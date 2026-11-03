@@ -1,0 +1,32 @@
+#pragma once
+
+#include <cstdint>
+
+namespace slrr {
+
+// Shared Win32 → script axis bridge (Input.getAxis / camera orbit).
+struct HostInput {
+  // Instantaneous look axes (consumed / decayed each tick).
+  float look_yaw = 0.f;    // AXIS_LOOK_LEFTRIGHT (7)
+  float look_pitch = 0.f;  // AXIS_LOOK_UPDOWN (8)
+  float look_zoom = 0.f;   // AXIS_LOOK_FWDBACK (10)
+  float cursor_x = 0.f;
+  float cursor_y = 0.f;
+  bool rmb_down = false;
+  bool keys_left = false;
+  bool keys_right = false;
+  bool keys_up = false;
+  bool keys_down = false;
+  bool keys_pgup = false;
+  bool keys_pgdn = false;
+};
+
+HostInput& host_input();
+
+// Poll keyboard held keys into HostInput (call each frame).
+void host_input_poll_keys();
+
+// Map HostInput → stock Input axis id. device ignored for now.
+float host_input_get_axis(int32_t axis, int32_t device);
+
+}  // namespace slrr

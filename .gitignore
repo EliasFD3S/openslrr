@@ -1,0 +1,65 @@
+# ==========================================
+# Build directories
+# ==========================================
+/out/
+/build/
+/build-bgfx/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# ==========================================
+# Third-party dependencies (bgfx)
+# ==========================================
+/third_party/
+
+# ==========================================
+# Compiled binaries
+# ==========================================
+*.exe
+*.dll
+*.lib
+*.a
+*.so
+*.dylib
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exp
+*.idb
+
+# ==========================================
+# Visual Studio / VS Code
+# ==========================================
+.vs/
+.vscode/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.suo
+*.user
+
+# ==========================================
+# Temporary files
+# ==========================================
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ==========================================
+# CMake / Ninja
+# ==========================================
+.ninja_deps
+.ninja_log
+build.ninja
+.ninja_*

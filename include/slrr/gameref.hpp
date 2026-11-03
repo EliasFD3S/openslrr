@@ -1,0 +1,117 @@
+#pragma once
+
+#include "slrr/scx_mesh.hpp"
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace slrr {
+
+// Soft PE Native.ptr stand-in for the Java hierarchy (system Scripts):
+//   java.lang.Native
+//     └── java.util.resource.ResourceRef   ← newNative/set/load/id/parent TREE
+//           ├── GameRef                   ← create / flags / pose / script
+//           │     └── java.lang.GameType  ← timers / eventMask / createNative…
+//           │           └── Scene → Garage / …
+//           ├── RenderRef                 ← create / setMatrix / setType
+//           │     └── Camera
+//           ├── Dummy / GroundRef / …
+// Java bodies (ctors, wrappers) stay TUFA. Host natives only on declaring class.
+
+constexpr int32_t kWorldTreeRoot = 0x00000010;
+constexpr int32_t kWorldTreeLeaf = 0x00000040;
+
+constexpr int32_t kEventTime = 0x00000080;
+constexpr int32_t kEventAny = 0x0FFFFFFF;
+
+enum class GameRefKind : uint8_t {
+  Generic = 0,
+  Dummy = 1,
+  RenderRef = 2,
+  GroundRef = 3,
+  Camera = 4,
+  Viewport = 5,
+  GameType = 6,
+};
+
+struct GameRefTimer {
+  float deadline = 0.f;  // absolute sim seconds
+  int32_t timer_id = 0;
+};
+
+struct GameRefState {
+  void* key = nullptr;  // java.util.resource.GameRef* / GameType*
+  void* parent = nullptr;
+  void* script = nullptr;  // usually same as key for GameType
+  GameRefKind kind = GameRefKind::Generic;
+  int32_t flags = 0;
+  int32_t type_id = 0;
+  int32_t event_mask = 0;
+  bool empty = true;
+  float pos[3] = {0, 0, 0};
+  float ypr[3] = {0, 0, 0};
+  float vel[3] = {0, 0, 0};
+  std::string alias;
+  std::string class_name;
+  std::vector<GameRefTimer> timers;
+  // Children (intrusive list stand-in).
+  std::vector<void*> children;
+  // Camera / Viewport extras (kind-specific).
+  void* viewport = nullptr;
+  float half_aov = 45.f;
+  float dmin = 0.1f;
+  float dmax = 100.f;
+  int32_t cam_pri = 0;
+  bool cam_active = false;
+  float vp_x = 0.f, vp_y = 0.f, vp_w = 1.f, vp_h = 1.f;
+  int32_t vp_pri = 0;
+  int32_t vp_flags = 0;
+  bool vp_active = false;
+  // Optional bound mesh (RenderRef / GroundRef).
+  bool has_mesh = false;
+  ScxGeometry mesh;
+  // Native object script (.cfg): render mesh, collision sphere, click volume.
+  bool script_parsed = false;
+  int32_t script_render = 0;
+  int32_t script_body_res = 0;
+  float script_body_r = 0.f;
+  float script_trigger_r = 0.f;
+  bool script_noclick = false;
+  std::string script_name;
+};
+
+float gameref_now();  // steady seconds since first call (timers / animate)
+
+void gameref_clear();
+GameRefState* gameref_upsert(void* key, GameRefKind kind = GameRefKind::Generic);
+GameRefState* gameref_get(void* key);
+void gameref_remove(void* key);
+
+void gameref_set_parent(void* key, void* parent);
+void gameref_set_flags(void* key, int32_t flags);
+void gameref_clear_flags(void* key, int32_t flags);
+int32_t gameref_get_flags(void* key);
+
+void gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
+                        float pitch, float roll);
+void gameref_set_event_mask(void* key, int32_t mask);
+void gameref_clear_event_mask(void* key, int32_t mask);
+void gameref_add_timer(void* key, float deadline_abs, int32_t timer_id);
+void gameref_remove_all_timers(void* key);
+
+// Due timers (deadline <= now). Caller dispatches handleEvent(EVENT_TIME, id).
+struct DueTimer {
+  void* key = nullptr;
+  int32_t timer_id = 0;
+};
+std::vector<DueTimer> gameref_poll_timers(float now_sec);
+
+std::vector<GameRefState*> gameref_active_cameras();
+std::vector<GameRefState*> gameref_nodes_with_mesh();
+std::vector<void*> gameref_world_roots();  // flags & WORLDTREEROOT
+
+void gameref_set_fog(int32_t color, float near_z, float far_z);
+bool gameref_get_fog(int32_t* color, float* near_z, float* far_z);
+
+}  // namespace slrr
