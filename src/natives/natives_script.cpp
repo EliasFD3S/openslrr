@@ -9,6 +9,7 @@
 #include "slrr/osd_registry.hpp"
 #include "slrr/render_backend.hpp"
 #include "slrr/script_cfg.hpp"
+#include "slrr/scene_instances.hpp"
 #include "slrr/slrr_font.hpp"
 #include "slrr/video_fmv.hpp"
 
@@ -231,10 +232,16 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
                                 native_noop);
   jvm.natives().register_method(
       "java.render.GfxEngine", "setGlobalEnvmap", "(Ljava.lang.Object;)V",
-      native_noop);
+      [](Object*,const std::vector<Value>& args){
+        auto* ref=!args.empty()&&args[0].tag==ValueTag::Obj?args[0].v.o:nullptr;
+        scene_instances_set_envmap(resource_id_of(ref));return Value::make_void();
+      });
   jvm.natives().register_method(
       "java.render.GfxEngine", "setGlobalEnvmap",
-      "(Ljava.util.resource.ResourceRef;)V", native_noop);
+      "(Ljava.util.resource.ResourceRef;)V", [](Object*,const std::vector<Value>& args){
+        auto* ref=!args.empty()&&args[0].tag==ValueTag::Obj?args[0].v.o:nullptr;
+        scene_instances_set_envmap(resource_id_of(ref));return Value::make_void();
+      });
   jvm.natives().register_method(
       "java.sound.Sound", "changeMusicSet", "(I)V", native_noop);
   // OptionsDialog.show reads the three channel volumes while building the

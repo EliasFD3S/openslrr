@@ -3,6 +3,7 @@
 
 #include "slrr/garage_camera.hpp"
 #include "slrr/gameref.hpp"
+#include "slrr/part_runtime.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/osd_registry.hpp"
@@ -259,14 +260,37 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
       });
   jvm.natives().register_method(
       "java.util.resource.GameRef", "isScripted", "(Ljava.lang.String;)I",
-      [](Object* self, const std::vector<Value>& args) {
+      [&jvm, &rpk](Object* self, const std::vector<Value>& args) {
         if (!self) return Value::make_int(0);
         std::string want;
         if (!args.empty() && args[0].tag == ValueTag::Obj && args[0].v.o)
           want = args[0].v.o->str;
+        const auto* state = gameref_get(self);
+        std::string name;
+        if (state && state->script && state->live_id) {
+          name = static_cast<Object*>(state->script)->class_name;
+        } else {
+          auto script = rpk.payload_prop(resource_id_of(self), "script");
+          std::replace(script.begin(), script.end(), '\\', '/');
+          if (script.empty()) {
+            return Value::make_int(0);
+          }
+          name = std::filesystem::path(script).stem().string();
+          if (!jvm.find_class(name))
+            jvm.load_class_file((std::filesystem::path(rpk.game_root()) / script).string());
+        }
+        const auto* cls = jvm.find_class(name);
+        if (!cls) return Value::make_int(0);
         if (want.empty()) return Value::make_int(1);
-        return Value::make_int(
-            self->class_name.find(want) != std::string::npos ? 1 : 0);
+        for (int depth = 0; cls && depth < 64; ++depth) {
+          if (cls->name() == want) return Value::make_int(1);
+          const auto base = cls->super_name();
+          if (base == want) return Value::make_int(1);
+          if (base.empty()) break;
+          jvm.load_class(base);
+          cls = jvm.find_class(base);
+        }
+        return Value::make_int(0);
       });
   jvm.natives().register_method(
       "java.util.resource.GameRef", "getPos", "()Ljava.lang.Vector3;",
@@ -336,8 +360,9 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
             !args[2].v.o)
           return Value::make_void();
         GameRefState* st = gameref_get(self);
-        if (!st || (st->type_id & 0xFFFF) != 0x33) return Value::make_void();
         const std::string& line = args[2].v.o->str;
+          if (part_command(self, line)) return Value::make_void();
+          if (!st || (st->type_id & 0xFFFF) != 0x33) return Value::make_void();
         if (!line.empty()) garage_camera_command(line.c_str());
         return Value::make_void();
       });
@@ -411,8 +436,14 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
               id = it->second.v.i;
           }
         }
-        // Only the track scan asks create() to load a Track script. Chassis
-        // and vehicle types share this native and must stay GameRefs.
+        const auto native = rpk.payload_prop(static_cast<uint32_t>(id), "native");
+        if(id && (native.rfind("car ",0)==0 || native.rfind("part ",0)==0)) {
+          Object* part=part_create(jvm,rpk,parent,static_cast<uint32_t>(id),alias?alias->str:"part");
+          if(part)gameref_bind_alias(self,part);
+          return Value::make_obj(part);
+        }
+        // Track selector metadata remains lazy; native part resources use
+        // the script-backed factory above, with independent live handles.
         const std::string alias_s =
             (alias && !alias->str.empty()) ? alias->str : std::string{};
         if (id && alias_s.find("Track") != std::string::npos) {

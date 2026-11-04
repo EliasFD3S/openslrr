@@ -34,6 +34,8 @@ add_executable(slrr_host
   src/render/slrr_font.cpp
   src/resources/rpk_index.cpp
   src/resources/script_cfg.cpp
+  src/resources/part_config.cpp
+  src/resources/part_runtime.cpp
   src/resources/gameref.cpp
   src/resources/scene_instances.cpp
   src/resources/scx_mesh.cpp
@@ -89,7 +91,7 @@ if(SLRR_WITH_LIBBGFX)
 
   bgfx_compile_shaders(
     TYPE VERTEX
-    SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh.sc"
+    SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_vehicle.sc"
     VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
     OUTPUT_DIR "${SLRR_SHADER_OUT}"
     INCLUDE_DIRS "${_bgfx_shader_inc}"
@@ -99,7 +101,7 @@ if(SLRR_WITH_LIBBGFX)
   )
   bgfx_compile_shaders(
     TYPE FRAGMENT
-    SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc"
+    SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc"
     VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
     OUTPUT_DIR "${SLRR_SHADER_OUT}"
     INCLUDE_DIRS "${_bgfx_shader_inc}"
@@ -146,6 +148,11 @@ if(SLRR_BUILD_TESTS)
     target_compile_definitions(ui_state_test PRIVATE _CRT_SECURE_NO_WARNINGS)
   endif()
   add_test(NAME ui_state COMMAND ui_state_test)
+  add_executable(part_config_test tests/part_config_test.cpp
+    src/resources/part_config.cpp src/resources/rpk_index.cpp)
+  target_include_directories(part_config_test PRIVATE include)
+  target_compile_features(part_config_test PRIVATE cxx_std_20)
+  add_test(NAME part_config COMMAND part_config_test)
 
   add_executable(scene_instances_test tests/scene_instances_test.cpp
     src/resources/scene_instances.cpp src/resources/gameref.cpp
@@ -168,7 +175,8 @@ if(SLRR_BUILD_TESTS)
   add_dependencies(host_runtime_test slrr_host)
   set(SLRR_TEST_GAME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../game" CACHE PATH "Original SLRR assets for integration tests")
   if(EXISTS "${SLRR_TEST_GAME_ROOT}/system/Scripts/lang/System.class")
-    foreach(_case sfx_probe regression_probe gap_probe hud_probe career_probe filedialog_probe scene_script_probe icon_probe paint_inventory)
+    add_test(NAME part_config_original_assets COMMAND part_config_test "${SLRR_TEST_GAME_ROOT}")
+    foreach(_case sfx_probe regression_probe gap_probe hud_probe career_probe filedialog_probe scene_script_probe icon_probe paint_inventory vehicle_assembly catalog)
       add_test(NAME runtime_${_case} COMMAND host_runtime_test ${_case} "${SLRR_TEST_GAME_ROOT}")
       set_tests_properties(runtime_${_case} PROPERTIES TIMEOUT 30)
     endforeach()

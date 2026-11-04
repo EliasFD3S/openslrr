@@ -42,6 +42,8 @@ struct GameRefTimer {
 
 struct GameRefState {
   void* key = nullptr;  // java.util.resource.GameRef* / GameType*
+  void* binding = nullptr; // reference handle alias; never another scene node
+  int32_t live_id = 0; // independent from the RPK type ID
   void* parent = nullptr;
   void* script = nullptr;  // usually same as key for GameType
   GameRefKind kind = GameRefKind::Generic;
@@ -72,6 +74,10 @@ struct GameRefState {
   bool has_mesh = false;
   bool sky_render = false;
   uint32_t color = 0xffffff;
+  uint32_t paint_source = 0, paint_texture = 0;
+  bool vehicle_material = false;
+  bool matrix_override = false;
+  float local_matrix[16]{};
   ScxGeometry mesh;
   // Native object script (.cfg): render mesh, collision sphere, click volume.
   bool script_parsed = false;
@@ -88,6 +94,9 @@ float gameref_now();  // steady seconds since first call (timers / animate)
 void gameref_clear();
 GameRefState* gameref_upsert(void* key, GameRefKind kind = GameRefKind::Generic);
 GameRefState* gameref_get(void* key);
+GameRefState* gameref_find_live(int32_t id);
+int32_t gameref_make_live(void* key);
+bool gameref_bind_alias(void* reference, void* target);
 void gameref_remove(void* key);
 
 void gameref_set_parent(void* key, void* parent);

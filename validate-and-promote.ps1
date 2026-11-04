@@ -20,7 +20,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $BuildDirectory 'CMakeCache.txt'))) 
 }
 & $cmake @configure
 if ($LASTEXITCODE -ne 0) { throw 'CMake configuration failed; release unchanged.' }
-& $cmake --build $BuildDirectory --config Release --target host_runtime_test ui_state_test scene_instances_test --parallel
+& $cmake --build $BuildDirectory --config Release --target host_runtime_test ui_state_test scene_instances_test part_config_test --parallel
 if ($LASTEXITCODE -ne 0) { throw 'Build failed; release unchanged.' }
 $testLog = Join-Path $BuildDirectory 'validated-ctest.log'
 & $ctest --test-dir $BuildDirectory -C Release --output-on-failure --output-log $testLog
@@ -34,7 +34,7 @@ if ($running) { throw 'Close the release game before promotion. The validated ca
 
 $checkpoint = Join-Path $workspace ('checkpoints/host-validated-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 New-Item -ItemType Directory -Path $checkpoint -Force | Out-Null
-$sourcePaths = @('src', 'include', 'shaders', 'tests', 'CMakeLists.txt', 'README.md', 'validate-and-promote.ps1') |
+$sourcePaths = @('src', 'include', 'shaders', 'tests', 'CMakeLists.txt', 'README.md', 'REFERENCE_PORT.md', 'validate-and-promote.ps1') |
     ForEach-Object { Join-Path $PSScriptRoot $_ }
 Compress-Archive -LiteralPath $sourcePaths -DestinationPath (Join-Path $checkpoint 'sources.zip')
 Copy-Item -LiteralPath $candidate -Destination (Join-Path $checkpoint 'slrr_host.exe')

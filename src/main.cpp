@@ -21,6 +21,7 @@ void usage() {
       "  slrr_host --probe-pacejka\n"
       "  slrr_host --game [--root DIR] [--window] [--no-wait] [--auto-new]\n"
       "           [--auto-cmd mainmenu|street|N] [--render null|d3d9|bgfx]\n"
+      "           [--spawn-car cars/racers/Baiern.rpk:0x6]\n"
       "           [PlayerName]\n"
       "\n"
       "Default --game: FMV intros → Init(int) (Soft splash / menu).\n"
@@ -71,6 +72,9 @@ int main(int argc, char** argv) {
     if (std::strcmp(a, "--auto-new") == 0) {
       opt.auto_new = true;
       continue;
+    }
+    if(std::strcmp(a,"--spawn-car")==0&&i+1<argc){
+      opt.spawn_car=argv[++i];opt.auto_new=true;continue;
     }
     if (std::strcmp(a, "--auto-cmd") == 0 && i + 1 < argc) {
       const char* c = argv[++i];

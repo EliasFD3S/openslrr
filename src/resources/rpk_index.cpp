@@ -718,4 +718,20 @@ std::vector<uint32_t> RpkIndex::garage_render_ids(int32_t pack_id,
   return ids;
 }
 
+std::vector<uint32_t> RpkIndex::children_of(uint32_t parent) const {
+  std::vector<uint32_t> result;
+  if (!resolve(parent)) return result;
+  for (int32_t pi = 1; pi < pack_count(); ++pi) {
+    const auto* pack = pack_by_id(pi);
+    if (!pack) continue;
+    for (const auto& entry : pack->entries) {
+      if (!entry.super_id) continue;
+      const auto id = make_full_id(pi, entry.type_id);
+      if (id != parent && resolve_embedded_id(pi, entry.super_id) == parent)
+        result.push_back(id);
+    }
+  }
+  return result;
+}
+
 }  // namespace slrr

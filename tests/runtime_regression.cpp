@@ -6,6 +6,7 @@
 #include "slrr/natives_boot.hpp"
 #include "slrr/osd_registry.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/part_runtime.hpp"
 #include "slrr/slrr_font.hpp"
 #include "slrr/video_fmv.hpp"
 #include <cmath>
@@ -743,12 +744,105 @@ int run_paint_inventory() {
   return failures ? 1 : 0;
 }
 
+int run_vehicle_assembly() {
+  int failures=0;
+  auto check=[&](bool ok,const char* message){std::printf("CHECK %s %s\n",ok?"PASS":"FAIL",message);if(!ok)++failures;};
+  NativeRegistry native;Jvm j(&native);j.set_game_root(integration_root);j.bootstrap_classpath();
+  RpkIndex resources;resources.set_root(integration_root);SectionMachine sections(&j);register_boot_natives(j,resources,sections);resources.open_all();
+  auto* pack=resources.pack_by_name("cars/racers/Baiern.rpk");if(!pack)return 1;
+  Object* world=j.new_object("java.util.resource.Dummy");gameref_upsert(world,GameRefKind::Dummy);gameref_set_flags(world,kWorldTreeRoot);
+  uint32_t chassis_id=RpkIndex::make_full_id(pack->pack_id,6),hood_id=RpkIndex::make_full_id(pack->pack_id,0x10d);
+  Object* chassis=part_create(j,resources,world,chassis_id,"assembly test");
+  check(chassis&&chassis->class_name=="java.game.cars.Baiern_CoupeSport","original chassis class is instantiated");
+  if(!chassis)return 1;
+  Object* hood=part_create(j,resources,world,hood_id,"hood test");
+  check(hood&&part_install(hood,chassis),"hood attaches through compatible original CFG slots");
+  auto tree=part_installed_tree(chassis);
+  check(tree.size()==2&&tree[1].parent_slot==601&&tree[1].own_slot==601,"attachment keeps both slot identities");
+  scene_instances_select(world,nullptr);
+  check(scene_instances_collect().size()>=2,"installed body pieces reach actual SCX scene rendering");
+  auto* alias=j.new_object("java.util.resource.GameRef");int live=gameref_make_live(chassis);
+  j.invoke_by_name(alias->class_name,"<init>",{Value::make_obj(alias),Value::make_int(live)},false);
+  check(gameref_get(alias)==gameref_get(chassis)&&live!=static_cast<int>(chassis_id),"live references share an instance without losing its RPK type");
+  auto script=j.invoke_by_name(alias->class_name,"getScriptInstance",{Value::make_obj(alias)},false);
+  check(script.tag==ValueTag::Obj&&script.v.o==chassis,"reference returns the canonical scripted chassis");
+  part_destroy(chassis);check(scene_instances_collect().empty(),"assembly destruction removes its child render instances");
+  Object* vehicle=vehicle_spawn_stock(j,resources,world,chassis_id);
+  check(vehicle!=nullptr,"stock vehicle factory returns a vehicle");
+  if(vehicle){
+    auto installed=part_installed_tree(vehicle);std::printf("VEHICLE parts=%zu renders=%zu\n",installed.size(),scene_instances_collect().size());
+    check(installed.size()>=70,"original addStockParts assembles body, engine and running gear through slot aliases");
+    check(scene_instances_collect().size()>15,"complete vehicle contributes visible part geometry");
+    auto instances=scene_instances_collect();
+    bool layered=false, masked=false, uv_channels=true;
+    for(const auto& instance:instances) {
+      const auto& mesh=*instance.geometry;
+      uv_channels=uv_channels && mesh.uv2.size()==mesh.uvs.size() && mesh.uv3.size()==mesh.uvs.size();
+      for(const auto& group:mesh.groups) {
+        layered=layered || (group.mix_index!=0xffff && group.reflection_index!=0xffff);
+        masked=masked || group.material_type==0x15;
+      }
+    }
+    check(layered&&masked&&uv_channels,"original SCX preserves mix, masked reflection type and authored UV channels");
+    if(auto* colors=resources.pack_by_name("cars.rpk")) {
+      auto red=RpkIndex::make_full_id(colors->pack_id,0x2a);
+      Object* panel=nullptr;
+      for(const auto& p:installed)if(p.resource==hood_id)panel=p.object;
+      if(panel)j.invoke_by_name(panel->class_name,"setTexture",{Value::make_obj(panel),Value::make_int(red)},false);
+      bool updated=false;
+      for(const auto& instance:scene_instances_collect())
+        if(instance.paint_slot>=0 && instance.paint_texture==resources.texture_path_for_id(red))updated=true;
+      check(panel&&updated,"Part.setTexture replaces the CFG paint slot in the live render instance");
+    }
+    part_destroy(vehicle);
+  }
+  return failures?1:0;
+}
+
+int run_catalog() {
+  NativeRegistry native;
+  Jvm j(&native); j.set_game_root(integration_root); j.bootstrap_classpath();
+  RpkIndex resources; resources.set_root(integration_root);
+  SectionMachine sections(&j); register_boot_natives(j,resources,sections); resources.open_all();
+  slrr_font_set_game_root(integration_root);
+  auto* player=sections.seed_player("Catalog test");
+  auto* pack=resources.pack_by_name("cars/racers/Baiern.rpk");
+  auto* vehicle=vehicle_spawn_stock(j,resources,player,RpkIndex::make_full_id(pack->pack_id,6));
+  player->fields["car"]=Value::make_obj(vehicle);
+  Object* catalog=j.new_object("java.game.Catalog");
+  j.invoke_by_name(catalog->class_name,"<init>",{Value::make_obj(catalog)},false);
+  j.invoke_by_name(catalog->class_name,"enter",{Value::make_obj(catalog),Value::make_obj(nullptr)},false);
+  j.invoke_by_name(catalog->class_name,"osdCommand",{Value::make_obj(catalog),Value::make_int(27)},false);
+  for(int i=0;i<8;++i)
+    j.invoke_by_name(catalog->class_name,"collectObjectsStep",{Value::make_obj(catalog),Value::make_int(8)},false);
+  auto inv=catalog->fields["inventory"];
+  auto* inventory=inv.tag==ValueTag::Obj?inv.v.o:nullptr;
+  auto items=inventory?inventory->fields["items"]:Value::make_void();
+  auto* vector=items.tag==ValueTag::Obj?items.v.o:nullptr;
+  auto size=vector?j.invoke_by_name(vector->class_name,"size",{Value::make_obj(vector)},false):Value::make_int(0);
+  printf("CATALOG body panels=%d\n",size.tag==ValueTag::Int?size.v.i:0);
+  int valid=0;
+  for(int i=0;i<4 && vector;++i) {
+    auto item=j.invoke_by_name(vector->class_name,"elementAt",{Value::make_obj(vector),Value::make_int(i)},false);
+    if(item.tag!=ValueTag::Obj || !item.v.o)continue;
+    auto part=j.invoke_by_name(item.v.o->class_name,"getPart",{item},false);
+    auto price=j.invoke_by_name(item.v.o->class_name,"getPrice",{item},false);
+    printf("PREVIEW %d part=%s priceTag=%d price=%g\n",i,part.tag==ValueTag::Obj&&part.v.o?part.v.o->class_name.c_str():"null",static_cast<int>(price.tag),price.tag==ValueTag::Float?price.v.f:price.tag==ValueTag::Int?static_cast<float>(price.v.i):0);
+    if(part.tag==ValueTag::Obj && part.v.o && j.tree_instance_of(part.v.o,"java.game.parts.Part")
+       && ((price.tag==ValueTag::Int && price.v.i>0) || (price.tag==ValueTag::Float && price.v.f>0)))++valid;
+  }
+  printf("CATALOG scripted previews with prices=%d\n",valid);
+  return size.tag==ValueTag::Int&&size.v.i>5&&valid==4?0:1;
+}
+
 int main(int argc, char **argv) {
   if (argc != 3) {
     std::fprintf(stderr, "Usage: host_runtime_test CASE GAME_ROOT\n");
     return 2;
   }
-  integration_root = argv[2];
+  integration_root = std::filesystem::absolute(argv[2]).string();
+  if(std::string(argv[1])=="catalog")return run_catalog();
+  if(std::string(argv[1])=="vehicle_assembly")return run_vehicle_assembly();
   if (std::string(argv[1]) == "paint_inventory")
     return run_paint_inventory();
   if (std::string(argv[1]) == "sfx_probe")

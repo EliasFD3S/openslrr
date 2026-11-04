@@ -3,6 +3,7 @@
 
 #include "slrr/garage_camera.hpp"
 #include "slrr/gameref.hpp"
+#include "slrr/part_runtime.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/osd_registry.hpp"
@@ -60,7 +61,13 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           else if (args[0].tag == ValueTag::Float)
             id = static_cast<int32_t>(args[0].v.f);
         }
+        if(auto* live=gameref_find_live(id)) {
+          gameref_bind_alias(self,live->key);
+          res_sync_id_field(self,id);
+          return Value::make_void();
+        }
         GameRefState* st = gameref_upsert(self);
+        if(st)st->binding=nullptr;
         if (st) {
           st->type_id = id;
           if (id != 0) {
@@ -85,6 +92,7 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
         if (!other) {
           // set(null) → clear bind (PE sub_545FC0(handle,0)).
           if (GameRefState* st = gameref_upsert(self)) {
+            st->binding=nullptr;
             st->type_id = 0;
             st->empty = true;
           }
@@ -92,6 +100,9 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           return Value::make_void();
         }
         int32_t id = 0;
+        if(auto* live=gameref_get(other);live&&live->live_id) {
+          gameref_bind_alias(self,live->key);res_sync_id_field(self,live->live_id);return Value::make_void();
+        }
         if (GameRefState* os = gameref_get(other))
           id = os->type_id;
         if (id == 0) {
@@ -162,6 +173,7 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
       });
   jvm.natives().register_method(kResRef, "destroy", "()V",
                                 [](Object* self, const std::vector<Value>&) {
+                                  if(part_destroy(self))return Value::make_void();
                                   if (self) {
                                       auto text=self->fields.find("_host_text");
                                       if(text!=self->fields.end()&&text->second.tag==ValueTag::Obj)slrr_text_destroy(text->second.v.o);
@@ -170,15 +182,18 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
                                         it->second.tag == ValueTag::Int)
                                       osd_hide_widget(it->second.v.i);
                                   }
-                                  gameref_remove(self);
+                                  auto* canonical=gameref_get(self);
+                                  gameref_remove(canonical?canonical->key:self);
                                   return Value::make_void();
                                 });
   jvm.natives().register_method(
       kResRef, "id", "()I",
       [](Object* self, const std::vector<Value>&) {
         if (!self) return Value::make_int(0);
-        if (GameRefState* st = gameref_get(self))
+        if (GameRefState* st = gameref_get(self)) {
+          if(st->live_id)return Value::make_int(st->live_id);
           if (st->type_id != 0) return Value::make_int(st->type_id);
+        }
         auto it = self->fields.find("id");
         if (it != self->fields.end() && it->second.tag == ValueTag::Int)
           return it->second;
@@ -199,7 +214,7 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
         GameRefState* st = gameref_get(self);
         if (!st || !st->parent) return Value::make_int(0);
         GameRefState* p = gameref_get(st->parent);
-        return Value::make_int(p ? p->type_id : 0);
+        return Value::make_int(p ? p->live_id?p->live_id:p->type_id : 0);
       });
   jvm.natives().register_method(
       kResRef, "getParent", "()Ljava.util.resource.ResourceRef;",
@@ -210,7 +225,9 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
         return Value::make_obj(p);
       });
   auto make_res = [&jvm](uint32_t full) -> Value {
-    Object* o = jvm.new_object("java.util.resource.ResourceRef");
+    // A resource-tree node can expose GameRef script queries before it has a
+    // live instance (Catalog walks these handles without instantiating parts).
+    Object* o = jvm.new_object("java.util.resource.GameRef");
     if (!o) return Value::make_obj(nullptr);
     o->fields["id"] = Value::make_int(static_cast<int32_t>(full));
     if (GameRefState* st = gameref_upsert(o)) {
@@ -226,11 +243,8 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
         if (st && !st->children.empty())
           return Value::make_obj(static_cast<Object*>(st->children.front()));
         const int32_t id = resource_id_of(self);
-        const int32_t pack = rpk_pack_of(rpk, id);
-        const uint32_t child =
-            rpk_child_after(rpk, pack, static_cast<uint32_t>(id), 0, true);
-        if (!child) return Value::make_obj(nullptr);
-        return make_res(child);
+        const auto children = rpk.children_of(static_cast<uint32_t>(id));
+        return children.empty() ? Value::make_obj(nullptr) : make_res(children.front());
       });
   jvm.natives().register_method(
       kResRef, "getNextChild", "()Ljava.util.resource.ResourceRef;",
@@ -238,50 +252,23 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
         const int32_t id = resource_id_of(self);
         const int32_t pack = RpkIndex::pack_from_full(static_cast<uint32_t>(id));
         if (pack <= 0) return Value::make_obj(nullptr);
-        const RpkEntry* e = rpk.find_entry(pack, static_cast<uint32_t>(id));
+        const RpkEntry* e = rpk.resolve(static_cast<uint32_t>(id));
         if (!e) return Value::make_obj(nullptr);
-        const uint32_t next = rpk_child_after(rpk, pack, e->super_id, e->type_id,
-                                              false);
-        if (!next) return Value::make_obj(nullptr);
-        return make_res(next);
+        const auto parent = rpk.resolve_embedded_id(pack, e->super_id);
+        const auto children = rpk.children_of(parent);
+        auto found = std::find(children.begin(), children.end(), static_cast<uint32_t>(id));
+        if (found == children.end() || ++found == children.end()) return Value::make_obj(nullptr);
+        return make_res(*found);
       });
   // Java countChildNodes / getChildNodes leave their counters uninitialized.
   jvm.natives().register_method(
       kResRef, "getChildNodes", "()[Ljava.util.resource.ResourceRef;",
       [&jvm, &rpk, make_res](Object* self, const std::vector<Value>&) {
         const int32_t id = resource_id_of(self);
-        const int32_t pack = rpk_pack_of(rpk, id);
-        const uint32_t parent_local = static_cast<uint32_t>(id) & 0xFFFFu;
+        const int32_t pack = RpkIndex::pack_from_full(id);
         std::vector<Value> kids;
-        // Children live in other packs too. super_id hi16 is the dependency
-        // slot (Test_Track.rpk: 0x10ABC → dep 1 = MW_Mod, local MAP_ROOT).
-        if (pack > 0) {
-          for (int32_t pi = 1; pi < rpk.pack_count() && kids.size() < 512;
-               ++pi) {
-            const RpkPack* p = rpk.pack_by_id(pi);
-            if (!p) continue;
-            for (const RpkEntry& e : p->entries) {
-              if (kids.size() >= 512) break;
-              if ((e.super_id & 0xFFFFu) != parent_local) continue;
-              const uint32_t hi = e.super_id >> 16;
-              bool match = false;
-              if (hi == 0) {
-                match = pi == pack;
-              } else {
-                for (const RpkDep& d : p->deps) {
-                  if ((d.id >> 16) != hi) continue;
-                  const RpkPack* dep = rpk.pack_by_name(d.path);
-                  match = dep && dep->pack_id == pack;
-                  break;
-                }
-              }
-              if (!match) continue;
-              if (pi == pack && (e.type_id & 0xFFFFu) == parent_local) continue;
-              kids.push_back(
-                  make_res(RpkIndex::make_full_id(pi, e.type_id)));
-            }
-          }
-        }
+        for (auto child : rpk.children_of(static_cast<uint32_t>(id)))
+          kids.push_back(make_res(child));
         Object* arr = jvm.new_object("java.util.resource.ResourceRef");
         if (arr) {
           arr->is_array = true;

@@ -15,6 +15,7 @@ namespace {
 const RpkIndex* g_resources = nullptr;
 void* g_world = nullptr;
 void* g_sky = nullptr;
+uint32_t g_environment = 0;
 std::unordered_map<uint32_t, std::shared_ptr<const ScxGeometry>> g_meshes;
 
 void identity(float* m) {
@@ -84,6 +85,11 @@ void scene_instances_set_resources(const RpkIndex* resources) {
   g_resources = resources;
   g_world = g_sky = nullptr;
   g_meshes.clear();
+  g_environment = 0;
+}
+void scene_instances_set_envmap(uint32_t resource) { g_environment=resource; }
+std::string scene_instances_envmap() {
+  return g_resources ? g_resources->texture_path_for_id(g_environment) : std::string{};
 }
 void scene_instances_select(void* world, void* skydome) {
   g_world = world; g_sky = skydome;
@@ -101,7 +107,9 @@ bool scene_instance_transform(void* key, void* root, float* matrix) {
     // Inventory items are independent worlds even though their roots have
     // an owning inventory parent. Never leak their meshes into the garage.
     if(current != root && (n->flags & kWorldTreeRoot)) return false;
-    float local[16]; local_matrix(*n, local);
+    float local[16];
+    if(n->matrix_override)std::copy(n->local_matrix,n->local_matrix+16,local);
+    else local_matrix(*n, local);
     multiply(matrix, local, matrix);
     if (current == root) {
       // Vertices are uploaded as S*v (S reflects Z). Instance matrix is S*M*S.
@@ -129,6 +137,19 @@ std::vector<SceneInstance> scene_instances_collect_root(void* root) {
     instance.key = n->key;
     instance.sky = n->key == g_sky;
     instance.color = n->color;
+    instance.vehicle_material = n->vehicle_material;
+    if(n->paint_source) {
+      auto normalize=[](std::string path){
+        std::replace(path.begin(),path.end(),'\\','/');
+        for(char& c:path)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return path;
+      };
+      const auto from=normalize(g_resources->texture_path_for_id(n->paint_source));
+      for(size_t i=0; !from.empty() && i<instance.geometry->textures.size(); ++i) {
+        if(normalize(instance.geometry->textures[i])==from) {instance.paint_slot=static_cast<int>(i);break;}
+      }
+      if(n->paint_texture)instance.paint_texture=g_resources->texture_path_for_id(n->paint_texture);
+    }
     out.push_back(std::move(instance));
   }
   return out;

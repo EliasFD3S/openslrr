@@ -16,9 +16,14 @@ struct SceneInstance {
   std::array<float, 16> transform{};
   bool sky = false;
   uint32_t color = 0xffffff;
+  int paint_slot = -1;
+  std::string paint_texture;
+  bool vehicle_material = false;
 };
 
 void scene_instances_set_resources(const RpkIndex* resources);
+void scene_instances_set_envmap(uint32_t resource);
+std::string scene_instances_envmap();
 void scene_instances_select(void* world, void* skydome);
 std::vector<SceneInstance> scene_instances_collect();
 std::vector<SceneInstance> scene_instances_collect_root(void* root);

@@ -1,13 +1,30 @@
 #include "slrr/jvm.hpp"
 #include "slrr/rpk_index.hpp"
+#include <algorithm>
+#include <cmath>
+#include <limits>
 
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
 #include <stdexcept>
 
 namespace slrr {
 namespace {
+Value declared_return(Value value, const std::string& descriptor) {
+  // TREE expressions retain their numeric type. The method boundary applies
+  // the declared conversion (e.g. Catalog InventoryItem_Part.getPrice(): int).
+  const auto end=descriptor.find(')');
+  if(value.tag!=ValueTag::Float || end==std::string::npos || end+1>=descriptor.size())return value;
+  const char type=descriptor[end+1];
+  if(type!='I' && type!='B' && type!='S' && type!='C' && type!='Z')return value;
+  const double number=value.v.f;
+  if(std::isnan(number))return Value::make_int(0);
+  if(number>=std::numeric_limits<int32_t>::max())return Value::make_int(INT32_MAX);
+  if(number<=std::numeric_limits<int32_t>::min())return Value::make_int(INT32_MIN);
+  return Value::make_int(static_cast<int32_t>(number));
+}
 Value empty_method_result(const std::string& desc) {
   auto p=desc.find(')');if(p==std::string::npos||p+1>=desc.size())return Value::make_void();
   char t=desc[p+1];if(t=='L'||t=='[')return Value::make_obj(nullptr);
@@ -85,6 +102,16 @@ bool Jvm::bootstrap_classpath() {
       {"parts/scripts/bodypart", "java.game.parts.bodypart"},
       {"parts/accessories/scripts", "java.game.parts.accessories"},
   };
+  // Engine/running-gear base classes live below parts/scripts. Resource
+  // classes in individual car packs add their own directory when loaded.
+  std::error_code directory_error;
+  const std::filesystem::path parts_root=std::filesystem::path(game_root_)/"parts/scripts";
+  if(std::filesystem::is_directory(parts_root,directory_error))
+    for(const auto& entry:std::filesystem::recursive_directory_iterator(parts_root))if(entry.is_directory()) {
+      auto suffix=entry.path().lexically_relative(parts_root).generic_string();
+      std::string package="java.game.parts."+suffix;std::replace(package.begin(),package.end(),'/','.');
+      classpath_.push_back({"parts/scripts/"+suffix,package});
+    }
   classpath_ready_ = true;
   std::printf("[jvm] classpath ready (%zu roots) under %s\n", classpath_.size(),
               game_root_.c_str());
@@ -100,13 +127,11 @@ std::string Jvm::resolve_class_path(const std::string& fqn) const {
 
   for (const auto& root : classpath_) {
     if (!pkg.empty() && root.second != pkg) continue;
-    const std::string path =
-        game_root_ + "/" + root.first + "/" + simple + ".class";
+    const std::string path = (std::filesystem::path(game_root_)/root.first/(simple+".class")).string();
     if (file_readable(path)) return path;
   }
   for (const auto& root : classpath_) {
-    const std::string path =
-        game_root_ + "/" + root.first + "/" + simple + ".class";
+    const std::string path = (std::filesystem::path(game_root_)/root.first/(simple+".class")).string();
     if (file_readable(path)) return path;
   }
   return {};
@@ -298,6 +323,13 @@ bool Jvm::load_class_file(const std::string& path) {
   }
   for (auto& cls : blobs) {
     const std::string name = cls.name();
+    auto dot=name.find_last_of('.');
+    if(dot!=std::string::npos){
+      auto directory=std::filesystem::absolute(path).parent_path().string();
+      std::string package=name.substr(0,dot);
+      auto candidate=std::make_pair(directory,package);
+      if(std::find(classpath_.begin(),classpath_.end(),candidate)==classpath_.end())classpath_.push_back(candidate);
+    }
     std::printf(
         "[jvm] loaded %s  build=0x%x  fields=%zu/%zu  methods=%zu/%zu  "
         "trees=%zu  from %s\n",
@@ -830,7 +862,7 @@ Value Jvm::invoke_by_name(const std::string& class_fqn,
     }
     return Value::make_void();
   }
-  return tr.value;
+  return declared_return(tr.value, owner_cls->utf8(m->descriptor));
 }
 
 Value Jvm::invoke(const std::string& class_fqn, const std::string& method,
@@ -927,7 +959,7 @@ Value Jvm::invoke(const std::string& class_fqn, const std::string& method,
     }
     return Value::make_void();
   }
-  return tr.value;
+  return declared_return(tr.value, owner_cls->utf8(m->descriptor));
 }
 
 }  // namespace slrr

@@ -20,10 +20,18 @@ struct ScxMeshInfo {
   std::string error;
 };
 
+struct ScxTextureMap {
+  uint32_t channel = 0, tiling = 0;
+  float scale_u = 1, scale_v = 1, offset_u = 0, offset_v = 0;
+};
 struct ScxGroup {
   uint32_t index_start = 0;
   uint32_t index_count = 0;
   uint16_t texture_index = 0xffff;
+  uint16_t mix_index = 0xffff, reflection_index = 0xffff;
+  uint32_t material_type = 0;
+  float reflection_strength = .5f;
+  ScxTextureMap base_map, mix_map, reflection_map;
   uint32_t material_flags = 0;  // bit0 = alphaOpacity (scx.md)
   float diffuse[4] = {0.6f, 0.65f, 0.7f, 1.f};
   std::string name;
@@ -36,6 +44,7 @@ struct ScxGeometry {
   std::vector<float> positions;  // xyz * N
   std::vector<float> normals;    // xyz * N
   std::vector<float> uvs;        // uv * N (UV1)
+  std::vector<float> uv2, uv3;
   std::vector<uint32_t> indices; // triangles * 3
   std::vector<ScxGroup> groups;
   // RPK `texture` property order (or .tex). Index == ScxGroup::texture_index.

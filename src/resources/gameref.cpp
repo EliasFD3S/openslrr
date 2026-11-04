@@ -8,6 +8,7 @@ namespace slrr {
 namespace {
 
 std::unordered_map<void*, GameRefState> g_refs;
+int32_t g_next_live = 0x70000000;
 int32_t g_fog_color = 0;
 float g_fog_near = 0.f;
 float g_fog_far = 0.f;
@@ -31,6 +32,7 @@ float gameref_now() {
 
 void gameref_clear() {
   g_refs.clear();
+  g_next_live = 0x70000000;
   g_fog = false;
 }
 
@@ -52,12 +54,33 @@ GameRefState* gameref_upsert(void* key, GameRefKind kind) {
 
 GameRefState* gameref_get(void* key) {
   if (!key) return nullptr;
-  auto it = g_refs.find(key);
-  return it == g_refs.end() ? nullptr : &it->second;
+  for(int depth=0;depth<64;depth++) {
+    auto it=g_refs.find(key);if(it==g_refs.end())return nullptr;
+    if(!it->second.binding)return &it->second;
+    key=it->second.binding;
+  }
+  return nullptr;
+}
+GameRefState* gameref_find_live(int32_t id) {
+  if(id<0x70000000)return nullptr;
+  for(auto& entry:g_refs)if(!entry.second.binding&&entry.second.live_id==id)return &entry.second;
+  return nullptr;
+}
+int32_t gameref_make_live(void* key) {
+  auto* state=gameref_get(key);if(!state)state=gameref_upsert(key);if(!state)return 0;
+  if(!state->live_id){while(gameref_find_live(g_next_live))++g_next_live;state->live_id=g_next_live++;}
+  return state->live_id;
+}
+bool gameref_bind_alias(void* reference,void* target) {
+  auto* canonical=gameref_get(target);if(!reference||!canonical)return false;
+  if(reference==canonical->key)return true;
+  auto* ref=gameref_upsert(reference);ref->binding=canonical->key;return true;
 }
 
 void gameref_remove(void* key) {
   if (!key) return;
+  auto own=g_refs.find(key);
+  if(own!=g_refs.end()&&own->second.binding){g_refs.erase(own);return;}
   GameRefState* n = gameref_get(key);
   if (n) unlink_from_parent(n);
   // Orphan children stay keyed but parent cleared.
@@ -71,6 +94,8 @@ void gameref_set_parent(void* key, void* parent) {
   GameRefState* n = gameref_get(key);
   if (!n) n = gameref_upsert(key);
   if (!n) return;
+  key=n->key;
+  if(auto* canonical_parent=gameref_get(parent))parent=canonical_parent->key;
   unlink_from_parent(n);
   n->parent = parent;
   if (parent) {
@@ -80,7 +105,8 @@ void gameref_set_parent(void* key, void* parent) {
 }
 
 void gameref_set_flags(void* key, int32_t flags) {
-  GameRefState* n = gameref_upsert(key);
+  GameRefState* n = gameref_get(key);
+  if(!n)n=gameref_upsert(key);
   if (n) n->flags |= flags;
 }
 
@@ -96,8 +122,10 @@ int32_t gameref_get_flags(void* key) {
 
 void gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
                         float pitch, float roll) {
-  GameRefState* n = gameref_upsert(key);
+  GameRefState* n = gameref_get(key);
+  if(!n)n=gameref_upsert(key);
   if (!n) return;
+  n->matrix_override=false;
   n->pos[0] = px;
   n->pos[1] = py;
   n->pos[2] = pz;

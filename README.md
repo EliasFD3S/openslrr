@@ -13,6 +13,9 @@ La validation utilise les données de **SLRR 2.2.1 MWM**.
 | Scripts | Chargement des classes TUFA, exécution des arbres TREE, appels Java/natifs, héritage et instructions `switch` |
 | Ressources | Lecture des RPK, résolution des références entre packs, géométrie SCX, textures DDS/PTX et lecture des propriétés CFG |
 | Rendu | Backend bgfx/D3D11, garage texturé, caméra orbitale, instances de scène et skydome |
+| Voiture | Création depuis un RPK/CFG, classes et sélection des pièces d'origine, assemblage par slots et alias de compatibilité ; Baiern de référence : 76 pièces |
+| Catalogue | Parcours des catégories entre RPK, identification des classes, pièces et aperçus 3D dans les pages d'origine |
+| Matériaux | Peinture par texture CFG, UV multiples, couche secondaire et envmap statique sélectionnée par les scripts |
 | Interface | Menus, dialogues de carrières, Club Info, track selector, champs texte, hover et affichage DAY/TIME |
 | Peinture | Bombes de peinture 3D dans les cinq cases, couleurs issues des scripts, défilement et caméras d'inventaire indépendantes |
 | Audio | Effets UI et appels `SfxRef`, voix indépendantes avec volume, pitch, boucle et arrêt |
@@ -20,7 +23,7 @@ La validation utilise les données de **SLRR 2.2.1 MWM**.
 
 Dans les données utilisées pour les tests, `Prime.avi` n'a pas de piste audio.
 
-**Encore à développer :** assemblage et affichage d'une voiture complète depuis ses CFG et ses pièces, réflexions de carrosserie, conduite/physique intégrée, monde et trafic. Les natives restent incomplètes ; certaines fonctions sont encore des stubs. Le module Pacejka est une base expérimentale, pas une simulation de conduite opérationnelle. Le multijoueur est hors du périmètre actuel.
+**Encore à développer :** conduite/physique intégrée, pose exacte des suspensions, fidélité complète des matériaux/transparences, réflexions dynamiques, monde et trafic. Les natives restent incomplètes ; certaines fonctions sont encore des stubs. L'affichage des pièces du catalogue est testé, mais le cycle complet achat/installation/sauvegarde reste à valider. Le module Pacejka est une base expérimentale, pas une simulation de conduite opérationnelle. Le multijoueur est hors du périmètre actuel.
 
 ## Prérequis
 
@@ -77,6 +80,9 @@ Les archives ne contiennent ni les données du jeu ni les dépendances de `third
 # Accès direct au garage pour le développement.
 .\build-bgfx\Release\slrr_host.exe --game --auto-new --render bgfx --root ..\game
 
+# Garage avec une Baiern assemblée depuis ses scripts et CFG d'origine.
+.\build-bgfx\Release\slrr_host.exe --game --spawn-car cars/racers/Baiern.rpk:0x6 --render bgfx --root ..\game
+
 # Vérification du chargement des données, sans session interactive.
 .\build-bgfx\Release\slrr_host.exe --probe --root ..\game
 
@@ -88,15 +94,17 @@ Le chemin des données peut aussi être défini avec `$env:SLRR_GAME_ROOT`. `--r
 
 Dans le garage : clic droit + glisser pour l'orbite, flèches et molette pour la caméra. Échap permet de passer les intros. Fermez la fenêtre pour quitter.
 
+`--spawn-car PACK:ID_LOCAL` ouvre une session de développement sans soumettre le dialogue de création de carrière. La pose repose sur un placement statique ; elle n'active pas une simulation de conduite.
+
 ## Tests
 
 ```powershell
 cmake --build build-bgfx --config Release `
-  --target host_runtime_test ui_state_test scene_instances_test --parallel
+  --target host_runtime_test ui_state_test scene_instances_test part_config_test --parallel
 ctest --test-dir build-bgfx -C Release --output-on-failure
 ```
 
-Avec les données de référence, la suite compte **12 tests CTest**. Elle couvre notamment :
+Avec les données de référence, la suite compte **16 tests CTest**. Elle couvre notamment :
 
 - les effets simultanés, `money.wav`, les boucles et l'arrêt des voix ;
 - la connexion et l'état de lecture de la sortie audio des intros ;
@@ -106,7 +114,10 @@ Avec les données de référence, la suite compte **12 tests CTest**. Elle couvr
 - le remplacement des descriptions du track selector sans accumulation ;
 - les états de hover, les boutons activés/désactivés et le focus ;
 - les cinq paint cans grises, la page rouge suivante et leur disparition à la fermeture ;
-- les transformations, l'isolation des scènes d'inventaire et les ressources de skydome.
+- les transformations, l'isolation des scènes d'inventaire et les ressources de skydome ;
+- les CFG de voiture, les slots, leurs alias et l'assemblage stock exécuté par les scripts ;
+- les pièces du catalogue, leurs classes, leurs prix et leurs aperçus ;
+- les couches SCX, les canaux UV et la propagation de `Part.setTexture` au rendu.
 
 Les tests d'intégration sont ajoutés lorsque `SLRR_TEST_GAME_ROOT` pointe vers les données du jeu. Sans ces données, seuls les tests autonomes sont disponibles. La commande de validation exige les assets pour éviter une promotion fondée sur une suite partielle.
 
@@ -132,3 +143,5 @@ third_party/      Dépendances locales, ignorées par Git
 Les dossiers `game/`, `game2/`, `sources/`, `sources2/`, `repos/` et `docs/` du poste de développement sont extérieurs à ce dépôt. Ils servent de données et de références locales. [QUARRY.md](QUARRY.md) décrit ces références ; certains de ses chemins supposent cet espace de travail élargi.
 
 Les projets [SLRR_rev](https://github.com/nedobylskiy/SLRR_rev), [SLRR-JVM-decompiler](https://github.com/nedobylskiy/SLRR-JVM-decompiler) et [io_invo_scx](https://github.com/nonamesex/io_invo_scx) servent notamment de références pour les formats et le comportement du jeu. Le rendu utilise [bgfx](https://github.com/bkaradzic/bgfx).
+
+[REFERENCE_PORT.md](REFERENCE_PORT.md) précise la révision de référence, les contrats repris en C++ et les limites de cette étape.

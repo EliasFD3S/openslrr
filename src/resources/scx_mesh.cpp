@@ -59,6 +59,13 @@ bool parse_v3(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
     group.diffuse[2] = rd_f32(buf.data() + mat_start + 12);
     group.diffuse[3] = rd_f32(buf.data() + mat_start + 16);
     group.material_flags = rd_u32(buf.data() + mat_start + 40);
+    group.reflection_strength = rd_f32(buf.data() + mat_start + 32);
+    group.reflection_index = static_cast<uint16_t>(buf[mat_start+50] | (buf[mat_start+51]<<8));
+    group.mix_index = static_cast<uint16_t>(buf[mat_start+52] | (buf[mat_start+53]<<8));
+    if (size > 56) {
+      group.base_map.channel = static_cast<uint16_t>(buf[mat_start+70] | (buf[mat_start+71]<<8));
+      group.mix_map.channel = static_cast<uint16_t>(buf[mat_start+72] | (buf[mat_start+73]<<8));
+    }
     group.texture_index = static_cast<uint16_t>(
         buf[mat_start + 44] | (buf[mat_start + 45] << 8));
     if (size == 136) {
@@ -95,6 +102,10 @@ bool parse_v3(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
         geo.normals.push_back(rd_f32(v + 20));
         geo.uvs.push_back(rd_f32(v + 24));
         geo.uvs.push_back(rd_f32(v + 28));
+        geo.uv2.push_back(rd_f32(v + 32));
+        geo.uv2.push_back(rd_f32(v + 36));
+        geo.uv3.push_back(size > 56 ? rd_f32(v + 52) : 0);
+        geo.uv3.push_back(size > 56 ? rd_f32(v + 56) : 0);
       }
     }
     off += static_cast<size_t>(vcount) * stride;
@@ -216,7 +227,8 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
       have_mat = true;
       if (type == 0 && p + 12 <= chunk_end) {
         // flags u32, function u32, property count u32
-        mat.material_flags = rd_u32(buf.data() + p);
+        mat.material_type = rd_u32(buf.data() + p);
+        mat.material_flags = rd_u32(buf.data() + p + 4);
         p += 8;  // flags + function word
         const uint32_t nprop = rd_u32(buf.data() + p);
         p += 4;
@@ -234,6 +246,7 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
             p += 4;
           } else if (prop >= 0x01000000u && prop <= 0x01000002u) {
             if (p + 4 > chunk_end) break;
+            if (prop == 0x01000001u) mat.reflection_strength = rd_f32(buf.data()+p);
             p += 4;
           } else if (prop == 0x05000000u || prop == 0x07000000u) {
             if (p + 4 > chunk_end) break;
@@ -242,11 +255,21 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
             // tex index, channel, tiling, scaleUV, offsetUV
             if (p + 28 > chunk_end) break;
             const uint32_t tex_i = rd_u32(buf.data() + p);
+            ScxTextureMap map;
+            map.channel = rd_u32(buf.data()+p+4);
+            map.tiling = rd_u32(buf.data()+p+8);
+            map.scale_u = rd_f32(buf.data()+p+12);
+            map.scale_v = rd_f32(buf.data()+p+16);
+            map.offset_u = rd_f32(buf.data()+p+20);
+            map.offset_v = rd_f32(buf.data()+p+24);
             // Prefer DiffuseMap (0x06000000); fall back to DiffuseMixSecond.
             if (prop == 0x06000000u ||
                 (prop == 0x06000001u && mat.texture_index == 0xffff)) {
               mat.texture_index = static_cast<uint16_t>(tex_i);
+              mat.base_map = map;
             }
+            if (prop == 0x06000001u) { mat.mix_index=static_cast<uint16_t>(tex_i); mat.mix_map=map; }
+            if (prop == 0x06000003u) { mat.reflection_index=static_cast<uint16_t>(tex_i); mat.reflection_map=map; }
             p += 28;
           } else if (prop == 0x08000000u) {
             if (p + 32 > chunk_end) break;
@@ -304,8 +327,9 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
           vv = rd_f32(v + o + 4);
           o += 8;
         }
-        // Skip UV2/UV3/tangents — diffuse uses UV1 for garage props.
-        (void)o;
+        float u2=0,v2=0,u3=0,v3=0;
+        if(flags&0x400) {u2=rd_f32(v+o);v2=rd_f32(v+o+4);o+=8;}
+        if(flags&0x800) {u3=rd_f32(v+o);v3=rd_f32(v+o+4);o+=8;}
         if (want_geo) {
           geo.positions.push_back(x);
           geo.positions.push_back(y);
@@ -315,6 +339,8 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
           geo.normals.push_back(nz);
           geo.uvs.push_back(u);
           geo.uvs.push_back(vv);
+          geo.uv2.push_back(u2); geo.uv2.push_back(v2);
+          geo.uv3.push_back(u3); geo.uv3.push_back(v3);
         }
       }
     } else if (type == 5) {

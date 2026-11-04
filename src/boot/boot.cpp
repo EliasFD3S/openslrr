@@ -8,6 +8,7 @@
 #include "slrr/mainloop.hpp"
 #include "slrr/natives_boot.hpp"
 #include "slrr/object.hpp"
+#include "slrr/part_runtime.hpp"
 #include "slrr/osd_registry.hpp"
 #include "slrr/rpk_index.hpp"
 #include "slrr/slrr_font.hpp"
@@ -272,7 +273,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
       osd_clear_widgets();
       slrr_text_clear_all();
       const int32_t cap = (opt.max_frames > 0) ? 2 : 0;
-      video_fmv_play_boot_intros(cap, [&render]() {
+      if(opt.spawn_car.empty())video_fmv_play_boot_intros(cap, [&render]() {
         render.pump(0);
         render.flush();
       });
@@ -312,7 +313,20 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     }
   }
 
-  if (opt.auto_new) {
+  if(!opt.spawn_car.empty()) {
+    auto colon=opt.spawn_car.find_last_of(':');
+    const RpkPack* pack=colon==std::string::npos?nullptr:rpk.pack_by_name(opt.spawn_car.substr(0,colon));
+    uint32_t local=0;
+    try {size_t used=0;std::string value=opt.spawn_car.substr(colon+1);unsigned long id=std::stoul(value,&used,0);if(used==value.size()&&id>0&&id<=0xffff)local=static_cast<uint32_t>(id);}catch(const std::exception&){}
+    Object* player=sections.seed_player(opt.player_name);
+    Object* car=pack&&local?vehicle_spawn_stock(jvm,rpk,player,RpkIndex::make_full_id(pack->pack_id,local)):nullptr;
+    if(!car){std::fprintf(stderr,"[boot] cannot spawn car %s\n",opt.spawn_car.c_str());if(render.ready())render.close();return 11;}
+    player->fields["car"]=Value::make_obj(car);
+    // A development session enters the garage directly; it never submits
+    // the NEW CAREER dialog or writes a save as a side effect of spawning.
+    sections.change_active_section(sections.garage());
+    std::printf("[boot] spawned %s parts=%zu\n",opt.spawn_car.c_str(),part_installed_tree(car).size());
+  } else if (opt.auto_new) {
     std::fprintf(stderr,
                  "[boot] WARN --auto-new bypasses Splash→MainMenu (stock "
                  "loop). Use --game without --auto-new for Soft path.\n");

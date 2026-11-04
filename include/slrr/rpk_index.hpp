@@ -108,6 +108,9 @@ class RpkIndex {
   std::vector<uint32_t> garage_render_ids(int32_t pack_id,
                                           int garage_index) const;
 
+  // Dependency-qualified children across all packs, in stable pack/TOC order.
+  std::vector<uint32_t> children_of(uint32_t parent) const;
+
   int32_t total_entries() const;
 
   std::string disk_path_for_pack(int32_t pack_id) const;

@@ -53,6 +53,10 @@
 #include "dxbc/fs_mesh.sc.bin.h"
 #include "glsl/vs_mesh.sc.bin.h"
 #include "glsl/fs_mesh.sc.bin.h"
+#include "dxbc/vs_vehicle.sc.bin.h"
+#include "dxbc/fs_vehicle.sc.bin.h"
+#include "glsl/vs_vehicle.sc.bin.h"
+#include "glsl/fs_vehicle.sc.bin.h"
 
 namespace slrr {
 namespace {
@@ -63,11 +67,15 @@ static const bgfx::EmbeddedShader k_vs[] = {
 static const bgfx::EmbeddedShader k_fs[] = {
     BGFX_EMBEDDED_SHADER(fs_mesh),
     BGFX_EMBEDDED_SHADER_END()};
+static const bgfx::EmbeddedShader k_vehicle[] = {
+    BGFX_EMBEDDED_SHADER(vs_vehicle), BGFX_EMBEDDED_SHADER(fs_vehicle),
+    BGFX_EMBEDDED_SHADER_END()};
 
 struct MeshVertex {
   float x, y, z;
   float nx, ny, nz;
   float u, v;
+  float u2 = 0, v2 = 0, u3 = 0, v3 = 0;
 };
 
 class LibBgfxBackend final : public IRenderBackend {
@@ -140,10 +148,23 @@ class LibBgfxBackend final : public IRenderBackend {
       return false;
     }
     program_ = bgfx::createProgram(vsh, fsh, true);
+    vehicle_program_ = bgfx::createProgram(
+        bgfx::createEmbeddedShader(k_vehicle, rt, "vs_vehicle"),
+        bgfx::createEmbeddedShader(k_vehicle, rt, "fs_vehicle"), true);
+    s_mix_ = bgfx::createUniform("s_vehicleMix", bgfx::UniformType::Sampler);
+    s_env_ = bgfx::createUniform("s_vehicleEnv", bgfx::UniformType::Sampler);
+    u_layers_ = bgfx::createUniform("u_vehicleLayers", bgfx::UniformType::Vec4);
+    u_channels_ = bgfx::createUniform("u_vehicleChannels", bgfx::UniformType::Vec4);
+    u_base_uv_ = bgfx::createUniform("u_vehicleBaseUv", bgfx::UniformType::Vec4);
+    u_mix_uv_ = bgfx::createUniform("u_vehicleMixUv", bgfx::UniformType::Vec4);
+    u_env_uv_ = bgfx::createUniform("u_vehicleEnvUv", bgfx::UniformType::Vec4);
+    u_diffuse_ = bgfx::createUniform("u_vehicleDiffuse", bgfx::UniformType::Vec4);
     layout_.begin()
         .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
         .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
         .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord1, 2, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord2, 2, bgfx::AttribType::Float)
         .end();
 
     // 1x1 white fallback texture.
@@ -197,6 +218,12 @@ class LibBgfxBackend final : public IRenderBackend {
     if (bgfx::isValid(program_)) {
       bgfx::destroy(program_);
       program_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(vehicle_program_)) bgfx::destroy(vehicle_program_);
+    vehicle_program_ = BGFX_INVALID_HANDLE;
+    for (auto* handle : {&s_mix_, &s_env_, &u_layers_, &u_channels_, &u_base_uv_, &u_mix_uv_, &u_env_uv_, &u_diffuse_}) {
+      if(bgfx::isValid(*handle)) bgfx::destroy(*handle);
+      *handle = BGFX_INVALID_HANDLE;
     }
     if (ready_) bgfx::shutdown();
 #ifdef _WIN32
@@ -391,6 +418,45 @@ class LibBgfxBackend final : public IRenderBackend {
   void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview) {
     const auto& part=instance_meshes_.at(instance.geometry.get());
     if(!bgfx::isValid(part.vbh)||!bgfx::isValid(part.ibh))return;
+    if (instance.vehicle_material && bgfx::isValid(vehicle_program_)) {
+      for (const auto& group : part.geo.groups) {
+        auto texture = [&](uint16_t slot) {
+          return slot < part.tex.size() && bgfx::isValid(part.tex[slot]) ? part.tex[slot] : white_tex_;
+        };
+        auto base = texture(group.texture_index);
+        const bool painted = instance.paint_slot >= 0 && group.texture_index == instance.paint_slot;
+        if (painted && !instance.paint_texture.empty()) base = tex_for_osd_icon(instance.paint_texture);
+        auto mix = texture(group.mix_index);
+        bool mixed = group.mix_index != 0xffff && group.mix_index != group.texture_index && mix.idx != white_tex_.idx;
+        auto env = texture(group.reflection_index);
+        bool generated = group.reflection_map.channel == 0xfffffffeu;
+        if (env.idx == white_tex_.idx && (painted || generated)) {
+          auto path = scene_instances_envmap();
+          if(!path.empty()) env = tex_for_osd_icon(path);
+          generated = true;
+        }
+        const float strength = std::isfinite(group.reflection_strength) ? std::clamp(group.reflection_strength,0.f,1.f)*.5f : .25f;
+        const float layers[4] = {mixed?1.f:0.f, env.idx!=white_tex_.idx?strength:0.f, group.material_type==0x15&&mixed?1.f:0.f, painted?1.f:0.f};
+        const float channels[4] = {static_cast<float>(group.base_map.channel),static_cast<float>(group.mix_map.channel),static_cast<float>(group.reflection_map.channel),generated?1.f:0.f};
+        auto map = [&](bgfx::UniformHandle uniform, const ScxTextureMap& uv) {
+          const float value[4]={uv.scale_u,uv.scale_v,uv.offset_u,uv.offset_v}; bgfx::setUniform(uniform,value);
+        };
+        bgfx::setUniform(u_layers_,layers); bgfx::setUniform(u_channels_,channels);
+        // A bound diffuse map supplies its authored color; SCX diffuse RGB is
+        // the untextured fallback, rather than an extra darkening multiplier.
+        float diffuse[4]={1,1,1,group.diffuse[3]};
+        if(group.texture_index>=part.geo.textures.size())
+          std::copy(group.diffuse,group.diffuse+3,diffuse);
+        bgfx::setUniform(u_diffuse_,diffuse);
+        map(u_base_uv_,group.base_map);map(u_mix_uv_,group.mix_map);map(u_env_uv_,group.reflection_map);
+        bgfx::setTexture(0,s_tex_,base);bgfx::setTexture(1,s_mix_,mix);bgfx::setTexture(2,s_env_,env);
+        bgfx::setTransform(matrix);bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,group.index_start,group.index_count);
+        uint64_t state=BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_MSAA|BGFX_STATE_DEPTH_TEST_LESS;
+        if(group.diffuse[3]<.99f)state|=BGFX_STATE_BLEND_ALPHA;else state|=BGFX_STATE_WRITE_Z;
+        bgfx::setState(state);bgfx::submit(view_id,vehicle_program_);
+      }
+      return;
+    }
     auto draw=[&](uint32_t first,uint32_t count,uint16_t texture_index,uint32_t flags){
       auto tex=texture_index<part.tex.size()?part.tex[texture_index]:white_tex_;if(!bgfx::isValid(tex))tex=white_tex_;
       bool cut=!preview&&!instance.sky&&(part.geo.info.version!=3||(flags&1));
@@ -508,6 +574,8 @@ class LibBgfxBackend final : public IRenderBackend {
         verts[i].u = 0;
         verts[i].v = 0;
       }
+      if(part.geo.uv2.size()>i*2+1) {verts[i].u2=part.geo.uv2[i*2];verts[i].v2=part.geo.uv2[i*2+1];}
+      if(part.geo.uv3.size()>i*2+1) {verts[i].u3=part.geo.uv3[i*2];verts[i].v3=part.geo.uv3[i*2+1];}
     }
     const bgfx::Memory* vmem = bgfx::copy(
         verts.data(), static_cast<uint32_t>(verts.size() * sizeof(MeshVertex)));
@@ -830,8 +898,11 @@ class LibBgfxBackend final : public IRenderBackend {
       if (img.format == DdsFormat::DXT1) fmt = bgfx::TextureFormat::BC1;
       else if (img.format == DdsFormat::DXT3) fmt = bgfx::TextureFormat::BC2;
       else if (img.format == DdsFormat::DXT5) fmt = bgfx::TextureFormat::BC3;
-      else if (img.format == DdsFormat::RGBA8)
-        fmt = bgfx::TextureFormat::RGBA8;
+      else if (img.format == DdsFormat::RGBA8) {
+        std::string ext=path.size()>=4?path.substr(path.size()-4):"";
+        for(char& c:ext)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        fmt=ext==".dds"?bgfx::TextureFormat::BGRA8:bgfx::TextureFormat::RGBA8;
+      }
       if (fmt != bgfx::TextureFormat::Unknown) {
         const bgfx::Memory* mem =
             bgfx::copy(img.data.data(), img.mip0_size);
@@ -1396,6 +1467,10 @@ class LibBgfxBackend final : public IRenderBackend {
   std::unordered_map<void*, bgfx::TextureHandle> font_tex_;
   bgfx::UniformHandle u_alpha_test_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_color_ = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle vehicle_program_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle s_mix_=BGFX_INVALID_HANDLE,s_env_=BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_layers_=BGFX_INVALID_HANDLE,u_channels_=BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_base_uv_=BGFX_INVALID_HANDLE,u_mix_uv_=BGFX_INVALID_HANDLE,u_env_uv_=BGFX_INVALID_HANDLE,u_diffuse_=BGFX_INVALID_HANDLE;
 };
 
 }  // namespace
