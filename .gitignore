@@ -63,3 +63,27 @@ Thumbs.db
 .ninja_log
 build.ninja
 .ninja_*
+CMakeUserPresets.json
+
+# ==========================================
+# Visual Studio intermediates
+# ==========================================
+*.ipch
+*.iobj
+*.ipdb
+*.pch
+*.tlog
+*.lastbuildstate
+*.aps
+*.res
+ipch/
+enc_temp_folder/
+
+# ==========================================
+# Editor / OS
+# ==========================================
+.cursor/
+desktop.ini
+
+# Captures locales, non lues par le host.
+/_mm_*.jpg

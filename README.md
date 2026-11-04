@@ -1,52 +1,66 @@
 # OpenSLRR
 
-Host C++ expérimental pour **Street Legal Racing: Redline**. Le projet exécute les scripts compilés du jeu dans un interpréteur TUFA et fournit progressivement les fonctions natives, les ressources, le rendu et l'audio nécessaires.
+Host C++ pour **Street Legal Racing: Redline**. Il charge les classes TUFA du jeu, exécute les arbres TREE, et fournit les natives, les ressources, le rendu et l'audio que ces scripts appellent.
 
-Le travail actuel porte sur le démarrage, les menus et le garage. Ce n'est pas encore une réimplémentation complète et jouable du moteur.
+Le périmètre validé couvre le démarrage, les menus, les dialogues et le garage, y compris l'assemblage d'une voiture depuis ses CFG. La conduite, le monde et le trafic restent à faire. Les données du jeu ne sont pas dans ce dépôt.
 
-## État actuel
+La validation utilise **SLRR 2.2.1 MWM**. Win32 est la configuration de référence : les scripts et les codecs AVI 32 bits s'y attendent. Le backend bgfx est compilé en C++20.
 
-La validation utilise les données de **SLRR 2.2.1 MWM**.
+## État
 
-| Domaine | Fonctionnalités présentes |
+| Domaine | En place |
 | --- | --- |
-| Scripts | Chargement des classes TUFA, exécution des arbres TREE, appels Java/natifs, héritage et instructions `switch` |
-| Ressources | Lecture des RPK, résolution des références entre packs, géométrie SCX, textures DDS/PTX et lecture des propriétés CFG |
-| Rendu | Backend bgfx/D3D11, garage texturé, caméra orbitale, instances de scène et skydome |
-| Voiture | Création depuis un RPK/CFG, classes et sélection des pièces d'origine, assemblage par slots et alias de compatibilité ; Baiern de référence : 76 pièces |
-| Catalogue | Parcours des catégories entre RPK, identification des classes, pièces et aperçus 3D dans les pages d'origine |
-| Matériaux | Peinture par texture CFG, UV multiples, couche secondaire et envmap statique sélectionnée par les scripts |
-| Interface | Menus, dialogues de carrières, Club Info, track selector, champs texte, hover et affichage DAY/TIME |
-| Peinture | Bombes de peinture 3D dans les cinq cases, couleurs issues des scripts, défilement et caméras d'inventaire indépendantes |
-| Audio | Effets UI et appels `SfxRef`, voix indépendantes avec volume, pitch, boucle et arrêt |
-| FMV | Lecture AVI, vidéo intégrée au rendu et sortie audio des intros Activision/Invictus |
+| Scripts | Classes TUFA, arbres TREE, appels Java et natifs, héritage, `switch` |
+| Ressources | RPK et références entre packs, géométrie SCX, textures DDS/PTX, propriétés CFG |
+| Rendu | bgfx/D3D11, garage texturé, caméra orbitale, instances de scène, skydome |
+| Voiture | Création depuis un RPK/CFG, pièces d'origine, slots et alias de compatibilité. Référence : Baiern, 76 pièces |
+| Catalogue | Catégories entre RPK, classes, prix, pièces et aperçus 3D dans les pages d'origine |
+| Matériaux | Peinture par texture CFG, UV multiples, couche secondaire, envmap statique choisie par les scripts |
+| Interface | Menus, dialogues de carrière, Club Info, track selector, champs texte, hover, DAY/TIME |
+| Peinture | Cinq bombes 3D, couleurs issues des scripts, défilement, caméras d'inventaire séparées |
+| Audio | Effets d'interface, `SfxRef`, voix avec volume, pitch, boucle et arrêt |
+| FMV | AVI dans le rendu, piste audio des intros Activision/Invictus |
 
-Dans les données utilisées pour les tests, `Prime.avi` n'a pas de piste audio.
+Dans les données de test, `Prime.avi` n'a pas de piste audio.
 
-**Encore à développer :** conduite/physique intégrée, pose exacte des suspensions, fidélité complète des matériaux/transparences, réflexions dynamiques, monde et trafic. Les natives restent incomplètes ; certaines fonctions sont encore des stubs. L'affichage des pièces du catalogue est testé, mais le cycle complet achat/installation/sauvegarde reste à valider. Le module Pacejka est une base expérimentale, pas une simulation de conduite opérationnelle. Le multijoueur est hors du périmètre actuel.
+**Encore à développer :** conduite et physique intégrée, pose réelle des suspensions, transparences et éclairage complets, réflexions dynamiques, monde et trafic. Des natives sont encore des stubs. L'affichage du catalogue est testé ; l'achat, le montage interactif et la sauvegarde de ce cycle ne le sont pas. Pacejka est une sonde (`--probe-pacejka`), pas la boucle de conduite. Le multijoueur est hors périmètre.
+
+## Provenance
+
+Les scripts TUFA et les assets installés restent la source des classes, des pièces et de leurs paramètres. Le host réécrit les contrats en C++. Les dépôts suivants ont servi de spécification :
+
+| Référence | Rôle pour ce host |
+| --- | --- |
+| [SLRR-JVM-decompiler](https://github.com/nedobylskiy/SLRR-JVM-decompiler) | Spec TUFA et `OP_FLAGS`, reprise dans `src/jvm/tufa.cpp` |
+| [SLRR-JVM-compiler](https://github.com/nedobylskiy/SLRR-JVM-compiler) | Écriture TUFA, utile pour régénérer des classes |
+| [SLRR-JVM](https://github.com/nedobylskiy/SLRR-JVM) | Dialecte source et natives, référence de comportement |
+| [SLRR_rev](https://github.com/nedobylskiy/SLRR_rev) | Formats RPK/SCX, CFG, FindFile |
+| [SLRR_rev `codex/physics-reverse-port` @ c65675f](https://github.com/nedobylskiy/SLRR_rev/tree/c65675f) | Couches SCX, peinture, envmap. Contrats dans [REFERENCE_PORT.md](REFERENCE_PORT.md) |
+| [SLRR_rev `codex/pacejka-research`](https://github.com/nedobylskiy/SLRR_rev) | Feuille Pacejka SL2, exposée par `--probe-pacejka` |
+| [io_invo_scx](https://github.com/nonamesex/io_invo_scx) | Structure des meshes SCX |
+| [bgfx](https://github.com/bkaradzic/bgfx) | Rendu D3D11 |
+
+D'autres notes de SLRR_rev (WheelRef, usure, dégâts) restent de la lecture. Elles ne pilotent pas encore le jeu. [QUARRY.md](QUARRY.md) décrit l'espace de travail local (`repos/`, `sources/`, `game/`) dans lequel ces références ont été lues.
 
 ## Prérequis
 
-- Windows et Visual Studio 2022 avec les outils C++, le SDK Windows et CMake.
-- Git pour récupérer les dépendances de rendu.
-- Une installation du jeu fournissant les classes, RPK, modèles, textures et sons.
+- Windows, Visual Studio 2022, le SDK Windows et CMake.
+- Git, pour récupérer bgfx.
+- Une installation du jeu : classes, RPK, modèles, textures et sons. Le fichier `system/Scripts/lang/System.class` doit y être.
 
-**Win32 est la configuration de référence**, notamment pour les conventions des scripts et les codecs AVI 32 bits. Le backend bgfx utilise C++20. Les données du jeu ne sont pas fournies par ce dépôt.
+Les commandes partent de la racine de ce dépôt. Dans l'espace de travail de développement, ce dossier s'appelle `host/`.
 
-Les commandes ci-dessous se lancent depuis la racine du dépôt `openslrr` — le dossier appelé `host/` dans l'espace de travail de développement.
-
-## Installation et compilation
+## Compilation
 
 ```powershell
 git clone https://github.com/EliasFD3S/openslrr.git
 cd openslrr
 
-# Wrapper CMake de bgfx ; ses dépendances sont récupérées par CMake.
 git clone https://github.com/bkaradzic/bgfx.cmake.git third_party/bgfx.cmake
 git -C third_party/bgfx.cmake checkout 5ea74ee66662daef4089695846d6322da0dde94e
 ```
 
-Placez les données du jeu dans un dossier voisin `../game/`, ou indiquez leur emplacement avec `-GameRoot` et `--root`. Le fichier `system/Scripts/lang/System.class` doit être présent dans ce dossier.
+Le dossier de jeu par défaut est `../game`. Un autre emplacement se passe avec `-GameRoot` ou `--root`.
 
 ```powershell
 cmake -S . -B build-bgfx -G "Visual Studio 17 2022" -A Win32 `
@@ -54,47 +68,38 @@ cmake -S . -B build-bgfx -G "Visual Studio 17 2022" -A Win32 `
 
 .\validate-and-promote.ps1
 
-# Avec une installation située ailleurs :
+# Installation ailleurs :
 .\validate-and-promote.ps1 -GameRoot 'D:\Jeux\SLRR'
 ```
 
-### Validation avant remplacement de l'exécutable
+`validate-and-promote.ps1` compile dans `build-bgfx/candidate/`, lance les tests sur les assets d'origine, archive sources, empreintes SHA-256, journal et exécutables dans `../checkpoints/`, puis remplace `build-bgfx/Release/slrr_host.exe` seulement si les tests passent. L'ancien exécutable reste dans la sauvegarde. Fermer le jeu avant cette étape : un exécutable ouvert bloque le remplacement. Une compilation avec `SLRR_STAGE_BUILD=ON` ne met à jour que le candidat.
 
-`validate-and-promote.ps1` :
-
-1. compile le programme dans `build-bgfx/candidate/` ;
-2. construit et lance les tests avec les ressources originales ;
-3. archive les sources, les empreintes SHA-256, le journal des tests et les exécutables dans `../checkpoints/` ;
-4. remplace `build-bgfx/Release/slrr_host.exe` uniquement si les tests réussissent.
-
-L'ancien exécutable est conservé dans la sauvegarde. Fermez le jeu avant cette étape : un exécutable ouvert empêche son remplacement. Une simple compilation avec `SLRR_STAGE_BUILD=ON` ne met à jour que le candidat.
-
-Les archives ne contiennent ni les données du jeu ni les dépendances de `third_party/`.
+Les archives ne contiennent ni le jeu ni `third_party/`.
 
 ## Lancement
 
 ```powershell
-# Démarrage normal : intros, puis menus.
+# Intros, puis menus.
 .\build-bgfx\Release\slrr_host.exe --game --render bgfx --root ..\game
 
-# Accès direct au garage pour le développement.
+# Garage, sans passer par la création de carrière.
 .\build-bgfx\Release\slrr_host.exe --game --auto-new --render bgfx --root ..\game
 
-# Garage avec une Baiern assemblée depuis ses scripts et CFG d'origine.
+# Baiern assemblée depuis ses scripts et CFG.
 .\build-bgfx\Release\slrr_host.exe --game --spawn-car cars/racers/Baiern.rpk:0x6 --render bgfx --root ..\game
 
-# Vérification du chargement des données, sans session interactive.
+# Chargement des données, sans session interactive.
 .\build-bgfx\Release\slrr_host.exe --probe --root ..\game
 
-# Vérification du module Pacejka.
+# Sonde Pacejka.
 .\build-bgfx\Release\slrr_host.exe --probe-pacejka
 ```
 
-Le chemin des données peut aussi être défini avec `$env:SLRR_GAME_ROOT`. `--root` reste prioritaire. Lancez `slrr_host.exe --help` pour les autres options.
+`$env:SLRR_GAME_ROOT` fixe aussi le dossier de jeu. `--root` a la priorité. `slrr_host.exe --help` liste le reste.
 
-Dans le garage : clic droit + glisser pour l'orbite, flèches et molette pour la caméra. Échap permet de passer les intros. Fermez la fenêtre pour quitter.
+Dans le garage : clic droit et glisser pour l'orbite, flèches et molette pour la caméra. Échap passe les intros. Fermer la fenêtre quitte.
 
-`--spawn-car PACK:ID_LOCAL` ouvre une session de développement sans soumettre le dialogue de création de carrière. La pose repose sur un placement statique ; elle n'active pas une simulation de conduite.
+`--spawn-car PACK:ID_LOCAL` ouvre une session de développement sans le dialogue de carrière. La pose est statique.
 
 ## Tests
 
@@ -104,44 +109,41 @@ cmake --build build-bgfx --config Release `
 ctest --test-dir build-bgfx -C Release --output-on-failure
 ```
 
-Avec les données de référence, la suite compte **16 tests CTest**. Elle couvre notamment :
+Avec les données de référence, CTest enregistre **16 tests** :
 
-- les effets simultanés, `money.wav`, les boucles et l'arrêt des voix ;
-- la connexion et l'état de lecture de la sortie audio des intros ;
-- Tune et les branches `switch` des scripts ;
-- le HUD DAY/TIME, y compris après sa recréation ;
-- l'ouverture des dialogues de carrières, leurs libellés et le défilement ;
-- le remplacement des descriptions du track selector sans accumulation ;
-- les états de hover, les boutons activés/désactivés et le focus ;
-- les cinq paint cans grises, la page rouge suivante et leur disparition à la fermeture ;
-- les transformations, l'isolation des scènes d'inventaire et les ressources de skydome ;
-- les CFG de voiture, les slots, leurs alias et l'assemblage stock exécuté par les scripts ;
-- les pièces du catalogue, leurs classes, leurs prix et leurs aperçus ;
-- les couches SCX, les canaux UV et la propagation de `Part.setTexture` au rendu.
+- effets simultanés, `money.wav`, boucles et arrêt des voix ;
+- connexion et lecture de la piste audio des intros ;
+- Tune et les `switch` des scripts ;
+- HUD DAY/TIME, y compris après recréation ;
+- dialogues de carrière, libellés et défilement ;
+- descriptions du track selector, sans accumulation ;
+- hover, boutons activés ou désactivés, focus ;
+- cinq paint cans grises, page rouge suivante, disparition à la fermeture ;
+- transformations, scènes d'inventaire isolées, skydome ;
+- CFG, slots, alias, assemblage stock exécuté par les scripts ;
+- pièces du catalogue, classes, prix, aperçus ;
+- couches SCX, canaux UV, propagation de `Part.setTexture`.
 
-Les tests d'intégration sont ajoutés lorsque `SLRR_TEST_GAME_ROOT` pointe vers les données du jeu. Sans ces données, seuls les tests autonomes sont disponibles. La commande de validation exige les assets pour éviter une promotion fondée sur une suite partielle.
+`SLRR_TEST_GAME_ROOT` doit pointer vers le jeu pour les tests d'intégration. Sans ces données, seuls les tests autonomes sont construits. La promotion refuse une suite partielle.
 
-Ces tests ne valident pas un cycle complet de chargement/enregistrement de carrière ni une session de conduite. Les vérifications audio confirment la création des voix et l'état de lecture ; une écoute reste utile pour juger le mixage. Les effets positionnels utilisent actuellement le mixage 2D.
+Ces tests ne couvrent pas un cycle complet de chargement de carrière ni une session de conduite. Les tests audio vérifient la création des voix et l'état de lecture. Les effets positionnels passent par le mixage 2D.
 
 ## Organisation
 
 ```text
-include/slrr/     Interfaces du host
-src/jvm/          Parseur TUFA, interpréteur TREE et résolution des appels
-src/natives/      Fonctions natives exposées aux scripts
-src/resources/    RPK, SCX, textures, CFG et instances de scène
-src/render/       Backends de rendu et polices
-src/ui/           Widgets, focus, hover et formatage de l'heure
-src/platform/     Entrées, audio, caméra et FMV Windows
+include/slrr/     Interfaces
+src/jvm/          Parseur TUFA, interpréteur TREE, résolution des appels
+src/natives/      Natives exposées aux scripts
+src/resources/    RPK, SCX, textures, CFG, instances, assemblage
+src/render/       Backends et polices
+src/ui/           Widgets, focus, hover, heure
+src/platform/     Entrées, audio, caméra, FMV
 src/boot/         Démarrage et boucle principale
-src/physics/      Module Pacejka expérimental
+src/physics/      Sonde Pacejka
 shaders/          Shaders bgfx
-tests/            Tests autonomes et intégration avec le jeu
+tests/            Tests autonomes et intégration
 third_party/      Dépendances locales, ignorées par Git
+assets/           Curseurs et icône extraits pour l'hôte
 ```
 
-Les dossiers `game/`, `game2/`, `sources/`, `sources2/`, `repos/` et `docs/` du poste de développement sont extérieurs à ce dépôt. Ils servent de données et de références locales. [QUARRY.md](QUARRY.md) décrit ces références ; certains de ses chemins supposent cet espace de travail élargi.
-
-Les projets [SLRR_rev](https://github.com/nedobylskiy/SLRR_rev), [SLRR-JVM-decompiler](https://github.com/nedobylskiy/SLRR-JVM-decompiler) et [io_invo_scx](https://github.com/nonamesex/io_invo_scx) servent notamment de références pour les formats et le comportement du jeu. Le rendu utilise [bgfx](https://github.com/bkaradzic/bgfx).
-
-[REFERENCE_PORT.md](REFERENCE_PORT.md) précise la révision de référence, les contrats repris en C++ et les limites de cette étape.
+`game/`, `game2/`, `sources/`, `sources2/`, `repos/` et `docs/` vivent à côté de ce dépôt. Ils ne sont pas versionnés ici.
