@@ -1,4 +1,6 @@
 #include "slrr/mainloop.hpp"
+#include "slrr/scene_instances.hpp"
+#include "slrr/video_fmv.hpp"
 
 #include "slrr/garage_camera.hpp"
 #include "slrr/gameref.hpp"
@@ -48,9 +50,15 @@ void mainloop_adopt_section(Jvm& jvm, SectionMachine& sections) {
 void mainloop_sync_section_render(IRenderBackend& render,
                                   SectionMachine& sections) {
   Object* actual = sections.actual();
+  auto object_field=[&](const char* field)->Object* {
+    if(!actual)return nullptr;auto it=actual->fields.find(field);
+    return it!=actual->fields.end()&&it->second.tag==ValueTag::Obj?it->second.v.o:nullptr;
+  };
+  scene_instances_select(object_field("map"),object_field("skydome"));
   const bool in_garage =
       actual && actual->class_name.find("Garage") != std::string::npos;
   if (in_garage) {
+    if(video_fmv_is_non_exclusive())video_fmv_close();
     bgfx_set_garage_viewport(render, true, osd_widget_count());
     bgfx_set_osd_overlay(render, false);
   } else {
@@ -266,7 +274,9 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
       else if (tv.tag == ValueTag::Int) time = static_cast<float>(tv.v.i);
       static int32_t shown_day = -1;
       static std::string shown_time;
-      if (day_txt && day != shown_day) {
+      static Object* shown_day_text = nullptr;
+      static Object* shown_time_text = nullptr;
+      if (day_txt && (day != shown_day || day_txt != shown_day_text)) {
         char buf[16];
         std::snprintf(buf, sizeof(buf), "%d", day);
         jvm.invoke("java.render.Text", "changeText", "(Ljava.lang.String;)V",
@@ -274,10 +284,11 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
                     Value::make_obj(jvm.new_string(buf))},
                    false);
         shown_day = day;
+        shown_day_text = day_txt;
       }
       const int minute = static_cast<int>(time) / 60;
       static int shown_minute = -100000;
-      if (time_txt && minute != shown_minute) {
+      if (time_txt && (minute != shown_minute || time_txt != shown_time_text)) {
         // TCF_NOSECONDS | TCF_US
         Value formatted = jvm.invoke(
             "java.lang.String", "timeToString",
@@ -287,12 +298,13 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
         if (formatted.tag == ValueTag::Obj && formatted.v.o)
           clock = formatted.v.o->str;
         shown_minute = minute;
-        if (!clock.empty() && clock != shown_time) {
+        if (!clock.empty() && (clock != shown_time || time_txt != shown_time_text)) {
           jvm.invoke("java.render.Text", "changeText",
                      "(Ljava.lang.String;)V",
                      {Value::make_obj(time_txt), Value::make_obj(formatted.v.o)},
                      false);
           shown_time = clock;
+          shown_time_text = time_txt;
         }
       }
     }

@@ -80,7 +80,8 @@ class Jvm : public TreeHost {
                                 bool prefer_static) const;
   const TufaMember* find_method_by_name(
       const TufaClass& cls, const std::string& method, int argc,
-      bool prefer_static, const std::vector<Value>* runtime = nullptr) const;
+      bool prefer_static, const std::vector<Value>* runtime = nullptr,
+      int* match_score = nullptr) const;
   // Walk class → super… for TREE member + declaring class FQN.
   const TufaMember* find_method_inherited(const std::string& class_fqn,
                                           const std::string& method,

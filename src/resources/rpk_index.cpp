@@ -566,7 +566,8 @@ std::vector<std::string> RpkIndex::textures_for_scx(
               auto png = dds.find("\\png\\");
               if (png == std::string::npos) png = dds.find("/png/");
               if (png != std::string::npos) dds.erase(png + 1, 4);
-              file = std::move(dds);
+              if(std::filesystem::exists(std::filesystem::path(root_)/dds))
+                file = std::move(dds);
             }
           }
         }
@@ -629,7 +630,8 @@ RpkIndex::ModelRef RpkIndex::model_for_resource(int32_t pack_id,
   out.alias = ent->alias;
   const uint32_t full = make_full_id(pack_id, local_id);
 
-  auto prefer_dds = [](std::string file) {
+  auto prefer_dds = [this](std::string file) {
+    const std::string original=file;
     if (file.size() <= 4) return file;
     const auto dot = file.find_last_of('.');
     if (dot == std::string::npos) return file;
@@ -642,7 +644,7 @@ RpkIndex::ModelRef RpkIndex::model_for_resource(int32_t pack_id,
     auto png = file.find("\\png\\");
     if (png == std::string::npos) png = file.find("/png/");
     if (png != std::string::npos) file.erase(png + 1, 4);
-    return file;
+    return std::filesystem::exists(std::filesystem::path(root_)/file)?file:original;
   };
 
   auto resolve_tex = [&](const std::vector<std::string>& refs) {

@@ -47,6 +47,7 @@ struct OsdWidget {
   Object* owner = nullptr;
   // Script Button. Hit-test reads nofocus, which the script sets after create.
   Object* button = nullptr;
+  Object* highlight_for = nullptr;
   // Text object whose changeText fills tip. File rows are created as ""
   // and renamed afterwards; hover matches tip against that text.
   void* label_src = nullptr;
@@ -62,6 +63,8 @@ struct OsdWidget {
 };
 
 void osd_clear_widgets();
+bool osd_focus_plate_visible(const OsdWidget& plate);
+bool osd_highlight_disabled(const OsdWidget& plate);
 // Hide one widget (ResourceRef.destroy of a rectangle instance).
 void osd_hide_widget(int32_t index);
 OsdWidget* osd_widget_mut(int32_t index);
@@ -124,6 +127,8 @@ const OsdWidget* osd_hover_widget();
 // HIGHLIGHT_NORMAL = frontend:0x012B (Gadget.java), drawn at ×1.1 under icon.
 void osd_set_highlight_path(std::string path);
 const std::string& osd_highlight_path();
+void osd_set_disabled_highlight_path(std::string path);
+const std::string& osd_disabled_highlight_path();
 constexpr float kOsdHighlightScale = 1.1f;
 
 using OsdClickFn = std::function<void(const OsdWidget& w)>;

@@ -15,6 +15,13 @@ HostInput g_input;
 }  // namespace
 
 HostInput& host_input() { return g_input; }
+namespace { std::string history; }
+void host_input_char(int ch) {
+  if(ch>='A'&&ch<='Z')ch+='a'-'A';
+  if(ch>=32&&ch<127){history.push_back(static_cast<char>(ch));if(history.size()>128)history.erase(0,history.size()-128);}
+}
+const std::string& host_input_history(){return history;}
+void host_input_clear_history(){history.clear();}
 
 void host_input_poll_keys() {
 #ifdef _WIN32

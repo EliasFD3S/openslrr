@@ -98,6 +98,9 @@ bool scene_instance_transform(void* key, void* root, float* matrix) {
     if (!seen.insert(current).second || seen.size() > 128) return false;
     auto* n = gameref_get(current);
     if (!n || n->empty || (n->flags & kWorldTreeLeaf)) return false;
+    // Inventory items are independent worlds even though their roots have
+    // an owning inventory parent. Never leak their meshes into the garage.
+    if(current != root && (n->flags & kWorldTreeRoot)) return false;
     float local[16]; local_matrix(*n, local);
     multiply(matrix, local, matrix);
     if (current == root) {

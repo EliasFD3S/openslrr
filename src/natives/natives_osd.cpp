@@ -25,6 +25,12 @@
 namespace slrr {
 
 void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
+  jvm.natives().register_method("java.render.Text","getFontSize","(Ljava.util.resource.ResourceRef;)I",
+    [](Object*,const std::vector<Value>& args){
+      Object* font=!args.empty()&&args[0].tag==ValueTag::Obj?args[0].v.o:nullptr;
+      const auto* loaded=slrr_font_get(font);
+      return Value::make_int(loaded?loaded->px_height:10);
+    });
   (void)rpk;
   (void)sections;
   // OSD factories are Java. These Viewport methods are real PE natives
@@ -62,6 +68,8 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
     self->fields["vy"] = Value::make_float(y);
     self->fields["vw"] = Value::make_float(w);
     self->fields["vh"] = Value::make_float(h);
+    auto* state=gameref_upsert(self,GameRefKind::Viewport);state->empty=false;
+    state->vp_pri=pri;state->vp_x=x;state->vp_y=y;state->vp_w=w;state->vp_h=h;
   };
   jvm.natives().register_method(
       "java.render.Viewport", "create", "(IFFFF)V",
@@ -82,6 +90,7 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
       [](Object* self, const std::vector<Value>&) {
         if (!self) return Value::make_void();
         self->fields["vp_ready"] = Value::make_int(0);
+        gameref_remove(self);
         self->fields["active"] = Value::make_int(0);
         auto it = self->fields.find("_osd");
         if (it != self->fields.end() && it->second.tag == ValueTag::Obj)
@@ -96,6 +105,7 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
             (!args.empty() && args[0].tag == ValueTag::Int) ? args[0].v.i : 0;
         self->fields["active"] = Value::make_int(1);
         self->fields["vp_renderflags"] = Value::make_int(flags);
+        if(auto* state=gameref_get(self)){state->vp_active=true;state->vp_flags=flags;}
         auto it = self->fields.find("_osd");
         if (it != self->fields.end() && it->second.tag == ValueTag::Obj)
           osd_set_owner_visible(it->second.v.o, true);
@@ -107,6 +117,7 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         if (!self) return Value::make_void();
         self->fields["active"] = Value::make_int(0);
         self->fields["vp_renderflags"] = Value::make_int(0);
+        if(auto* state=gameref_get(self))state->vp_active=false;
         auto it = self->fields.find("_osd");
         if (it != self->fields.end() && it->second.tag == ValueTag::Obj)
           osd_set_owner_visible(it->second.v.o, false);
@@ -178,17 +189,26 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   jvm.natives().register_method(
       "java.render.Camera", "create",
       "(Ljava.util.resource.ResourceRef;Ljava.render.Viewport;IFFFFFII)V",
-      [](Object* self, const std::vector<Value>& args) {
+      [as_f](Object* self, const std::vector<Value>& args) {
         if (!self) return Value::make_void();
         if (!args.empty()) self->fields["parent"] = args[0];
         if (args.size() > 1) self->fields["vp"] = args[1];
+        auto* state=gameref_upsert(self,GameRefKind::Camera);state->empty=false;
+        gameref_set_parent(self,!args.empty()&&args[0].tag==ValueTag::Obj?args[0].v.o:nullptr);
+        state->viewport=args.size()>1&&args[1].tag==ValueTag::Obj?args[1].v.o:nullptr;
+        state->cam_pri=args.size()>2?args[2].v.i:0;
+        state->half_aov=args.size()>3?as_f(args[3],45):45;
+        state->dmin=args.size()>4?as_f(args[4],.1f):.1f;
+        state->dmax=args.size()>5?as_f(args[5],100):100;state->cam_active=true;
         return Value::make_void();
       });
-  jvm.natives().register_method("java.render.Camera", "destroy", "()V", native_noop);
+  jvm.natives().register_method("java.render.Camera", "destroy", "()V", [](Object* self,const std::vector<Value>&){gameref_remove(self);return Value::make_void();});
   jvm.natives().register_method(
-      "java.render.Camera", "activate", "(Ljava.render.Viewport;I)V", native_noop);
+      "java.render.Camera", "activate", "(Ljava.render.Viewport;I)V",
+      [](Object* self,const std::vector<Value>& args){if(auto* s=gameref_get(self)){if(!args.empty()&&args[0].tag==ValueTag::Obj)s->viewport=args[0].v.o;if(args.size()>1)s->cam_pri=args[1].v.i;s->cam_active=true;}return Value::make_void();});
   jvm.natives().register_method(
-      "java.render.Camera", "deactivate", "(Ljava.render.Viewport;)V", native_noop);
+      "java.render.Camera", "deactivate", "(Ljava.render.Viewport;)V",
+      [](Object* self,const std::vector<Value>& args){if(auto* s=gameref_get(self);s&&(args.empty()||(args[0].tag==ValueTag::Obj&&args[0].v.o==s->viewport)))s->cam_active=false;return Value::make_void();});
   // PhysicsRef PE natives — createButton TREE → createBox hit volumes.
   jvm.natives().register_method(
       "java.util.resource.PhysicsRef", "createBox",

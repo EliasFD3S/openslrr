@@ -124,6 +124,14 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
     locals.resize(method.locals, Value::make_int(0));
 
   std::vector<Value> stack;
+  std::vector<std::string> local_types(locals.size());
+  auto local_value = [&](size_t slot, Value v) {
+    if (slot < local_types.size()) {
+      if (local_types[slot] == "I" && v.tag == ValueTag::Float) return Value::make_int(static_cast<int32_t>(v.v.f));
+      if (local_types[slot] == "F" && v.tag == ValueTag::Int) return Value::make_float(static_cast<float>(v.v.i));
+    }
+    return v;
+  };
   int pending_expr = -1;  // TAGS index when set via 0x07
   std::string pending_class;
   std::string pending_new_class;  // type for `new` — not clobbered by getstatic class
@@ -360,6 +368,9 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
 
   auto push_instance_field = [&](Object* recv, const std::string& fname,
                                  const std::string& fdesc) {
+    last_ifield_recv = recv;
+    last_ifield_name = fname;
+    last_ifield_fresh = recv != nullptr;
     if (!recv) {
       if (!fdesc.empty() && fdesc[0] == 'L')
         push(Value::make_obj(nullptr));
@@ -419,7 +430,7 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
       own_static_method = in_static && !in_instance;
     }
     const bool menu_call =
-        name == "addItem" || name == "addSeparator" || name == "setSliderStyle";
+        (name == "addItem" && (argc_unset || argc >= 2)) || name == "addSeparator" || name == "setSliderStyle";
     const bool osd_build = name == "createMenu" || name == "createButton" ||
                            name == "createText" || name == "createRectangle" ||
                            name == "createHeader" || name == "createHotkey" ||
@@ -674,7 +685,7 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
       if (pending_local_store >= static_cast<int>(locals.size()))
         locals.resize(static_cast<size_t>(pending_local_store) + 1);
       Value val = pop();
-      locals[static_cast<size_t>(pending_local_store)] = val;
+      locals[static_cast<size_t>(pending_local_store)] = local_value(static_cast<size_t>(pending_local_store), val);
       if (keep) push(val);
       pending_local_store = -1;
     } else if (!pending_field.empty()) {
@@ -759,8 +770,20 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
         push(locals[n.imm]);
         break;
       }
-      case 0x02:  // declare — slot for a following init/store
-        if (n.wide) pending_init_local = static_cast<int>(n.imm);
+      case 0x02:  // only declarations with an initializer own a trailing store
+        if (n.wide) {
+          if (local_types.size() <= n.imm) local_types.resize(n.imm + 1);
+          if (ip + 1 < tree.size() && tree[ip + 1].op == 0x06) local_types[n.imm] = cls.utf8(tree[ip + 1].imm);
+          // Invictus permits uninitialized locals. A declaration inside a
+          // loop starts a new lifetime; retaining the preceding iteration's
+          // InventoryItem attaches the same can to multiple empty panels.
+          if(locals.size()<=n.imm)locals.resize(n.imm+1);
+          const auto& type=local_types[n.imm];
+          locals[n.imm]=!type.empty()&&(type[0]=='L'||type[0]=='[')
+            ?Value::make_obj(nullptr):type=="F"?Value::make_float(0.f):Value::make_int(0);
+        }
+        if (n.wide && ip + 2 < tree.size() && tree[ip + 2].op == 0x2c)
+          pending_init_local = static_cast<int>(n.imm);
         break;
       case 0x03:  // release
         break;
@@ -995,7 +1018,7 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
             if (prev.op == 0x01 && prev.wide) {
               if (prev.imm >= locals.size())
                 locals.resize(static_cast<size_t>(prev.imm) + 1);
-              locals[prev.imm] = result;
+              locals[prev.imm] = local_value(prev.imm, result);
             } else if ((prev.op == 0x1b || prev.op == 0x1c) && prev.wide) {
               if (last_ifield_fresh && last_ifield_recv) {
                 last_ifield_recv->fields[last_ifield_name] = result;
@@ -1118,6 +1141,9 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
                                        ? kind_owner
                                        : (owner.empty() ? cls.name() : owner);
             result = host->tree_get_static(so, fname);
+            last_ifield_fresh = false;
+            last_ifield_recv = nullptr;
+            last_ifield_name.clear();
             on_class = false;
             owner.clear();
           } else {
@@ -1177,6 +1203,12 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
         }
         pending_expr = -1;
         break;
+      }
+      case 0x17: {  // switch case: compare label, retaining the subject on a miss
+        if(stack.size()<2)return fail("case stack underflow");
+        Value label=pop();
+        if(values_equal(label,stack.back())){pop();if(n.wide&&!take_rel(static_cast<int32_t>(n.imm)))return fail(jump_err);}
+        pending_expr=-1;break;
       }
       case 0x18:  // pop
         (void)pop();
@@ -1536,6 +1568,9 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
             recv = locals[0].v.o;
           if (!stack.empty() && stack.back().tag == ValueTag::Obj)
             recv = pop().v.o;
+          last_ifield_recv = recv;
+          last_ifield_name = pending_field;
+          last_ifield_fresh = recv != nullptr;
           if (!recv) {
             push(Value::make_int(0));
           } else {
@@ -1667,12 +1702,13 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
           slot = n.imm;
         }
         if (slot >= locals.size()) locals.resize(slot + 1);
-        locals[slot] = pop();
+        locals[slot] = local_value(slot, pop());
         break;
       }
-      default:
-        return fail("unsupported op 0x" + std::to_string(n.op) +
-                    " line=" + std::to_string(n.line));
+      default: {
+        char code[16];std::snprintf(code,sizeof(code),"%02x",static_cast<unsigned>(n.op));
+        return fail(std::string("unsupported op 0x")+code+" line="+std::to_string(n.line));
+      }
     }
   }
   return fail("missing return");

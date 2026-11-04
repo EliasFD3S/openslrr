@@ -1,4 +1,6 @@
 #include "slrr/render_backend.hpp"
+#include "slrr/scene_instances.hpp"
+#include "slrr/gameref.hpp"
 
 #include "slrr/dds_image.hpp"
 #include "slrr/garage_camera.hpp"
@@ -260,15 +262,19 @@ class LibBgfxBackend final : public IRenderBackend {
     float proj[16];
     build_camera(view, proj);
     bgfx::setViewTransform(0, view, proj);
+    bgfx::setViewMode(0,bgfx::ViewMode::Sequential);
     bgfx::touch(0);
 
     video_fmv_pump();
     // Menu/Splash: no garage SCX — stock MainMenu uses FMV or Dummy scene.
+    sync_instances();
+    draw_dynamic_world(view);
     if (garage_ && !parts_.empty()) draw_scene();
     // View order: 0 = 3D/clear, 1 = FMV underlay, 2 = OSD on top.
     draw_fmv();
     // Boot intros own the frame. Menu OSD from the probe must not cover them.
     if ((garage_ || osd_overlay_) && !video_fmv_block_osd()) draw_osd();
+    if (!video_fmv_block_osd()) draw_previews();
 
     bgfx::frame();
   }
@@ -317,6 +323,8 @@ class LibBgfxBackend final : public IRenderBackend {
   }
 
   void clear_scene() {
+    for(auto& entry:instance_meshes_)destroy_part(entry.second);
+    instance_meshes_.clear();instances_.clear();previews_.clear();
     for (ScenePart& p : parts_) destroy_part(p);
     parts_.clear();
     mesh_ok_ = false;
@@ -353,10 +361,73 @@ class LibBgfxBackend final : public IRenderBackend {
  private:
   struct ScenePart {
     ScxGeometry geo;
+    std::shared_ptr<const ScxGeometry> source;
     bgfx::VertexBufferHandle vbh = BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle ibh = BGFX_INVALID_HANDLE;
     std::vector<bgfx::TextureHandle> tex;
   };
+  struct Preview { GameRefState camera; GameRefState viewport; std::vector<SceneInstance> instances; };
+  std::vector<SceneInstance> instances_;
+  std::vector<Preview> previews_;
+  std::unordered_map<const ScxGeometry*,ScenePart> instance_meshes_;
+
+  void sync_instances() {
+    instances_=scene_instances_collect();previews_.clear();
+    for(const auto* camera:gameref_active_cameras()) {
+      const auto* vp=gameref_get(camera->viewport);
+      if(!vp||!vp->vp_active||vp->vp_w<=0||vp->vp_h<=0||(vp->vp_w>=.99f&&vp->vp_h>=.99f))continue;
+      auto objects=scene_instances_collect_root(camera->parent);
+      if(!objects.empty())previews_.push_back({*camera,*vp,std::move(objects)});
+    }
+    std::sort(previews_.begin(),previews_.end(),[](const Preview&a,const Preview&b){return a.viewport.vp_pri!=b.viewport.vp_pri?a.viewport.vp_pri<b.viewport.vp_pri:a.viewport.vp_x<b.viewport.vp_x;});
+    std::unordered_map<const ScxGeometry*,bool> used;
+    auto cache=[&](const SceneInstance& i){const auto* key=i.geometry.get();used[key]=true;if(instance_meshes_.count(key))return;
+      ScenePart part;part.source=i.geometry;part.geo=*i.geometry;upload_part(part);load_part_textures(part);instance_meshes_.emplace(key,std::move(part));};
+    for(const auto&i:instances_)cache(i);for(const auto&p:previews_)for(const auto&i:p.instances)cache(i);
+    for(auto it=instance_meshes_.begin();it!=instance_meshes_.end();) {
+      if(used.count(it->first)){++it;continue;}destroy_part(it->second);it=instance_meshes_.erase(it);
+    }
+  }
+  void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview) {
+    const auto& part=instance_meshes_.at(instance.geometry.get());
+    if(!bgfx::isValid(part.vbh)||!bgfx::isValid(part.ibh))return;
+    auto draw=[&](uint32_t first,uint32_t count,uint16_t texture_index,uint32_t flags){
+      auto tex=texture_index<part.tex.size()?part.tex[texture_index]:white_tex_;if(!bgfx::isValid(tex))tex=white_tex_;
+      bool cut=!preview&&!instance.sky&&(part.geo.info.version!=3||(flags&1));
+      const float settings[4]={cut?1.f:0.f,instance.sky?1.f:preview?.5f:0.f,0.f,preview&&tex.idx!=white_tex_.idx?1.f:0.f};
+      uint32_t color=preview?instance.color:0xffffff;
+      const float tint[4]={((color>>16)&255)/255.f,((color>>8)&255)/255.f,(color&255)/255.f,1};
+      bgfx::setUniform(u_alpha_test_,settings);bgfx::setUniform(u_color_,tint);bgfx::setTransform(matrix);
+      bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,first,count);bgfx::setTexture(0,s_tex_,tex);
+      bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_MSAA|
+        (instance.sky?0:BGFX_STATE_WRITE_Z|BGFX_STATE_DEPTH_TEST_LESS));bgfx::submit(view_id,program_);
+    };
+    if(part.geo.groups.empty())draw(0,static_cast<uint32_t>(part.geo.indices.size()),0,0);
+    else for(const auto&g:part.geo.groups)draw(g.index_start,g.index_count,g.texture_index,g.material_flags);
+  }
+  void draw_dynamic_world(const float* view) {
+    float camera[16];bx::mtxInverse(camera,view);
+    for(const auto&i:instances_)if(i.sky) {
+      auto matrix=i.transform;float radius=0;
+      for(int k=0;k<3;k++)radius=std::max(radius,std::max(std::fabs(i.geometry->info.bbox_min[k]),std::fabs(i.geometry->info.bbox_max[k]))*.01f);
+      float scale=radius>.001f?50.f/radius:1.f;
+      for(int c=0;c<3;c++)for(int r=0;r<3;r++)matrix[c*4+r]*=scale;
+      matrix[12]=camera[12];matrix[13]=camera[13];matrix[14]=camera[14];draw_instance(0,i,matrix.data(),false);
+    }
+    for(const auto&i:instances_)if(!i.sky)draw_instance(0,i,i.transform.data(),false);
+  }
+  void draw_previews() {
+    uint16_t id=3;
+    for(const auto&p:previews_) {
+      if(id>=64)break;
+      int x=std::clamp(static_cast<int>(p.viewport.vp_x*width_),0,width_-1),y=std::clamp(static_cast<int>(p.viewport.vp_y*height_),0,height_-1);
+      int w=std::clamp(static_cast<int>(p.viewport.vp_w*width_),1,width_-x),h=std::clamp(static_cast<int>(p.viewport.vp_h*height_),1,height_-y);
+      float world[16],view[16],proj[16];if(!scene_instance_transform(p.camera.key,p.camera.parent,world))continue;
+      bx::mtxInverse(view,world);bx::mtxProj(proj,p.camera.half_aov,static_cast<float>(w)/h,std::max(.0001f,p.camera.dmin),p.camera.dmax,bgfx::getCaps()->homogeneousDepth);
+      bgfx::setViewRect(id,x,y,w,h);bgfx::setViewClear(id,BGFX_CLEAR_DEPTH,0,1.f);bgfx::setViewMode(id,bgfx::ViewMode::Sequential);bgfx::setViewTransform(id,view,proj);
+      for(const auto&i:p.instances)draw_instance(id,i,i.transform.data(),true);++id;
+    }
+  }
 
   void expand_scene_bbox(const float mn[3], const float mx[3]) {
     if (!mesh_ok_ && parts_.empty()) {
@@ -600,7 +671,7 @@ class LibBgfxBackend final : public IRenderBackend {
         return g > 140 && r > 100 && bl < 40 && g >= r;
       };
 
-      DdsImage img = load_dds_file(path);
+      DdsImage img = load_texture_file(path);
       if (!img.ok) {
         std::printf("[bgfx] DDS miss slot %zu %s\n", i, path.c_str());
         continue;
@@ -617,7 +688,11 @@ class LibBgfxBackend final : public IRenderBackend {
       if (img.format == DdsFormat::DXT1) fmt = bgfx::TextureFormat::BC1;
       else if (img.format == DdsFormat::DXT3) fmt = bgfx::TextureFormat::BC2;
       else if (img.format == DdsFormat::DXT5) fmt = bgfx::TextureFormat::BC3;
-      else if (img.format == DdsFormat::RGBA8) fmt = bgfx::TextureFormat::BGRA8;
+      else if (img.format == DdsFormat::RGBA8) {
+        std::string ext=path.size()>=4?path.substr(path.size()-4):"";
+        for(char& c:ext)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        fmt=ext==".dds"?bgfx::TextureFormat::BGRA8:bgfx::TextureFormat::RGBA8;
+      }
       else
         continue;
       const bgfx::Memory* mem =
@@ -683,6 +758,7 @@ class LibBgfxBackend final : public IRenderBackend {
     }
     if (msg == WM_CHAR) {
       const int ch = static_cast<int>(wp);
+      host_input_char(ch);
       if (ch >= 32 && ch < 127) osd_on_char(ch);
       return 0;
     }
@@ -903,10 +979,7 @@ class LibBgfxBackend final : public IRenderBackend {
       const float top_y = t.y;
 
       uint32_t argb = t.color;
-      const bool glow =
-          hover_tip && *hover_tip == t.text &&
-          (std::fabs(hover->y - t.y) < 0.08f ||
-           (hover->label_src && std::fabs(hover->label_y - t.y) < 0.02f));
+      const bool glow = hover && hover->label_src == t.text_key;
       // changeSelection2(-1) focuses the first row (NEW CAREER) in yellow
       // even when the pointer is elsewhere. That color is the hover state.
       if (argb == 0xFFFFCB00u && !glow) argb = 0xFFC0C0C0u;
@@ -1153,6 +1226,7 @@ class LibBgfxBackend final : public IRenderBackend {
     bgfx::setViewRect(2, 0, 0, static_cast<uint16_t>(width_),
                       static_cast<uint16_t>(height_));
     bgfx::setViewTransform(2, nullptr, ortho);
+    bgfx::setViewMode(2, bgfx::ViewMode::Sequential);
     bgfx::touch(2);
 
     // Menu plate: dark translucent fullscreen when GENERALBG path missing.
@@ -1237,7 +1311,7 @@ class LibBgfxBackend final : public IRenderBackend {
         // Text buttons hover the label, same as the main menu. The hl
         // texture stays on icon buttons (garage) and slider tracks.
         const bool text_button =
-            !hw->string_input && !hw->row_label && !hw->tip.empty();
+            !hw->string_input && !hw->row_label && hw->label_src;
         if (hw->layer == layer && !hw->string_input && !text_button &&
             !hw->icon_path.empty()) {
           OsdWidget hl = *hw;
@@ -1259,13 +1333,19 @@ class LibBgfxBackend final : public IRenderBackend {
             w.hit_only)
           return;
         const uint32_t local = w.icon_id & 0xFFFFu;
+        if ((local == 0x12bu || local == 0x13cu) && !osd_focus_plate_visible(w)) return;
         const bool knob = local == 0x0091u;
         // Gadget.focus builds this plate 1.1× and slightly behind the icon.
         // Creation order painted it on top, so hover hid the button.
-        const bool glow = local == 0x012Bu;
+        const bool glow = local == 0x012Bu || local == 0x013Cu;
         const int which = knob ? 2 : (glow ? 0 : 1);
         if (which != pass) return;
-        if (!w.icon_path.empty()) draw_osd_quad(w);
+        if(glow) {
+          OsdWidget plate=w;
+          const auto& path=osd_highlight_disabled(w)?osd_disabled_highlight_path():osd_highlight_path();
+          if(!path.empty())plate.icon_path=path;
+          if(!plate.icon_path.empty())draw_osd_quad(plate);
+        } else if (!w.icon_path.empty()) draw_osd_quad(w);
       };
       for (const OsdWidget& w : widgets) draw_icon(w, 0);
       for (const OsdWidget& w : widgets) draw_icon(w, 1);

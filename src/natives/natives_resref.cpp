@@ -163,6 +163,8 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
   jvm.natives().register_method(kResRef, "destroy", "()V",
                                 [](Object* self, const std::vector<Value>&) {
                                   if (self) {
+                                      auto text=self->fields.find("_host_text");
+                                      if(text!=self->fields.end()&&text->second.tag==ValueTag::Obj)slrr_text_destroy(text->second.v.o);
                                     auto it = self->fields.find("_osd_wi");
                                     if (it != self->fields.end() &&
                                         it->second.tag == ValueTag::Int)

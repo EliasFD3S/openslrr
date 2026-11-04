@@ -17,7 +17,8 @@ void main()
 	vec4 tex = texture2D(s_texColor, v_texcoord0);
 	if (u_alphaTest.x > 0.5 && tex.a < 0.5)
 		discard;
-	float light = (u_alphaTest.y > 0.5) ? 1.0 : ndl;
+	float light = (u_alphaTest.y > 0.75) ? 1.0 : ((u_alphaTest.y > 0.25) ? 0.65 + 0.35 * ndl : ndl);
 	float outA = (u_alphaTest.z > 0.5) ? tex.a : 1.0;
-	gl_FragColor = vec4(tex.rgb * light * u_color.rgb, outA * u_color.a);
+	vec3 tint = (u_alphaTest.w > 0.5) ? mix(u_color.rgb, vec3(1.0, 1.0, 1.0), tex.a) : u_color.rgb;
+	gl_FragColor = vec4(tex.rgb * light * tint, outA * u_color.a);
 }

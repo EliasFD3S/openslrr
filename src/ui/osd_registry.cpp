@@ -24,6 +24,7 @@ int32_t g_fb_h = 600;
 int32_t g_hover_index = -1;
 int32_t g_string_focus = -1;
 std::string g_highlight_path;
+std::string g_disabled_highlight_path;
 
 bool owner_suppressed(const OsdWidget& w) {
   if (!w.owner) return false;
@@ -190,33 +191,7 @@ void osd_sync_button_label(Object* osd, void* text, float y,
     if (w.half_h < cover) w.half_h = cover;
     return;
   }
-  if (label.empty()) return;
-  int32_t best = -1;
-  // Dialog viewports scale the baseline away from the button center.
-  // The nearest empty hit box is still this row.
-  float best_dy = 0.45f;
-  for (int32_t i = static_cast<int32_t>(g_widgets.size()) - 1; i >= 0; --i) {
-    const OsdWidget& w = g_widgets[static_cast<size_t>(i)];
-    if (w.hidden || w.background || w.string_input || w.cmd == 9999999)
-      continue;
-    // The plate is no_hit. Binding it leaves the physics box with an
-    // empty tip, so the pointer never turns the name white.
-    if (!w.hit_only || w.no_hit) continue;
-    if (osd && w.owner != osd) continue;
-    if (!w.tip.empty() || w.label_src) continue;
-    const float dy = std::fabs(w.y - y);
-    if (dy < best_dy) {
-      best = i;
-      best_dy = dy;
-    }
-  }
-  if (best < 0) return;
-  OsdWidget& w = g_widgets[static_cast<size_t>(best)];
-  w.label_src = text;
-  w.label_y = y;
-  w.tip = label;
-  const float cover = std::fabs(w.y - y) + 0.03f;
-  if (w.half_h < cover) w.half_h = cover;
+  // Button.label.txt is bound when the script assigns its label.
 }
 
 void osd_attach_row_label(const std::string& label, float y) {
@@ -466,15 +441,38 @@ void osd_drop_modal_shield() {
 
 bool osd_set_hover_at(float osd_x, float osd_y) {
   const int32_t idx = osd_hit_index(osd_x, osd_y);
-  if (idx == g_hover_index) return false;
+  const bool changed = idx != g_hover_index;
   g_hover_index = idx;
   if (g_hover) g_hover(osd_widget_at(idx));
-  return true;
+  return changed;
 }
 
 int32_t osd_hover_index() { return g_hover_index; }
 
-const OsdWidget* osd_hover_widget() { return osd_widget_at(g_hover_index); }
+const OsdWidget* osd_hover_widget() {
+  const auto* w = osd_widget_at(g_hover_index);
+  return w && !w->hidden && !owner_suppressed(*w) && !widget_disabled(*w) ? w : nullptr;
+}
+bool osd_focus_plate_visible(const OsdWidget& plate) {
+  Object* gadget = plate.highlight_for;
+  if (!gadget || plate.hidden || owner_suppressed(plate)) return false;
+  auto get_obj = [](Object* o, const char* name) -> Object* {
+    if (!o) return nullptr;
+    auto it = o->fields.find(name);
+    return it != o->fields.end() && it->second.tag == ValueTag::Obj ? it->second.v.o : nullptr;
+  };
+  Object* osd = get_obj(gadget, "osd");
+  if (!osd || get_obj(osd, "pointedGadget") != gadget) return false;
+  auto mode = osd->fields.find("controlMode");
+  if (mode != osd->fields.end() && mode->second.tag == ValueTag::Int && mode->second.v.i == 1) return true;
+  const auto* hover = osd_hover_widget();
+  return hover && hover->button == gadget;
+}
+bool osd_highlight_disabled(const OsdWidget& plate) {
+  if(!plate.highlight_for)return plate.disabled;
+  auto it=plate.highlight_for->fields.find("disabled");
+  return it!=plate.highlight_for->fields.end()&&it->second.tag==ValueTag::Int&&it->second.v.i!=0;
+}
 
 void osd_set_highlight_path(std::string path) {
   g_highlight_path = std::move(path);
@@ -483,6 +481,8 @@ void osd_set_highlight_path(std::string path) {
 }
 
 const std::string& osd_highlight_path() { return g_highlight_path; }
+void osd_set_disabled_highlight_path(std::string path) { g_disabled_highlight_path = std::move(path); }
+const std::string& osd_disabled_highlight_path() { return g_disabled_highlight_path; }
 
 void osd_set_click_handler(OsdClickFn fn) { g_click = std::move(fn); }
 
@@ -628,6 +628,7 @@ void osd_fire_click_at(float osd_x, float osd_y) {
   std::printf("[osd] click cmd=%d handler=%s\n", hit.cmd,
               hit.handler_class.empty() ? "?" : hit.handler_class.c_str());
   if (g_click) g_click(hit);
+  osd_set_hover_at(osd_x, osd_y);
 }
 
 void osd_pixel_to_text(int32_t px, int32_t py, int32_t fb_w, int32_t fb_h,
@@ -686,6 +687,9 @@ void bind_gadget(Object* g) {
   if (!w) return;
   w->button = g;
   w->hit_only = true;
+  if (Object* label = field_o(g, "label")) {
+    if (Object* text = field_o(label, "txt")) w->label_src = text;
+  }
   auto cit = g->fields.find("cmd");
   if (cit != g->fields.end() && cit->second.tag == ValueTag::Int)
     w->cmd = cit->second.v.i;
@@ -699,6 +703,7 @@ void bind_gadget(Object* g) {
       if (vit != ins->fields.end() && vit->second.tag == ValueTag::Int) {
         if (OsdWidget* vis = osd_widget_mut(vit->second.v.i)) {
           vis->no_hit = true;
+          vis->background = false;
           if (!vis->icon_path.empty()) {
             w->icon_id = vis->icon_id;
             w->icon_path = vis->icon_path;
@@ -756,8 +761,17 @@ void osd_on_field_write(Object* recv, const std::string& field) {
       vp->fields["_osd"] = Value::make_obj(recv);
     return;
   }
-  if (field == "handler" || field == "cmd" || field == "rect") {
+  if (field == "handler" || field == "cmd" || field == "rect" || field == "label") {
     if (field_o(recv, "phy")) bind_gadget(recv);
+  }
+  if (field == "hr") {
+    if (Object* rectangle = field_o(recv, "hr")) {
+      if (Object* instance = field_o(rectangle, "ins")) {
+        auto wi = instance->fields.find("_osd_wi");
+        if (wi != instance->fields.end() && wi->second.tag == ValueTag::Int)
+          if (auto* plate = osd_widget_mut(wi->second.v.i)) plate->highlight_for = recv;
+      }
+    }
   }
   if (field == "tooltip") {
     if (field_o(recv, "phy")) bind_gadget(recv);

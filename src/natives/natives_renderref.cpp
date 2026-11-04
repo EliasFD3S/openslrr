@@ -159,7 +159,7 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
             w.half_h = hh;
             // Slider knob (RID_SLD_KNOB) is created before the track. Marking
             // it a plate draws it underneath the bar.
-            w.background = plate && local != 0x0091u;
+            w.background = local != 0x0091u && local != 0x012bu && local != 0x013cu;
             w.no_hit = true;
             w.icon_id = tid;
             w.tex_alpha = local == 0x00A2u;
@@ -258,7 +258,11 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
         return Value::make_void();
       });
   jvm.natives().register_method(
-      "java.util.resource.RenderRef", "setColor", "(I)V", native_noop);
+      "java.util.resource.RenderRef", "setColor", "(I)V",
+      [](Object* self,const std::vector<Value>& args){
+        if(auto* state=gameref_get(self);state&&!args.empty()&&args[0].tag==ValueTag::Int)state->color=static_cast<uint32_t>(args[0].v.i)&0xffffff;
+        return Value::make_void();
+      });
   jvm.natives().register_method(
       "java.util.resource.RenderRef", "setLight", "(III)V", native_noop);
   jvm.natives().register_method(

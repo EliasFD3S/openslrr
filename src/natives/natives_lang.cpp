@@ -1,4 +1,5 @@
 #include "slrr/natives_boot.hpp"
+#include "slrr/ui_time.hpp"
 #include "natives_internal.hpp"
 
 #include "slrr/garage_camera.hpp"
@@ -201,6 +202,22 @@ Object* arg_o(const std::vector<Value>& args, size_t i) {
 }  // namespace
 
 void register_lang_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
+  jvm.natives().register_method("java.lang.Vector3", "rotate", "(Ljava.lang.Ypr;)Ljava.lang.Vector3;",
+      [&jvm](Object* self,const std::vector<Value>& args){
+        jvm.natives().invoke("java.lang.Vector3","rotate","(Ljava.lang.Ypr;)V",self,args);
+        return Value::make_obj(self);
+      });
+  jvm.natives().register_method("java.lang.String", "timeToString", "(FI)Ljava.lang.String;",
+      [&jvm](Object*, const std::vector<Value>& args) {
+        const float time = args.empty() ? 0.f : args[0].tag == ValueTag::Float ? args[0].v.f : static_cast<float>(args[0].v.i);
+        const int flags = args.size() > 1 ? args[1].v.i : 0;
+        return Value::make_obj(jvm.new_string(format_game_time(time, flags)));
+      });
+  jvm.natives().register_method("java.lang.String", "timeToString", "(F)Ljava.lang.String;",
+      [&jvm](Object*, const std::vector<Value>& args) {
+        const float time = args.empty() ? 0.f : args[0].tag == ValueTag::Float ? args[0].v.f : static_cast<float>(args[0].v.i);
+        return Value::make_obj(jvm.new_string(format_game_time(time, 0)));
+      });
   // GameLogic.save / load / loadDefaults / changeActiveSection are the Java
   // TREE. File.write persists the bytes; the frame adopts actualState after.
 

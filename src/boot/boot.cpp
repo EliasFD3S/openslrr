@@ -239,6 +239,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     if (hl.empty())
       hl = opt.game_root + "\\frontend\\textures\\buttons\\Info_holder.ptx";
     osd_set_highlight_path(std::move(hl));
+    osd_set_disabled_highlight_path(rpk.texture_path_for_id(0x013c));
   }
 
   if (!jvm.load_class("java.lang.System")) return 4;
@@ -435,32 +436,6 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     }
     return true;
   });
-  osd_set_hover_handler([&jvm](const OsdWidget* w) {
-    // Physics hit volumes carry the gadget. The 0x012B plate is not a button.
-    Object* g = (w && w->button) ? w->button : nullptr;
-    Object* osd = nullptr;
-    if (g) {
-      auto it = g->fields.find("osd");
-      if (it != g->fields.end() && it->second.tag == ValueTag::Obj)
-        osd = it->second.v.o;
-    }
-    static Object* last_osd = nullptr;
-    if (!osd) osd = last_osd;
-    if (g && osd) last_osd = osd;
-    if (!osd) return;
-    Object* cur = nullptr;
-    auto pit = osd->fields.find("pointedGadget");
-    if (pit != osd->fields.end() && pit->second.tag == ValueTag::Obj)
-      cur = pit->second.v.o;
-    if (cur == g) return;
-    if (cur && !cur->class_name.empty())
-      jvm.invoke(cur->class_name, "unfocus", "()V", {Value::make_obj(cur)},
-                 false);
-    osd->fields["pointedGadget"] = Value::make_obj(g);
-    osd->fields["controlMode"] = Value::make_int(0);
-    if (g && !g->class_name.empty())
-      jvm.invoke(g->class_name, "focus", "()V", {Value::make_obj(g)}, false);
-  });
   osd_set_click_handler([&jvm, &sections, &render](const OsdWidget& w) {
     if (video_fmv_block_osd()) return;
     Object* handler = w.handler;
@@ -511,6 +486,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
       }
     }
     host_set_script_pump(nullptr);
+    video_fmv_close();
     render.close();
   }
   std::printf("[boot] game exit=0 frames=%d section=%s\n", frames,

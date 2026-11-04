@@ -15,6 +15,7 @@ void register_boot_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections);
 // (boot paths that run before the window loop).
 using HostScriptPump = std::function<bool()>;
 void host_set_script_pump(HostScriptPump fn);
+void install_osd_script_hover(Jvm& jvm);
 
 // Frontend.setFonts + Config.video_x/y — pick SLII11 vs SLII17 from resolution
 // (stock Layout). Call after the window size is known, before Garage.enter.

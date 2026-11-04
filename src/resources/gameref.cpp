@@ -171,6 +171,13 @@ std::vector<GameRefState*> gameref_nodes_with_mesh() {
   }
   return out;
 }
+std::vector<GameRefState*> gameref_render_nodes() {
+  std::vector<GameRefState*> out;
+  for (auto& kv : g_refs)
+    if (kv.second.kind == GameRefKind::RenderRef && !kv.second.empty && kv.second.type_id)
+      out.push_back(&kv.second);
+  return out;
+}
 
 std::vector<void*> gameref_world_roots() {
   std::vector<void*> out;

@@ -5,6 +5,7 @@
 #include "slrr/gameref.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
+#include "slrr/host_sfx.hpp"
 #include "slrr/osd_registry.hpp"
 #include "slrr/render_backend.hpp"
 #include "slrr/script_cfg.hpp"
@@ -25,6 +26,27 @@
 namespace slrr {
 
 void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
+  jvm.natives().register_method("java.game.GameLogic","kismajomCheck","([Ljava.lang.String;)I",
+    [](Object*,const std::vector<Value>& args){
+      int match=-1;
+      if(!args.empty()&&args[0].tag==ValueTag::Obj&&args[0].v.o){auto& codes=args[0].v.o->slots;
+        for(size_t i=0;i<codes.size();i++){if(codes[i].tag!=ValueTag::Obj||!codes[i].v.o)continue;
+          std::string decoded=codes[i].v.o->str;for(char& c:decoded)--c;
+          if(!decoded.empty()&&host_input_history().ends_with(decoded)){match=static_cast<int>(i);break;}
+        }
+      }
+      host_input_clear_history();return Value::make_int(match);
+    });
+  jvm.natives().register_method("java.util.resource.SfxRef", "nplay", "(Ljava.lang.Vector3;FFFII)I",
+    [&rpk](Object* self, const std::vector<Value>& args) {
+      uint32_t rid=resource_id_of(self); if(!rid) return Value::make_int(0);
+      auto path=under_game(rpk.game_root(),rpk.payload_prop(rid,"sourcefile"));
+      auto num=[&](size_t i,float fallback){return i>=args.size()?fallback:args[i].tag==ValueTag::Float?args[i].v.f:args[i].tag==ValueTag::Int?static_cast<float>(args[i].v.i):fallback;};
+      if(path.empty())return Value::make_int(0);
+      return Value::make_int(host_sfx_play_file(path.string(),num(2,1),num(3,1),static_cast<int>(num(4,0))&1,static_cast<int>(num(5,0))));
+    });
+  jvm.natives().register_method("java.util.resource.SfxRef", "stop", "(I)V",
+    [](Object*,const std::vector<Value>& args){if(!args.empty())host_sfx_stop(args[0].v.i);return Value::make_void();});
   // Soft OptionsDialog.show: "800 600 32".token(i).intValue()
   jvm.natives().register_method(
       "java.lang.String", "token", "(ILjava.lang.String;)Ljava.lang.String;",
@@ -245,6 +267,7 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           if (v < 0.f) v = 0.f;
           if (v > 1.f) v = 1.f;
           volumes[c] = v;
+          if(c==0)host_sfx_set_volume(v);
           return Value::make_void();
         });
   }

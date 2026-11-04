@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace slrr {
 
@@ -22,6 +23,9 @@ struct HostInput {
 };
 
 HostInput& host_input();
+void host_input_char(int ch);
+const std::string& host_input_history();
+void host_input_clear_history();
 
 // Poll keyboard held keys into HostInput (call each frame).
 void host_input_poll_keys();

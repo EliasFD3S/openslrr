@@ -1,4 +1,5 @@
 #include "slrr/natives_boot.hpp"
+#include "slrr/scene_instances.hpp"
 #include "natives_internal.hpp"
 
 #include "slrr/garage_camera.hpp"
@@ -490,6 +491,7 @@ void frontend_set_fonts(Jvm& jvm, int32_t video_x, int32_t video_y) {
 }
 
 void register_boot_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
+  scene_instances_set_resources(&rpk);
   register_io_natives(jvm, rpk, sections);
   register_lang_natives(jvm, rpk, sections);
   register_osd_natives(jvm, rpk, sections);
@@ -497,6 +499,7 @@ void register_boot_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   register_renderref_natives(jvm, rpk, sections);
   register_resref_natives(jvm, rpk, sections);
   register_script_natives(jvm, rpk, sections);
+  install_osd_script_hover(jvm);
 
   // Statics
   jvm.set_static("java.io.Input", "AXIS_CANCEL", Value::make_int(35));

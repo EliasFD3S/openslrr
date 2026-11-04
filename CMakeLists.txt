@@ -28,11 +28,14 @@ add_executable(slrr_host
   src/natives/natives_resref.cpp
   src/natives/natives_script.cpp
   src/ui/osd_registry.cpp
+  src/ui/osd_script.cpp
+  src/ui/ui_time.cpp
   src/render/bgfx_backend.cpp
   src/render/slrr_font.cpp
   src/resources/rpk_index.cpp
   src/resources/script_cfg.cpp
   src/resources/gameref.cpp
+  src/resources/scene_instances.cpp
   src/resources/scx_mesh.cpp
   src/resources/dds_image.cpp
   src/resources/ptx_image.cpp
@@ -64,7 +67,7 @@ if(WIN32)
   # vfw32 = Cinepak (prime.avi is cvid). The 32-bit codec does not connect
   # through the Sample Grabber graph, so menu playback uses AVIFile.
   target_link_libraries(slrr_host PRIVATE user32 gdi32 opengl32 winmm ole32
-                                          oleaut32 strmiids vfw32)
+                                          oleaut32 strmiids vfw32 xaudio2)
 endif()
 
 if(SLRR_WITH_LIBBGFX)
@@ -125,3 +128,50 @@ if(SLRR_WITH_LIBBGFX)
 endif()
 
 install(TARGETS slrr_host RUNTIME DESTINATION bin)
+
+option(SLRR_STAGE_BUILD "Build the host into candidate/ before validation and promotion" OFF)
+if(SLRR_STAGE_BUILD)
+  set_target_properties(slrr_host PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_BINARY_DIR}/candidate")
+endif()
+
+option(SLRR_BUILD_TESTS "Build host UI regression tests" OFF)
+if(SLRR_BUILD_TESTS)
+  enable_testing()
+  add_executable(ui_state_test tests/ui_state_test.cpp
+    src/ui/osd_registry.cpp src/ui/ui_time.cpp src/render/slrr_font.cpp)
+  target_include_directories(ui_state_test PRIVATE include)
+  target_compile_features(ui_state_test PRIVATE cxx_std_20)
+  if(MSVC)
+    target_compile_definitions(ui_state_test PRIVATE _CRT_SECURE_NO_WARNINGS)
+  endif()
+  add_test(NAME ui_state COMMAND ui_state_test)
+
+  add_executable(scene_instances_test tests/scene_instances_test.cpp
+    src/resources/scene_instances.cpp src/resources/gameref.cpp
+    src/resources/rpk_index.cpp src/resources/scx_mesh.cpp)
+  target_include_directories(scene_instances_test PRIVATE include)
+  target_compile_features(scene_instances_test PRIVATE cxx_std_20)
+  add_test(NAME scene_instances COMMAND scene_instances_test)
+
+  # Integration checks execute the actual TUFA scripts and original assets.
+  # Build a separate test executable so a clean build cannot use stale probes.
+  get_target_property(_runtime_sources slrr_host SOURCES)
+  list(FILTER _runtime_sources EXCLUDE REGEX "(^|/)main\\.cpp$|\\.rc$")
+  add_executable(host_runtime_test tests/runtime_regression.cpp ${_runtime_sources})
+  foreach(_property INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_OPTIONS COMPILE_FEATURES LINK_LIBRARIES)
+    get_target_property(_value slrr_host ${_property})
+    if(_value)
+      set_property(TARGET host_runtime_test PROPERTY ${_property} "${_value}")
+    endif()
+  endforeach()
+  add_dependencies(host_runtime_test slrr_host)
+  set(SLRR_TEST_GAME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../game" CACHE PATH "Original SLRR assets for integration tests")
+  if(EXISTS "${SLRR_TEST_GAME_ROOT}/system/Scripts/lang/System.class")
+    foreach(_case sfx_probe regression_probe gap_probe hud_probe career_probe filedialog_probe scene_script_probe icon_probe paint_inventory)
+      add_test(NAME runtime_${_case} COMMAND host_runtime_test ${_case} "${SLRR_TEST_GAME_ROOT}")
+      set_tests_properties(runtime_${_case} PROPERTIES TIMEOUT 30)
+    endforeach()
+    add_test(NAME scene_original_assets COMMAND scene_instances_test "${SLRR_TEST_GAME_ROOT}")
+  endif()
+endif()

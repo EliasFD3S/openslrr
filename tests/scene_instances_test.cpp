@@ -40,6 +40,9 @@ int main(int argc, char** argv) {
   check(!scene_instance_transform(&child, &root, m), "destroyed parent removes subtree from scene");
   gameref_set_parent(&child, &root);
   check(scene_instance_transform(&child, &root, m), "reparenting restores instance");
+  gameref_set_flags(&child,kWorldTreeRoot);
+  check(!scene_instance_transform(&child,&root,m), "nested world roots isolate inventory scenes");
+  gameref_clear_flags(&child,kWorldTreeRoot);
   gameref_remove(&child);
   check(!scene_instance_transform(&child, &root, m), "destroyed instance disappears");
 

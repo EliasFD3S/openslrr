@@ -70,6 +70,8 @@ struct GameRefState {
   bool vp_active = false;
   // Optional bound mesh (RenderRef / GroundRef).
   bool has_mesh = false;
+  bool sky_render = false;
+  uint32_t color = 0xffffff;
   ScxGeometry mesh;
   // Native object script (.cfg): render mesh, collision sphere, click volume.
   bool script_parsed = false;
@@ -109,6 +111,7 @@ std::vector<DueTimer> gameref_poll_timers(float now_sec);
 
 std::vector<GameRefState*> gameref_active_cameras();
 std::vector<GameRefState*> gameref_nodes_with_mesh();
+std::vector<GameRefState*> gameref_render_nodes();
 std::vector<void*> gameref_world_roots();  // flags & WORLDTREEROOT
 
 void gameref_set_fog(int32_t color, float near_z, float far_z);

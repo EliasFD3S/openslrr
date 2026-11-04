@@ -17,6 +17,8 @@ int32_t video_fmv_open(const char* path, int32_t non_exclusive, int32_t loop);
 void video_fmv_close();
 int32_t video_fmv_is_playing();
 int32_t video_fmv_is_non_exclusive();
+int32_t video_fmv_audio_stream_count();
+bool video_fmv_audio_running();
 // Boot intros: OSD must not draw or take clicks over the movie.
 void video_fmv_set_block_osd(bool block);
 bool video_fmv_block_osd();

@@ -8,6 +8,11 @@
 
 namespace slrr {
 namespace {
+Value empty_method_result(const std::string& desc) {
+  auto p=desc.find(')');if(p==std::string::npos||p+1>=desc.size())return Value::make_void();
+  char t=desc[p+1];if(t=='L'||t=='[')return Value::make_obj(nullptr);
+  if(t=='F'||t=='D')return Value::make_float(0);if(t!='V')return Value::make_int(0);return Value::make_void();
+}
 
 bool file_readable(const std::string& path) {
   std::ifstream in(path, std::ios::binary);
@@ -462,7 +467,8 @@ const TufaMember* Jvm::find_method(const TufaClass& cls,
 
 const TufaMember* Jvm::find_method_by_name(
     const TufaClass& cls, const std::string& method, int argc,
-    bool prefer_static, const std::vector<Value>* runtime) const {
+    bool prefer_static, const std::vector<Value>* runtime, int* match_score) const {
+  if(match_score)*match_score=-100000;
   // Two createButton overloads share argc. Match the live tags
   // (String,int) against (int,String) instead of taking the first one.
   auto score = [&](const std::string& jni) -> int {
@@ -535,6 +541,7 @@ const TufaMember* Jvm::find_method_by_name(
         best_score = sc;
       }
     }
+    if(match_score&&(best||fallback))*match_score=best?best_score:-10000;
     return best ? best : fallback;
   };
   if (prefer_static) {
@@ -611,6 +618,18 @@ Value Jvm::get_static(const std::string& class_fqn, const std::string& field) {
   if (cit == statics_.end()) return Value::make_void();
   auto fit = cit->second.find(field);
   if (fit == cit->second.end()) return Value::make_void();
+  if (fit->second.tag == ValueTag::Int && (fit->second.v.i & 0xffff0000) == 0) {
+    if (const auto* cls = find_class(class_fqn)) for (const auto& f : cls->static_fields) {
+      if (cls->utf8(f.name) != field || f.tree == kTufaNone || f.tree >= cls->trees.size()) continue;
+      const auto& tree = cls->trees[f.tree]; if (tree.size() > 8) break;
+      for (const auto& n : tree) if(n.op == 0x0e && n.wide) {
+        const auto rid=cls->resource(n.imm);
+        if(static_cast<uint32_t>(fit->second.v.i)==rid.id)
+          fit->second=Value::make_int(static_cast<int32_t>(rpk_resolve_resource(rid.pack,rid.id)));
+      }
+      break;
+    }
+  }
   return fit->second;
 }
 
@@ -687,19 +706,23 @@ Value Jvm::invoke_by_name(const std::string& class_fqn,
   // shadow a subclass Java override (Dialog.show void0 ≠ MainMenuDialog.show).
   std::string owner = class_fqn;
   const TufaClass* owner_cls = cls;
+  int best_score=-100000;
   const TufaMember* m =
-      find_method_by_name(*cls, method, argc, is_static, &call_args);
-  if (!m) {
+      find_method_by_name(*cls, method, argc, is_static, &call_args, &best_score);
+  if (method != "<init>" || !m) {
     std::string cur = cls->super_name();
-    for (int depth = 0; depth < 48 && !cur.empty() && !m; ++depth) {
+    for (int depth = 0; depth < 48 && !cur.empty(); ++depth) {
       load_class(cur);
       const TufaClass* c = find_class(cur);
       if (!c) break;
-      m = find_method_by_name(*c, method, argc, is_static, &call_args);
-      if (m) {
+      int candidate_score=-100000;
+      const auto* candidate=find_method_by_name(*c,method,argc,is_static,&call_args,&candidate_score);
+      if (candidate && (!m||candidate_score>best_score)) {
+        m=candidate;best_score=candidate_score;
         owner = cur;
         owner_cls = c;
-        break;
+        // Invictus inherits resource constructors; choose the nearest one.
+        if(method=="<init>")break;
       }
       cur = c->super_name();
     }
@@ -764,6 +787,7 @@ Value Jvm::invoke_by_name(const std::string& class_fqn,
     return natives_->invoke(host_key, method, jni, self, call_args);
 
   if (is_native || empty_tree) {
+    if(empty_tree&&!is_native)return empty_method_result(jni);
     if (method == "<init>") return Value::make_void();
     if (halt_on_unbound_ && is_native) halt_unbound(owner, method, jni);
     std::fprintf(stderr,
@@ -855,6 +879,7 @@ Value Jvm::invoke(const std::string& class_fqn, const std::string& method,
   if (is_native || empty_tree) {
     if (native_has_alias(owner, method, jni_sig, &host_key))
       return natives_->invoke(host_key, method, jni_sig, self, call_args);
+    if(empty_tree&&!is_native)return empty_method_result(jni_sig);
     if (halt_on_unbound_ && is_native) halt_unbound(owner, method, jni_sig);
     std::fprintf(stderr,
                  "[jvm] native/empty TREE without host binding %s.%s %s "
