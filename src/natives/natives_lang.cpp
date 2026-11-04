@@ -1,3 +1,4 @@
+#include "slrr/mainloop.hpp"
 #include "slrr/natives_boot.hpp"
 #include "slrr/ui_time.hpp"
 #include "natives_internal.hpp"
@@ -314,7 +315,7 @@ void register_lang_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
       "java.lang.Thread", "init", "(Ljava.lang.String;)V", native_noop);
   jvm.natives().register_method(
       "java.lang.Thread", "start", "()V",
-      [](Object* self, const std::vector<Value>&) {
+      [&jvm](Object* self, const std::vector<Value>&) {
         const char* tgt = "-";
         if (self) {
           auto it = self->fields.find("target");
@@ -323,9 +324,17 @@ void register_lang_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
             tgt = it->second.v.o->class_name.c_str();
         }
         std::printf("[native] Thread.start %s\n", tgt);
+        // GameLogic.run stays unscheduled. Mechanic.run only refreshes
+        // the info line, and that tick is applied here.
+        mainloop_note_thread(jvm, self, true);
         return Value::make_void();
       });
-  jvm.natives().register_method("java.lang.Thread", "stop", "()V", native_noop);
+  jvm.natives().register_method(
+      "java.lang.Thread", "stop", "()V",
+      [&jvm](Object* self, const std::vector<Value>&) {
+        mainloop_note_thread(jvm, self, false);
+        return Value::make_void();
+      });
   jvm.natives().register_method("java.lang.Thread", "sleep", "(F)V", native_noop);
   jvm.natives().register_method(
       "java.lang.Thread", "isAlive", "()I",

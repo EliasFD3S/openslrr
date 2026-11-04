@@ -65,6 +65,13 @@ bool parse_v3(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
     if (size > 56) {
       group.base_map.channel = static_cast<uint16_t>(buf[mat_start+70] | (buf[mat_start+71]<<8));
       group.mix_map.channel = static_cast<uint16_t>(buf[mat_start+72] | (buf[mat_start+73]<<8));
+      // +0x38 is the lightmap slot. The exe always samples it on uv channel 1.
+      const int16_t lm = static_cast<int16_t>(
+          buf[mat_start + 0x38] | (buf[mat_start + 0x39] << 8));
+      if (lm >= 0) {
+        group.lightmap_index = static_cast<uint16_t>(lm);
+        group.lightmap_map.channel = 1;
+      }
     }
     group.texture_index = static_cast<uint16_t>(
         buf[mat_start + 44] | (buf[mat_start + 45] << 8));
@@ -251,7 +258,7 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
           } else if (prop == 0x05000000u || prop == 0x07000000u) {
             if (p + 4 > chunk_end) break;
             p += 4;
-          } else if (prop >= 0x06000000u && prop <= 0x06000005u) {
+          } else if (prop >= 0x06000000u && prop <= 0x06000007u) {
             // tex index, channel, tiling, scaleUV, offsetUV
             if (p + 28 > chunk_end) break;
             const uint32_t tex_i = rd_u32(buf.data() + p);
@@ -270,6 +277,10 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
             }
             if (prop == 0x06000001u) { mat.mix_index=static_cast<uint16_t>(tex_i); mat.mix_map=map; }
             if (prop == 0x06000003u) { mat.reflection_index=static_cast<uint16_t>(tex_i); mat.reflection_map=map; }
+            if (prop == 0x06000007u && tex_i != 0xffffffffu) {
+              mat.lightmap_index = static_cast<uint16_t>(tex_i);
+              mat.lightmap_map = map;
+            }
             p += 28;
           } else if (prop == 0x08000000u) {
             if (p + 32 > chunk_end) break;

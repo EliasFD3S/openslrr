@@ -642,8 +642,9 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
   constexpr size_t kMaxSteps = 4000000;
   size_t steps = 0;
   size_t ip = 0;
-  // If i++ doesn't stick, `i < N` stays true. Cap backward edges so hideGroup
-  // of the later menus still runs.
+  // If i++ doesn't stick, `i < N` stays true. Cap backward edges so the
+  // rest of the method still runs. TextBox.changeText loops once per word;
+  // 80 cuts the catalog description before the last line can take " (...)".
   std::unordered_map<size_t, int> back_edges;
   std::string jump_err;
   auto take_rel = [&](int32_t rel) -> bool {
@@ -653,7 +654,7 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
       jump_err = "jump OOB";
       return false;
     }
-    if (rel < 0 && ++back_edges[static_cast<size_t>(next)] > 80) return true;
+    if (rel < 0 && ++back_edges[static_cast<size_t>(next)] > 8192) return true;
     ip = static_cast<size_t>(next) - 1;
     return true;
   };
@@ -710,6 +711,18 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
             !pending_class.empty() ? pending_class : cls.name();
         host->tree_set_static(owner, pending_field, val);
       } else if (recv) {
+        // Integer literals assigned to float fields (`new Vector3(-2, 1, -4)`)
+        // stay Int unless coerced here. Natives that only read Float then see 0.
+        // The other way matches the field: Catalog stores `price * PRICERATIO`
+        // into an int (RetailP / DeliveryP / TotalP) and prints `"$" + field`.
+        // Truncating here is what drops the fraction.
+        if (pending_field_desc == "F" && val.tag == ValueTag::Int)
+          val = Value::make_float(static_cast<float>(val.v.i));
+        else if ((pending_field_desc == "I" || pending_field_desc == "B" ||
+                  pending_field_desc == "S" || pending_field_desc == "C" ||
+                  pending_field_desc == "Z") &&
+                 val.tag == ValueTag::Float)
+          val = Value::make_int(static_cast<int32_t>(val.v.f));
         recv->fields[pending_field] = val;
         osd_on_field_write(recv, pending_field);
       }
@@ -1065,6 +1078,10 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
       }
       case 0x0c:
         push(Value::make_obj(nullptr));
+        break;
+      case 0x0d:  // boolean literal. removeElement returns true/false as int.
+        if (!n.wide) return fail("bool missing imm");
+        push(Value::make_int(n.imm ? 1 : 0));
         break;
       case 0x11: {  // path
         // After call/call_on this is the name-path header; the segments run

@@ -256,6 +256,9 @@ Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
   rec.state.object = part;
   rec.state.resource = resource;
   rec.config = cfg;
+  // PE copies the cfg `texture` line onto the part at create. Catalog
+  // shows that id on the color chip: cars:0x0025 is default_white.
+  rec.state.texture = cfg->texture;
   records.emplace(part, std::move(rec));
   auto *node = gameref_upsert(part, GameRefKind::GameType);
   node->type_id = resource;
@@ -422,6 +425,36 @@ std::vector<InstalledPart> part_installed_tree(Object *root) {
   visit(visit, canonical(root));
   return out;
 }
+bool part_car_ground(void *key, float *y) {
+  if (!key || !y || !car(static_cast<Object *>(key)))
+    return false;
+  bool any = false;
+  float low = 0.f;
+  for (const auto &instance : scene_instances_collect_root(key)) {
+    if (!instance.geometry)
+      continue;
+    const auto &geo = *instance.geometry;
+    const float scale = geo.position_scale;
+    const float *m = instance.transform.data();
+    const float xs[2] = {geo.info.bbox_min[0] * scale, geo.info.bbox_max[0] * scale};
+    const float ys[2] = {geo.info.bbox_min[1] * scale, geo.info.bbox_max[1] * scale};
+    const float zs[2] = {geo.info.bbox_min[2] * scale, geo.info.bbox_max[2] * scale};
+    for (float x : xs)
+      for (float yy : ys)
+        for (float z : zs) {
+          const float wy = m[1] * x + m[5] * yy - m[9] * z + m[13];
+          if (!any || wy < low) {
+            low = wy;
+            any = true;
+          }
+        }
+  }
+  if (!any)
+    return false;
+  *y = low;
+  return true;
+}
+
 Object *vehicle_spawn_stock(Jvm &jvm, RpkIndex &resources, Object *parent,
                             uint32_t chassis, uint32_t texture) {
   if (!texture) {
@@ -552,10 +585,15 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   bind("getCar", "()I", [](Object *s, const std::vector<Value> &) {
     return Value::make_int(gameref_make_live(car(s)));
   });
-  bind("getMass", "()F", [](Object *s, const std::vector<Value> &) {
+  auto mass_of = [](Object *s, const std::vector<Value> &) {
     auto *p = record(s);
-    return Value::make_float(p ? p->config->mass : 0);
-  });
+    return Value::make_float(p && p->config ? p->config->mass : 0.f);
+  };
+  bind("getMass", "()F", mass_of);
+  // Chassis.getMass is its own native (empty TREE). The catalog delivery
+  // price is chassis.getMass()*5.8; resolving only Part left that call at 0.
+  jvm.natives().register_method("java.game.parts.bodypart.Chassis", "getMass",
+                                "()F", mass_of);
   for (const auto &property :
        std::vector<std::pair<std::string, float InstalledPart::*>>{
            {"Wear", &InstalledPart::wear}, {"Tear", &InstalledPart::tear}}) {

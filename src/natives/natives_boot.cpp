@@ -294,6 +294,7 @@ void ensure_charset_loaded(Object* charset) {
 
 
 std::function<bool()> g_script_pump;
+std::function<void()> g_loading_present;
 // 1 = inside wait, 2 = notify arrived for this object.
 std::unordered_map<Object*, int> g_object_wait;
 
@@ -412,6 +413,14 @@ void object_wait(Object* self) {
 
 void host_set_script_pump(std::function<bool()> fn) {
   g_script_pump = std::move(fn);
+}
+
+void host_set_loading_present(std::function<void()> fn) {
+  g_loading_present = std::move(fn);
+}
+
+void host_loading_present() {
+  if (g_loading_present) g_loading_present();
 }
 
 void frontend_set_fonts(Jvm& jvm, int32_t video_x, int32_t video_y) {

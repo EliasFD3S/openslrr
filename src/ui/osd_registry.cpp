@@ -152,12 +152,6 @@ void osd_add_widget(OsdWidget w) {
   }
   if (w.layer == 0) w.layer = osd_viewport_pri(w.owner);
   g_widgets.push_back(std::move(w));
-  // Keep log short — long format crashed mid-line under Soft menu build.
-  const OsdWidget& back = g_widgets.back();
-  std::printf("[osd] widget cmd=%d (%.2f,%.2f) tip=%zu icon=%d n=%zu\n",
-              back.cmd, back.x, back.y, back.tip.size(),
-              back.icon_path.empty() ? 0 : 1, g_widgets.size());
-  std::fflush(stdout);
 }
 
 const std::vector<OsdWidget>& osd_widgets() { return g_widgets; }
@@ -187,8 +181,14 @@ void osd_sync_button_label(Object* osd, void* text, float y,
     if (w.label_src != text) continue;
     w.tip = label;
     w.label_y = y;
-    const float cover = std::fabs(w.y - y) + 0.03f;
-    if (w.half_h < cover) w.half_h = cover;
+    // Menu rows: the glyph anchor and the hit volume are built apart
+    // (font top vs button center). Growing the volume to cover both
+    // made it swallow the next row, so the click loaded that car.
+    if (auto* o = static_cast<Object*>(text)) {
+      auto yit = o->fields.find("_text_y");
+      if (yit != o->fields.end() && yit->second.tag == ValueTag::Float)
+        w.y = yit->second.v.f;
+    }
     return;
   }
   // Button.label.txt is bound when the script assigns its label.
@@ -704,6 +704,11 @@ void bind_gadget(Object* g) {
         if (OsdWidget* vis = osd_widget_mut(vit->second.v.i)) {
           vis->no_hit = true;
           vis->background = false;
+          vis->button = g;
+          vis->cmd = w->cmd;
+          auto dit = g->fields.find("disabled");
+          vis->disabled = dit != g->fields.end() &&
+                          dit->second.tag == ValueTag::Int && dit->second.v.i != 0;
           if (!vis->icon_path.empty()) {
             w->icon_id = vis->icon_id;
             w->icon_path = vis->icon_path;
@@ -745,6 +750,28 @@ void bind_input(Object* g) {
 
 }  // namespace
 
+void osd_attach_button_picture(Object* render) {
+  if (!render) return;
+  auto wit = render->fields.find("_osd_wi");
+  if (wit == render->fields.end() || wit->second.tag != ValueTag::Int) return;
+  OsdWidget* vis = osd_widget_mut(wit->second.v.i);
+  if (!vis) return;
+  for (const OsdWidget& w : g_widgets) {
+    if (!w.button) continue;
+    Object* rect = field_o(w.button, "rect");
+    Object* ins = field_o(rect, "ins");
+    if (ins != render) continue;
+    vis->button = w.button;
+    vis->cmd = w.cmd;
+    vis->no_hit = true;
+    vis->background = false;
+    auto dit = w.button->fields.find("disabled");
+    vis->disabled = dit != w.button->fields.end() &&
+                    dit->second.tag == ValueTag::Int && dit->second.v.i != 0;
+    return;
+  }
+}
+
 void osd_on_field_write(Object* recv, const std::string& field) {
   if (!recv || field.empty()) return;
   if (field == "osd" && recv->class_name == "java.render.Group") {
@@ -760,6 +787,12 @@ void osd_on_field_write(Object* recv, const std::string& field) {
     if (Object* vp = field_o(recv, "vp"))
       vp->fields["_osd"] = Value::make_obj(recv);
     return;
+  }
+  if (field == "disabled") {
+    const bool dis = recv->fields["disabled"].tag == ValueTag::Int &&
+                     recv->fields["disabled"].v.i != 0;
+    for (OsdWidget& w : g_widgets)
+      if (w.button == recv) w.disabled = dis;
   }
   if (field == "handler" || field == "cmd" || field == "rect" || field == "label") {
     if (field_o(recv, "phy")) bind_gadget(recv);

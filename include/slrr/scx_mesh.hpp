@@ -29,9 +29,11 @@ struct ScxGroup {
   uint32_t index_count = 0;
   uint16_t texture_index = 0xffff;
   uint16_t mix_index = 0xffff, reflection_index = 0xffff;
+  // Baked light (v3 header +0x38, v4 entry 0x06000007). 0xffff = none.
+  uint16_t lightmap_index = 0xffff;
   uint32_t material_type = 0;
   float reflection_strength = .5f;
-  ScxTextureMap base_map, mix_map, reflection_map;
+  ScxTextureMap base_map, mix_map, reflection_map, lightmap_map;
   uint32_t material_flags = 0;  // bit0 = alphaOpacity (scx.md)
   float diffuse[4] = {0.6f, 0.65f, 0.7f, 1.f};
   std::string name;
@@ -49,6 +51,8 @@ struct ScxGeometry {
   std::vector<ScxGroup> groups;
   // RPK `texture` property order (or .tex). Index == ScxGroup::texture_index.
   std::vector<std::string> textures;
+  // SCX positions are centimetres. POLY / script positions are already metres.
+  float position_scale = 0.01f;
 };
 
 ScxMeshInfo parse_scx_file(const std::string& path);

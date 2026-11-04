@@ -2,6 +2,7 @@
 
 #include "slrr/scx_mesh.hpp"
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -29,4 +30,14 @@ std::vector<SceneInstance> scene_instances_collect();
 std::vector<SceneInstance> scene_instances_collect_root(void* root);
 // Rejects missing parents, hidden subtrees and cycles.
 bool scene_instance_transform(void* key, void* root, float* matrix);
+// Ground maps (dealer, car lot, Valo City) keep their triangles in the
+// typeof-1 instance tree. `params` names the material table. On success
+// *render_id is that render; *poly is the mesh in metres, or null when the
+// tree has no POLY sections.
+bool scene_instances_ground_map(const RpkIndex& rpk, uint32_t ground_id,
+                                uint32_t* render_id,
+                                std::shared_ptr<const ScxGeometry>* poly);
+// Drawn instead of the render object's .scx (a ground template is materials).
+void scene_instances_override_mesh(uint32_t id,
+                                   std::shared_ptr<const ScxGeometry> geo);
 }  // namespace slrr

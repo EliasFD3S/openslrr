@@ -1,4 +1,5 @@
 #include "slrr/jvm.hpp"
+#include "slrr/natives_boot.hpp"
 #include "slrr/rpk_index.hpp"
 #include <algorithm>
 #include <cmath>
@@ -330,12 +331,6 @@ bool Jvm::load_class_file(const std::string& path) {
       auto candidate=std::make_pair(directory,package);
       if(std::find(classpath_.begin(),classpath_.end(),candidate)==classpath_.end())classpath_.push_back(candidate);
     }
-    std::printf(
-        "[jvm] loaded %s  build=0x%x  fields=%zu/%zu  methods=%zu/%zu  "
-        "trees=%zu  from %s\n",
-        name.c_str(), cls.build, cls.static_fields.size(),
-        cls.instance_fields.size(), cls.static_methods.size(),
-        cls.instance_methods.size(), cls.trees.size(), path.c_str());
     seed_static_fields(cls);
     by_name_[name] = std::move(cls);
     enrich_static_fields(by_name_[name]);
@@ -353,6 +348,9 @@ bool Jvm::load_class(const std::string& fqn_or_path) {
     return false;
   }
   if (find_class(fqn_or_path)) return true;
+  // Array descriptors (`[I`, `[Ljava.lang.Object;`) are not class files.
+  // Logging each miss stalled dialog construction on the console.
+  if (!fqn_or_path.empty() && fqn_or_path[0] == '[') return false;
 
   const std::string path = resolve_class_path(fqn_or_path);
   if (path.empty()) {
@@ -804,10 +802,6 @@ Value Jvm::invoke_by_name(const std::string& class_fqn,
     return Value::make_void();
   }
   const std::string jni = owner_cls->utf8(m->descriptor);
-  if (method == "<init>" && owner != class_fqn) {
-    std::printf("[jvm] ctor %s argc=%d -> %s %s\n", class_fqn.c_str(), argc,
-                owner.c_str(), jni.c_str());
-  }
   const bool empty_tree =
       m->tree == kTufaNone || m->tree >= owner_cls->trees.size() ||
       owner_cls->trees[m->tree].empty();
@@ -828,6 +822,22 @@ Value Jvm::invoke_by_name(const std::string& class_fqn,
                  owner.c_str(), method.c_str(), jni.c_str(), class_fqn.c_str());
     return Value::make_void();
   }
+
+  // Outermost LoadingScreen.show only. show() / show(pic) / show(dialog)
+  // nest; one present keeps Loading.dds up while the click handler continues.
+  static int loading_show_depth = 0;
+  const bool loading_show =
+      method == "show" && owner == "java.render.LoadingScreen";
+  struct LoadingShowGuard {
+    bool on;
+    int* depth;
+    ~LoadingShowGuard() {
+      if (on) --*depth;
+    }
+  };
+  if (loading_show) ++loading_show_depth;
+  LoadingShowGuard loading_guard{loading_show, &loading_show_depth};
+  if (loading_show && loading_show_depth == 1) host_loading_present();
 
   if (invoke_depth_ > 64) {
     static int logged = 0;

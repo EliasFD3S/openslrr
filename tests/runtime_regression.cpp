@@ -246,6 +246,32 @@ int run_gap_probe() {
     check(std::fabs(lines[0].y - .22f) < .001f,
           "three leading blank lines use 36 pixels");
   }
+  slrr_text_clear_all();
+  const char *catalog =
+      "This is the basic Baiern model, a classical but modren looking 5th "
+      "generation CoupeSport. This coupe was meant to be a comfortable sporty "
+      "car with good performance. The factory developed this car for more than "
+      "4 years, so it is. It's in production since 1997, but this autumn, a "
+      "new model will come, so the dealers lowered its price for the summer "
+      "until production ends. Because of the incorporation between Baiern Cars "
+      "Gmbh and Emer Japanese-German Automobiles it can be easily modified and "
+      "tuned with lots of parts from Emer and EMD engines and running gears or "
+      "component kits.";
+  auto boxed = j.invoke_by_name(
+      osd->class_name, "createTextBox",
+      {Value::make_obj(osd), Value::make_obj(j.new_string(catalog)), font,
+       Value::make_int(1), Value::make_float(0.09f), Value::make_float(0.21f),
+       Value::make_float(0.85f), Value::make_obj(nullptr), Value::make_int(10)},
+      false);
+  check(boxed.tag == ValueTag::Obj && boxed.v.o, "10-line text box is created");
+  int nlines = 0;
+  bool ellipsis = false;
+  for (const auto &t : slrr_osd_texts()) {
+    ++nlines;
+    if (t.text.find("(...)") != std::string::npos) ellipsis = true;
+  }
+  check(nlines > 0 && nlines <= 10 && ellipsis,
+        "catalog description stops at 10 lines with (...)");
   for (const char *slot : {"smallFont", "mediumFont", "largeFont"}) {
     auto f = j.get_static("java.render.Frontend", slot);
     auto measured =

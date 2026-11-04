@@ -29,4 +29,8 @@ void mainloop_sync_section_render(IRenderBackend& render,
 // Follow GameLogic.actualState after the Java changeActiveSection TREE.
 void mainloop_adopt_section(Jvm& jvm, SectionMachine& sections);
 
+// Mechanic.run is the inventory spinner. Thread.start does not enter it,
+// so the garage "Welcome!" placeholder never became the slot line.
+void mainloop_note_thread(Jvm& jvm, Object* thread, bool started);
+
 }  // namespace slrr

@@ -147,6 +147,7 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
           if (already != self->fields.end() &&
               already->second.tag == ValueTag::Int) {
             osd_set_widget_pos(already->second.v.i, nx, ny);
+            osd_attach_button_picture(self);
           } else if (tid != 0 && local != 0x0018u && mw > 0.f && mh > 0.f) {
             bool plate = false;
             float hw = 0.f, hh = 0.f;
@@ -172,6 +173,7 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
             const int32_t wi = static_cast<int32_t>(osd_widgets().size());
             self->fields["_osd_wi"] = Value::make_int(wi);
             osd_add_widget(std::move(w));
+            osd_attach_button_picture(self);
           }
         }
         return Value::make_void();

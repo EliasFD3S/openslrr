@@ -23,7 +23,7 @@ Validation uses **SLRR 2.2.1 MWM**. Win32 is the reference configuration: the sc
 
 In the test data, `Prime.avi` has no audio track.
 
-**Still to build:** integrated driving and physics, a real suspension pose, full transparency and lighting, dynamic reflections, the world, and traffic. Some natives are still stubs. Catalog display is tested; buying, interactive install, and saving that cycle are not. Pacejka is a probe (`--probe-pacejka`), separate from the driving loop. Multiplayer is out of scope.
+**Still to build:** integrated driving and physics, a real suspension pose, full transparency and lighting, the world, and traffic. Some natives are still stubs. Catalog display is tested; buying, interactive install, and saving that cycle are not. Pacejka is a probe (`--probe-pacejka`), separate from the driving loop. Multiplayer is out of scope.
 
 ## Sources
 

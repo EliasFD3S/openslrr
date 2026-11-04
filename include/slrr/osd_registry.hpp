@@ -77,6 +77,10 @@ int32_t osd_widget_count();
 void osd_set_widget_pos(int32_t index, float x, float y);
 void osd_set_widget_cmd(int32_t index, int32_t cmd);
 void osd_set_widget_icon(int32_t index, uint32_t icon_id, std::string path);
+// changeTexture builds a new rectangle picture. Tie it back to the button
+// so a disabled pager can show the forbidden icon, and the color chip can
+// stay white while its texture is still the empty placeholder.
+void osd_attach_button_picture(Object* render);
 // Slider title is createText'd after the track button (empty tip, has icon).
 // Bind that string so hover can turn it white (Gadget HL_LABELCOLOR).
 void osd_attach_row_label(const std::string& label, float y);

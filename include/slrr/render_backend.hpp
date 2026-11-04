@@ -63,4 +63,8 @@ void* bgfx_native_hwnd(IRenderBackend& render);
 // Draw OSD even outside garage (MainMenu / Splash).
 void bgfx_set_osd_overlay(IRenderBackend& render, bool enabled);
 
+// True once the menu or the garage is allowed to draw OSD. Boot stays false
+// until the splash frame, so a loading present cannot flash the clear color.
+bool bgfx_osd_draw_enabled(IRenderBackend& render);
+
 }  // namespace slrr

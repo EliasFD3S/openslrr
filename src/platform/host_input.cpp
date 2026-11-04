@@ -55,8 +55,10 @@ float host_input_get_axis(int32_t axis, int32_t /*device*/) {
     }
     case 10: {  // AXIS_LOOK_FWDBACK
       float v = in.look_zoom;
-      if (in.keys_pgup) v += 0.02f;
-      if (in.keys_pgdn) v -= 0.02f;
+      // ControlSet: PgUp -0.010, PgDn +0.010 on AXIS_LOOK_FWDBACK.
+      // Positive here zooms in; the orbit applies 1 - axis * 100 * dt.
+      if (in.keys_pgup) v += 0.010f;
+      if (in.keys_pgdn) v -= 0.010f;
       return v;
     }
     case 1:  // AXIS_TURN_LEFTRIGHT — mouse X when not orbiting

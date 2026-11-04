@@ -11,6 +11,10 @@
 #include <chrono>
 #include <cstdio>
 #include <string>
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 namespace slrr {
 namespace {
@@ -20,14 +24,17 @@ constexpr float kDtClamp = 0.1f;  // PE Engine_dtClamp @ 0x60C8CC
 void dispatch_due_timers(Jvm& jvm, float now, int32_t* fired) {
   // Soft PE TickTimers → queueEvent EVENT_TIME (0x80) → handleEvent(ref,I,I).
   // Gate on GameType.event_mask like stock mask test. Only the live
-  // GameLogic.actualState may consume timers (stale Splash from tree smoke).
+  // section may consume timers (stale Splash from tree smoke).
+  // GameLogic is not a section: its 10 s timer is the 4x clock
+  // (spendTime(timeRefreshRate * timeFactor), then it re-arms).
   Object* actual = nullptr;
   Value av = jvm.get_static("java.game.GameLogic", "actualState");
   if (av.tag == ValueTag::Obj) actual = av.v.o;
   for (const DueTimer& t : gameref_poll_timers(now)) {
     auto* o = static_cast<Object*>(t.key);
     if (!o) continue;
-    if (actual && o != actual) continue;
+    const bool game_clock = o->class_name == "java.game.GameLogic";
+    if (actual && o != actual && !game_clock) continue;
     GameRefState* st = gameref_get(o);
     if (st && (st->event_mask & kEventTime) == 0) continue;
     jvm.invoke(o->class_name, "handleEvent",
@@ -40,6 +47,56 @@ void dispatch_due_timers(Jvm& jvm, float now, int32_t* fired) {
 }
 
 }  // namespace
+
+// Mechanic.show starts this thread. hide stops it. The script loop is
+// the only writer that replaces Garage infoline after createText.
+static Object* g_spinning_mechanic = nullptr;
+
+static Object* field_obj(Object* o, const char* name) {
+  if (!o) return nullptr;
+  auto it = o->fields.find(name);
+  if (it == o->fields.end() || it->second.tag != ValueTag::Obj) return nullptr;
+  return it->second.v.o;
+}
+
+static int32_t field_int(Object* o, const char* name) {
+  if (!o) return 0;
+  auto it = o->fields.find(name);
+  if (it == o->fields.end()) return 0;
+  if (it->second.tag == ValueTag::Int) return it->second.v.i;
+  if (it->second.tag == ValueTag::Float)
+    return static_cast<int32_t>(it->second.v.f);
+  return 0;
+}
+
+// Mechanic.run, the branch under actualPanelChanged || visualsUpdated.
+// filterInventory sets the flag before show(), and the first tick has
+// no selected slot, so the line becomes null. That is why "Welcome!"
+// exists in the script and never stays on screen.
+static void apply_mechanic_infoline(Jvm& jvm, Object* mechanic) {
+  if (!mechanic || mechanic != g_spinning_mechanic) return;
+  Object* inv = field_obj(mechanic, "inventory");
+  const int32_t changed = field_int(mechanic, "actualPanelChanged");
+  const int32_t visuals = field_int(inv, "visualsUpdated");
+  if (!changed && !visuals) return;
+  mechanic->fields["actualPanelChanged"] = Value::make_int(0);
+  if (inv) inv->fields["visualsUpdated"] = Value::make_int(0);
+
+  Object* line = field_obj(mechanic, "infoline");
+  if (!line) return;
+  Object* panel = field_obj(mechanic, "actualPanel");
+  Object* item = field_obj(panel, "invItem");
+  Object* text = nullptr;
+  if (panel && item) {
+    Value info = jvm.invoke(item->class_name, "getInfo", "()Ljava.lang.String;",
+                             {Value::make_obj(item)}, false);
+    if (info.tag == ValueTag::Obj) text = info.v.o;
+  } else if (panel) {
+    text = jvm.new_string("empty slot");
+  }
+  jvm.invoke("java.render.Text", "changeText", "(Ljava.lang.String;)V",
+             {Value::make_obj(line), Value::make_obj(text)}, false);
+}
 
 void mainloop_adopt_section(Jvm& jvm, SectionMachine& sections) {
   Value av = jvm.get_static("java.game.GameLogic", "actualState");
@@ -81,8 +138,16 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   const float yaw = host_input_get_axis(7, 0);
   const float pitch = host_input_get_axis(8, 0);
   const float zoom = host_input_get_axis(10, 0);
-  garage_camera_tick(frame_dt > 0.f ? frame_dt : (1.f / 60.f), yaw, pitch,
-                     zoom);
+  const bool in_garage =
+      sections.actual() &&
+      sections.actual()->class_name.find("Garage") != std::string::npos;
+  // Script camera orbits the car. The free garage orbit only moves when
+  // that camera is not the one on screen.
+  gameref_orbit_world_camera(yaw * 2.5f, pitch * 1.5f, zoom, frame_dt);
+  if (in_garage) {
+    garage_camera_tick(frame_dt > 0.f ? frame_dt : (1.f / 60.f), yaw, pitch,
+                       zoom);
+  }
   in.look_yaw = 0.f;
   in.look_pitch = 0.f;
   in.look_zoom = 0.f;
@@ -221,22 +286,77 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
         if (oit != dlg->fields.end() && oit->second.tag == ValueTag::Obj)
           losd = oit->second.v.o;
       }
-      std::string pic = jvm.game_root();
-      if (!pic.empty() && pic.back() != '\\' && pic.back() != '/')
-        pic.push_back('\\');
-      pic += "frontend\\textures\\Loading.dds";
-      osd_ensure_loading_plate(losd, pic);
-      osd_set_loading_overlay(pic);
+      // Dealer show(pic) already built its own plate (New/Used welcome).
+      // Covering it with Loading.dds hid that picture. The generic plate
+      // is only the stand-in until the dialog has a background.
+      bool own_plate = false;
+      if (losd) {
+        for (const OsdWidget& w : osd_widgets()) {
+          if (w.owner == losd && w.background && w.half_w > 0.4f &&
+              w.half_h > 0.4f && !w.icon_path.empty()) {
+            own_plate = true;
+            break;
+          }
+        }
+      }
+      if (own_plate) {
+        osd_set_loading_overlay({});
+      } else {
+        std::string pic = jvm.game_root();
+        if (!pic.empty() && pic.back() != '\\' && pic.back() != '/')
+          pic.push_back('\\');
+        pic += "frontend\\textures\\Loading.dds";
+        osd_ensure_loading_plate(losd, pic);
+        osd_set_loading_overlay(pic);
+      }
       const auto now = std::chrono::steady_clock::now();
       if (dlg != load_seen) {
         load_seen = dlg;
         load_until = now + std::chrono::milliseconds(500);
       }
+      auto as_float = [&](const char* name) -> float {
+        if (!screen) return 0.f;
+        auto it = screen->fields.find(name);
+        if (it == screen->fields.end()) return 0.f;
+        if (it->second.tag == ValueTag::Float) return it->second.v.f;
+        if (it->second.tag == ValueTag::Int)
+          return static_cast<float>(it->second.v.i);
+        return 0.f;
+      };
+      // userWait(sec) sets waitForUser and then termSig.wait(). SoftTimer
+      // is the thread that would notify after sec; it never starts. A
+      // click does the same, which is loadingDialog.wait().
+      static Object* wait_screen = nullptr;
+      static int32_t wait_gen = 0;
+      static std::chrono::steady_clock::time_point wait_deadline{};
+      const int32_t wait_user = as_int("waitForUser");
+      bool skip = false;
+#ifdef _WIN32
+      {
+        const bool down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) ||
+                          (GetAsyncKeyState(VK_RETURN) & 0x8000) ||
+                          (GetAsyncKeyState(VK_SPACE) & 0x8000) ||
+                          (GetAsyncKeyState(VK_ESCAPE) & 0x8000);
+        // The click that opened the dealer is still down. Wait until it
+        // is released before a new press can skip the plate.
+        static bool armed = false;
+        static bool held = false;
+        static Object* skip_dlg = nullptr;
+        if (skip_dlg != dlg) {
+          skip_dlg = dlg;
+          armed = false;
+          held = down;
+        }
+        if (!down) armed = true;
+        skip = armed && down && !held;
+        held = down;
+      }
+#endif
       if (now >= load_until) {
         const int32_t init = as_int("init");
         if (init > 0) {
           screen->fields["init"] = Value::make_int(init - 1);
-        } else if (as_int("waitForUser") == 0) {
+        } else if (wait_user == 0) {
           Value busy =
               jvm.invoke("java.lang.System", "isLoading", "()I", {}, true);
           const bool loading =
@@ -244,6 +364,49 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
           if (!loading)
             jvm.invoke("java.render.LoadingScreen", "hide", "()V",
                        {Value::make_obj(screen)}, false);
+        } else {
+          if (wait_screen != screen || wait_gen != wait_user) {
+            wait_screen = screen;
+            wait_gen = wait_user;
+            // userWait(5): the picture stays, then FlashText asks for a key.
+            // userWait(-1): no timer, the prompt is immediate. The timer
+            // does not dismiss the plate.
+            float limit = as_float("waitForUserTimeLimit");
+            if (limit < 0.f) limit = 0.f;
+            wait_deadline =
+                now + std::chrono::milliseconds(static_cast<int>(limit * 1000.f));
+          }
+          if (now >= wait_deadline && skip) {
+            jvm.invoke("java.render.LoadingScreen", "hide", "()V",
+                       {Value::make_obj(screen)}, false);
+          } else if (now >= wait_deadline && dlg) {
+            Object* label = nullptr;
+            auto tit = dlg->fields.find("loadingText");
+            if (tit != dlg->fields.end() && tit->second.tag == ValueTag::Obj)
+              label = tit->second.v.o;
+            static bool prompt_on = true;
+            static Object* flash_dlg = nullptr;
+            static std::chrono::steady_clock::time_point next_flash{};
+            if (flash_dlg != dlg) {
+              flash_dlg = dlg;
+              prompt_on = true;
+              next_flash = now + std::chrono::milliseconds(600);
+            } else if (now >= next_flash) {
+              prompt_on = !prompt_on;
+              next_flash = now + std::chrono::milliseconds(600);
+            }
+            static bool shown_on = false;
+            static Object* shown_label = nullptr;
+            if (label && (shown_label != label || shown_on != prompt_on)) {
+              Object* text = prompt_on ? jvm.new_string("PRESS ENTER TO CONTINUE...")
+                                       : nullptr;
+              jvm.invoke("java.render.Text", "changeText",
+                         "(Ljava.lang.String;)V",
+                         {Value::make_obj(label), Value::make_obj(text)}, false);
+              shown_on = prompt_on;
+              shown_label = label;
+            }
+          }
         }
       }
     } else {
@@ -310,6 +473,8 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     }
   }
 
+  apply_mechanic_infoline(jvm, g_spinning_mechanic);
+
   // --- Present: AltPresentGate (FMV) else PresentFrame ---
   // Soft: backend flush pumps FMV SampleGrabber + Present (libbgfx path).
   render.flush();
@@ -322,6 +487,18 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
 
   // --- EndFrame @ 0x554DC0 — FileAsync Soft no-op on lean host ---
   return out;
+}
+
+void mainloop_note_thread(Jvm& jvm, Object* thread, bool started) {
+  Object* tgt = field_obj(thread, "target");
+  if (!tgt || tgt->class_name != "java.game.Mechanic") return;
+  if (!started) {
+    if (g_spinning_mechanic == tgt) g_spinning_mechanic = nullptr;
+    return;
+  }
+  g_spinning_mechanic = tgt;
+  // Same moment the script thread would take its first 20 ms tick.
+  apply_mechanic_infoline(jvm, tgt);
 }
 
 }  // namespace slrr

@@ -145,7 +145,12 @@ PartConfig parse_part_config(const std::string &source,
       if (command == "slot") {
         PartSlot slot;
         slot.pose = pose(t);
-        slot.id = integer(t, 7);
+        // PE sscanf "%f %f %f %f %f %f %d": a missing id stays 0.
+        // Duhen SunStrip 1.8 and 2.2 omit it on the FR shock line. Rejecting
+        // the whole cfg dropped those two cars, and every later catalog
+        // click loaded the chassis two slots earlier.
+        if (t.size() > 7)
+          slot.id = integer(t, 7);
         if (std::any_of(out.slots.begin(), out.slots.end(),
                         [&](const auto &prior) { return prior.id == slot.id; }))
           throw std::runtime_error("duplicate slot ID");

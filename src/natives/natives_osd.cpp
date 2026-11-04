@@ -70,6 +70,7 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
     self->fields["vh"] = Value::make_float(h);
     auto* state=gameref_upsert(self,GameRefKind::Viewport);state->empty=false;
     state->vp_pri=pri;state->vp_x=x;state->vp_y=y;state->vp_w=w;state->vp_h=h;
+    gameref_make_live(self);
   };
   jvm.natives().register_method(
       "java.render.Viewport", "create", "(IFFFF)V",
@@ -487,10 +488,22 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
       v = static_cast<float>(it->second.v.i);
     return v > 0.02f ? v : 1.f;
   };
+  // Text.java divides by Config.video_*, the logical mode, not the
+  // window. A 1920 back buffer with video_x still at 800 made every token
+  // look narrow, so the 10-line catalog box never inserted " (...)".
+  auto video_axis = [&jvm](const char* field, int32_t fb, int32_t fallback) {
+    Value v = jvm.get_static("java.game.Config", field);
+    int32_t n = 0;
+    if (v.tag == ValueTag::Int) n = v.v.i;
+    else if (v.tag == ValueTag::Float) n = static_cast<int32_t>(v.v.f);
+    if (n > 2) return static_cast<float>(n);
+    if (fb > 2) return static_cast<float>(fb);
+    return static_cast<float>(fallback);
+  };
   jvm.natives().register_method(
       "java.render.Text", "getWidth",
       "(Ljava.lang.String;Ljava.util.resource.ResourceRef;Ljava.render.Viewport;)F",
-      [ensure_font, vp_span](Object*, const std::vector<Value>& args) {
+      [ensure_font, vp_span, video_axis](Object*, const std::vector<Value>& args) {
         Object* str =
             (args.size() >= 1 && args[0].tag == ValueTag::Obj) ? args[0].v.o
                                                                : nullptr;
@@ -502,14 +515,13 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
                                                                : nullptr;
         ensure_font(font);
         const float px = slrr_font_measure_px(font, str ? str->str.c_str() : "");
-        const float screen = static_cast<float>(
-            osd_framebuffer_width() > 2 ? osd_framebuffer_width() : 800);
+        const float screen = video_axis("video_x", osd_framebuffer_width(), 800);
         return Value::make_float(2.f * px / (screen * vp_span(vp, "vp_w")));
       });
   jvm.natives().register_method(
       "java.render.Text", "getHeight",
       "(Ljava.util.resource.ResourceRef;Ljava.render.Viewport;)F",
-      [ensure_font, vp_span](Object*, const std::vector<Value>& args) {
+      [ensure_font, vp_span, video_axis](Object*, const std::vector<Value>& args) {
         Object* font =
             (args.size() >= 1 && args[0].tag == ValueTag::Obj) ? args[0].v.o
                                                                : nullptr;
@@ -520,8 +532,7 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         float px = 20.f;
         if (const SlrrFont* f = slrr_font_get(font))
           if (f->px_height > 0) px = static_cast<float>(f->px_height);
-        const float screen = static_cast<float>(
-            osd_framebuffer_height() > 2 ? osd_framebuffer_height() : 600);
+        const float screen = video_axis("video_y", osd_framebuffer_height(), 600);
         return Value::make_float(2.f * px / (screen * vp_span(vp, "vp_h")));
       });
   jvm.natives().register_method(

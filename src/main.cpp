@@ -34,6 +34,9 @@ void usage() {
 
 int main(int argc, char** argv) {
   using namespace slrr;
+  // Line-buffered stdout stalls a dialog on every log line. Keep a block
+  // buffer; real failures still go to stderr.
+  std::setvbuf(stdout, nullptr, _IOFBF, 1 << 16);
 
   bool want_probe = false;
   bool want_pacejka = false;

@@ -259,6 +259,19 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
       return 3;
     }
     osd_set_framebuffer(render.width(), render.height());
+    // Click → LoadingScreen.show presents this plate before the rest of the
+    // handler (garage enter, track load). Skipped until the splash is up,
+    // so Init's own show() cannot flash the clear color.
+    host_set_loading_present([&jvm, &render]() {
+      if (!render.ready() || !bgfx_osd_draw_enabled(render)) return;
+      std::string pic = jvm.game_root();
+      if (!pic.empty() && pic.back() != '\\' && pic.back() != '/')
+        pic.push_back('\\');
+      pic += "frontend\\textures\\Loading.dds";
+      osd_set_loading_overlay(pic);
+      render.pump(0);
+      render.flush();
+    });
     // HUD text positions assume Frontend.setFonts for this resolution —
     // SLII17 at 800×600 overflows the garage header (stock uses SLII11).
     frontend_set_fonts(jvm, render.width(), render.height());

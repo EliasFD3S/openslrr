@@ -130,6 +130,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
           st->type_id = args[1].v.i;
         if (args.size() >= 4 && args[3].tag == ValueTag::Obj && args[3].v.o)
           st->alias = args[3].v.o->str;
+        if (st->alias == "dummy") gameref_make_live(self);
         gameref_set_flags(self, kWorldTreeRoot);
         return Value::make_void();
       };
@@ -208,8 +209,10 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
           if (!o) return;
           auto getf = [&](const char* n, float* out) {
             auto it = o->fields.find(n);
-            if (it != o->fields.end() && it->second.tag == ValueTag::Float)
-              *out = it->second.v.f;
+            if (it == o->fields.end()) return;
+            if (it->second.tag == ValueTag::Float) *out = it->second.v.f;
+            else if (it->second.tag == ValueTag::Int)
+              *out = static_cast<float>(it->second.v.i);
           };
           getf("x", a);
           getf("y", b);
@@ -222,8 +225,10 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
           if (o) {
             auto getf = [&](const char* n, float* out) {
               auto it = o->fields.find(n);
-              if (it != o->fields.end() && it->second.tag == ValueTag::Float)
-                *out = it->second.v.f;
+              if (it == o->fields.end()) return;
+              if (it->second.tag == ValueTag::Float) *out = it->second.v.f;
+              else if (it->second.tag == ValueTag::Int)
+                *out = static_cast<float>(it->second.v.i);
             };
             getf("y", &yaw);
             getf("p", &pitch);
@@ -313,8 +318,10 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
         Object* o = args[0].v.o;
         auto getf = [&](const char* n, float* out) {
           auto it = o->fields.find(n);
-          if (it != o->fields.end() && it->second.tag == ValueTag::Float)
-            *out = it->second.v.f;
+          if (it == o->fields.end()) return;
+          if (it->second.tag == ValueTag::Float) *out = it->second.v.f;
+          else if (it->second.tag == ValueTag::Int)
+            *out = static_cast<float>(it->second.v.i);
         };
         getf("x", &st->pos[0]);
         getf("y", &st->pos[1]);
@@ -361,9 +368,10 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
           return Value::make_void();
         GameRefState* st = gameref_get(self);
         const std::string& line = args[2].v.o->str;
-          if (part_command(self, line)) return Value::make_void();
-          if (!st || (st->type_id & 0xFFFF) != 0x33) return Value::make_void();
-        if (!line.empty()) garage_camera_command(line.c_str());
+        if (part_command(self, line)) return Value::make_void();
+        if (!st || (st->type_id & 0xFFFF) != 0x33) return Value::make_void();
+        if (gameref_scene_command(st->key, line))
+          garage_camera_command(line.c_str());
         return Value::make_void();
       });
   jvm.natives().register_method(
@@ -409,6 +417,10 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
             (args.size() >= 4 && args[3].tag == ValueTag::Obj) ? args[3].v.o
                                                                : nullptr;
         gameref_bind_create(self, parent, type, alias);
+        Object* params =
+            (args.size() >= 3 && args[2].tag == ValueTag::Obj) ? args[2].v.o
+                                                               : nullptr;
+        gameref_bind_scene_camera(self, params ? params->str : std::string{});
         return Value::make_void();
       });
   jvm.natives().register_method(
@@ -427,6 +439,10 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
             (args.size() >= 4 && args[3].tag == ValueTag::Obj) ? args[3].v.o
                                                                : nullptr;
         gameref_bind_create(self, parent, type, alias);
+        Object* params =
+            (args.size() >= 3 && args[2].tag == ValueTag::Obj) ? args[2].v.o
+                                                               : nullptr;
+        gameref_bind_scene_camera(self, params ? params->str : std::string{});
         int32_t id = 0;
         if (type) {
           if (GameRefState* ts = gameref_get(type)) id = ts->type_id;
