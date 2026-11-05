@@ -164,9 +164,6 @@ struct DueTimer {
 std::vector<DueTimer> gameref_poll_timers(float now_sec);
 
 std::vector<GameRefState*> gameref_active_cameras();
-// When required, the fullscreen camera must sit under root. A null root then
-// yields no camera, so a leftover garage lens cannot cover the menu.
-void gameref_set_camera_root(void* root, bool required);
 // Newest fullscreen camera. Catalog slots (viewport under 1×1) are skipped.
 GameRefState* fullscreen_script_camera();
 // system:0x33. Constructor params are "x,y,z,yaw,pitch,roll,...".

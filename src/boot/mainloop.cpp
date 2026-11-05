@@ -198,27 +198,8 @@ void mainloop_sync_section_render(IRenderBackend& render,
   void* world = object_field("map");
   if (!world) world = object_field("CarScene");
   if (!world) world = object_field("Scene");
-  const bool main_menu =
-      actual && actual->class_name.find("MainMenu") != std::string::npos;
-  if (!world && main_menu)
-    if (Object* mmd = object_field("mmd")) {
-      auto dialog_field = [&](const char* name) -> void* {
-        auto it = mmd->fields.find(name);
-        if (it == mmd->fields.end() || it->second.tag != ValueTag::Obj)
-          return nullptr;
-        return it->second.v.o;
-      };
-      world = dialog_field("bgScene");
-      if (!world) world = dialog_field("CarScene");
-      if (!world) world = dialog_field("DriverScene");
-    }
-  // Back leaves the garage camera active. Taking its parent as the world
-  // drew the empty garage over the menu video: the car had been reparented
-  // onto the player and was no longer in that map.
-  gameref_set_camera_root(nullptr, false);
-  if (!world && !main_menu)
+  if (!world)
     if (GameRefState* cam = fullscreen_script_camera()) world = cam->parent;
-  gameref_set_camera_root(world, true);
   scene_instances_select(world, object_field("skydome"));
   const bool in_garage =
       actual && actual->class_name.find("Garage") != std::string::npos;
