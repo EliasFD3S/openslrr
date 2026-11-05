@@ -90,6 +90,17 @@ PartMatrix part_matrix_inverse_rigid(const PartMatrix &m) {
     out[12 + r] = -(out[r] * m[12] + out[4 + r] * m[13] + out[8 + r] * m[14]);
   return out;
 }
+bool part_parked_spring_length(float rest, float minimum, float maximum,
+                               float force, float mass_on_wheel, float &length) {
+  if (!(force > 0.f && rest > 0.f) || !std::isfinite(mass_on_wheel))
+    return false;
+  const float low = minimum > 0.f ? minimum : 0.f;
+  const float high = maximum > 0.f ? maximum : rest;
+  const float sag = mass_on_wheel * 9.81f / force;
+  length = std::clamp(rest - sag, low, high);
+  return true;
+}
+
 bool part_slot_matrix(const PartConfig &config, const PartSlot &slot,
                       PartMatrix &matrix) {
   PartMatrix frame = identity();
@@ -118,6 +129,9 @@ PartConfig parse_part_config(const std::string &source,
   size_t line = 0;
   uint32_t deformable = 0;
   PartPose deformable_pose;
+  bool have_spring = false;
+  float spring[3] = {0.29f, 0.1f, 0.05f};
+  float wheel_radius = 0.f;
   auto rid = [&](const std::string &text) {
     std::string word = text;
     if (!word.empty() && (word.back() == 'r' || word.back() == 'R'))
@@ -166,8 +180,32 @@ PartConfig parse_part_config(const std::string &source,
         if (out.slots.empty())
           throw std::runtime_error("slottype before slot");
         out.slots.back().type = integer(t, 1);
-      } else if (command == "wheel")
+      } else if (command == "type") {
+        have_spring = false;
+        wheel_radius = 0.f;
+        if (t.size() >= 4 && (t[2] == "sphere" || t[2] == "Sphere")) {
+          wheel_radius = number(t, 3);
+          if (wheel_radius <= 0.f)
+            throw std::runtime_error("wheel radius must be positive");
+        }
+      } else if (command == "spring") {
+        for (int i = 0; i < 3; ++i)
+          spring[i] = number(t, static_cast<size_t>(i + 1));
+        if (spring[0] <= 0.f || spring[1] <= 0.f || spring[2] <= 0.f)
+          throw std::runtime_error("spring components must be positive");
+        have_spring = true;
+      } else if (command == "wheel") {
         out.wheels.push_back(pose(t));
+        PartWheelSpring spec;
+        spec.radius = wheel_radius;
+        if (have_spring) {
+          spec.base = spring[0];
+          spec.travel = spring[1];
+          spec.damping = spring[2];
+          spec.authored = true;
+        }
+        out.wheel_springs.push_back(spec);
+      }
       else if (command == "steering") {
         out.steering = pose(t);
         out.has_steering = true;
@@ -189,15 +227,33 @@ PartConfig parse_part_config(const std::string &source,
       } else if (command == "flags" && !out.renders.empty())
         out.renders.back().flags |= static_cast<uint32_t>(integer(t, 1));
       else if (command == "lod" && !out.renders.empty())
-        out.renders.back().lod = true;
+        out.renders.back().lod_level = integer(t, 1);
+      else if (command == "linked" && !out.renders.empty()) {
+        PartLink link;
+        link.first = integer(t, 1);
+        if (t.size() > 2)
+          link.second = integer(t, 2);
+        if (t.size() > 3) {
+          link.parent_slot = integer(t, 3);
+          link.filter = true;
+        }
+        out.renders.back().links.push_back(link);
+      }
       else if (command == "mesh")
         out.mesh = rid(t.at(1));
       else if (command == "texture")
         out.texture = rid(t.at(1));
       else if (command == "category")
         out.category = integer(t, 1);
-      else if (command == "body" && t.size() >= 8)
-        out.mass += number(t, 7);
+      else if (command == "body" && t.size() >= 8) {
+        PartBody body;
+        body.pose = pose(t);
+        body.mass = number(t, 7);
+        if (body.mass < 0.f)
+          throw std::runtime_error("body mass must be non-negative");
+        out.bodies.push_back(body);
+        out.mass += body.mass;
+      }
       else if (command == "name") {
         for (size_t i = 1; i < t.size(); i++) {
           if (i > 1)
@@ -215,8 +271,14 @@ PartConfig parse_part_config(const std::string &source,
     out.render = deformable;
     out.render_pose = deformable_pose;
   } else if (!out.renders.empty()) {
-    out.render = out.renders[0].resource;
-    out.render_pose = out.renders[0].pose;
+    // The first render is the lo-res box. The catalog camera sits inside the
+    // closest band, which is the last level (the deck and the bores).
+    const PartRender *chosen = &out.renders[0];
+    for (const auto &r : out.renders)
+      if (!r.flags && r.lod_level >= chosen->lod_level)
+        chosen = &r;
+    out.render = chosen->resource;
+    out.render_pose = chosen->pose;
   }
   out.valid = out.errors.empty() && (!out.slots.empty() || out.render != 0);
   return out;

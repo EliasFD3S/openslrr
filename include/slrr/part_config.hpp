@@ -12,6 +12,20 @@ struct PartPose {
   std::array<float, 3> position{};
   std::array<float, 3> rotation{}; // yaw, pitch, roll in radians
 };
+// One `body` line. Mass is kilograms; the pose is in the part's own frame.
+struct PartBody {
+  PartPose pose;
+  float mass = 0;
+};
+// `spring base travel damping` consumed by the next `wheel`. Missing lines
+// keep the stock fallback (0.29, 0.10, 0.05). Radius comes from `type sphere`.
+struct PartWheelSpring {
+  float base = 0.29f;
+  float travel = 0.1f;
+  float damping = 0.05f;
+  float radius = 0.f;
+  bool authored = false;
+};
 struct PartSlotLink {
   uint32_t resource = 0;
   int slot = 0;
@@ -23,11 +37,21 @@ struct PartSlot {
   std::vector<PartSlotLink> attach;
   std::vector<PartSlotLink> compatible;
 };
+// `linked a [b] [parentSlot]`. b == 0 is one anchor. The third value, when
+// present, keeps the rule only for that parent slot. First match wins.
+struct PartLink {
+  int first = 0;
+  int second = 0;
+  int parent_slot = 0;
+  bool filter = false;
+};
 struct PartRender {
   uint32_t resource = 0;
   PartPose pose;
   uint32_t flags = 0;
-  bool lod = false;
+  // -1: always drawn. 0 lo-res, 1 hi-res, 2 extr-hi-res. Alternatives, not layers.
+  int lod_level = -1;
+  std::vector<PartLink> links;
 };
 struct PartConfig {
   uint32_t resource = 0;
@@ -36,6 +60,8 @@ struct PartConfig {
   std::string name;
   int category = 0;
   float mass = 0;
+  std::vector<PartBody> bodies;
+  std::vector<PartWheelSpring> wheel_springs;
   uint32_t render = 0, mesh = 0, texture = 0;
   PartPose render_pose;
   PartPose steering;
@@ -60,4 +86,8 @@ PartMatrix part_matrix_multiply(const PartMatrix &a, const PartMatrix &b);
 PartMatrix part_matrix_inverse_rigid(const PartMatrix &matrix);
 bool part_slot_matrix(const PartConfig &config, const PartSlot &slot,
                       PartMatrix &matrix);
+// Parked ride length: rest minus the static sag, clamped to the Java limits.
+// `force` is the spring rate in N/m. Returns false when the spring is unset.
+bool part_parked_spring_length(float rest, float minimum, float maximum,
+                               float force, float mass_on_wheel, float &length);
 } // namespace slrr

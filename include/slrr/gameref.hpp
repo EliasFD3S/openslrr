@@ -107,6 +107,9 @@ struct GameRefState {
   float move_s[3] = {};
   float eye_s[3] = {};
   float eye_vel[3] = {};
+  // This frame's look axes (PE mouse rate). The orbit body consumes them.
+  float ctl_x = 0.f;
+  float ctl_y = 0.f;
   float cam_clock = -1.f;
   // Parent-local eye and look point. The preview rebuilds its view from
   // these: the Z reflection that matches the mesh also reverses a look-at basis.
@@ -163,8 +166,8 @@ std::vector<DueTimer> gameref_poll_timers(float now_sec);
 std::vector<GameRefState*> gameref_active_cameras();
 // system:0x33. Constructor params are "x,y,z,yaw,pitch,roll,...".
 void gameref_bind_scene_camera(void* key, const std::string& params);
-// render/look/move/zoom/hide from SLRR_rev java-scene-camera. Returns true
-// when the verb also belongs to the garage orbit camera (smooth/dist/zoom).
+// render/look/move/zoom/hide on the script camera. A move with no look
+// target slides the pose with Pori; a move plus look orbits.
 bool gameref_scene_command(void* key, const std::string& line);
 // Fullscreen script camera (dealer, car lot). Eye and look are script
 // metres; the renderer still flips Z to match the uploaded meshes.

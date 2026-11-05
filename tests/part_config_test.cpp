@@ -27,8 +27,32 @@ int main(int argc, char **argv) {
   check(config.stock == std::vector<uint32_t>({0x44, 0x44}),
         "repeated stock wheel references remain ordered");
   check(config.texture == 0x25 && config.category == 2 &&
-            std::fabs(config.mass - 10.5f) < .001f,
+            std::fabs(config.mass - 10.5f) < .001f &&
+            config.bodies.size() == 1 &&
+            std::fabs(config.bodies[0].pose.position[2]) < .001f,
         "paint category and mass are retained");
+  auto sprung = parse_part_config(
+      "type 10 sphere 0.315\n"
+      "spring 0.290 0.100 0.050\n"
+      "wheel -0.67 -0.630 -1.146 0 0 0 1 0 1 0\n"
+      "type 10 sphere 0.315\n"
+      "spring 0.290 0.100 0.050\n"
+      "wheel 0.67 -0.630 -1.146 0 0 0 1 0 1 0\n"
+      "body 0 0 0.2 0 0 0 1292 box 1 1 1\n");
+  const float force = 4.6f * 1000.f * 9.81f;
+  const float load = 1292.f * 0.539f / 2.f;
+  float length = 0.f;
+  const float rest = 9.5f * 0.0254f + load * 9.81f / force;
+  check(sprung.wheel_springs.size() == 2 && sprung.wheel_springs[0].authored &&
+            std::fabs(sprung.wheel_springs[0].base - 0.29f) < 1e-6f &&
+            std::fabs(sprung.wheel_springs[0].radius - 0.315f) < 1e-6f &&
+            part_parked_spring_length(rest, 7.f * 0.0254f, 11.5f * 0.0254f,
+                                     force, load, length) &&
+            std::fabs(length - 0.2413f) < 1e-4f,
+        "parked spring length matches the installed preload");
+  check(std::fabs((sprung.wheel_springs[0].base + sprung.wheel_springs[0].travel) -
+                  length - 0.1487f) < 1e-4f,
+        "ride shift is the anchor minus the loaded length");
   check(config.unknown.size() == 1, "unsupported commands remain visible");
   PartMatrix matrix;
   check(part_slot_matrix(config, config.slots[0], matrix) &&

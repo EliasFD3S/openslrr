@@ -2,8 +2,8 @@
 #include "slrr/scene_instances.hpp"
 #include "slrr/video_fmv.hpp"
 
-#include "slrr/garage_camera.hpp"
 #include "slrr/gameref.hpp"
+#include "slrr/part_runtime.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/object.hpp"
 #include "slrr/osd_registry.hpp"
@@ -104,6 +104,33 @@ void mainloop_adopt_section(Jvm& jvm, SectionMachine& sections) {
   sections.adopt_actual(av.v.o);
 }
 
+// GameType.run is the async message thread. Thread.start does not enter
+// it, so CarLot.osdCommand's putMessage never reached handleMessage.
+// Drain the live section's port the way that loop would, between frames.
+void pump_async_messages(Jvm& jvm, Object* game) {
+  if (!game) return;
+  for (int n = 0; n < 16; ++n) {
+    Object* mp = field_obj(game, "mp");
+    Object* fifo = field_obj(mp, "fifo");
+    if (!fifo || field_int(fifo, "elementCount") <= 0) return;
+    Value msg = jvm.invoke("java.util.MessagePort", "getMessage",
+                           "()Ljava.util.Message;",
+                           {Value::make_obj(mp)}, false);
+    if (msg.tag != ValueTag::Obj || !msg.v.o) return;
+    const int32_t type = field_int(msg.v.o, "type");
+    const int32_t cmd = field_int(msg.v.o, "cmd");
+    // MT_SYSTEM + MC_SYS_TERMINATE. leaveAsyncMode posts this on exit.
+    if (type == 0 && cmd == 0) {
+      jvm.invoke(game->class_name, "leaveAsyncMode_Script_Real", "()V",
+                 {Value::make_obj(game)}, false);
+      return;
+    }
+    std::printf("[async] %s cmd=%d\n", game->class_name.c_str(), cmd);
+    jvm.invoke(game->class_name, "handleMessage", "(Ljava.util.Message;)V",
+               {Value::make_obj(game), msg}, false);
+  }
+}
+
 void mainloop_sync_section_render(IRenderBackend& render,
                                   SectionMachine& sections) {
   Object* actual = sections.actual();
@@ -128,6 +155,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
                                    SectionMachine& sections, float dt) {
   MainLoopFrameResult out;
   mainloop_adopt_section(jvm, sections);
+  pump_async_messages(jvm, sections.actual());
 
   // --- Input_tick @ 0x54DDA0 (Soft: live axes + garage orbit) ---
   float frame_dt = dt;
@@ -138,16 +166,8 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   const float yaw = host_input_get_axis(7, 0);
   const float pitch = host_input_get_axis(8, 0);
   const float zoom = host_input_get_axis(10, 0);
-  const bool in_garage =
-      sections.actual() &&
-      sections.actual()->class_name.find("Garage") != std::string::npos;
-  // Script camera orbits the car. The free garage orbit only moves when
-  // that camera is not the one on screen.
+  // One camera: the script camera. Orbit, spring and Pori all live on it.
   gameref_orbit_world_camera(yaw * 2.5f, pitch * 1.5f, zoom, frame_dt);
-  if (in_garage) {
-    garage_camera_tick(frame_dt > 0.f ? frame_dt : (1.f / 60.f), yaw, pitch,
-                       zoom);
-  }
   in.look_yaw = 0.f;
   in.look_pitch = 0.f;
   in.look_zoom = 0.f;
@@ -279,6 +299,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     static Object* load_seen = nullptr;
     static std::chrono::steady_clock::time_point load_until{};
     if (shown("loadingDialog")) {
+      osd_set_loading_dialog(true);
       Object* dlg = screen->fields["loadingDialog"].v.o;
       Object* losd = nullptr;
       if (dlg) {
@@ -411,6 +432,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
       }
     } else {
       load_seen = nullptr;
+      osd_set_loading_dialog(false);
       osd_set_loading_overlay({});
     }
   }
@@ -474,6 +496,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   }
 
   apply_mechanic_infoline(jvm, g_spinning_mechanic);
+  part_plant_parked();
 
   // --- Present: AltPresentGate (FMV) else PresentFrame ---
   // Soft: backend flush pumps FMV SampleGrabber + Present (libbgfx path).

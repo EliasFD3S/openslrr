@@ -3,7 +3,6 @@
 #include "slrr/part_runtime.hpp"
 #include "natives_internal.hpp"
 
-#include "slrr/garage_camera.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/object.hpp"
@@ -349,6 +348,7 @@ void osd_world_to_ndc(Object* osd, float wx, float wy, float* nx, float* ny) {
 
 void osd_mesh_halves(Object* osd, float mesh_w, float mesh_h, float* hw,
                      float* hh, bool* plate) {
+  (void)osd;
   constexpr float kScaleFs = 1.47f;
   float vp_a = osd_framebuffer_aspect();
   if (vp_a < 0.1f) vp_a = 1.f;
@@ -357,13 +357,10 @@ void osd_mesh_halves(Object* osd, float mesh_w, float mesh_h, float* hw,
   // createRectangle bakes vpWidth into the template (mesh taller than 0.5 m
   // or wider than a button). Style.rt does not, except the fullscreen shield.
   const bool is_plate = mesh_h > 0.5f || mesh_w > 2.5f;
-  const bool square =
-      mesh_h > 1e-4f && std::fabs(mesh_w / mesh_h - 1.f) < 0.15f;
-  if (!is_plate && !square) {
-    const OsdView view = osd_view(osd);
-    half_w *= view.width;
-    half_h *= view.height;
-  }
+  // The OSD camera sits at CAM_OFFSET * vpHeight, so a mesh covers the same
+  // fraction of every viewport. Multiplying by the viewport size again made
+  // a catalog cell's hitbox a small patch in the middle of the slot. The
+  // button is authored to fill that slot (Style(itemWidth*2, itemHeight*2)).
   // Dialog shield is Style(2, 2, vpAspect). backShieldOsd is built with
   // aspect 0, so rWidth is 0 and the box does not cover the menu.
   if (is_plate && half_w < 0.05f && half_h > 0.5f) half_w = 1.f;

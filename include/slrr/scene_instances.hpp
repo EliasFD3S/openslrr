@@ -40,4 +40,14 @@ bool scene_instances_ground_map(const RpkIndex& rpk, uint32_t ground_id,
 // Drawn instead of the render object's .scx (a ground template is materials).
 void scene_instances_override_mesh(uint32_t id,
                                    std::shared_ptr<const ScxGeometry> geo);
+// Boot garage shells are drawn from the renderer preload, not as RenderRefs.
+// Their triangles stay here so a parked car can find the concrete.
+void scene_instances_add_static_mesh(const ScxGeometry& geo);
+// Highest surface at script (x, z) that is not above `below`. Skips the sky,
+// vehicle materials, and anything parented under `ignore` (the car).
+bool scene_instances_floor(float x, float z, float below, void* ignore,
+                           float* height);
+// One entry per mesh under `root`: x, z and the lowest vertex Y, in script
+// space (the same Y the chassis pose uses).
+bool scene_instances_supports(void* root, std::vector<std::array<float, 3>>& points);
 }  // namespace slrr

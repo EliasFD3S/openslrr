@@ -10,6 +10,9 @@ struct HostInput {
   // Instantaneous look axes (consumed / decayed each tick).
   float look_yaw = 0.f;    // AXIS_LOOK_LEFTRIGHT (7)
   float look_pitch = 0.f;  // AXIS_LOOK_UPDOWN (8)
+  // Raw right-drag pixels since the last camera step. +x is right, +y is down.
+  float mouse_dx = 0.f;
+  float mouse_dy = 0.f;
   float look_zoom = 0.f;   // AXIS_LOOK_FWDBACK (10)
   float cursor_x = 0.f;
   float cursor_y = 0.f;

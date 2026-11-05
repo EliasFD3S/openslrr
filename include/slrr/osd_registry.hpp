@@ -19,6 +19,8 @@ struct OsdWidget {
   float half_h = 0.06f;
   bool disabled = false;
   bool hidden = false;     // hideGroup or the whole Osd
+  // destroy() hid this picture. showGroup must not bring it back.
+  bool dead = false;
   // Survives Osd.show(). Dialog.show() activates the viewport after the
   // pages were hidden; that must not bring every options page back.
   bool group_hidden = false;
@@ -69,6 +71,8 @@ bool osd_highlight_disabled(const OsdWidget& plate);
 void osd_hide_widget(int32_t index);
 OsdWidget* osd_widget_mut(int32_t index);
 void osd_add_widget(OsdWidget w);
+// Dialog.show sets Osd.OF_MODAL. That plate has to cover the catalog.
+bool osd_owner_modal(Object* owner);
 // Viewport priority stored by Viewport.create (menu 10, dialog 22, shield 21).
 int32_t osd_viewport_pri(Object* osd);
 const std::vector<OsdWidget>& osd_widgets();
@@ -151,6 +155,10 @@ void osd_ensure_loading_plate(Object* osd, const std::string& path);
 // Drawn after every OSD widget, so a hidden group cannot cover it.
 void osd_set_loading_overlay(const std::string& path);
 const std::string& osd_loading_overlay();
+// Dealer welcome keeps its own plate, so the overlay path is empty, but the
+// cursor is still over the city button that opened it.
+void osd_set_loading_dialog(bool on);
+bool osd_loading_dialog();
 // Last widget is a string field. Focus it so keys edit osd.stringValue.
 void osd_mark_string_input(Object* gadget, Object* value, void* text_key,
                            const std::string& input);

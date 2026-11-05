@@ -16,7 +16,6 @@ add_executable(slrr_host
   src/platform/host_input.cpp
   src/platform/host_sfx.cpp
   src/platform/host_cursor.cpp
-  src/platform/garage_camera.cpp
   src/platform/video_fmv.cpp
   src/natives/native_registry.cpp
   src/natives/natives_boot.cpp
@@ -48,6 +47,7 @@ add_executable(slrr_host
   src/boot/mainloop.cpp
   src/boot/boot.cpp
   src/physics/sl2_pacejka.cpp
+  src/physics/dyno_model.cpp
 )
 
 if(WIN32)

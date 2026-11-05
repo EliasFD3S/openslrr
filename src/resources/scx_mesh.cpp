@@ -58,6 +58,10 @@ bool parse_v3(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
     group.diffuse[1] = rd_f32(buf.data() + mat_start + 8);
     group.diffuse[2] = rd_f32(buf.data() + mat_start + 12);
     group.diffuse[3] = rd_f32(buf.data() + mat_start + 16);
+    group.specular[0] = rd_f32(buf.data() + mat_start + 20);
+    group.specular[1] = rd_f32(buf.data() + mat_start + 24);
+    group.specular[2] = rd_f32(buf.data() + mat_start + 28);
+    group.shininess = rd_f32(buf.data() + mat_start + 36);
     group.material_flags = rd_u32(buf.data() + mat_start + 40);
     group.reflection_strength = rd_f32(buf.data() + mat_start + 32);
     group.reflection_index = static_cast<uint16_t>(buf[mat_start+50] | (buf[mat_start+51]<<8));
@@ -244,15 +248,20 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
           p += 4;
           if (prop <= 2) {
             if (p + 4 > chunk_end) break;
-            if (prop == 0 && want_geo) {
+            if (want_geo && prop == 0) {
               mat.diffuse[0] = buf[p + 0] / 255.f;
               mat.diffuse[1] = buf[p + 1] / 255.f;
               mat.diffuse[2] = buf[p + 2] / 255.f;
               mat.diffuse[3] = buf[p + 3] / 255.f;
+            } else if (want_geo && prop == 1) {
+              mat.specular[0] = buf[p + 0] / 255.f;
+              mat.specular[1] = buf[p + 1] / 255.f;
+              mat.specular[2] = buf[p + 2] / 255.f;
             }
             p += 4;
           } else if (prop >= 0x01000000u && prop <= 0x01000002u) {
             if (p + 4 > chunk_end) break;
+            if (prop == 0x01000000u) mat.shininess = rd_f32(buf.data() + p);
             if (prop == 0x01000001u) mat.reflection_strength = rd_f32(buf.data()+p);
             p += 4;
           } else if (prop == 0x05000000u || prop == 0x07000000u) {

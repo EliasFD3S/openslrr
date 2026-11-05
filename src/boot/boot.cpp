@@ -1,6 +1,5 @@
 #include "slrr/boot.hpp"
 
-#include "slrr/garage_camera.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
@@ -13,6 +12,7 @@
 #include "slrr/rpk_index.hpp"
 #include "slrr/slrr_font.hpp"
 #include "slrr/scx_mesh.hpp"
+#include "slrr/scene_instances.hpp"
 #include "slrr/section_machine.hpp"
 #include "slrr/video_fmv.hpp"
 
@@ -382,6 +382,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     if (!geo.info.ok) continue;
     scx_verts += geo.info.vertices;
     scx_tris += geo.info.triangles;
+    scene_instances_add_static_mesh(geo);
     bgfx_add_scx_geometry(render, std::move(geo));
     if (want_window && render.ready() && (++load_i % 2) == 0) {
       mainloop_sync_section_render(render, sections);
@@ -398,7 +399,10 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     scx_geo.textures = rpk.textures_for_scx(garage_scx);
     scx_verts = scx_geo.info.vertices;
     scx_tris = scx_geo.info.triangles;
-    if (scx_geo.info.ok) bgfx_set_scx_geometry(render, std::move(scx_geo));
+    if (scx_geo.info.ok) {
+      scene_instances_add_static_mesh(scx_geo);
+      bgfx_set_scx_geometry(render, std::move(scx_geo));
+    }
   }
 
   // Garage preload can eat the Splash 3s timer — restart it so MainLoop

@@ -36,6 +36,10 @@ struct ScxGroup {
   ScxTextureMap base_map, mix_map, reflection_map, lightmap_map;
   uint32_t material_flags = 0;  // bit0 = alphaOpacity (scx.md)
   float diffuse[4] = {0.6f, 0.65f, 0.7f, 1.f};
+  // v4 color 1 and 0x01000000. Paint and chrome use a tight power (~21),
+  // rubber a wide one (~2.7). Zero specular adds nothing.
+  float specular[3] = {0.f, 0.f, 0.f};
+  float shininess = 1.f;
   std::string name;
 };
 

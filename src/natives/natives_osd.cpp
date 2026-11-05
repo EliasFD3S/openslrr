@@ -1,7 +1,6 @@
 #include "slrr/natives_boot.hpp"
 #include "natives_internal.hpp"
 
-#include "slrr/garage_camera.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"

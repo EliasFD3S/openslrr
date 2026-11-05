@@ -3,7 +3,6 @@
 #include "slrr/gameref.hpp"
 
 #include "slrr/dds_image.hpp"
-#include "slrr/garage_camera.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/host_sfx.hpp"
@@ -157,12 +156,14 @@ class LibBgfxBackend final : public IRenderBackend {
         bgfx::createEmbeddedShader(k_vehicle, rt, "fs_vehicle"), true);
     s_mix_ = bgfx::createUniform("s_vehicleMix", bgfx::UniformType::Sampler);
     s_env_ = bgfx::createUniform("s_vehicleEnv", bgfx::UniformType::Sampler);
+    s_bake_ = bgfx::createUniform("s_vehicleBake", bgfx::UniformType::Sampler);
     u_layers_ = bgfx::createUniform("u_vehicleLayers", bgfx::UniformType::Vec4);
     u_channels_ = bgfx::createUniform("u_vehicleChannels", bgfx::UniformType::Vec4);
     u_base_uv_ = bgfx::createUniform("u_vehicleBaseUv", bgfx::UniformType::Vec4);
     u_mix_uv_ = bgfx::createUniform("u_vehicleMixUv", bgfx::UniformType::Vec4);
     u_env_uv_ = bgfx::createUniform("u_vehicleEnvUv", bgfx::UniformType::Vec4);
     u_diffuse_ = bgfx::createUniform("u_vehicleDiffuse", bgfx::UniformType::Vec4);
+    u_spec_ = bgfx::createUniform("u_vehicleSpec", bgfx::UniformType::Vec4);
     layout_.begin()
         .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
         .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
@@ -240,7 +241,7 @@ class LibBgfxBackend final : public IRenderBackend {
     }
     if (bgfx::isValid(vehicle_program_)) bgfx::destroy(vehicle_program_);
     vehicle_program_ = BGFX_INVALID_HANDLE;
-    for (auto* handle : {&s_mix_, &s_env_, &u_layers_, &u_channels_, &u_base_uv_, &u_mix_uv_, &u_env_uv_, &u_diffuse_}) {
+    for (auto* handle : {&s_mix_, &s_env_, &s_bake_, &u_layers_, &u_channels_, &u_base_uv_, &u_mix_uv_, &u_env_uv_, &u_diffuse_, &u_spec_}) {
       if(bgfx::isValid(*handle)) bgfx::destroy(*handle);
       *handle = BGFX_INVALID_HANDLE;
     }
@@ -363,10 +364,9 @@ class LibBgfxBackend final : public IRenderBackend {
         garage_ != enabled || osd_buttons_ != osd_buttons;
     garage_ = enabled;
     osd_buttons_ = osd_buttons;
-    if (enabled && !garage_camera().active) garage_camera_setup_defaults();
     if (changed) {
-      std::printf("[bgfx] garage viewport=%d osd_buttons=%d gpu=libbgfx cam=%d\n",
-                  enabled ? 1 : 0, osd_buttons, garage_camera().active ? 1 : 0);
+      std::printf("[bgfx] garage viewport=%d osd_buttons=%d gpu=libbgfx\n",
+                  enabled ? 1 : 0, osd_buttons);
     }
   }
 
@@ -504,26 +504,65 @@ class LibBgfxBackend final : public IRenderBackend {
         bool mixed = group.mix_index != 0xffff && group.mix_index != group.texture_index && mix.idx != white_tex_.idx;
         auto env = texture(group.reflection_index);
         bool generated = group.reflection_map.channel == 0xfffffffeu;
-        if (env.idx == white_tex_.idx && (painted || generated)) {
+        const float strength = std::isfinite(group.reflection_strength) ? std::clamp(group.reflection_strength,0.f,1.f) : .5f;
+        // 3 = glass (dark tint, the spheremap warps across the pane).
+        // 2 = chrome: flags 0x33 with no color map (rims, tips), or a
+        // 0x0c cap whose color slot never loaded. A bare pipe is flags 0.
+        const bool glass = (group.material_flags & 0x40000000u) != 0;
+        const bool tex_missing = group.texture_index != 0xffff &&
+            (group.texture_index >= part.tex.size() || !bgfx::isValid(part.tex[group.texture_index]));
+        const bool chrome = !glass && group.material_type == 0x33u && group.texture_index == 0xffff;
+        const bool bare_cap = !glass && !chrome && tex_missing && group.material_type == 0x0cu &&
+                              group.reflection_index != 0xffff;
+        // A missing reflection slot is the global envmap, and the exe
+        // builds its UVs from the reflection vector, not the mesh.
+        if (env.idx == white_tex_.idx && (painted || generated || chrome || bare_cap)) {
           auto path = scene_instances_envmap();
           if(!path.empty()) env = tex_for_osd_icon(path);
           generated = true;
         }
-        const float strength = std::isfinite(group.reflection_strength) ? std::clamp(group.reflection_strength,0.f,1.f)*.5f : .25f;
-        const float layers[4] = {mixed?1.f:0.f, env.idx!=white_tex_.idx?strength:0.f, group.material_type==0x15&&mixed?1.f:0.f, painted?1.f:0.f};
+        const float kind = glass ? 3.f : (chrome || bare_cap) ? 2.f : painted ? 1.f : 0.f;
+        const float layers[4] = {mixed?1.f:0.f, env.idx!=white_tex_.idx?strength:0.f, group.material_type==0x15&&mixed?1.f:0.f, kind};
         const float channels[4] = {static_cast<float>(group.base_map.channel),static_cast<float>(group.mix_map.channel),static_cast<float>(group.reflection_map.channel),generated?1.f:0.f};
         auto map = [&](bgfx::UniformHandle uniform, const ScxTextureMap& uv) {
           const float value[4]={uv.scale_u,uv.scale_v,uv.offset_u,uv.offset_v}; bgfx::setUniform(uniform,value);
         };
         bgfx::setUniform(u_layers_,layers); bgfx::setUniform(u_channels_,channels);
-        // A bound diffuse map supplies its authored color; SCX diffuse RGB is
-        // the untextured fallback, rather than an extra darkening multiplier.
+        // Paint replaces the slot, so the body keeps the texture color.
+        // Tex / TexSpecular (tyre is 0x04) replace colour 0 with white:
+        // the tread is the texture. A second multiply by the file diffuse
+        // turns that tread black. Colour classes and bare metal keep it.
+        const bool tex_family = group.material_type == 0x00u || group.material_type == 0x04u ||
+                                group.material_type == 0x08u || group.material_type == 0x0cu ||
+                                group.material_type == 0x10u || group.material_type == 0x14u ||
+                                group.material_type == 0x20u || group.material_type == 0x24u;
+        const bool has_tex = group.texture_index < part.geo.textures.size();
         float diffuse[4]={1,1,1,group.diffuse[3]};
-        if(group.texture_index>=part.geo.textures.size())
+        if(!has_tex || (!tex_family && !painted))
           std::copy(group.diffuse,group.diffuse+3,diffuse);
         bgfx::setUniform(u_diffuse_,diffuse);
+        const float spec[4] = {group.specular[0], group.specular[1], group.specular[2],
+                               group.shininess > 0.f ? group.shininess : 1.f};
+        bgfx::setUniform(u_spec_, spec);
         map(u_base_uv_,group.base_map);map(u_mix_uv_,group.mix_map);map(u_env_uv_,group.reflection_map);
+        bgfx::TextureHandle bake = white_tex_;
+        float bake_u[4] = {0.f, static_cast<float>(group.base_map.channel), 1.f, 0.f};
+        float bake_xf[4] = {1.f, 1.f, 0.f, 0.f};
+        if (group.lightmap_index != 0xffff &&
+            group.lightmap_index < part.tex.size() &&
+            bgfx::isValid(part.tex[group.lightmap_index])) {
+          bake = part.tex[group.lightmap_index];
+          bake_u[0] = 1.f;
+          bake_u[2] = static_cast<float>(group.lightmap_map.channel);
+          bake_xf[0] = group.lightmap_map.scale_u;
+          bake_xf[1] = group.lightmap_map.scale_v;
+          bake_xf[2] = group.lightmap_map.offset_u;
+          bake_xf[3] = group.lightmap_map.offset_v;
+        }
+        bgfx::setUniform(u_lightmap_, bake_u);
+        bgfx::setUniform(u_lightmap_uv_, bake_xf);
         bgfx::setTexture(0,s_tex_,base);bgfx::setTexture(1,s_mix_,mix);bgfx::setTexture(2,s_env_,env);
+        bgfx::setTexture(3,s_bake_,bake);
         bgfx::setTransform(matrix);bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,group.index_start,group.index_count);
         uint64_t state=BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_MSAA|BGFX_STATE_DEPTH_TEST_LESS;
         if(group.diffuse[3]<.99f)state|=BGFX_STATE_BLEND_ALPHA;else state|=BGFX_STATE_WRITE_Z;
@@ -573,7 +612,26 @@ class LibBgfxBackend final : public IRenderBackend {
         const bx::Vec3 at{p.camera.aim_at[0],p.camera.aim_at[1],-p.camera.aim_at[2]};
         const bx::Vec3 up{0.f,1.f,0.f};
         bx::mtxLookAt(view,eye,at,up);
-      }else bx::mtxInverse(view,world);
+      }else{
+        // setMatrix stores the PE pose Ry*Rx*Rz. The scene basis is a
+        // different yaw/pitch, so the slot camera looked past the can and
+        // the viewport stayed the garage floor. -Z of this pose points at
+        // the can. Vertices are uploaded as S*v, so the view is inv(M)*S.
+        const float yaw=p.camera.ypr[0],pitch=p.camera.ypr[1],roll=p.camera.ypr[2];
+        const float sy=std::sin(yaw),cy=std::cos(yaw),sp=std::sin(pitch),cp=std::cos(pitch),sr=std::sin(roll),cr=std::cos(roll);
+        const float srsp=sr*sp,crsp=cr*sp;
+        float pose[16]={};
+        pose[0]=srsp*sy+cr*cy; pose[1]=sr*cp; pose[2]=srsp*cy-cr*sy;
+        pose[4]=crsp*sy-sr*cy; pose[5]=cr*cp; pose[6]=crsp*cy+sr*sy;
+        pose[8]=cp*sy;          pose[9]=-sp;   pose[10]=cp*cy;
+        pose[12]=p.camera.pos[0]; pose[13]=p.camera.pos[1]; pose[14]=p.camera.pos[2]; pose[15]=1.f;
+        bx::mtxInverse(view,pose);
+        // Drawn points are S*M*v (Z mirrored). The camera has to live in that
+        // same space: S*inv(M)*S. Negating only the Z column turned the lens
+        // around and left the eye where it was, so every part sat behind it.
+        view[2]=-view[2]; view[6]=-view[6]; view[14]=-view[14];
+        view[8]=-view[8]; view[9]=-view[9]; view[11]=-view[11];
+      }
       bx::mtxProj(proj,p.camera.half_aov,static_cast<float>(w)/h,std::max(.0001f,p.camera.dmin),p.camera.dmax,bgfx::getCaps()->homogeneousDepth);
       bgfx::setViewRect(id,x,y,w,h);bgfx::setViewClear(id,BGFX_CLEAR_DEPTH,0,1.f);bgfx::setViewMode(id,bgfx::ViewMode::Sequential);bgfx::setViewTransform(id,view,proj);
       for(const auto&i:p.instances)draw_instance(id,i,i.transform.data(),true);++id;
@@ -609,11 +667,6 @@ class LibBgfxBackend final : public IRenderBackend {
     const float aspect =
         height_ > 0 ? static_cast<float>(width_) / static_cast<float>(height_)
                     : 1.333f;
-    if (garage_camera().active) {
-      garage_camera_matrices(view, proj, aspect,
-                             bgfx::getCaps()->homogeneousDepth);
-      return;
-    }
     constexpr float kScale = 0.01f;
     const float cx = 0.5f * (mesh_min_[0] + mesh_max_[0]) * kScale;
     const float cy = 0.5f * (mesh_min_[1] + mesh_max_[1]) * kScale;
@@ -853,9 +906,11 @@ class LibBgfxBackend final : public IRenderBackend {
         continue;
       const bgfx::Memory* mem =
           bgfx::copy(img.data.data(), img.mip0_size);
+      // Wrap, same as the stock sampler. Mirror flips a tread that tiles
+      // past 1 (the tyre runs U 0..4) so the grooves reverse every repeat.
       part.tex[i] = bgfx::createTexture2D(
           static_cast<uint16_t>(img.width), static_cast<uint16_t>(img.height),
-          false, 1, fmt, BGFX_SAMPLER_U_MIRROR | BGFX_SAMPLER_V_MIRROR, mem);
+          false, 1, fmt, 0, mem);
       if (bgfx::isValid(part.tex[i])) ++loaded;
     }
     std::printf("[bgfx] DDS GPU uploaded %d / %zu\n", loaded, paths.size());
@@ -941,6 +996,8 @@ class LibBgfxBackend final : public IRenderBackend {
         if (in.rmb_down) {
           in.look_yaw -= dx;
           in.look_pitch -= dy;
+          in.mouse_dx += static_cast<float>(x - self->mouse_x_);
+          in.mouse_dy += static_cast<float>(y - self->mouse_y_);
         } else {
           in.cursor_x = dx;
           in.cursor_y = dy;
@@ -1012,7 +1069,8 @@ class LibBgfxBackend final : public IRenderBackend {
     return th;
   }
 
-  void draw_osd_quad(const OsdWidget& w) {
+  void draw_osd_quad(const OsdWidget& w, float cr = 1.f, float cg = 1.f,
+                     float cb = 1.f, float ca = 1.f) {
     MeshVertex v[4];
     const float x0 = w.x - w.half_w, x1 = w.x + w.half_w;
     const float y0 = w.y - w.half_h, y1 = w.y + w.half_h;
@@ -1068,8 +1126,8 @@ class LibBgfxBackend final : public IRenderBackend {
     // tex.a keeps the antialiasing. Splash/loading have no usable alpha.
     const float u[4] = {0.f, 1.f, splash_plate ? 0.f : 1.f, 0.f};
     bgfx::setUniform(u_alpha_test_, u);
-    const float white_c[4] = {1.f, 1.f, 1.f, 1.f};
-    bgfx::setUniform(u_color_, white_c);
+    const float tint[4] = {cr, cg, cb, ca};
+    bgfx::setUniform(u_color_, tint);
     // PTX RGB is already multiplied by alpha. SRC_ALPHA would darken the
     // menu plate a second time (rgb * a * a). Premultiplied blend keeps
     // the gold frame and lets prime.avi through the transparent center.
@@ -1111,15 +1169,6 @@ class LibBgfxBackend final : public IRenderBackend {
 
     // Text-menu hover: stock HL_LABELCOLOR → COLOR_SELECTED (full white).
     const OsdWidget* hover = osd_hover_widget();
-    // Stock Gadget.focus: HL_LABELCOLOR turns the row title white. Slider
-    // tracks have an icon, so the tip match must still apply to them.
-    // String fields do not highlight. Labeled buttons (menu, dialog OK)
-    // turn the text white; only icon buttons get the hl plate.
-    const std::string* hover_tip =
-        (hover && !hover->disabled && !hover->string_input &&
-         !hover->tip.empty())
-            ? &hover->tip
-            : nullptr;
 
     for (const SlrrOsdText& t : texts) {
       if (!t.visible || !t.font_key || t.text.empty()) continue;
@@ -1210,6 +1259,169 @@ class LibBgfxBackend final : public IRenderBackend {
         pen_x += adv_osd;
       }
     }
+    const float white_c[4] = {1.f, 1.f, 1.f, 1.f};
+    bgfx::setUniform(u_color_, white_c);
+  }
+
+  // One OSD line. y is the glyph top (y+ down). align 1 centers on x.
+  void draw_osd_line(void* font_key, const std::string& text, float x, float y,
+                     int align, uint32_t argb) {
+    if (!font_key || text.empty() || width_ <= 0 || height_ <= 0) return;
+    const SlrrFont* font = slrr_font_get(font_key);
+    if (!font || !font->ready) return;
+    bgfx::TextureHandle tex = tex_for_font(font_key);
+    if (!bgfx::isValid(tex)) return;
+    const float sw = static_cast<float>(width_);
+    const float sh = static_cast<float>(height_);
+    float pen_x = x;
+    const float width_osd = 2.f * slrr_font_measure_px(font_key, text.c_str()) / sw;
+    if (align == 1) pen_x -= width_osd * 0.5f;
+    else if (align == 0) pen_x -= width_osd;
+    const float cr = ((argb >> 16) & 0xff) / 255.f;
+    const float cg = ((argb >> 8) & 0xff) / 255.f;
+    const float cb = (argb & 0xff) / 255.f;
+    const float ca = ((argb >> 24) & 0xff) / 255.f;
+    const float col[4] = {cr, cg, cb, ca};
+    const float u_at[4] = {0.f, 1.f, 1.f, 0.f};
+    const float to_x = 2.f / sw;
+    const float to_y = 2.f / sh;
+    for (unsigned char ch : text) {
+      const size_t gi = static_cast<size_t>(ch);
+      const SlrrFontGlyph* g =
+          gi < font->glyphs.size() ? &font->glyphs[gi] : nullptr;
+      const float adv_px = (g && g->adv_px > 0.f)
+                               ? g->adv_px
+                               : static_cast<float>(font->px_height) * 0.35f;
+      const bool draw =
+          g && (g->u1 > g->u0 + 1e-6f) && (g->v1 > g->v0 + 1e-6f);
+      if (draw) {
+        const int corner[4] = {0, 1, 3, 2};
+        MeshVertex v[4];
+        auto setv = [](MeshVertex& o, float px, float py, float uu, float vv) {
+          o.x = px;
+          o.y = py;
+          o.z = 0.f;
+          o.nx = 0;
+          o.ny = 0;
+          o.nz = 1;
+          o.u = uu;
+          o.v = vv;
+        };
+        for (int i = 0; i < 4; ++i) {
+          const int c = corner[i];
+          setv(v[i], pen_x + g->px[c] * to_x, y + g->py[c] * to_y, g->tu[c],
+               g->tv[c]);
+        }
+        const uint16_t idx[6] = {0, 1, 2, 0, 2, 3};
+        if (bgfx::getAvailTransientVertexBuffer(4, layout_) < 4 ||
+            bgfx::getAvailTransientIndexBuffer(6) < 6)
+          break;
+        bgfx::TransientVertexBuffer tvb;
+        bgfx::TransientIndexBuffer tib;
+        bgfx::allocTransientVertexBuffer(&tvb, 4, layout_);
+        bgfx::allocTransientIndexBuffer(&tib, 6);
+        std::memcpy(tvb.data, v, sizeof(v));
+        std::memcpy(tib.data, idx, sizeof(idx));
+        float mtx[16];
+        bx::mtxIdentity(mtx);
+        bgfx::setTransform(mtx);
+        bgfx::setVertexBuffer(0, &tvb);
+        bgfx::setIndexBuffer(&tib);
+        bgfx::setTexture(0, s_tex_, tex);
+        bind_baked_light(nullptr, nullptr);
+        bgfx::setUniform(u_color_, col);
+        bgfx::setUniform(u_alpha_test_, u_at);
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                       BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
+        bgfx::submit(osd_view_, program_);
+      }
+      pen_x += adv_px * to_x;
+    }
+  }
+
+  // Osd.animate builds this after idleFor(1). The host never runs that
+  // loop except for the credits scroller, so the plate is drawn here.
+  // Row titles live in tip too; they are already painted beside the slider.
+  void draw_tooltip() {
+    if (width_ <= 0 || height_ <= 0) return;
+    // The city button under the cursor still owns its tip while the dealer
+    // picture is up. That plate is the black square on the loading screen.
+    if (osd_loading_dialog() || !osd_loading_overlay().empty()) {
+      tip_hover_ = -2;
+      return;
+    }
+    if (host_input().rmb_down) {
+      tip_hover_ = -2;
+      return;
+    }
+    const int32_t idx = osd_hover_index();
+    const OsdWidget* h = osd_hover_widget();
+    const bool showable = h && !h->row_label && !h->string_input &&
+                          !h->background && !h->tip.empty();
+    const float now = gameref_now();
+    if (!showable || idx != tip_hover_) {
+      tip_hover_ = showable ? idx : -2;
+      tip_since_ = now;
+      return;
+    }
+    if (now - tip_since_ < 1.f) return;
+
+    void* font_key = slrr_font_ui_small();
+    if (!font_key) return;
+    if (!slrr_font_ready(font_key) && !tip_font_tried_) {
+      tip_font_tried_ = true;
+      slrr_font_load(font_key, "slii11");
+    }
+    const SlrrFont* font = slrr_font_get(font_key);
+    if (!font || !font->ready || font->px_height <= 0) return;
+
+    const float sw = static_cast<float>(width_);
+    const float sh = static_cast<float>(height_);
+    const float text_w =
+        2.f * slrr_font_measure_px(font_key, h->tip.c_str()) / sw;
+    const float text_h = 2.f * static_cast<float>(font->px_height) / sh;
+    // Osd.animate: border = line height * 0.6, then grow the plate.
+    const float border = text_h * 0.6f;
+    const float box_w = text_w + border;
+    const float box_h = text_h + border;
+    if (box_w < 0.02f || box_h < 0.02f) return;
+
+    float cx = 0.f, cy = 0.f;
+    osd_pixel_to_text(mouse_x_, mouse_y_, width_, height_, &cx, &cy);
+    float bx = cx + box_w * 0.5f + 0.05f;
+    float by = cy + box_h * 0.5f + 0.1f;
+    const float hw = box_w * 0.5f;
+    const float hh = box_h * 0.5f;
+    if (bx + hw > 1.f) bx = 1.f - hw;
+    if (by + hh > 1.f) by = 1.f - hh;
+    if (bx - hw < -1.f) bx = -1.f + hw;
+    if (by - hh < -1.f) by = -1.f + hh;
+
+    OsdWidget plate;
+    plate.x = bx;
+    plate.y = by;
+    plate.half_w = hw;
+    plate.half_h = hh;
+    draw_osd_quad(plate, 0.f, 0.f, 0.f, 1.f);
+    const float px = 1.f / sw;
+    const float py = 1.f / sh;
+    OsdWidget edge;
+    edge.x = bx;
+    edge.y = by - hh;
+    edge.half_w = hw;
+    edge.half_h = py;
+    draw_osd_quad(edge, 1.f, 1.f, 1.f, 1.f);
+    edge.y = by + hh;
+    draw_osd_quad(edge, 1.f, 1.f, 1.f, 1.f);
+    edge.x = bx - hw;
+    edge.y = by;
+    edge.half_w = px;
+    edge.half_h = hh;
+    draw_osd_quad(edge, 1.f, 1.f, 1.f, 1.f);
+    edge.x = bx + hw;
+    draw_osd_quad(edge, 1.f, 1.f, 1.f, 1.f);
+
+    draw_osd_line(font_key, h->tip, bx, by - text_h * 0.5f, 1, 0xFFFFFFFFu);
     const float white_c[4] = {1.f, 1.f, 1.f, 1.f};
     bgfx::setUniform(u_color_, white_c);
   }
@@ -1463,6 +1675,26 @@ class LibBgfxBackend final : public IRenderBackend {
     static bool opening_retired = false;
     if (other_plate || movie) opening_retired = true;
 
+    // The parts bar is an opaque plate. On a later OSD layer it is submitted
+    // above the slot cameras and the cans disappear. A plate that only covers
+    // a preview slot stays under that camera. A fullscreen plate still covers
+    // the preview, so a dialog does not open a hole onto the car.
+    auto plate_behind_preview = [&](const OsdWidget& w) {
+      if (w.half_w > 0.9f && w.half_h > 0.9f) return false;
+      const float left = (w.x - w.half_w + 1.f) * 0.5f;
+      const float top = (w.y - w.half_h + 1.f) * 0.5f;
+      const float right = (w.x + w.half_w + 1.f) * 0.5f;
+      const float bot = (w.y + w.half_h + 1.f) * 0.5f;
+      for (const auto& p : previews_) {
+        const float x0 = std::max(left, p.viewport.vp_x);
+        const float y0 = std::max(top, p.viewport.vp_y);
+        const float x1 = std::min(right, p.viewport.vp_x + p.viewport.vp_w);
+        const float y1 = std::min(bot, p.viewport.vp_y + p.viewport.vp_h);
+        if (x1 - x0 > 0.01f && y1 - y0 > 0.01f) return true;
+      }
+      return false;
+    };
+
     for (int32_t layer : layers) {
       // Credits first, then plates and icons, then labels. The frame and
       // button textures cover the scroller; the header and BACK stay readable.
@@ -1471,8 +1703,8 @@ class LibBgfxBackend final : public IRenderBackend {
       osd_view_ = kOsdView;
       draw_osd_texts(layer, true, true);
       // The page background is the lowest layer. A dialog plate is higher
-      // and has to cover the car, so it stays with the buttons.
-      osd_view_ = layer == layers.front() ? static_cast<uint16_t>(2) : kOsdView;
+      // and has to cover the car, so it stays with the buttons. The parts
+      // strip is the exception: the slot cameras draw into it.
       for (const OsdWidget& w : widgets) {
         if (w.layer != layer || w.hidden || w.disabled || !w.background)
           continue;
@@ -1480,6 +1712,12 @@ class LibBgfxBackend final : public IRenderBackend {
         if ((opening_retired || movie || other_plate) &&
             is_opening(w.icon_path))
           continue;
+        // A modal dialog (BUY PART) overlaps the catalog previews. Sending
+        // that plate to view 2 put it under the parts and under their names.
+        osd_view_ = (!osd_owner_modal(w.owner) &&
+                     (layer == layers.front() || plate_behind_preview(w)))
+                        ? static_cast<uint16_t>(2)
+                        : kOsdView;
         draw_osd_quad(w);
       }
       osd_view_ = kOsdView;
@@ -1564,6 +1802,8 @@ class LibBgfxBackend final : public IRenderBackend {
       }
       draw_osd_texts(layer, true, false);
     }
+    osd_view_ = kOsdView;
+    draw_tooltip();
     // After every layer, so a hidden menu group cannot sit on Loading.dds.
     if (loading) {
       OsdWidget plate;
@@ -1580,6 +1820,9 @@ class LibBgfxBackend final : public IRenderBackend {
   bool shown_ = false;
   int mouse_x_ = 0;
   int mouse_y_ = 0;
+  int32_t tip_hover_ = -2;
+  float tip_since_ = 0.f;
+  bool tip_font_tried_ = false;
   int lmb_x_ = 0;
   int lmb_y_ = 0;
   bool have_mouse_ = false;
@@ -1615,9 +1858,9 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::UniformHandle u_alpha_test_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_color_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle vehicle_program_ = BGFX_INVALID_HANDLE;
-  bgfx::UniformHandle s_mix_=BGFX_INVALID_HANDLE,s_env_=BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle s_mix_=BGFX_INVALID_HANDLE,s_env_=BGFX_INVALID_HANDLE,s_bake_=BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_layers_=BGFX_INVALID_HANDLE,u_channels_=BGFX_INVALID_HANDLE;
-  bgfx::UniformHandle u_base_uv_=BGFX_INVALID_HANDLE,u_mix_uv_=BGFX_INVALID_HANDLE,u_env_uv_=BGFX_INVALID_HANDLE,u_diffuse_=BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_base_uv_=BGFX_INVALID_HANDLE,u_mix_uv_=BGFX_INVALID_HANDLE,u_env_uv_=BGFX_INVALID_HANDLE,u_diffuse_=BGFX_INVALID_HANDLE,u_spec_=BGFX_INVALID_HANDLE;
 };
 
 }  // namespace
@@ -1660,7 +1903,7 @@ void bgfx_add_scx_geometry(IRenderBackend& render, ScxGeometry geo) {
   if (LibBgfxBackend* b = as_lib(render)) b->add_scx_geometry(std::move(geo));
 }
 
-void bgfx_garage_camera_setup() { garage_camera_setup_defaults(); }
+void bgfx_garage_camera_setup() {}
 
 void* bgfx_native_hwnd(IRenderBackend& render) {
   if (LibBgfxBackend* b = as_lib(render)) return b->native_hwnd();

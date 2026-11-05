@@ -1,7 +1,6 @@
 #include "slrr/natives_boot.hpp"
 #include "natives_internal.hpp"
 
-#include "slrr/garage_camera.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/host_cursor.hpp"
@@ -77,6 +76,101 @@ Object* script_instance_for(Jvm& jvm, const RpkIndex& rpk, uint32_t full_id) {
       nit->second.v.o)
     shown = nit->second.v.o->str;
   std::printf("[track] %s MapName=%s\n", tc->name().c_str(), shown.c_str());
+  return inst;
+}
+
+// VehicleType resources carry only `script Brand_VT.class`. Stock create
+// builds that class so the constructor fills vtdarr; init() then ORs the
+// set mask. Returning the blank GameRef left every new-dealer slot null.
+Object* script_construct(Jvm& jvm, const RpkIndex& rpk, uint32_t full_id) {
+  std::string script = rpk.payload_prop(full_id, "script");
+  while (!script.empty() && (script.back() == '\r' || script.back() == '\n' ||
+                             script.back() == ' '))
+    script.pop_back();
+  if (script.size() < 7) return nullptr;
+  for (char& c : script)
+    if (c == '/') c = '\\';
+  std::string root = rpk.game_root();
+  if (!root.empty() && root.back() != '\\' && root.back() != '/')
+    root.push_back('\\');
+  const std::string disk = root + script;
+  if (!jvm.load_class(disk)) {
+    std::printf("[vt] class miss %s\n", disk.c_str());
+    return nullptr;
+  }
+  std::string simple = script;
+  const auto slash = simple.find_last_of('\\');
+  if (slash != std::string::npos) simple = simple.substr(slash + 1);
+  if (simple.size() > 6 && simple.compare(simple.size() - 6, 6, ".class") == 0)
+    simple.resize(simple.size() - 6);
+  const TufaClass* tc = jvm.find_class(simple);
+  if (!tc) return nullptr;
+  Object* inst = jvm.new_object(tc->name());
+  if (!inst) return nullptr;
+  if (GameRefState* st = gameref_upsert(inst, GameRefKind::GameType)) {
+    st->type_id = static_cast<int32_t>(full_id);
+    st->script = inst;
+    st->class_name = tc->name();
+    st->alias = "VehicleType";
+    st->empty = false;
+    st->flags &= ~kWorldTreeRoot;
+  }
+  inst->fields["id"] = Value::make_int(static_cast<int32_t>(full_id));
+  jvm.invoke_by_name(
+      tc->name(), "<init>",
+      {Value::make_obj(inst), Value::make_int(static_cast<int32_t>(full_id))},
+      false);
+
+  int models = 0;
+  int mask = 0;
+  float stock = 0.f;
+  auto num = [](const Value& v) -> float {
+    if (v.tag == ValueTag::Float) return v.v.f;
+    if (v.tag == ValueTag::Int) return static_cast<float>(v.v.i);
+    return 0.f;
+  };
+  auto vec = inst->fields.find("vtdarr");
+  if (vec != inst->fields.end() && vec->second.tag == ValueTag::Obj &&
+      vec->second.v.o) {
+    Object* v = vec->second.v.o;
+    auto cit = v->fields.find("elementCount");
+    if (cit != v->fields.end())
+      models = static_cast<int>(num(cit->second));
+    Object* data = nullptr;
+    auto dit = v->fields.find("elementData");
+    if (dit != v->fields.end() && dit->second.tag == ValueTag::Obj)
+      data = dit->second.v.o;
+    if (data && data->is_array) {
+      const int n = std::min(models, static_cast<int>(data->slots.size()));
+      for (int i = 0; i < n; ++i) {
+        if (data->slots[static_cast<size_t>(i)].tag != ValueTag::Obj ||
+            !data->slots[static_cast<size_t>(i)].v.o)
+          continue;
+        Object* model = data->slots[static_cast<size_t>(i)].v.o;
+        auto mit = model->fields.find("vehicleSetMask");
+        const int bits =
+            mit == model->fields.end() ? 0 : static_cast<int>(num(mit->second));
+        mask |= bits;
+        // Constructor adds prevalence for stock (4) and used (2) models.
+        if (bits & 0x6) {
+          auto pit = model->fields.find("prevalence");
+          if (pit != model->fields.end()) stock += num(pit->second);
+        }
+      }
+    }
+  }
+  auto have = inst->fields.find("vehicleSetMask");
+  if (mask && (have == inst->fields.end() || num(have->second) == 0.f))
+    inst->fields["vehicleSetMask"] = Value::make_int(mask);
+  float prevalence = 0.f;
+  auto pit = inst->fields.find("prevalence");
+  if (pit != inst->fields.end()) prevalence = num(pit->second);
+  if (prevalence == 0.f && stock > 0.f) {
+    inst->fields["prevalence"] = Value::make_float(stock);
+    prevalence = stock;
+  }
+  std::printf("[vt] %s id=0x%x models=%d mask=0x%x prevalence=%.0f\n",
+              tc->name().c_str(), full_id, models, mask, prevalence);
   return inst;
 }
 
@@ -280,9 +374,19 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
           if (script.empty()) {
             return Value::make_int(0);
           }
-          name = std::filesystem::path(script).stem().string();
-          if (!jvm.find_class(name))
-            jvm.load_class_file((std::filesystem::path(rpk.game_root()) / script).string());
+          const bool fqn = script.find('/') == std::string::npos &&
+                           script.find('\\') == std::string::npos &&
+                           script.find('.') != std::string::npos &&
+                           (script.size() < 6 ||
+                            script.compare(script.size() - 6, 6, ".class") != 0);
+          if (fqn) {
+            name = script;
+            if (!jvm.find_class(name)) jvm.load_class(name);
+          } else {
+            name = std::filesystem::path(script).stem().string();
+            if (!jvm.find_class(name))
+              jvm.load_class_file((std::filesystem::path(rpk.game_root()) / script).string());
+          }
         }
         const auto* cls = jvm.find_class(name);
         if (!cls) return Value::make_int(0);
@@ -370,8 +474,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
         const std::string& line = args[2].v.o->str;
         if (part_command(self, line)) return Value::make_void();
         if (!st || (st->type_id & 0xFFFF) != 0x33) return Value::make_void();
-        if (gameref_scene_command(st->key, line))
-          garage_camera_command(line.c_str());
+        gameref_scene_command(st->key, line);
         return Value::make_void();
       });
   jvm.natives().register_method(
@@ -465,6 +568,11 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
         if (id && alias_s.find("Track") != std::string::npos) {
           if (Object* inst =
                   script_instance_for(jvm, rpk, static_cast<uint32_t>(id)))
+            return Value::make_obj(inst);
+        }
+        if (id && alias_s == "VehicleType") {
+          if (Object* inst =
+                  script_construct(jvm, rpk, static_cast<uint32_t>(id)))
             return Value::make_obj(inst);
         }
         return Value::make_obj(self);

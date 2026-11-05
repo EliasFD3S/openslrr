@@ -3,6 +3,7 @@
 #include "slrr/jvm.hpp"
 #include "slrr/native_registry.hpp"
 #include "slrr/render_backend.hpp"
+#include "slrr/dyno_model.hpp"
 #include "slrr/sl2_pacejka.hpp"
 
 #include <cstdio>
@@ -19,6 +20,7 @@ void usage() {
       "Usage:\n"
       "  slrr_host --probe [--root DIR]\n"
       "  slrr_host --probe-pacejka\n"
+      "  slrr_host --probe-dyno\n"
       "  slrr_host --game [--root DIR] [--window] [--no-wait] [--auto-new]\n"
       "           [--auto-cmd mainmenu|street|N] [--render null|d3d9|bgfx]\n"
       "           [--spawn-car cars/racers/Baiern.rpk:0x6]\n"
@@ -40,6 +42,7 @@ int main(int argc, char** argv) {
 
   bool want_probe = false;
   bool want_pacejka = false;
+  bool want_dyno = false;
   bool want_game = false;
   BootOptions opt;
   const char* root_arg = nullptr;
@@ -57,6 +60,10 @@ int main(int argc, char** argv) {
     }
     if (std::strcmp(a, "--probe-pacejka") == 0) {
       want_pacejka = true;
+      continue;
+    }
+    if (std::strcmp(a, "--probe-dyno") == 0) {
+      want_dyno = true;
       continue;
     }
     if (std::strcmp(a, "--game") == 0) {
@@ -108,7 +115,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  if (!want_probe && !want_game && !want_pacejka) {
+  if (!want_probe && !want_game && !want_pacejka && !want_dyno) {
     usage();
     return 1;
   }
@@ -116,6 +123,14 @@ int main(int argc, char** argv) {
   if (want_pacejka) {
     char msg[256];
     const bool ok = sl2_pacejka_self_check(msg, sizeof(msg));
+    std::printf("[phys] %s\n", msg);
+    if (!ok) return 3;
+    if (!want_probe && !want_game && !want_dyno) return 0;
+  }
+
+  if (want_dyno) {
+    char msg[256];
+    const bool ok = dyno_self_check(msg, sizeof(msg));
     std::printf("[phys] %s\n", msg);
     if (!ok) return 3;
     if (!want_probe && !want_game) return 0;

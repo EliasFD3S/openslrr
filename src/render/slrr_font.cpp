@@ -287,6 +287,7 @@ void slrr_font_set_ui_keys(void* small, void* medium, void* large) {
   g_ui_large = large;
 }
 
+void* slrr_font_ui_small() { return g_ui_small; }
 void* slrr_font_ui_medium() { return g_ui_medium; }
 void* slrr_font_ui_large() { return g_ui_large; }
 

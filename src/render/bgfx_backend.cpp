@@ -44,7 +44,6 @@ class NullBackend final : public IRenderBackend {
 
 #ifndef SLRR_HAS_LIBBGFX
 #include "slrr/dds_image.hpp"
-#include "slrr/garage_camera.hpp"
 #include "slrr/host_input.hpp"
 
 #include <algorithm>
@@ -327,37 +326,17 @@ class BgfxBackend final : public IRenderBackend {
 
     float eye_x = cx + dist * 0.55f;
     float eye_y = cy + dist * 0.35f;
-    float eye_z = cz + dist * 0.75f;
-
-    if (garage_camera().active) {
-      float view[16];
-      float proj[16];
-      garage_camera_matrices(view, proj, aspect, false);
-      glMatrixMode(GL_PROJECTION);
-      glLoadMatrixf(proj);
-      glMatrixMode(GL_MODELVIEW);
-      glLoadMatrixf(view);
-      const auto& cam = garage_camera();
-      const float cyaw = std::cos(cam.yaw);
-      const float syaw = std::sin(cam.yaw);
-      const float cp = std::cos(cam.pitch);
-      const float sp = std::sin(cam.pitch);
-      eye_x = cam.look_x + cam.dist * cp * syaw;
-      eye_y = cam.look_y + cam.dist * sp;
-      eye_z = cam.look_z + cam.dist * cp * cyaw;
-    } else {
-      glMatrixMode(GL_PROJECTION);
-      glLoadIdentity();
-      const float near_z = 0.1f;
-      const float far_z = dist + radius * 4.f;
-      const float fovy = 45.f * 3.14159265f / 180.f;
-      const float top = near_z * std::tan(fovy * 0.5f);
-      const float right = top * aspect;
-      glFrustum(-right, right, -top, top, near_z, far_z);
-      glMatrixMode(GL_MODELVIEW);
-      glLoadIdentity();
-      look_at(eye_x, eye_y, eye_z, cx, cy, cz, 0.f, 1.f, 0.f);
-    }
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    const float near_z = 0.1f;
+    const float far_z = dist + radius * 4.f;
+    const float fovy = 45.f * 3.14159265f / 180.f;
+    const float top = near_z * std::tan(fovy * 0.5f);
+    const float right = top * aspect;
+    glFrustum(-right, right, -top, top, near_z, far_z);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    look_at(eye_x, eye_y, eye_z, cx, cy, cz, 0.f, 1.f, 0.f);
 
     glEnable(GL_LIGHTING);
     glEnable(GL_LIGHT0);
@@ -656,6 +635,8 @@ class BgfxBackend final : public IRenderBackend {
         if (in.rmb_down) {
           in.look_yaw -= dx;
           in.look_pitch -= dy;
+          in.mouse_dx += static_cast<float>(x - self->mouse_x_);
+          in.mouse_dy += static_cast<float>(y - self->mouse_y_);
         }
       }
       if (self) {
@@ -783,6 +764,8 @@ void bgfx_add_scx_geometry(IRenderBackend& render, ScxGeometry geo) {
   if (BgfxBackend* b = BgfxBackend::as_bgfx(render))
     b->set_scx_geometry(std::move(geo));
 }
+
+void bgfx_garage_camera_setup() {}
 
 void bgfx_garage_camera_setup() { garage_camera_setup_defaults(); }
 

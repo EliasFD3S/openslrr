@@ -1,7 +1,6 @@
 #include "slrr/natives_boot.hpp"
 #include "natives_internal.hpp"
 
-#include "slrr/garage_camera.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
@@ -71,6 +70,7 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
         copy_num(type, self, "_mw");
         copy_num(type, self, "_mh");
         copy_num(type, self, "_tid");
+        copy_num(type, self, "_texpath");
         if (st->alias == "Rectangle")
           self->fields["_rect"] = Value::make_int(1);
         return Value::make_void();
@@ -140,6 +140,11 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
           auto tit = self->fields.find("_tid");
           if (tit != self->fields.end() && tit->second.tag == ValueTag::Int)
             tid = static_cast<uint32_t>(tit->second.v.i);
+          std::string texpath;
+          auto pit = self->fields.find("_texpath");
+          if (pit != self->fields.end() && pit->second.tag == ValueTag::Obj &&
+              pit->second.v.o)
+            texpath = pit->second.v.o->str;
           const uint32_t local = tid & 0xFFFFu;
           float nx = px, ny = py;
           if (osd) osd_world_to_ndc(osd, px, py, &nx, &ny);
@@ -147,8 +152,13 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
           if (already != self->fields.end() &&
               already->second.tag == ValueTag::Int) {
             osd_set_widget_pos(already->second.v.i, nx, ny);
+            if (tid != 0 || !texpath.empty())
+              osd_set_widget_icon(
+                  already->second.v.i, tid,
+                  !texpath.empty() ? texpath : rpk.texture_path_for_id(tid));
             osd_attach_button_picture(self);
-          } else if (tid != 0 && local != 0x0018u && mw > 0.f && mh > 0.f) {
+          } else if ((tid != 0 || !texpath.empty()) && local != 0x0018u &&
+                     mw > 0.f && mh > 0.f) {
             bool plate = false;
             float hw = 0.f, hh = 0.f;
             osd_mesh_halves(osd, mw, mh, &hw, &hh, &plate);
@@ -164,7 +174,7 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
             w.no_hit = true;
             w.icon_id = tid;
             w.tex_alpha = local == 0x00A2u;
-            w.icon_path = rpk.texture_path_for_id(tid);
+            w.icon_path = !texpath.empty() ? texpath : rpk.texture_path_for_id(tid);
             if (group) {
               auto git = group->fields.find("_host_group");
               if (git != group->fields.end() && git->second.tag == ValueTag::Int)
@@ -257,6 +267,8 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
             kept->second.tag == ValueTag::Int)
           id = kept->second.v.i;
         if (id != 0) self->fields["_tid"] = Value::make_int(id);
+        auto path = neu->fields.find("_texpath");
+        if (path != neu->fields.end()) self->fields["_texpath"] = path->second;
         return Value::make_void();
       });
   jvm.natives().register_method(

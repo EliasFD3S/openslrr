@@ -1,7 +1,6 @@
 #include "slrr/natives_boot.hpp"
 #include "natives_internal.hpp"
 
-#include "slrr/garage_camera.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/part_runtime.hpp"
@@ -14,7 +13,9 @@
 #include "slrr/video_fmv.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <unordered_set>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -70,6 +71,84 @@ void spawn_ground_shell(Jvm& jvm, const RpkIndex& rpk, Object* ground) {
   std::printf("[scene] ground shell 0x%x '%s' src=%s poly=%d\n", full,
               model.alias.c_str(), model.source.c_str(),
               poly ? poly->info.triangles : 0);
+}
+
+// Catalog categories. The walk is a stack: the last sibling is shown first.
+// Other cars' folders are dropped, and the loaded car's folder is moved to
+// the end so its parts lead the page. A plain function: a lambda captured
+// here would die with this stack frame and crash on the next catalog open.
+bool catalog_category_local(uint32_t local) {
+  switch (local) {
+    case 0x0010: case 0x0012: case 0x001C: case 0x00B6: case 0x00B7:
+    case 0x00BD: case 0x00BE: case 0x00C9: case 0x023B: case 0x023C:
+    case 0x0246: case 0x0247: case 0x0248: case 0x0249: case 0x024A:
+    case 0x024B: case 0x0250: case 0x0252: case 0x0255: case 0x025B:
+    case 0x025C: case 0x025D: case 0x025E: case 0x026B: case 0x026E:
+    case 0x026F: case 0x0277: case 0x0279: case 0x0281: case 0x0282:
+    case 0xD120: case 0xD121: case 0xF228: case 0xF229: case 0xF22A:
+    case 0xF22D: case 0xF233: case 0xF235: case 0xF23B: case 0xF23C:
+    case 0xF23E: case 0xF23F: case 0xF240: case 0xF241: case 0xF242:
+    case 0xF243: case 0xF244: case 0xF245: case 0xF246: case 0xF247:
+    case 0xF248: case 0xF249: case 0xF24B: case 0xF24C: case 0xF24F:
+    case 0xF27D:
+      return true;
+    default:
+      return false;
+  }
+}
+
+int player_car_pack(Jvm& jvm) {
+  Value pl = jvm.get_static("java.game.GameLogic", "player");
+  if (pl.tag != ValueTag::Obj || !pl.v.o) return 0;
+  auto cit = pl.v.o->fields.find("car");
+  if (cit == pl.v.o->fields.end() || cit->second.tag != ValueTag::Obj ||
+      !cit->second.v.o)
+    return 0;
+  Object* car = cit->second.v.o;
+  Object* part = car;
+  auto chassis = car->fields.find("chassis");
+  if (chassis != car->fields.end() && chassis->second.tag == ValueTag::Obj &&
+      chassis->second.v.o)
+    part = chassis->second.v.o;
+  GameRefState* st = gameref_get(part);
+  if (!st || st->type_id == 0) st = gameref_get(car);
+  return st ? (st->type_id >> 16) : 0;
+}
+
+std::unordered_set<int> vehicle_packs(const RpkIndex& rpk) {
+  std::unordered_set<int> packs;
+  for (int i = 1; i < rpk.pack_count(); ++i) {
+    const RpkPack* p = rpk.pack_by_id(i);
+    if (!p) continue;
+    std::string path = p->path;
+    for (char& c : path)
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (path.find("cars") == std::string::npos) continue;
+    const uint32_t root = RpkIndex::make_full_id(p->pack_id, 0x1000);
+    if (!rpk.resolve(root)) continue;
+    for (uint32_t id : rpk.children_of(root))
+      packs.insert(RpkIndex::pack_from_full(id));
+    break;
+  }
+  return packs;
+}
+
+std::vector<uint32_t> catalog_siblings(Jvm& jvm, const RpkIndex& rpk,
+                                       uint32_t parent) {
+  auto kids = rpk.children_of(parent);
+  if (!catalog_category_local(parent & 0xFFFFu)) return kids;
+  const int car = player_car_pack(jvm);
+  if (car == 0) return kids;
+  const auto vehicles = vehicle_packs(rpk);
+  std::vector<uint32_t> keep, mine;
+  for (uint32_t id : kids) {
+    const int pack = RpkIndex::pack_from_full(id);
+    if (pack == car) mine.push_back(id);
+    else if (vehicles.count(pack)) continue;
+    else keep.push_back(id);
+  }
+  keep.insert(keep.end(), mine.begin(), mine.end());
+  return keep;
 }
 
 void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
@@ -295,24 +374,24 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
   };
   jvm.natives().register_method(
       kResRef, "getFirstChild", "()Ljava.util.resource.ResourceRef;",
-      [&rpk, make_res](Object* self, const std::vector<Value>&) {
+      [&jvm, &rpk, make_res](Object* self, const std::vector<Value>&) {
         GameRefState* st = gameref_get(self);
         if (st && !st->children.empty())
           return Value::make_obj(static_cast<Object*>(st->children.front()));
         const int32_t id = resource_id_of(self);
-        const auto children = rpk.children_of(static_cast<uint32_t>(id));
+        const auto children = catalog_siblings(jvm, rpk, static_cast<uint32_t>(id));
         return children.empty() ? Value::make_obj(nullptr) : make_res(children.front());
       });
   jvm.natives().register_method(
       kResRef, "getNextChild", "()Ljava.util.resource.ResourceRef;",
-      [&rpk, make_res](Object* self, const std::vector<Value>&) {
+      [&jvm, &rpk, make_res](Object* self, const std::vector<Value>&) {
         const int32_t id = resource_id_of(self);
         const int32_t pack = RpkIndex::pack_from_full(static_cast<uint32_t>(id));
         if (pack <= 0) return Value::make_obj(nullptr);
         const RpkEntry* e = rpk.resolve(static_cast<uint32_t>(id));
         if (!e) return Value::make_obj(nullptr);
         const auto parent = rpk.resolve_embedded_id(pack, e->super_id);
-        const auto children = rpk.children_of(parent);
+        const auto children = catalog_siblings(jvm, rpk, parent);
         auto found = std::find(children.begin(), children.end(), static_cast<uint32_t>(id));
         if (found == children.end() || ++found == children.end()) return Value::make_obj(nullptr);
         return make_res(*found);
@@ -352,7 +431,24 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
       });
   jvm.natives().register_method(
       kResRef, "makeTexture",
-      "(Ljava.util.resource.ResourceRef;Ljava.lang.String;)V", native_noop);
+      "(Ljava.util.resource.ResourceRef;Ljava.lang.String;)V",
+      [&jvm](Object* self, const std::vector<Value>& args) {
+        if (!self) return Value::make_void();
+        std::string file;
+        if (args.size() > 1 && args[1].tag == ValueTag::Obj && args[1].v.o)
+          file = args[1].v.o->str;
+        for (char& c : file)
+          if (c == '/') c = '\\';
+        if (!file.empty() && !(file.size() > 1 && file[1] == ':')) {
+          std::string root = jvm.game_root();
+          if (!root.empty() && root.back() != '\\' && root.back() != '/')
+            root += '\\';
+          file = root + file;
+        }
+        Object* path = jvm.new_string(file);
+        if (path) self->fields["_texpath"] = Value::make_obj(path);
+        return Value::make_void();
+      });
   jvm.natives().register_method(
       kResRef, "makeSound",
       "(Ljava.util.resource.ResourceRef;Ljava.lang.String;)V", native_noop);
@@ -391,7 +487,7 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           if (GameRefState* dst = gameref_upsert(self, GameRefKind::RenderRef))
             dst->type_id = id;
         }
-        for (const char* k : {"_mw", "_mh", "_tid"}) {
+        for (const char* k : {"_mw", "_mh", "_tid", "_texpath"}) {
           auto it = src->fields.find(k);
           if (it != src->fields.end()) self->fields[k] = it->second;
         }

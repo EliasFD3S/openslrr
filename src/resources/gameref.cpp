@@ -1,4 +1,5 @@
 #include "slrr/gameref.hpp"
+#include "slrr/host_input.hpp"
 #include "slrr/part_runtime.hpp"
 
 #include <algorithm>
@@ -411,54 +412,109 @@ void pori_step(float* cur, const float* dest, float rate, float dt) {
   for (int i = 0; i < 3; ++i) cur[i] += (dest[i] - cur[i]) * k;
 }
 
-// The eye is a light body (mass 0.05) on a spring toward the pose the mouse
-// is pulling. Radial motion restores the distance; sideways motion is what
-// the drag feels like, and perpdamping is the resistance.
-void spring_eye(GameRefState* cam, const float desired[3], const float* center,
-                float dt) {
-  if (!cam->cam_pose_init || dt <= 0.f) {
-    std::copy(desired, desired + 3, cam->eye_s);
-    cam->eye_vel[0] = cam->eye_vel[1] = cam->eye_vel[2] = 0.f;
-    cam->cam_pose_init = true;
-    return;
-  }
-  // Radius and bearing are separate. A drag only moves the bearing; folding
-  // that error into the radius is what yanked the camera into the car.
-  float cur[3] = {cam->eye_s[0] - center[0], cam->eye_s[1] - center[1],
-                  cam->eye_s[2] - center[2]};
-  float des[3] = {desired[0] - center[0], desired[1] - center[1],
-                  desired[2] - center[2]};
-  float cur_len = std::sqrt(cur[0] * cur[0] + cur[1] * cur[1] + cur[2] * cur[2]);
-  float des_len = std::sqrt(des[0] * des[0] + des[1] * des[1] + des[2] * des[2]);
-  float n[3];
-  if (cur_len < 1e-3f) {
-    if (des_len < 1e-3f) {
-      n[0] = 0.f;
-      n[1] = 1.f;
-      n[2] = 0.f;
-    } else {
-      n[0] = des[0] / des_len;
-      n[1] = des[1] / des_len;
-      n[2] = des[2] / des_len;
+// PE camera body (FUN_004897b0 / FUN_0048a430). The mouse is a force on a
+// 0.05 kg body. The spring only restores the distance to the hub, and the
+// perpendicular term brakes sideways speed. Releasing the drag leaves the
+// body where it is: nothing pulls the angle back, so there is no bounce.
+// The two forces do not cancel cleanly, which is the tremble.
+void drive_orbit(GameRefState* cam, const float* hub, float dist, float frame_dt) {
+  const float ax = cam->ctl_x;
+  const float ay = cam->ctl_y;
+  cam->ctl_x = 0.f;
+  cam->ctl_y = 0.f;
+  float rem = frame_dt;
+  if (rem < 0.f) rem = 0.f;
+  if (rem > 0.1f) rem = 0.1f;
+  constexpr float kStep = 0.02f;
+  while (rem > 1e-4f) {
+    float dt = rem;
+    if (rem >= kStep) {
+      dt = kStep;
+      if (rem - kStep <= kStep) dt = rem * 0.5f;
     }
-    cur_len = 0.f;
-  } else {
-    n[0] = cur[0] / cur_len;
-    n[1] = cur[1] / cur_len;
-    n[2] = cur[2] / cur_len;
-  }
-  const float radial_err = des_len - cur_len;
-  const float vn =
-      cam->eye_vel[0] * n[0] + cam->eye_vel[1] * n[1] + cam->eye_vel[2] * n[2];
-  const float des_along = des[0] * n[0] + des[1] * n[1] + des[2] * n[2];
-  constexpr float kInvMass = 20.f;  // 1 / 0.05
-  for (int i = 0; i < 3; ++i) {
-    const float perp_e = des[i] - n[i] * des_along;
-    const float perp_v = cam->eye_vel[i] - n[i] * vn;
-    const float force = n[i] * (radial_err * cam->cam_spring - vn * cam->cam_damping) +
-                        perp_e * cam->cam_spring + perp_v * cam->cam_perpdamp;
-    cam->eye_vel[i] += force * kInvMass * dt;
-    cam->eye_s[i] += cam->eye_vel[i] * dt;
+    rem -= dt;
+    float fx = ax * -400.f;
+    float fy = ay * 400.f;
+    const float fl2 = fx * fx + fy * fy;
+    if (fl2 > 100.f) {
+      const float s = 10.f / std::sqrt(fl2);
+      fx *= s;
+      fy *= s;
+    }
+    float* p = cam->eye_s;
+    float* v = cam->eye_vel;
+    float fwx = hub[0] - p[0];
+    float fwy = hub[1] - p[1];
+    float fwz = hub[2] - p[2];
+    float fl = std::sqrt(fwx * fwx + fwy * fwy + fwz * fwz);
+    if (fl < 1e-3f) {
+      fwx = 0.f;
+      fwy = 0.f;
+      fwz = -1.f;
+    } else {
+      fwx /= fl;
+      fwy /= fl;
+      fwz /= fl;
+    }
+    float rx = -fwz;
+    float rz = fwx;
+    float rl = std::sqrt(rx * rx + rz * rz);
+    if (rl < 1e-4f) {
+      rx = 1.f;
+      rz = 0.f;
+      rl = 1.f;
+    }
+    rx /= rl;
+    rz /= rl;
+    const float ux = -rz * fwy;
+    const float uy = rz * fwx - rx * fwz;
+    const float uz = rx * fwy;
+    float Fx = rx * fx + ux * fy - v[0] * 0.0025f;
+    float Fy = uy * fy - v[1] * 0.0025f;
+    float Fz = rz * fx + uz * fy - v[2] * 0.0025f;
+    if (cam->cam_height_set) {
+      const float err = cam->cam_height + hub[1] - p[1];
+      if (std::fabs(err) > 0.001f) Fy += err * 30.f - 2.f * v[1];
+    }
+    const float dx = hub[0] - p[0];
+    const float dy = hub[1] - p[1];
+    const float dz = hub[2] - p[2];
+    const float len2 = dx * dx + dy * dy + dz * dz;
+    if (dist > 0.f && len2 > 1e-4f) {
+      const float len = std::sqrt(len2);
+      const float nx = dx / len;
+      const float ny = dy / len;
+      const float nz = dz / len;
+      const float along = v[0] * nx + v[1] * ny + v[2] * nz;
+      const float spring = (len - dist) * cam->cam_spring;
+      const float damp = -along * cam->cam_damping;
+      float sfx = nx * (spring + damp);
+      float sfy = ny * (spring + damp);
+      float sfz = nz * (spring + damp);
+      const float sf2 = sfx * sfx + sfy * sfy + sfz * sfz;
+      if (sf2 > 400.f) {
+        const float s = 20.f / std::sqrt(sf2);
+        sfx *= s;
+        sfy *= s;
+        sfz *= s;
+      }
+      const float tx = v[0] - nx * along;
+      const float ty = v[1] - ny * along;
+      const float tz = v[2] - nz * along;
+      Fx += sfx + tx * cam->cam_perpdamp;
+      Fy += sfy + ty * cam->cam_perpdamp;
+      Fz += sfz + tz * cam->cam_perpdamp;
+    }
+    constexpr float kInvMass = 20.f;
+    const float axa = Fx * kInvMass;
+    const float aya = Fy * kInvMass;
+    const float aza = Fz * kInvMass;
+    p[0] += v[0] * dt + axa * 0.5f * dt * dt;
+    p[1] += v[1] * dt + aya * 0.5f * dt * dt;
+    p[2] += v[2] * dt + aza * 0.5f * dt * dt;
+    v[0] += axa * dt;
+    v[1] += aya * dt;
+    v[2] += aza * dt;
   }
 }
 
@@ -548,9 +604,34 @@ bool gameref_world_camera(float eye[3], float at[3], float* fov, float* znear,
       desired[1] = hub[1] + dist * se;
       desired[2] = hub[2] + std::cos(azimuth) * dist * ce;
     }
-    spring_eye(cam, desired, hub, dt);
+    if (!cam->cam_pose_init) {
+      std::copy(desired, desired + 3, cam->eye_s);
+      cam->eye_vel[0] = cam->eye_vel[1] = cam->eye_vel[2] = 0.f;
+      cam->cam_pose_init = true;
+    }
+    drive_orbit(cam, hub, dist, dt);
     std::copy(cam->eye_s, cam->eye_s + 3, eye);
     std::copy(cam->look_s, cam->look_s + 3, at);
+  } else if (have_follow && !cam->aim_look) {
+    // `move id x,y,z dist` with no look: the point is the eye. The trailing
+    // number is how far short of it the body stops (car lot: 0.01). The
+    // slide is a Pori step of 0.02 at 60 Hz: twice the first try, and the
+    // step is scaled by frame time so the speed does not follow the fps.
+    // Orientation stays the camera ypr.
+    const float rate = 0.015f;
+    if (!cam->cam_pose_init || rate <= 0.f || rate >= 1.f) {
+      std::copy(follow, follow + 3, cam->eye_s);
+      cam->cam_pose_init = true;
+    } else {
+      pori_step(cam->eye_s, follow, rate, dt);
+    }
+    std::copy(cam->eye_s, cam->eye_s + 3, eye);
+    const float yaw = cam->ypr[0];
+    const float pitch = cam->ypr[1];
+    const float cp = std::cos(pitch);
+    at[0] = eye[0] - std::sin(yaw) * cp;
+    at[1] = eye[1] + std::sin(pitch);
+    at[2] = eye[2] - std::cos(yaw) * cp;
   } else if (have_follow && cam->move_dist <= 0.25f) {
     eye[0] = follow[0];
     eye[1] = follow[1];
@@ -564,12 +645,35 @@ bool gameref_world_camera(float eye[3], float at[3], float* fov, float* znear,
 
 void gameref_orbit_world_camera(float yaw_delta, float pitch_delta,
                                 float zoom_axis, float dt) {
+  auto& in = host_input();
+  float ax = 0.f;
+  float ay = 0.f;
+  const float dt_ms = dt > 1e-4f ? dt * 1000.f : 0.f;
+  if (dt_ms > 0.f) {
+    ax = in.mouse_dx / dt_ms * 0.005f;
+    ay = in.mouse_dy / dt_ms * 0.005f;
+    ax = std::max(-1.f, std::min(1.f, ax));
+    ay = std::max(-1.f, std::min(1.f, ay));
+  }
+  if (in.keys_left) ax += 0.005f;
+  if (in.keys_right) ax -= 0.005f;
+  if (in.keys_up) ay += 0.003f;
+  if (in.keys_down) ay -= 0.003f;
+  in.mouse_dx = 0.f;
+  in.mouse_dy = 0.f;
   GameRefState* cam = fullscreen_script_camera();
   if (!cam) return;
-  cam->orbit_yaw += yaw_delta;
-  const float pitch_lim = cam->cam_height_set ? 0.3f : 1.3f;
-  cam->orbit_pitch = std::max(-pitch_lim, std::min(pitch_lim,
-                                                   cam->orbit_pitch + pitch_delta));
+  // Orbit cameras take the axes as a force. A free pose still tracks the
+  // pointer directly.
+  if (cam->aim_look && cam->move_dist > 0.25f) {
+    cam->ctl_x = ax;
+    cam->ctl_y = ay;
+  } else {
+    cam->orbit_yaw += yaw_delta;
+    const float pitch_lim = cam->cam_height_set ? 0.3f : 1.3f;
+    cam->orbit_pitch = std::max(-pitch_lim, std::min(pitch_lim,
+                                                     cam->orbit_pitch + pitch_delta));
+  }
   if (dt < 0.f) dt = 0.f;
   if (dt > 0.1f) dt = 0.1f;
   if (cam->cam_distance < 0.05f) {

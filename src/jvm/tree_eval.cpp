@@ -24,6 +24,19 @@ float bits_to_float(uint32_t bits) {
   return f;
 }
 
+// Script float text: three decimals, trailing zeros removed. 5.5 stays 5.5,
+// 3.727 stays 3.727, 13.033 stays 13.033.
+std::string format_script_number(double v) {
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), "%.3f", v);
+  std::string s(buf);
+  const auto dot = s.find('.');
+  if (dot == std::string::npos) return s;
+  while (!s.empty() && s.back() == '0') s.pop_back();
+  if (!s.empty() && s.back() == '.') s.pop_back();
+  return s;
+}
+
 bool values_equal(const Value& a, const Value& b) {
   if (a.tag != b.tag) {
     if ((a.tag == ValueTag::Int || a.tag == ValueTag::Float) &&
@@ -127,8 +140,17 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
   std::vector<std::string> local_types(locals.size());
   auto local_value = [&](size_t slot, Value v) {
     if (slot < local_types.size()) {
-      if (local_types[slot] == "I" && v.tag == ValueTag::Float) return Value::make_int(static_cast<int32_t>(v.v.f));
-      if (local_types[slot] == "F" && v.tag == ValueTag::Int) return Value::make_float(static_cast<float>(v.v.i));
+      const std::string& t = local_types[slot];
+      // `int price = getPrice() * PRICERATIO` — the label prints the local,
+      // and the catalog shows whole dollars.
+      if ((t == "I" || t == "B" || t == "S" || t == "C" || t == "Z") &&
+          v.tag == ValueTag::Float) {
+        int32_t n = static_cast<int32_t>(v.v.f);
+        if (t == "Z") n = n != 0 ? 1 : 0;
+        return Value::make_int(n);
+      }
+      if (t == "F" && v.tag == ValueTag::Int)
+        return Value::make_float(static_cast<float>(v.v.i));
     }
     return v;
   };
@@ -220,11 +242,8 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
         auto piece = [](const Value& v) -> std::string {
           if (v.tag == ValueTag::Obj && v.v.o) return v.v.o->str;
           if (v.tag == ValueTag::Int) return std::to_string(v.v.i);
-          if (v.tag == ValueTag::Float) {
-            char buf[64];
-            std::snprintf(buf, sizeof(buf), "%g", static_cast<double>(v.v.f));
-            return buf;
-          }
+          if (v.tag == ValueTag::Float)
+            return format_script_number(static_cast<double>(v.v.f));
           return "null";
         };
         push(Value::make_obj(host->tree_new_string(piece(a) + piece(b))));
@@ -492,6 +511,39 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
       if (stack.empty()) return fail("call arg underflow");
       call_args.insert(call_args.begin(), pop());
     }
+    // createText(chas.ratio[i], ...) — the parameter is a String and the
+    // argument is a float. Without this the gear numbers stay blank.
+    if (!desc.empty() && desc[0] == '(') {
+      size_t di = 1;
+      for (size_t ai = 0; ai < call_args.size() && di < desc.size() &&
+                          desc[di] != ')';
+           ++ai) {
+        const bool str =
+            desc.compare(di, 19, "Ljava.lang.String;") == 0 ||
+            desc.compare(di, 19, "Ljava/lang/String;") == 0;
+        if (desc[di] == 'L') {
+          const auto end = desc.find(';', di);
+          di = end == std::string::npos ? desc.size() : end + 1;
+        } else if (desc[di] == '[') {
+          ++di;
+          if (di < desc.size() && desc[di] == 'L') {
+            const auto end = desc.find(';', di);
+            di = end == std::string::npos ? desc.size() : end + 1;
+          } else if (di < desc.size()) {
+            ++di;
+          }
+        } else {
+          ++di;
+        }
+        if (!str) continue;
+        Value& v = call_args[ai];
+        if (v.tag == ValueTag::Float)
+          v = Value::make_obj(
+              host->tree_new_string(format_script_number(v.v.f)));
+        else if (v.tag == ValueTag::Int)
+          v = Value::make_obj(host->tree_new_string(std::to_string(v.v.i)));
+      }
+    }
     if (menu_call && last_menu &&
         (!recv || !class_has(recv, "Menu")))
       recv = last_menu;
@@ -713,16 +765,18 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
       } else if (recv) {
         // Integer literals assigned to float fields (`new Vector3(-2, 1, -4)`)
         // stay Int unless coerced here. Natives that only read Float then see 0.
-        // The other way matches the field: Catalog stores `price * PRICERATIO`
-        // into an int (RetailP / DeliveryP / TotalP) and prints `"$" + field`.
-        // Truncating here is what drops the fraction.
+        // An int field keeps a whole number: catalog prices are `(int)`.
+        // Gear ratios are a float[] and are not touched here.
         if (pending_field_desc == "F" && val.tag == ValueTag::Int)
           val = Value::make_float(static_cast<float>(val.v.i));
         else if ((pending_field_desc == "I" || pending_field_desc == "B" ||
                   pending_field_desc == "S" || pending_field_desc == "C" ||
                   pending_field_desc == "Z") &&
-                 val.tag == ValueTag::Float)
-          val = Value::make_int(static_cast<int32_t>(val.v.f));
+                 val.tag == ValueTag::Float) {
+          int32_t n = static_cast<int32_t>(val.v.f);
+          if (pending_field_desc == "Z") n = n != 0 ? 1 : 0;
+          val = Value::make_int(n);
+        }
         recv->fields[pending_field] = val;
         osd_on_field_write(recv, pending_field);
       }
@@ -863,6 +917,21 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
           const bool ok = host->tree_instance_of(obj, pending_class);
           push(Value::make_int(ok ? 1 : 0));
           pending_expr = -1;
+          break;
+        }
+        // `(int)(price * ratio)`. A declaration's type node follows opcode
+        // 0x02 and does not convert whatever happens to sit on the stack.
+        if ((ip == 0 || tree[ip - 1].op != 0x02) && !stack.empty()) {
+          Value& top = stack.back();
+          if ((raw == "I" || raw == "B" || raw == "S" || raw == "C" ||
+               raw == "Z") &&
+              top.tag == ValueTag::Float) {
+            int32_t n = static_cast<int32_t>(top.v.f);
+            if (raw == "Z") n = n != 0 ? 1 : 0;
+            top = Value::make_int(n);
+          } else if (raw == "F" && top.tag == ValueTag::Int) {
+            top = Value::make_float(static_cast<float>(top.v.i));
+          }
         }
         break;
       }

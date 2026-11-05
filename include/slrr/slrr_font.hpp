@@ -62,6 +62,7 @@ const char* slrr_font_name_for_rid(int32_t rid);
 
 // Frontend.setFonts pointers — menu tip labels when createText TREE is lean.
 void slrr_font_set_ui_keys(void* small, void* medium, void* large);
+void* slrr_font_ui_small();
 void* slrr_font_ui_medium();
 void* slrr_font_ui_large();
 

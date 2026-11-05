@@ -112,7 +112,9 @@ void osd_set_framebuffer_listener(OsdFramebufferFn fn) {
 
 void osd_hide_widget(int32_t index) {
   if (index < 0 || static_cast<size_t>(index) >= g_widgets.size()) return;
-  g_widgets[static_cast<size_t>(index)].hidden = true;
+  OsdWidget& w = g_widgets[static_cast<size_t>(index)];
+  w.hidden = true;
+  w.dead = true;
 }
 
 OsdWidget* osd_widget_mut(int32_t index) {
@@ -142,6 +144,13 @@ int32_t osd_viewport_pri(Object* osd) {
   if (pri == vp->second.v.o->fields.end() || pri->second.tag != ValueTag::Int)
     return 0;
   return pri->second.v.i;
+}
+
+bool osd_owner_modal(Object* owner) {
+  if (!owner) return false;
+  auto fit = owner->fields.find("flags");
+  return fit != owner->fields.end() && fit->second.tag == ValueTag::Int &&
+         (fit->second.v.i & 1) != 0;
 }
 
 void osd_add_widget(OsdWidget w) {
@@ -266,7 +275,7 @@ void osd_show_group(int32_t group) {
   for (OsdWidget& w : g_widgets) {
     if (w.group != group) continue;
     w.group_hidden = false;
-    if (!owner_suppressed(w)) w.hidden = false;
+    if (!w.dead && !owner_suppressed(w)) w.hidden = false;
   }
   g_hidden_groups.erase(group);
   slrr_text_set_group_visible(group, true);
@@ -282,7 +291,7 @@ void osd_show_only_group(int32_t group) {
     w.group_hidden = w.group != group;
     if (w.group_hidden) g_hidden_groups.insert(w.group);
     else g_hidden_groups.erase(w.group);
-    w.hidden = owner_suppressed(w) || w.group_hidden;
+    w.hidden = w.dead || owner_suppressed(w) || w.group_hidden;
   }
   slrr_text_show_only_group(group);
   int32_t shown = 0;
@@ -489,16 +498,21 @@ void osd_set_click_handler(OsdClickFn fn) { g_click = std::move(fn); }
 void osd_set_hover_handler(OsdHoverFn fn) { g_hover = std::move(fn); }
 
 std::string g_loading_overlay;
+bool g_loading_dialog = false;
 
 void osd_set_loading_overlay(const std::string& path) { g_loading_overlay = path; }
 
 const std::string& osd_loading_overlay() { return g_loading_overlay; }
 
+void osd_set_loading_dialog(bool on) { g_loading_dialog = on; }
+
+bool osd_loading_dialog() { return g_loading_dialog; }
+
 void osd_ensure_loading_plate(Object* osd, const std::string& path) {
   if (!osd) return;
   bool have = false;
   for (OsdWidget& w : g_widgets) {
-    if (w.owner != osd) continue;
+    if (w.owner != osd || w.dead) continue;
     w.hidden = false;
     w.group_hidden = false;
     if (w.layer < 100000) w.layer = 100000;
@@ -662,7 +676,7 @@ void show_group_exact(int32_t group) {
   for (OsdWidget& w : g_widgets) {
     if (w.group != group) continue;
     w.group_hidden = false;
-    if (!owner_suppressed(w)) w.hidden = false;
+    if (!w.dead && !owner_suppressed(w)) w.hidden = false;
   }
   g_hidden_groups.erase(group);
   slrr_text_set_group_visible(group, true);
@@ -756,11 +770,24 @@ void osd_attach_button_picture(Object* render) {
   if (wit == render->fields.end() || wit->second.tag != ValueTag::Int) return;
   OsdWidget* vis = osd_widget_mut(wit->second.v.i);
   if (!vis) return;
-  for (const OsdWidget& w : g_widgets) {
-    if (!w.button) continue;
+  for (OsdWidget& w : g_widgets) {
+    if (!w.button || w.dead) continue;
     Object* rect = field_o(w.button, "rect");
     Object* ins = field_o(rect, "ins");
     if (ins != render) continue;
+    // changeTexture builds a new rectangle. The previous picture stays in
+    // the group, and showGroup would paint it again on top of the new one.
+    for (OsdWidget& old : g_widgets) {
+      if (&old == vis || &old == &w || old.hit_only || old.dead) continue;
+      if (old.button != w.button) continue;
+      old.hidden = true;
+      old.dead = true;
+      old.icon_path.clear();
+    }
+    if (w.hit_only) {
+      w.icon_id = vis->icon_id;
+      w.icon_path = vis->icon_path;
+    }
     vis->button = w.button;
     vis->cmd = w.cmd;
     vis->no_hit = true;

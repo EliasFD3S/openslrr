@@ -22,6 +22,12 @@ void* g_sky = nullptr;
 uint32_t g_environment = 0;
 std::unordered_map<uint32_t, std::shared_ptr<const ScxGeometry>> g_meshes;
 std::unordered_map<uint32_t, std::shared_ptr<const ScxGeometry>> g_overrides;
+struct StaticMesh {
+  std::vector<float> positions;
+  std::vector<uint32_t> indices;
+  float scale = 0.01f;
+};
+std::vector<StaticMesh> g_static;
 
 void identity(float* m) {
   std::fill(m, m + 16, 0.f);
@@ -288,6 +294,7 @@ void scene_instances_set_resources(const RpkIndex* resources) {
   g_world = g_sky = nullptr;
   g_meshes.clear();
   g_overrides.clear();
+  g_static.clear();
   g_environment = 0;
 }
 void scene_instances_set_envmap(uint32_t resource) { g_environment=resource; }
@@ -299,7 +306,7 @@ void scene_instances_select(void* world, void* skydome) {
   if (auto* sky = gameref_get(skydome)) sky->sky_render = true;
 }
 
-bool scene_instance_transform(void* key, void* root, float* matrix) {
+bool chain_matrix(void* key, void* root, float* matrix, bool reflect) {
   if (!key || !root || !matrix) return false;
   identity(matrix);
   std::unordered_set<void*> seen;
@@ -316,14 +323,141 @@ bool scene_instance_transform(void* key, void* root, float* matrix) {
     multiply(matrix, local, matrix);
     if (current == root) {
       // Vertices are uploaded as S*v (S reflects Z). Instance matrix is S*M*S.
-      for (int col = 0; col < 4; ++col)
-        for (int row = 0; row < 4; ++row)
-          if ((col == 2) != (row == 2)) matrix[col * 4 + row] *= -1.f;
+      if (reflect)
+        for (int col = 0; col < 4; ++col)
+          for (int row = 0; row < 4; ++row)
+            if ((col == 2) != (row == 2)) matrix[col * 4 + row] *= -1.f;
       return true;
     }
     current = n->parent;
   }
   return false;
+}
+bool scene_instance_transform(void* key, void* root, float* matrix) {
+  return chain_matrix(key, root, matrix, true);
+}
+
+namespace {
+void floor_triangles(const float* m, const std::vector<float>& pos,
+                     const std::vector<uint32_t>& idx, float scale, float x,
+                     float z, float below, float& best, bool& hit) {
+  if (!m || idx.size() < 3 || pos.size() < 9) return;
+  for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+    float v[3][3];
+    bool ok = true;
+    float min_x = 0, max_x = 0, min_z = 0, max_z = 0;
+    for (int k = 0; k < 3; ++k) {
+      const uint32_t vi = idx[t + static_cast<size_t>(k)];
+      if (static_cast<size_t>(vi) * 3 + 2 >= pos.size()) {
+        ok = false;
+        break;
+      }
+      const float vx = pos[vi * 3] * scale;
+      const float vy = pos[vi * 3 + 1] * scale;
+      const float vz = pos[vi * 3 + 2] * scale;
+      v[k][0] = m[0] * vx + m[4] * vy + m[8] * vz + m[12];
+      v[k][1] = m[1] * vx + m[5] * vy + m[9] * vz + m[13];
+      v[k][2] = m[2] * vx + m[6] * vy + m[10] * vz + m[14];
+      if (k == 0) {
+        min_x = max_x = v[0][0];
+        min_z = max_z = v[0][2];
+      } else {
+        min_x = std::min(min_x, v[k][0]);
+        max_x = std::max(max_x, v[k][0]);
+        min_z = std::min(min_z, v[k][2]);
+        max_z = std::max(max_z, v[k][2]);
+      }
+    }
+    if (!ok || x < min_x || x > max_x || z < min_z || z > max_z) continue;
+    const float x0 = v[0][0], z0 = v[0][2], x1 = v[1][0], z1 = v[1][2];
+    const float x2 = v[2][0], z2 = v[2][2];
+    const float denom = (z1 - z2) * (x0 - x2) + (x2 - x1) * (z0 - z2);
+    if (std::fabs(denom) < 1e-8f) continue;
+    const float a = ((z1 - z2) * (x - x2) + (x2 - x1) * (z - z2)) / denom;
+    const float b = ((z2 - z0) * (x - x2) + (x0 - x2) * (z - z2)) / denom;
+    const float c = 1.f - a - b;
+    if (a < -1e-4f || b < -1e-4f || c < -1e-4f) continue;
+    const float y = a * v[0][1] + b * v[1][1] + c * v[2][1];
+    if (y > below + 0.05f) continue;
+    if (!hit || y > best) {
+      best = y;
+      hit = true;
+    }
+  }
+}
+}  // namespace
+
+bool scene_instances_floor(float x, float z, float below, void* ignore,
+                           float* height) {
+  if (!height) return false;
+  float best = 0.f;
+  bool hit = false;
+  // Preloaded garage shells are drawn at identity with unflipped script XZ.
+  float eye[16];
+  identity(eye);
+  for (const auto& mesh : g_static)
+    floor_triangles(eye, mesh.positions, mesh.indices, mesh.scale, x, z, below,
+                    best, hit);
+  if (g_world)
+    for (auto* n : gameref_render_nodes()) {
+      if (!n || n->empty || n->sky_render || n->vehicle_material) continue;
+      bool owned = false;
+      void* p = n->key;
+      for (int guard = 0; p && !owned && guard < 32; ++guard) {
+        if (p == ignore) owned = true;
+        auto* s = gameref_get(p);
+        p = s ? s->parent : nullptr;
+      }
+      if (owned) continue;
+      float m[16];
+      if (!chain_matrix(n->key, g_world, m, false)) continue;
+      auto geo = geometry(static_cast<uint32_t>(n->type_id));
+      if (!geo) continue;
+      floor_triangles(m, geo->positions, geo->indices, geo->position_scale, x,
+                      z, below, best, hit);
+    }
+  if (!hit) return false;
+  *height = best;
+  return true;
+}
+
+bool scene_instances_supports(void* root, std::vector<std::array<float, 3>>& points) {
+  points.clear();
+  if (!g_world || !root) return false;
+  for (auto* n : gameref_render_nodes()) {
+    if (!n || n->empty || n->sky_render) continue;
+    bool under = false;
+    void* p = n->key;
+    for (int guard = 0; p && guard < 32; ++guard) {
+      if (p == root) {
+        under = true;
+        break;
+      }
+      auto* s = gameref_get(p);
+      p = s ? s->parent : nullptr;
+    }
+    if (!under) continue;
+    float m[16];
+    if (!chain_matrix(n->key, g_world, m, false)) continue;
+    auto geo = geometry(static_cast<uint32_t>(n->type_id));
+    if (!geo || geo->positions.size() < 3) continue;
+    const float scale = geo->position_scale;
+    bool any = false;
+    float best = 0.f, bx = 0.f, bz = 0.f;
+    for (size_t i = 0; i + 2 < geo->positions.size(); i += 3) {
+      const float vx = geo->positions[i] * scale;
+      const float vy = geo->positions[i + 1] * scale;
+      const float vz = geo->positions[i + 2] * scale;
+      const float y = m[1] * vx + m[5] * vy + m[9] * vz + m[13];
+      if (any && y >= best) continue;
+      best = y;
+      bx = m[0] * vx + m[4] * vy + m[8] * vz + m[12];
+      bz = m[2] * vx + m[6] * vy + m[10] * vz + m[14];
+      any = true;
+    }
+    if (any) points.push_back({bx, best, bz});
+  }
+  return !points.empty();
 }
 
 std::vector<SceneInstance> scene_instances_collect_root(void* root) {
@@ -342,14 +476,22 @@ std::vector<SceneInstance> scene_instances_collect_root(void* root) {
     instance.color = n->color;
     instance.vehicle_material = n->vehicle_material;
     if(n->paint_source) {
-      auto normalize=[](std::string path){
+      // The mesh list prefers a .dds next to the source, while the CFG id
+      // still names the .png. Compare the game-relative path without the
+      // extension so the paint color replaces that one slot.
+      auto key=[](std::string path){
         std::replace(path.begin(),path.end(),'\\','/');
         for(char& c:path)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        const auto slash=path.find_last_of('/');
+        const auto dot=path.find_last_of('.');
+        if(dot!=std::string::npos && (slash==std::string::npos || dot>slash)) path.resize(dot);
+        const auto game=path.rfind("game/");
+        if(game!=std::string::npos) path=path.substr(game+5);
         return path;
       };
-      const auto from=normalize(g_resources->texture_path_for_id(n->paint_source));
+      const auto from=key(g_resources->texture_path_for_id(n->paint_source));
       for(size_t i=0; !from.empty() && i<instance.geometry->textures.size(); ++i) {
-        if(normalize(instance.geometry->textures[i])==from) {instance.paint_slot=static_cast<int>(i);break;}
+        if(key(instance.geometry->textures[i])==from) {instance.paint_slot=static_cast<int>(i);break;}
       }
       if(n->paint_texture)instance.paint_texture=g_resources->texture_path_for_id(n->paint_texture);
     }
@@ -364,6 +506,15 @@ std::vector<SceneInstance> scene_instances_collect() {
 void scene_instances_override_mesh(uint32_t id,
                                    std::shared_ptr<const ScxGeometry> geo) {
   if (id && geo) g_overrides[id] = std::move(geo);
+}
+void scene_instances_add_static_mesh(const ScxGeometry& geo) {
+  if (!geo.info.ok || geo.indices.size() < 3 || geo.positions.size() < 9)
+    return;
+  StaticMesh mesh;
+  mesh.positions = geo.positions;
+  mesh.indices = geo.indices;
+  mesh.scale = geo.position_scale;
+  g_static.push_back(std::move(mesh));
 }
 
 bool scene_instances_ground_map(const RpkIndex& rpk, uint32_t ground_id,

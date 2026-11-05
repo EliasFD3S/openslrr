@@ -26,6 +26,9 @@ bool part_command(Object *part, const std::string &command);
 // World height of the tyre contact under a car. The camera's `move` spring
 // hangs on this point; `look` stays on the chassis origin.
 bool part_car_ground(void *key, float *y);
+// Drop or raise each parked car so its lowest tyre vertices meet the floor
+// under them. Safe to call every frame; a flat result does not move the car.
+void part_plant_parked();
 std::vector<InstalledPart> part_installed_tree(Object *root);
 Object *vehicle_spawn_stock(Jvm &jvm, RpkIndex &resources, Object *parent,
                             uint32_t chassis, uint32_t texture = 0);
