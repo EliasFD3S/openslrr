@@ -12,10 +12,11 @@ Validation uses **SLRR 2.2.1 MWM**. Win32 is the reference configuration: the sc
 | --- | --- |
 | Scripts | TUFA classes, TREE programs, Java and native calls, inheritance, `switch` |
 | Resources | RPK packs and cross-pack references, SCX geometry, DDS/PTX textures, CFG properties |
-| Rendering | bgfx/D3D11, textured garage, orbit camera, scene instances, skydome |
-| Car | Built from an RPK/CFG, stock parts, slots, and compatibility aliases. Reference: Baiern, 76 parts |
-| Catalog | Categories across RPKs, classes, prices, parts, and 3D previews on the original pages |
-| Materials | Paint from the CFG texture, multiple UVs, secondary layer, static envmap chosen by the scripts |
+| Rendering | bgfx/D3D11, textured garage, script camera, scene instances, skydome, map POLY shells |
+| Car | Built from an RPK/CFG, stock parts, slots, and compatibility aliases. Wheel springs and body mass come from the CFG. A parked chassis is dropped onto the preloaded garage mesh. Reference: Baiern, 76 parts |
+| Catalog | Categories across RPKs, classes, integer prices, parts, and 3D previews on the original pages |
+| Materials | Paint, chrome, and glass from the material flags. Lightmap multiply, the script envmap, wrap sampling. Tyre UVs stay as authored |
+| Curves | Dyno torque and power from the chassis update (`--probe-dyno`). Pacejka stays a probe |
 | Interface | Menus, career dialogs, Club Info, track selector, text fields, hover, DAY/TIME |
 | Paint | Five 3D paint cans, colors from the scripts, scrolling, separate inventory cameras |
 | Audio | UI effects, `SfxRef`, voices with volume, pitch, looping, and stop |
@@ -23,7 +24,7 @@ Validation uses **SLRR 2.2.1 MWM**. Win32 is the reference configuration: the sc
 
 In the test data, `Prime.avi` has no audio track.
 
-**Still to build:** integrated driving and physics, a real suspension pose, full transparency and lighting, the world, and traffic. Some natives are still stubs. Catalog display is tested; buying, interactive install, and saving that cycle are not. Pacejka is a probe (`--probe-pacejka`), separate from the driving loop. Multiplayer is out of scope.
+**Still to build:** the driving loop (rigid body, clutch, contacts), saves, full transparency, the city, and traffic. The parked drop places the chassis. It is not that solver. Some natives are still stubs. Catalog display is tested; buying, interactive install, and saving that cycle are not. Multiplayer is out of scope.
 
 ## Sources
 
@@ -37,6 +38,7 @@ The installed TUFA scripts and assets remain the source of classes, parts, and t
 | [SLRR_rev](https://github.com/nedobylskiy/SLRR_rev) | RPK/SCX formats, CFG, FindFile |
 | [SLRR_rev `codex/physics-reverse-port` @ c65675f](https://github.com/nedobylskiy/SLRR_rev/tree/c65675f) | SCX layers, paint, envmap. Contracts in [REFERENCE_PORT.md](REFERENCE_PORT.md) |
 | [SLRR_rev `codex/pacejka-research`](https://github.com/nedobylskiy/SLRR_rev) | SL2 Pacejka leaf, exposed by `--probe-pacejka` |
+| [SLRR_rev `54ee35cc`](https://github.com/nedobylskiy/SLRR_rev/commit/54ee35cc) | Parked spring length from the installed load and the CFG anchors. The measured attachment offsets on that branch are not used |
 | [io_invo_scx](https://github.com/nonamesex/io_invo_scx) | SCX mesh layout |
 | [bgfx](https://github.com/bkaradzic/bgfx) | D3D11 rendering |
 
@@ -93,13 +95,16 @@ The archives contain neither the game data nor `third_party/`.
 
 # Pacejka probe.
 .\build-bgfx\Release\slrr_host.exe --probe-pacejka
+
+# Dyno curve check, without a window.
+.\build-bgfx\Release\slrr_host.exe --probe-dyno
 ```
 
 `$env:SLRR_GAME_ROOT` also sets the game folder. `--root` takes priority. `slrr_host.exe --help` lists the remaining options.
 
-In the garage: right-click and drag to orbit, arrow keys and the wheel for the camera. Escape skips the intros. Closing the window quits.
+In the garage, dealer, and car lot the script camera is the view. Right-click and drag, the arrow keys, and the wheel orbit it. Escape skips the intros. Closing the window quits.
 
-`--spawn-car PACK:LOCAL_ID` opens a development session without the career dialog. The pose is static.
+`--spawn-car PACK:LOCAL_ID` opens a development session without the career dialog. The car is placed, not driven.
 
 ## Tests
 
@@ -120,7 +125,7 @@ With the reference data, CTest registers **16 tests**:
 - hover, enabled and disabled buttons, focus;
 - five gray paint cans, the next red page, and their removal on close;
 - transforms, isolated inventory scenes, skydome;
-- CFG, slots, aliases, and the stock assembly run by the scripts;
+- CFG, slots, aliases, wheel springs, and the stock assembly run by the scripts;
 - catalog parts, classes, prices, and previews;
 - SCX layers, UV channels, and `Part.setTexture` propagation.
 
@@ -137,9 +142,9 @@ src/natives/      Natives exposed to scripts
 src/resources/    RPK, SCX, textures, CFG, instances, assembly
 src/render/       Backends and fonts
 src/ui/           Widgets, focus, hover, clock
-src/platform/     Input, audio, camera, FMV
+src/platform/     Input, audio, FMV
 src/boot/         Startup and main loop
-src/physics/      Pacejka probe
+src/physics/      Dyno curves and the Pacejka probe
 shaders/          bgfx shaders
 tests/            Standalone and integration tests
 third_party/      Local dependencies, ignored by Git
