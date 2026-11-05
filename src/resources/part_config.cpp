@@ -131,6 +131,9 @@ PartConfig parse_part_config(const std::string &source,
   uint32_t deformable = 0;
   PartPose deformable_pose;
   bool have_spring = false;
+  // The wheel whose `render` lines are still open. Slot and stock lines
+  // close it, so a body render is never tagged as a wheel.
+  int open_wheel = -1;
   float spring[3] = {0.29f, 0.1f, 0.05f};
   float wheel_radius = 0.f;
   float wheel_mass = 0.f;
@@ -159,6 +162,7 @@ PartConfig parse_part_config(const std::string &source,
       if (command == "eof")
         break;
       if (command == "slot") {
+        open_wheel = -1;
         PartSlot slot;
         slot.pose = pose(t);
         // PE sscanf "%f %f %f %f %f %f %d": a missing id stays 0.
@@ -225,24 +229,34 @@ PartConfig parse_part_config(const std::string &source,
           spec.authored = true;
         }
         out.wheel_springs.push_back(spec);
+        open_wheel = static_cast<int>(out.wheels.size()) - 1;
       } else if (command == "maxsteer") {
+        open_wheel = -1;
         out.max_steer = number(t, 1);
         out.ackermann_length = t.size() > 2 ? number(t, 2) : 0.f;
       } else if (command == "steering") {
+        open_wheel = -1;
         out.steering = pose(t);
         out.has_steering = true;
-      } else if (command == "stockpart")
+      } else if (command == "stockpart") {
+        open_wheel = -1;
         out.stock.push_back(rid(t.at(1)));
-      else if (command == "render") {
+      } else if (command == "render") {
         PartRender render;
         render.resource = rid(t.at(1));
+        render.wheel = open_wheel;
         if (t.size() == 5)
           for (int i = 0; i < 3; i++)
             render.pose.position[i] = number(t, 2 + i);
         else if (t.size() > 2)
           render.pose = pose(t, 2);
         out.renders.push_back(render);
+      } else if (command == "colors" && !out.renders.empty()) {
+        for (size_t i = 2; i < t.size(); ++i)
+          out.renders.back().colors.push_back(
+              static_cast<uint32_t>(std::stoul(t[i], nullptr, 0)) & 0xffffffu);
       } else if (command == "deformable") {
+        open_wheel = -1;
         deformable = rid(t.at(1));
         if (t.size() > 2)
           deformable_pose = pose(t, 2);
@@ -260,13 +274,17 @@ PartConfig parse_part_config(const std::string &source,
           link.filter = true;
         }
         out.renders.back().links.push_back(link);
-      } else if (command == "mesh")
+      }       else if (command == "mesh") {
+        open_wheel = -1;
         out.mesh = rid(t.at(1));
-      else if (command == "texture")
+      } else if (command == "texture") {
+        open_wheel = -1;
         out.texture = rid(t.at(1));
-      else if (command == "category")
+      } else if (command == "category") {
+        open_wheel = -1;
         out.category = integer(t, 1);
-      else if (command == "body" && t.size() >= 8) {
+      } else if (command == "body" && t.size() >= 8) {
+        open_wheel = -1;
         PartBody body;
         body.pose = pose(t);
         body.mass = number(t, 7);
@@ -275,6 +293,7 @@ PartConfig parse_part_config(const std::string &source,
         out.bodies.push_back(body);
         out.mass += body.mass;
       } else if (command == "name") {
+        open_wheel = -1;
         for (size_t i = 1; i < t.size(); i++) {
           if (i > 1)
             out.name += ' ';
@@ -295,7 +314,9 @@ PartConfig parse_part_config(const std::string &source,
     // closest band, which is the last level (the deck and the bores).
     const PartRender *chosen = &out.renders[0];
     for (const auto &r : out.renders)
-      if (!r.flags && r.lod_level >= chosen->lod_level)
+      if (!r.flags && r.wheel < 0 &&
+          (chosen->flags || chosen->wheel >= 0 ||
+           r.lod_level >= chosen->lod_level))
         chosen = &r;
     out.render = chosen->resource;
     out.render_pose = chosen->pose;

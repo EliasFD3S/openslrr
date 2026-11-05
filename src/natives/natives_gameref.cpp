@@ -560,7 +560,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
         }
         const auto native = rpk.payload_prop(static_cast<uint32_t>(id), "native");
         if(id && (native.rfind("car ",0)==0 || native.rfind("part ",0)==0)) {
-          Object* part=part_create(jvm,rpk,parent,static_cast<uint32_t>(id),alias?alias->str:"part");
+          Object* part=part_create(jvm,rpk,parent,static_cast<uint32_t>(id),alias?alias->str:"part",params?params->str:std::string{});
           if(part)gameref_bind_alias(self,part);
           return Value::make_obj(part);
         }

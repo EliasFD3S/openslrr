@@ -71,6 +71,9 @@ struct Record {
   std::vector<LinkVisual> links;
   float max_wear = 1.f;
   int flap = 0;
+  // Seventh field of the create string, an index into each render's colors.
+  bool colour_set = false;
+  int colour_index = 0;
   bool mesh_set = false, render_set = false;
   uint32_t mesh_id = 0, render_id = 0;
   float sfx_a = 0, sfx_b = 0;
@@ -293,8 +296,19 @@ Object *car(Object *self) {
   return nullptr;
 }
 void render_part(Jvm &jvm, Object *self, Record &rec) {
-  auto add = [&](uint32_t resource, const PartPose &pose,
-                 const std::vector<PartLink> *rules) {
+  auto paint_of = [&](const std::vector<uint32_t> &colors) {
+    uint32_t paint = 0xffffff;
+    if (!rec.colour_set || colors.empty())
+      return paint;
+    int count = static_cast<int>(colors.size());
+    int pick = rec.colour_index % count;
+    if (pick < 0)
+      pick += count;
+    return colors[static_cast<size_t>(pick)];
+  };
+  auto add = [&](uint32_t resource, const PartMatrix &local,
+                 const std::vector<PartLink> *rules,
+                 const std::vector<uint32_t> *colors) {
     if (!resource ||
         !index
              ->model_for_resource(RpkIndex::pack_from_full(resource),
@@ -309,10 +323,10 @@ void render_part(Jvm &jvm, Object *self, Record &rec) {
     node->paint_source = rec.config->texture;
     node->vehicle_material = true;
     node->paint_texture = rec.state.texture;
+    node->color = paint_of(colors ? *colors : std::vector<uint32_t>{});
     node->empty = false;
     gameref_set_parent(render, self);
-    auto transform = part_pose_matrix(pose);
-    std::copy(transform.begin(), transform.end(), node->local_matrix);
+    std::copy(local.begin(), local.end(), node->local_matrix);
     node->matrix_override = true;
     render->fields["id"] = Value::make_int(resource);
     rec.renders.push_back(render);
@@ -321,18 +335,44 @@ void render_part(Jvm &jvm, Object *self, Record &rec) {
   };
   const PartRender *chosen =
       rec.config->renders.empty() ? nullptr : &rec.config->renders[0];
-  for (const auto &r : rec.config->renders)
-    if (!r.flags &&
-        (!chosen || chosen->flags || r.lod_level >= chosen->lod_level))
-      chosen = &r;
-  add(rec.config->render, rec.config->render_pose,
-      chosen ? &chosen->links : nullptr);
-  // Lamps are flagged. The other LOD levels are stand-ins for this mesh,
-  // already represented by the finest one chosen above.
   for (const auto &r : rec.config->renders) {
-    if (r.flags || r.lod_level >= 0 || r.resource == rec.config->render)
+    if (r.wheel >= 0 || r.flags)
       continue;
-    add(r.resource, r.pose, &r.links);
+    if (!chosen || chosen->flags || chosen->wheel >= 0 ||
+        r.lod_level >= chosen->lod_level)
+      chosen = &r;
+  }
+  add(rec.config->render, part_pose_matrix(rec.config->render_pose),
+      chosen ? &chosen->links : nullptr, chosen ? &chosen->colors : nullptr);
+  // Lamps are flagged. Wheel meshes are placed on their wheel below. The
+  // other LOD levels are stand-ins for this mesh.
+  for (const auto &r : rec.config->renders) {
+    if (r.flags || r.wheel >= 0 || r.lod_level >= 0 ||
+        r.resource == rec.config->render)
+      continue;
+    add(r.resource, part_pose_matrix(r.pose), &r.links, &r.colors);
+  }
+  // A car with no script draws its wheels from the cfg `render` lines that
+  // follow each `wheel`. They stay on the wheel, not on the chassis origin.
+  if (rec.config->native_kind == "car" &&
+      self->class_name == "java.game.parts.Part") {
+    for (const auto &r : rec.config->renders) {
+      if (r.wheel < 0 || r.flags)
+        continue;
+      if (r.wheel >= static_cast<int>(rec.config->wheels.size()))
+        continue;
+      bool finer = false;
+      for (const auto &other : rec.config->renders)
+        if (&other != &r && other.wheel == r.wheel && !other.flags &&
+            other.lod_level > r.lod_level)
+          finer = true;
+      if (finer)
+        continue;
+      PartMatrix local = part_matrix_multiply(
+          part_pose_matrix(rec.config->wheels[static_cast<size_t>(r.wheel)]),
+          part_pose_matrix(r.pose));
+      add(r.resource, local, &r.links, &r.colors);
+    }
   }
 }
 void stock_parts(Jvm &jvm, Object *part, Object *descriptor, int depth = 0) {
@@ -959,10 +999,37 @@ void refresh_chassis(Object *chassis) {
   record(chassis)->physics_dirty = true;
   --refresh_depth;
 }
+// A native car with no script (traffic, fake racers) is finished by its cfg:
+// the stock parts, closed, in the create string's colour. A scripted chassis
+// builds itself through addStockParts and must not be filled twice.
+void install_cfg_stock(Jvm &jvm, Object *part, int depth = 0) {
+  if (depth > 48 || records.size() > 2000)
+    return;
+  auto *current = record(part);
+  if (!current)
+    return;
+  std::string params;
+  if (current->colour_set)
+    params = "0,0,0,0,0,0," + std::to_string(current->colour_index);
+  auto *parent = gameref_get(part);
+  for (uint32_t resource : current->config->stock) {
+    Object *child = part_create(
+        jvm, *index, parent ? static_cast<Object *>(parent->parent) : nullptr,
+        resource, "stockpart", params);
+    if (!child)
+      continue;
+    if (!part_install(child, part)) {
+      part_destroy(child);
+      continue;
+    }
+    install_cfg_stock(jvm, child, depth + 1);
+  }
+}
 } // namespace
 
 Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
-                    uint32_t resource, const std::string &alias) {
+                    uint32_t resource, const std::string &alias,
+                    const std::string &params) {
   index = &resources;
   auto cfg = configuration(resource);
   if (!cfg->valid) {
@@ -1004,12 +1071,27 @@ Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
   // PE copies the cfg `texture` line onto the part at create. Catalog
   // shows that id on the color chip: cars:0x0025 is default_white.
   rec.state.texture = cfg->texture;
+  float pos[3] = {}, ypr[3] = {};
+  int got = 0;
+  if (!params.empty()) {
+    int colour = 0;
+    got = std::sscanf(params.c_str(), "%f,%f,%f,%f,%f,%f,%d", &pos[0], &pos[1],
+                      &pos[2], &ypr[0], &ypr[1], &ypr[2], &colour);
+    if (got >= 7) {
+      rec.colour_set = true;
+      rec.colour_index = colour;
+    }
+  }
   records.emplace(part, std::move(rec));
   auto *node = gameref_upsert(part, GameRefKind::GameType);
   node->type_id = resource;
   node->script = part;
   node->class_name = class_name;
   node->alias = alias;
+  if (got >= 6) {
+    std::copy(pos, pos + 3, node->pos);
+    std::copy(ypr, ypr + 3, node->ypr);
+  }
   int id = gameref_make_live(part);
   if (parent)
     gameref_make_live(parent);
@@ -1023,6 +1105,8 @@ Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
   node->empty = false;
   gameref_set_parent(part, parent);
   render_part(jvm, part, records.at(part));
+  if (script.empty() && cfg->native_kind == "car")
+    install_cfg_stock(jvm, part);
   std::printf(
       "[part] create id=0x%x type=0x%x class=%s slots=%zu renders=%zu\n", id,
       resource, class_name.c_str(), cfg->slots.size(),

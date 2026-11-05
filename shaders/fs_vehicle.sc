@@ -55,12 +55,27 @@ void main()
     float weight = u_vehicleLayers.y;
     if (u_vehicleLayers.z > 0.5) weight *= 1.0-detail.a;
     float fres = pow(1.0-max(dot(n, viewDir), 0.0), 3.0);
-    // Glass stays a dark tint. The spheremap slides across the curve,
-    // which is the warped highlight on the sail panel.
+    // ColorMixTex. Texture alpha reveals colour 0. A transparent group
+    // drops texels at or under alpha ref 4, so a grille's holes stay open.
+    if (u_vehicleLayers.w > 3.5) {
+        vec3 mixed = mix(u_vehicleDiffuse.rgb, base.rgb, base.a);
+        float alpha = base.a*u_vehicleDiffuse.a;
+        if (u_lightmap.w > 0.5 && alpha < 4.0/255.0) discard;
+        vec3 pane = mixed*light*bake;
+        pane += u_vehicleSpec.rgb*spec;
+        if (u_vehicleLayers.w > 4.5) pane += environment*weight;
+        gl_FragColor = vec4(pane, alpha);
+        return;
+    }
+    // Glass. The dark tint still covers the cabin. The spheremap is added
+    // on the pane, and the edges catch more light the way a real pane does.
     if (u_vehicleLayers.w > 2.5) {
-        color = albedo*light*0.4;
-        color += environment*(0.45+1.4*fres);
-        color += u_vehicleSpec.rgb*spec;
+        float alpha = u_vehicleDiffuse.a;
+        float cover = alpha*(2.0-alpha);
+        vec3 tint = u_vehicleDiffuse.rgb*light;
+        vec3 shine = environment*(weight+fres) + u_vehicleSpec.rgb*spec;
+        gl_FragColor = vec4(tint*cover + shine, cover);
+        return;
     } else if (u_vehicleLayers.w > 1.5) {
         // Stock chrome: lit colour + env*strength + specular. The garage
         // light is diffuse (0.92, 0.96, 1), ambient 0.35, specular 0.5.

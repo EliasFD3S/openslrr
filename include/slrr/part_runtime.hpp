@@ -18,7 +18,8 @@ struct InstalledPart {
 };
 void register_part_natives(Jvm &jvm, RpkIndex &resources);
 Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
-                    uint32_t resource, const std::string &alias);
+                    uint32_t resource, const std::string &alias,
+                    const std::string &params = {});
 bool part_install(Object *child, Object *root, int own_slot = 0,
                   int parent_slot = 0);
 bool part_destroy(Object *part);

@@ -505,7 +505,7 @@ class LibBgfxBackend final : public IRenderBackend {
     bgfx::setTexture(1, s_lightmap_, lm);
   }
 
-  void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview) {
+  void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass) {
     const auto& part=instance_meshes_.at(instance.geometry.get());
     if(!bgfx::isValid(part.vbh)||!bgfx::isValid(part.ibh))return;
     if (instance.vehicle_material && bgfx::isValid(vehicle_program_)) {
@@ -521,13 +521,23 @@ class LibBgfxBackend final : public IRenderBackend {
         auto env = texture(group.reflection_index);
         bool generated = group.reflection_map.channel == 0xfffffffeu;
         const float strength = std::isfinite(group.reflection_strength) ? std::clamp(group.reflection_strength,0.f,1.f) : .5f;
-        // 3 = glass (dark tint, the spheremap warps across the pane).
-        // 2 = chrome: flags 0x33 with no color map (rims, tips), or a
-        // 0x0c cap whose color slot never loaded. A bare pipe is flags 0.
-        const bool glass = (group.material_flags & 0x40000000u) != 0;
+        // 0x40000000 only sends the section through the transparent group.
+        // Glass is ColorSpecularSpheremap (0x33) in that group. A grille is
+        // ColorMixTex (0x03): texture alpha, not the glass tint.
+        // 5 = ColorMixTex with a spheremap (headlight lens).
+        // 4 = ColorMixTex. 3 = glass. 2 = chrome (0x33, no color map, or a
+        // 0x0c cap whose color slot never loaded). A bare pipe is flags 0.
+        const bool transparent = (group.material_flags & 0x40000000u) != 0;
+        if (transparent != (pass == 1)) continue;
+        const uint32_t kind_id = group.material_type;
+        const bool glass = transparent && kind_id == 0x33u;
+        const bool color_mix_env = kind_id == 0x0bu || kind_id == 0x13u || kind_id == 0x23u ||
+                                   kind_id == 0x0fu || kind_id == 0x17u || kind_id == 0x27u;
+        const bool color_mix = color_mix_env || kind_id == 0x03u || kind_id == 0x1bu ||
+                               kind_id == 0x07u || kind_id == 0x1fu;
         const bool tex_missing = group.texture_index != 0xffff &&
             (group.texture_index >= part.tex.size() || !bgfx::isValid(part.tex[group.texture_index]));
-        const bool chrome = !glass && group.material_type == 0x33u && group.texture_index == 0xffff;
+        const bool chrome = !glass && kind_id == 0x33u && group.texture_index == 0xffff;
         const bool bare_cap = !glass && !chrome && tex_missing && group.material_type == 0x0cu &&
                               group.reflection_index != 0xffff;
         // A missing reflection slot is the global envmap, and the exe
@@ -537,7 +547,8 @@ class LibBgfxBackend final : public IRenderBackend {
           if(!path.empty()) env = tex_for_osd_icon(path);
           generated = true;
         }
-        const float kind = glass ? 3.f : (chrome || bare_cap) ? 2.f : painted ? 1.f : 0.f;
+        const float kind = glass ? 3.f : color_mix_env ? 5.f : color_mix ? 4.f
+                                : (chrome || bare_cap) ? 2.f : painted ? 1.f : 0.f;
         const float layers[4] = {mixed?1.f:0.f, env.idx!=white_tex_.idx?strength:0.f, group.material_type==0x15&&mixed?1.f:0.f, kind};
         const float channels[4] = {static_cast<float>(group.base_map.channel),static_cast<float>(group.mix_map.channel),static_cast<float>(group.reflection_map.channel),generated?1.f:0.f};
         auto map = [&](bgfx::UniformHandle uniform, const ScxTextureMap& uv) {
@@ -556,6 +567,18 @@ class LibBgfxBackend final : public IRenderBackend {
         float diffuse[4]={1,1,1,group.diffuse[3]};
         if(!has_tex || (!tex_family && !painted))
           std::copy(group.diffuse,group.diffuse+3,diffuse);
+        // The create string's colour index. White is "no paint".
+        if (instance.color != 0xffffffu) {
+          const float paint[3] = {((instance.color >> 16) & 255) / 255.f,
+                                  ((instance.color >> 8) & 255) / 255.f,
+                                  (instance.color & 255) / 255.f};
+          if (has_tex && !painted)
+            for (int i = 0; i < 3; ++i) diffuse[i] *= paint[i];
+          else if (!painted)
+            std::copy(paint, paint + 3, diffuse);
+        }
+        // A spheremap ColorMixTex outputs texture.a times the env factor.
+        if (color_mix_env) diffuse[3] = strength;
         bgfx::setUniform(u_diffuse_,diffuse);
         const float spec[4] = {group.specular[0], group.specular[1], group.specular[2],
                                group.shininess > 0.f ? group.shininess : 1.f};
@@ -575,13 +598,19 @@ class LibBgfxBackend final : public IRenderBackend {
           bake_xf[2] = group.lightmap_map.offset_u;
           bake_xf[3] = group.lightmap_map.offset_v;
         }
+        if (transparent && color_mix) bake_u[3] = 1.f;
         bgfx::setUniform(u_lightmap_, bake_u);
         bgfx::setUniform(u_lightmap_uv_, bake_xf);
         bgfx::setTexture(0,s_tex_,base);bgfx::setTexture(1,s_mix_,mix);bgfx::setTexture(2,s_env_,env);
         bgfx::setTexture(3,s_bake_,bake);
         bgfx::setTransform(matrix);bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,group.index_start,group.index_count);
         uint64_t state=BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_MSAA|BGFX_STATE_DEPTH_TEST_LESS;
-        if(group.diffuse[3]<.99f)state|=BGFX_STATE_BLEND_ALPHA;else state|=BGFX_STATE_WRITE_Z;
+        if (glass)
+          state |= BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
+        else if (transparent || group.diffuse[3] < .99f)
+          state |= BGFX_STATE_BLEND_ALPHA;
+        else
+          state |= BGFX_STATE_WRITE_Z;
         bgfx::setState(state);bgfx::submit(view_id,vehicle_program_);
       }
       return;
@@ -598,6 +627,7 @@ class LibBgfxBackend final : public IRenderBackend {
       bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_MSAA|
         (instance.sky?0:BGFX_STATE_WRITE_Z|BGFX_STATE_DEPTH_TEST_LESS));bgfx::submit(view_id,program_);
     };
+    if (pass != 0) return;
     if(part.geo.groups.empty())draw(0,static_cast<uint32_t>(part.geo.indices.size()),0,0,nullptr);
     else for(const auto&g:part.geo.groups)draw(g.index_start,g.index_count,g.texture_index,g.material_flags,&g);
   }
@@ -608,9 +638,10 @@ class LibBgfxBackend final : public IRenderBackend {
       for(int k=0;k<3;k++)radius=std::max(radius,std::max(std::fabs(i.geometry->info.bbox_min[k]),std::fabs(i.geometry->info.bbox_max[k]))*.01f);
       float scale=radius>.001f?50.f/radius:1.f;
       for(int c=0;c<3;c++)for(int r=0;r<3;r++)matrix[c*4+r]*=scale;
-      matrix[12]=camera[12];matrix[13]=camera[13];matrix[14]=camera[14];draw_instance(view_id,i,matrix.data(),false);
+      matrix[12]=camera[12];matrix[13]=camera[13];matrix[14]=camera[14];draw_instance(view_id,i,matrix.data(),false,0);
     }
-    for(const auto&i:instances_)if(!i.sky)draw_instance(view_id,i,i.transform.data(),false);
+    for (int pass = 0; pass < 2; ++pass)
+      for(const auto&i:instances_)if(!i.sky)draw_instance(view_id,i,i.transform.data(),false,pass);
   }
   void draw_vehicle_shadows(uint16_t view_id) {
     // Project cached vehicle buffers along the scene light onto actual ground.
@@ -682,7 +713,9 @@ class LibBgfxBackend final : public IRenderBackend {
       }
       bx::mtxProj(proj,p.camera.half_aov,static_cast<float>(w)/h,std::max(.0001f,p.camera.dmin),p.camera.dmax,bgfx::getCaps()->homogeneousDepth);
       bgfx::setViewRect(id,x,y,w,h);bgfx::setViewClear(id,BGFX_CLEAR_DEPTH,0,1.f);bgfx::setViewMode(id,bgfx::ViewMode::Sequential);bgfx::setViewTransform(id,view,proj);
-      for(const auto&i:p.instances)draw_instance(id,i,i.transform.data(),true);++id;
+      for (int pass = 0; pass < 2; ++pass)
+        for(const auto&i:p.instances)draw_instance(id,i,i.transform.data(),true,pass);
+      ++id;
     }
   }
 

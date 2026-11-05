@@ -61,6 +61,11 @@ struct PartRender {
   // -1: always drawn. 0 lo-res, 1 hi-res, 2 extr-hi-res. Alternatives, not
   // layers.
   int lod_level = -1;
+  // A `render` line after `wheel` is that wheel's mesh. -1 is the body.
+  int wheel = -1;
+  // `colors N rgb...` on this render. The create string's seventh field
+  // picks one: index modulo the count.
+  std::vector<uint32_t> colors;
   std::vector<PartLink> links;
 };
 struct PartConfig {

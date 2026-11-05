@@ -143,21 +143,46 @@ void pump_async_messages(Jvm& jvm, Object* game) {
 }
 
 // CarSelect.run is an infinite camera loop. Thread.start never enters it,
-// so the lens stayed at the origin, inside the car.
+// so the lens stayed at the origin, inside the car. The garage camera has
+// already received "render", so its sequence outranks this one and its
+// look/move chase (drive-style, not ext_camera) stays locked behind the car.
 void spin_car_select_camera(Object* section) {
-  if (!section || section->class_name.find("CarSelect") == std::string::npos)
+  static void* held = nullptr;
+  auto release = []() {
+    if (!held) return;
+    if (GameRefState* old = gameref_get(held)) {
+      if (old->cam_seq == 0x7fffffff) {
+        old->cam_active = false;
+        old->cam_seq = 0;
+      }
+    }
+    held = nullptr;
+  };
+  const bool select =
+      section && section->class_name.find("CarSelect") != std::string::npos;
+  if (!select) {
+    release();
     return;
+  }
   auto it = section->fields.find("Cam");
   if (it == section->fields.end() || it->second.tag != ValueTag::Obj ||
       !it->second.v.o)
     return;
+  GameRefState* cam = gameref_get(it->second.v.o);
+  if (!cam) return;
+  if (held && held != cam->key) release();
+  held = cam->key;
+  cam->cam_active = true;
+  cam->cam_seq = 0x7fffffff;
+  cam->aim_look = false;
+  cam->aim_move = false;
   const float yaw = -0.01f + gameref_now() * 0.5f;
   const float place = -0.15f;
   const float sy = std::sin(yaw), cy = std::cos(yaw);
   const float sp = std::sin(place), cp = std::cos(place);
   const float arm = 1.5f * sp + 8.5f * cp;
-  gameref_set_matrix(it->second.v.o, sy * arm, 1.5f * cp - 8.5f * sp, cy * arm,
-                     yaw, -0.23f, 0.f);
+  gameref_set_matrix(cam->key, sy * arm, 1.5f * cp - 8.5f * sp, cy * arm, yaw,
+                     -0.23f, 0.f);
 }
 
 void mainloop_sync_section_render(IRenderBackend& render,
@@ -662,6 +687,10 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   // The solver caps work itself and retains debt; the camera's dt clamp must
   // not silently discard elapsed simulation time.
   part_physics_advance(dt < 0.f ? 0.0 : static_cast<double>(dt));
+
+  // Last write before the view is built. The chase camera must not cover
+  // the showroom orbit, and nothing after the earlier spin may put it back.
+  spin_car_select_camera(sections.actual());
 
   // --- Present: AltPresentGate (FMV) else PresentFrame ---
   // Soft: backend flush pumps FMV SampleGrabber + Present (libbgfx path).
