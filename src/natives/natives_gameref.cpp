@@ -408,9 +408,16 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
         Object* v = jvm.new_object("java.lang.Vector3");
         GameRefState* st = gameref_get(self);
         if (v && st) {
-          v->fields["x"] = Value::make_float(st->pos[0]);
-          v->fields["y"] = Value::make_float(st->pos[1]);
-          v->fields["z"] = Value::make_float(st->pos[2]);
+          float x = st->pos[0], y = st->pos[1], z = st->pos[2];
+          float sx = 0.f, sy = 0.f, sz = 0.f;
+          if (part_car_script_pos(self, &sx, &sy, &sz)) {
+            x = sx;
+            y = sy;
+            z = sz;
+          }
+          v->fields["x"] = Value::make_float(x);
+          v->fields["y"] = Value::make_float(y);
+          v->fields["z"] = Value::make_float(z);
         }
         return Value::make_obj(v);
       });

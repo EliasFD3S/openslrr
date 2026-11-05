@@ -58,6 +58,12 @@
 #include "dxbc/fs_vehicle.sc.bin.h"
 #include "glsl/vs_vehicle.sc.bin.h"
 #include "glsl/fs_vehicle.sc.bin.h"
+#include "dxbc/fs_white.sc.bin.h"
+#include "dxbc/vs_shadow_recv.sc.bin.h"
+#include "dxbc/fs_shadow_recv.sc.bin.h"
+#include "glsl/fs_white.sc.bin.h"
+#include "glsl/vs_shadow_recv.sc.bin.h"
+#include "glsl/fs_shadow_recv.sc.bin.h"
 
 namespace slrr {
 namespace {
@@ -71,6 +77,12 @@ static const bgfx::EmbeddedShader k_fs[] = {
 static const bgfx::EmbeddedShader k_vehicle[] = {
     BGFX_EMBEDDED_SHADER(vs_vehicle), BGFX_EMBEDDED_SHADER(fs_vehicle),
     BGFX_EMBEDDED_SHADER_END()};
+static const bgfx::EmbeddedShader k_shadow_white[] = {
+    BGFX_EMBEDDED_SHADER(vs_mesh), BGFX_EMBEDDED_SHADER(fs_white),
+    BGFX_EMBEDDED_SHADER_END()};
+static const bgfx::EmbeddedShader k_shadow_recv[] = {
+    BGFX_EMBEDDED_SHADER(vs_shadow_recv), BGFX_EMBEDDED_SHADER(fs_shadow_recv),
+    BGFX_EMBEDDED_SHADER_END()};
 
 struct MeshVertex {
   float x, y, z;
@@ -80,8 +92,15 @@ struct MeshVertex {
 };
 
 class LibBgfxBackend final : public IRenderBackend {
-  // Previews occupy views 3..63. The interface has to stay above the car
-  // viewport or that rect covers the color chip.
+  // Views 0..3 are shadow maps (their own framebuffers). The world is view 4,
+  // or view 5 when an FMV backdrop occupies 4. Previews start at 8. The
+  // interface stays on kOsdView, above those rects.
+  static constexpr int kShadowSlots = 4;
+  static constexpr uint16_t kShadowSize = 256;
+  static constexpr uint16_t kWorldView = 4;
+  static constexpr uint16_t kFmvLayer = 5;
+  static constexpr uint16_t kOsdUnder = 6;
+  static constexpr uint16_t kPreview0 = 8;
   static constexpr uint16_t kOsdView = 70;
 
  public:
@@ -170,6 +189,55 @@ class LibBgfxBackend final : public IRenderBackend {
     u_sun_amb_ = bgfx::createUniform("u_sunAmb", bgfx::UniformType::Vec4);
     u_sun_spec_ = bgfx::createUniform("u_sunSpec", bgfx::UniformType::Vec4);
     u_sun_dir_ = bgfx::createUniform("u_sunDir", bgfx::UniformType::Vec4);
+    bgfx::ShaderHandle white_vs =
+        bgfx::createEmbeddedShader(k_shadow_white, rt, "vs_mesh");
+    bgfx::ShaderHandle white_fs =
+        bgfx::createEmbeddedShader(k_shadow_white, rt, "fs_white");
+    if (bgfx::isValid(white_vs) && bgfx::isValid(white_fs))
+      shadow_program_ = bgfx::createProgram(white_vs, white_fs, true);
+    else {
+      if (bgfx::isValid(white_vs)) bgfx::destroy(white_vs);
+      if (bgfx::isValid(white_fs)) bgfx::destroy(white_fs);
+    }
+    bgfx::ShaderHandle recv_vs =
+        bgfx::createEmbeddedShader(k_shadow_recv, rt, "vs_shadow_recv");
+    bgfx::ShaderHandle recv_fs =
+        bgfx::createEmbeddedShader(k_shadow_recv, rt, "fs_shadow_recv");
+    if (bgfx::isValid(recv_vs) && bgfx::isValid(recv_fs))
+      shadow_recv_ = bgfx::createProgram(recv_vs, recv_fs, true);
+    else {
+      if (bgfx::isValid(recv_vs)) bgfx::destroy(recv_vs);
+      if (bgfx::isValid(recv_fs)) bgfx::destroy(recv_fs);
+    }
+    u_shadow_mtx_ = bgfx::createUniform("u_shadowMtx", bgfx::UniformType::Mat4);
+    u_shadow_ramp_ = bgfx::createUniform("u_shadowRamp", bgfx::UniformType::Vec4);
+    // A colour target alone is dropped by D3D11. The depth target is only
+    // there so the pass is a real framebuffer; casters do not test it.
+    const uint64_t shadow_color_flags =
+        BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+    for (int i = 0; i < kShadowSlots; ++i) {
+      bgfx::TextureHandle color = bgfx::createTexture2D(
+          kShadowSize, kShadowSize, false, 1, bgfx::TextureFormat::RGBA8,
+          shadow_color_flags);
+      bgfx::TextureHandle depth = bgfx::createTexture2D(
+          kShadowSize, kShadowSize, false, 1, bgfx::TextureFormat::D16,
+          BGFX_TEXTURE_RT_WRITE_ONLY);
+      if (!bgfx::isValid(color) || !bgfx::isValid(depth)) {
+        if (bgfx::isValid(color)) bgfx::destroy(color);
+        if (bgfx::isValid(depth)) bgfx::destroy(depth);
+        std::fprintf(stderr, "[shadow] framebuffer %d rejected\n", i);
+        continue;
+      }
+      bgfx::TextureHandle attachments[2] = {color, depth};
+      shadow_fb_[i] = bgfx::createFrameBuffer(2, attachments, true);
+      if (!bgfx::isValid(shadow_fb_[i])) {
+        bgfx::destroy(color);
+        bgfx::destroy(depth);
+        std::fprintf(stderr, "[shadow] framebuffer %d rejected\n", i);
+        continue;
+      }
+      shadow_tex_[i] = color;
+    }
     layout_.begin()
         .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
         .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
@@ -191,8 +259,8 @@ class LibBgfxBackend final : public IRenderBackend {
     const float white_c[4] = {1.f, 1.f, 1.f, 1.f};
     bgfx::setUniform(u_color_, white_c);
 
-    bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL, 0x1c1814ff, 1.0f,
-                       0);
+    bgfx::setViewClear(kWorldView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL,
+                       0x1c1814ff, 1.0f, 0);
     ready_ = true;
     quit_ = false;
     video_fmv_set_hwnd(hwnd_);
@@ -247,6 +315,19 @@ class LibBgfxBackend final : public IRenderBackend {
     }
     if (bgfx::isValid(vehicle_program_)) bgfx::destroy(vehicle_program_);
     vehicle_program_ = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(shadow_program_)) bgfx::destroy(shadow_program_);
+    shadow_program_ = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(shadow_recv_)) bgfx::destroy(shadow_recv_);
+    shadow_recv_ = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(u_shadow_mtx_)) bgfx::destroy(u_shadow_mtx_);
+    u_shadow_mtx_ = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(u_shadow_ramp_)) bgfx::destroy(u_shadow_ramp_);
+    u_shadow_ramp_ = BGFX_INVALID_HANDLE;
+    for (int i = 0; i < kShadowSlots; ++i) {
+      if (bgfx::isValid(shadow_fb_[i])) bgfx::destroy(shadow_fb_[i]);
+      shadow_fb_[i] = BGFX_INVALID_HANDLE;
+      shadow_tex_[i] = BGFX_INVALID_HANDLE;
+    }
     for (auto* handle : {&s_mix_, &s_env_, &s_bake_, &u_layers_, &u_channels_, &u_base_uv_, &u_mix_uv_, &u_env_uv_, &u_diffuse_, &u_spec_, &u_sun_diff_, &u_sun_amb_, &u_sun_spec_, &u_sun_dir_}) {
       if(bgfx::isValid(*handle)) bgfx::destroy(*handle);
       *handle = BGFX_INVALID_HANDLE;
@@ -386,22 +467,36 @@ class LibBgfxBackend final : public IRenderBackend {
           break;
         }
     if (shown_ && !show) return;
-    const uint16_t world_view = fmv_bg ? 1 : 0;
+    // Shadow maps render first (views 0..3, off the backbuffer). The world
+    // follows on 4, or on 5 when the movie occupies 4.
+    const uint16_t world_view = fmv_bg ? kFmvLayer : kWorldView;
     const auto ww = static_cast<uint16_t>(width_);
     const auto hh = static_cast<uint16_t>(height_);
+    for (int i = 0; i < kShadowSlots; ++i) {
+      if (!bgfx::isValid(shadow_fb_[i])) continue;
+      const auto shadow_view = static_cast<uint16_t>(i);
+      bgfx::setViewFrameBuffer(shadow_view, shadow_fb_[i]);
+      bgfx::setViewRect(shadow_view, 0, 0, kShadowSize, kShadowSize);
+      bgfx::setViewClear(shadow_view, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
+                         0x000000ff, 1.f, 0);
+      bgfx::setViewMode(shadow_view, bgfx::ViewMode::Sequential);
+      bgfx::touch(shadow_view);
+    }
+    bgfx::setViewFrameBuffer(kWorldView, BGFX_INVALID_HANDLE);
+    bgfx::setViewFrameBuffer(kFmvLayer, BGFX_INVALID_HANDLE);
     if (fmv_bg) {
-      bgfx::setViewRect(0, 0, 0, ww, hh);
-      bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL,
+      bgfx::setViewRect(kWorldView, 0, 0, ww, hh);
+      bgfx::setViewClear(kWorldView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL,
                          0x000000ff, 1.0f, 0);
-      bgfx::setViewMode(0, bgfx::ViewMode::Sequential);
-      draw_fmv(0);
+      bgfx::setViewMode(kWorldView, bgfx::ViewMode::Sequential);
+      draw_fmv(kWorldView);
       bgfx::setViewRect(world_view, 0, 0, ww, hh);
       bgfx::setViewClear(world_view, BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL, 0,
                          1.0f, 0);
     } else {
-      bgfx::setViewRect(0, 0, 0, ww, hh);
+      bgfx::setViewRect(world_view, 0, 0, ww, hh);
       const uint32_t clear = (garage_ || world_cam) ? 0x3a342cff : 0x1a2230ff;
-      bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL,
+      bgfx::setViewClear(world_view, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL,
                          clear, 1.0f, 0);
     }
     bgfx::setViewTransform(world_view, view, proj);
@@ -412,9 +507,9 @@ class LibBgfxBackend final : public IRenderBackend {
     draw_dynamic_world(view, world_view);
     if (garage_ && !parts_.empty()) draw_scene(world_view);
     draw_vehicle_shadows(world_view);
-    // View order: 0 = backdrop, 1 = 3D over the movie (or 0 = 3D when there
-    // is no movie), 3.. = car previews, 70 = OSD on top.
-    if (!fmv_bg) draw_fmv(1);
+    // Previews start at view 8. OSD plates under the cars are view 6; the
+    // rest of the interface is view 70.
+    if (!fmv_bg) draw_fmv(kFmvLayer);
     // Boot intros own the frame. Menu OSD from the probe must not cover them.
     if ((garage_ || osd_overlay_ || !osd_loading_overlay().empty()) &&
         !video_fmv_block_osd())
@@ -729,39 +824,450 @@ class LibBgfxBackend final : public IRenderBackend {
       for(const auto&i:instances_)if(!i.sky)draw_instance(view_id,i,i.transform.data(),false,pass);
   }
   void draw_vehicle_shadows(uint16_t view_id) {
-    // Project cached vehicle buffers along the scene light onto actual ground.
-    // Stencil forms a union: overlapping body/tyre triangles darken only once.
-    struct Plane {bool valid=false;float projection[16]{};};
-    std::unordered_map<void*,Plane> planes;
-    for(const auto& instance:instances_) {
-      if(!instance.vehicle_material || instance.sky)continue;
-      float frame[16];auto* owner=part_shadow_source(instance.key,frame);
-      if(!owner)continue;
-      auto entry=planes.find(owner);
-      if(entry==planes.end()) {
-        Plane plane;SceneFloorHit hit;
-        if(scene_instances_sample_floor(frame[12],frame[14],frame[13]+.1f,owner,hit)) {
-          plane.valid=scene_shadow_projection(frame,hit,plane.projection);
-        }
-        entry=planes.emplace(owner,plane).first;
+    // One owner is one car. Traffic carries a kocsiarnyek quad and does not
+    // cast. A body with render flags (flags & 9) == 8 is drawn white into
+    // that car's shadow map, then the ground is multiplied by it.
+    struct CarShadow {
+      void* owner = nullptr;
+      bool decal = false;
+      SceneShadowDecal blob;
+      const float* xform = nullptr;
+      float script[16]{};
+      std::vector<const SceneInstance*> casters;
+    };
+    std::vector<CarShadow> cars;
+    std::unordered_map<void*, size_t> car_index;
+    for (const auto& instance : instances_) {
+      if (instance.sky || !instance.geometry) continue;
+      uint32_t flags = 0;
+      SceneShadowDecal decal;
+      scene_shadow_info(static_cast<uint32_t>(instance.type_id), &flags, &decal);
+      const bool casts = decal.present || (flags & 9u) == 8u;
+      if (!casts) continue;
+      float frame[16]{};
+      void* owner = part_shadow_source(instance.key, frame);
+      if (!owner) {
+        // A dealer display still casts. Its render matrix is the pose.
+        owner = instance.key;
+        frame[0] = frame[5] = frame[10] = frame[15] = 1.f;
+        frame[12] = instance.transform[12];
+        frame[13] = instance.transform[13];
+        frame[14] = -instance.transform[14];
       }
-      if(!entry->second.valid)continue;
-      const auto& part=instance_meshes_.at(instance.geometry.get());
-      if(!bgfx::isValid(part.vbh)||!bgfx::isValid(part.ibh))continue;
-      float matrix[16]{};
-      for(int c=0;c<4;++c)for(int r=0;r<4;++r)for(int k=0;k<4;++k)
-        matrix[c*4+r]+=entry->second.projection[k*4+r]*instance.transform[c*4+k];
-      const float tint[4]={0,0,0,.38f},settings[4]={0,1,0,0};
-      bgfx::setUniform(u_color_,tint);bgfx::setUniform(u_alpha_test_,settings);
-      bind_baked_light(nullptr,nullptr);bgfx::setTexture(0,s_tex_,white_tex_);
-      bgfx::setTransform(matrix);bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh);
-      bgfx::setStencil(BGFX_STENCIL_TEST_EQUAL|BGFX_STENCIL_FUNC_REF(0)|BGFX_STENCIL_FUNC_RMASK(0xff)|BGFX_STENCIL_OP_FAIL_S_KEEP|BGFX_STENCIL_OP_FAIL_Z_KEEP|BGFX_STENCIL_OP_PASS_Z_INCR);
-      bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_DEPTH_TEST_LEQUAL|BGFX_STATE_BLEND_ALPHA|BGFX_STATE_MSAA);
-      bgfx::submit(view_id,program_);
+      auto found = car_index.find(owner);
+      if (found == car_index.end()) {
+        found = car_index.emplace(owner, cars.size()).first;
+        CarShadow car;
+        car.owner = owner;
+        std::memcpy(car.script, frame, sizeof(frame));
+        cars.push_back(std::move(car));
+      }
+      CarShadow& car = cars[found->second];
+      if (decal.present) {
+        if (!car.decal) {
+          car.decal = true;
+          car.blob = std::move(decal);
+          car.xform = instance.transform.data();
+        }
+      } else if ((flags & 9u) == 8u) {
+        car.casters.push_back(&instance);
+      }
+    }
+
+    struct Slot {
+      bool used = false;
+      float mtx[16]{};
+      float view[16]{};
+      float centre[3]{};
+      float centre_y = 0.f;
+      float ramp = 0.f;
+      float radius = 0.f;
+      float bottom = 0.f;
+      float script_x = 0.f, script_y = 0.f, script_z = 0.f;
+      void* owner = nullptr;
+      bgfx::TextureHandle tex = BGFX_INVALID_HANDLE;
+    };
+    Slot slots[kShadowSlots];
+    // The offscreen map never reached the courtyard. Flatten the body onto
+    // the ground along the sun; the stencil keeps overlapping panels from
+    // stacking the ink.
+    SceneSun sun = scene_sun();
+    float travel[3] = {sun.direction[0], sun.direction[1], -sun.direction[2]};
+    {
+      const float tlen = std::sqrt(travel[0] * travel[0] + travel[1] * travel[1] +
+                                   travel[2] * travel[2]);
+      if (tlen < 1e-5f) {
+        travel[0] = 0.f;
+        travel[1] = -1.f;
+        travel[2] = 0.f;
+      } else {
+        travel[0] /= tlen;
+        travel[1] /= tlen;
+        travel[2] /= tlen;
+      }
+    }
+    const uint64_t flat_state =
+        BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LEQUAL |
+        BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA,
+                              BGFX_STATE_BLEND_INV_SRC_ALPHA);
+    const uint32_t flat_stencil =
+        BGFX_STENCIL_TEST_NOTEQUAL | BGFX_STENCIL_FUNC_REF(1) |
+        BGFX_STENCIL_FUNC_RMASK(0xff) | BGFX_STENCIL_OP_FAIL_S_KEEP |
+        BGFX_STENCIL_OP_FAIL_Z_KEEP | BGFX_STENCIL_OP_PASS_Z_REPLACE;
+    const float flat_tint[4] = {0.f, 0.f, 0.f, 0.5f};
+    const float flat_alpha[4] = {0.f, 1.f, 0.f, 0.f};
+    if (std::fabs(travel[1]) > 0.05f && bgfx::isValid(program_) &&
+        bgfx::isValid(white_tex_)) {
+      const float dot = travel[1];
+      for (const CarShadow& car : cars) {
+        if (car.decal || car.casters.empty()) continue;
+        float y_min = 1e30f;
+        bool any = false;
+        for (const SceneInstance* inst : car.casters) {
+          if (!inst->geometry) continue;
+          const float scale = inst->geometry->position_scale > 0.f
+                                  ? inst->geometry->position_scale
+                                  : 0.01f;
+          const float* m = inst->transform.data();
+          for (int ix = 0; ix < 2; ++ix)
+            for (int iy = 0; iy < 2; ++iy)
+              for (int iz = 0; iz < 2; ++iz) {
+                const float lx =
+                    (ix ? inst->geometry->info.bbox_max[0]
+                       : inst->geometry->info.bbox_min[0]) *
+                    scale;
+                const float ly =
+                    (iy ? inst->geometry->info.bbox_max[1]
+                       : inst->geometry->info.bbox_min[1]) *
+                    scale;
+                const float lz =
+                    -((iz ? inst->geometry->info.bbox_max[2]
+                         : inst->geometry->info.bbox_min[2]) *
+                      scale);
+                const float y = m[1] * lx + m[5] * ly + m[9] * lz + m[13];
+                y_min = std::min(y_min, y);
+                any = true;
+              }
+        }
+        if (!any) continue;
+        SceneFloorHit hit;
+        const bool on_floor = scene_instances_sample_floor(
+            car.script[12], car.script[14], car.script[13] + 1.f, car.owner, hit);
+        const float y0 = (on_floor ? hit.height : y_min) + 0.04f;
+        float flatten[16]{};
+        flatten[0] = flatten[5] = flatten[10] = flatten[15] = 1.f;
+        for (int r = 0; r < 3; ++r) flatten[4 + r] -= travel[r] / dot;
+        flatten[12] = travel[0] * y0 / dot;
+        flatten[13] = travel[1] * y0 / dot;
+        flatten[14] = travel[2] * y0 / dot;
+        for (const SceneInstance* inst : car.casters) {
+          auto mesh = instance_meshes_.find(inst->geometry.get());
+          if (mesh == instance_meshes_.end()) continue;
+          const ScenePart& part = mesh->second;
+          if (!bgfx::isValid(part.vbh) || !bgfx::isValid(part.ibh)) continue;
+          float model[16];
+          bx::mtxMul(model, inst->transform.data(), flatten);
+          bgfx::setTransform(model);
+          bgfx::setVertexBuffer(0, part.vbh);
+          bgfx::setIndexBuffer(part.ibh);
+          bgfx::setTexture(0, s_tex_, white_tex_);
+          bind_baked_light(nullptr, nullptr);
+          bgfx::setUniform(u_color_, flat_tint);
+          bgfx::setUniform(u_alpha_test_, flat_alpha);
+          bgfx::setStencil(flat_stencil, flat_stencil);
+          bgfx::setState(flat_state);
+          bgfx::submit(view_id, program_);
+        }
+      }
+    }
+    const bool maps = false;
+    if (maps) {
+      SceneSun sun = scene_sun();
+      float travel[3] = {sun.direction[0], sun.direction[1], -sun.direction[2]};
+      const float tlen = std::sqrt(travel[0] * travel[0] + travel[1] * travel[1] +
+                                   travel[2] * travel[2]);
+      if (tlen < 1e-5f) {
+        travel[0] = 0.f;
+        travel[1] = -1.f;
+        travel[2] = 0.f;
+      } else {
+        travel[0] /= tlen;
+        travel[1] /= tlen;
+        travel[2] /= tlen;
+      }
+      auto light_view = [](const float d[3], const float centre[3], float* view) {
+        float rx, ry = 0.f, rz;
+        if (std::fabs(d[0]) < 1e-5f && std::fabs(d[2]) < 1e-5f) {
+          rx = 1.f;
+          rz = 0.f;
+        } else {
+          rx = -d[2];
+          rz = d[0];
+          const float rl = std::sqrt(rx * rx + rz * rz);
+          rx /= rl;
+          rz /= rl;
+        }
+        float ux = ry * d[2] - rz * d[1];
+        float uy = rz * d[0] - rx * d[2];
+        float uz = rx * d[1] - ry * d[0];
+        const float ul = std::sqrt(ux * ux + uy * uy + uz * uz);
+        if (ul > 1e-8f) {
+          ux /= ul;
+          uy /= ul;
+          uz /= ul;
+        }
+        std::fill(view, view + 16, 0.f);
+        view[0] = rx;
+        view[1] = ux;
+        view[2] = d[0];
+        view[4] = ry;
+        view[5] = uy;
+        view[6] = d[1];
+        view[8] = rz;
+        view[9] = uz;
+        view[10] = d[2];
+        view[12] = -(rx * centre[0] + ry * centre[1] + rz * centre[2]);
+        view[13] = -(ux * centre[0] + uy * centre[1] + uz * centre[2]);
+        view[14] = -(d[0] * centre[0] + d[1] * centre[1] + d[2] * centre[2]);
+        view[15] = 1.f;
+      };
+      const bgfx::Caps* caps = bgfx::getCaps();
+      const float sy = caps->originBottomLeft ? 0.5f : -0.5f;
+      int slot_n = 0;
+      const uint64_t caster_state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
+      for (const CarShadow& car : cars) {
+        if (car.decal || car.casters.empty() || slot_n >= kShadowSlots) continue;
+        if (!bgfx::isValid(shadow_fb_[slot_n])) break;
+        float mn[3] = {1e30f, 1e30f, 1e30f};
+        float mx[3] = {-1e30f, -1e30f, -1e30f};
+        bool any = false;
+        for (const SceneInstance* inst : car.casters) {
+          const float scale = inst->geometry->position_scale > 0.f
+                                  ? inst->geometry->position_scale
+                                  : 0.01f;
+          const float* m = inst->transform.data();
+          for (int ix = 0; ix < 2; ++ix)
+            for (int iy = 0; iy < 2; ++iy)
+              for (int iz = 0; iz < 2; ++iz) {
+                const float lx =
+                    (ix ? inst->geometry->info.bbox_max[0]
+                       : inst->geometry->info.bbox_min[0]) *
+                    scale;
+                const float ly =
+                    (iy ? inst->geometry->info.bbox_max[1]
+                       : inst->geometry->info.bbox_min[1]) *
+                    scale;
+                const float lz =
+                    -((iz ? inst->geometry->info.bbox_max[2]
+                         : inst->geometry->info.bbox_min[2]) *
+                      scale);
+                const float x = m[0] * lx + m[4] * ly + m[8] * lz + m[12];
+                const float y = m[1] * lx + m[5] * ly + m[9] * lz + m[13];
+                const float z = m[2] * lx + m[6] * ly + m[10] * lz + m[14];
+                mn[0] = std::min(mn[0], x);
+                mn[1] = std::min(mn[1], y);
+                mn[2] = std::min(mn[2], z);
+                mx[0] = std::max(mx[0], x);
+                mx[1] = std::max(mx[1], y);
+                mx[2] = std::max(mx[2], z);
+                any = true;
+              }
+        }
+        if (!any) continue;
+        const float dx = mx[0] - mn[0], dy = mx[1] - mn[1], dz = mx[2] - mn[2];
+        float radius = 0.5f * std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (radius < 1e-4f) continue;
+        if (radius < 0.5f) radius = 0.5f;
+        // The sun is not straight down. The contact patch sits outside the
+        // body box; a tighter map clips it.
+        radius *= 1.35f;
+        const float centre[3] = {(mn[0] + mx[0]) * 0.5f, (mn[1] + mx[1]) * 0.5f,
+                                 (mn[2] + mx[2]) * 0.5f};
+        float view[16], proj[16];
+        light_view(travel, centre, view);
+        bx::mtxOrtho(proj, -radius, radius, -radius, radius, -30.f, 30.f, 0.f,
+                     caps->homogeneousDepth);
+        const auto shadow_view = static_cast<uint16_t>(slot_n);
+        bgfx::setViewTransform(shadow_view, view, proj);
+        for (const SceneInstance* inst : car.casters) {
+          auto mesh = instance_meshes_.find(inst->geometry.get());
+          if (mesh == instance_meshes_.end()) continue;
+          const ScenePart& part = mesh->second;
+          if (!bgfx::isValid(part.vbh) || !bgfx::isValid(part.ibh)) continue;
+          bgfx::setTransform(inst->transform.data());
+          bgfx::setVertexBuffer(0, part.vbh);
+          bgfx::setIndexBuffer(part.ibh);
+          bgfx::setState(caster_state);
+          bgfx::submit(shadow_view, shadow_program_);
+        }
+        const float crop[16] = {
+            0.5f, 0.f, 0.f, 0.f, 0.f, sy, 0.f, 0.f, 0.f, 0.f,
+            caps->homogeneousDepth ? 0.5f : 1.f, 0.f, 0.5f, 0.5f,
+            caps->homogeneousDepth ? 0.5f : 0.f, 1.f};
+        float pv[16], tex[16];
+        bx::mtxMul(pv, view, proj);
+        bx::mtxMul(tex, pv, crop);
+        Slot& slot = slots[slot_n];
+        slot.used = true;
+        std::memcpy(slot.mtx, tex, sizeof(tex));
+        std::memcpy(slot.view, view, sizeof(view));
+        std::memcpy(slot.centre, centre, sizeof(centre));
+        slot.centre_y = centre[1];
+        slot.ramp = 0.25f / radius;
+        slot.radius = radius;
+        slot.bottom = mn[1];
+        slot.script_x = car.script[12];
+        slot.script_y = car.script[13];
+        slot.script_z = car.script[14];
+        slot.owner = car.owner;
+        slot.tex = shadow_tex_[slot_n];
+        ++slot_n;
+      }
+      const uint64_t recv_state =
+          BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LEQUAL |
+          BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_INV_SRC_COLOR) |
+          BGFX_STATE_MSAA;
+      auto receive = [&](bgfx::VertexBufferHandle vb, bgfx::IndexBufferHandle ib,
+                         const float* matrix) {
+        if (!bgfx::isValid(vb) || !bgfx::isValid(ib)) return;
+        for (const Slot& slot : slots) {
+          if (!slot.used || !bgfx::isValid(slot.tex)) continue;
+          bgfx::setUniform(u_shadow_mtx_, slot.mtx);
+          const float ramp[4] = {0.f, slot.centre_y, 0.f, slot.ramp};
+          bgfx::setUniform(u_shadow_ramp_, ramp);
+          bgfx::setTransform(matrix);
+          bgfx::setVertexBuffer(0, vb);
+          bgfx::setIndexBuffer(ib);
+          bgfx::setTexture(0, s_tex_, slot.tex);
+          bgfx::setState(recv_state);
+          bgfx::submit(view_id, shadow_recv_);
+        }
+      };
+      float identity[16];
+      bx::mtxIdentity(identity);
+      for (const ScenePart& part : parts_) receive(part.vbh, part.ibh, identity);
+      for (const auto& instance : instances_) {
+        if (instance.sky || instance.vehicle_material || !instance.geometry)
+          continue;
+        auto mesh = instance_meshes_.find(instance.geometry.get());
+        if (mesh == instance_meshes_.end()) continue;
+        receive(mesh->second.vbh, mesh->second.ibh, instance.transform.data());
+      }
+      // The map mesh is not always the surface under the car. A quad in the
+      // light's window, sitting on the floor, carries the same silhouette.
+      const uint64_t patch_state =
+          BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LEQUAL |
+          BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_INV_SRC_COLOR);
+      const float patch_tint[4] = {0.55f, 0.55f, 0.55f, 1.f};
+      const float patch_alpha[4] = {0.f, 1.f, 0.f, 0.f};
+      const float sy_sign = sy > 0.f ? 1.f : -1.f;
+      for (const Slot& slot : slots) {
+        if (!slot.used || !bgfx::isValid(slot.tex)) continue;
+        SceneFloorHit hit;
+        const bool on_floor = scene_instances_sample_floor(
+            slot.script_x, slot.script_z, slot.script_y + 1.f, slot.owner, hit);
+        const float y0 = (on_floor ? hit.height : slot.bottom) + 0.03f;
+        const float* lv = slot.view;
+        const float rx = lv[0], ry = lv[4], rz = lv[8];
+        const float ux = lv[1], uy = lv[5], uz = lv[9];
+        const float nx = lv[2], ny = lv[6], nz = lv[10];
+        if (std::fabs(ny) < 0.15f) continue;
+        const float r = slot.radius;
+        const float corner[4][2] = {{-r, -r}, {r, -r}, {r, r}, {-r, r}};
+        MeshVertex verts[4]{};
+        for (int i = 0; i < 4; ++i) {
+          const float lx = corner[i][0], ly = corner[i][1];
+          const float lz = (y0 - slot.centre[1] - lx * ry - ly * uy) / ny;
+          verts[i].x = slot.centre[0] + lx * rx + ly * ux + lz * nx;
+          verts[i].y = y0;
+          verts[i].z = slot.centre[2] + lx * rz + ly * uz + lz * nz;
+          verts[i].ny = 1.f;
+          verts[i].u = 0.5f + 0.5f * lx / r;
+          verts[i].v = 0.5f + sy_sign * 0.5f * ly / r;
+        }
+        const uint16_t idx[6] = {0, 1, 2, 0, 2, 3};
+        if (bgfx::getAvailTransientVertexBuffer(4, layout_) < 4 ||
+            bgfx::getAvailTransientIndexBuffer(6) < 6)
+          continue;
+        bgfx::TransientVertexBuffer tvb;
+        bgfx::TransientIndexBuffer tib;
+        bgfx::allocTransientVertexBuffer(&tvb, 4, layout_);
+        bgfx::allocTransientIndexBuffer(&tib, 6);
+        std::memcpy(tvb.data, verts, sizeof(verts));
+        std::memcpy(tib.data, idx, sizeof(idx));
+        float ident[16];
+        bx::mtxIdentity(ident);
+        bgfx::setTransform(ident);
+        bgfx::setVertexBuffer(0, &tvb);
+        bgfx::setIndexBuffer(&tib);
+        bgfx::setTexture(0, s_tex_, slot.tex);
+        bind_baked_light(nullptr, nullptr);
+        bgfx::setUniform(u_color_, patch_tint);
+        bgfx::setUniform(u_alpha_test_, patch_alpha);
+        bgfx::setState(patch_state);
+        bgfx::submit(view_id, program_);
+      }
+    }
+
+    const uint64_t blob_state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                                BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_BLEND_ALPHA |
+                                BGFX_STATE_MSAA;
+    const float blob_tint[4] = {1.f, 1.f, 1.f, 1.f};
+    const float blob_alpha[4] = {0.f, 1.f, 1.f, 0.f};
+    for (const CarShadow& car : cars) {
+      if (!car.decal || !car.xform) continue;
+      bgfx::TextureHandle tex = tex_for_osd_icon(car.blob.texture);
+      if (!bgfx::isValid(tex)) continue;
+      SceneFloorHit hit;
+      const bool on_floor = scene_instances_sample_floor(
+          car.script[12], car.script[14], car.script[13] + 0.5f, car.owner, hit);
+      const float* m = car.xform;
+      const float* c = car.blob.center;
+      const float* u = car.blob.axis_u;
+      const float* v = car.blob.axis_v;
+      MeshVertex verts[4]{};
+      const float su[4] = {-1.f, 1.f, 1.f, -1.f};
+      const float sv[4] = {-1.f, -1.f, 1.f, 1.f};
+      const float uu[4] = {car.blob.uv[0], car.blob.uv[2], car.blob.uv[2],
+                           car.blob.uv[0]};
+      const float vv[4] = {car.blob.uv[1], car.blob.uv[1], car.blob.uv[3],
+                           car.blob.uv[3]};
+      for (int i = 0; i < 4; ++i) {
+        const float lx = c[0] + su[i] * u[0] + sv[i] * v[0];
+        const float ly = c[1] + su[i] * u[1] + sv[i] * v[1];
+        const float lz = -(c[2] + su[i] * u[2] + sv[i] * v[2]);
+        verts[i].x = m[0] * lx + m[4] * ly + m[8] * lz + m[12];
+        verts[i].y = on_floor ? hit.height + 0.03f : m[13] + 0.03f;
+        verts[i].z = m[2] * lx + m[6] * ly + m[10] * lz + m[14];
+        verts[i].ny = 1.f;
+        verts[i].u = uu[i];
+        verts[i].v = vv[i];
+      }
+      const uint16_t idx[6] = {0, 1, 2, 0, 2, 3};
+      if (bgfx::getAvailTransientVertexBuffer(4, layout_) < 4 ||
+          bgfx::getAvailTransientIndexBuffer(6) < 6)
+        continue;
+      bgfx::TransientVertexBuffer tvb;
+      bgfx::TransientIndexBuffer tib;
+      bgfx::allocTransientVertexBuffer(&tvb, 4, layout_);
+      bgfx::allocTransientIndexBuffer(&tib, 6);
+      std::memcpy(tvb.data, verts, sizeof(verts));
+      std::memcpy(tib.data, idx, sizeof(idx));
+      float identity[16];
+      bx::mtxIdentity(identity);
+      bgfx::setTransform(identity);
+      bgfx::setVertexBuffer(0, &tvb);
+      bgfx::setIndexBuffer(&tib);
+      bgfx::setTexture(0, s_tex_, tex);
+      bind_baked_light(nullptr, nullptr);
+      bgfx::setUniform(u_color_, blob_tint);
+      bgfx::setUniform(u_alpha_test_, blob_alpha);
+      bgfx::setState(blob_state);
+      bgfx::submit(view_id, program_);
     }
   }
   void draw_previews() {
-    uint16_t id=3;
+    uint16_t id = kPreview0;
     for(const auto&p:previews_) {
       if(id>=64)break;
       int x=std::clamp(static_cast<int>(p.viewport.vp_x*width_),0,width_-1),y=std::clamp(static_cast<int>(p.viewport.vp_y*height_),0,height_-1);
@@ -1780,7 +2286,7 @@ class LibBgfxBackend final : public IRenderBackend {
       return;
     float ortho[16];
     // OSD text space: x right, y down (top = -1). Plates stay under the car
-    // preview (views 3+). Buttons and text sit on kOsdView, above it.
+    // preview (views 8+). Buttons and text sit on kOsdView, above it.
     bx::mtxOrtho(ortho, -1.f, 1.f, 1.f, -1.f, 0.f, 100.f, 0.f,
                  bgfx::getCaps()->homogeneousDepth);
     auto setup_osd = [&](uint16_t view) {
@@ -1790,9 +2296,9 @@ class LibBgfxBackend final : public IRenderBackend {
       bgfx::setViewMode(view, bgfx::ViewMode::Sequential);
       bgfx::touch(view);
     };
-    setup_osd(2);
+    setup_osd(kOsdUnder);
     setup_osd(kOsdView);
-    osd_view_ = 2;
+    osd_view_ = kOsdUnder;
 
     // Menu plate: dark translucent fullscreen when GENERALBG path missing.
     bool have_bg_tex = false;
@@ -1899,7 +2405,7 @@ class LibBgfxBackend final : public IRenderBackend {
         // that plate to view 2 put it under the parts and under their names.
         osd_view_ = (!osd_owner_modal(w.owner) &&
                      (layer == layers.front() || plate_behind_preview(w)))
-                        ? static_cast<uint16_t>(2)
+                        ? kOsdUnder
                         : kOsdView;
         draw_osd_quad(w);
       }
@@ -2004,7 +2510,7 @@ class LibBgfxBackend final : public IRenderBackend {
   bool scx_ok_ = false;
   bool mesh_ok_ = false;
   int32_t osd_buttons_ = 0;
-  uint16_t osd_view_ = 2;
+  uint16_t osd_view_ = kOsdUnder;
   int32_t width_ = 0;
   int32_t height_ = 0;
   int32_t frames_ = 0;
@@ -2029,6 +2535,16 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::UniformHandle s_mix_=BGFX_INVALID_HANDLE,s_env_=BGFX_INVALID_HANDLE,s_bake_=BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_layers_=BGFX_INVALID_HANDLE,u_channels_=BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_base_uv_=BGFX_INVALID_HANDLE,u_mix_uv_=BGFX_INVALID_HANDLE,u_env_uv_=BGFX_INVALID_HANDLE,u_diffuse_=BGFX_INVALID_HANDLE,u_spec_=BGFX_INVALID_HANDLE,u_sun_diff_=BGFX_INVALID_HANDLE,u_sun_amb_=BGFX_INVALID_HANDLE,u_sun_spec_=BGFX_INVALID_HANDLE,u_sun_dir_=BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle shadow_program_ = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle shadow_recv_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_shadow_mtx_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_shadow_ramp_ = BGFX_INVALID_HANDLE;
+  bgfx::TextureHandle shadow_tex_[4] = {
+      BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE,
+      BGFX_INVALID_HANDLE};
+  bgfx::FrameBufferHandle shadow_fb_[4] = {
+      BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE,
+      BGFX_INVALID_HANDLE};
 };
 
 }  // namespace

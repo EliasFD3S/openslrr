@@ -1750,8 +1750,68 @@ void park_chassis(Object *chassis, bool shift) {
   rec->physics_released = false;
   pose_wheels(chassis, *rec);
 }
+bool script_pos(void *key, float *x, float *y, float *z) {
+  if (!key || !x || !y || !z)
+    return false;
+  Object *chassis = canonical(static_cast<Object *>(key));
+  auto *rec = record(chassis);
+  auto *node = chassis ? gameref_get(chassis) : nullptr;
+  if (!rec || !node || rec->config->native_kind != "car")
+    return false;
+  dynamics_wheels(*rec);
+  float mass = 0.f, com[3]{};
+  assembly_mass_center(chassis, mass, com);
+  int count = 0;
+  for (const auto &wheel : rec->dynamics.wheels)
+    if (wheel.enabled)
+      ++count;
+  if (!count || !(mass > 0.f))
+    return false;
+  const float share = mass / static_cast<float>(count);
+  physics::Vec3 contact;
+  int used = 0;
+  for (size_t i = 0; i < 4; ++i) {
+    const auto &cfg = rec->dynamics.wheels[i];
+    const auto &state = rec->dynamics.state[i];
+    if (!cfg.enabled)
+      continue;
+    float length = static_cast<float>(cfg.rest);
+    if (state.seeded)
+      length = static_cast<float>(state.length);
+    else if (!part_parked_spring_length(static_cast<float>(cfg.rest),
+                                        static_cast<float>(cfg.minimum),
+                                        static_cast<float>(cfg.maximum),
+                                        static_cast<float>(cfg.spring), share,
+                                        length))
+      length = static_cast<float>(cfg.rest);
+    const auto down = cfg.down.normalized();
+    const auto center =
+        cfg.center + down * (static_cast<double>(length) - cfg.anchor_length());
+    contact += center + down * cfg.radius;
+    ++used;
+  }
+  if (!used)
+    return false;
+  contact = contact * (1.0 / used);
+  PartPose pose;
+  std::copy(node->ypr, node->ypr + 3, pose.rotation.begin());
+  const auto turned = part_pose_matrix(pose);
+  const double cx = turned[0] * contact.x + turned[4] * contact.y +
+                    turned[8] * contact.z;
+  const double cy = turned[1] * contact.x + turned[5] * contact.y +
+                    turned[9] * contact.z;
+  const double cz = turned[2] * contact.x + turned[6] * contact.y +
+                    turned[10] * contact.z;
+  *x = node->pos[0] + static_cast<float>(cx);
+  *y = node->pos[1] + static_cast<float>(cy);
+  *z = node->pos[2] + static_cast<float>(cz);
+  return true;
+}
 } // namespace
 void part_park_chassis(Object *car, bool shift) { park_chassis(car, shift); }
+bool part_car_script_pos(void *key, float *x, float *y, float *z) {
+  return script_pos(key, x, y, z);
+}
 void part_physics_advance(double seconds) {
   if (!std::isfinite(seconds) || seconds < 0)
     throw std::invalid_argument("invalid vehicle elapsed time");

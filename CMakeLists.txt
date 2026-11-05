@@ -94,7 +94,7 @@ if(SLRR_WITH_LIBBGFX)
 
   bgfx_compile_shaders(
     TYPE VERTEX
-    SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_vehicle.sc"
+    SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow_recv.sc"
     VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
     OUTPUT_DIR "${SLRR_SHADER_OUT}"
     INCLUDE_DIRS "${_bgfx_shader_inc}"
@@ -104,7 +104,7 @@ if(SLRR_WITH_LIBBGFX)
   )
   bgfx_compile_shaders(
     TYPE FRAGMENT
-    SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc"
+    SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_white.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_shadow_recv.sc"
     VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
     OUTPUT_DIR "${SLRR_SHADER_OUT}"
     INCLUDE_DIRS "${_bgfx_shader_inc}"

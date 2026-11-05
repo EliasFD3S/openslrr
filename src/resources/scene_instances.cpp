@@ -21,6 +21,11 @@ const RpkIndex *g_resources = nullptr;
 void *g_world = nullptr;
 void *g_sky = nullptr;
 uint32_t g_environment = 0;
+struct ShadowInfo {
+  uint32_t flags = 0;
+  SceneShadowDecal decal;
+};
+std::unordered_map<uint32_t, ShadowInfo> g_shadow_info;
 std::unordered_map<uint32_t, std::shared_ptr<const ScxGeometry>> g_meshes;
 std::unordered_map<uint32_t, std::shared_ptr<const ScxGeometry>> g_overrides;
 struct StaticMesh {
@@ -560,6 +565,61 @@ bool scene_shadow_projection(const float *frame, const SceneFloorHit &hit,
   matrix[15] = 1;
   return true;
 }
+bool scene_shadow_info(uint32_t type_id, uint32_t *flags,
+                       SceneShadowDecal *decal) {
+  if (flags)
+    *flags = 0;
+  if (decal)
+    *decal = {};
+  if (!type_id || !g_resources)
+    return false;
+  auto found = g_shadow_info.find(type_id);
+  if (found == g_shadow_info.end()) {
+    ShadowInfo info;
+    const auto flag_lines = g_resources->payload_props(type_id, "flags");
+    if (!flag_lines.empty())
+      info.flags = static_cast<uint32_t>(
+          std::strtoul(flag_lines.front().c_str(), nullptr, 0));
+    float center[3]{}, axis_u[3]{}, axis_v[3]{};
+    auto parse3 = [](const std::string &text, float *out) {
+      return std::sscanf(text.c_str(), "%f %f %f", out, out + 1, out + 2) == 3;
+    };
+    parse3(g_resources->payload_prop(type_id, "shd_center"), center);
+    const bool have_u =
+        parse3(g_resources->payload_prop(type_id, "shd_diru"), axis_u);
+    const bool have_v =
+        parse3(g_resources->payload_prop(type_id, "shd_dirv"), axis_v);
+    const float ulen = axis_u[0] * axis_u[0] + axis_u[1] * axis_u[1] +
+                       axis_u[2] * axis_u[2];
+    const float vlen = axis_v[0] * axis_v[0] + axis_v[1] * axis_v[1] +
+                       axis_v[2] * axis_v[2];
+    const std::string tex = g_resources->payload_prop(type_id, "shd_texture");
+    if (!tex.empty() && have_u && have_v && ulen > 1e-8f && vlen > 1e-8f) {
+      const uint32_t rid =
+          static_cast<uint32_t>(std::strtoul(tex.c_str(), nullptr, 0));
+      const uint32_t full = g_resources->resolve_embedded_id(
+          RpkIndex::pack_from_full(type_id), rid);
+      info.decal.texture = g_resources->texture_path_for_id(full);
+      if (!info.decal.texture.empty()) {
+        info.decal.present = true;
+        std::memcpy(info.decal.center, center, sizeof(center));
+        std::memcpy(info.decal.axis_u, axis_u, sizeof(axis_u));
+        std::memcpy(info.decal.axis_v, axis_v, sizeof(axis_v));
+        float uv[4];
+        const std::string uvs = g_resources->payload_prop(type_id, "shd_uv");
+        if (std::sscanf(uvs.c_str(), "%f %f %f %f", uv, uv + 1, uv + 2,
+                        uv + 3) == 4)
+          std::memcpy(info.decal.uv, uv, sizeof(uv));
+      }
+    }
+    found = g_shadow_info.emplace(type_id, std::move(info)).first;
+  }
+  if (flags)
+    *flags = found->second.flags;
+  if (decal)
+    *decal = found->second.decal;
+  return true;
+}
 bool scene_instances_floor(float x, float z, float below, void *ignore,
                            float *height) {
   if (!height)
@@ -725,6 +785,7 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root) {
     if (!instance.geometry)
       continue;
     instance.key = n->key;
+    instance.type_id = n->type_id;
     instance.sky = n->key == g_sky;
     instance.color = n->color;
     instance.vehicle_material = n->vehicle_material;

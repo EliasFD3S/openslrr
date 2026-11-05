@@ -21,6 +21,19 @@ struct SceneInstance {
   std::string paint_texture;
   bool vehicle_material = false;
   uint32_t light_flags = 0;
+  // Render-object id. Carries `flags` (dynamic shadow caster) and `shd_*`.
+  int32_t type_id = 0;
+};
+
+// Flat blob under a traffic car (kocsiarnyek). Vectors are metres in the
+// render object's local space, before the mesh Z flip.
+struct SceneShadowDecal {
+  bool present = false;
+  float center[3] = {};
+  float axis_u[3] = {};
+  float axis_v[3] = {};
+  float uv[4] = {0.f, 0.f, 1.f, 1.f};
+  std::string texture;
 };
 
 void scene_instances_set_resources(const RpkIndex *resources);
@@ -66,6 +79,10 @@ struct SceneFloorHit {
 // Renderer-space projection onto the sampled receiver, along the scene light.
 bool scene_shadow_projection(const float *script_frame,
                              const SceneFloorHit &hit, float *matrix);
+// `flags` is the render-object flags word (8 casts a dynamic shadow).
+// `decal` is set when shd_texture and both axes are real.
+bool scene_shadow_info(uint32_t type_id, uint32_t *flags,
+                       SceneShadowDecal *decal);
 bool scene_instances_sample_floor(float x, float z, float below, void *ignore,
                                   SceneFloorHit &hit);
 // One entry per mesh under `root`: x, z and the lowest vertex Y, in script
