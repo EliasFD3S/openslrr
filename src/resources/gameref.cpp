@@ -391,10 +391,31 @@ bool gameref_scene_command(void* key, const std::string& line) {
   return std::strcmp(word, "torque") == 0;
 }
 
+void* g_camera_root = nullptr;
+bool g_camera_root_required = false;
+
+void gameref_set_camera_root(void* root, bool required) {
+  g_camera_root = root;
+  g_camera_root_required = required;
+}
+
+bool camera_under_root(const GameRefState* cam) {
+  if (!g_camera_root_required) return true;
+  if (!g_camera_root || !cam) return false;
+  for (void* p = cam->parent; p;) {
+    if (p == g_camera_root) return true;
+    GameRefState* n = gameref_get(p);
+    if (!n) return false;
+    p = n->parent;
+  }
+  return false;
+}
+
 GameRefState* fullscreen_script_camera() {
   GameRefState* found = nullptr;
   for (GameRefState* c : gameref_active_cameras()) {
     if (!c || !c->cam_active) continue;
+    if (!camera_under_root(c)) continue;
     GameRefState* vp = c->viewport ? gameref_get(c->viewport) : nullptr;
     if (vp && (vp->vp_w < 0.99f || vp->vp_h < 0.99f)) continue;
     // Osd.show() adds a second fullscreen camera (priority 2, parent = the
