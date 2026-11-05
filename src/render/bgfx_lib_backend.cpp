@@ -1,6 +1,7 @@
 #include "slrr/render_backend.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/gameref.hpp"
+#include "slrr/part_runtime.hpp"
 
 #include "slrr/dds_image.hpp"
 #include "slrr/host_cursor.hpp"
@@ -185,7 +186,7 @@ class LibBgfxBackend final : public IRenderBackend {
     const float white_c[4] = {1.f, 1.f, 1.f, 1.f};
     bgfx::setUniform(u_color_, white_c);
 
-    bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x1c1814ff, 1.0f,
+    bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL, 0x1c1814ff, 1.0f,
                        0);
     ready_ = true;
     quit_ = false;
@@ -295,21 +296,12 @@ class LibBgfxBackend final : public IRenderBackend {
     sc.width = static_cast<uint32_t>(width_);
     sc.height = static_cast<uint32_t>(height_);
     bgfx::reset(BGFX_RESET_VSYNC, &sc);
-    bgfx::setViewRect(0, 0, 0, static_cast<uint16_t>(width_),
-                      static_cast<uint16_t>(height_));
-
     float world_eye[3], world_at[3], world_fov = 60.f, world_zn = 0.05f,
                                      world_zf = 500.f;
     // Garage, dealer and car lot all use the script camera, which looks
     // at the car (or the empty bay). The free orbit is only a fallback.
     const bool world_cam = gameref_world_camera(world_eye, world_at, &world_fov,
                                                  &world_zn, &world_zf);
-    if (garage_ || world_cam)
-      bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x3a342cff,
-                         1.0f, 0);
-    else
-      bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x1a2230ff,
-                         1.0f, 0);
 
     float view[16];
     float proj[16];
@@ -326,17 +318,41 @@ class LibBgfxBackend final : public IRenderBackend {
     } else {
       build_camera(view, proj);
     }
-    bgfx::setViewTransform(0, view, proj);
-    bgfx::setViewMode(0,bgfx::ViewMode::Sequential);
-    bgfx::touch(0);
 
     video_fmv_pump();
+    // prime.avi is the backdrop. Drawing it after the world hid the car.
+    const bool fmv_bg = video_fmv_is_playing() && video_fmv_is_non_exclusive() &&
+                        video_fmv_frame_ready();
+    const uint16_t world_view = fmv_bg ? 1 : 0;
+    const auto ww = static_cast<uint16_t>(width_);
+    const auto hh = static_cast<uint16_t>(height_);
+    if (fmv_bg) {
+      bgfx::setViewRect(0, 0, 0, ww, hh);
+      bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL,
+                         0x000000ff, 1.0f, 0);
+      bgfx::setViewMode(0, bgfx::ViewMode::Sequential);
+      draw_fmv(0);
+      bgfx::setViewRect(world_view, 0, 0, ww, hh);
+      bgfx::setViewClear(world_view, BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL, 0,
+                         1.0f, 0);
+    } else {
+      bgfx::setViewRect(0, 0, 0, ww, hh);
+      const uint32_t clear = (garage_ || world_cam) ? 0x3a342cff : 0x1a2230ff;
+      bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL,
+                         clear, 1.0f, 0);
+    }
+    bgfx::setViewTransform(world_view, view, proj);
+    bgfx::setViewMode(world_view, bgfx::ViewMode::Sequential);
+    bgfx::touch(world_view);
+
     // Menu/Splash: no garage SCX — stock MainMenu uses FMV or Dummy scene.
     sync_instances();
-    draw_dynamic_world(view);
-    if (garage_ && !parts_.empty()) draw_scene();
-    // View order: 0 = 3D/clear, 1 = FMV, 3.. = car previews, 70 = OSD on top.
-    draw_fmv();
+    draw_dynamic_world(view, world_view);
+    if (garage_ && !parts_.empty()) draw_scene(world_view);
+    draw_vehicle_shadows(world_view);
+    // View order: 0 = backdrop, 1 = 3D over the movie (or 0 = 3D when there
+    // is no movie), 3.. = car previews, 70 = OSD on top.
+    if (!fmv_bg) draw_fmv(1);
     // Boot intros own the frame. Menu OSD from the probe must not cover them.
     if ((garage_ || osd_overlay_) && !video_fmv_block_osd()) draw_osd();
     if (!video_fmv_block_osd()) draw_previews();
@@ -585,16 +601,48 @@ class LibBgfxBackend final : public IRenderBackend {
     if(part.geo.groups.empty())draw(0,static_cast<uint32_t>(part.geo.indices.size()),0,0,nullptr);
     else for(const auto&g:part.geo.groups)draw(g.index_start,g.index_count,g.texture_index,g.material_flags,&g);
   }
-  void draw_dynamic_world(const float* view) {
+  void draw_dynamic_world(const float* view, uint16_t view_id) {
     float camera[16];bx::mtxInverse(camera,view);
     for(const auto&i:instances_)if(i.sky) {
       auto matrix=i.transform;float radius=0;
       for(int k=0;k<3;k++)radius=std::max(radius,std::max(std::fabs(i.geometry->info.bbox_min[k]),std::fabs(i.geometry->info.bbox_max[k]))*.01f);
       float scale=radius>.001f?50.f/radius:1.f;
       for(int c=0;c<3;c++)for(int r=0;r<3;r++)matrix[c*4+r]*=scale;
-      matrix[12]=camera[12];matrix[13]=camera[13];matrix[14]=camera[14];draw_instance(0,i,matrix.data(),false);
+      matrix[12]=camera[12];matrix[13]=camera[13];matrix[14]=camera[14];draw_instance(view_id,i,matrix.data(),false);
     }
-    for(const auto&i:instances_)if(!i.sky)draw_instance(0,i,i.transform.data(),false);
+    for(const auto&i:instances_)if(!i.sky)draw_instance(view_id,i,i.transform.data(),false);
+  }
+  void draw_vehicle_shadows(uint16_t view_id) {
+    // Project cached vehicle buffers along the scene light onto actual ground.
+    // Stencil forms a union: overlapping body/tyre triangles darken only once.
+    struct Plane {bool valid=false;float projection[16]{};};
+    std::unordered_map<void*,Plane> planes;
+    for(const auto& instance:instances_) {
+      if(!instance.vehicle_material || instance.sky)continue;
+      float frame[16];auto* owner=part_shadow_source(instance.key,frame);
+      if(!owner)continue;
+      auto entry=planes.find(owner);
+      if(entry==planes.end()) {
+        Plane plane;SceneFloorHit hit;
+        if(scene_instances_sample_floor(frame[12],frame[14],frame[13]+.1f,owner,hit)) {
+          plane.valid=scene_shadow_projection(frame,hit,plane.projection);
+        }
+        entry=planes.emplace(owner,plane).first;
+      }
+      if(!entry->second.valid)continue;
+      const auto& part=instance_meshes_.at(instance.geometry.get());
+      if(!bgfx::isValid(part.vbh)||!bgfx::isValid(part.ibh))continue;
+      float matrix[16]{};
+      for(int c=0;c<4;++c)for(int r=0;r<4;++r)for(int k=0;k<4;++k)
+        matrix[c*4+r]+=entry->second.projection[k*4+r]*instance.transform[c*4+k];
+      const float tint[4]={0,0,0,.38f},settings[4]={0,1,0,0};
+      bgfx::setUniform(u_color_,tint);bgfx::setUniform(u_alpha_test_,settings);
+      bind_baked_light(nullptr,nullptr);bgfx::setTexture(0,s_tex_,white_tex_);
+      bgfx::setTransform(matrix);bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh);
+      bgfx::setStencil(BGFX_STENCIL_TEST_EQUAL|BGFX_STENCIL_FUNC_REF(0)|BGFX_STENCIL_FUNC_RMASK(0xff)|BGFX_STENCIL_OP_FAIL_S_KEEP|BGFX_STENCIL_OP_FAIL_Z_KEEP|BGFX_STENCIL_OP_PASS_Z_INCR);
+      bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_DEPTH_TEST_LEQUAL|BGFX_STATE_BLEND_ALPHA|BGFX_STATE_MSAA);
+      bgfx::submit(view_id,program_);
+    }
   }
   void draw_previews() {
     uint16_t id=3;
@@ -764,7 +812,7 @@ class LibBgfxBackend final : public IRenderBackend {
       std::printf("[bgfx] logo UV horizontal flip verts=%d\n", flipped);
   }
 
-  void draw_scene() {
+  void draw_scene(uint16_t view_id) {
     float mtx[16];
     bx::mtxIdentity(mtx);
     // Stock map faces are two-sided. Culling either winding hid a side of
@@ -793,7 +841,7 @@ class LibBgfxBackend final : public IRenderBackend {
                          bgfx::isValid(tex) ? tex : white_tex_);
         bind_baked_light(group, &part.tex);
         bgfx::setState(alpha_cutout ? state_cutout : state_opaque);
-        bgfx::submit(0, program_);
+        bgfx::submit(view_id, program_);
       };
       // v4: always honour DDS alpha (SLRR_rev scxDiffuseUsesAlpha).
       // v3: only when material flag alphaOpacity (0x1).
@@ -956,6 +1004,10 @@ class LibBgfxBackend final : public IRenderBackend {
         if (!video_fmv_block_osd() && osd_hit_index(ox, oy) >= 0) {
           host_sfx_play(HostSfx::MenuSelect);
           osd_fire_click_at(ox, oy);
+        } else if (!video_fmv_block_osd()) {
+          in.part_click = true;
+          in.part_click_x = self->lmb_x_;
+          in.part_click_y = self->lmb_y_;
         }
       }
       if (msg == WM_RBUTTONUP) {
@@ -1007,6 +1059,11 @@ class LibBgfxBackend final : public IRenderBackend {
         self->mouse_x_ = x;
         self->mouse_y_ = y;
         self->have_mouse_ = true;
+        in.pointer_x = x;
+        in.pointer_y = y;
+        in.pointer_valid = true;
+        in.view_w = self->width_ > 0 ? self->width_ : 800;
+        in.view_h = self->height_ > 0 ? self->height_ : 600;
         if (!in.rmb_down) {
           float ox = 0.f, oy = 0.f;
           osd_pixel_to_text(x, y, self->width_, self->height_, &ox, &oy);
@@ -1426,7 +1483,7 @@ class LibBgfxBackend final : public IRenderBackend {
     bgfx::setUniform(u_color_, white_c);
   }
 
-  void draw_fmv() {
+  void draw_fmv(uint16_t view_id) {
     if (!video_fmv_is_playing() || !video_fmv_is_non_exclusive()) return;
     if (!video_fmv_frame_ready() || !bgfx::isValid(program_)) return;
     const uint8_t* bgra = video_fmv_bgra();
@@ -1439,8 +1496,7 @@ class LibBgfxBackend final : public IRenderBackend {
       fmv_tex_ = bgfx::createTexture2D(
           static_cast<uint16_t>(fw), static_cast<uint16_t>(fh), false, 1,
           bgfx::TextureFormat::BGRA8,
-          BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
-              BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT,
+          BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP,
           nullptr);
       fmv_tex_w_ = fw;
       fmv_tex_h_ = fh;
@@ -1457,11 +1513,10 @@ class LibBgfxBackend final : public IRenderBackend {
     float ortho[16];
     bx::mtxOrtho(ortho, -1.f, 1.f, 1.f, -1.f, 0.f, 100.f, 0.f,
                  bgfx::getCaps()->homogeneousDepth);
-    // FMV underlay = view 1 (OSD uses view 2).
-    bgfx::setViewRect(1, 0, 0, static_cast<uint16_t>(width_),
+    bgfx::setViewRect(view_id, 0, 0, static_cast<uint16_t>(width_),
                       static_cast<uint16_t>(height_));
-    bgfx::setViewTransform(1, nullptr, ortho);
-    bgfx::touch(1);
+    bgfx::setViewTransform(view_id, nullptr, ortho);
+    bgfx::touch(view_id);
 
     MeshVertex v[4];
     auto setv = [](MeshVertex& o, float x, float y, float uu, float vv) {
@@ -1503,7 +1558,7 @@ class LibBgfxBackend final : public IRenderBackend {
     bgfx::setUniform(u_alpha_test_, u_at);
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                    BGFX_STATE_MSAA);
-    bgfx::submit(1, program_);
+    bgfx::submit(view_id, program_);
   }
 
   // Draw a string in OSD text-space (same path as SlrrOsdText glyphs).

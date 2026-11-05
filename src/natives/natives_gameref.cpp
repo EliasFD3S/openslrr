@@ -330,6 +330,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
           }
         }
         gameref_set_matrix(self, px, py, pz, yaw, pitch, roll);
+        part_park_chassis(self);
         return Value::make_void();
       });
   jvm.natives().register_method(
@@ -416,7 +417,8 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
   jvm.natives().register_method(
       "java.util.resource.GameRef", "setPos", "(Ljava.lang.Vector3;)V",
       [](Object* self, const std::vector<Value>& args) {
-        GameRefState* st = gameref_upsert(self);
+        GameRefState* st = gameref_get(self);
+        if(!st)st=gameref_upsert(self);
         if (!st || args.empty() || args[0].tag != ValueTag::Obj || !args[0].v.o)
           return Value::make_void();
         Object* o = args[0].v.o;
@@ -430,6 +432,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
         getf("x", &st->pos[0]);
         getf("y", &st->pos[1]);
         getf("z", &st->pos[2]);
+          st->matrix_override=false;
         return Value::make_void();
       });
   jvm.natives().register_method(

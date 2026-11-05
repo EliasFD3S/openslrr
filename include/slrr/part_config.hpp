@@ -24,6 +24,8 @@ struct PartWheelSpring {
   float travel = 0.1f;
   float damping = 0.05f;
   float radius = 0.f;
+  // `type <kg> sphere R`. Zero keeps the massless ray spring.
+  float mass = 0.f;
   bool authored = false;
 };
 struct PartSlotLink {
@@ -36,6 +38,13 @@ struct PartSlot {
   PartPose pose;
   std::vector<PartSlotLink> attach;
   std::vector<PartSlotLink> compatible;
+  // Bare 11-float line after the slot: pivot, axis, direction, closed, open.
+  bool has_flap = false;
+  float flap_pivot[3] = {};
+  float flap_axis[3] = {};
+  float flap_dir[3] = {};
+  float flap_lo = 0.f;
+  float flap_hi = 0.f;
 };
 // `linked a [b] [parentSlot]`. b == 0 is one anchor. The third value, when
 // present, keeps the rule only for that parent slot. First match wins.
@@ -49,7 +58,8 @@ struct PartRender {
   uint32_t resource = 0;
   PartPose pose;
   uint32_t flags = 0;
-  // -1: always drawn. 0 lo-res, 1 hi-res, 2 extr-hi-res. Alternatives, not layers.
+  // -1: always drawn. 0 lo-res, 1 hi-res, 2 extr-hi-res. Alternatives, not
+  // layers.
   int lod_level = -1;
   std::vector<PartLink> links;
 };
@@ -67,6 +77,8 @@ struct PartConfig {
   PartPose steering;
   bool has_steering = false;
   std::vector<PartPose> wheels;
+  float max_steer = .6f, ackermann_length = 0;
+  std::vector<float> wheel_steering;
   std::vector<PartSlot> slots;
   std::vector<uint32_t> stock;
   std::vector<PartRender> renders;

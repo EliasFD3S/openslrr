@@ -9,6 +9,7 @@
 #include "slrr/part_runtime.hpp"
 #include "slrr/slrr_font.hpp"
 #include "slrr/video_fmv.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -861,12 +862,209 @@ int run_catalog() {
   return size.tag==ValueTag::Int&&size.v.i>5&&valid==4?0:1;
 }
 
+int run_vehicle_physics() {
+  int failures=0;
+  auto check=[&](bool ok,const char* label){printf("CHECK %s %s\n",ok?"PASS":"FAIL",label);if(!ok)++failures;};
+  NativeRegistry natives;Jvm j(&natives);j.set_game_root(integration_root);j.bootstrap_classpath();
+  RpkIndex resources;resources.set_root(integration_root);SectionMachine sections(&j);
+  register_boot_natives(j,resources,sections);resources.open_all();
+  Object* world=j.new_object("java.util.resource.Dummy");gameref_upsert(world,GameRefKind::Dummy);gameref_set_flags(world,kWorldTreeRoot);
+  scene_instances_select(world,nullptr);
+  ScxGeometry floor;floor.info.ok=true;floor.position_scale=1;
+  floor.positions={-10,0,-10,10,0,-10,10,0,10,-10,0,10};floor.indices={0,1,2,0,2,3};
+  scene_instances_add_static_mesh(floor);
+  const auto* pack=resources.pack_by_name("cars/racers/Baiern.rpk");
+  if(!pack)return 1;
+  const auto rid=RpkIndex::make_full_id(pack->pack_id,6);
+  auto* vehicle=vehicle_spawn_stock(j,resources,world,rid);
+  if(!vehicle)return 1;
+  gameref_set_matrix(vehicle,0,2,0,.3f,0,0);
+  for(int i=0;i<9;++i)part_physics_advance(1.0/60);
+  PartPhysicsState falling;part_physics_state(vehicle,falling);
+  printf("DYNAMIC air ticks=%llu y=%.6f vy=%.6f mass=%.2f\n",static_cast<unsigned long long>(falling.ticks),falling.height,falling.vertical_speed,falling.mass);
+  check(falling.active&&falling.ticks==36&&falling.height<1.95&&falling.vertical_speed<-1,"stock scripted vehicle falls instead of being planted on its first frame");
+  for(int i=0;i<480;++i)part_physics_advance(1.0/60);
+  PartPhysicsState rest;part_physics_state(vehicle,rest);
+  int contacts=0;double force=0;for(size_t i=0;i<4;++i){contacts+=rest.contact[i];force+=rest.force[i];}
+  printf("DYNAMIC rest y=%.6f vy=%.6f mass=%.2f contacts=%d force=%.3f lengths=%.6f %.6f %.6f %.6f\n",rest.height,rest.vertical_speed,rest.mass,contacts,force,rest.length[0],rest.length[1],rest.length[2],rest.length[3]);
+  check(contacts==4&&std::fabs(rest.vertical_speed)<.04,"original CFG and WheelRef springs support all four stock wheels");
+  check(std::fabs(force-rest.mass*9.81)<rest.mass*9.81*.03,"native spring forces balance the assembled CFG body mass");
+  auto* node=gameref_get(vehicle);
+  check(node&&node->matrix_override&&std::fabs(node->local_matrix[13]-rest.height)<1e-5&&std::fabs(node->pos[1]-rest.height)<1e-5,"physics pose is the rendered pose and the script-visible position");
+  Object* preview_root=j.new_object("java.util.resource.Dummy");gameref_upsert(preview_root,GameRefKind::Dummy);gameref_set_flags(preview_root,kWorldTreeRoot);gameref_set_parent(preview_root,world);
+  auto* preview=vehicle_spawn_stock(j,resources,preview_root,rid);
+  part_physics_advance(1.0/60);PartPhysicsState hidden;part_physics_state(preview,hidden);
+  check(!hidden.active,"inventory worlds are excluded from live vehicle simulation");part_destroy(preview);
+  part_command(vehicle,"suspend");part_physics_advance(1.0/60);PartPhysicsState paused;part_physics_state(vehicle,paused);
+  check(!paused.active&&paused.ticks==rest.ticks+4,"suspended script vehicles do not accrue simulation time");
+  part_command(vehicle,"wakeup");gameref_set_matrix(vehicle,0,3,0,-.4f,0,0);part_physics_advance(1.0/240);
+  PartPhysicsState reset;part_physics_state(vehicle,reset);
+  check(reset.ticks==1&&reset.height>2.99&&reset.vertical_speed<0,"script teleport resets physics once and retains the new frame");
+  auto* position=j.new_object("java.lang.Vector3");position->fields["x"]=Value::make_float(0);position->fields["y"]=Value::make_float(4);position->fields["z"]=Value::make_float(0);
+  j.invoke_by_name(vehicle->class_name,"setPos",{Value::make_obj(vehicle),Value::make_obj(position)},false);
+  part_physics_advance(1.0/240);PartPhysicsState native_move;part_physics_state(vehicle,native_move);
+  check(native_move.ticks==1&&native_move.height>3.99,"GameRef.setPos through a Vehicle alias updates the canonical dynamic body");
+  // Real garage shell, not an implicit floor plane or the visual car meshes.
+  scene_instances_set_resources(&resources);scene_instances_select(world,nullptr);
+  const auto* garage=resources.pack_by_name("misc/garage.rpk");int meshes=0;
+  if(garage)for(auto id:resources.garage_render_ids(garage->pack_id,0)) {
+    auto model=resources.model_for_resource(garage->pack_id,id);auto path=std::filesystem::path(integration_root)/model.source;
+    auto ext=path.extension().string();for(char& c:ext)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if(ext==".scy")path.replace_extension(".scx");
+    auto geometry=load_scx_geometry(path.string());if(geometry.info.ok){
+      scene_instances_add_static_mesh(geometry);++meshes;
+      auto* terrain=j.new_object("java.render.RenderRef");
+      const uint32_t terrain_id=0xfffe0000u+meshes;
+      gameref_upsert(terrain,GameRefKind::RenderRef)->type_id=static_cast<int>(terrain_id);
+      gameref_set_parent(terrain,world);
+      scene_instances_override_mesh(terrain_id,std::make_shared<ScxGeometry>(std::move(geometry)));
+    }
+  }
+  gameref_set_matrix(vehicle,0,2,0,0,0,0);
+  for(int i=0;i<480;++i)part_physics_advance(1.0/60);
+  PartPhysicsState actual;part_physics_state(vehicle,actual);contacts=0;for(bool c:actual.contact)contacts+=c;
+  printf("DYNAMIC garage meshes=%d contacts=%d y=%.6f vy=%.6f\n",meshes,contacts,actual.height,actual.vertical_speed);
+  check(meshes>0&&contacts==4&&std::fabs(actual.vertical_speed)<.05,"stock vehicle settles on the actual preloaded garage triangles");
+  gameref_set_matrix(vehicle,0,0,0,0,0,0);part_command(vehicle,"reset");
+  for(int i=0;i<240;++i)part_physics_advance(1.0/60);
+  PartPhysicsState overlap;part_physics_state(vehicle,overlap);contacts=0;for(bool c:overlap.contact)contacts+=c;
+  printf("DYNAMIC initial-overlap contacts=%d y=%.6f vy=%.6f\n",contacts,overlap.height,overlap.vertical_speed);
+  check(contacts==4&&std::fabs(overlap.vertical_speed)<.05,"original zero-height garage reset recovers overlap through physical contacts");
+  part_destroy(vehicle);
+  if(const auto* duhen=resources.pack_by_name("cars/racers/Duhen.rpk")) {
+    std::vector<uint32_t> variants{RpkIndex::make_full_id(duhen->pack_id,0x126)};
+    for(const auto& entry:duhen->entries) {
+      const auto id=RpkIndex::make_full_id(duhen->pack_id,entry.type_id);
+      if(resources.payload_prop(id,"native").find("_main_SunStrip_1_5_DVC.cfg")!=std::string::npos)variants.push_back(id);
+    }
+    check(variants.size()==2,"both Duhen 1.8 and the screenshot's 1.5 variant resolve from RPK");
+    for(auto variant:variants) {
+    auto* other=vehicle_spawn_stock(j,resources,world,variant);
+
+    check(other!=nullptr,"second vehicle is built from the original Duhen DVC scripts");
+    if(other) {
+      scene_instances_enable_static_floor(false);
+      gameref_set_matrix(other,0,2,0,0,0,0);
+      scene_instances_prepare_physics();
+      const auto terrain_builds=scene_instances_floor_builds();
+      for(int i=0;i<480;++i)part_physics_advance(1.0/60);
+      PartPhysicsState state;part_physics_state(other,state);contacts=0;force=0;
+      for(size_t i=0;i<4;++i){contacts+=state.contact[i];force+=state.force[i];}
+      printf("DYNAMIC Duhen mass=%.3f contacts=%d y=%.6f vy=%.6f support=%.3f\n",state.mass,contacts,state.height,state.vertical_speed,force);
+      check(state.active&&contacts==4&&std::fabs(state.vertical_speed)<.05,"Duhen uses its own native springs to settle on the real garage");
+      check(std::fabs(force-state.mass*9.81)<state.mass*9.81*.03,"Duhen load is not replaced by Baiern tuning");
+      const double front_track=std::fabs(state.wheel_center[0][0]-state.wheel_center[1][0]);
+      const double rear_track=std::fabs(state.wheel_center[2][0]-state.wheel_center[3][0]);
+      printf("DYNAMIC Duhen front-track=%.6f rear-track=%.6f\n",front_track,rear_track);
+      auto tree=part_installed_tree(other);
+      bool belt=false;
+      for(const auto& installed:tree)
+        if(installed.object->class_name.find("camshaft_drive_belt")!=std::string::npos &&
+           installed.parent_slot==4)
+          belt=true;
+      check(belt,"Duhen stock engine installs the camshaft drive belt on crankshaft slot 4");
+      std::array<PartMatrix,4> straight{};
+      std::array<Object*,4> rims{};
+      for(const auto& installed:tree) {
+        if(installed.object->class_name.find(".rims.")!=std::string::npos && installed.parent_slot>=101 && installed.parent_slot<=104) {
+          const int corner=installed.parent_slot-101;rims[corner]=installed.object;
+          scene_instances_script_matrix(installed.object,straight[corner].data());
+        }
+      }
+      int tyre_count=0;bool tyre_centers=true;
+      for(bool solved:state.geometry_solved)tyre_centers=tyre_centers&&solved;
+      PartMatrix chassis;scene_instances_script_matrix(other,chassis.data());
+      const auto inverse=part_matrix_inverse_rigid(chassis);
+      for(const auto& installed:tree)if(installed.object->class_name.find(".tyres.")!=std::string::npos) {
+        const auto rim=std::find(rims.begin(),rims.end(),installed.parent);
+        if(rim==rims.end())continue;
+        const size_t corner=rim-rims.begin();
+        for(const auto& mesh:scene_instances_collect_root(installed.object)) {
+          PartMatrix world;if(!scene_instances_script_matrix(mesh.key,world.data()))continue;
+          const auto local=part_matrix_multiply(inverse,world);const auto& g=*mesh.geometry;
+          const float x=(g.info.bbox_min[0]+g.info.bbox_max[0])*.5f*g.position_scale;
+          const float y=(g.info.bbox_min[1]+g.info.bbox_max[1])*.5f*g.position_scale;
+          const float z=(g.info.bbox_min[2]+g.info.bbox_max[2])*.5f*g.position_scale;
+          const float actual_x=local[0]*x+local[4]*y+local[8]*z+local[12];
+          float shadow_frame[16];
+          tyre_centers=tyre_centers&&part_shadow_source(mesh.key,shadow_frame)==gameref_get(other)->key;
+          printf("TYRE center corner=%zu actual=%.6f constrained=%.6f\n",corner,actual_x,state.wheel_center[corner][0]);
+          tyre_centers=tyre_centers&&std::fabs(actual_x)>std::fabs(state.wheel_center[corner][0])+.01 && std::fabs(actual_x)<std::fabs(state.wheel_center[corner][0])+.12;++tyre_count;
+        }
+      }
+      check(tyre_count==4&&tyre_centers,"native arm/hub geometry places rendered tyres independently of template track");
+      auto template_positions=[&]() {
+        auto* chassis=static_cast<Object*>(gameref_get(other)->key);bool valid=true;
+        for(int i=0;i<4;++i) {
+          auto wheel=j.invoke_by_name(chassis->class_name,"getWheel",{Value::make_obj(chassis),Value::make_int(i)},false);
+          if(wheel.tag!=ValueTag::Obj||!wheel.v.o)return false;
+          auto position=j.invoke_by_name("java.game.parts.WheelRef","getPos",{wheel},false);
+          if(position.tag!=ValueTag::Obj||!position.v.o)return false;
+          const auto x=position.v.o->fields["x"],z=position.v.o->fields["z"];
+          valid=valid&&x.tag==ValueTag::Float&&z.tag==ValueTag::Float&&
+            std::fabs(x.v.f-state.wheel_center[i][0])<1e-6&&std::fabs(z.v.f-state.wheel_center[i][2])<1e-6;
+        }
+        return valid;
+      };
+      check(template_positions(),"WheelRef.getPos preserves native template X/Z independently of rendered tyre position");
+      check(part_command(other,"setsteer -0.7"),"original setsteer command is handled");
+      bool fronts=true,rears=true;
+      double front_angles[2]{};
+      for(size_t i=0;i<4;++i) {
+        PartMatrix turned;if(!rims[i]||!scene_instances_script_matrix(rims[i],turned.data())){fronts=rears=false;continue;}
+        const double rotation=std::fabs(turned[0]-straight[i][0])+std::fabs(turned[2]-straight[i][2]);
+        if(i<2){const auto delta=part_matrix_multiply(part_matrix_inverse_rigid(straight[i]),turned);front_angles[i]=std::atan2(delta[8],delta[10]);}
+        if(i<2)fronts=fronts&&rotation>.1;else rears=rears&&rotation<1e-5;
+      }
+      check(fronts&&rears,"steering turns both front wheel meshes and leaves the unsteered rear axle aligned");
+      check(front_angles[0]*front_angles[1]>0&&std::fabs(front_angles[0]-front_angles[1])>.02,"Ackermann steering distinguishes inner and outer wheel angles");
+      check(template_positions(),"steering leaves native Car Information track measurements unchanged");
+      part_physics_advance(1.0/60);
+      part_command(other,"setsteer 0");
+      bool restored=true;
+      for(size_t i=0;i<4;++i){PartMatrix current;if(!rims[i]||!scene_instances_script_matrix(rims[i],current.data())){restored=false;continue;}for(int k=0;k<12;++k)restored=restored&&std::fabs(current[k]-straight[i][k])<1e-4;}
+      check(restored,"clearing steering restores native alignment without accumulating rotations");
+      check(std::fabs(front_track-1.366)<.0001&&std::fabs(rear_track-1.320)<.0001,
+        "Duhen track matches original-game evidence: 1366 mm front and 1320 mm rear");
+      check(std::fabs(std::fabs(state.wheel_center[0][2]-state.wheel_center[2][2])-2.547)<.002,
+        "Duhen wheelbase matches original-game 2547 mm within displayed rounding");
+      check(state.height<.82&&state.height>.65,"Duhen ride height uses CFG anchor length independently of tuned spring rest");
+      check(scene_instances_floor_builds()==terrain_builds,"real RenderRef terrain indices are reused across 480 physics frames");
+      // Garage.enter/lockCar issues these commands before the first host tick.
+      // Select the map afterwards, as section/render synchronisation does.
+      scene_instances_select(nullptr,nullptr);
+      gameref_set_matrix(other,0,0,0,0,0,0);
+      part_command(other,"reset");part_command(other,"setsteer -0.7");
+      part_command(other,"stop");part_command(other,"wakeup");part_command(other,"suspend");
+      part_physics_advance(1.0/60);
+      scene_instances_select(world,nullptr);
+      for(int i=0;i<360;++i)part_physics_advance(1.0/60);
+      PartPhysicsState parked;part_physics_state(other,parked);int supported=0;for(bool c:parked.contact)supported+=c;
+      printf("GARAGE suspended-reset y=%.6f ticks=%llu contacts=%d\n",parked.height,static_cast<unsigned long long>(parked.ticks),supported);
+      check(!parked.active&&supported==4&&std::fabs(parked.height-state.height)<.01,
+        "garage reset resolves ground placement before script suspend freezes the vehicle");
+      for(int i=0;i<60;++i)part_physics_advance(1.0/60);
+      PartPhysicsState frozen;part_physics_state(other,frozen);
+      check(frozen.ticks==parked.ticks&&std::fabs(frozen.height-parked.height)<1e-7,
+        "settled suspended garage car stops consuming physics ticks");
+      gameref_set_matrix(other,0,3,0,0,0,0);
+      for(int i=0;i<30;++i)part_physics_advance(1.0/60);
+      check(std::fabs(gameref_get(other)->pos[1]-3)<1e-6,
+        "scripted lift pose remains frozen when no ground reset was requested");
+      part_destroy(other);
+    }
+    }
+  } else check(false,"original Duhen pack is present");
+  return failures?1:0;
+}
+
 int main(int argc, char **argv) {
   if (argc != 3) {
     std::fprintf(stderr, "Usage: host_runtime_test CASE GAME_ROOT\n");
     return 2;
   }
   integration_root = std::filesystem::absolute(argv[2]).string();
+  if(std::string(argv[1])=="vehicle_physics")return run_vehicle_physics();
   if(std::string(argv[1])=="catalog")return run_catalog();
   if(std::string(argv[1])=="vehicle_assembly")return run_vehicle_assembly();
   if (std::string(argv[1]) == "paint_inventory")

@@ -48,6 +48,8 @@ add_executable(slrr_host
   src/boot/boot.cpp
   src/physics/sl2_pacejka.cpp
   src/physics/dyno_model.cpp
+  src/physics/vehicle_dynamics.cpp
+  src/physics/suspension_geometry.cpp
 )
 
 if(WIN32)
@@ -153,8 +155,12 @@ if(SLRR_BUILD_TESTS)
   target_include_directories(part_config_test PRIVATE include)
   target_compile_features(part_config_test PRIVATE cxx_std_20)
   add_test(NAME part_config COMMAND part_config_test)
+  add_executable(vehicle_dynamics_test tests/vehicle_dynamics_test.cpp src/physics/vehicle_dynamics.cpp src/physics/suspension_geometry.cpp)
+  target_include_directories(vehicle_dynamics_test PRIVATE include)
+  add_test(NAME vehicle_dynamics COMMAND vehicle_dynamics_test)
 
   add_executable(scene_instances_test tests/scene_instances_test.cpp
+    tests/scene_platform_stubs.cpp
     src/resources/scene_instances.cpp src/resources/gameref.cpp
     src/resources/rpk_index.cpp src/resources/scx_mesh.cpp)
   target_include_directories(scene_instances_test PRIVATE include)
@@ -176,7 +182,7 @@ if(SLRR_BUILD_TESTS)
   set(SLRR_TEST_GAME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../game" CACHE PATH "Original SLRR assets for integration tests")
   if(EXISTS "${SLRR_TEST_GAME_ROOT}/system/Scripts/lang/System.class")
     add_test(NAME part_config_original_assets COMMAND part_config_test "${SLRR_TEST_GAME_ROOT}")
-    foreach(_case sfx_probe regression_probe gap_probe hud_probe career_probe filedialog_probe scene_script_probe icon_probe paint_inventory vehicle_assembly catalog)
+    foreach(_case sfx_probe regression_probe gap_probe hud_probe career_probe filedialog_probe scene_script_probe icon_probe paint_inventory vehicle_assembly catalog vehicle_physics)
       add_test(NAME runtime_${_case} COMMAND host_runtime_test ${_case} "${SLRR_TEST_GAME_ROOT}")
       set_tests_properties(runtime_${_case} PROPERTIES TIMEOUT 30)
     endforeach()

@@ -5,6 +5,8 @@
 #include "slrr/rpk_index.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/scx_mesh.hpp"
+#include "slrr/suspension_geometry.hpp"
+#include "slrr/vehicle_dynamics.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -22,26 +24,33 @@ namespace {
 // multiplies by 0.5). Pacejka 0/2/4/11/12/14 mirror sliction, friction,
 // stiffness, max load, frictn_x and load smooth.
 struct WheelPhys {
+  bool has_arm = false, has_hub = false;
+  bool steer_set = false;
   bool live = false, contact = false, has_pos = false, has_ypr = false;
   float pos[3]{}, ypr[3]{};
   float drive = 0, steer = 0, radius = 0, width = 0;
   float cpatch_hw = 0, cpatch_ang = 0, cpatch_off = 0;
   float friction = 1, frictn_x = 1, sliction = 1, stiffness = 100;
   float roll_res = 0.001f, bearing = 20, max_load = 1000, load_smooth = 0;
-  float pacejka[17] = {1.4f, 0,  1.49f, 0, 15.2f, 0, 0, 0, -1.f, 0, 0, 8000.f,
-                       1.f,  0.015f, 0.4f, 0, 0};
+  float pacejka[17] = {1.4f, 0, 1.49f,  0,   15.2f,  0,    0, 0, -1.f,
+                       0,    0, 8000.f, 1.f, 0.015f, 0.4f, 0, 0};
   float force = 0, damp_bound = 0, damp_rebound = 0;
   float rest = 0, min_len = 0, max_len = 0;
   float ic[6]{};
   float brake = 0, hbrake = 0;
   int opp = -1;
   float arm[7]{}, hub[10]{};
+  bool authored_position = false;
+  float input_position[3]{};
 };
 struct SfxItem {
   int sfx = 0;
   float pitch = 1, pmin = 0, pmax = 0, vmin = 0, vmax = 0;
 };
 struct Record {
+  float steering_input = 0;
+  bool has_steering_transform = false;
+  PartMatrix steering_transform{};
   InstalledPart state;
   std::shared_ptr<const PartConfig> config;
   std::unordered_map<int, Object *> children;
@@ -82,11 +91,18 @@ struct Record {
   std::vector<Buck> bucks;
   std::array<WheelPhys, 8> wheels{};
   std::array<std::string, 8> wheel_damage{};
-  // Extra parent-Y applied to each corner after the CFG attachment. Rebuilt
-  // from the installed springs; place_child reads it so a later slot edit
-  // does not drop the ride height.
-  bool ride_ready = false;
-  float ride_shift[4]{};
+  bool dynamic_frames = false;
+  bool physics_pending_placement = true;
+  unsigned physics_quiet_ticks = 0;
+  std::array<PartMatrix, 4> travel_frame{}, carrier_frame{}, hub_frame{};
+  std::array<bool, 4> geometry_solved{};
+  std::array<physics::Vec3, 4> base_wheel_center{};
+  physics::VehicleDynamics dynamics;
+  bool physics_ready = false, physics_dirty = true, physics_suspended = false;
+  bool physics_reported = false;
+  int reported_contacts = -1, physics_status_lines = 0;
+  void *physics_parent = nullptr;
+  PartMatrix published_frame{};
   std::array<Object *, 3> sfx{};
 };
 std::unordered_map<Object *, std::vector<SfxItem>> sfx_items;
@@ -177,10 +193,10 @@ PartMatrix node_local(Object *obj) {
     std::copy(n->local_matrix, n->local_matrix + 16, m.begin());
     return m;
   }
-  m[12] = n->pos[0];
-  m[13] = n->pos[1];
-  m[14] = n->pos[2];
-  return m;
+  PartPose pose;
+  std::copy(n->pos, n->pos + 3, pose.position.begin());
+  std::copy(n->ypr, n->ypr + 3, pose.rotation.begin());
+  return part_pose_matrix(pose);
 }
 PartMatrix world_matrix(Object *obj) {
   std::vector<PartMatrix> chain;
@@ -306,7 +322,8 @@ void render_part(Jvm &jvm, Object *self, Record &rec) {
   const PartRender *chosen =
       rec.config->renders.empty() ? nullptr : &rec.config->renders[0];
   for (const auto &r : rec.config->renders)
-    if (!r.flags && (!chosen || chosen->flags || r.lod_level >= chosen->lod_level))
+    if (!r.flags &&
+        (!chosen || chosen->flags || r.lod_level >= chosen->lod_level))
       chosen = &r;
   add(rec.config->render, rec.config->render_pose,
       chosen ? &chosen->links : nullptr);
@@ -350,7 +367,15 @@ Object *add_part(Jvm &jvm, Object *parent, uint32_t resource,
       alias);
   if (!child)
     return nullptr;
-  if (!part_install(child, parent)) {
+  // Part.addPart installs onto the car (`install 0 <car> 0 <caller> 0`).
+  // The caller's own slots win, so a camshaft stays on the head. A part the
+  // caller cannot hold, such as the camshaft belt added by the head and
+  // attached to the crankshaft, is then sought on the rest of the car.
+  Object *root = parent;
+  if (!select(child, parent, 0, 0).parent)
+    if (Object *chassis = car(parent); chassis && chassis != parent)
+      root = chassis;
+  if (!part_install(child, root)) {
     part_destroy(child);
     return nullptr;
   }
@@ -445,7 +470,8 @@ PartMatrix eye_matrix() {
   m[0] = m[5] = m[10] = m[15] = 1.f;
   return m;
 }
-// Root mount type 101–400 selects the corner. The CFG id is not the wheel index.
+// Root mount type 101–400 selects the corner. The CFG id is not the wheel
+// index.
 int mount_group(Object *part) {
   int type = 0;
   std::unordered_set<Object *> seen;
@@ -465,7 +491,8 @@ int mount_group(Object *part) {
   }
   return type >= 101 && type <= 400 ? (type - 101) % 10 : 0;
 }
-bool linked_frame(Object *part, int base, PartMatrix &out) {
+bool linked_frame(Object *part, int base, PartMatrix &out,
+                  bool follow_steering = true) {
   if (!base)
     return false;
   const int id = base + mount_group(part);
@@ -507,14 +534,18 @@ bool linked_frame(Object *part, int base, PartMatrix &out) {
         if (!own)
           continue;
         PartMatrix own_frame, mount_frame;
-        if (!part_slot_matrix(*child->config, *own, own_frame) ||
+        if (!part_slot_matrix(*child->config, posed_slot(*child, *own),
+                              own_frame) ||
             !part_slot_matrix(*rec->config, posed_slot(*rec, mount),
                               mount_frame))
           return false;
+        auto carrier = node_local(it->second);
+        if (!follow_steering && child->has_steering_transform)
+          carrier = part_matrix_multiply(
+              part_matrix_inverse_rigid(child->steering_transform), carrier);
         frame = part_matrix_multiply(
-            part_matrix_multiply(
-                part_matrix_multiply(node_local(it->second), own_frame),
-                part_matrix_inverse_rigid(mount_frame)),
+            part_matrix_multiply(part_matrix_multiply(carrier, own_frame),
+                                 part_matrix_inverse_rigid(mount_frame)),
             frame);
         break;
       }
@@ -543,7 +574,8 @@ bool mesh_span(uint32_t resource, float &min_y, float &max_y, float &cx,
       if (model.ok && !model.source.empty()) {
         std::replace(model.source.begin(), model.source.end(), '\\', '/');
         auto mesh = load_scx_geometry(
-            (std::filesystem::path(index->game_root()) / model.source).string());
+            (std::filesystem::path(index->game_root()) / model.source)
+                .string());
         if (mesh.info.ok) {
           box.ok = true;
           for (int i = 0; i < 3; ++i) {
@@ -566,8 +598,8 @@ bool mesh_span(uint32_t resource, float &min_y, float &max_y, float &cx,
 PartMatrix span_between(const PartMatrix &a, const PartMatrix &b, float min_y,
                         float max_y, float cx, float cz) {
   const float axis[3] = {b[12] - a[12], b[13] - a[13], b[14] - a[14]};
-  const float length = std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] +
-                                 axis[2] * axis[2]);
+  const float length =
+      std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
   const float yv[3] = {axis[0] / length, axis[1] / length, axis[2] / length};
   const float ref[3] = {std::fabs(yv[1]) < 0.9f ? 0.f : 1.f,
                         std::fabs(yv[1]) < 0.9f ? 1.f : 0.f, 0.f};
@@ -601,8 +633,7 @@ PartMatrix span_between(const PartMatrix &a, const PartMatrix &b, float min_y,
   center[13] = -min_y;
   center[14] = -cz;
   return part_matrix_multiply(
-      to, part_matrix_multiply(
-              rotation, part_matrix_multiply(scale, center)));
+      to, part_matrix_multiply(rotation, part_matrix_multiply(scale, center)));
 }
 void relink_one(Object *part) {
   auto *rec = record(part);
@@ -619,7 +650,7 @@ void relink_one(Object *part) {
     if (!rule)
       continue;
     PartMatrix first;
-    if (!linked_frame(part, rule->first, first))
+    if (!linked_frame(part, rule->first, first, rule->second != 0))
       continue;
     PartMatrix pose = first;
     if (rule->second) {
@@ -662,7 +693,7 @@ void relink_assembly(Object *part) {
         pending.push_back(child.second);
   }
 }
-void place_child(Object *parent, int slot_id) {
+void place_child(Object *parent, int slot_id, bool refresh_links = true) {
   auto *p = record(parent);
   if (!p)
     return;
@@ -684,22 +715,99 @@ void place_child(Object *parent, int slot_id) {
     return;
   PartMatrix parent_frame, child_frame;
   if (!part_slot_matrix(*p->config, posed_slot(*p, *mount), parent_frame) ||
-      !part_slot_matrix(*c->config, *mate, child_frame))
+      !part_slot_matrix(*c->config, posed_slot(*c, *mate), child_frame))
     return;
-  auto transform =
-      part_matrix_multiply(parent_frame, part_matrix_inverse_rigid(child_frame));
+  auto transform = part_matrix_multiply(parent_frame,
+                                        part_matrix_inverse_rigid(child_frame));
   const int type = mount->type;
   const bool gear = (type >= 101 && type <= 104) ||
                     (type >= 201 && type <= 204) ||
                     (type >= 301 && type <= 304);
-  if (gear && p->ride_ready) {
-    const int index = type % 100 - 1;
-    if (index >= 0 && index < 4)
-      transform[13] += p->ride_shift[index];
+  if (gear && p->dynamic_frames) {
+    const int corner = type % 100 - 1;
+    // The arm anchor follows travel; the wheel/hub also follows steering.
+    const auto &delta = type >= 301   ? p->travel_frame[corner]
+                        : type >= 201 ? p->hub_frame[corner]
+                                      : p->carrier_frame[corner];
+    transform = part_matrix_multiply(delta, transform);
+    parent_frame = part_matrix_multiply(delta, parent_frame);
   }
   auto *node = gameref_get(found->second);
   if (!node)
     return;
+  c->has_steering_transform = false;
+  if (gear && type < 301) {
+    const int corner = type % 100 - 1;
+    const auto &wheel = p->wheels[corner];
+    const float factor =
+        wheel.steer_set
+            ? wheel.steer
+            : (static_cast<size_t>(corner) < p->config->wheel_steering.size()
+                   ? p->config->wheel_steering[corner]
+                   : 0.f);
+    const double angle = p->steering_input * p->config->max_steer;
+    double turn = angle * factor;
+    const double length =
+        p->ackermann != 0 ? p->ackermann : p->config->ackermann_length;
+    if (std::fabs(angle) > 1e-7 && length > 0) {
+      const double radius = length / std::tan(angle), x = wheel.pos[0];
+      turn = (radius <= 0 ? -std::atan2(length, -radius - x)
+                          : std::atan2(length, radius + x)) *
+             factor;
+    }
+    if (std::fabs(turn) > 1e-7) {
+      PartPose pivot, back, rotation;
+      for (int axis = 0; axis < 3; ++axis) {
+        pivot.position[axis] = wheel.pos[axis];
+        back.position[axis] = -wheel.pos[axis];
+      }
+      rotation.rotation[0] = static_cast<float>(turn);
+      c->steering_transform =
+          part_matrix_multiply(part_matrix_multiply(part_pose_matrix(pivot),
+                                                    part_pose_matrix(rotation)),
+                               part_pose_matrix(back));
+      c->has_steering_transform = true;
+      transform = part_matrix_multiply(c->steering_transform, transform);
+    }
+  }
+  // Open flap: the hinge lives on the parent slot. Closed is the CFG pose.
+  if (mount->has_flap && c->flap) {
+    float ax = mount->flap_axis[0], ay = mount->flap_axis[1],
+          az = mount->flap_axis[2];
+    const float len = std::sqrt(ax * ax + ay * ay + az * az);
+    if (len > 1e-6f) {
+      ax /= len;
+      ay /= len;
+      az /= len;
+      const float c0 = std::cos(mount->flap_hi);
+      const float s0 = std::sin(mount->flap_hi);
+      const float t0 = 1.f - c0;
+      PartMatrix rot{};
+      rot[0] = t0 * ax * ax + c0;
+      rot[1] = t0 * ax * ay + s0 * az;
+      rot[2] = t0 * ax * az - s0 * ay;
+      rot[4] = t0 * ax * ay - s0 * az;
+      rot[5] = t0 * ay * ay + c0;
+      rot[6] = t0 * ay * az + s0 * ax;
+      rot[8] = t0 * ax * az + s0 * ay;
+      rot[9] = t0 * ay * az - s0 * ax;
+      rot[10] = t0 * az * az + c0;
+      rot[15] = 1.f;
+      PartMatrix to{};
+      PartMatrix back{};
+      to[0] = to[5] = to[10] = to[15] = 1.f;
+      back[0] = back[5] = back[10] = back[15] = 1.f;
+      to[12] = mount->flap_pivot[0];
+      to[13] = mount->flap_pivot[1];
+      to[14] = mount->flap_pivot[2];
+      back[12] = -to[12];
+      back[13] = -to[13];
+      back[14] = -to[14];
+      transform = part_matrix_multiply(
+          to, part_matrix_multiply(
+                  rot, part_matrix_multiply(back, transform)));
+    }
+  }
   std::copy(transform.begin(), transform.end(), node->local_matrix);
   node->matrix_override = true;
   if (type >= 101 && type <= 104) {
@@ -707,8 +815,6 @@ void place_child(Object *parent, int slot_id) {
     w.pos[0] = parent_frame[12];
     w.pos[1] = parent_frame[13];
     w.pos[2] = parent_frame[14];
-    if (p->ride_ready)
-      w.pos[1] += p->ride_shift[type - 101];
     w.has_pos = true;
     w.live = true;
   } else if (slot_id >= 101 && slot_id < 109) {
@@ -719,7 +825,8 @@ void place_child(Object *parent, int slot_id) {
     w.has_pos = true;
     w.live = true;
   }
-  relink_assembly(parent);
+  if (refresh_links)
+    relink_assembly(parent);
 }
 void seed_wheel(Record &rec, int id) {
   if (id < 0 || id >= 8)
@@ -836,68 +943,6 @@ void assembly_mass_center(Object *chassis, float &mass, float com[3]) {
     for (int i = 0; i < 3; ++i)
       com[i] /= mass;
 }
-// Static ride height. Java has already written force and rest length. The
-// corner parts move by the sag; the chassis drop itself happens every frame.
-void settle_parked(Object *chassis) {
-  auto *rec = record(chassis);
-  if (!rec || rec->config->wheels.size() < 4)
-    return;
-  for (int i = 0; i < 4; ++i)
-    if (!(rec->wheels[static_cast<size_t>(i)].force > 0.f &&
-          rec->wheels[static_cast<size_t>(i)].rest > 0.f))
-      return;
-  float mass = 0.f, com[3]{};
-  assembly_mass_center(chassis, mass, com);
-  if (!(mass > 0.f))
-    return;
-  const auto &wheels = rec->config->wheels;
-  const float front_z = 0.5f * (wheels[0].position[2] + wheels[1].position[2]);
-  const float rear_z = 0.5f * (wheels[2].position[2] + wheels[3].position[2]);
-  const float span_z = rear_z - front_z;
-  const float front_share =
-      std::fabs(span_z) > 1e-6f
-          ? std::clamp((rear_z - com[2]) / span_z, 0.f, 1.f)
-          : 0.5f;
-  float shift[4];
-  for (int i = 0; i < 4; ++i) {
-    const int axle = i < 2 ? 0 : 2;
-    const float left = wheels[static_cast<size_t>(axle)].position[0];
-    const float right = wheels[static_cast<size_t>(axle + 1)].position[0];
-    const float span_x = right - left;
-    const float left_share =
-        std::fabs(span_x) > 1e-6f
-            ? std::clamp((right - com[0]) / span_x, 0.f, 1.f)
-            : 0.5f;
-    const float load = mass * (i < 2 ? front_share : 1.f - front_share) *
-                       (i % 2 ? 1.f - left_share : left_share);
-    PartWheelSpring spec;
-    if (static_cast<size_t>(i) < rec->config->wheel_springs.size())
-      spec = rec->config->wheel_springs[static_cast<size_t>(i)];
-    float length = 0.f;
-    const auto &phys = rec->wheels[static_cast<size_t>(i)];
-    if (!part_parked_spring_length(phys.rest, phys.min_len, phys.max_len,
-                                  phys.force, load, length))
-      return;
-    shift[i] = spec.base + spec.travel - length;
-  }
-  std::vector<int> slots;
-  slots.reserve(rec->children.size());
-  for (const auto &child : rec->children)
-    slots.push_back(child.first);
-  auto slot_of = [&](int id) -> const PartSlot * {
-    for (const auto &slot : rec->config->slots)
-      if (slot.id == id)
-        return &slot;
-    return nullptr;
-  };
-  std::copy(shift, shift + 4, rec->ride_shift);
-  rec->ride_ready = true;
-  for (int id : slots) {
-    const PartSlot *slot = slot_of(id);
-    if (slot && corner_gear(slot->type))
-      place_child(chassis, id);
-  }
-}
 // The exe calls Chassis.updatevariables from forceUpdate when the script
 // has not set suspend_update. That walk is what fills dynodata and runs
 // calcDyno. A part install asks for the same pass once the car is live.
@@ -911,7 +956,7 @@ void refresh_chassis(Object *chassis) {
   ++refresh_depth;
   runtime->invoke_by_name(chassis->class_name, "updatevariables",
                           {Value::make_obj(chassis)}, false);
-  settle_parked(chassis);
+  record(chassis)->physics_dirty = true;
   --refresh_depth;
 }
 } // namespace
@@ -939,10 +984,10 @@ Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
     const std::string lookup =
         fqn ? script : std::filesystem::path(script).stem().string();
     if (!jvm.find_class(lookup) &&
-        !jvm.load_class(fqn ? script
-                            : (std::filesystem::path(resources.game_root()) /
-                               script)
-                                  .string()))
+        !jvm.load_class(
+            fqn ? script
+                : (std::filesystem::path(resources.game_root()) / script)
+                      .string()))
       return nullptr;
     auto *cls = jvm.find_class(lookup);
     if (!cls)
@@ -1026,13 +1071,33 @@ bool part_install(Object *child, Object *root, int own, int target) {
   p->children[selected.mount->id] = child;
   if (runtime)
     if (auto *chassis = car(child)) {
-      runtime->invoke_by_name(
-          chassis->class_name, "addpart",
-          {Value::make_obj(chassis), Value::make_obj(child)}, false);
+      // A rim put back on the car still carries its tyre. Register the
+      // whole assembly, not only the part that was clicked into the slot.
+      for (const auto &installed : part_installed_tree(child))
+        runtime->invoke_by_name(
+            chassis->class_name, "addpart",
+            {Value::make_obj(chassis), Value::make_obj(installed.object)},
+            false);
       refresh_chassis(chassis);
     }
   relink_assembly(child);
   return true;
+}
+// `filter <category> <mode>`: 1 engine, 2 body (the chassis), 3 running
+// gear. Mode 2 hides that category's meshes; 0 and 1 show them again.
+void apply_part_filter(Object *part, int category, int mode) {
+  auto *rec = record(part);
+  if (!rec || !rec->config)
+    return;
+  if (category == 0 || rec->config->category == category) {
+    const bool hide = mode == 2;
+    for (Object *render : rec->renders)
+      if (auto *node = gameref_get(render))
+        if (node->type_id)
+          node->empty = hide;
+  }
+  for (const auto &child : rec->children)
+    apply_part_filter(child.second, category, mode);
 }
 bool part_command(Object *part, const std::string &command) {
   part = canonical(part);
@@ -1042,6 +1107,17 @@ bool part_command(Object *part, const std::string &command) {
   std::istringstream input(command);
   std::string verb;
   input >> verb;
+  if (verb == "setsteer" && rec->config->native_kind == "car") {
+    float value = 0;
+    if (!(input >> value) || !std::isfinite(value))
+      return false;
+    rec->steering_input = std::clamp(value, -1.f, 1.f);
+    for (const auto &slot : rec->config->slots)
+      if (slot.type >= 101 && slot.type <= 304)
+        place_child(part, slot.id, false);
+    relink_assembly(part);
+    return true;
+  }
   if (verb == "install") {
     int own = 0, target = 0;
     if (input >> own >> target) {
@@ -1075,25 +1151,56 @@ bool part_command(Object *part, const std::string &command) {
     return true;
   }
   if (verb == "reset" && rec->config->native_kind == "car") {
-    // Static garage placement: settle the assembled visual bounds on y=0.
-    // The driving/suspension solver is a separate system.
-    auto *node = gameref_get(part);
-    float low = 0;
-    for (const auto &instance : scene_instances_collect_root(part)) {
-      const auto &geo = *instance.geometry;
-      const auto &m = instance.transform;
-      for (size_t i = 0; i < geo.positions.size(); i += 3) {
-        float y = m[1] * geo.positions[i] * .01f +
-                  m[5] * geo.positions[i + 1] * .01f -
-                  m[9] * geo.positions[i + 2] * .01f + m[13];
-        low = std::min(low, y);
-      }
-    }
-    if (low < 0)
-      node->pos[1] -= low;
+    // Stock reset zeroes the velocities and the steer, then sleeps the body.
+    // It does not move the chassis. start is what releases it.
+    rec->physics_suspended = true;
+    rec->physics_pending_placement = false;
+    rec->steering_input = 0.f;
+    rec->dynamics.body.velocity = {};
+    rec->dynamics.body.momentum = {};
+    part_park_chassis(part, false);
+    for (const auto &slot : rec->config->slots)
+      if (slot.type >= 101 && slot.type <= 304)
+        place_child(part, slot.id, false);
+    relink_assembly(part);
+    return true;
+  }
+  if (verb == "start" && rec->config->native_kind == "car") {
+    rec->physics_suspended = false;
+    return true;
+  }
+  if (verb == "suspend" && rec->config->native_kind == "car") {
+    rec->physics_suspended = true;
+    return true;
+  }
+  if (verb == "wakeup" && rec->config->native_kind == "car") {
+    rec->physics_suspended = false;
+    return true;
+  }
+  if (verb == "flap_toggle") {
+    rec->flap ^= 1;
+    if (rec->state.parent)
+      place_child(rec->state.parent, rec->state.parent_slot);
+    return true;
+  }
+  if (verb == "filter") {
+    int category = 0, mode = 0;
+    if (input >> category >> mode)
+      apply_part_filter(part, category, mode);
     return true;
   }
   return false;
+}
+Object *part_render_owner(void *key) {
+  for (int depth = 0; key && depth < 32; ++depth) {
+    if (record(static_cast<Object *>(key)))
+      return canonical(static_cast<Object *>(key));
+    auto *node = gameref_get(key);
+    if (!node)
+      return nullptr;
+    key = node->parent;
+  }
+  return nullptr;
 }
 bool part_destroy(Object *part) {
   part = canonical(part);
@@ -1131,66 +1238,439 @@ std::vector<InstalledPart> part_installed_tree(Object *root) {
   visit(visit, canonical(root));
   return out;
 }
-void part_plant_parked() {
-  static int logged = 0;
+
+namespace {
+bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
+  auto unavailable = [&](const char *reason) {
+    if (!rec.physics_reported) {
+      std::printf("[phys] unavailable type=0x%x: %s\n", rec.state.resource,
+                  reason);
+      std::fflush(stdout);
+      rec.physics_reported = true;
+    }
+    return false;
+  };
+  float mass = 0, com[3]{};
+  assembly_mass_center(chassis, mass, com);
+  if (!(mass > 0))
+    return unavailable("missing positive CFG body mass");
+  const uint32_t render = rec.render_set ? rec.render_id : rec.config->render;
+  auto model = index->model_for_resource(RpkIndex::pack_from_full(render),
+                                         render & 0xffff);
+  if (!model.ok)
+    return unavailable("missing chassis render");
+  std::replace(model.source.begin(), model.source.end(), '\\', '/');
+  auto path = std::filesystem::path(index->game_root()) / model.source;
+  auto ext = path.extension().string();
+  for (char &c : ext)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (ext == ".scy") {
+    auto scx = path;
+    scx.replace_extension(".scx");
+    if (std::filesystem::exists(scx))
+      path = scx;
+  }
+  auto geometry = load_scx_geometry(path.string());
+  if (!geometry.info.ok)
+    return unavailable("unreadable chassis geometry");
+  const double scale = geometry.position_scale;
+  physics::Vec3 lo{geometry.info.bbox_min[0] * scale,
+                   geometry.info.bbox_min[1] * scale,
+                   geometry.info.bbox_min[2] * scale};
+  physics::Vec3 hi{geometry.info.bbox_max[0] * scale,
+                   geometry.info.bbox_max[1] * scale,
+                   geometry.info.bbox_max[2] * scale};
+  const auto velocity = rec.dynamics.body.velocity,
+             momentum = rec.dynamics.body.momentum;
+  rec.dynamics.body.configure(mass, lo, hi, {com[0], com[1], com[2]});
+  const bool held = rec.physics_ready;
+  rec.dynamics.body.set_frame(frame);
+  if (held) {
+    rec.dynamics.body.velocity = velocity;
+    rec.dynamics.body.momentum = momentum;
+  } else {
+    rec.dynamics.release_wheels();
+    rec.dynamics.reset_clock();
+  }
+  rec.physics_ready = true;
+  rec.physics_dirty = false;
+  rec.physics_parent = gameref_get(chassis)->parent;
+  if (!rec.physics_reported) {
+    std::printf("[phys] dynamic type=0x%x mass=%.2f fixed=240Hz\n",
+                rec.state.resource, mass);
+    std::fflush(stdout);
+    rec.physics_reported = true;
+  }
+  return true;
+}
+void dynamics_wheels(Record &rec) {
+  for (size_t i = 0; i < 4; ++i) {
+    auto &cfg = rec.dynamics.wheels[i];
+    const auto &live = rec.wheels[i];
+    cfg.enabled = false;
+    if (i >= rec.config->wheels.size())
+      continue;
+    const PartSlot *mount = nullptr;
+    for (const auto &slot : rec.config->slots)
+      if (slot.type == 101 + static_cast<int>(i) &&
+          rec.children.count(slot.id)) {
+        mount = &slot;
+        break;
+      }
+    if (!mount)
+      continue;
+    PartMatrix frame;
+    if (!part_slot_matrix(*rec.config, posed_slot(rec, *mount), frame))
+      continue;
+    rec.base_wheel_center[i] = {frame[12], frame[13], frame[14]};
+    const auto fallback = i < rec.config->wheel_springs.size()
+                              ? rec.config->wheel_springs[i]
+                              : PartWheelSpring{};
+    // CFG wheel is the physical centre. setSlotPos edits the attachment
+    // hardware frame; adding that offset here incorrectly widens the track.
+    // Explicit WheelRef.setPos remains an authored physical override.
+    const auto &physical = rec.config->wheels[i].position;
+    cfg.center =
+        live.authored_position
+            ? physics::Vec3{live.input_position[0], live.input_position[1],
+                            live.input_position[2]}
+            : physics::Vec3{physical[0], physical[1], physical[2]};
+    PartPose alignment;
+    if (live.has_ypr)
+      std::copy(live.ypr, live.ypr + 3, alignment.rotation.begin());
+    auto orient = part_pose_matrix(alignment);
+    cfg.down = {-orient[4], -orient[5], -orient[6]};
+    cfg.radius = live.radius > 0 ? live.radius : fallback.radius;
+    cfg.rest = live.rest;
+    cfg.anchor = fallback.base + fallback.travel;
+    cfg.minimum = std::max(0.f, live.min_len);
+    cfg.maximum = live.max_len > 0 ? live.max_len : live.rest;
+    cfg.spring = live.force;
+    cfg.bump_damping = live.damp_bound;
+    cfg.rebound_damping = live.damp_rebound;
+    cfg.unsprung = fallback.mass;
+    cfg.arm_length = 0;
+    cfg.has_hub = false;
+    cfg.hub = {};
+    cfg.hub_alignment = {};
+    if (live.has_arm && live.opp < 0 && live.arm[0] > 0) {
+      cfg.arm_length = live.arm[0];
+      cfg.arm_pivot = cfg.center + physics::Vec3{live.arm[1], live.arm[2],
+                                                 live.arm[3]};
+      cfg.arm_axis = {live.arm[4], live.arm[5], live.arm[6]};
+      if (live.has_hub) {
+        cfg.has_hub = true;
+        for (int k = 0; k < 10; ++k)
+          cfg.hub[static_cast<size_t>(k)] = live.hub[k];
+        const auto &ypr = live.has_ypr ? live.ypr
+                                       : rec.config->wheels[i].rotation.data();
+        cfg.hub_alignment =
+            (physics::Quaternion{0, std::sin(ypr[0] * .5), 0,
+                                 std::cos(ypr[0] * .5)} *
+             physics::Quaternion{std::sin(ypr[1] * .5), 0, 0,
+                                 std::cos(ypr[1] * .5)} *
+             physics::Quaternion{0, 0, std::sin(ypr[2] * .5),
+                                 std::cos(ypr[2] * .5)})
+                .normalized();
+      }
+    }
+    cfg.enabled = cfg.radius > 0 && cfg.rest > 0 &&
+                  cfg.maximum >= cfg.minimum && cfg.spring > 0;
+  }
+}
+void pose_wheels(Object *chassis, Record &rec);
+void finish_dynamics_sync(Object *chassis, Record &rec);
+void dynamics_sync(Object *chassis, Record &rec,
+                   const PartMatrix &parent_frame) {
+  auto *node = gameref_get(chassis);
+  const auto world = rec.dynamics.body.frame();
+  const auto local =
+      part_matrix_multiply(part_matrix_inverse_rigid(parent_frame), world);
+  std::copy(local.begin(), local.end(), node->local_matrix);
+  node->matrix_override = true;
+  std::copy(local.begin() + 12, local.begin() + 15, node->pos);
+  const double pitch = std::asin(std::clamp(-double(local[9]), -1.0, 1.0));
+  node->ypr[1] = static_cast<float>(pitch);
+  if (std::fabs(std::cos(pitch)) > 1e-6) {
+    node->ypr[0] = std::atan2(local[8], local[10]);
+    node->ypr[2] = std::atan2(local[1], local[5]);
+  } else {
+    node->ypr[0] = std::atan2(-local[2], local[0]);
+    node->ypr[2] = 0;
+  }
+  auto velocity = rec.dynamics.body.velocity;
+  node->vel[0] = static_cast<float>(parent_frame[0] * velocity.x +
+                                    parent_frame[1] * velocity.y +
+                                    parent_frame[2] * velocity.z);
+  node->vel[1] = static_cast<float>(parent_frame[4] * velocity.x +
+                                    parent_frame[5] * velocity.y +
+                                    parent_frame[6] * velocity.z);
+  node->vel[2] = static_cast<float>(parent_frame[8] * velocity.x +
+                                    parent_frame[9] * velocity.y +
+                                    parent_frame[10] * velocity.z);
+  rec.published_frame = local;
+  pose_wheels(chassis, rec);
+  finish_dynamics_sync(chassis, rec);
+}
+void pose_wheels(Object *chassis, Record &rec) {
+  rec.dynamic_frames = true;
+  for (size_t i = 0; i < 4; ++i) {
+    const auto &cfg = rec.dynamics.wheels[i];
+    const auto &state = rec.dynamics.state[i];
+    rec.travel_frame[i] = rec.carrier_frame[i] = rec.hub_frame[i] =
+        eye_matrix();
+    rec.geometry_solved[i] = false;
+    if (!cfg.enabled)
+      continue;
+    const physics::Vec3 seat =
+        cfg.center - cfg.down.normalized() * cfg.anchor_length();
+    const physics::Vec3 center = seat + cfg.down.normalized() * state.length;
+    const auto base = rec.base_wheel_center[i];
+    const auto delta = center - base;
+    rec.travel_frame[i][12] = static_cast<float>(delta.x);
+    rec.travel_frame[i][13] = static_cast<float>(delta.y);
+    rec.travel_frame[i][14] = static_cast<float>(delta.z);
+    PartPose authored, live;
+    authored.rotation = rec.config->wheels[i].rotation;
+    if (rec.wheels[i].has_ypr)
+      std::copy(rec.wheels[i].ypr, rec.wheels[i].ypr + 3,
+                live.rotation.begin());
+    else
+      live.rotation = authored.rotation;
+    auto rotation = part_matrix_multiply(
+        part_pose_matrix(live),
+        part_matrix_inverse_rigid(part_pose_matrix(authored)));
+    PartPose from, to;
+    from.position = {float(-base.x), float(-base.y), float(-base.z)};
+    to.position = {float(center.x), float(center.y), float(center.z)};
+    rec.carrier_frame[i] = part_matrix_multiply(
+        part_matrix_multiply(part_pose_matrix(to), rotation),
+        part_pose_matrix(from));
+    rec.hub_frame[i] = rec.carrier_frame[i];
+    if (rec.wheels[i].has_arm && rec.wheels[i].has_hub &&
+        rec.wheels[i].opp < 0) {
+      physics::CornerGeometry geometry;
+      geometry.reference = cfg.center;
+      std::copy(rec.wheels[i].arm, rec.wheels[i].arm + 7, geometry.arm.begin());
+      std::copy(rec.wheels[i].hub, rec.wheels[i].hub + 10,
+                geometry.hub.begin());
+      const auto &ypr = live.rotation;
+      geometry.alignment = (physics::Quaternion{0, std::sin(ypr[0] * .5), 0,
+                                                std::cos(ypr[0] * .5)} *
+                            physics::Quaternion{std::sin(ypr[1] * .5), 0, 0,
+                                                std::cos(ypr[1] * .5)} *
+                            physics::Quaternion{0, 0, std::sin(ypr[2] * .5),
+                                                std::cos(ypr[2] * .5)})
+                               .normalized();
+      physics::CornerFrames frames;
+      if (physics::solve_corner_geometry(geometry, center, frames)) {
+        const auto inverse =
+            part_matrix_inverse_rigid(part_pose_matrix(rec.config->wheels[i]));
+        rec.travel_frame[i] = part_matrix_multiply(
+            physics::corner_matrix(frames.arm_origin, frames.arm_rotation),
+            inverse);
+        rec.hub_frame[i] = rec.carrier_frame[i] = part_matrix_multiply(
+            physics::corner_matrix(frames.hub_origin, frames.hub_rotation),
+            inverse);
+        rec.geometry_solved[i] = true;
+      }
+    }
+    rec.wheels[i].contact = state.contact;
+  }
+  for (const auto &slot : rec.config->slots)
+    if (corner_gear(slot.type))
+      place_child(chassis, slot.id, false);
+  relink_assembly(chassis);
+}
+void finish_dynamics_sync(Object *chassis, Record &rec) {
+  auto *node = gameref_get(chassis);
+  int contacts = 0;
+  double support = 0;
+  for (const auto &state : rec.dynamics.state) {
+    contacts += state.contact;
+    support += state.force;
+  }
+  if (contacts != rec.reported_contacts && rec.physics_status_lines < 8) {
+    std::printf("[phys] contacts=%d/4 y=%.3f vy=%.3f support=%.1fN\n", contacts,
+                node->pos[1], rec.dynamics.body.velocity.y, support);
+    std::fflush(stdout);
+    rec.reported_contacts = contacts;
+    ++rec.physics_status_lines;
+  }
+}
+// setMatrix of a car puts the midpoint of the four static tyre contacts on
+// the given point and writes the loaded spring length. The body stays asleep.
+void park_chassis(Object *chassis, bool shift) {
+  chassis = canonical(chassis);
+  auto *rec = record(chassis);
+  auto *node = chassis ? gameref_get(chassis) : nullptr;
+  if (!rec || !node || rec->config->native_kind != "car")
+    return;
+  dynamics_wheels(*rec);
+  float mass = 0.f, com[3]{};
+  assembly_mass_center(chassis, mass, com);
+  int count = 0;
+  for (const auto &wheel : rec->dynamics.wheels)
+    if (wheel.enabled)
+      ++count;
+  if (!count || !(mass > 0.f))
+    return;
+  const float share = mass / static_cast<float>(count);
+  physics::Vec3 contact;
+  int used = 0;
+  for (size_t i = 0; i < 4; ++i) {
+    auto &cfg = rec->dynamics.wheels[i];
+    auto &state = rec->dynamics.state[i];
+    if (!cfg.enabled)
+      continue;
+    float length = static_cast<float>(cfg.rest);
+    if (!part_parked_spring_length(static_cast<float>(cfg.rest),
+                                   static_cast<float>(cfg.minimum),
+                                   static_cast<float>(cfg.maximum),
+                                   static_cast<float>(cfg.spring), share,
+                                   length))
+      length = static_cast<float>(cfg.rest);
+    state.length = length;
+    state.speed = 0;
+    state.seeded = true;
+    state.contact = false;
+    state.force = 0;
+    const auto down = cfg.down.normalized();
+    const auto center = cfg.center + down * (state.length - cfg.anchor_length());
+    contact += center + down * cfg.radius;
+    ++used;
+  }
+  if (!used)
+    return;
+  contact = contact * (1.0 / used);
+  if (shift) {
+    PartPose pose;
+    std::copy(node->ypr, node->ypr + 3, pose.rotation.begin());
+    const auto turned = part_pose_matrix(pose);
+    const double cx = turned[0] * contact.x + turned[4] * contact.y +
+                      turned[8] * contact.z;
+    const double cy = turned[1] * contact.x + turned[5] * contact.y +
+                      turned[9] * contact.z;
+    const double cz = turned[2] * contact.x + turned[6] * contact.y +
+                      turned[10] * contact.z;
+    node->pos[0] -= static_cast<float>(cx);
+    node->pos[1] -= static_cast<float>(cy);
+    node->pos[2] -= static_cast<float>(cz);
+    node->matrix_override = false;
+  }
+  rec->physics_suspended = true;
+  rec->physics_pending_placement = false;
+  pose_wheels(chassis, *rec);
+}
+} // namespace
+void part_park_chassis(Object *car, bool shift) { park_chassis(car, shift); }
+void part_physics_advance(double seconds) {
+  if (!std::isfinite(seconds) || seconds < 0)
+    throw std::invalid_argument("invalid vehicle elapsed time");
+  scene_instances_prepare_physics();
   for (auto &entry : records) {
     Object *chassis = entry.first;
-    Record &rec = entry.second;
-    if (!rec.config || rec.config->native_kind != "car" || rec.state.parent)
+    auto &rec = entry.second;
+    if (rec.config->native_kind != "car" || rec.state.parent ||
+        (rec.physics_suspended && !rec.physics_pending_placement))
       continue;
-    std::vector<std::array<float, 3>> points;
-    if (!scene_instances_supports(chassis, points)) {
-      if (logged < 4) {
-        ++logged;
-        std::printf("[phys] plant miss supports=0\n");
-        std::fflush(stdout);
-      }
-      continue;
-    }
-    std::sort(points.begin(), points.end(),
-              [](const std::array<float, 3> &a, const std::array<float, 3> &b) {
-                return a[1] < b[1];
-              });
-    if (points.size() > 8)
-      points.resize(8);
-    float lift = 0.f;
-    bool hit = false;
-    for (const auto &point : points) {
-      float ground = 0.f;
-      // Highest surface at or below the mesh bottom. A pit under the
-      // belly is lower than the concrete under the tyres, so the max
-      // keeps the car on the rails instead of dropping into the hole.
-      if (!scene_instances_floor(point[0], point[2], point[1], chassis,
-                                &ground))
-        continue;
-      const float needed = ground - point[1];
-      if (!hit || needed > lift)
-        lift = needed;
-      hit = true;
-    }
-    if (!hit || std::fabs(lift) < 0.002f) {
-      if (logged < 4) {
-        ++logged;
-        const auto& p = points.front();
-        std::printf("[phys] plant miss hit=%d lift=%+.3f at %.2f %.2f %.2f meshes=%zu\n",
-                    hit ? 1 : 0, lift, p[0], p[1], p[2], points.size());
-        std::fflush(stdout);
-      }
-      continue;
-    }
     auto *node = gameref_get(chassis);
     if (!node)
       continue;
-    if (node->matrix_override)
-      node->local_matrix[13] += lift;
+    PartMatrix frame, parent = eye_matrix();
+    if (!scene_instances_script_matrix(chassis, frame.data()))
+      continue;
+    if (node->parent &&
+        !scene_instances_script_matrix(node->parent, parent.data()))
+      continue;
+    const auto local = node_local(chassis);
+    bool external = node->parent != rec.physics_parent;
+    for (size_t i = 0; i < 16; ++i)
+      external =
+          external || std::fabs(local[i] - rec.published_frame[i]) > 1e-5f;
+    if (external)
+      rec.physics_ready = false;
+    if (!rec.physics_ready || rec.physics_dirty)
+      if (!dynamics_configure(chassis, rec, frame))
+        continue;
+    dynamics_wheels(rec);
+    const auto terrain = [&](double x, double z, double ceiling,
+                             physics::GroundHit &ground) {
+      SceneFloorHit hit;
+      if (!scene_instances_sample_floor(
+              static_cast<float>(x), static_cast<float>(z),
+              static_cast<float>(ceiling), chassis, hit))
+        return false;
+      ground.height = hit.height;
+      ground.normal = {hit.normal[0], hit.normal[1], hit.normal[2]};
+      return true;
+    };
+    const auto steps = rec.dynamics.advance(seconds, terrain);
+    if (steps)
+      dynamics_sync(chassis, rec, parent);
     else
-      node->pos[1] += lift;
-    if (logged < 4) {
-      ++logged;
-      std::printf("[phys] plant %+.3f over %zu meshes\n", lift, points.size());
-      std::fflush(stdout);
+      rec.published_frame = local;
+    if (steps && rec.physics_pending_placement) {
+      if (!rec.physics_suspended)
+        rec.physics_pending_placement = false;
+      else {
+        bool supported = true;
+        double force = 0;
+        for (size_t i = 0; i < 4; ++i) {
+          if (rec.dynamics.wheels[i].enabled)
+            supported = supported && rec.dynamics.state[i].contact;
+          force += rec.dynamics.state[i].force;
+        }
+        const bool quiet = supported &&
+                           rec.dynamics.body.velocity.length() < .02 &&
+                           rec.dynamics.body.omega().length() < .02 &&
+                           std::fabs(force - rec.dynamics.body.mass * 9.81) <
+                               rec.dynamics.body.mass * 9.81 * .02;
+        rec.physics_quiet_ticks = quiet ? rec.physics_quiet_ticks + steps : 0;
+        if (rec.physics_quiet_ticks >= 60) {
+          rec.physics_pending_placement = false;
+          rec.dynamics.body.velocity = {};
+          rec.dynamics.body.momentum = {};
+        }
+      }
     }
   }
+}
+bool part_physics_state(Object *key, PartPhysicsState &state) {
+  auto *rec = record(as_part(key));
+  if (!rec)
+    return false;
+  PartMatrix world;
+  state = {};
+  state.active = rec->physics_ready && !rec->physics_suspended &&
+                 scene_instances_script_matrix(as_part(key), world.data());
+  if (!rec->physics_ready)
+    return true;
+  state.mass = rec->dynamics.body.mass;
+  state.height = rec->dynamics.body.frame()[13];
+  state.vertical_speed = rec->dynamics.body.velocity.y;
+  state.ticks = rec->dynamics.ticks;
+  state.backlog = rec->dynamics.backlog();
+  for (size_t i = 0; i < 4; ++i) {
+    state.length[i] = rec->dynamics.state[i].length;
+    state.force[i] = rec->dynamics.state[i].force;
+    state.contact[i] = rec->dynamics.state[i].contact;
+    state.geometry_solved[i] = rec->geometry_solved[i];
+    const auto &center = rec->dynamics.wheels[i].center;
+    state.wheel_center[i] = {center.x, center.y, center.z};
+  }
+  return true;
+}
+
+void *part_shadow_source(void *render, float *frame) {
+  for (int guard = 0; render && guard < 64; ++guard) {
+    if (auto *rec = record(static_cast<Object *>(render));
+        rec && rec->config->native_kind == "car")
+      return scene_instances_script_matrix(render, frame) ? render : nullptr;
+    auto *node = gameref_get(render);
+    render = node ? node->parent : nullptr;
+  }
+  return nullptr;
 }
 bool part_car_ground(void *key, float *y) {
   if (!key || !y || !car(static_cast<Object *>(key)))
@@ -1203,9 +1683,12 @@ bool part_car_ground(void *key, float *y) {
     const auto &geo = *instance.geometry;
     const float scale = geo.position_scale;
     const float *m = instance.transform.data();
-    const float xs[2] = {geo.info.bbox_min[0] * scale, geo.info.bbox_max[0] * scale};
-    const float ys[2] = {geo.info.bbox_min[1] * scale, geo.info.bbox_max[1] * scale};
-    const float zs[2] = {geo.info.bbox_min[2] * scale, geo.info.bbox_max[2] * scale};
+    const float xs[2] = {geo.info.bbox_min[0] * scale,
+                         geo.info.bbox_max[0] * scale};
+    const float ys[2] = {geo.info.bbox_min[1] * scale,
+                         geo.info.bbox_max[1] * scale};
+    const float zs[2] = {geo.info.bbox_min[2] * scale,
+                         geo.info.bbox_max[2] * scale};
     for (float x : xs)
       for (float yy : ys)
         for (float z : zs) {
@@ -1276,9 +1759,42 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
       return Value::make_int(state->type_id);
     if (query == 55)
       return Value::make_int(p ? p->config->category : 0);
+    if (query == 52) {
+      // GII_CAR_DRIVETYPE. Chassis bits DT_FWD=1, DT_RWD=2 become the
+      // CarInfo codes: 0 none, 1 all, 2 front, 3 rear, 4 cross.
+      Object *chassis = canonical(self);
+      if (chassis && chassis->fields.find("drive_type") == chassis->fields.end())
+        if (auto it = chassis->fields.find("chassis");
+            it != chassis->fields.end() && it->second.tag == ValueTag::Obj)
+          chassis = it->second.v.o;
+      int bits = 0;
+      if (chassis) {
+        auto it = chassis->fields.find("drive_type");
+        if (it != chassis->fields.end()) {
+          if (it->second.tag == ValueTag::Int)
+            bits = it->second.v.i;
+          else if (it->second.tag == ValueTag::Float)
+            bits = static_cast<int>(it->second.v.f);
+        }
+      }
+      const int fwd = bits & 1;
+      const int rwd = bits & 2;
+      if (!fwd && !rwd)
+        return Value::make_int(bits ? 4 : 0);
+      if (fwd && rwd)
+        return Value::make_int(1);
+      return Value::make_int(fwd ? 2 : 3);
+    }
     if (query == 24 || query == 43) {
       auto *parent = gameref_get(state->parent);
       return Value::make_int(parent ? parent->live_id : 0);
+    }
+    if (query == 41) {
+      // GII_GETOUT_OK. The chassis stays. A rim leaves with the tyre still
+      // mounted: children are part of the assembly, not a reason to refuse.
+      if (!p || p->config->native_kind == "car")
+        return Value::make_int(-1);
+      return Value::make_int(0);
     }
     if (query == 71 || query == 72) {
       int id = number(args, 1);
@@ -1306,7 +1822,8 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
       bool any = false;
       for (const auto &instance :
            scene_instances_collect_root(canonical(self))) {
-        if (!instance.geometry) continue;
+        if (!instance.geometry)
+          continue;
         const auto &mesh = instance.geometry->info;
         const float s = instance.geometry->position_scale;
         any = true;
@@ -1315,7 +1832,8 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
           hi[i] = std::max(hi[i], mesh.bbox_max[i] * s);
         }
       }
-      if (!any) return Value::make_int(100);
+      if (!any)
+        return Value::make_int(100);
       float near2 = 0.f, far2 = 0.f;
       for (int i = 0; i < 3; ++i) {
         const float l = std::min(lo[i], 0.f);
@@ -1325,8 +1843,10 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
       }
       const float r = std::sqrt(std::max(near2, far2));
       int cm = 1 + static_cast<int>(r * 100.f);
-      if (cm < 1) cm = 1;
-      if (cm > 10000) cm = 10000;
+      if (cm < 1)
+        cm = 1;
+      if (cm > 10000)
+        cm = 10000;
       return Value::make_int(cm);
     }
     return Value::make_int(0);
@@ -1438,7 +1958,8 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   });
   auto dyno_fields = [](Object *self) {
     std::unordered_map<std::string, float> fields;
-    if (!self) return fields;
+    if (!self)
+      return fields;
     for (const auto &entry : self->fields) {
       if (entry.second.tag == ValueTag::Float)
         fields[entry.first] = entry.second.v.f;
@@ -1448,7 +1969,8 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
     return fields;
   };
   auto write_dyno = [](Object *self, const char *name, float value) {
-    if (self) self->fields[name] = Value::make_float(value);
+    if (self)
+      self->fields[name] = Value::make_float(value);
   };
   jvm.natives().register_method("java.game.parts.DynoData", "newNative", "()V",
                                 [](Object *self, const std::vector<Value> &) {
@@ -1461,7 +1983,8 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
       "java.game.parts.DynoData", "deleteNative", "()V",
       [](Object *self, const std::vector<Value> &) {
         dyno_forget(self);
-        if (self) self->fields.erase("_host_native_allocated");
+        if (self)
+          self->fields.erase("_host_native_allocated");
         return Value::make_void();
       });
   jvm.natives().register_method(
@@ -1485,19 +2008,22 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   jvm.natives().register_method(
       "java.game.parts.DynoData", "getTorque", "(FF)F",
       [](Object *self, const std::vector<Value> &args) {
-        return Value::make_float(dyno_sample(self, scalar(args, 0), scalar(args, 1), false));
+        return Value::make_float(
+            dyno_sample(self, scalar(args, 0), scalar(args, 1), false));
       });
   jvm.natives().register_method(
       "java.game.parts.DynoData", "getHP", "(FF)F",
       [](Object *self, const std::vector<Value> &args) {
-        return Value::make_float(dyno_sample(self, scalar(args, 0), scalar(args, 1), true));
+        return Value::make_float(
+            dyno_sample(self, scalar(args, 0), scalar(args, 1), true));
       });
   jvm.natives().register_method(
       "java.game.parts.bodypart.Chassis", "getTorque", "(FF)F",
       [](Object *self, const std::vector<Value> &args) {
         Object *dyno = nullptr;
         auto take = [&](Object *part) {
-          if (!part || dyno) return;
+          if (!part || dyno)
+            return;
           for (const char *name : {"dynodata", "dyno"}) {
             auto it = part->fields.find(name);
             if (it != part->fields.end() && it->second.tag == ValueTag::Obj &&
@@ -1510,13 +2036,17 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
         std::vector<Object *> pending{self};
         for (size_t i = 0; i < pending.size() && i < 64 && !dyno; ++i) {
           Object *part = pending[i];
-          if (i) take(part);
+          if (i)
+            take(part);
           if (auto *rec = record(part))
-            for (const auto &child : rec->children) pending.push_back(child.second);
+            for (const auto &child : rec->children)
+              pending.push_back(child.second);
         }
-        if (!dyno) take(self);
+        if (!dyno)
+          take(self);
         return Value::make_float(
-            dyno ? dyno_sample(dyno, scalar(args, 0), scalar(args, 1), false) : 0.f);
+            dyno ? dyno_sample(dyno, scalar(args, 0), scalar(args, 1), false)
+                 : 0.f);
       });
   for (bool maximum : {false, true})
     jvm.natives().register_method(
@@ -1634,7 +2164,10 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
          ov.pos = ov.ypr = true;
          std::copy(v, v + 3, ov.p);
          std::copy(v + 3, v + 6, ov.y);
-         place_child(canonical(s), slot);
+         if (p->state.parent && slot == p->state.own_slot)
+           place_child(p->state.parent, p->state.parent_slot);
+         else
+           place_child(canonical(s), slot);
          return Value::make_void();
        });
   bind("setSlotPos", "(ILjava.lang.Vector3;Ljava.lang.Ypr;)V",
@@ -1663,7 +2196,10 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
              ov.ypr = true;
            }
          }
-         place_child(canonical(s), slot);
+         if (p->state.parent && slot == p->state.own_slot)
+           place_child(p->state.parent, p->state.parent_slot);
+         else
+           place_child(canonical(s), slot);
          return Value::make_void();
        });
   bind("getMesh", "()I", [](Object *s, const std::vector<Value> &) {
@@ -1700,8 +2236,11 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
     auto *p = record(s);
     if (!p)
       return Value::make_int(-1);
-    if (number(a, 0) == 1)
+    if (number(a, 0) == 1) {
       p->flap ^= 1;
+      if (p->state.parent)
+        place_child(p->state.parent, p->state.parent_slot);
+    }
     return Value::make_int(p->flap);
   });
   bind("getLogo", "()I", [](Object *s, const std::vector<Value> &) {
@@ -1792,6 +2331,10 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
                 seed_wheel(*p, i);
                 std::copy(p->wheels[static_cast<size_t>(i)].pos,
                           p->wheels[static_cast<size_t>(i)].pos + 3, p3);
+                if (static_cast<size_t>(i) < p->config->wheels.size()) {
+                  p3[0] = p->config->wheels[i].position[0];
+                  p3[2] = p->config->wheels[i].position[2];
+                }
               }
             }
             return Value::make_obj(vec3(p3[0], p3[1], p3[2]));
@@ -1938,8 +2481,8 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   });
   sfx("getItems", "()I", [](Object *s, const std::vector<Value> &) {
     auto it = sfx_items.find(s);
-    return Value::make_int(it == sfx_items.end() ? 0
-                                                : static_cast<int>(it->second.size()));
+    return Value::make_int(
+        it == sfx_items.end() ? 0 : static_cast<int>(it->second.size()));
   });
   sfx("clear", "()V", [](Object *s, const std::vector<Value> &) {
     auto it = sfx_items.find(s);
@@ -1976,7 +2519,19 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
           auto *w = wheel_of(s);
           if (!w)
             return Value::make_obj(nullptr);
-          return Value::make_obj(vec3(w->pos[0], w->pos[1], w->pos[2]));
+          float x = w->pos[0], z = w->pos[2];
+          if (auto *p = record(s->fields["chassis"].tag == ValueTag::Obj
+                                   ? s->fields["chassis"].v.o
+                                   : nullptr)) {
+            const int i = field_int(s, "wheel_id", -1);
+            if (i >= 0 && static_cast<size_t>(i) < p->config->wheels.size()) {
+              // Native getPos 0x441B60 takes X/Z from the template, not
+              // from any of the three moving visual attachment bodies.
+              x = p->config->wheels[i].position[0];
+              z = p->config->wheels[i].position[2];
+            }
+          }
+          return Value::make_obj(vec3(x, w->pos[1], z));
         });
   wheel("getYpr", "()Ljava.lang.Ypr;",
         [](Object *s, const std::vector<Value> &) {
@@ -2020,6 +2575,8 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
             w.pos[1] = comp(v, "y");
             w.pos[2] = comp(v, "z");
             w.has_pos = true;
+            w.authored_position = true;
+            std::copy(w.pos, w.pos + 3, w.input_position);
           });
         });
   wheel("setYpr", "(Ljava.lang.Ypr;)V",
@@ -2038,7 +2595,10 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
     return put(s, [&](WheelPhys &w) { w.drive = scalar(a, 0, 0); });
   });
   wheel("setSteer", "(F)V", [put](Object *s, const std::vector<Value> &a) {
-    return put(s, [&](WheelPhys &w) { w.steer = scalar(a, 0, 0); });
+    return put(s, [&](WheelPhys &w) {
+      w.steer = scalar(a, 0, 0);
+      w.steer_set = true;
+    });
   });
   wheel("setRadius", "(F)V", [put](Object *s, const std::vector<Value> &a) {
     return put(s, [&](WheelPhys &w) { w.radius = scalar(a, 0, 0); });
@@ -2056,24 +2616,20 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
     });
   });
   wheel("setFriction", "(F)V", [put](Object *s, const std::vector<Value> &a) {
-    return put(s, [&](WheelPhys &w) {
-      w.friction = w.pacejka[2] = scalar(a, 0, 0);
-    });
+    return put(
+        s, [&](WheelPhys &w) { w.friction = w.pacejka[2] = scalar(a, 0, 0); });
   });
   wheel("setFrictn_x", "(F)V", [put](Object *s, const std::vector<Value> &a) {
-    return put(s, [&](WheelPhys &w) {
-      w.frictn_x = w.pacejka[12] = scalar(a, 0, 0);
-    });
+    return put(
+        s, [&](WheelPhys &w) { w.frictn_x = w.pacejka[12] = scalar(a, 0, 0); });
   });
   wheel("setSliction", "(F)V", [put](Object *s, const std::vector<Value> &a) {
-    return put(s, [&](WheelPhys &w) {
-      w.sliction = w.pacejka[0] = scalar(a, 0, 0);
-    });
+    return put(
+        s, [&](WheelPhys &w) { w.sliction = w.pacejka[0] = scalar(a, 0, 0); });
   });
   wheel("setStiffness", "(F)V", [put](Object *s, const std::vector<Value> &a) {
-    return put(s, [&](WheelPhys &w) {
-      w.stiffness = w.pacejka[4] = scalar(a, 0, 0);
-    });
+    return put(
+        s, [&](WheelPhys &w) { w.stiffness = w.pacejka[4] = scalar(a, 0, 0); });
   });
   wheel("setRollRes", "(F)V", [put](Object *s, const std::vector<Value> &a) {
     return put(s, [&](WheelPhys &w) { w.roll_res = scalar(a, 0, 0); });
@@ -2082,9 +2638,8 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
     return put(s, [&](WheelPhys &w) { w.bearing = scalar(a, 0, 0); });
   });
   wheel("setMaxLoad", "(F)V", [put](Object *s, const std::vector<Value> &a) {
-    return put(s, [&](WheelPhys &w) {
-      w.max_load = w.pacejka[11] = scalar(a, 0, 0);
-    });
+    return put(
+        s, [&](WheelPhys &w) { w.max_load = w.pacejka[11] = scalar(a, 0, 0); });
   });
   wheel("setLoadSmooth", "(F)V", [put](Object *s, const std::vector<Value> &a) {
     return put(s, [&](WheelPhys &w) {
@@ -2143,6 +2698,7 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   });
   wheel("setArm", "(FFFFFFF)V", [put](Object *s, const std::vector<Value> &a) {
     return put(s, [&](WheelPhys &w) {
+      w.has_arm = true;
       for (int i = 0; i < 7; ++i)
         w.arm[i] = scalar(a, static_cast<size_t>(i), 0);
     });
@@ -2152,6 +2708,7 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
           return put(s, [&](WheelPhys &w) {
             for (int i = 0; i < 10; ++i)
               w.hub[i] = scalar(a, static_cast<size_t>(i), 0);
+            w.has_hub = true;
           });
         });
 }

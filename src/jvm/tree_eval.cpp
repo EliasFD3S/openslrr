@@ -239,12 +239,14 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
         return n == "java.lang.String" || n == "String";
       };
       if (is_jstring(a) || is_jstring(b)) {
+        // A null reference concatenates as empty. Mechanic builds its
+        // flags with `flags = flags + "+"`, and flags starts null.
         auto piece = [](const Value& v) -> std::string {
-          if (v.tag == ValueTag::Obj && v.v.o) return v.v.o->str;
+          if (v.tag == ValueTag::Obj) return v.v.o ? v.v.o->str : "";
           if (v.tag == ValueTag::Int) return std::to_string(v.v.i);
           if (v.tag == ValueTag::Float)
             return format_script_number(static_cast<double>(v.v.f));
-          return "null";
+          return "";
         };
         push(Value::make_obj(host->tree_new_string(piece(a) + piece(b))));
         pending_expr = -1;
@@ -511,16 +513,26 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
       if (stack.empty()) return fail("call arg underflow");
       call_args.insert(call_args.begin(), pop());
     }
-    // createText(chas.ratio[i], ...) — the parameter is a String and the
-    // argument is a float. Without this the gear numbers stay blank.
+    // createText(chas.ratio[i], ...) and the dyno tick labels pass a number
+    // into a String parameter. "Ljava.lang.String;" is 18 characters; a
+    // 19-wide compare never matched, so those texts stayed blank.
+    auto as_string = [&](Value& v) {
+      if (v.tag == ValueTag::Float)
+        v = Value::make_obj(
+            host->tree_new_string(format_script_number(v.v.f)));
+      else if (v.tag == ValueTag::Int)
+        v = Value::make_obj(host->tree_new_string(std::to_string(v.v.i)));
+    };
+    if ((name == "createText" || name == "createTextBox") && !call_args.empty())
+      as_string(call_args[0]);
     if (!desc.empty() && desc[0] == '(') {
       size_t di = 1;
       for (size_t ai = 0; ai < call_args.size() && di < desc.size() &&
                           desc[di] != ')';
            ++ai) {
         const bool str =
-            desc.compare(di, 19, "Ljava.lang.String;") == 0 ||
-            desc.compare(di, 19, "Ljava/lang/String;") == 0;
+            desc.compare(di, 18, "Ljava.lang.String;") == 0 ||
+            desc.compare(di, 18, "Ljava/lang/String;") == 0;
         if (desc[di] == 'L') {
           const auto end = desc.find(';', di);
           di = end == std::string::npos ? desc.size() : end + 1;
@@ -536,12 +548,7 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
           ++di;
         }
         if (!str) continue;
-        Value& v = call_args[ai];
-        if (v.tag == ValueTag::Float)
-          v = Value::make_obj(
-              host->tree_new_string(format_script_number(v.v.f)));
-        else if (v.tag == ValueTag::Int)
-          v = Value::make_obj(host->tree_new_string(std::to_string(v.v.i)));
+        as_string(call_args[ai]);
       }
     }
     if (menu_call && last_menu &&

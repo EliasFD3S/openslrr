@@ -397,6 +397,11 @@ GameRefState* fullscreen_script_camera() {
     if (!c || !c->cam_active) continue;
     GameRefState* vp = c->viewport ? gameref_get(c->viewport) : nullptr;
     if (vp && (vp->vp_w < 0.99f || vp->vp_h < 0.99f)) continue;
+    // Osd.show() adds a second fullscreen camera (priority 2, parent = the
+    // Osd) after the scene camera. It exists for 3D widgets; those are drawn
+    // as 2D. Taking it as the world camera looks past the car.
+    if (GameRefState* parent = c->parent ? gameref_get(c->parent) : nullptr)
+      if (parent->class_name.find("Osd") != std::string::npos) continue;
     if (!found || c->cam_seq >= found->cam_seq) found = c;
   }
   return found;

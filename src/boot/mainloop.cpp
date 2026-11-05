@@ -9,6 +9,7 @@
 #include "slrr/osd_registry.hpp"
 #include "slrr/slrr_font.hpp"
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <string>
 #ifdef _WIN32
@@ -51,6 +52,9 @@ void dispatch_due_timers(Jvm& jvm, float now, int32_t* fired) {
 // Mechanic.show starts this thread. hide stops it. The script loop is
 // the only writer that replaces Garage infoline after createText.
 static Object* g_spinning_mechanic = nullptr;
+static Object* g_mechanic_hover = nullptr;
+static int g_mechanic_pointer_depth = 0;
+static float g_inventory_spin = 0.f;
 
 static Object* field_obj(Object* o, const char* name) {
   if (!o) return nullptr;
@@ -79,6 +83,13 @@ static void apply_mechanic_infoline(Jvm& jvm, Object* mechanic) {
   const int32_t changed = field_int(mechanic, "actualPanelChanged");
   const int32_t visuals = field_int(inv, "visualsUpdated");
   if (!changed && !visuals) return;
+  // A car-part hover already wrote the name. The panel flag must not
+  // replace it, and must not fire again on the next tick.
+  if (g_mechanic_hover) {
+    mechanic->fields["actualPanelChanged"] = Value::make_int(0);
+    if (inv) inv->fields["visualsUpdated"] = Value::make_int(0);
+    return;
+  }
   mechanic->fields["actualPanelChanged"] = Value::make_int(0);
   if (inv) inv->fields["visualsUpdated"] = Value::make_int(0);
 
@@ -131,6 +142,24 @@ void pump_async_messages(Jvm& jvm, Object* game) {
   }
 }
 
+// CarSelect.run is an infinite camera loop. Thread.start never enters it,
+// so the lens stayed at the origin, inside the car.
+void spin_car_select_camera(Object* section) {
+  if (!section || section->class_name.find("CarSelect") == std::string::npos)
+    return;
+  auto it = section->fields.find("Cam");
+  if (it == section->fields.end() || it->second.tag != ValueTag::Obj ||
+      !it->second.v.o)
+    return;
+  const float yaw = -0.01f + gameref_now() * 0.5f;
+  const float place = -0.15f;
+  const float sy = std::sin(yaw), cy = std::cos(yaw);
+  const float sp = std::sin(place), cp = std::cos(place);
+  const float arm = 1.5f * sp + 8.5f * cp;
+  gameref_set_matrix(it->second.v.o, sy * arm, 1.5f * cp - 8.5f * sp, cy * arm,
+                     yaw, -0.23f, 0.f);
+}
+
 void mainloop_sync_section_render(IRenderBackend& render,
                                   SectionMachine& sections) {
   Object* actual = sections.actual();
@@ -138,9 +167,18 @@ void mainloop_sync_section_render(IRenderBackend& render,
     if(!actual)return nullptr;auto it=actual->fields.find(field);
     return it!=actual->fields.end()&&it->second.tag==ValueTag::Obj?it->second.v.o:nullptr;
   };
-  scene_instances_select(object_field("map"),object_field("skydome"));
+  spin_car_select_camera(actual);
+  // Garage and city publish a map. The car selector parents the car to
+  // CarScene and has no map, so the mesh was never collected.
+  void* world = object_field("map");
+  if (!world) world = object_field("CarScene");
+  if (!world) world = object_field("Scene");
+  if (!world)
+    if (GameRefState* cam = fullscreen_script_camera()) world = cam->parent;
+  scene_instances_select(world, object_field("skydome"));
   const bool in_garage =
       actual && actual->class_name.find("Garage") != std::string::npos;
+  scene_instances_enable_static_floor(in_garage);
   if (in_garage) {
     if(video_fmv_is_non_exclusive())video_fmv_close();
     bgfx_set_garage_viewport(render, true, osd_widget_count());
@@ -149,6 +187,129 @@ void mainloop_sync_section_render(IRenderBackend& render,
     bgfx_set_garage_viewport(render, false, 0);
     bgfx_set_osd_overlay(render, true);
   }
+}
+
+void spin_mechanic_inventory(Jvm& jvm, float dt) {
+  if (!g_spinning_mechanic || g_mechanic_pointer_depth) {
+    g_inventory_spin = 0.f;
+    return;
+  }
+  Object* panel = nullptr;
+  const auto& in = host_input();
+  if (in.pointer_valid && !in.rmb_down)
+    if (const OsdWidget* w = osd_hover_widget())
+      if (w->handler &&
+          w->handler->class_name.find("InventoryPanel") != std::string::npos)
+        panel = w->handler;
+  Object* current = field_obj(g_spinning_mechanic, "actualPanel");
+  if (panel != current) {
+    g_spinning_mechanic->fields["actualPanel"] = Value::make_obj(panel);
+    g_spinning_mechanic->fields["actualPanelChanged"] = Value::make_int(1);
+  }
+  if (!panel) {
+    g_inventory_spin = 0.f;
+    return;
+  }
+  // Mechanic.run calls focusHook every 20 ms. That walks the slot camera
+  // around the part, which is the spin in the inventory cell.
+  if (dt < 0.f) dt = 0.f;
+  g_inventory_spin += dt;
+  while (g_inventory_spin >= 0.02f) {
+    g_inventory_spin -= 0.02f;
+    jvm.invoke(panel->class_name, "focusHook", "()V",
+               {Value::make_obj(panel)}, false);
+    if (g_inventory_spin > 0.1f) g_inventory_spin = 0.f;
+  }
+}
+
+void dispatch_mechanic_pointer(Jvm& jvm) {
+  auto& in = host_input();
+  if (g_mechanic_pointer_depth) {
+    in.part_click = false;
+    return;
+  }
+  if (!g_spinning_mechanic) {
+    g_mechanic_hover = nullptr;
+    return;
+  }
+  if (!in.pointer_valid || in.rmb_down || in.view_w <= 0 || in.view_h <= 0)
+    return;
+  const bool click = in.part_click;
+  in.part_click = false;
+
+  auto part_at = [&](int px, int py) -> Object* {
+    float eye[3], at[3], fov = 60.f, zn = 0.05f, zf = 500.f;
+    if (!gameref_world_camera(eye, at, &fov, &zn, &zf)) return nullptr;
+    float fx = at[0] - eye[0], fy = at[1] - eye[1], fz = at[2] - eye[2];
+    const float fl = std::sqrt(fx * fx + fy * fy + fz * fz);
+    if (fl < 1e-4f) return nullptr;
+    fx /= fl;
+    fy /= fl;
+    fz /= fl;
+    float rx = -fz, rz = fx;
+    const float rl = std::sqrt(rx * rx + rz * rz);
+    if (rl < 1e-4f) {
+      rx = 1.f;
+      rz = 0.f;
+    } else {
+      rx /= rl;
+      rz /= rl;
+    }
+    const float ux = -rz * fy;
+    const float uy = rz * fx - rx * fz;
+    const float uz = rx * fy;
+    const float aspect =
+        static_cast<float>(in.view_w) / static_cast<float>(in.view_h);
+    const float tany = std::tan(fov * 3.14159265f / 360.f);
+    const float ndc_x =
+        (2.f * px / static_cast<float>(in.view_w) - 1.f) * tany * aspect;
+    const float ndc_y = (1.f - 2.f * py / static_cast<float>(in.view_h)) * tany;
+    float dx = fx + rx * ndc_x + ux * ndc_y;
+    float dy = fy + uy * ndc_y;
+    float dz = fz + rz * ndc_x + uz * ndc_y;
+    const float dl = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (dl < 1e-6f) return nullptr;
+    const float origin[3] = {eye[0], eye[1], eye[2]};
+    const float dir[3] = {dx / dl, dy / dl, dz / dl};
+    return part_render_owner(scene_instances_pick(origin, dir));
+  };
+  auto cursor = [&](Object* part, const char* param) {
+    Object* text = jvm.new_string(param);
+    struct Depth {
+      int &n;
+      explicit Depth(int &n) : n(n) { ++n; }
+      ~Depth() { --n; }
+    } guard(g_mechanic_pointer_depth);
+    jvm.invoke(g_spinning_mechanic->class_name, "handleEvent",
+               "(Ljava.util.resource.GameRef;ILjava.lang.String;)V",
+               {Value::make_obj(g_spinning_mechanic), Value::make_obj(part),
+                Value::make_int(0x00010000), Value::make_obj(text)},
+               false);
+  };
+
+  if (click)
+    if (Object* part = part_at(in.part_click_x, in.part_click_y)) {
+      char buf[96];
+      std::snprintf(buf, sizeof(buf), "5 0 %d 0 0 0 0 0 0",
+                    gameref_make_live(part));
+      cursor(part, buf);
+    }
+  float ox = 0.f, oy = 0.f;
+  osd_pixel_to_text(in.pointer_x, in.pointer_y, in.view_w, in.view_h, &ox, &oy);
+  Object* hover =
+      osd_hit_index(ox, oy) >= 0 ? nullptr : part_at(in.pointer_x, in.pointer_y);
+  if (hover == g_mechanic_hover) return;
+  if (g_mechanic_hover) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "16 0 %d",
+                  gameref_make_live(g_mechanic_hover));
+    cursor(g_mechanic_hover, buf);
+  }
+  g_mechanic_hover = hover;
+  if (!hover) return;
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), "15 0 %d -1", gameref_make_live(hover));
+  cursor(hover, buf);
 }
 
 MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
@@ -495,8 +656,12 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     }
   }
 
+  dispatch_mechanic_pointer(jvm);
+  spin_mechanic_inventory(jvm, frame_dt);
   apply_mechanic_infoline(jvm, g_spinning_mechanic);
-  part_plant_parked();
+  // The solver caps work itself and retains debt; the camera's dt clamp must
+  // not silently discard elapsed simulation time.
+  part_physics_advance(dt < 0.f ? 0.0 : static_cast<double>(dt));
 
   // --- Present: AltPresentGate (FMV) else PresentFrame ---
   // Soft: backend flush pumps FMV SampleGrabber + Present (libbgfx path).
@@ -516,7 +681,11 @@ void mainloop_note_thread(Jvm& jvm, Object* thread, bool started) {
   Object* tgt = field_obj(thread, "target");
   if (!tgt || tgt->class_name != "java.game.Mechanic") return;
   if (!started) {
-    if (g_spinning_mechanic == tgt) g_spinning_mechanic = nullptr;
+    if (g_spinning_mechanic == tgt) {
+      g_spinning_mechanic = nullptr;
+      g_mechanic_hover = nullptr;
+      g_inventory_spin = 0.f;
+    }
     return;
   }
   g_spinning_mechanic = tgt;

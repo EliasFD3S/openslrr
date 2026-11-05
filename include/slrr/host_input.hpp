@@ -17,6 +17,15 @@ struct HostInput {
   float cursor_x = 0.f;
   float cursor_y = 0.f;
   bool rmb_down = false;
+  // Client pixels. part_click is a left release that missed every OSD widget.
+  int pointer_x = 0;
+  int pointer_y = 0;
+  int view_w = 0;
+  int view_h = 0;
+  bool pointer_valid = false;
+  bool part_click = false;
+  int part_click_x = 0;
+  int part_click_y = 0;
   bool keys_left = false;
   bool keys_right = false;
   bool keys_up = false;

@@ -1,58 +1,71 @@
-# OpenSLRR
+<p align="center">
+  <img src="assets/branding/open-slrr.png" alt="Open SLRR" width="600">
+</p>
 
-C++ host for **Street Legal Racing: Redline**. It loads the game's TUFA classes, runs the TREE programs, and supplies the natives, resources, rendering, and audio those scripts call.
+<p align="center">
+  <strong>Rebuild the engine. Return to the garage.</strong><br>
+  A C++ reimplementation of the Street Legal Racing: Redline engine.
+</p>
 
-The validated scope covers startup, menus, dialogs, and the garage, including assembling a car from its CFG files. Driving, the world, and traffic are still ahead. The game data is not in this repository.
+<p align="center">
+  <img src="https://img.shields.io/badge/status-in_development-8b5cf6" alt="In development">
+  <img src="https://img.shields.io/badge/platform-Windows_x86-0078d4" alt="Windows x86">
+  <img src="https://img.shields.io/badge/C%2B%2B-20-00599c" alt="C++20">
+  <img src="https://img.shields.io/badge/reference-SLRR_2.2.1_MWM-c0c0c0" alt="SLRR 2.2.1 MWM">
+</p>
 
-Validation uses **SLRR 2.2.1 MWM**. Win32 is the reference configuration: the scripts and the 32-bit AVI codecs expect it. The bgfx backend is built as C++20.
+<p align="center">
+  <a href="#progress">Progress</a> · <a href="#build">Build</a> · <a href="#run">Run</a> · <a href="#sources-and-credits">Sources and credits</a>
+</p>
 
-## Status
+---
 
-| Area | In place |
+Open SLRR brings the game's scripts, cars, and resources into a new engine. The project reimplements resource loading, script execution, rendering, the interface, and the native functions those scripts use.
+
+**The garage is coming to life, but the game is not fully playable yet.** Menus, parts previews, and car assembly are in place. Driving and a complete career remain to be built.
+
+Original game data is required and is not included. The reference version is **SLRR 2.2.1 MWM**; compatibility with other versions and mods is not guaranteed. This is an independent project, unaffiliated with the original game's developers or publishers.
+
+## Progress
+
+These milestones describe existing functionality, rather than a percentage of the game completed.
+
+| Area | Current state |
 | --- | --- |
-| Scripts | TUFA classes, TREE programs, Java and native calls, inheritance, `switch` |
-| Resources | RPK packs and cross-pack references, SCX geometry, DDS/PTX textures, CFG properties |
-| Rendering | bgfx/D3D11, textured garage, script camera, scene instances, skydome, map POLY shells |
-| Car | Built from an RPK/CFG, stock parts, slots, and compatibility aliases. Wheel springs and body mass come from the CFG. A parked chassis is dropped onto the preloaded garage mesh. Reference: Baiern, 76 parts |
-| Catalog | Categories across RPKs, classes, integer prices, parts, and 3D previews on the original pages |
-| Materials | Paint, chrome, and glass from the material flags. Lightmap multiply, the script envmap, wrap sampling. Tyre UVs stay as authored |
-| Curves | Dyno torque and power from the chassis update (`--probe-dyno`). Pacejka stays a probe |
-| Interface | Menus, career dialogs, Club Info, track selector, text fields, hover, DAY/TIME |
-| Paint | Five 3D paint cans, colors from the scripts, scrolling, separate inventory cameras |
-| Audio | UI effects, `SfxRef`, voices with volume, pitch, looping, and stop |
-| FMV | AVI inside the renderer, audio track of the Activision/Invictus intros |
+| Scripts | ✅ TUFA classes and TREE programs, inheritance, Java and native calls |
+| Resources | ✅ RPK packs, SCX models, DDS/PTX textures, and CFG configurations |
+| Garage and rendering | ✅ bgfx/D3D11, textures, script camera, instances, and sky |
+| Interface | ✅ Menus, career dialogs, catalog, track selection, and paint inventory |
+| Cars | ✅ Assembly from scripts and CFG files; reference Baiern with 76 parts |
+| Physics | 🔧 Chassis, springs/dampers, and wheel contacts on the garage floor, verified with Baiern and Duhen |
+| Audio and video | ✅ Effects, voices, loops, and intros with their audio tracks where available |
+| Driving | ⏳ Tyre slip, engine, clutch, transmission, and controls still need to be connected |
+| World and career | ⏳ City, traffic, saves, and the complete purchase/install/save cycle |
 
-In the test data, `Prime.avi` has no audio track.
+**Next major milestones**
 
-**Still to build:** the driving loop (rigid body, clutch, contacts), saves, full transparency, the city, and traffic. The parked drop places the chassis. It is not that solver. Some natives are still stubs. Catalog display is tested; buying, interactive install, and saving that cycle are not. Multiplayer is out of scope.
+- [ ] Complete the simulation and controls needed to drive.
+- [ ] Extend wall collisions, suspension constraints, and deformation.
+- [ ] Finish purchasing and interactively installing parts, then saving the result.
+- [ ] Complete transparency rendering.
+- [ ] Bring the city and traffic to life.
 
-## Sources
-
-The installed TUFA scripts and assets remain the source of classes, parts, and their parameters. The host reimplements those contracts in C++. The repositories below were used as specifications:
-
-| Reference | Role for this host |
-| --- | --- |
-| [SLRR-JVM-decompiler](https://github.com/nedobylskiy/SLRR-JVM-decompiler) | TUFA and `OP_FLAGS` spec, carried into `src/jvm/tufa.cpp` |
-| [SLRR-JVM-compiler](https://github.com/nedobylskiy/SLRR-JVM-compiler) | TUFA writer, used when regenerating classes |
-| [SLRR-JVM](https://github.com/nedobylskiy/SLRR-JVM) | Source dialect and natives, behavior reference |
-| [SLRR_rev](https://github.com/nedobylskiy/SLRR_rev) | RPK/SCX formats, CFG, FindFile |
-| [SLRR_rev `codex/physics-reverse-port` @ c65675f](https://github.com/nedobylskiy/SLRR_rev/tree/c65675f) | SCX layers, paint, envmap. Contracts in [REFERENCE_PORT.md](REFERENCE_PORT.md) |
-| [SLRR_rev `codex/pacejka-research`](https://github.com/nedobylskiy/SLRR_rev) | SL2 Pacejka leaf, exposed by `--probe-pacejka` |
-| [SLRR_rev `54ee35cc`](https://github.com/nedobylskiy/SLRR_rev/commit/54ee35cc) | Parked spring length from the installed load and the CFG anchors. The measured attachment offsets on that branch are not used |
-| [io_invo_scx](https://github.com/nonamesex/io_invo_scx) | SCX mesh layout |
-| [bgfx](https://github.com/bkaradzic/bgfx) | D3D11 rendering |
-
-Other SLRR_rev notes (WheelRef, wear, damage) stay as reading material. They do not drive the game yet. [QUARRY.md](QUARRY.md) describes the local workspace (`repos/`, `sources/`, `game/`) where those references were read.
-
-## Requirements
-
-- Windows, Visual Studio 2022, the Windows SDK, and CMake.
-- Git, to fetch bgfx.
-- A game install: classes, RPKs, models, textures, and sounds. It must contain `system/Scripts/lang/System.class`.
-
-Run the commands from the root of this repository. In the development workspace, that folder is named `host/`.
+Some native functions are still placeholders. Catalog display works, but the full purchase loop has not yet been validated. Multiplayer is outside the current scope.
 
 ## Build
+
+### Requirements
+
+- Windows and **Visual Studio 2022**, with the **Desktop development with C++** workload and the Windows SDK.
+- **CMake 3.21 or later** and **Git**, available in your terminal.
+- An installation of **SLRR 2.2.1 MWM**, containing `system/Scripts/lang/System.class`.
+- An Internet connection while preparing and initially configuring dependencies.
+
+The reference configuration is **Win32**, including on 64-bit Windows: the original scripts and AVI codecs expect a 32-bit environment.
+
+### Get the project
+
+In PowerShell:
 
 ```powershell
 git clone https://github.com/EliasFD3S/openslrr.git
@@ -62,93 +75,68 @@ git clone https://github.com/bkaradzic/bgfx.cmake.git third_party/bgfx.cmake
 git -C third_party/bgfx.cmake checkout 5ea74ee66662daef4089695846d6322da0dde94e
 ```
 
-The default game folder is `../game`. Pass another location with `-GameRoot` or `--root`.
+Run the following commands from this folder, which contains `CMakeLists.txt`. In the local development workspace, it is named `host/`.
+
+### Configure and build
+
+Replace the game path with your installation location:
 
 ```powershell
 cmake -S . -B build-bgfx -G "Visual Studio 17 2022" -A Win32 `
-  -DSLRR_WITH_LIBBGFX=ON -DSLRR_BUILD_TESTS=ON -DSLRR_STAGE_BUILD=ON
+  -DSLRR_WITH_LIBBGFX=ON `
+  -DSLRR_BUILD_TESTS=ON `
+  -DSLRR_STAGE_BUILD=OFF `
+  -DSLRR_TEST_GAME_ROOT="D:/Games/SLRR"
 
-.\validate-and-promote.ps1
-
-# Game installed elsewhere:
-.\validate-and-promote.ps1 -GameRoot 'D:\Jeux\SLRR'
+cmake --build build-bgfx --config Release --parallel
 ```
 
-`validate-and-promote.ps1` builds into `build-bgfx/candidate/`, runs the tests against the original assets, archives sources, SHA-256 hashes, the test log, and the executables under `../checkpoints/`, then replaces `build-bgfx/Release/slrr_host.exe` only when the tests pass. The previous executable stays in that backup. Close the game before this step: a running executable blocks the replacement. A build with `SLRR_STAGE_BUILD=ON` updates only the candidate.
-
-The archives contain neither the game data nor `third_party/`.
+The executable is generated at `build-bgfx/Release/slrr_host.exe`. The first build includes bgfx and its shader tools, so it may take a while.
 
 ## Run
 
 ```powershell
 # Intros, then menus.
-.\build-bgfx\Release\slrr_host.exe --game --render bgfx --root ..\game
+.\build-bgfx\Release\slrr_host.exe --game --render bgfx --root "D:\Games\SLRR"
 
-# Garage, skipping career creation.
-.\build-bgfx\Release\slrr_host.exe --game --auto-new --render bgfx --root ..\game
+# Open the garage, skipping career creation.
+.\build-bgfx\Release\slrr_host.exe --game --auto-new --render bgfx --root "D:\Games\SLRR"
 
-# Baiern assembled from its scripts and CFG.
-.\build-bgfx\Release\slrr_host.exe --game --spawn-car cars/racers/Baiern.rpk:0x6 --render bgfx --root ..\game
-
-# Data load check, without an interactive session.
-.\build-bgfx\Release\slrr_host.exe --probe --root ..\game
-
-# Pacejka probe.
-.\build-bgfx\Release\slrr_host.exe --probe-pacejka
-
-# Dyno curve check, without a window.
-.\build-bgfx\Release\slrr_host.exe --probe-dyno
+# Baiern assembled from its scripts and configurations.
+.\build-bgfx\Release\slrr_host.exe --game --spawn-car cars/racers/Baiern.rpk:0x6 --render bgfx --root "D:\Games\SLRR"
 ```
 
-`$env:SLRR_GAME_ROOT` also sets the game folder. `--root` takes priority. `slrr_host.exe --help` lists the remaining options.
+In the garage, **right-click and drag**, the **arrow keys**, and the **scroll wheel** control the camera. **Escape** skips the intros. Close the window to quit. The car rests on its wheels, but driving controls are not connected yet.
 
-In the garage, dealer, and car lot the script camera is the view. Right-click and drag, the arrow keys, and the wheel orbit it. Escape skips the intros. Closing the window quits.
+You can also set the game path with `$env:SLRR_GAME_ROOT`. The `--root` option takes priority; without either setting, the default folder is `../game`. Run `slrr_host.exe --help` for all options.
 
-`--spawn-car PACK:LOCAL_ID` opens a development session without the career dialog. The car is placed, not driven.
+## Verify the build
 
-## Tests
+After building:
 
 ```powershell
-cmake --build build-bgfx --config Release `
-  --target host_runtime_test ui_state_test scene_instances_test part_config_test --parallel
 ctest --test-dir build-bgfx -C Release --output-on-failure
 ```
 
-With the reference data, CTest registers **16 tests**:
+With the reference game data configured, the suite registers **18 tests**, covering scripts, the interface, audio, scenes, parts, and suspension contacts. Without game data, only standalone tests are registered. These checks do not yet cover a driving session or a complete career.
 
-- simultaneous effects, `money.wav`, voice loops, and stopping voices;
-- connection and playback of the intro audio track;
-- Tune and script `switch` branches;
-- the DAY/TIME HUD, including after it is recreated;
-- career dialogs, labels, and scrolling;
-- track selector descriptions, without stacking leftovers;
-- hover, enabled and disabled buttons, focus;
-- five gray paint cans, the next red page, and their removal on close;
-- transforms, isolated inventory scenes, skydome;
-- CFG, slots, aliases, wheel springs, and the stock assembly run by the scripts;
-- catalog parts, classes, prices, and previews;
-- SCX layers, UV channels, and `Part.setTexture` propagation.
+## Sources and credits
 
-`SLRR_TEST_GAME_ROOT` must point at the game for the integration tests. Without that data, only the standalone tests are built. Promotion refuses a partial suite.
+The project draws on community research to understand SLRR's formats and behavior. Your installation's scripts and resources supply the classes, parts, and their parameters; the C++ engine reimplements the functions they expect.
 
-These tests do not cover a full career load cycle or a driving session. The audio tests check that voices are created and report playback state. Positional effects go through the 2D mixer.
+| Source | Contribution |
+| --- | --- |
+| [SLRR-JVM-decompiler](https://github.com/nedobylskiy/SLRR-JVM-decompiler) | TUFA class format and script instructions |
+| [SLRR-JVM-compiler](https://github.com/nedobylskiy/SLRR-JVM-compiler) | Writing and regenerating TUFA classes |
+| [SLRR-JVM](https://github.com/nedobylskiy/SLRR-JVM) | Reference for the scripting language and native functions |
+| [SLRR_rev](https://github.com/nedobylskiy/SLRR_rev) | RPK/SCX formats, configurations, materials, and physics research |
+| [io_invo_scx](https://github.com/nonamesex/io_invo_scx) | SCX mesh structure |
+| [bgfx](https://github.com/bkaradzic/bgfx) and [bgfx.cmake](https://github.com/bkaradzic/bgfx.cmake) | Graphics rendering and CMake build integration |
 
-## Layout
+Physics research is being integrated gradually: listing a reference does not mean the entire original simulation has already been reproduced. Thanks to the authors of these tools and research, and to the original game's creators.
 
-```text
-include/slrr/     Interfaces
-src/jvm/          TUFA parser, TREE interpreter, call resolution
-src/natives/      Natives exposed to scripts
-src/resources/    RPK, SCX, textures, CFG, instances, assembly
-src/render/       Backends and fonts
-src/ui/           Widgets, focus, hover, clock
-src/platform/     Input, audio, FMV
-src/boot/         Startup and main loop
-src/physics/      Dyno curves and the Pacejka probe
-shaders/          bgfx shaders
-tests/            Standalone and integration tests
-third_party/      Local dependencies, ignored by Git
-assets/           Cursors and icon extracted for the host
-```
+## Contributing
 
-`game/`, `game2/`, `sources/`, `sources2/`, `repos/`, and `docs/` live beside this repository. They are not versioned here.
+When reporting a problem, include your game version, launch command, expected behavior, and actual result. Attach console output and, if useful, a screenshot. If you use a mod, name it and check whether the issue also occurs with the reference game data.
+
+To explore the code: `src/jvm/` runs scripts, `src/resources/` loads data, `src/natives/` connects scripts to the engine, and `src/render/`, `src/ui/`, `src/platform/`, and `src/physics/` contain the main systems. Tests live in `tests/`.

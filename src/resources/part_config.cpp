@@ -91,7 +91,8 @@ PartMatrix part_matrix_inverse_rigid(const PartMatrix &m) {
   return out;
 }
 bool part_parked_spring_length(float rest, float minimum, float maximum,
-                               float force, float mass_on_wheel, float &length) {
+                               float force, float mass_on_wheel,
+                               float &length) {
   if (!(force > 0.f && rest > 0.f) || !std::isfinite(mass_on_wheel))
     return false;
   const float low = minimum > 0.f ? minimum : 0.f;
@@ -132,6 +133,7 @@ PartConfig parse_part_config(const std::string &source,
   bool have_spring = false;
   float spring[3] = {0.29f, 0.1f, 0.05f};
   float wheel_radius = 0.f;
+  float wheel_mass = 0.f;
   auto rid = [&](const std::string &text) {
     std::string word = text;
     if (!word.empty() && (word.back() == 'r' || word.back() == 'R'))
@@ -180,9 +182,25 @@ PartConfig parse_part_config(const std::string &source,
         if (out.slots.empty())
           throw std::runtime_error("slottype before slot");
         out.slots.back().type = integer(t, 1);
+      } else if (!out.slots.empty() && t.size() == 11 &&
+                 (std::isdigit(static_cast<unsigned char>(command[0])) ||
+                  command[0] == '-' || command[0] == '+' ||
+                  command[0] == '.')) {
+        PartSlot &slot = out.slots.back();
+        for (int i = 0; i < 3; ++i) {
+          slot.flap_pivot[i] = number(t, static_cast<size_t>(i));
+          slot.flap_axis[i] = number(t, static_cast<size_t>(3 + i));
+          slot.flap_dir[i] = number(t, static_cast<size_t>(6 + i));
+        }
+        slot.flap_lo = number(t, 9);
+        slot.flap_hi = number(t, 10);
+        slot.has_flap = true;
       } else if (command == "type") {
         have_spring = false;
         wheel_radius = 0.f;
+        wheel_mass = t.size() >= 2 ? number(t, 1) : 0.f;
+        if (wheel_mass < 0.f)
+          throw std::runtime_error("wheel mass must be non-negative");
         if (t.size() >= 4 && (t[2] == "sphere" || t[2] == "Sphere")) {
           wheel_radius = number(t, 3);
           if (wheel_radius <= 0.f)
@@ -196,8 +214,10 @@ PartConfig parse_part_config(const std::string &source,
         have_spring = true;
       } else if (command == "wheel") {
         out.wheels.push_back(pose(t));
+        out.wheel_steering.push_back(t.size() > 7 ? number(t, 7) : 0.f);
         PartWheelSpring spec;
         spec.radius = wheel_radius;
+        spec.mass = wheel_mass;
         if (have_spring) {
           spec.base = spring[0];
           spec.travel = spring[1];
@@ -205,8 +225,10 @@ PartConfig parse_part_config(const std::string &source,
           spec.authored = true;
         }
         out.wheel_springs.push_back(spec);
-      }
-      else if (command == "steering") {
+      } else if (command == "maxsteer") {
+        out.max_steer = number(t, 1);
+        out.ackermann_length = t.size() > 2 ? number(t, 2) : 0.f;
+      } else if (command == "steering") {
         out.steering = pose(t);
         out.has_steering = true;
       } else if (command == "stockpart")
@@ -238,8 +260,7 @@ PartConfig parse_part_config(const std::string &source,
           link.filter = true;
         }
         out.renders.back().links.push_back(link);
-      }
-      else if (command == "mesh")
+      } else if (command == "mesh")
         out.mesh = rid(t.at(1));
       else if (command == "texture")
         out.texture = rid(t.at(1));
@@ -253,8 +274,7 @@ PartConfig parse_part_config(const std::string &source,
           throw std::runtime_error("body mass must be non-negative");
         out.bodies.push_back(body);
         out.mass += body.mass;
-      }
-      else if (command == "name") {
+      } else if (command == "name") {
         for (size_t i = 1; i < t.size(); i++) {
           if (i > 1)
             out.name += ' ';
