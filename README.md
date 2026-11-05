@@ -81,14 +81,10 @@ Run the following commands from this folder, which contains `CMakeLists.txt`. In
 
 ### Configure and build
 
-Replace the game path with your installation location:
-
 ```powershell
 cmake -S . -B build-bgfx -G "Visual Studio 17 2022" -A Win32 `
   -DSLRR_WITH_LIBBGFX=ON `
-  -DSLRR_BUILD_TESTS=ON `
-  -DSLRR_STAGE_BUILD=OFF `
-  -DSLRR_TEST_GAME_ROOT="D:/Games/SLRR"
+  -DSLRR_STAGE_BUILD=OFF
 
 cmake --build build-bgfx --config Release --parallel
 ```
@@ -112,15 +108,13 @@ In the garage, **right-click and drag**, the **arrow keys**, and the **scroll wh
 
 You can also set the game path with `$env:SLRR_GAME_ROOT`. The `--root` option takes priority; without either setting, the default folder is `../game`. Run `slrr_host.exe --help` for all options.
 
-## Verify the build
-
-After building:
+## Build and promote with a backup
 
 ```powershell
-ctest --test-dir build-bgfx -C Release --output-on-failure
+.\validate-and-promote.ps1
 ```
 
-With the reference game data configured, the suite registers **18 tests**, covering scripts, the interface, audio, scenes, parts, and suspension contacts. Without game data, only standalone tests are registered. These checks do not yet cover a driving session or a complete career.
+This compiles the candidate, archives the sources and previous executable, then copies the new executable to `build-bgfx/Release/`. Close the running Release executable before promotion. There is no automated test suite.
 
 ## Sources and credits
 
@@ -141,4 +135,4 @@ Physics research is being integrated gradually: listing a reference does not mea
 
 When reporting a problem, include your game version, launch command, expected behavior, and actual result. Attach console output and, if useful, a screenshot. If you use a mod, name it and check whether the issue also occurs with the reference game data.
 
-To explore the code: `src/jvm/` runs scripts, `src/resources/` loads data, `src/natives/` connects scripts to the engine, and `src/render/`, `src/ui/`, `src/platform/`, and `src/physics/` contain the main systems. Tests live in `tests/`.
+To explore the code: `src/jvm/` runs scripts, `src/resources/` loads data, `src/natives/` connects scripts to the engine, and `src/render/`, `src/ui/`, `src/platform/`, and `src/physics/` contain the main systems.

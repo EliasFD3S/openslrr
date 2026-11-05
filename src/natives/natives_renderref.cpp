@@ -162,7 +162,15 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
             bool plate = false;
             float hw = 0.f, hh = 0.f;
             osd_mesh_halves(osd, mw, mh, &hw, &hh, &plate);
+            const std::string icon =
+                !texpath.empty() ? texpath : rpk.texture_path_for_id(tid);
+            // The dealer swaps catalog → sell on the same button. The new
+            // rectangle is a different size after the viewport activates, so
+            // a size check left the first glyph up under the second one.
+            if (osd_claim_button_icon(self, nx, ny, tid, icon))
+              return Value::make_void();
             OsdWidget w;
+            w.picture_source = self;
             w.owner = osd;
             w.x = nx;
             w.y = ny;
@@ -174,7 +182,7 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
             w.no_hit = true;
             w.icon_id = tid;
             w.tex_alpha = local == 0x00A2u;
-            w.icon_path = !texpath.empty() ? texpath : rpk.texture_path_for_id(tid);
+            w.icon_path = icon;
             if (group) {
               auto git = group->fields.find("_host_group");
               if (git != group->fields.end() && git->second.tag == ValueTag::Int)

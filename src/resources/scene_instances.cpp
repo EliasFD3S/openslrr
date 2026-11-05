@@ -1,5 +1,6 @@
 #include "slrr/scene_instances.hpp"
 #include "slrr/gameref.hpp"
+#include "slrr/part_runtime.hpp"
 #include "slrr/rpk_index.hpp"
 
 #include <algorithm>
@@ -715,6 +716,8 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root) {
     // alive until script cleanup. Never render it as ordinary foreground.
     if (n->sky_render && n->key != g_sky)
       continue;
+    if (n->light_flags && !part_lamp_lit(n->light_flags))
+      continue;
     SceneInstance instance;
     if (!scene_instance_transform(n->key, root, instance.transform.data()))
       continue;
@@ -725,6 +728,7 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root) {
     instance.sky = n->key == g_sky;
     instance.color = n->color;
     instance.vehicle_material = n->vehicle_material;
+    instance.light_flags = n->light_flags;
     if (n->paint_source) {
       // The mesh list prefers a .dds next to the source, while the CFG id
       // still names the .png. Compare the game-relative path without the

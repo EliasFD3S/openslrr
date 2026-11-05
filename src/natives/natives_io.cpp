@@ -2,6 +2,7 @@
 #include "natives_internal.hpp"
 
 #include "slrr/gameref.hpp"
+#include "slrr/part_runtime.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/osd_registry.hpp"
@@ -22,6 +23,18 @@
 #include <string>
 
 namespace slrr {
+namespace {
+// StreetLegal can hold save/temp/CopyCar open. The selector's back-to-first
+// page saves, destroys, then loads that path; a failed disk write must still
+// be what the following read sees.
+std::unordered_map<std::string, std::vector<uint8_t>> g_unflushed_saves;
+
+std::string save_key(const std::filesystem::path& path) {
+  std::error_code ec;
+  const auto canon = std::filesystem::weakly_canonical(path, ec);
+  return (ec ? path : canon).lexically_normal().string();
+}
+}  // namespace
 
 void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   jvm.natives().register_method(
@@ -226,8 +239,12 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         const fs::path p = under_game(jvm.game_root(), rel);
         if (p.empty()) return Value::make_int(0);
         std::error_code ec;
-        if (!fs::exists(p, ec)) return Value::make_int(1);
+        if (!fs::exists(p, ec)) {
+          g_unflushed_saves.erase(save_key(p));
+          return Value::make_int(1);
+        }
         fs::remove_all(p, ec);
+        if (!ec) g_unflushed_saves.erase(save_key(p));
         std::printf("[native] File.delete %s ok=%d\n", rel.c_str(), ec ? 0 : 1);
         return Value::make_int(ec ? 0 : 1);
       });
@@ -289,10 +306,17 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         hf.path = p;
         hf.writing = mode != 0;
         if (!hf.writing) {
-          std::ifstream in(p, std::ios::binary);
-          if (!in) return Value::make_int(0);
-          hf.bytes.assign(std::istreambuf_iterator<char>(in),
-                          std::istreambuf_iterator<char>());
+          // Specifying a mode replaces the ifstream default. Without in,
+          // MSVC does not open the file.
+          std::ifstream in(p, std::ios::in | std::ios::binary);
+          const auto kept = g_unflushed_saves.find(save_key(p));
+          if (kept != g_unflushed_saves.end())
+            hf.bytes = kept->second;
+          else if (in)
+            hf.bytes.assign(std::istreambuf_iterator<char>(in),
+                            std::istreambuf_iterator<char>());
+          else
+            return Value::make_int(0);
         }
         g_host_files[self] = std::move(hf);
         return Value::make_int(1);
@@ -311,12 +335,20 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
           // open the file and the career buffer never reaches disk.
           std::ofstream out(it->second.path, std::ios::out | std::ios::binary |
                                                  std::ios::trunc);
-          if (out && !it->second.bytes.empty())
+          const bool wrote = static_cast<bool>(out);
+          if (wrote && !it->second.bytes.empty())
             out.write(reinterpret_cast<const char*>(it->second.bytes.data()),
                       static_cast<std::streamsize>(it->second.bytes.size()));
-          std::printf("[native] File.close %s %zu bytes ok=%d\n",
+          const std::string key = save_key(it->second.path);
+          if (wrote && out)
+            g_unflushed_saves.erase(key);
+          else
+            g_unflushed_saves[key] = it->second.bytes;
+          std::printf("[native] File.close %s %zu bytes ok=%d kept=%d\n",
                       it->second.path.string().c_str(), it->second.bytes.size(),
-                      static_cast<bool>(out) ? 1 : 0);
+                      wrote && static_cast<bool>(out) ? 1 : 0,
+                      g_unflushed_saves.count(key) ? 1 : 0);
+          part_note_live_save(it->second.path.string());
         }
         g_host_files.erase(self);
         return Value::make_void();

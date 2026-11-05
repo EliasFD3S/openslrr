@@ -60,6 +60,21 @@ bool widget_disabled(const OsdWidget& w) {
          it->second.v.i != 0;
 }
 
+// Group.java still points a disabled gadget when highliteMethod is exactly
+// HL_BACKLIGHT. That is the pager (Empty.ptx): the forbidden plate is the
+// focus rectangle, not a picture that stays up.
+bool widget_backlight(const OsdWidget& w) {
+  if (!w.button) return false;
+  auto it = w.button->fields.find("highliteMethod");
+  if (it == w.button->fields.end()) return false;
+  int method = 0;
+  if (it->second.tag == ValueTag::Int) method = it->second.v.i;
+  else if (it->second.tag == ValueTag::Float)
+    method = static_cast<int>(it->second.v.f);
+  else return false;
+  return method == 2;
+}
+
 void refresh_string_text(const OsdWidget& w, bool caret) {
   if (!w.text_key) return;
   std::string shown = w.input;
@@ -318,10 +333,15 @@ int32_t osd_hit_index(float osd_x, float osd_y) {
   for (int32_t i = static_cast<int32_t>(g_widgets.size()) - 1; i >= 0; --i) {
     const OsdWidget& w = g_widgets[static_cast<size_t>(i)];
     // Do NOT skip cmd==0 — Mechanic.CMD_SCROLL_UP is 0.
-    if (widget_disabled(w) || w.hidden || w.background || w.no_hit) continue;
-    // Gadget.focus plants a 0x012B plate on the pointed icon. It is not a
-    // button; hitting it keeps the highlight glued to that icon.
-    if ((w.icon_id & 0xFFFFu) == 0x012Bu) continue;
+    if (w.hidden || w.background || w.no_hit) continue;
+    // Disabled text rows stay quiet. A disabled backlight button (catalog
+    // and car-selector page arrows) is still a hover target.
+    if (widget_disabled(w) && (widget_nofocus(w) || !widget_backlight(w)))
+      continue;
+    // Gadget.focus plants a 0x012B / 0x013C plate on the pointed icon. It is
+    // not a button; hitting it keeps the highlight glued to that icon.
+    if ((w.icon_id & 0xFFFFu) == 0x012Bu || (w.icon_id & 0xFFFFu) == 0x013Cu)
+      continue;
     if (modal && w.owner != modal) continue;
     if (std::fabs(osd_x - w.x) > w.half_w ||
         std::fabs(osd_y - w.y) > w.half_h)
@@ -474,8 +494,11 @@ bool osd_focus_plate_visible(const OsdWidget& plate) {
   if (!osd || get_obj(osd, "pointedGadget") != gadget) return false;
   auto mode = osd->fields.find("controlMode");
   if (mode != osd->fields.end() && mode->second.tag == ValueTag::Int && mode->second.v.i == 1) return true;
-  const auto* hover = osd_hover_widget();
-  return hover && hover->button == gadget;
+  // osd_hover_widget drops disabled buttons, but that is exactly when
+  // Gadget.focus builds the forbidden plate.
+  const auto* hover = osd_widget_at(osd_hover_index());
+  if (!hover || hover->hidden || owner_suppressed(*hover)) return false;
+  return hover->button == gadget;
 }
 bool osd_highlight_disabled(const OsdWidget& plate) {
   if(!plate.highlight_for)return plate.disabled;
@@ -620,6 +643,8 @@ void osd_fire_click_at(float osd_x, float osd_y) {
   const int32_t idx = osd_hit_index(osd_x, osd_y);
   if (idx < 0 || idx >= static_cast<int32_t>(g_widgets.size())) return;
   const OsdWidget hit = g_widgets[static_cast<size_t>(idx)];
+  // Hover can land here. The command still does not run.
+  if (widget_disabled(hit)) return;
   if (hit.string_input) {
     g_string_focus = idx;
     sync_string_value(hit);
@@ -764,6 +789,25 @@ void bind_input(Object* g) {
 
 }  // namespace
 
+bool osd_claim_button_icon(Object* render, float x, float y, uint32_t icon_id,
+                           const std::string& path) {
+  if (!render) return false;
+  // A replacement RenderRef owns a new widget. Reusing an old widget by
+  // coordinates aliases two instance lifetimes and can leave an orphan glyph.
+  for(OsdWidget& hit:g_widgets) {
+    if(!hit.hit_only || hit.dead || !hit.button)continue;
+    if(field_o(field_o(hit.button,"rect"),"ins")!=render)continue;
+    for(OsdWidget& old:g_widgets) {
+      if(old.button!=hit.button || old.hit_only || old.dead)continue;
+      if(old.picture_source==render)continue;
+      old.hidden=old.dead=true;old.icon_path.clear();
+    }
+    hit.icon_id=icon_id;hit.icon_path=path;
+    break;
+  }
+  return false;
+}
+
 void osd_attach_button_picture(Object* render) {
   if (!render) return;
   auto wit = render->fields.find("_osd_wi");
@@ -771,7 +815,7 @@ void osd_attach_button_picture(Object* render) {
   OsdWidget* vis = osd_widget_mut(wit->second.v.i);
   if (!vis) return;
   for (OsdWidget& w : g_widgets) {
-    if (!w.button || w.dead) continue;
+    if (!w.button || w.dead || !w.hit_only) continue;
     Object* rect = field_o(w.button, "rect");
     Object* ins = field_o(rect, "ins");
     if (ins != render) continue;
@@ -799,8 +843,39 @@ void osd_attach_button_picture(Object* render) {
   }
 }
 
+void osd_sync_button_pictures() {
+  std::unordered_set<Object*> seen;
+  for(OsdWidget& hit:g_widgets) {
+    if(!hit.hit_only || hit.dead || !hit.button || !seen.insert(hit.button).second)continue;
+    Object* render=field_o(field_o(hit.button,"rect"),"ins");
+    if(!render)continue;
+    auto wi=render->fields.find("_osd_wi");
+    if(wi==render->fields.end() || wi->second.tag!=ValueTag::Int)continue;
+    OsdWidget* current=osd_widget_mut(wi->second.v.i);
+    if(!current || current->dead || (current->picture_source && current->picture_source!=render))continue;
+    auto previous=hit.button->fields.find("_host_current_picture");
+    if(previous==hit.button->fields.end() || previous->second.tag!=ValueTag::Int || previous->second.v.i!=wi->second.v.i) {
+      osd_attach_button_picture(render);
+      hit.button->fields["_host_current_picture"]=Value::make_int(wi->second.v.i);
+    }
+    current->background=false;current->no_hit=true;
+    hit.icon_id=current->icon_id;hit.icon_path=current->icon_path;
+  }
+}
+
 void osd_on_field_write(Object* recv, const std::string& field) {
   if (!recv || field.empty()) return;
+  if(field=="ins" && recv->class_name=="java.render.Rectangle") {
+    Object* current=field_o(recv,"ins");
+    Object* previous=field_o(recv,"_host_picture_instance");
+    if(previous && previous!=current) {
+      for(OsdWidget& old:g_widgets)if(old.picture_source==previous) {
+        old.hidden=old.dead=true;old.icon_path.clear();
+      }
+    }
+    recv->fields["_host_picture_instance"]=Value::make_obj(current);
+    return;
+  }
   if (field == "osd" && recv->class_name == "java.render.Group") {
     const int32_t id = alloc_group_id();
     recv->fields["_host_group"] = Value::make_int(id);

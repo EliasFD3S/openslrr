@@ -8,6 +8,7 @@
 #include "slrr/suspension_geometry.hpp"
 #include "slrr/vehicle_dynamics.hpp"
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -96,6 +97,9 @@ struct Record {
   std::array<std::string, 8> wheel_damage{};
   bool dynamic_frames = false;
   bool physics_pending_placement = true;
+  // start releases the body. Until then a chassis only settles onto a floor.
+  // The catalog preview has none, so integrating gravity walks it out of frame.
+  bool physics_released = false;
   unsigned physics_quiet_ticks = 0;
   std::array<PartMatrix, 4> travel_frame{}, carrier_frame{}, hub_frame{};
   std::array<bool, 4> geometry_solved{};
@@ -308,7 +312,8 @@ void render_part(Jvm &jvm, Object *self, Record &rec) {
   };
   auto add = [&](uint32_t resource, const PartMatrix &local,
                  const std::vector<PartLink> *rules,
-                 const std::vector<uint32_t> *colors) {
+                 const std::vector<uint32_t> *colors,
+                 uint32_t light_flags = 0) {
     if (!resource ||
         !index
              ->model_for_resource(RpkIndex::pack_from_full(resource),
@@ -322,6 +327,7 @@ void render_part(Jvm &jvm, Object *self, Record &rec) {
     node->alias = "part render";
     node->paint_source = rec.config->texture;
     node->vehicle_material = true;
+    node->light_flags = light_flags;
     node->paint_texture = rec.state.texture;
     node->color = paint_of(colors ? *colors : std::vector<uint32_t>{});
     node->empty = false;
@@ -344,13 +350,19 @@ void render_part(Jvm &jvm, Object *self, Record &rec) {
   }
   add(rec.config->render, part_pose_matrix(rec.config->render_pose),
       chosen ? &chosen->links : nullptr, chosen ? &chosen->colors : nullptr);
-  // Lamps are flagged. Wheel meshes are placed on their wheel below. The
-  // other LOD levels are stand-ins for this mesh.
+  // Wheel meshes are placed on their wheel below. The other LOD levels
+  // are stand-ins for this mesh. A light-state flag is a separate mesh
+  // (city, brake, reverse, indicator), shown only while that light is on.
   for (const auto &r : rec.config->renders) {
     if (r.flags || r.wheel >= 0 || r.lod_level >= 0 ||
         r.resource == rec.config->render)
       continue;
     add(r.resource, part_pose_matrix(r.pose), &r.links, &r.colors);
+  }
+  for (const auto &r : rec.config->renders) {
+    if (r.wheel >= 0 || (r.flags & 0x40u) || (r.flags & 0x13fu) == 0)
+      continue;
+    add(r.resource, part_pose_matrix(r.pose), &r.links, &r.colors, r.flags);
   }
   // A car with no script draws its wheels from the cfg `render` lines that
   // follow each `wheel`. They stay on the wheel, not on the chassis origin.
@@ -1025,11 +1037,76 @@ void install_cfg_stock(Jvm &jvm, Object *part, int depth = 0) {
     install_cfg_stock(jvm, child, depth + 1);
   }
 }
+
+// The selector saves CopyCar, destroys the car and loads the file. That
+// round-trip builds a second, thinner car. The live tree is handed back.
+struct LiveHold {
+  bool armed = false;
+  bool sealing = false;
+  std::vector<Object *> order;
+  size_t next = 0;
+};
+LiveHold g_live_hold;
+
+void collect_held(Object *part, std::vector<Object *> &out) {
+  part = canonical(part);
+  auto *rec = record(part);
+  if (!rec)
+    return;
+  out.push_back(part);
+  const int back = rec->state.own_slot;
+  for (const auto &slot : rec->config->slots) {
+    if (slot.id == back)
+      continue;
+    auto child = rec->children.find(slot.id);
+    if (child != rec->children.end())
+      collect_held(child->second, out);
+  }
+}
+bool live_held(Object *part) {
+  if (!g_live_hold.sealing)
+    return false;
+  part = canonical(part);
+  return std::find(g_live_hold.order.begin(), g_live_hold.order.end(), part) !=
+         g_live_hold.order.end();
+}
+Object *take_held_part(uint32_t resource) {
+  if (!g_live_hold.sealing || g_live_hold.next >= g_live_hold.order.size())
+    return nullptr;
+  Object *have = canonical(g_live_hold.order[g_live_hold.next]);
+  auto *rec = record(have);
+  if (!rec || rec->state.resource != resource)
+    return nullptr;
+  ++g_live_hold.next;
+  return have;
+}
+bool lamp_lit(uint32_t flags) {
+  const uint32_t bits = flags & 0x13fu;
+  if (!bits || (flags & 0x40u) || !runtime)
+    return false;
+  Value time = runtime->get_static("java.game.GameLogic", "time");
+  float sec = 0.f;
+  if (time.tag == ValueTag::Float)
+    sec = time.v.f;
+  else if (time.tag == ValueTag::Int)
+    sec = static_cast<float>(time.v.i);
+  sec = std::fmod(sec, 86400.f);
+  if (sec < 0.f)
+    sec += 86400.f;
+  // Stock night: outside 6:00..21:00. The selector starts at midnight and
+  // LIGHTS ON/OFF adds twelve hours.
+  const bool night = sec < 21600.f || sec >= 75600.f;
+  return (bits & 4u) != 0 && night;
+}
 } // namespace
+
+bool part_lamp_lit(uint32_t flags) { return lamp_lit(flags); }
 
 Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
                     uint32_t resource, const std::string &alias,
                     const std::string &params) {
+  if (Object *kept = take_held_part(resource))
+    return kept;
   index = &resources;
   auto cfg = configuration(resource);
   if (!cfg->valid) {
@@ -1239,6 +1316,7 @@ bool part_command(Object *part, const std::string &command) {
     // It does not move the chassis. start is what releases it.
     rec->physics_suspended = true;
     rec->physics_pending_placement = false;
+    rec->physics_released = false;
     rec->steering_input = 0.f;
     rec->dynamics.body.velocity = {};
     rec->dynamics.body.momentum = {};
@@ -1251,10 +1329,12 @@ bool part_command(Object *part, const std::string &command) {
   }
   if (verb == "start" && rec->config->native_kind == "car") {
     rec->physics_suspended = false;
+    rec->physics_released = true;
     return true;
   }
   if (verb == "suspend" && rec->config->native_kind == "car") {
     rec->physics_suspended = true;
+    rec->physics_released = false;
     return true;
   }
   if (verb == "wakeup" && rec->config->native_kind == "car") {
@@ -1286,11 +1366,34 @@ Object *part_render_owner(void *key) {
   }
   return nullptr;
 }
+void part_note_live_save(const std::string &path) {
+  const auto name = std::filesystem::path(path).filename().string();
+  std::string lower = name;
+  for (char &c : lower)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (lower == "copycar")
+    g_live_hold.armed = true;
+}
+void part_release_live_hold() {
+  g_live_hold.armed = false;
+  g_live_hold.sealing = false;
+  g_live_hold.order.clear();
+  g_live_hold.next = 0;
+}
 bool part_destroy(Object *part) {
   part = canonical(part);
   auto *rec = record(part);
   if (!rec)
     return false;
+  if (g_live_hold.armed && !rec->state.parent &&
+      rec->config->native_kind == "car") {
+    g_live_hold.armed = false;
+    g_live_hold.sealing = true;
+    g_live_hold.order.clear();
+    g_live_hold.next = 0;
+    collect_held(part, g_live_hold.order);
+    return true;
+  }
   auto children = rec->children;
   for (auto entry : children)
     part_destroy(entry.second);
@@ -1644,6 +1747,7 @@ void park_chassis(Object *chassis, bool shift) {
   }
   rec->physics_suspended = true;
   rec->physics_pending_placement = false;
+  rec->physics_released = false;
   pose_wheels(chassis, *rec);
 }
 } // namespace
@@ -1678,6 +1782,14 @@ void part_physics_advance(double seconds) {
       if (!dynamics_configure(chassis, rec, frame))
         continue;
     dynamics_wheels(rec);
+    // An unreleased chassis (catalog, before start) may drop onto a floor.
+    // With no floor the step only applies gravity, and the car leaves the shot.
+    if (!rec.physics_released && rec.physics_pending_placement) {
+      SceneFloorHit probe;
+      if (!scene_instances_sample_floor(frame[12], frame[14], frame[13] + 4.f,
+                                        chassis, probe))
+        continue;
+    }
     const auto terrain = [&](double x, double z, double ceiling,
                              physics::GroundHit &ground) {
       SceneFloorHit hit;
@@ -2166,6 +2278,8 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   bind("setTexture", "(I)I", [](Object *s, const std::vector<Value> &a) {
     auto *p = record(s);
     int old = p ? p->state.texture : 0;
+    if (live_held(s))
+      return Value::make_int(old);
     if (p) {
       p->state.texture = number(a, 0);
       for (auto *render : p->renders)
@@ -2294,6 +2408,8 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
                                        : static_cast<int>(p->config->mesh));
   });
   bind("setMesh", "(I)I", [](Object *s, const std::vector<Value> &a) {
+    if (live_held(s))
+      return Value::make_int(1);
     if (auto *p = record(s)) {
       p->mesh_set = true;
       p->mesh_id = static_cast<uint32_t>(number(a, 0));
@@ -2309,6 +2425,12 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
                                          : static_cast<int>(p->config->render));
   });
   bind("setRenderType", "(I)I", [](Object *s, const std::vector<Value> &a) {
+    if (live_held(s)) {
+      auto *p = record(s);
+      return Value::make_int(p ? static_cast<int>(p->render_set ? p->render_id
+                                                               : p->config->render)
+                               : 0);
+    }
     if (auto *p = record(s)) {
       p->render_set = true;
       p->render_id = static_cast<uint32_t>(number(a, 0));

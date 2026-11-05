@@ -27,6 +27,13 @@ bool part_command(Object *part, const std::string &command);
 // Car setMatrix: loaded springs, contacts on the given point, body asleep.
 // shift is false for reset, which tucks the springs and does not move the body.
 void part_park_chassis(Object *car, bool shift = true);
+// CopyCar is the selector's save/destroy/load. SLRR_rev vehicle-serialization:
+// a live car is not moved by that file. The same parts stay in the world.
+void part_note_live_save(const std::string &path);
+void part_release_live_hold();
+// City lamps follow the world clock (on outside 6:00–21:00). Brake, reverse
+// and indicators stay off until the car asks for them.
+bool part_lamp_lit(uint32_t flags);
 // Render node or one of its parents, when that node is an installed part.
 Object *part_render_owner(void *key);
 // World height of the tyre contact under a car. The camera's `move` spring

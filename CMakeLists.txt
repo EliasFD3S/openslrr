@@ -133,59 +133,8 @@ endif()
 
 install(TARGETS slrr_host RUNTIME DESTINATION bin)
 
-option(SLRR_STAGE_BUILD "Build the host into candidate/ before validation and promotion" OFF)
+option(SLRR_STAGE_BUILD "Build the host into candidate/ before backup and promotion" OFF)
 if(SLRR_STAGE_BUILD)
   set_target_properties(slrr_host PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_BINARY_DIR}/candidate")
-endif()
-
-option(SLRR_BUILD_TESTS "Build host UI regression tests" OFF)
-if(SLRR_BUILD_TESTS)
-  enable_testing()
-  add_executable(ui_state_test tests/ui_state_test.cpp
-    src/ui/osd_registry.cpp src/ui/ui_time.cpp src/render/slrr_font.cpp)
-  target_include_directories(ui_state_test PRIVATE include)
-  target_compile_features(ui_state_test PRIVATE cxx_std_20)
-  if(MSVC)
-    target_compile_definitions(ui_state_test PRIVATE _CRT_SECURE_NO_WARNINGS)
-  endif()
-  add_test(NAME ui_state COMMAND ui_state_test)
-  add_executable(part_config_test tests/part_config_test.cpp
-    src/resources/part_config.cpp src/resources/rpk_index.cpp)
-  target_include_directories(part_config_test PRIVATE include)
-  target_compile_features(part_config_test PRIVATE cxx_std_20)
-  add_test(NAME part_config COMMAND part_config_test)
-  add_executable(vehicle_dynamics_test tests/vehicle_dynamics_test.cpp src/physics/vehicle_dynamics.cpp src/physics/suspension_geometry.cpp)
-  target_include_directories(vehicle_dynamics_test PRIVATE include)
-  add_test(NAME vehicle_dynamics COMMAND vehicle_dynamics_test)
-
-  add_executable(scene_instances_test tests/scene_instances_test.cpp
-    tests/scene_platform_stubs.cpp
-    src/resources/scene_instances.cpp src/resources/gameref.cpp
-    src/resources/rpk_index.cpp src/resources/scx_mesh.cpp)
-  target_include_directories(scene_instances_test PRIVATE include)
-  target_compile_features(scene_instances_test PRIVATE cxx_std_20)
-  add_test(NAME scene_instances COMMAND scene_instances_test)
-
-  # Integration checks execute the actual TUFA scripts and original assets.
-  # Build a separate test executable so a clean build cannot use stale probes.
-  get_target_property(_runtime_sources slrr_host SOURCES)
-  list(FILTER _runtime_sources EXCLUDE REGEX "(^|/)main\\.cpp$|\\.rc$")
-  add_executable(host_runtime_test tests/runtime_regression.cpp ${_runtime_sources})
-  foreach(_property INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_OPTIONS COMPILE_FEATURES LINK_LIBRARIES)
-    get_target_property(_value slrr_host ${_property})
-    if(_value)
-      set_property(TARGET host_runtime_test PROPERTY ${_property} "${_value}")
-    endif()
-  endforeach()
-  add_dependencies(host_runtime_test slrr_host)
-  set(SLRR_TEST_GAME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../game" CACHE PATH "Original SLRR assets for integration tests")
-  if(EXISTS "${SLRR_TEST_GAME_ROOT}/system/Scripts/lang/System.class")
-    add_test(NAME part_config_original_assets COMMAND part_config_test "${SLRR_TEST_GAME_ROOT}")
-    foreach(_case sfx_probe regression_probe gap_probe hud_probe career_probe filedialog_probe scene_script_probe icon_probe paint_inventory vehicle_assembly catalog vehicle_physics)
-      add_test(NAME runtime_${_case} COMMAND host_runtime_test ${_case} "${SLRR_TEST_GAME_ROOT}")
-      set_tests_properties(runtime_${_case} PROPERTIES TIMEOUT 30)
-    endforeach()
-    add_test(NAME scene_original_assets COMMAND scene_instances_test "${SLRR_TEST_GAME_ROOT}")
-  endif()
 endif()

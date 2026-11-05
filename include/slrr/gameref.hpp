@@ -121,6 +121,9 @@ struct GameRefState {
   uint32_t color = 0xffffff;
   uint32_t paint_source = 0, paint_texture = 0;
   bool vehicle_material = false;
+  // Cfg light bits (1 brake, 2 reverse, 4 city, 16 indicator). Drawn only
+  // while that light is on.
+  uint32_t light_flags = 0;
   bool matrix_override = false;
   float local_matrix[16]{};
   ScxGeometry mesh;

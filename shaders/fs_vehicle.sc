@@ -71,7 +71,10 @@ void main()
     // on the pane, and the edges catch more light the way a real pane does.
     if (u_vehicleLayers.w > 2.5) {
         float alpha = u_vehicleDiffuse.a;
-        float cover = alpha*(2.0-alpha);
+        // Cabin panes use the boosted cover. A headlight lens (reflection
+        // slot empty, marked 2) keeps the authored alpha so the chrome
+        // behind it stays visible.
+        float cover = u_vehicleChannels.w > 1.5 ? alpha : alpha*(2.0-alpha);
         vec3 tint = u_vehicleDiffuse.rgb*light;
         vec3 shine = environment*(weight+fres) + u_vehicleSpec.rgb*spec;
         gl_FragColor = vec4(tint*cover + shine, cover);

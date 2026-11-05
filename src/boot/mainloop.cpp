@@ -339,6 +339,8 @@ void dispatch_mechanic_pointer(Jvm& jvm) {
 
 MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
                                    SectionMachine& sections, float dt) {
+  // The click that saved CopyCar already ran, inside pump, before this frame.
+  part_release_live_hold();
   MainLoopFrameResult out;
   mainloop_adopt_section(jvm, sections);
   pump_async_messages(jvm, sections.actual());

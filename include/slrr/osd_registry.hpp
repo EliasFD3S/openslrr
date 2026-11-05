@@ -49,6 +49,8 @@ struct OsdWidget {
   Object* owner = nullptr;
   // Script Button. Hit-test reads nofocus, which the script sets after create.
   Object* button = nullptr;
+  // Exact Rectangle RenderRef, independent of screen position or texture.
+  Object* picture_source = nullptr;
   Object* highlight_for = nullptr;
   // Text object whose changeText fills tip. File rows are created as ""
   // and renamed afterwards; hover matches tip against that text.
@@ -76,6 +78,7 @@ bool osd_owner_modal(Object* owner);
 // Viewport priority stored by Viewport.create (menu 10, dialog 22, shield 21).
 int32_t osd_viewport_pri(Object* osd);
 const std::vector<OsdWidget>& osd_widgets();
+void osd_sync_button_pictures();
 int32_t osd_widget_count();
 // Patch hit-rect after PhysicsRef.setMatrix (createButton TREE path).
 void osd_set_widget_pos(int32_t index, float x, float y);
@@ -85,6 +88,11 @@ void osd_set_widget_icon(int32_t index, uint32_t icon_id, std::string path);
 // so a disabled pager can show the forbidden icon, and the color chip can
 // stay white while its texture is still the empty placeholder.
 void osd_attach_button_picture(Object* render);
+// changeTexture already points the button at the new picture. Reuse the
+// quad that is on screen instead of stacking a second texture on it.
+// Returns true when that quad was retargeted and no new widget is needed.
+bool osd_claim_button_icon(Object* render, float x, float y, uint32_t icon_id,
+                           const std::string& path);
 // Slider title is createText'd after the track button (empty tip, has icon).
 // Bind that string so hover can turn it white (Gadget HL_LABELCOLOR).
 void osd_attach_row_label(const std::string& label, float y);

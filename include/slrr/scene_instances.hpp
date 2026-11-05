@@ -20,6 +20,7 @@ struct SceneInstance {
   int paint_slot = -1;
   std::string paint_texture;
   bool vehicle_material = false;
+  uint32_t light_flags = 0;
 };
 
 void scene_instances_set_resources(const RpkIndex *resources);

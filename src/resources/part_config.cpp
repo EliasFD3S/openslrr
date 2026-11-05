@@ -162,6 +162,7 @@ PartConfig parse_part_config(const std::string &source,
       if (command == "eof")
         break;
       if (command == "slot") {
+        open_wheel = -1;
         PartSlot slot;
         slot.pose = pose(t);
         // PE sscanf "%f %f %f %f %f %f %d": a missing id stays 0.
@@ -228,13 +229,12 @@ PartConfig parse_part_config(const std::string &source,
           spec.authored = true;
         }
         out.wheel_springs.push_back(spec);
+        open_wheel = static_cast<int>(out.wheels.size()) - 1;
       } else if (command == "maxsteer") {
+        open_wheel = -1;
         out.max_steer = number(t, 1);
         out.ackermann_length = t.size() > 2 ? number(t, 2) : 0.f;
       } else if (command == "steering") {
-        out.steering = pose(t);
-        out.has_steering = true;
-      } else if (command == "stockpart")
         open_wheel = -1;
         out.steering = pose(t);
         out.has_steering = true;
@@ -255,7 +255,7 @@ PartConfig parse_part_config(const std::string &source,
         for (size_t i = 2; i < t.size(); ++i)
           out.renders.back().colors.push_back(
               static_cast<uint32_t>(std::stoul(t[i], nullptr, 0)) & 0xffffffu);
-          deformable_pose = pose(t, 2);
+      } else if (command == "deformable") {
         open_wheel = -1;
         deformable = rid(t.at(1));
         if (t.size() > 2)
@@ -294,6 +294,9 @@ PartConfig parse_part_config(const std::string &source,
         out.mass += body.mass;
       } else if (command == "name") {
         open_wheel = -1;
+        for (size_t i = 1; i < t.size(); i++) {
+          if (i > 1)
+            out.name += ' ';
           out.name += t[i];
         }
       } else
@@ -311,12 +314,12 @@ PartConfig parse_part_config(const std::string &source,
     // closest band, which is the last level (the deck and the bores).
     const PartRender *chosen = &out.renders[0];
     for (const auto &r : out.renders)
-      if (!r.flags && r.lod_level >= chosen->lod_level)
-        chosen = &r;
-    out.render = chosen->resource;
       if (!r.flags && r.wheel < 0 &&
           (chosen->flags || chosen->wheel >= 0 ||
            r.lod_level >= chosen->lod_level))
+        chosen = &r;
+    out.render = chosen->resource;
+    out.render_pose = chosen->pose;
   }
   out.valid = out.errors.empty() && (!out.slots.empty() || out.render != 0);
   return out;

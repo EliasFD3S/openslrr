@@ -323,6 +323,64 @@ class LibBgfxBackend final : public IRenderBackend {
     // prime.avi is the backdrop. Drawing it after the world hid the car.
     const bool fmv_bg = video_fmv_is_playing() && video_fmv_is_non_exclusive() &&
                         video_fmv_frame_ready();
+    // Back to the menu closes that movie before the next one is ready.
+    // A retired splash still counts as a widget but is not drawn, so the
+    // frame was only the clear color. Keep the previous image instead.
+    sync_instances();
+    auto is_opening = [](const std::string& path) {
+      std::string low = path;
+      for (char& c : low)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      return low.find("opening") != std::string::npos;
+    };
+    bool show = fmv_bg || garage_;
+    if (!show) {
+      for (const OsdWidget& w : osd_widgets()) {
+        if (w.hidden || w.dead || !w.background || w.icon_path.empty())
+          continue;
+        if (w.half_w > 0.9f && w.half_h > 0.9f &&
+            (!is_opening(w.icon_path) || !opening_retired_)) {
+          show = true;
+          break;
+        }
+      }
+    }
+    if (!show) {
+      for (const auto& i : instances_)
+        if (i.sky) {
+          show = true;
+          break;
+        }
+    }
+    if (!show && !world_cam && !instances_.empty()) show = true;
+    if (!show && world_cam) {
+      float fx = world_at[0] - world_eye[0];
+      float fy = world_at[1] - world_eye[1];
+      float fz = world_at[2] - world_eye[2];
+      const float fl = std::sqrt(fx * fx + fy * fy + fz * fz);
+      if (fl > 1e-4f) {
+        fx /= fl;
+        fy /= fl;
+        fz /= fl;
+      }
+      for (const auto& i : instances_) {
+        const float x = i.transform[12] - world_eye[0];
+        const float y = i.transform[13] - world_eye[1];
+        const float z = -i.transform[14] - world_eye[2];
+        const float ahead = fx * x + fy * y + fz * z;
+        if (ahead > 0.05f && ahead < world_zf) {
+          show = true;
+          break;
+        }
+      }
+    }
+    if (!show)
+      for (const auto& p : previews_)
+        if (!p.instances.empty()) {
+          show = true;
+          break;
+        }
+    if (shown_ && !show) return;
     const uint16_t world_view = fmv_bg ? 1 : 0;
     const auto ww = static_cast<uint16_t>(width_);
     const auto hh = static_cast<uint16_t>(height_);
@@ -346,7 +404,6 @@ class LibBgfxBackend final : public IRenderBackend {
     bgfx::touch(world_view);
 
     // Menu/Splash: no garage SCX — stock MainMenu uses FMV or Dummy scene.
-    sync_instances();
     draw_dynamic_world(view, world_view);
     if (garage_ && !parts_.empty()) draw_scene(world_view);
     draw_vehicle_shadows(world_view);
@@ -354,7 +411,9 @@ class LibBgfxBackend final : public IRenderBackend {
     // is no movie), 3.. = car previews, 70 = OSD on top.
     if (!fmv_bg) draw_fmv(1);
     // Boot intros own the frame. Menu OSD from the probe must not cover them.
-    if ((garage_ || osd_overlay_) && !video_fmv_block_osd()) draw_osd();
+    if ((garage_ || osd_overlay_ || !osd_loading_overlay().empty()) &&
+        !video_fmv_block_osd())
+      draw_osd();
     if (!video_fmv_block_osd()) draw_previews();
 
     bgfx::frame();
@@ -540,9 +599,14 @@ class LibBgfxBackend final : public IRenderBackend {
         const bool chrome = !glass && kind_id == 0x33u && group.texture_index == 0xffff;
         const bool bare_cap = !glass && !chrome && tex_missing && group.material_type == 0x0cu &&
                               group.reflection_index != 0xffff;
+        // A headlight lens names a reflection slot the render leaves empty.
+        // Cabin glass already asks for a generated spheremap. Only the lens
+        // keeps the stock alpha, so the housing texture shows through.
+        const bool lens = glass && env.idx == white_tex_.idx && !generated;
         // A missing reflection slot is the global envmap, and the exe
         // builds its UVs from the reflection vector, not the mesh.
-        if (env.idx == white_tex_.idx && (painted || generated || chrome || bare_cap)) {
+        if (env.idx == white_tex_.idx &&
+            (painted || generated || chrome || bare_cap || glass)) {
           auto path = scene_instances_envmap();
           if(!path.empty()) env = tex_for_osd_icon(path);
           generated = true;
@@ -550,7 +614,7 @@ class LibBgfxBackend final : public IRenderBackend {
         const float kind = glass ? 3.f : color_mix_env ? 5.f : color_mix ? 4.f
                                 : (chrome || bare_cap) ? 2.f : painted ? 1.f : 0.f;
         const float layers[4] = {mixed?1.f:0.f, env.idx!=white_tex_.idx?strength:0.f, group.material_type==0x15&&mixed?1.f:0.f, kind};
-        const float channels[4] = {static_cast<float>(group.base_map.channel),static_cast<float>(group.mix_map.channel),static_cast<float>(group.reflection_map.channel),generated?1.f:0.f};
+        const float channels[4] = {static_cast<float>(group.base_map.channel),static_cast<float>(group.mix_map.channel),static_cast<float>(group.reflection_map.channel),lens?2.f:generated?1.f:0.f};
         auto map = [&](bgfx::UniformHandle uniform, const ScxTextureMap& uv) {
           const float value[4]={uv.scale_u,uv.scale_v,uv.offset_u,uv.offset_v}; bgfx::setUniform(uniform,value);
         };
@@ -599,6 +663,8 @@ class LibBgfxBackend final : public IRenderBackend {
           bake_xf[3] = group.lightmap_map.offset_v;
         }
         if (transparent && color_mix) bake_u[3] = 1.f;
+        // A switched-on lamp is the glow texture, not a surface in shade.
+        if (instance.light_flags) bake_u[0] = 1.f;
         bgfx::setUniform(u_lightmap_, bake_u);
         bgfx::setUniform(u_lightmap_uv_, bake_xf);
         bgfx::setTexture(0,s_tex_,base);bgfx::setTexture(1,s_mix_,mix);bgfx::setTexture(2,s_env_,env);
@@ -1034,10 +1100,12 @@ class LibBgfxBackend final : public IRenderBackend {
         float ox = 0.f, oy = 0.f;
         osd_pixel_to_text(self->lmb_x_, self->lmb_y_, self->width_,
                           self->height_, &ox, &oy);
-        if (!video_fmv_block_osd() && osd_hit_index(ox, oy) >= 0) {
+        const int32_t hit = osd_hit_index(ox, oy);
+        const OsdWidget* clicked = hit >= 0 ? osd_widget_at(hit) : nullptr;
+        if (!video_fmv_block_osd() && clicked && !clicked->disabled) {
           host_sfx_play(HostSfx::MenuSelect);
           osd_fire_click_at(ox, oy);
-        } else if (!video_fmv_block_osd()) {
+        } else if (!video_fmv_block_osd() && !clicked) {
           in.part_click = true;
           in.part_click_x = self->lmb_x_;
           in.part_click_y = self->lmb_y_;
@@ -1100,8 +1168,12 @@ class LibBgfxBackend final : public IRenderBackend {
         if (!in.rmb_down) {
           float ox = 0.f, oy = 0.f;
           osd_pixel_to_text(x, y, self->width_, self->height_, &ox, &oy);
-          if (osd_set_hover_at(ox, oy) && osd_hover_widget())
-            host_sfx_play(HostSfx::MenuMove);
+          if (osd_set_hover_at(ox, oy)) {
+            const OsdWidget* pointed = osd_widget_at(osd_hover_index());
+            if (pointed && !pointed->hidden &&
+                (osd_hover_widget() || pointed->disabled))
+              host_sfx_play(HostSfx::MenuMove);
+          }
         }
       }
       return 0;
@@ -1446,6 +1518,10 @@ class LibBgfxBackend final : public IRenderBackend {
     }
     const int32_t idx = osd_hover_index();
     const OsdWidget* h = osd_hover_widget();
+    if (!h) {
+      const OsdWidget* raw = osd_widget_at(idx);
+      if (raw && raw->disabled && !raw->hidden) h = raw;
+    }
     const bool showable = h && !h->row_label && !h->string_input &&
                           !h->background && !h->tip.empty();
     const float now = gameref_now();
@@ -1676,6 +1752,7 @@ class LibBgfxBackend final : public IRenderBackend {
   }
 
   void draw_osd() {
+    osd_sync_button_pictures();
     const auto& widgets = osd_widgets();
     const auto& texts = slrr_osd_texts();
     const bool loading = !osd_loading_overlay().empty();
@@ -1760,8 +1837,7 @@ class LibBgfxBackend final : public IRenderBackend {
     // Once the menu (or the movie) has covered the splash, do not bring
     // Openingpic back when a section hides its plate. Back from the track
     // selector was showing that still instead of the loading picture.
-    static bool opening_retired = false;
-    if (other_plate || movie) opening_retired = true;
+    if (other_plate || movie) opening_retired_ = true;
 
     // The parts bar is an opaque plate. On a later OSD layer it is submitted
     // above the slot cameras and the cans disappear. A plate that only covers
@@ -1794,10 +1870,10 @@ class LibBgfxBackend final : public IRenderBackend {
       // and has to cover the car, so it stays with the buttons. The parts
       // strip is the exception: the slot cameras draw into it.
       for (const OsdWidget& w : widgets) {
-        if (w.layer != layer || w.hidden || w.disabled || !w.background)
+        if (w.layer != layer || w.hidden || w.dead || w.disabled || !w.background)
           continue;
         if (w.icon_path.empty()) continue;  // RRT_NONE — no mesh (Osd.java)
-        if ((opening_retired || movie || other_plate) &&
+        if ((opening_retired_ || movie || other_plate) &&
             is_opening(w.icon_path))
           continue;
         // A modal dialog (BUY PART) overlaps the catalog previews. Sending
@@ -1831,11 +1907,10 @@ class LibBgfxBackend final : public IRenderBackend {
         }
       }
       auto draw_icon = [&](const OsdWidget& w, int pass) {
-        if (w.layer != layer || w.hidden) return;
+        if (w.layer != layer || w.hidden || w.dead) return;
         const uint32_t local = w.icon_id & 0xFFFFu;
-        // frontend:0x00AF is Empty.ptx, fully transparent. The pager stores
-        // that on the hit box, which is not a picture, so the forbidden icon
-        // only existed as the hover plate. Draw it on the button itself.
+        // frontend:0x00AF is Empty.ptx. A disabled pager keeps that texture
+        // and shows frontend:0x013C only while Gadget.focus is on it.
         std::string low = w.icon_path;
         for (char& c : low)
           c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -1845,15 +1920,6 @@ class LibBgfxBackend final : public IRenderBackend {
         // offers the color chip, and it starts white.
         const bool color_chip =
             w.cmd == 116 && blank && !w.hit_only && !w.disabled;
-        const bool forbidden =
-            w.hit_only && w.disabled && blank && w.cmd != 116;
-        if (forbidden) {
-          if (pass != 1) return;
-          OsdWidget no = w;
-          no.icon_path = osd_disabled_highlight_path();
-          if (!no.icon_path.empty()) draw_osd_quad(no);
-          return;
-        }
         if (w.background || w.hit_only) return;
         if (w.disabled && !color_chip) return;
         if (blank && !color_chip) return;
@@ -1878,16 +1944,8 @@ class LibBgfxBackend final : public IRenderBackend {
       for (const OsdWidget& w : widgets) draw_icon(w, 0);
       for (const OsdWidget& w : widgets) draw_icon(w, 1);
       for (const OsdWidget& w : widgets) draw_icon(w, 2);
-      // Icon buttons are plates, so they were drawn before the backlight.
-      // Gadget.focus puts that plate behind the icon (z -= 0.0005, ×1.1).
-      // Repaint the icon or the orange square hides it.
-      if (const OsdWidget* hw = osd_hover_widget()) {
-        const bool text_button =
-            !hw->string_input && !hw->row_label && hw->label_src;
-        if (hw->layer == layer && !hw->hidden && !text_button &&
-            !hw->icon_path.empty())
-          draw_osd_quad(*hw);
-      }
+      // Current button pictures are foreground icons, drawn once after the
+      // highlight pass. Never repaint a cached hit-box glyph on hover.
       draw_osd_texts(layer, true, false);
     }
     osd_view_ = kOsdView;
@@ -1921,6 +1979,9 @@ class LibBgfxBackend final : public IRenderBackend {
   bool quit_ = false;
   bool garage_ = false;
   bool osd_overlay_ = false;
+  // Openingpic stays up after the boot movie. Once the menu or its movie
+  // has covered it, a later empty frame must not bring that still back.
+  bool opening_retired_ = false;
   bool scx_ok_ = false;
   bool mesh_ok_ = false;
   int32_t osd_buttons_ = 0;

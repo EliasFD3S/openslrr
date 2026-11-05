@@ -300,6 +300,15 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
       });
   jvm.natives().register_method(kResRef, "destroy", "()V",
                                 [](Object* self, const std::vector<Value>&) {
+                                  // changeTexture destroys the old picture before the
+                                  // replacement exists. Drop that quad first: a part
+                                  // record returns before the hide below.
+                                  if (self) {
+                                    auto it = self->fields.find("_osd_wi");
+                                    if (it != self->fields.end() &&
+                                        it->second.tag == ValueTag::Int)
+                                      osd_hide_widget(it->second.v.i);
+                                  }
                                   if(part_destroy(self))return Value::make_void();
                                   // Vehicle.destroy() is this native. The chassis is a
                                   // separate part record; leaving it kept the previous
@@ -313,10 +322,6 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
                                   if (self) {
                                       auto text=self->fields.find("_host_text");
                                       if(text!=self->fields.end()&&text->second.tag==ValueTag::Obj)slrr_text_destroy(text->second.v.o);
-                                    auto it = self->fields.find("_osd_wi");
-                                    if (it != self->fields.end() &&
-                                        it->second.tag == ValueTag::Int)
-                                      osd_hide_widget(it->second.v.i);
                                   }
                                   auto* canonical=gameref_get(self);
                                   gameref_remove(canonical?canonical->key:self);
