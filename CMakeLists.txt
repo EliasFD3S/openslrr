@@ -33,6 +33,7 @@ add_executable(slrr_host
   src/render/slrr_font.cpp
   src/resources/rpk_index.cpp
   src/resources/script_cfg.cpp
+  src/resources/scene_sun.cpp
   src/resources/part_config.cpp
   src/resources/part_runtime.cpp
   src/resources/gameref.cpp

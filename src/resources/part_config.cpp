@@ -116,6 +116,17 @@ bool part_slot_matrix(const PartConfig &config, const PartSlot &slot,
     if (wheel < 0 || static_cast<size_t>(wheel) >= config.wheels.size())
       return false;
     frame = part_pose_matrix(config.wheels[wheel]);
+  } else if (slot.type >= 500) {
+    // Einvagen hangs the front spring on slottype 501, the upper-arm
+    // locator whose slot id is 501. The wheel-body codes stop at 304.
+    const PartSlot *locator = nullptr;
+    for (const auto &other : config.slots)
+      if (other.id == slot.type && other.type < 500) {
+        locator = &other;
+        break;
+      }
+    if (!locator || !part_slot_matrix(config, *locator, frame))
+      return false;
   } else if (slot.type != 0)
     return false;
   matrix = part_matrix_multiply(frame, part_pose_matrix(slot.pose));

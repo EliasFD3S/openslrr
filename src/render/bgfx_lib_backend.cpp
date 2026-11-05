@@ -2,6 +2,7 @@
 #include "slrr/scene_instances.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/part_runtime.hpp"
+#include "slrr/scene_sun.hpp"
 
 #include "slrr/dds_image.hpp"
 #include "slrr/host_cursor.hpp"
@@ -165,6 +166,10 @@ class LibBgfxBackend final : public IRenderBackend {
     u_env_uv_ = bgfx::createUniform("u_vehicleEnvUv", bgfx::UniformType::Vec4);
     u_diffuse_ = bgfx::createUniform("u_vehicleDiffuse", bgfx::UniformType::Vec4);
     u_spec_ = bgfx::createUniform("u_vehicleSpec", bgfx::UniformType::Vec4);
+    u_sun_diff_ = bgfx::createUniform("u_sunDiff", bgfx::UniformType::Vec4);
+    u_sun_amb_ = bgfx::createUniform("u_sunAmb", bgfx::UniformType::Vec4);
+    u_sun_spec_ = bgfx::createUniform("u_sunSpec", bgfx::UniformType::Vec4);
+    u_sun_dir_ = bgfx::createUniform("u_sunDir", bgfx::UniformType::Vec4);
     layout_.begin()
         .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
         .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
@@ -242,7 +247,7 @@ class LibBgfxBackend final : public IRenderBackend {
     }
     if (bgfx::isValid(vehicle_program_)) bgfx::destroy(vehicle_program_);
     vehicle_program_ = BGFX_INVALID_HANDLE;
-    for (auto* handle : {&s_mix_, &s_env_, &s_bake_, &u_layers_, &u_channels_, &u_base_uv_, &u_mix_uv_, &u_env_uv_, &u_diffuse_, &u_spec_}) {
+    for (auto* handle : {&s_mix_, &s_env_, &s_bake_, &u_layers_, &u_channels_, &u_base_uv_, &u_mix_uv_, &u_env_uv_, &u_diffuse_, &u_spec_, &u_sun_diff_, &u_sun_amb_, &u_sun_spec_, &u_sun_dir_}) {
       if(bgfx::isValid(*handle)) bgfx::destroy(*handle);
       *handle = BGFX_INVALID_HANDLE;
     }
@@ -643,6 +648,20 @@ class LibBgfxBackend final : public IRenderBackend {
         }
         // A spheremap ColorMixTex outputs texture.a times the env factor.
         if (color_mix_env) diffuse[3] = strength;
+        const SceneSun sun = scene_sun();
+        const float sun_d[4] = {sun.diffuse[0], sun.diffuse[1], sun.diffuse[2],
+                                sun.set ? 1.f : 0.f};
+        const float sun_a[4] = {sun.ambient[0], sun.ambient[1], sun.ambient[2], 0.f};
+        const float sun_s[4] = {sun.specular[0], sun.specular[1], sun.specular[2],
+                                sun.set ? 1.f : 0.f};
+        // Game direction is where the light travels. Toward it, with Z
+        // flipped into the same space as the rendered vertices.
+        const float sun_r[4] = {-sun.direction[0], -sun.direction[1],
+                                sun.direction[2], sun.has_direction ? 1.f : 0.f};
+        bgfx::setUniform(u_sun_diff_, sun_d);
+        bgfx::setUniform(u_sun_amb_, sun_a);
+        bgfx::setUniform(u_sun_spec_, sun_s);
+        bgfx::setUniform(u_sun_dir_, sun_r);
         bgfx::setUniform(u_diffuse_,diffuse);
         const float spec[4] = {group.specular[0], group.specular[1], group.specular[2],
                                group.shininess > 0.f ? group.shininess : 1.f};
@@ -2009,7 +2028,7 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::ProgramHandle vehicle_program_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle s_mix_=BGFX_INVALID_HANDLE,s_env_=BGFX_INVALID_HANDLE,s_bake_=BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_layers_=BGFX_INVALID_HANDLE,u_channels_=BGFX_INVALID_HANDLE;
-  bgfx::UniformHandle u_base_uv_=BGFX_INVALID_HANDLE,u_mix_uv_=BGFX_INVALID_HANDLE,u_env_uv_=BGFX_INVALID_HANDLE,u_diffuse_=BGFX_INVALID_HANDLE,u_spec_=BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_base_uv_=BGFX_INVALID_HANDLE,u_mix_uv_=BGFX_INVALID_HANDLE,u_env_uv_=BGFX_INVALID_HANDLE,u_diffuse_=BGFX_INVALID_HANDLE,u_spec_=BGFX_INVALID_HANDLE,u_sun_diff_=BGFX_INVALID_HANDLE,u_sun_amb_=BGFX_INVALID_HANDLE,u_sun_spec_=BGFX_INVALID_HANDLE,u_sun_dir_=BGFX_INVALID_HANDLE;
 };
 
 }  // namespace

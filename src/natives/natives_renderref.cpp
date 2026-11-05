@@ -7,6 +7,7 @@
 #include "slrr/osd_registry.hpp"
 #include "slrr/render_backend.hpp"
 #include "slrr/script_cfg.hpp"
+#include "slrr/scene_sun.hpp"
 #include "slrr/slrr_font.hpp"
 #include "slrr/video_fmv.hpp"
 
@@ -22,6 +23,76 @@
 #include <string>
 
 namespace slrr {
+
+// A directional light resource is text. Colours are "a r g b". Direction is
+// where the light travels. setLight on the type (time of day) wins over the
+// file colours; the file still supplies the direction. Point lights are
+// left alone. The garage light is misc.garage:0x001D, straight down.
+void apply_directional_light(const RpkIndex& rpk, int32_t full_id, Object* type) {
+  if (full_id == 0) return;
+  const std::vector<uint8_t> bytes =
+      rpk.read_payload(static_cast<uint32_t>(full_id));
+  if (bytes.size() < 8) return;
+  const std::string text(bytes.begin(), bytes.end());
+  bool directional = false;
+  float diff[3]{}, amb[3]{}, spec[3] = {1.f, 1.f, 1.f}, dir[3]{};
+  bool have_d = false, have_a = false, have_s = false, have_dir = false;
+  size_t at = 0;
+  while (at < text.size()) {
+    size_t end = text.find('\n', at);
+    if (end == std::string::npos) end = text.size();
+    std::string line = text.substr(at, end - at);
+    at = end + 1;
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line.compare(0, 4, "type") == 0 &&
+        line.find("directional") != std::string::npos)
+      directional = true;
+    float a = 0, r = 0, g = 0, b = 0;
+    if (line.compare(0, 7, "diffuse") == 0 &&
+        std::sscanf(line.c_str(), "%*s %f %f %f %f", &a, &r, &g, &b) == 4) {
+      diff[0] = r;
+      diff[1] = g;
+      diff[2] = b;
+      have_d = true;
+    } else if (line.compare(0, 7, "ambient") == 0 &&
+               std::sscanf(line.c_str(), "%*s %f %f %f %f", &a, &r, &g, &b) ==
+                   4) {
+      amb[0] = r;
+      amb[1] = g;
+      amb[2] = b;
+      have_a = true;
+    } else if (line.compare(0, 8, "specular") == 0 &&
+               std::sscanf(line.c_str(), "%*s %f %f %f %f", &a, &r, &g, &b) ==
+                   4) {
+      spec[0] = r;
+      spec[1] = g;
+      spec[2] = b;
+      have_s = true;
+    } else if (line.compare(0, 9, "direction") == 0 &&
+               std::sscanf(line.c_str(), "%*s %f %f %f", &r, &g, &b) == 3) {
+      dir[0] = r;
+      dir[1] = g;
+      dir[2] = b;
+      have_dir = true;
+    }
+  }
+  if (!directional || !have_d) return;
+  if (!have_a) amb[0] = amb[1] = amb[2] = 0.f;
+  if (!have_s) spec[0] = spec[1] = spec[2] = 1.f;
+  if (!have_dir) dir[0] = dir[1] = dir[2] = 0.f;
+  scene_sun_set_resource(diff, amb, spec, dir);
+  auto packed = [](Object* o, const char* key, int32_t* out) {
+    if (!o) return false;
+    auto it = o->fields.find(key);
+    if (it == o->fields.end() || it->second.tag != ValueTag::Int) return false;
+    *out = it->second.v.i;
+    return true;
+  };
+  int32_t sd = 0, sa = 0, ss = 0;
+  if (packed(type, "_sun_d", &sd) && packed(type, "_sun_a", &sa) &&
+      packed(type, "_sun_s", &ss))
+    scene_sun_set_packed(sd, sa, ss);
+}
 
 void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   // ---- java.util.resource.RenderRef (declaring class) ----
@@ -60,8 +131,10 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
           self->fields["id"] = Value::make_int(tid);
         }
         if (alias && !alias->str.empty()) st->alias = alias->str;
-        if (st->type_id)
+        if (st->type_id) {
           apply_script_cfg(rpk, st, static_cast<uint32_t>(st->type_id));
+          apply_directional_light(rpk, st->type_id, type);
+        }
         auto copy_num = [](Object* from, Object* to, const char* key) {
           if (!from || !to) return;
           auto it = from->fields.find(key);
@@ -286,7 +359,24 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
         return Value::make_void();
       });
   jvm.natives().register_method(
-      "java.util.resource.RenderRef", "setLight", "(III)V", native_noop);
+      "java.util.resource.RenderRef", "setLight", "(III)V",
+      [](Object* self, const std::vector<Value>& args) {
+        auto as_i = [](const Value& v) -> int32_t {
+          if (v.tag == ValueTag::Int) return v.v.i;
+          if (v.tag == ValueTag::Float) return static_cast<int32_t>(v.v.f);
+          return 0;
+        };
+        const int32_t diffuse = !args.empty() ? as_i(args[0]) : 0xffffff;
+        const int32_t ambient = args.size() > 1 ? as_i(args[1]) : 0x404040;
+        const int32_t specular = args.size() > 2 ? as_i(args[2]) : 0xffffff;
+        if (self) {
+          self->fields["_sun_d"] = Value::make_int(diffuse);
+          self->fields["_sun_a"] = Value::make_int(ambient);
+          self->fields["_sun_s"] = Value::make_int(specular);
+        }
+        scene_sun_set_packed(diffuse, ambient, specular);
+        return Value::make_void();
+      });
   jvm.natives().register_method(
       "java.util.resource.RenderRef", "setFlare",
       "(Ljava.util.resource.ResourceRef;IFFII)V", native_noop);

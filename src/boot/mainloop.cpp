@@ -532,9 +532,10 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
           return static_cast<float>(it->second.v.i);
         return 0.f;
       };
-      // userWait(sec) sets waitForUser and then termSig.wait(). SoftTimer
-      // is the thread that would notify after sec; it never starts. A
-      // click does the same, which is loadingDialog.wait().
+      // userWait(sec) blocks on termSig. LoadingScreen starts SoftTimer,
+      // which notifies the dialog after sec, and FlashText during the wait.
+      // A click is loadingDialog.osdCommand, the same notify. userWait(-1)
+      // starts no timer.
       static Object* wait_screen = nullptr;
       static int32_t wait_gen = 0;
       static std::chrono::steady_clock::time_point wait_deadline{};
@@ -574,21 +575,27 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
             jvm.invoke("java.render.LoadingScreen", "hide", "()V",
                        {Value::make_obj(screen)}, false);
         } else {
-          if (wait_screen != screen || wait_gen != wait_user) {
+          static Object* wait_dlg = nullptr;
+          static bool wait_timed = false;
+          const float limit = as_float("waitForUserTimeLimit");
+          if (wait_screen != screen || wait_gen != wait_user ||
+              wait_dlg != dlg) {
             wait_screen = screen;
             wait_gen = wait_user;
-            // userWait(5): the picture stays, then FlashText asks for a key.
-            // userWait(-1): no timer, the prompt is immediate. The timer
-            // does not dismiss the plate.
-            float limit = as_float("waitForUserTimeLimit");
-            if (limit < 0.f) limit = 0.f;
+            wait_dlg = dlg;
+            // Negative limit is userWait(): click only. Zero or more is
+            // SoftTimer, which dismisses the plate by itself.
+            wait_timed = limit >= 0.f;
             wait_deadline =
-                now + std::chrono::milliseconds(static_cast<int>(limit * 1000.f));
+                wait_timed
+                    ? now + std::chrono::milliseconds(
+                               static_cast<int>(limit * 1000.f))
+                    : now;
           }
-          if (now >= wait_deadline && skip) {
+          if ((wait_timed && now >= wait_deadline) || skip) {
             jvm.invoke("java.render.LoadingScreen", "hide", "()V",
                        {Value::make_obj(screen)}, false);
-          } else if (now >= wait_deadline && dlg) {
+          } else if (dlg) {
             Object* label = nullptr;
             auto tit = dlg->fields.find("loadingText");
             if (tit != dlg->fields.end() && tit->second.tag == ValueTag::Obj)

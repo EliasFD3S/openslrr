@@ -13,6 +13,10 @@ uniform vec4 u_vehicleMixUv;
 uniform vec4 u_vehicleEnvUv;
 uniform vec4 u_vehicleDiffuse;
 uniform vec4 u_vehicleSpec; // rgb, shininess
+uniform vec4 u_sunDiff; // rgb, set
+uniform vec4 u_sunAmb;
+uniform vec4 u_sunSpec;
+uniform vec4 u_sunDir; // render-space toward the light, w = present
 vec2 channelUv(float channel, vec2 uv0, vec2 uv1, vec2 uv2)
 {
     if (channel > 1.5) return uv2;
@@ -26,19 +30,23 @@ void main()
     vec4 base = texture2D(s_texColor, baseUv);
     vec4 detail = texture2D(s_vehicleMix, channelUv(u_vehicleChannels.y, v_texcoord0, v_texcoord1, v_texcoord2)*u_vehicleMixUv.xy+u_vehicleMixUv.zw);
     vec3 albedo = mix(base.rgb, detail.rgb, detail.a*u_vehicleLayers.x)*u_vehicleDiffuse.rgb;
-    // Same sun as the scene light: (3, 5, 4) in game space. Rendered
-    // vertices flip Z, so the direction does too.
-    vec3 lightDir = normalize(mul(u_view, vec4(normalize(vec3(3.0, 5.0, -4.0)), 0.0)).xyz);
+    // Toward the scene light. Rendered vertices flip Z, so the CPU already
+    // flipped it. Without a light resource, the stand-in is (3, 5, 4).
+    vec3 lightDir = normalize(mul(u_view, vec4(normalize(
+        u_sunDir.w > 0.5 ? u_sunDir.xyz : vec3(3.0, 5.0, -4.0)), 0.0)).xyz);
     float ndl = max(dot(n, lightDir), 0.0);
-    float light = 0.45+0.55*ndl;
+    float shade = 0.45+0.55*ndl;
+    vec3 illum = u_sunDiff.a > 0.5
+        ? (u_sunAmb.rgb + u_sunDiff.rgb*ndl)
+        : vec3(shade, shade, shade);
     vec2 raw = channelUv(u_lightmap.z, v_texcoord0, v_texcoord1, v_texcoord2);
     vec2 luv = vec2(((raw.x - 0.5) - u_lightmapUv.z) * u_lightmapUv.x + 0.5,
                     0.5 - ((0.5 - raw.y) - u_lightmapUv.w) * u_lightmapUv.y);
     vec3 bake = texture2D(s_vehicleBake, luv).rgb;
     float use = step(0.5, u_lightmap.x);
-    light = mix(light, 1.0, use);
+    illum = mix(illum, vec3(1.0, 1.0, 1.0), use);
     bake = mix(vec3(1.0, 1.0, 1.0), bake, use);
-    vec3 color = albedo*light*bake;
+    vec3 color = albedo*illum*bake;
     vec3 viewDir = normalize(-v_viewPos);
     vec3 halfDir = normalize(lightDir + viewDir);
     float ndh = max(dot(n, halfDir), 0.0);
@@ -48,8 +56,12 @@ void main()
     vec2 envUv = channelUv(u_vehicleChannels.z, v_texcoord0, v_texcoord1, v_texcoord2);
     if (u_vehicleChannels.w > 0.5) {
         vec3 ray = reflect(normalize(v_viewPos), n);
-        float yaw = atan2(u_view[0][2], u_view[2][2]);
-        envUv = vec2(ray.x*0.5-yaw/6.2831853, -ray.y*0.5+0.5);
+        // Stock spheremap: u = 0.5 Rx - yaw/pi. yaw is the look direction,
+        // atan2(forward.x, forward.z). Reading u_view[0][2] takes the
+        // camera's right on HLSL, so the picture jumped as the view pitched.
+        vec3 look = mtxGetRow(u_view, 2).xyz;
+        float yaw = atan2(look.x, look.z);
+        envUv = vec2(ray.x*0.5-yaw/3.1415927, -ray.y*0.5+0.5);
     }
     vec3 environment = texture2D(s_vehicleEnv, envUv*u_vehicleEnvUv.xy+u_vehicleEnvUv.zw).rgb;
     float weight = u_vehicleLayers.y;
@@ -61,30 +73,36 @@ void main()
         vec3 mixed = mix(u_vehicleDiffuse.rgb, base.rgb, base.a);
         float alpha = base.a*u_vehicleDiffuse.a;
         if (u_lightmap.w > 0.5 && alpha < 4.0/255.0) discard;
-        vec3 pane = mixed*light*bake;
+        vec3 pane = mixed*illum*bake;
         pane += u_vehicleSpec.rgb*spec;
         if (u_vehicleLayers.w > 4.5) pane += environment*weight;
         gl_FragColor = vec4(pane, alpha);
         return;
     }
-    // Glass. The dark tint still covers the cabin. The spheremap is added
-    // on the pane, and the edges catch more light the way a real pane does.
+    // Stock glass is two passes. The lit tint blends by the material
+    // alpha. The spheremap times its strength, plus the specular, is added.
+    // u_sunDiff.a marks a scene light (setLight or a directional resource).
     if (u_vehicleLayers.w > 2.5) {
-        float alpha = u_vehicleDiffuse.a;
-        // Cabin panes use the boosted cover. A headlight lens (reflection
-        // slot empty, marked 2) keeps the authored alpha so the chrome
-        // behind it stays visible.
-        float cover = u_vehicleChannels.w > 1.5 ? alpha : alpha*(2.0-alpha);
-        vec3 tint = u_vehicleDiffuse.rgb*light;
-        vec3 shine = environment*(weight+fres) + u_vehicleSpec.rgb*spec;
-        gl_FragColor = vec4(tint*cover + shine, cover);
+        // The mesh is two-sided, so both windings blend. Stock culls one.
+        // Two full alphas of this near-black tint stack into a black pane.
+        // 1-sqrt(1-a) twice transmits the same as one authored alpha.
+        float alpha = 1.0-sqrt(max(1.0-u_vehicleDiffuse.a, 0.0));
+        vec3 lit = u_vehicleDiffuse.rgb*illum;
+        // A headlight cover names an empty spheremap and borrows the sky.
+        // Cabin glass keeps its strength, plus a graze, so it is not a hole.
+        float envK = u_vehicleChannels.w > 1.5 ? 0.4 : (1.0+fres*0.5);
+        vec3 shine = environment*weight*envK*0.5 + u_vehicleSpec.rgb*spec*0.5;
+        gl_FragColor = vec4(lit*alpha + shine, alpha);
         return;
     } else if (u_vehicleLayers.w > 1.5) {
-        // Stock chrome: lit colour + env*strength + specular. The garage
-        // light is diffuse (0.92, 0.96, 1), ambient 0.35, specular 0.5.
-        vec3 lit = u_vehicleDiffuse.rgb*(vec3(0.347, 0.347, 0.347)+vec3(0.919, 0.958, 1.0)*ndl);
+        // Stock chrome: lit colour + env*strength + specular. The 0.5 is the
+        // garage light's specular when no scene light has been read yet.
+        vec3 lit = u_vehicleDiffuse.rgb*(u_sunDiff.a > 0.5
+            ? illum
+            : (vec3(0.347, 0.347, 0.347)+vec3(0.919, 0.958, 1.0)*ndl));
         color = lit + environment*weight;
-        color += u_vehicleSpec.rgb*pow(ndh, max(u_vehicleSpec.a, 1.0))*0.5*step(0.001, ndl);
+        vec3 sp = u_sunSpec.a > 0.5 ? u_sunSpec.rgb : vec3(0.5, 0.5, 0.5);
+        color += u_vehicleSpec.rgb*pow(ndh, max(u_vehicleSpec.a, 1.0))*sp*step(0.001, ndl);
     } else if (u_vehicleLayers.w > 0.5) {
         // Painted panels keep their color and gain the room on top.
         color += environment*weight*(0.9+fres);
