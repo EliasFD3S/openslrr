@@ -26,11 +26,6 @@ Open SLRR brings the game's scripts, cars, and resources into a new engine. The 
 
 Original game data is required and is not included. The reference version is **SLRR 2.2.1 MWM**; compatibility with other versions and mods is not guaranteed. This is an independent project, unaffiliated with the original game's developers or publishers.
 
-## Video
-
-[![Watch Open SLRR on YouTube](https://img.youtube.com/vi/BPfR9-6H-Ek/hqdefault.jpg)](https://www.youtube.com/watch?v=BPfR9-6H-Ek)
-
-[Watch the video on YouTube](https://www.youtube.com/watch?v=BPfR9-6H-Ek).
 
 ## Progress
 
