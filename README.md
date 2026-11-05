@@ -22,7 +22,7 @@
 
 Open SLRR brings the game's scripts, cars, and resources into a new engine. The project reimplements resource loading, script execution, rendering, the interface, and the native functions those scripts use.
 
-**The garage is coming to life, but the game is not fully playable yet.** Menus, parts previews, and car assembly are in place. Driving and a complete career remain to be built.
+**The garage is coming to life, but the game is not fully playable yet.** Menus, the car showroom, parts previews, and car assembly are in place. In the garage you can name the part under the cursor, hide a group of parts, open panels, and remove or fit a part together with what is attached to it. Driving and a complete career remain to be built.
 
 Original game data is required and is not included. The reference version is **SLRR 2.2.1 MWM**; compatibility with other versions and mods is not guaranteed. This is an independent project, unaffiliated with the original game's developers or publishers.
 
@@ -35,22 +35,23 @@ These milestones describe existing functionality, rather than a percentage of th
 | Scripts | ✅ TUFA classes and TREE programs, inheritance, Java and native calls |
 | Resources | ✅ RPK packs, SCX models, DDS/PTX textures, and CFG configurations |
 | Garage and rendering | ✅ bgfx/D3D11, textures, script camera, instances, and sky |
-| Interface | ✅ Menus, career dialogs, catalog, track selection, and paint inventory |
-| Cars | ✅ Assembly from scripts and CFG files; reference Baiern with 76 parts |
-| Physics | 🔧 Chassis, springs/dampers, and wheel contacts on the garage floor, verified with Baiern and Duhen |
+| Interface | ✅ Menus, career dialogs, catalog, car showroom, track selection, and paint inventory |
+| Cars | ✅ Assembly from scripts and CFG files; reference Baiern with 76 parts. The showroom car turns over the film. Car information shows the powertrain layout, gear ratios, and dyno scales |
+| Workshop | ✅ Point at a part to read its name, hide the body or the engine, open doors and adjustment dialogs, and remove or fit a part together with the parts attached to it. An inventory part turns while you point at it |
+| Physics | ✅ Chassis, springs, dampers, and wheel contacts, verified with Baiern and Duhen. A released car settles on the garage floor. A parked car holds its standing height |
 | Audio and video | ✅ Effects, voices, loops, and intros with their audio tracks where available |
 | Driving | ⏳ Tyre slip, engine, clutch, transmission, and controls still need to be connected |
-| World and career | ⏳ City, traffic, saves, and the complete purchase/install/save cycle |
+| World and career | ⏳ City, traffic, saves, and the complete purchase and save cycle |
 
 **Next major milestones**
 
 - [ ] Complete the simulation and controls needed to drive.
 - [ ] Extend wall collisions, suspension constraints, and deformation.
-- [ ] Finish purchasing and interactively installing parts, then saving the result.
+- [ ] Finish buying a part and saving the car.
 - [ ] Complete transparency rendering.
 - [ ] Bring the city and traffic to life.
 
-Some native functions are still placeholders. Catalog display works, but the full purchase loop has not yet been validated. Multiplayer is outside the current scope.
+Some native functions are still placeholders. You can browse the catalog and work on the car in the garage. Buying a part and saving the car have not been validated yet. Multiplayer is outside the current scope.
 
 ## Build
 
@@ -106,7 +107,7 @@ The executable is generated at `build-bgfx/Release/slrr_host.exe`. The first bui
 .\build-bgfx\Release\slrr_host.exe --game --spawn-car cars/racers/Baiern.rpk:0x6 --render bgfx --root "D:\Games\SLRR"
 ```
 
-In the garage, **right-click and drag**, the **arrow keys**, and the **scroll wheel** control the camera. **Escape** skips the intros. Close the window to quit. The car rests on its wheels, but driving controls are not connected yet.
+In the garage, **right-click and drag**, the **arrow keys**, and the **scroll wheel** control the camera. **Escape** skips the intros. Close the window to quit. The car rests on its wheels, but driving controls are not connected yet. In the showroom the view turns around the car on its own.
 
 You can also set the game path with `$env:SLRR_GAME_ROOT`. The `--root` option takes priority; without either setting, the default folder is `../game`. Run `slrr_host.exe --help` for all options.
 
