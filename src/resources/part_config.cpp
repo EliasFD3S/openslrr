@@ -197,18 +197,23 @@ PartConfig parse_part_config(const std::string &source,
         if (out.slots.empty())
           throw std::runtime_error("slottype before slot");
         out.slots.back().type = integer(t, 1);
-      } else if (!out.slots.empty() && t.size() == 11 &&
+      } else if (!out.slots.empty() &&
+                 ((command == "flap" && t.size() >= 12) ||
+                  (t.size() == 11 &&
                  (std::isdigit(static_cast<unsigned char>(command[0])) ||
                   command[0] == '-' || command[0] == '+' ||
-                  command[0] == '.')) {
+                  command[0] == '.')))) {
         PartSlot &slot = out.slots.back();
+        // Stock CFGs prefix the hinge parameters with `flap`. Older
+        // files may contain the same eleven numbers without the keyword.
+        const size_t first = command == "flap" ? 1 : 0;
         for (int i = 0; i < 3; ++i) {
-          slot.flap_pivot[i] = number(t, static_cast<size_t>(i));
-          slot.flap_axis[i] = number(t, static_cast<size_t>(3 + i));
-          slot.flap_dir[i] = number(t, static_cast<size_t>(6 + i));
+          slot.flap_pivot[i] = number(t, first + i);
+          slot.flap_axis[i] = number(t, first + 3 + i);
+          slot.flap_dir[i] = number(t, first + 6 + i);
         }
-        slot.flap_lo = number(t, 9);
-        slot.flap_hi = number(t, 10);
+        slot.flap_lo = number(t, first + 9);
+        slot.flap_hi = number(t, first + 10);
         slot.has_flap = true;
       } else if (command == "type") {
         have_spring = false;
