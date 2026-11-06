@@ -18,10 +18,13 @@ void write_color(float* dst, int32_t packed) {
 }  // namespace
 
 void scene_sun_set_packed(int32_t diffuse, int32_t ambient, int32_t specular) {
-  write_color(g_sun.diffuse, diffuse);
-  write_color(g_sun.ambient, ambient);
-  write_color(g_sun.specular, specular);
-  g_sun.set = true;
+  scene_sun_apply_packed(g_sun,diffuse,ambient,specular);
+}
+void scene_sun_apply_packed(SceneSun& light,int32_t diffuse,int32_t ambient,int32_t specular) {
+  write_color(light.diffuse, diffuse);
+  write_color(light.ambient, ambient);
+  write_color(light.specular, specular);
+  light.set = true;
 }
 
 void scene_sun_set_resource(const float diffuse[3], const float ambient[3],

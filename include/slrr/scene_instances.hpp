@@ -1,6 +1,7 @@
 #pragma once
 
 #include "slrr/scx_mesh.hpp"
+#include "slrr/scene_sun.hpp"
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -11,6 +12,7 @@ class RpkIndex;
 struct GameRefState;
 
 struct SceneInstance {
+  SceneSun lighting;
   void *key = nullptr;
   std::shared_ptr<const ScxGeometry> geometry;
   // Column-major renderer matrix; script meters, with the SCX Z reflection.
@@ -42,6 +44,7 @@ std::string scene_instances_envmap();
 void scene_instances_select(void *world, void *skydome);
 std::vector<SceneInstance> scene_instances_collect();
 std::vector<SceneInstance> scene_instances_collect_root(void *root);
+SceneSun scene_instances_light(void* root=nullptr);
 // Rejects missing parents, hidden subtrees and cycles.
 bool scene_instance_transform(void *key, void *root, float *matrix);
 // Active world, unreflected script metres. False for inventory/other worlds.

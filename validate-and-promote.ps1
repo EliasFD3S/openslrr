@@ -27,7 +27,8 @@ if ($running) { throw 'Close the release game before promotion. The built candid
 $checkpoint = Join-Path $workspace ('checkpoints/host-built-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 New-Item -ItemType Directory -Path $checkpoint -Force | Out-Null
 $sourcePaths = @('src', 'include', 'shaders', 'CMakeLists.txt', 'README.md', 'REFERENCE_PORT.md', 'PHYSICS_PORT_AUDIT.md', 'VEHICLE_DYNAMICS.md', 'NATIVE_SUSPENSION_GEOMETRY.md', 'validate-and-promote.ps1') |
-    ForEach-Object { Join-Path $PSScriptRoot $_ }
+    ForEach-Object { Join-Path $PSScriptRoot $_ } |
+    Where-Object { Test-Path -LiteralPath $_ }
 Compress-Archive -LiteralPath $sourcePaths -DestinationPath (Join-Path $checkpoint 'sources.zip')
 Copy-Item -LiteralPath $candidate -Destination (Join-Path $checkpoint 'slrr_host.exe')
 if (Test-Path -LiteralPath $release) {

@@ -767,10 +767,25 @@ bool scene_instances_supports(void *root,
   return !points.empty();
 }
 
+SceneSun scene_instances_light(void* root) {
+  if(!root)root=g_world;
+  SceneSun selected=scene_sun();int newest=0;
+  for(auto* node:gameref_render_nodes()) {
+    if(!node->directional_light.set || node->live_id<=newest)continue;
+    float frame[16];
+    // chain_matrix rejects inventory world roots and hidden subtrees.
+    if(!chain_matrix(node->key,root,frame,false))continue;
+    selected=node->directional_light;newest=node->live_id;
+    const auto& d=node->directional_light.direction;
+    for(int i=0;i<3;++i)selected.direction[i]=frame[i]*d[0]+frame[4+i]*d[1]+frame[8+i]*d[2];
+  }
+  return selected;
+}
 std::vector<SceneInstance> scene_instances_collect_root(void *root) {
   std::vector<SceneInstance> out;
   if (!g_resources || !root)
     return out;
+  const auto lighting=scene_instances_light(root);
   for (auto *n : gameref_render_nodes()) {
     // Source scripts replace Scene.skydome; a superseded handle may remain
     // alive until script cleanup. Never render it as ordinary foreground.
@@ -779,6 +794,7 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root) {
     if (n->light_flags && !part_lamp_lit(n->light_flags))
       continue;
     SceneInstance instance;
+    instance.lighting=lighting;
     if (!scene_instance_transform(n->key, root, instance.transform.data()))
       continue;
     instance.geometry = geometry(static_cast<uint32_t>(n->type_id));

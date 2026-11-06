@@ -28,7 +28,7 @@ namespace slrr {
 // where the light travels. setLight on the type (time of day) wins over the
 // file colours; the file still supplies the direction. Point lights are
 // left alone. The garage light is misc.garage:0x001D, straight down.
-void apply_directional_light(const RpkIndex& rpk, int32_t full_id, Object* type) {
+void apply_directional_light(const RpkIndex& rpk, int32_t full_id, Object* type,GameRefState& instance) {
   if (full_id == 0) return;
   const std::vector<uint8_t> bytes =
       rpk.read_payload(static_cast<uint32_t>(full_id));
@@ -80,7 +80,13 @@ void apply_directional_light(const RpkIndex& rpk, int32_t full_id, Object* type)
   if (!have_a) amb[0] = amb[1] = amb[2] = 0.f;
   if (!have_s) spec[0] = spec[1] = spec[2] = 1.f;
   if (!have_dir) dir[0] = dir[1] = dir[2] = 0.f;
-  scene_sun_set_resource(diff, amb, spec, dir);
+  auto& light=instance.directional_light;
+  std::copy(diff,diff+3,light.diffuse);
+  std::copy(amb,amb+3,light.ambient);
+  std::copy(spec,spec+3,light.specular);
+  std::copy(dir,dir+3,light.direction);
+  light.set=true;
+  light.has_direction=dir[0]*dir[0]+dir[1]*dir[1]+dir[2]*dir[2]>1e-8f;
   auto packed = [](Object* o, const char* key, int32_t* out) {
     if (!o) return false;
     auto it = o->fields.find(key);
@@ -91,7 +97,7 @@ void apply_directional_light(const RpkIndex& rpk, int32_t full_id, Object* type)
   int32_t sd = 0, sa = 0, ss = 0;
   if (packed(type, "_sun_d", &sd) && packed(type, "_sun_a", &sa) &&
       packed(type, "_sun_s", &ss))
-    scene_sun_set_packed(sd, sa, ss);
+    scene_sun_apply_packed(light,sd,sa,ss);
 }
 
 void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
@@ -133,7 +139,7 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
         if (alias && !alias->str.empty()) st->alias = alias->str;
         if (st->type_id) {
           apply_script_cfg(rpk, st, static_cast<uint32_t>(st->type_id));
-          apply_directional_light(rpk, st->type_id, type);
+          apply_directional_light(rpk, st->type_id, type,*st);
         }
         auto copy_num = [](Object* from, Object* to, const char* key) {
           if (!from || !to) return;
@@ -374,7 +380,8 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
           self->fields["_sun_a"] = Value::make_int(ambient);
           self->fields["_sun_s"] = Value::make_int(specular);
         }
-        scene_sun_set_packed(diffuse, ambient, specular);
+        if(auto* light=gameref_get(self))
+          scene_sun_apply_packed(light->directional_light,diffuse,ambient,specular);
         return Value::make_void();
       });
   jvm.natives().register_method(

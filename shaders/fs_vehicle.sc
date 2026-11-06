@@ -56,9 +56,7 @@ void main()
     vec2 envUv = channelUv(u_vehicleChannels.z, v_texcoord0, v_texcoord1, v_texcoord2);
     if (u_vehicleChannels.w > 0.5) {
         vec3 ray = reflect(normalize(v_viewPos), n);
-        // Stock spheremap: u = 0.5 Rx - yaw/pi. yaw is the look direction,
-        // atan2(forward.x, forward.z). Reading u_view[0][2] takes the
-        // camera's right on HLSL, so the picture jumped as the view pitched.
+        // Stock view-space spheremap with camera heading compensation.
         vec3 look = mtxGetRow(u_view, 2).xyz;
         float yaw = atan2(look.x, look.z);
         envUv = vec2(ray.x*0.5-yaw/3.1415927, -ray.y*0.5+0.5);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "slrr/scx_mesh.hpp"
+#include "slrr/scene_sun.hpp"
 
 #include <cstdint>
 #include <string>
@@ -41,6 +42,7 @@ struct GameRefTimer {
 };
 
 struct GameRefState {
+  SceneSun directional_light;
   void* key = nullptr;  // java.util.resource.GameRef* / GameType*
   void* binding = nullptr; // reference handle alias; never another scene node
   int32_t live_id = 0; // independent from the RPK type ID

@@ -743,7 +743,7 @@ class LibBgfxBackend final : public IRenderBackend {
         }
         // A spheremap ColorMixTex outputs texture.a times the env factor.
         if (color_mix_env) diffuse[3] = strength;
-        const SceneSun sun = scene_sun();
+        const SceneSun sun = instance.lighting;
         const float sun_d[4] = {sun.diffuse[0], sun.diffuse[1], sun.diffuse[2],
                                 sun.set ? 1.f : 0.f};
         const float sun_a[4] = {sun.ambient[0], sun.ambient[1], sun.ambient[2], 0.f};
@@ -781,7 +781,10 @@ class LibBgfxBackend final : public IRenderBackend {
         if (instance.light_flags) bake_u[0] = 1.f;
         bgfx::setUniform(u_lightmap_, bake_u);
         bgfx::setUniform(u_lightmap_uv_, bake_xf);
-        bgfx::setTexture(0,s_tex_,base);bgfx::setTexture(1,s_mix_,mix);bgfx::setTexture(2,s_env_,env);
+        bgfx::setTexture(0,s_tex_,base);bgfx::setTexture(1,s_mix_,mix);
+        // Global environment textures share the image cache with OSD, but
+        // material UV transforms need the scene's wrapping sampler here.
+        bgfx::setTexture(2, s_env_, env, BGFX_SAMPLER_NONE);
         bgfx::setTexture(3,s_bake_,bake);
         bgfx::setTransform(matrix);bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,group.index_start,group.index_count);
         uint64_t state=BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_MSAA|BGFX_STATE_DEPTH_TEST_LESS;
@@ -891,7 +894,7 @@ class LibBgfxBackend final : public IRenderBackend {
     // The offscreen map never reached the courtyard. Flatten the body onto
     // the ground along the sun; the stencil keeps overlapping panels from
     // stacking the ink.
-    SceneSun sun = scene_sun();
+    SceneSun sun = scene_instances_light();
     float travel[3] = {sun.direction[0], sun.direction[1], -sun.direction[2]};
     {
       const float tlen = std::sqrt(travel[0] * travel[0] + travel[1] * travel[1] +
@@ -982,7 +985,7 @@ class LibBgfxBackend final : public IRenderBackend {
     }
     const bool maps = false;
     if (maps) {
-      SceneSun sun = scene_sun();
+      SceneSun sun = scene_instances_light();
       float travel[3] = {sun.direction[0], sun.direction[1], -sun.direction[2]};
       const float tlen = std::sqrt(travel[0] * travel[0] + travel[1] * travel[1] +
                                    travel[2] * travel[2]);
