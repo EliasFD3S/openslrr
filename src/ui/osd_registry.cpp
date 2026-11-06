@@ -639,6 +639,47 @@ void osd_on_char(int ascii) {
   refresh_string_text(w, true);
 }
 
+Object* osd_inventory_drag_source_at(float x, float y) {
+  const auto* w = osd_widget_at(osd_hit_index(x, y));
+  if (!w || widget_disabled(*w) || !w->button || !w->handler ||
+      w->handler->class_name != "java.game.InventoryPanel") return nullptr;
+  auto object_field = [](Object* o, const char* key) -> Object* {
+    if (!o) return nullptr;
+    auto it = o->fields.find(key);
+    return it != o->fields.end() && it->second.tag == ValueTag::Obj
+               ? it->second.v.o : nullptr;
+  };
+  Object* inv = object_field(w->handler, "inv");
+  if (!inv || !object_field(w->handler, "invItem")) return nullptr;
+  auto it = inv->fields.find("interactive");
+  if (it == inv->fields.end() || it->second.tag != ValueTag::Int || !it->second.v.i)
+    return nullptr;
+  return w->button;
+}
+
+bool osd_fire_inventory_drop_at(Object* source, float x, float y) {
+  if (!source) return false;
+  bool live_source = false;
+  for (const auto& w : g_widgets)
+    if (w.button == source && !w.hidden && !w.dead && !widget_disabled(w))
+      live_source = true;
+  const auto* target = osd_widget_at(osd_hit_index(x, y));
+  if (!live_source || !target || widget_disabled(*target) ||
+      !target->button || target->button == source || !target->owner || !g_click)
+    return false;
+  const auto enabled = target->button->fields.find("dropEnabled");
+  if (enabled == target->button->fields.end() || enabled->second.tag != ValueTag::Int ||
+      !enabled->second.v.i) return false;
+  const OsdWidget hit = *target; // Script callbacks can rebuild the registry.
+  Object* owner = hit.owner;
+  owner->fields["dropObject"] = Value::make_obj(nullptr);
+  owner->fields["dropGadget"] = Value::make_obj(source);
+  g_click(hit);
+  owner->fields["dropGadget"] = Value::make_obj(nullptr);
+  owner->fields["dropObject"] = Value::make_obj(nullptr);
+  return true;
+}
+
 void osd_fire_click_at(float osd_x, float osd_y) {
   const int32_t idx = osd_hit_index(osd_x, osd_y);
   if (idx < 0 || idx >= static_cast<int32_t>(g_widgets.size())) return;

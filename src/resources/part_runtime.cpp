@@ -185,6 +185,14 @@ bool matches(const Record &parent, const PartSlot &mount, const Record &child,
       return true;
   return false;
 }
+bool wheel_on_suspension_service(const Record& parent, int slot, Object* child) {
+  if (!runtime || parent.config->native_kind != "car" ||
+      !((slot >= 301 && slot <= 304) || (slot >= 311 && slot <= 314)))
+    return false;
+  return runtime->tree_instance_of(child, "java.game.parts.rgearpart.Spring") ||
+         runtime->tree_instance_of(child, "java.game.parts.rgearpart.ShockAbsorber") ||
+         runtime->tree_instance_of(child, "java.game.parts.rgearpart.Pneumatic_ShockAbsorber");
+}
 struct Selection {
   Object *parent = nullptr;
   const PartSlot *mount = nullptr;
@@ -271,7 +279,8 @@ Selection select(Object *child, Object *root, int own, int target,
       const auto blocked = p->slot_status.find(mount.id);
       if ((target && mount.id != target) ||
           (free_only && p->children.count(mount.id)) ||
-          (blocked != p->slot_status.end() && blocked->second) ||
+          (free_only && blocked != p->slot_status.end() && blocked->second &&
+           !(blocked->second == 1 && wheel_on_suspension_service(*p, mount.id, child))) ||
           mount.id == p->state.own_slot)
         continue;
       for (const auto &mate : c->config->slots)
@@ -2107,10 +2116,8 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
       // mounted: children are part of the assembly, not a reason to refuse.
       if (!p || p->config->native_kind == "car")
         return Value::make_int(-1);
-      // Installation already respects disableSlot. Removal must respect the
-      // same locked attachment chain (stock FUN_004ca300 / FUN_004cb0b0),
-      // otherwise a spring can leave behind a wheel/brake that prevents it
-      // from being installed again. Keep the tyre on a removable rim.
+      // Use the same service exception as installation for springs and
+      // dampers, so a wheel left on the car cannot prevent their return.
       std::unordered_set<Object *> seen;
       auto *current = p;
       while (current && current->state.parent) {
@@ -2120,7 +2127,10 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
         if (!parent)
           break;
         auto blocked = parent->slot_status.find(current->state.parent_slot);
-        if (blocked != parent->slot_status.end() && blocked->second)
+        if (blocked != parent->slot_status.end() && blocked->second &&
+            !(blocked->second == 1 && wheel_on_suspension_service(
+                                         *parent, current->state.parent_slot,
+                                         current->state.object)))
           return Value::make_int(-1);
         current = parent;
       }
@@ -2627,8 +2637,31 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
          }
          auto found = select(canonical(s), as_part(object(a, 0)), number(a, 3),
                              number(a, 1), true, use);
-         if (!found.parent)
+         if (!found.parent) {
+           auto* child = record(s);
+           Object* root = as_part(object(a, 0));
+           std::fprintf(stderr, "[part] install_OK refused class=%s cfg=%s root=%s\n",
+                        s ? s->class_name.c_str() : "null",
+                        child ? child->config->source.c_str() : "missing",
+                        root ? root->class_name.c_str() : "null");
+           int candidates = 0;
+           if (child)
+             for (const auto& installed : part_installed_tree(root)) {
+               auto* parent = record(installed.object);
+               if (!parent) continue;
+               for (const auto& mount : parent->config->slots)
+                 for (const auto& mate : child->config->slots)
+                   if (matches(*parent, mount, *child, mate) && candidates++ < 12) {
+                     auto blocked = parent->slot_status.find(mount.id);
+                     std::fprintf(stderr, "[part] candidate cfg=%s slot=%d mate=%d occupied=%d disabled=%d\n",
+                                  parent->config->source.c_str(), mount.id, mate.id,
+                                  parent->children.count(mount.id) != 0,
+                                  blocked == parent->slot_status.end() ? 0 : blocked->second);
+                   }
+             }
+           std::fprintf(stderr, "[part] compatible candidates=%d\n", candidates);
            return Value::make_obj(nullptr);
+         }
          if (auto *out = object(a, 2))
            gameref_bind_alias(out, found.parent);
          auto *pair = jvm.new_object("[I");

@@ -961,6 +961,11 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
         self->lmb_x_ = static_cast<short>(LOWORD(lp));
         self->lmb_y_ = static_cast<short>(HIWORD(lp));
         self->lmb_down_ = true;
+        float x, y;
+        osd_pixel_to_text(self->lmb_x_, self->lmb_y_, self->width_, self->height_, &x, &y);
+        self->inventory_drag_source_ = video_fmv_block_osd()
+                                          ? nullptr : osd_inventory_drag_source_at(x, y);
+        self->inventory_dragging_ = false;
       }
       return 0;
     }
@@ -974,6 +979,20 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     if (msg == WM_LBUTTONUP || msg == WM_RBUTTONUP) {
       if (msg == WM_LBUTTONUP && self && self->lmb_down_ && !in.rmb_down) {
         self->lmb_down_ = false;
+        if (self->inventory_dragging_) {
+          Object* source = self->inventory_drag_source_;
+          self->inventory_drag_source_ = nullptr;
+          self->inventory_dragging_ = false;
+          host_cursor_set_pointer(self->inventory_drag_cursor_);
+          ReleaseCapture();
+          float x, y;
+          osd_pixel_to_text(static_cast<short>(LOWORD(lp)), static_cast<short>(HIWORD(lp)),
+                            self->width_, self->height_, &x, &y);
+          if (!video_fmv_block_osd() && osd_fire_inventory_drop_at(source, x, y))
+            host_sfx_play(HostSfx::MenuSelect);
+          return 0;
+        }
+        self->inventory_drag_source_ = nullptr;
         float ox = 0.f, oy = 0.f;
         osd_pixel_to_text(self->lmb_x_, self->lmb_y_, self->width_,
                           self->height_, &ox, &oy);
@@ -996,6 +1015,14 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
       if (msg == WM_LBUTTONUP && self) self->lmb_down_ = false;
       if (!in.rmb_down) ReleaseCapture();
       return 0;
+    }
+    if (msg == WM_CAPTURECHANGED || msg == WM_CANCELMODE) {
+      if (self) {
+        self->lmb_down_ = false;
+        self->inventory_drag_source_ = nullptr;
+        if (self->inventory_dragging_) host_cursor_set_pointer(self->inventory_drag_cursor_);
+        self->inventory_dragging_ = false;
+      }
     }
     if (msg == WM_CHAR) {
       const int ch = static_cast<int>(wp);
@@ -1020,6 +1047,13 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     if (msg == WM_MOUSEMOVE) {
       const int x = static_cast<short>(LOWORD(lp));
       const int y = static_cast<short>(HIWORD(lp));
+      if (self && self->lmb_down_ && self->inventory_drag_source_ &&
+          !self->inventory_dragging_ && !in.rmb_down &&
+          (std::abs(x - self->lmb_x_) >= 5 || std::abs(y - self->lmb_y_) >= 5)) {
+        self->inventory_dragging_ = true;
+        self->inventory_drag_cursor_ = host_cursor_pointer();
+        host_cursor_set_pointer('A');
+      }
       if (self && self->have_mouse_) {
         const float dx = static_cast<float>(x - self->mouse_x_) / 200.f;
         const float dy = static_cast<float>(y - self->mouse_y_) / 200.f;

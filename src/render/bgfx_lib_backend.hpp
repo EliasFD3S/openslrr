@@ -221,6 +221,9 @@ class LibBgfxBackend final : public IRenderBackend {
   int lmb_y_ = 0;
   bool have_mouse_ = false;
   bool lmb_down_ = false;
+  Object* inventory_drag_source_ = nullptr;
+  bool inventory_dragging_ = false;
+  char inventory_drag_cursor_ = 'J';
 #endif
 
   bool ready_ = false;

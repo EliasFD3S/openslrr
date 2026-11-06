@@ -154,6 +154,8 @@ void osd_set_click_handler(OsdClickFn fn);
 using OsdHoverFn = std::function<void(const OsdWidget* w)>;
 void osd_set_hover_handler(OsdHoverFn fn);
 void osd_fire_click_at(float osd_x, float osd_y);
+Object* osd_inventory_drag_source_at(float x, float y);
+bool osd_fire_inventory_drop_at(Object* source, float x, float y);
 
 // Show or hide every widget and text that belongs to this Osd instance.
 void osd_set_owner_visible(Object* osd, bool visible);
