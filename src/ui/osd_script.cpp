@@ -39,10 +39,23 @@ void install_osd_script_hover(Jvm& jvm) {
     const float value=number(slider,"value",before);
     if(!std::isfinite(value) || value==before)return true;
     if(osd)osd->fields["sliderValue"]=Value::make_float(value);
-    // Match Slider.sendMessage before the host's synchronous OSD dispatch.
+    // Gadget.sendMessage uses Events for async GameType handlers (tuned
+    // parts), and osdCommand for synchronous dialogs such as OptionsDialog.
+    // The host pumps sections only; deliver the part event synchronously
+    // instead of leaving it in a port with no running Java thread.
     Object* handler=object(slider,"handler");
-    if(handler)jvm.invoke_by_name(handler->class_name,"osdCommand",
-       {Value::make_obj(handler),Value::make_int(static_cast<int>(number(slider,"cmd",static_cast<float>(w.cmd))))},false);
+    const int cmd=static_cast<int>(number(slider,"cmd",static_cast<float>(w.cmd)));
+    if(handler && jvm.tree_instance_of(handler,"java.lang.GameType") && object(handler,"mp")) {
+      Object* event=jvm.new_object("java.util.Event");
+      jvm.invoke_by_name(event->class_name,"<init>",
+         {Value::make_obj(event),Value::make_int(cmd),Value::make_int(4)},false);
+      event->fields["gadget"]=Value::make_obj(slider);
+      jvm.invoke(handler->class_name,"handleMessage","(Ljava.util.Event;)V",
+         {Value::make_obj(handler),Value::make_obj(event)},false);
+    } else if(handler) {
+      jvm.invoke_by_name(handler->class_name,"osdCommand",
+         {Value::make_obj(handler),Value::make_int(cmd)},false);
+    }
     return true;
   });
   auto last = std::make_shared<Object*>(nullptr);

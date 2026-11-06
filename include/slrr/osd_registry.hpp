@@ -75,6 +75,7 @@ OsdWidget* osd_widget_mut(int32_t index);
 void osd_add_widget(OsdWidget w);
 // Dialog.show sets Osd.OF_MODAL. That plate has to cover the catalog.
 bool osd_owner_modal(Object* owner);
+bool osd_has_modal();
 // Viewport priority stored by Viewport.create (menu 10, dialog 22, shield 21).
 int32_t osd_viewport_pri(Object* osd);
 const std::vector<OsdWidget>& osd_widgets();

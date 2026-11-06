@@ -38,7 +38,7 @@ bool owner_suppressed(const OsdWidget& w) {
 Object* modal_osd() {
   for (int32_t i = static_cast<int32_t>(g_widgets.size()) - 1; i >= 0; --i) {
     const OsdWidget& w = g_widgets[static_cast<size_t>(i)];
-    if (w.hidden || !w.owner) continue;
+    if (w.hidden || w.dead || !w.owner || owner_suppressed(w)) continue;
     auto it = w.owner->fields.find("flags");
     if (it == w.owner->fields.end() || it->second.tag != ValueTag::Int)
       continue;
@@ -52,6 +52,14 @@ bool widget_nofocus(const OsdWidget& w) {
   auto it = w.button->fields.find("nofocus");
   return it != w.button->fields.end() && it->second.tag == ValueTag::Int &&
          it->second.v.i != 0;
+}
+
+bool widget_slider_track(const OsdWidget& w) {
+  if (!w.button) return false;
+  auto it = w.button->fields.find("parent");
+  Object* parent = it != w.button->fields.end() && it->second.tag == ValueTag::Obj
+                       ? it->second.v.o : nullptr;
+  return parent && parent->class_name == "java.render.osd.Slider";
 }
 
 bool widget_disabled(const OsdWidget& w) {
@@ -162,6 +170,8 @@ int32_t osd_viewport_pri(Object* osd) {
     return 0;
   return pri->second.v.i;
 }
+
+bool osd_has_modal() { return modal_osd() != nullptr; }
 
 bool osd_owner_modal(Object* owner) {
   if (!owner) return false;
@@ -350,7 +360,10 @@ int32_t osd_hit_index(float osd_x, float osd_y) {
       continue;
     // nofocus is keyboard-only. The modal shield uses it and must still
     // swallow clicks that would otherwise reach the menu.
-    const bool block = w.cmd == 9999999 || widget_nofocus(w);
+    // Slider tracks are nofocus because their parent owns focus. They still
+    // receive mouse clicks; treating them as shields loses the entire drag.
+    const bool block = w.cmd == 9999999 ||
+                       (widget_nofocus(w) && !widget_slider_track(w));
     if (!have || w.layer > best_layer ||
         (w.layer == best_layer && best_block && !block)) {
       best = i;

@@ -1013,7 +1013,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
         if (!video_fmv_block_osd() && clicked && !clicked->disabled) {
           host_sfx_play(HostSfx::MenuSelect);
           osd_fire_click_at(ox, oy);
-        } else if (!video_fmv_block_osd() && !clicked) {
+        } else if (!video_fmv_block_osd() && !clicked && !osd_has_modal()) {
           in.part_click = true;
           in.part_click_x = self->lmb_x_;
           in.part_click_y = self->lmb_y_;

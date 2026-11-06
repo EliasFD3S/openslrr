@@ -33,7 +33,11 @@ hotkey dispatcher to the host.
 
 Slider hit boxes (knob or track Button.parent) now route through the Slider's
 range/tick-aware `setValue`. The host copies the result to `osd.sliderValue`
-before dispatching its command. Mouse capture keeps dragging active outside
+before dispatching its command. Async GameType handlers receive an Event with
+F_GAD_CHANGE and the Slider as gadget, through handleMessage(Event); synchronous
+dialog handlers retain osdCommand. This keeps tuning controls separate from
+the dialog OK/Cancel buttons. Reference casts in TREE no longer turn subsequent
+instance assignments into static writes. Mouse capture keeps dragging active outside
 the track; release, cancellation and hidden controls are handled.
 
 The engine-owned Config instance is loaded before Init and retained as a VM
@@ -70,3 +74,7 @@ new voice when all slots are occupied by loops.
 A temporary muted XAudio2 diagnostic confirmed 1,000 hover requests -> one
 voice, 1,000 wrench requests -> one voice, two spaced wrench requests -> two
 voices, click priority, and preservation of independent looping voices.
+
+A temporary fuel-rail tuning diagnostic verified that dragging updates the
+mixture ratio to 17:1 while keeping the dialog shown and its result untouched.
+The audio-slider/save-reload diagnostic also passes after this correction.

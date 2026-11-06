@@ -1310,6 +1310,16 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
         break;
       case 0x19: {  // class
         if (!n.wide) return fail("class missing imm");
+        if (pending_expr == 33) {
+          // A reference cast keeps the object on the stack. Its class
+          // carrier is not a static-access prefix: ((Slider)e.gadget).value
+          // must read the slider, and the following assignment stays on this.
+          pending_expr = -1;
+          pending_class.clear();
+          path_static = false;
+          saw_class = false;
+          break;
+        }
         pending_class = cls.class_name(n.imm);
         path_static = true;
         saw_class = true;
