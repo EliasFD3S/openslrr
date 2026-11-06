@@ -22,7 +22,7 @@
 
 Open SLRR brings the game's scripts, cars, and resources into a new engine. The project reimplements resource loading, script execution, rendering, the interface, and the native functions those scripts use.
 
-**The garage is coming to life, but the game is not fully playable yet.** Menus, the car showroom, parts previews, and car assembly are in place. In the garage you can name the part under the cursor, hide a group of parts, open panels, and remove or fit a part together with what is attached to it. Driving and a complete career remain to be built.
+**The garage is coming to life, but the game is not fully playable yet.** Menus, the car showroom, parts previews, and car assembly are in place. In the garage you can inspect parts, hide assemblies, open panels with interpolated motion, and remove or fit parts together with their attachments. Car shadows, environment reflections, music playlists, and persistent audio settings are also implemented. Driving and a complete career remain to be built.
 
 Original game data is required and is not included. The reference version is **SLRR 2.2.1 MWM**; compatibility with other versions and mods is not guaranteed. This is an independent project, unaffiliated with the original game's developers or publishers.
 
@@ -31,19 +31,44 @@ Original game data is required and is not included. The reference version is **S
 
 These milestones describe existing functionality, rather than a percentage of the game completed.
 
+### Native bindings
+
+![Native bindings by family: with a body, no-op, or missing](assets/progress/native-coverage.svg)
+
+**277 with a body · 20 no-op · 79 missing**, out of **376 stock natives** (6 November 2026).
+The bars show **numbers of functions**, not percentages. A body can still be partial or return a fixed value; these counts do not establish full behavior or validation in game. The separately counted no-op functions are explicitly registered as `native_noop`.
+
+| Family | With a body | No-op | Missing |
+| --- | ---: | ---: | ---: |
+| World | 3 | 0 | 51 |
+| Language | 50 | 10 | 14 |
+| Sound & scripts | 11 | 0 | 7 |
+| Resources | 49 | 5 | 6 |
+| Rendering | 35 | 0 | 1 |
+| Files & input | 32 | 5 | 0 |
+| Parts | 97 | 0 | 0 |
+| **Total** | **277** | **20** | **79** |
+
+World covers GroundRef, particles, animation and PhysicsRef; language covers `java.lang`. Resources covers GameRef, ResourceRef, RenderRef and SfxRef; rendering covers GfxEngine, Text, Camera and Viewport. Files & input includes File, FindFile, Input, Controller and MouseCursor; parts includes Part, Chassis, WheelRef, DynoData and SfxTable. Sound & scripts covers Sound, Vehicle, Painter, Navigator and GameLogic.
+
+The snapshot matches the stock native table against registered class, method and parameter signatures, with explicit no-op bindings reviewed separately. Counts and definitions are stored in [native-coverage.json](assets/progress/native-coverage.json). After auditing a new snapshot, regenerate the graphic with `python tools/render-native-coverage.py` (standard library only).
+
+### Features
+
 | Area | Current state |
 | --- | --- |
 | Scripts | ✅ TUFA classes and TREE programs, inheritance, Java and native calls |
 | VM memory | ✅ Mark/sweep garbage collection, pin/unpin and finalizers; conservative native roots. See [VM_GC.md](VM_GC.md) |
 | Resources | ✅ RPK packs, SCX models, DDS/PTX textures, and CFG configurations |
-| Garage and rendering | ✅ bgfx/D3D11, textures, script camera, instances, and sky |
+| Garage and rendering | ✅ bgfx/D3D11, textures, script camera, sky, environment reflections and filtered projected car shadows |
 | Interface | ✅ Menus, career dialogs, catalog, car showroom, track selection, and paint inventory |
-| Cars | ✅ Assembly from scripts and CFG files; reference Baiern with 76 parts. The showroom car turns over the film. Car information shows the powertrain layout, gear ratios, and dyno scales |
-| Workshop | ✅ Point at a part to read its name, hide the body or the engine, open doors and adjustment dialogs, and remove or fit a part together with the parts attached to it. An inventory part turns while you point at it |
+| Cars | ✅ Assembly from scripts and CFG files; reference Baiern with 76 parts. Showroom camera orbit, vehicle information, powertrain layout, gear ratios and dyno calculations |
+| Workshop | ✅ Point at a part to read its name, hide the body or the engine, open panels with interpolated motion and adjust tunable parts. Remove or fit attached assemblies, and drag inventory parts onto Repair/Sell. Detached suspension parts regain their rest pose in the inventory |
 | Physics | ✅ Chassis, springs, dampers, and wheel contacts, verified with Baiern and Duhen. A released car settles on the garage floor. A parked car holds its standing height |
-| Audio and video | ✅ Effects, voices, loops, and intros with their audio tracks where available |
+| Audio and video | ✅ Effects, loops, FMV audio and four music playlists streamed with Media Foundation/XAudio2. Repeated effects and menu sounds have separate overlap limits |
+| Options | ✅ Mouse-operated sliders and all three audio volume values saved/reloaded through the stock `save/game/options` format |
 | Driving | ⏳ Tyre slip, engine, clutch, transmission, and controls still need to be connected |
-| World and career | ⏳ City, traffic, saves, and the complete purchase and save cycle |
+| World and career | ⏳ City, traffic and complete career flow; vehicle purchase/save/load still need end-to-end validation |
 
 **Next major milestones**
 
@@ -53,7 +78,16 @@ These milestones describe existing functionality, rather than a percentage of th
 - [ ] Complete transparency rendering.
 - [ ] Bring the city and traffic to life.
 
-Some native functions are still placeholders. You can browse the catalog and work on the car in the garage. Buying a part and saving the car have not been validated yet. Multiplayer is outside the current scope.
+Some native functions are still placeholders. Engine-loop audio and the original music-mode shuffle/repeat policies are not implemented; track progression is currently sequential. The engine-volume setting is stored for future engine audio. You can browse the catalog and work on the car in the garage. Buying a part and saving the car have not been validated yet. Multiplayer is outside the current scope.
+
+### Recent changes
+
+- Added an engine-owned Config instance, audio sliders, and debounced option saving, with a final save on normal shutdown.
+- Replaced the failing MCI music player with bounded PCM streaming through Media Foundation and XAudio2. Music volume is independent of effects and FMV.
+- Fixed `Input.createHotkey` being misrouted to Osd, slider track hit-testing, and tuning events carrying the actual slider to the part. Modal dialogs block clicks into the car behind them.
+- Fixed reference casts used by tuning scripts, so mixture-ratio and similar assignments update the part instance.
+
+Headless diagnostics cover all four music sets (muted), audio-volume save/reload and fuel-rail slider interaction through hit-testing and a modal wait. The latest tuning changes still need confirmation in normal gameplay. See [HOST_NATIVE_UTILITIES.md](HOST_NATIVE_UTILITIES.md) for implementation details and limits.
 
 ## Build
 
@@ -62,6 +96,7 @@ Some native functions are still placeholders. You can browse the catalog and wor
 - Windows and **Visual Studio 2022**, with the **Desktop development with C++** workload and the Windows SDK.
 - **CMake 3.21 or later** and **Git**, available in your terminal.
 - An installation of **SLRR 2.2.1 MWM**, containing `system/Scripts/lang/System.class`.
+- Windows Media Foundation for music decoding (included in standard Windows installations; Windows N editions need the Media Feature Pack).
 - An Internet connection while preparing and initially configuring dependencies.
 
 The reference configuration is **Win32**, including on 64-bit Windows: the original scripts and AVI codecs expect a 32-bit environment.
@@ -98,12 +133,11 @@ The executable is generated at `build-bgfx/Release/slrr_host.exe`. The first bui
 # Intros, then menus.
 .\build-bgfx\Release\slrr_host.exe --game --render bgfx --root "D:\Games\SLRR"
 
-# Open the garage, skipping career creation.
-.\build-bgfx\Release\slrr_host.exe --game --auto-new --render bgfx --root "D:\Games\SLRR"
-
 # Baiern assembled from its scripts and configurations.
 .\build-bgfx\Release\slrr_host.exe --game --spawn-car cars/racers/Baiern.rpk:0x6 --render bgfx --root "D:\Games\SLRR"
 ```
+
+In Sound Options, drag the volume sliders; changes are saved automatically to the game installation’s `save/game/options` file and restored on startup. A saved music volume of zero keeps music muted.
 
 In the garage, **right-click and drag**, the **arrow keys**, and the **scroll wheel** control the camera. **Escape** skips the intros. Close the window to quit. The car rests on its wheels, but driving controls are not connected yet. In the showroom the view turns around the car on its own.
 
@@ -127,6 +161,7 @@ The project draws on community research to understand SLRR's formats and behavio
 | [SLRR-JVM-compiler](https://github.com/nedobylskiy/SLRR-JVM-compiler) | Writing and regenerating TUFA classes |
 | [SLRR-JVM](https://github.com/nedobylskiy/SLRR-JVM) | Reference for the scripting language and native functions |
 | [SLRR_rev](https://github.com/nedobylskiy/SLRR_rev) | RPK/SCX formats, configurations, materials, and physics research |
+| [slrr-reverse](https://github.com/EliasFD3S/slrr-reverse) | Additional reference for native contracts, engine behavior and suspension/link research |
 | [io_invo_scx](https://github.com/nonamesex/io_invo_scx) | SCX mesh structure |
 | [bgfx](https://github.com/bkaradzic/bgfx) and [bgfx.cmake](https://github.com/bkaradzic/bgfx.cmake) | Graphics rendering and CMake build integration |
 

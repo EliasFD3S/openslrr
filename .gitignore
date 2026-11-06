@@ -4,6 +4,7 @@
 /out/
 /build/
 /build-bgfx/
+/tools/
 cmake-build-*/
 CMakeFiles/
 CMakeCache.txt
@@ -88,3 +89,6 @@ desktop.ini
 
 # Captures locales, non lues par le host.
 /_mm_*.jpg
+
+#MD sauf README
+*.md !README.md

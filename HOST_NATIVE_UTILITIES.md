@@ -78,3 +78,10 @@ voices, click priority, and preservation of independent looping voices.
 A temporary fuel-rail tuning diagnostic verified that dragging updates the
 mixture ratio to 17:1 while keeping the dialog shown and its result untouched.
 The audio-slider/save-reload diagnostic also passes after this correction.
+
+The tuning pointer regression also traverses `osd_hit_index` before changing
+values: slider track Buttons are `nofocus` because their Slider parent owns
+focus, not because they should swallow mouse input. Their hit volumes now
+remain clickable. An active modal OSD also prevents unmatched mouse clicks
+from becoming mechanic/world clicks. A headless wide-dialog display/wait
+probe drags the slider, remains waiting, and closes only on an explicit OK.

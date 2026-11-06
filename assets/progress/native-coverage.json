@@ -1,0 +1,49 @@
+{
+  "updated": "2026-11-06",
+  "total": 376,
+  "scope": "Stock native table (docs/stubs.txt in the research workspace), matched against registered class/method/parameter signatures. Explicit native_noop bindings are counted separately. Bodies can be partial implementations or return constants; these are binding counts, not gameplay-completion or validation scores.",
+  "categories": [
+    {
+      "name": "World",
+      "body": 3,
+      "noop": 0,
+      "missing": 51
+    },
+    {
+      "name": "Language",
+      "body": 50,
+      "noop": 10,
+      "missing": 14
+    },
+    {
+      "name": "Sound & scripts",
+      "body": 11,
+      "noop": 0,
+      "missing": 7
+    },
+    {
+      "name": "Resources",
+      "body": 49,
+      "noop": 5,
+      "missing": 6
+    },
+    {
+      "name": "Rendering",
+      "body": 35,
+      "noop": 0,
+      "missing": 1
+    },
+    {
+      "name": "Files & input",
+      "body": 32,
+      "noop": 5,
+      "missing": 0
+    },
+    {
+      "name": "Parts",
+      "body": 97,
+      "noop": 0,
+      "missing": 0
+    }
+  ]
+}
