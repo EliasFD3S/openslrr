@@ -1,5 +1,5 @@
 $input a_position
-$output v_texcoord0, v_texcoord1
+$output v_texcoord0, v_texcoord1, v_worldPos
 
 #include <bgfx_shader.sh>
 
@@ -8,6 +8,7 @@ uniform mat4 u_shadowMtx;
 void main()
 {
 	vec4 world = mul(u_model[0], vec4(a_position, 1.0));
+	v_worldPos = world.xyz;
 	vec4 clip = mul(u_shadowMtx, world);
 	float w = abs(clip.w) < 0.000001 ? 1.0 : clip.w;
 	v_texcoord0 = clip.xy / w;

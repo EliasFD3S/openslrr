@@ -63,6 +63,8 @@
 #include "dxbc/vs_shadow_recv.sc.bin.h"
 #include "dxbc/fs_shadow_recv.sc.bin.h"
 #include "glsl/fs_white.sc.bin.h"
+#include "dxbc/vs_shadow_cast.sc.bin.h"
+#include "glsl/vs_shadow_cast.sc.bin.h"
 #include "glsl/vs_shadow_recv.sc.bin.h"
 #include "glsl/fs_shadow_recv.sc.bin.h"
 
@@ -81,7 +83,7 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
     BGFX_EMBEDDED_SHADER(vs_vehicle), BGFX_EMBEDDED_SHADER(fs_vehicle),
     BGFX_EMBEDDED_SHADER_END()};
 static const bgfx::EmbeddedShader k_shadow_white[] = {
-    BGFX_EMBEDDED_SHADER(vs_mesh), BGFX_EMBEDDED_SHADER(fs_white),
+    BGFX_EMBEDDED_SHADER(vs_shadow_cast), BGFX_EMBEDDED_SHADER(fs_white),
     BGFX_EMBEDDED_SHADER_END()};
 static const bgfx::EmbeddedShader k_shadow_recv[] = {
     BGFX_EMBEDDED_SHADER(vs_shadow_recv), BGFX_EMBEDDED_SHADER(fs_shadow_recv),
@@ -174,7 +176,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     u_sun_spec_ = bgfx::createUniform("u_sunSpec", bgfx::UniformType::Vec4);
     u_sun_dir_ = bgfx::createUniform("u_sunDir", bgfx::UniformType::Vec4);
     bgfx::ShaderHandle white_vs =
-        bgfx::createEmbeddedShader(k_shadow_white, rt, "vs_mesh");
+        bgfx::createEmbeddedShader(k_shadow_white, rt, "vs_shadow_cast");
     bgfx::ShaderHandle white_fs =
         bgfx::createEmbeddedShader(k_shadow_white, rt, "fs_white");
     if (bgfx::isValid(white_vs) && bgfx::isValid(white_fs))
@@ -194,6 +196,9 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
       if (bgfx::isValid(recv_fs)) bgfx::destroy(recv_fs);
     }
     u_shadow_mtx_ = bgfx::createUniform("u_shadowMtx", bgfx::UniformType::Mat4);
+    if (!bgfx::isValid(shadow_program_) || !bgfx::isValid(shadow_recv_))
+      std::fprintf(stderr, "[shadow] shader program creation failed: caster=%d receiver=%d\n",
+                   bgfx::isValid(shadow_program_), bgfx::isValid(shadow_recv_));
     u_shadow_ramp_ = bgfx::createUniform("u_shadowRamp", bgfx::UniformType::Vec4);
     // A colour target alone is dropped by D3D11. The depth target is only
     // there so the pass is a real framebuffer; casters do not test it.

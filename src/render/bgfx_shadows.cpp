@@ -456,7 +456,7 @@ namespace slrr {
       else ++it;
     }
     const bool maps = true;
-    if (maps) {
+    if (maps && bgfx::isValid(shadow_program_) && bgfx::isValid(shadow_recv_)) {
       SceneSun sun = scene_instances_light();
       float travel[3] = {sun.direction[0], sun.direction[1], -sun.direction[2]};
       const float tlen = std::sqrt(travel[0] * travel[0] + travel[1] * travel[1] +

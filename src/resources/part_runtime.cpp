@@ -2107,6 +2107,23 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
       // mounted: children are part of the assembly, not a reason to refuse.
       if (!p || p->config->native_kind == "car")
         return Value::make_int(-1);
+      // Installation already respects disableSlot. Removal must respect the
+      // same locked attachment chain (stock FUN_004ca300 / FUN_004cb0b0),
+      // otherwise a spring can leave behind a wheel/brake that prevents it
+      // from being installed again. Keep the tyre on a removable rim.
+      std::unordered_set<Object *> seen;
+      auto *current = p;
+      while (current && current->state.parent) {
+        if (!seen.insert(current->state.object).second)
+          return Value::make_int(-1);
+        auto *parent = record(current->state.parent);
+        if (!parent)
+          break;
+        auto blocked = parent->slot_status.find(current->state.parent_slot);
+        if (blocked != parent->slot_status.end() && blocked->second)
+          return Value::make_int(-1);
+        current = parent;
+      }
       return Value::make_int(0);
     }
     if (query == 71 || query == 72) {

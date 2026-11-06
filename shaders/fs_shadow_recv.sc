@@ -1,4 +1,4 @@
-$input v_texcoord0, v_texcoord1
+$input v_texcoord0, v_texcoord1, v_worldPos
 
 #include <bgfx_shader.sh>
 
@@ -21,6 +21,11 @@ float height_ramp(float u)
 
 void main()
 {
+	// Use the actual triangle plane, not smoothed vertex normals: pit walls
+	// must not receive the floor's shadow at a shared edge. Keep ramps up to 45 degrees.
+	vec3 plane = cross(dFdx(v_worldPos), dFdy(v_worldPos));
+	if (plane.y * plane.y < 0.5 * dot(plane, plane))
+		discard;
 	vec2 uv = v_texcoord0;
 	float s = texture2D(s_texColor, uv).r;
 	if (uv.x < 0.004 || uv.x > 0.996 || uv.y < 0.004 || uv.y > 0.996)
