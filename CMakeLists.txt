@@ -57,7 +57,22 @@ if(WIN32)
   target_sources(slrr_host PRIVATE slrr_host.rc)
 endif()
 
-target_include_directories(slrr_host PRIVATE include)
+set(SLRR_VERSION_H "${CMAKE_BINARY_DIR}/generated/slrr_version.h")
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/generated")
+add_custom_command(
+  TARGET slrr_host PRE_BUILD
+  COMMAND ${CMAKE_COMMAND}
+          -DSRC=${CMAKE_CURRENT_SOURCE_DIR}
+          -DOUT=${SLRR_VERSION_H}
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/write_version.cmake
+  VERBATIM)
+execute_process(
+  COMMAND ${CMAKE_COMMAND}
+          -DSRC=${CMAKE_CURRENT_SOURCE_DIR}
+          -DOUT=${SLRR_VERSION_H}
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/write_version.cmake)
+
+target_include_directories(slrr_host PRIVATE include "${CMAKE_BINARY_DIR}/generated")
 
 if(MSVC)
   target_compile_options(slrr_host PRIVATE /W3 /utf-8)

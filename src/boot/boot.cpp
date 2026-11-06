@@ -15,6 +15,7 @@
 #include "slrr/scene_instances.hpp"
 #include "slrr/section_machine.hpp"
 #include "slrr/video_fmv.hpp"
+#include "slrr_version.h"
 
 #include <cstdio>
 #include <exception>
@@ -254,7 +255,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
   const bool want_window =
       opt.window || opt.render == RenderBackendKind::Bgfx || opt.auto_new;
   if (want_window) {
-    if (!render.open(800, 600, "SLRR host")) {
+    if (!render.open(800, 600, "OpenSLRR - " SLRR_VERSION)) {
       std::fprintf(stderr, "[boot] render.open failed (%s)\n", render.name());
       return 3;
     }

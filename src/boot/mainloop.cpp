@@ -204,11 +204,20 @@ void mainloop_sync_section_render(IRenderBackend& render,
   const bool in_garage =
       actual && actual->class_name.find("Garage") != std::string::npos;
   scene_instances_enable_static_floor(in_garage);
+  // Close the menu movie once, on the way in. CarSelect.enter opens
+  // prime.avi and then waits; that wait still pumps with the host
+  // section stuck on the garage, and closing every frame killed the
+  // video that had just started. Back then showed the selector plate
+  // on the brown clear instead of the movie.
+  static bool movie_closed_for_garage = false;
   if (in_garage) {
-    if(video_fmv_is_non_exclusive())video_fmv_close();
+    if (!movie_closed_for_garage && video_fmv_is_non_exclusive())
+      video_fmv_close();
+    movie_closed_for_garage = true;
     bgfx_set_garage_viewport(render, true, osd_widget_count());
     bgfx_set_osd_overlay(render, false);
   } else {
+    movie_closed_for_garage = false;
     bgfx_set_garage_viewport(render, false, 0);
     bgfx_set_osd_overlay(render, true);
   }

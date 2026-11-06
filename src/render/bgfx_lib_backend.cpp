@@ -619,8 +619,12 @@ class LibBgfxBackend final : public IRenderBackend {
   // Projection depends on scene geometry, never on the viewing camera.
   // Keep parked cars out of the per-vertex floor queries on subsequent frames.
   struct ProjectedShadow {
-    std::shared_ptr<const ScxGeometry> source;
-    std::array<float, 16> transform{};
+    struct Stamp {
+      void* key = nullptr;
+      std::shared_ptr<const ScxGeometry> source;
+      std::array<float, 16> transform{};
+    };
+    std::vector<Stamp> stamps;
     std::array<float, 3> light{};
     void* owner = nullptr;
     float ceiling = 0.f;
@@ -932,9 +936,9 @@ class LibBgfxBackend final : public IRenderBackend {
         BGFX_STENCIL_TEST_NOTEQUAL | BGFX_STENCIL_FUNC_REF(1) |
         BGFX_STENCIL_FUNC_RMASK(0xff) | BGFX_STENCIL_OP_FAIL_S_KEEP |
         BGFX_STENCIL_OP_FAIL_Z_KEEP | BGFX_STENCIL_OP_PASS_Z_REPLACE;
-    // Stock inks the ground with a multiply. Half-alpha black leaves the
-    // concrete showing through; the garage shadow reads as a solid patch.
-    const float flat_tint[4] = {0.f, 0.f, 0.f, 0.9f};
+    // Stock multiplies the ground by black inside the silhouette. The
+    // fill is that ink, one write, so the middle matches the contour.
+    const float flat_tint[4] = {0.f, 0.f, 0.f, 1.f};
     const float flat_alpha[4] = {0.f, 1.f, 0.f, 0.f};
     std::unordered_set<void*> active_shadows;
     const auto floor_revision = scene_instances_floor_revision();
@@ -943,17 +947,19 @@ class LibBgfxBackend final : public IRenderBackend {
         bgfx::isValid(white_tex_)) {
       for (const CarShadow& car : cars) {
         if (car.decal || car.casters.empty()) continue;
-        // One height is a sheet across the pit. Each vertex sits on the
-        // surface under it (lift deck, then the pit), and a triangle that
-        // jumps from the deck to the floor is dropped so it does not bridge.
+        // Each vertex sits on the surface under it. A triangle that jumps
+        // from the deck to the pit is split until the pieces lie on one
+        // surface; the sliver that still bridges is dropped.
         struct Cell {
           bool hit = false;
           float h = 0, nx = 0, ny = 1, nz = 0;
         };
         std::unordered_map<uint64_t, Cell> cells;
         auto probe = [&](float sx, float sz, float below, Cell& cell) {
-          const int ix = static_cast<int>(std::floor(sx * 40.f));
-          const int iz = static_cast<int>(std::floor(sz * 40.f));
+          // Five centimetres follows the lip of the pit. The shadow's
+          // plan position is the mesh, so this key only caches height.
+          const int ix = static_cast<int>(std::floor(sx * 20.f));
+          const int iz = static_cast<int>(std::floor(sz * 20.f));
           const uint64_t key =
               (static_cast<uint64_t>(static_cast<uint32_t>(ix)) << 32) |
               static_cast<uint32_t>(iz);
@@ -992,9 +998,12 @@ class LibBgfxBackend final : public IRenderBackend {
             if (std::fabs(travel[1]) < 0.05f || iter == 1) {
               out.ok = true;
               out.h = cell.h;
-              out.x = sx + cell.nx * 0.02f;
-              out.y = cell.h + ny * 0.02f + 0.012f;
-              out.z = sz - cell.nz * 0.02f;
+              // Stay under the vertex. A nudge along the floor normal
+              // walks the shadow off the tyre and the sill.
+              out.x = sx;
+              out.y = cell.h + 0.004f;
+              out.z = sz;
+              (void)ny;
               return out;
             }
             const float t = (cell.h + 0.02f - ry) / travel[1];
@@ -1004,25 +1013,72 @@ class LibBgfxBackend final : public IRenderBackend {
           }
           return out;
         };
-        for (const SceneInstance* inst : car.casters) {
-          if (!inst->geometry) continue;
-          const auto& geo = *inst->geometry;
-          const size_t n = geo.positions.size() / 3;
-          if (n == 0 || geo.indices.size() < 3) continue;
-          const float scale =
-              geo.position_scale > 0.f ? geo.position_scale : 0.01f;
-          const float* m = inst->transform.data();
-          active_shadows.insert(inst->key);
-          auto& cached = projected_shadows_[inst->key];
-          if (cached.source != inst->geometry || cached.transform != inst->transform ||
-              cached.light != shadow_light || cached.owner != car.owner ||
-              cached.ceiling != car.script[13] || cached.floor_revision != floor_revision) {
-            cached.source = inst->geometry;
-            cached.transform = inst->transform;
-            cached.light = shadow_light;
-            cached.owner = car.owner;
-            cached.ceiling = car.script[13];
-            cached.floor_revision = floor_revision;
+        // Already projected. Sampling again would walk the shadow sideways.
+        auto drop = [&](float rx, float rz) {
+          Placed out;
+          Cell cell;
+          probe(rx, -rz, car.script[13] + 0.45f, cell);
+          if (!cell.hit) return out;
+          const float ny = std::fabs(cell.ny) > 0.2f ? cell.ny : 1.f;
+          out.ok = true;
+          out.h = cell.h;
+          out.x = rx;
+          out.y = cell.h + 0.004f;
+          out.z = rz;
+          (void)ny;
+          return out;
+        };
+        // A parked car still jitters by a millimetre. Rebuilding the
+        // silhouette on that jitter was the frame hitch.
+        auto quant = [](std::array<float, 16> m) {
+          for (float& v : m) v = std::round(v * 100.f) * 0.01f;
+          return m;
+        };
+        const float ceiling = std::round(car.script[13] * 100.f) * 0.01f;
+        active_shadows.insert(car.owner);
+        auto& cached = projected_shadows_[car.owner];
+        bool dirty = cached.owner != car.owner || cached.light != shadow_light ||
+                     cached.ceiling != ceiling ||
+                     cached.floor_revision != floor_revision ||
+                     cached.stamps.size() != car.casters.size();
+        if (!dirty) {
+          for (size_t i = 0; i < car.casters.size(); ++i) {
+            const SceneInstance* inst = car.casters[i];
+            const auto& stamp = cached.stamps[i];
+            if (stamp.key != inst->key || stamp.source != inst->geometry ||
+                stamp.transform != quant(inst->transform)) {
+              dirty = true;
+              break;
+            }
+          }
+        }
+        if (dirty) {
+          cached.owner = car.owner;
+          cached.light = shadow_light;
+          cached.ceiling = ceiling;
+          cached.floor_revision = floor_revision;
+          cached.stamps.clear();
+          cached.vertices.clear();
+          cached.indices.clear();
+          struct Tri {
+            float x[3], z[3];
+          };
+          std::vector<Tri> tris;
+          float minz = 0.f, maxz = 0.f;
+          bool any = false;
+          for (const SceneInstance* inst : car.casters) {
+            ProjectedShadow::Stamp stamp;
+            stamp.key = inst->key;
+            stamp.source = inst->geometry;
+            stamp.transform = quant(inst->transform);
+            cached.stamps.push_back(std::move(stamp));
+            if (!inst->geometry) continue;
+            const auto& geo = *inst->geometry;
+            const size_t n = geo.positions.size() / 3;
+            if (n == 0 || geo.indices.size() < 3) continue;
+            const float scale =
+                geo.position_scale > 0.f ? geo.position_scale : 0.01f;
+            const float* m = inst->transform.data();
             std::vector<Placed> placed(n);
             for (size_t i = 0; i < n; ++i) {
               const float lx = geo.positions[i * 3 + 0] * scale;
@@ -1032,48 +1088,173 @@ class LibBgfxBackend final : public IRenderBackend {
                                 m[1] * lx + m[5] * ly + m[9] * lz + m[13],
                                 m[2] * lx + m[6] * ly + m[10] * lz + m[14]);
             }
-            auto& idx = cached.indices;
-            idx.clear();
-            idx.reserve(geo.indices.size());
             for (size_t t = 0; t + 2 < geo.indices.size(); t += 3) {
-              const uint32_t a = geo.indices[t];
-              const uint32_t b = geo.indices[t + 1];
-              const uint32_t c = geo.indices[t + 2];
-              if (a >= n || b >= n || c >= n) continue;
-              if (!placed[a].ok || !placed[b].ok || !placed[c].ok) continue;
-              const float h0 = placed[a].h, h1 = placed[b].h, h2 = placed[c].h;
-              const float span =
-                  std::max(h0, std::max(h1, h2)) - std::min(h0, std::min(h1, h2));
-              if (span > 0.22f) continue;
-              idx.push_back(a);
-              idx.push_back(b);
-              idx.push_back(c);
-            }
-            cached.vertices.assign(n, MeshVertex{});
-            for (size_t i = 0; i < n; ++i) {
-              if (!placed[i].ok) continue;
-              auto& vertex = cached.vertices[i];
-              vertex.x = placed[i].x;
-              vertex.y = placed[i].y;
-              vertex.z = placed[i].z;
-              vertex.ny = 1.f;
+              const uint32_t ia = geo.indices[t];
+              const uint32_t ib = geo.indices[t + 1];
+              const uint32_t ic = geo.indices[t + 2];
+              if (ia >= n || ib >= n || ic >= n) continue;
+              if (!placed[ia].ok || !placed[ib].ok || !placed[ic].ok) continue;
+              Tri tri{{placed[ia].x, placed[ib].x, placed[ic].x},
+                      {placed[ia].z, placed[ib].z, placed[ic].z}};
+              const float zlo = std::min(tri.z[0], std::min(tri.z[1], tri.z[2]));
+              const float zhi = std::max(tri.z[0], std::max(tri.z[1], tri.z[2]));
+              if (!any) {
+                minz = zlo;
+                maxz = zhi;
+                any = true;
+              } else {
+                minz = std::min(minz, zlo);
+                maxz = std::max(maxz, zhi);
+              }
+              tris.push_back(tri);
             }
           }
-          const auto& idx = cached.indices;
-          if (idx.size() < 3) continue;
-          const auto vn = static_cast<uint32_t>(n);
-          const auto in = static_cast<uint32_t>(idx.size());
-          if (bgfx::getAvailTransientVertexBuffer(vn, layout_) < vn ||
-              bgfx::getAvailTransientIndexBuffer(in, true) < in)
-            continue;
+          // One band per centimetre. Its left and right edges are the
+          // real contour, and everything between them is filled, so the
+          // gaps between the sill and the wheels close.
+          if (any && maxz - minz > 1e-3f && !tris.empty()) {
+            constexpr float kWant = 0.004f;
+            int nrows = static_cast<int>(std::ceil((maxz - minz) / kWant));
+            if (nrows < 1) nrows = 1;
+            if (nrows > 1400) nrows = 1400;
+            const float row = (maxz - minz) / static_cast<float>(nrows);
+            struct Span {
+              float lo = 1e9f, hi = -1e9f;
+            };
+            std::vector<Span> spans(static_cast<size_t>(nrows));
+            auto cover = [&](const Tri& tri, float z, Span& span) {
+              float lo = 1e9f, hi = -1e9f;
+              auto edge = [&](int a, int b) {
+                const float az = tri.z[a], bz = tri.z[b];
+                const float ax = tri.x[a], bx = tri.x[b];
+                if (std::fabs(az - bz) < 1e-6f) {
+                  if (std::fabs(az - z) > 1e-4f) return;
+                  lo = std::min(lo, std::min(ax, bx));
+                  hi = std::max(hi, std::max(ax, bx));
+                  return;
+                }
+                const float t = (z - az) / (bz - az);
+                if (t < -1e-4f || t > 1.f + 1e-4f) return;
+                const float x = ax + t * (bx - ax);
+                lo = std::min(lo, x);
+                hi = std::max(hi, x);
+              };
+              edge(0, 1);
+              edge(1, 2);
+              edge(2, 0);
+              if (hi < lo) return;
+              span.lo = std::min(span.lo, lo);
+              span.hi = std::max(span.hi, hi);
+            };
+            for (const Tri& tri : tris) {
+              const float zlo = std::min(tri.z[0], std::min(tri.z[1], tri.z[2]));
+              const float zhi = std::max(tri.z[0], std::max(tri.z[1], tri.z[2]));
+              int r0 = static_cast<int>(std::floor((zlo - minz) / row));
+              int r1 = static_cast<int>(std::floor((zhi - minz) / row));
+              if (r0 < 0) r0 = 0;
+              if (r1 >= nrows) r1 = nrows - 1;
+              if (r0 > r1) continue;
+              for (int r = r0; r <= r1; ++r) {
+                const float za = minz + static_cast<float>(r) * row;
+                const float zb = za + row;
+                cover(tri, std::max(za, zlo), spans[static_cast<size_t>(r)]);
+                cover(tri, std::min(zb, zhi), spans[static_cast<size_t>(r)]);
+              }
+            }
+            auto emit_quad = [&](float x0, float x1, float z0, float z1, float h) {
+              if (x1 < x0 + 1e-4f) return;
+              const float y = h + 0.012f;
+              const auto base = static_cast<uint32_t>(cached.vertices.size());
+              auto push = [&](float x, float z) {
+                MeshVertex vertex{};
+                vertex.x = x;
+                vertex.y = y;
+                vertex.z = z;
+                vertex.ny = 1.f;
+                cached.vertices.push_back(vertex);
+              };
+              push(x0, z0);
+              push(x1, z0);
+              push(x1, z1);
+              push(x0, z0);
+              push(x1, z1);
+              push(x0, z1);
+              for (uint32_t i = 0; i < 6; ++i) cached.indices.push_back(base + i);
+            };
+            for (int r = 0; r < nrows; ++r) {
+              const Span& span = spans[static_cast<size_t>(r)];
+              if (span.hi < span.lo) continue;
+              const float z0 = minz + static_cast<float>(r) * row;
+              const float z1 = z0 + row;
+              const float midz = 0.5f * (z0 + z1);
+              struct Sample {
+                float x, h;
+                bool ok;
+              };
+              std::vector<Sample> samples;
+              for (float x = span.lo; x < span.hi + 1e-4f; x += 0.05f) {
+                const float sx = std::min(x, span.hi);
+                const Placed p = drop(sx, midz);
+                samples.push_back(Sample{sx, p.ok ? p.h : 0.f, p.ok});
+              }
+              if (samples.empty()) continue;
+              // A crack in the lift mesh sees the pit and used to skip a
+              // chunk of the silhouette. Compare against the original
+              // samples: healing in place would climb out of the whole pit.
+              const std::vector<Sample> raw = samples;
+              for (size_t i = 0; i < samples.size(); ++i) {
+                float deck = -1e9f;
+                for (size_t j = 0; j < raw.size(); ++j) {
+                  if (!raw[j].ok) continue;
+                  if (std::fabs(raw[j].x - raw[i].x) > 0.2f) continue;
+                  deck = std::max(deck, raw[j].h);
+                }
+                if (deck < -1e8f) continue;
+                if (!samples[i].ok || samples[i].h < deck - 0.22f) {
+                  samples[i].h = deck;
+                  samples[i].ok = true;
+                }
+              }
+              size_t i = 0;
+              while (i < samples.size()) {
+                if (!samples[i].ok) {
+                  ++i;
+                  continue;
+                }
+                size_t j = i;
+                while (j + 1 < samples.size() && samples[j + 1].ok &&
+                       std::fabs(samples[j + 1].h - samples[i].h) <= 0.22f)
+                  ++j;
+                emit_quad(samples[i].x, samples[j].x, z0 - row * 0.5f,
+                          z1 + row * 0.5f, samples[i].h);
+                i = j + 1;
+              }
+            }
+          }
+        }
+        const auto& idx = cached.indices;
+        if (idx.size() < 3 || cached.vertices.empty()) continue;
+        const auto vn = static_cast<uint32_t>(cached.vertices.size());
+        // One car's panels do not fit a single transient buffer. The
+        // indices are local to each triangle, so the soup splits cleanly.
+        constexpr uint32_t kBatch = 9000;
+        float ident[16];
+        bx::mtxIdentity(ident);
+        for (uint32_t start = 0; start + 2 < vn; start += kBatch) {
+          uint32_t count = std::min(kBatch, vn - start);
+          count -= count % 3;
+          if (count < 3) break;
+          if (bgfx::getAvailTransientVertexBuffer(count, layout_) < count ||
+              bgfx::getAvailTransientIndexBuffer(count, true) < count)
+            break;
           bgfx::TransientVertexBuffer tvb;
           bgfx::TransientIndexBuffer tib;
-          bgfx::allocTransientVertexBuffer(&tvb, vn, layout_);
-          bgfx::allocTransientIndexBuffer(&tib, in, true);
-          std::memcpy(tvb.data, cached.vertices.data(), n * sizeof(MeshVertex));
-          std::memcpy(tib.data, idx.data(), idx.size() * sizeof(uint32_t));
-          float ident[16];
-          bx::mtxIdentity(ident);
+          bgfx::allocTransientVertexBuffer(&tvb, count, layout_);
+          bgfx::allocTransientIndexBuffer(&tib, count, true);
+          std::memcpy(tvb.data, cached.vertices.data() + start,
+                      count * sizeof(MeshVertex));
+          auto* ids = reinterpret_cast<uint32_t*>(tib.data);
+          for (uint32_t i = 0; i < count; ++i) ids[i] = i;
           bgfx::setTransform(ident);
           bgfx::setVertexBuffer(0, &tvb);
           bgfx::setIndexBuffer(&tib);
@@ -1083,9 +1264,13 @@ class LibBgfxBackend final : public IRenderBackend {
           bgfx::setUniform(u_alpha_test_, flat_alpha);
           bgfx::setStencil(flat_stencil, flat_stencil);
           bgfx::setState(flat_state);
+          // Pull the ink toward the camera so the coplanar tread cannot
+          // win the depth test in spots.
+          bgfx::setDepthControl(-8, -2.f);
           bgfx::submit(view_id, program_);
         }
       }
+      bgfx::setDepthControl(0, 0.f);
     }
     for (auto it = projected_shadows_.begin(); it != projected_shadows_.end();) {
       if (!active_shadows.count(it->first)) it = projected_shadows_.erase(it);
