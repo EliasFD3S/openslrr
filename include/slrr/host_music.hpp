@@ -10,4 +10,6 @@ int host_music_set_mode(int mode);
 void host_music_set_volume(float volume);
 void host_music_update();
 void host_music_stop();
+bool host_music_playing();
+int host_music_track_count(int set);
 }

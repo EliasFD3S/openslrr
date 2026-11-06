@@ -5,6 +5,7 @@
 #include "slrr/host_input.hpp"
 #include "slrr/host_sfx.hpp"
 #include "slrr/host_music.hpp"
+#include "slrr/host_game_options.hpp"
 #include "slrr/mainloop.hpp"
 #include "slrr/natives_boot.hpp"
 #include "slrr/object.hpp"
@@ -225,6 +226,8 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
   rpk.set_root(opt.game_root);
   SectionMachine sections(&jvm);
   register_boot_natives(jvm, rpk, sections);
+
+  host_game_options_load(jvm);
 
   const int32_t opened = rpk.open_all();
   const RpkPack* fe_found = rpk.pack_by_path("frontend.rpk");
@@ -528,6 +531,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     }
     host_set_script_pump(nullptr);
     video_fmv_close();
+    host_game_options_update(jvm, true);
     host_music_stop();
     render.close();
     host_set_render_callbacks({}, {});

@@ -163,7 +163,9 @@ int32_t host_sfx_play_file(const std::string &path, float pitch, float volume,
   if (!loop) {
     Voice* latest = nullptr;
     size_t copies = 0;
+    size_t menu_copies = 0;
     for (const auto& playing : audio.voices) {
+      menu_copies += !playing->loop && playing->menu != 0;
       if (menu == 1 && !playing->loop && playing->menu > 1) {
         ++audio.coalesced;
         return 0;
@@ -172,7 +174,12 @@ int32_t host_sfx_play_file(const std::string &path, float pitch, float volume,
       ++copies;
       if (!latest || playing->last_request > latest->last_request) latest = playing.get();
     }
-    if (latest && (menu || copies >= 2 || now - latest->last_request < std::chrono::milliseconds(35))) {
+    // Menu clicks/hover may repeat rapidly, but the whole UI has three slots.
+    if (menu && menu_copies >= 3) {
+      ++audio.coalesced;
+      return latest ? latest->id : 0;
+    }
+    if (!menu && latest && (copies >= 2 || now - latest->last_request < std::chrono::milliseconds(35))) {
       // Coalesce bursts before loading/allocating another WAV/source voice.
       latest->last_request = now;
       ++audio.coalesced;

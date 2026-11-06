@@ -16,6 +16,7 @@ add_executable(slrr_host
   src/platform/host_input.cpp
   src/platform/host_sfx.cpp
   src/platform/host_music.cpp
+  src/platform/host_game_options.cpp
   src/platform/host_cursor.cpp
   src/platform/video_fmv.cpp
   src/natives/native_registry.cpp
@@ -89,7 +90,7 @@ if(WIN32)
   # vfw32 = Cinepak (prime.avi is cvid). The 32-bit codec does not connect
   # through the Sample Grabber graph, so menu playback uses AVIFile.
   target_link_libraries(slrr_host PRIVATE user32 gdi32 opengl32 winmm ole32
-                                          oleaut32 strmiids vfw32 xaudio2)
+                                          oleaut32 strmiids vfw32 xaudio2 mfplat mfreadwrite mfuuid)
 endif()
 
 if(SLRR_WITH_LIBBGFX)

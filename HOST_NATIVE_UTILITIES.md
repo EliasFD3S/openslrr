@@ -14,13 +14,39 @@ contracts documented in `repos/slrr-reverse/engine/Runtime/Render/RenderNatives.
 | `Sound.changeMusicSet` | Selects Garage_Shop, Roam_ride, Race_chase or Main_menu under the game's music directory. Invalid set/NONE stops music. Re-selecting the current set does not restart it. |
 | `Sound.nextTrack`, `prevTrack` | Wrap around the active playlist and actually switch the streamed track. |
 | `Sound.getMode`, `setMode` | Per-playlist mode state (initially 3). Accept 0..3, preserve the old mode for invalid values. No active set: get returns -1, set returns its input, matching the reference native. Specific shuffle/repeat policies for these mode values have not been established; the host currently advances sequentially at EOF. |
-| `Sound.has3DHardware`, `hasMixHardware` | Zero: the XAudio2/MCI backend does not provide the legacy DirectSound hardware-buffer capabilities. This does not mean sound is unavailable. |
+| `Sound.has3DHardware`, `hasMixHardware` | Zero: the XAudio2 backend does not provide the legacy DirectSound hardware-buffer capabilities. This does not mean sound is unavailable. |
 
-Music streams through a separate Windows MCI alias. It does not use the FMV
-alias or replace the XAudio2 effects engine. Music volume is independent of
-effects volume. Polling runs during modal script pumps too. Playback/capture
-need a manual check on the target machine; compilation and the headless VM
-bootstrap do not establish their visual or audible output.
+Music uses Media Foundation to decode MP3/WAV/WMA and a separate XAudio2
+streaming voice. MCI and DirectShow failed to open the stock menu MP3 on the
+host machine; the replacement successfully decodes and starts playback.
+At most 24 decoded chunks are queued, rather than loading complete songs.
+The music voice is independent of FMV and effects volume, and is refilled
+in modal script pumps as well as the main loop. Startup logs list scan counts
+and track starts; decoding failures include their HRESULT.
+
+## Audio options
+
+The VM now keeps `Input.createHotkey` on Input rather than rewriting it to
+`Osd.createHotkey`. The existing Java Osd overloads can therefore activate
+hotkeys without the missing-method error. This does not add a general keyboard
+hotkey dispatcher to the host.
+
+Slider hit boxes (knob or track Button.parent) now route through the Slider's
+range/tick-aware `setValue`. The host copies the result to `osd.sliderValue`
+before dispatching its command. Mouse capture keeps dragging active outside
+the track; release, cancellation and hidden controls are handled.
+
+The engine-owned Config instance is loaded before Init and retained as a VM
+static. Audio edits queue a save after 500 ms of inactivity and flush on normal
+shutdown. Persistence uses the original Java `Config.saveConfig/loadConfig`
+and `save/game/options` SDAT format, including all three channel volumes and
+the other Config fields. No original Java files are patched. The engine volume
+value is saved/restored; engine-loop audio itself is not yet implemented.
+
+A temporary headless diagnostic exercised the actual OptionsDialog sliders,
+verified 20/40/60% through save/reload in an isolated directory, and started all
+four music sets with volume zero. Audible playback and visual mouse interaction
+remain user checks; no game window was launched.
 
 `SLRR_rev` remains a resource/script reference; no directly portable audio
 device or screenshot implementation was taken from it.
@@ -33,7 +59,8 @@ copies of one transient cue may overlap; their gains are divided by the copy
 count so correlated waveforms cannot multiply that cue's peak amplitude.
 Coalesced requests return the already playing voice handle.
 
-Menu hover/select/back each allow only one active copy. Select/back remove
+Menu hover/select/back share a three-voice budget and may repeat rapidly
+without the transient 35 ms coalescing window. Select/back remove
 lingering hover voices, and hover cannot obscure an active select/back sound.
 Looping sounds are excluded from grouping. The existing overall 32-voice
 budget evicts a transient first; it no longer interrupts a loop to admit a

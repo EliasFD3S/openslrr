@@ -13,6 +13,7 @@ namespace {
 
 std::vector<OsdWidget> g_widgets;
 OsdClickFn g_click;
+OsdSliderFn g_slider;
 OsdHoverFn g_hover;
 OsdFramebufferFn g_fb_listener;
 int32_t g_group_count = 1;
@@ -681,12 +682,22 @@ bool osd_fire_inventory_drop_at(Object* source, float x, float y) {
   return true;
 }
 
+void osd_set_slider_handler(OsdSliderFn fn) { g_slider = std::move(fn); }
+bool osd_update_slider_at(int32_t index, float x, float y) {
+  const auto* w = osd_widget_at(index);
+  if (!w || w->dead || w->hidden || owner_suppressed(*w) || widget_disabled(*w) ||
+      (modal_osd() && modal_osd() != w->owner) || !g_slider) return false;
+  const OsdWidget copy = *w; // setValue can rebuild widget records.
+  return g_slider(copy, x, y);
+}
+
 void osd_fire_click_at(float osd_x, float osd_y) {
   const int32_t idx = osd_hit_index(osd_x, osd_y);
   if (idx < 0 || idx >= static_cast<int32_t>(g_widgets.size())) return;
   const OsdWidget hit = g_widgets[static_cast<size_t>(idx)];
   // Hover can land here. The command still does not run.
   if (widget_disabled(hit)) return;
+  if (osd_update_slider_at(idx, osd_x, osd_y)) return;
   if (hit.string_input) {
     g_string_focus = idx;
     sync_string_value(hit);

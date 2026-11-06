@@ -963,6 +963,8 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
         self->lmb_down_ = true;
         float x, y;
         osd_pixel_to_text(self->lmb_x_, self->lmb_y_, self->width_, self->height_, &x, &y);
+        const int slider_hit=osd_hit_index(x,y);
+        self->slider_drag_index_=!video_fmv_block_osd() && osd_update_slider_at(slider_hit,x,y) ? slider_hit : -1;
         self->inventory_drag_source_ = video_fmv_block_osd()
                                           ? nullptr : osd_inventory_drag_source_at(x, y);
         self->inventory_dragging_ = false;
@@ -979,6 +981,16 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     if (msg == WM_LBUTTONUP || msg == WM_RBUTTONUP) {
       if (msg == WM_LBUTTONUP && self && self->lmb_down_ && !in.rmb_down) {
         self->lmb_down_ = false;
+        if (self->slider_drag_index_ >= 0) {
+          float x,y;
+          osd_pixel_to_text(static_cast<short>(LOWORD(lp)),static_cast<short>(HIWORD(lp)),
+                            self->width_,self->height_,&x,&y);
+          if(!video_fmv_block_osd())osd_update_slider_at(self->slider_drag_index_,x,y);
+          self->slider_drag_index_=-1;
+          self->inventory_drag_source_=nullptr;
+          ReleaseCapture();
+          return 0;
+        }
         if (self->inventory_dragging_) {
           Object* source = self->inventory_drag_source_;
           self->inventory_drag_source_ = nullptr;
@@ -1018,6 +1030,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     }
     if (msg == WM_CAPTURECHANGED || msg == WM_CANCELMODE) {
       if (self) {
+        self->slider_drag_index_=-1;
         self->lmb_down_ = false;
         self->inventory_drag_source_ = nullptr;
         if (self->inventory_dragging_) host_cursor_set_pointer(self->inventory_drag_cursor_);
@@ -1047,6 +1060,10 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     if (msg == WM_MOUSEMOVE) {
       const int x = static_cast<short>(LOWORD(lp));
       const int y = static_cast<short>(HIWORD(lp));
+      if(self && self->lmb_down_ && self->slider_drag_index_>=0 && !in.rmb_down && !video_fmv_block_osd()) {
+        float sx,sy;osd_pixel_to_text(x,y,self->width_,self->height_,&sx,&sy);
+        osd_update_slider_at(self->slider_drag_index_,sx,sy);
+      }
       if (self && self->lmb_down_ && self->inventory_drag_source_ &&
           !self->inventory_dragging_ && !in.rmb_down &&
           (std::abs(x - self->lmb_x_) >= 5 || std::abs(y - self->lmb_y_) >= 5)) {

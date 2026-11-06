@@ -2,9 +2,49 @@
 #include "slrr/osd_registry.hpp"
 #include "slrr/object.hpp"
 #include <memory>
+#include <algorithm>
+#include <cmath>
 
 namespace slrr {
 void install_osd_script_hover(Jvm& jvm) {
+  osd_set_slider_handler([&jvm](const OsdWidget& w, float x, float) {
+    auto object = [](Object* o, const char* key) -> Object* {
+      if (!o) return nullptr;
+      auto i=o->fields.find(key);
+      return i!=o->fields.end() && i->second.tag==ValueTag::Obj ? i->second.v.o : nullptr;
+    };
+    auto number = [](Object* o, const char* key, float fallback) {
+      if (!o) return fallback;
+      auto i=o->fields.find(key);
+      if(i==o->fields.end())return fallback;
+      return i->second.tag==ValueTag::Float ? i->second.v.f :
+             i->second.tag==ValueTag::Int ? float(i->second.v.i) : fallback;
+    };
+    Object* slider=w.button;
+    for(int depth=0; slider && depth<4; ++depth) {
+      if(jvm.tree_instance_of(slider,"java.render.osd.Slider"))break;
+      slider=object(slider,"parent");
+    }
+    if(!slider || !jvm.tree_instance_of(slider,"java.render.osd.Slider"))return false;
+    Object* osd=object(slider,"osd");
+    const float width=number(osd,"vpWidth",1.f);
+    const float x0=number(slider,"x0",0.f), x1=number(slider,"x1",0.f);
+    if(width<=0.f || x0==x1)return true;
+    const float local=(x-(2.f*number(osd,"vpLeft",0.f)+width-1.f))/width;
+    const float t=std::clamp((local-x0)/(x1-x0),0.f,1.f);
+    const float a=number(slider,"a",0.f), b=number(slider,"b",1.f);
+    const float before=number(slider,"value",0.f);
+    jvm.invoke_by_name(slider->class_name,"setValue",
+                      {Value::make_obj(slider),Value::make_float(a+(b-a)*t)},false);
+    const float value=number(slider,"value",before);
+    if(!std::isfinite(value) || value==before)return true;
+    if(osd)osd->fields["sliderValue"]=Value::make_float(value);
+    // Match Slider.sendMessage before the host's synchronous OSD dispatch.
+    Object* handler=object(slider,"handler");
+    if(handler)jvm.invoke_by_name(handler->class_name,"osdCommand",
+       {Value::make_obj(handler),Value::make_int(static_cast<int>(number(slider,"cmd",static_cast<float>(w.cmd))))},false);
+    return true;
+  });
   auto last = std::make_shared<Object*>(nullptr);
   jvm.add_gc_roots([last](const GcRootVisitor& visit) { visit(*last); });
   osd_set_hover_handler([&jvm, last](const OsdWidget* w) {

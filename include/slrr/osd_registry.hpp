@@ -154,6 +154,9 @@ void osd_set_click_handler(OsdClickFn fn);
 using OsdHoverFn = std::function<void(const OsdWidget* w)>;
 void osd_set_hover_handler(OsdHoverFn fn);
 void osd_fire_click_at(float osd_x, float osd_y);
+using OsdSliderFn = std::function<bool(const OsdWidget&, float, float)>;
+void osd_set_slider_handler(OsdSliderFn fn);
+bool osd_update_slider_at(int32_t index, float x, float y);
 Object* osd_inventory_drag_source_at(float x, float y);
 bool osd_fire_inventory_drop_at(Object* source, float x, float y);
 

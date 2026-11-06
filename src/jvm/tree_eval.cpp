@@ -454,7 +454,8 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
         (name == "addItem" && (argc_unset || argc >= 2)) || name == "addSeparator" || name == "setSliderStyle";
     const bool osd_build = name == "createMenu" || name == "createButton" ||
                            name == "createText" || name == "createRectangle" ||
-                           name == "createHeader" || name == "createHotkey" ||
+                           name == "createHeader" ||
+                           (name == "createHotkey" && owner != "java.io.Input") ||
                            name == "createBG" || name == "createTextBox" ||
                            name == "createStringInput" || name == "endGroup" ||
                            name == "hideGroup" || name == "showGroup" ||
@@ -510,7 +511,8 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
     }
     call_args.reserve(static_cast<size_t>(argc));
     for (int i = 0; i < argc; ++i) {
-      if (stack.empty()) return fail("call arg underflow");
+      if (stack.empty()) return fail("call arg underflow calling " + owner + "." + name +
+                                     " argc=" + std::to_string(argc));
       call_args.insert(call_args.begin(), pop());
     }
     // createText(chas.ratio[i], ...) and the dyno tick labels pass a number

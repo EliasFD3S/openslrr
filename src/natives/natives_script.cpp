@@ -6,6 +6,7 @@
 #include "slrr/host_input.hpp"
 #include "slrr/host_sfx.hpp"
 #include "slrr/host_music.hpp"
+#include "slrr/host_game_options.hpp"
 #include "slrr/osd_registry.hpp"
 #include "slrr/render_backend.hpp"
 #include "slrr/script_cfg.hpp"
@@ -27,6 +28,14 @@
 namespace slrr {
 
 void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
+  jvm.natives().register_method("java.lang.System", "setMeasure", "(F)V",
+    [&jvm](Object*, const std::vector<Value>& args) {
+      float meters = args.empty() ? 1000.f : args[0].tag==ValueTag::Float ? args[0].v.f :
+                     args[0].tag==ValueTag::Int ? static_cast<float>(args[0].v.i) : 1000.f;
+      if(std::isfinite(meters) && meters>0.f)
+        jvm.set_static("java.lang.System","_hostDistanceUnitMeters",Value::make_float(meters));
+      return Value::make_void();
+    });
   jvm.natives().register_method("java.game.GameLogic","kismajomCheck","([Ljava.lang.String;)I",
     [](Object*,const std::vector<Value>& args){
       int match=-1;
@@ -311,6 +320,7 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           volumes[c] = v;
           if(c==0)host_sfx_set_volume(v);
           if(c==1)host_music_set_volume(v);
+          host_game_options_dirty();
           return Value::make_void();
         });
   }
