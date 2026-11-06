@@ -130,6 +130,9 @@ if(SLRR_WITH_LIBBGFX)
 
   target_sources(slrr_host PRIVATE
     src/render/bgfx_lib_backend.cpp
+    src/render/bgfx_lighting.cpp
+    src/render/bgfx_shadows.cpp
+    src/render/bgfx_osd.cpp
     ${SLRR_VS_SHADER_HEADERS}
     ${SLRR_FS_SHADER_HEADERS}
   )

@@ -41,7 +41,7 @@
 #include <utility>
 #include <vector>
 
-// MeshVertex used by draw_osd / upload_part (defined below in anonymous ns).
+// MeshVertex is in bgfx_lib_backend.hpp.
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -66,6 +66,8 @@
 #include "glsl/vs_shadow_recv.sc.bin.h"
 #include "glsl/fs_shadow_recv.sc.bin.h"
 
+#include "bgfx_lib_backend.hpp"
+
 namespace slrr {
 namespace {
 
@@ -85,29 +87,10 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     BGFX_EMBEDDED_SHADER(vs_shadow_recv), BGFX_EMBEDDED_SHADER(fs_shadow_recv),
     BGFX_EMBEDDED_SHADER_END()};
 
-struct MeshVertex {
-  float x, y, z;
-  float nx, ny, nz;
-  float u, v;
-  float u2 = 0, v2 = 0, u3 = 0, v3 = 0;
-};
+}  // namespace
 
-class LibBgfxBackend final : public IRenderBackend {
-  // Views 0..3 are shadow maps (their own framebuffers). The world is view 4,
-  // or view 5 when an FMV backdrop occupies 4. Previews start at 8. The
-  // interface stays on kOsdView, above those rects.
-  static constexpr int kShadowSlots = 4;
-  static constexpr uint16_t kShadowSize = 256;
-  static constexpr uint16_t kWorldView = 4;
-  static constexpr uint16_t kFmvLayer = 5;
-  static constexpr uint16_t kOsdUnder = 6;
-  static constexpr uint16_t kPreview0 = 8;
-  static constexpr uint16_t kOsdView = 70;
-
- public:
-  const char* name() const override { return "bgfx"; }
-
-  bool open(int32_t width, int32_t height, const char* title) override {
+  bool LibBgfxBackend::open(int32_t width, int32_t height, const char* title)
+{
     width_ = width > 0 ? width : 800;
     height_ = height > 0 ? height : 600;
 
@@ -269,8 +252,8 @@ class LibBgfxBackend final : public IRenderBackend {
                 bgfx::getRendererName(rt));
     return true;
   }
-
-  void close() override {
+  void LibBgfxBackend::close()
+{
     clear_scene();
     for (auto& kv : osd_tex_) {
       if (bgfx::isValid(kv.second) &&
@@ -342,10 +325,8 @@ class LibBgfxBackend final : public IRenderBackend {
 #endif
     ready_ = false;
   }
-
-  bool ready() const override { return ready_; }
-
-  void pump(int32_t /*ms*/) override {
+  void LibBgfxBackend::pump(int32_t /*ms*/)
+{
 #ifdef _WIN32
     MSG msg;
     while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -359,11 +340,8 @@ class LibBgfxBackend final : public IRenderBackend {
     host_input_poll_keys();
 #endif
   }
-
-  bool quit_requested() const override { return quit_; }
-  void request_quit() override { quit_ = true; }
-
-  void flush() override {
+  void LibBgfxBackend::flush()
+{
     ++frames_;
     if (!ready_) return;
 
@@ -526,16 +504,13 @@ class LibBgfxBackend final : public IRenderBackend {
       shown_ = true;
     }
   }
-
-  int32_t width() const override { return width_; }
-  int32_t height() const override { return height_; }
-
-  void set_scx_smoke(const std::string& path) {
+  void LibBgfxBackend::set_scx_smoke(const std::string& path)
+{
     scx_ok_ = !path.empty();
     std::printf("[bgfx] SCX smoke %s ok=%d\n", path.c_str(), scx_ok_ ? 1 : 0);
   }
-
-  void set_garage_viewport(bool enabled, int32_t osd_buttons) {
+  void LibBgfxBackend::set_garage_viewport(bool enabled, int32_t osd_buttons)
+{
     const bool changed =
         garage_ != enabled || osd_buttons_ != osd_buttons;
     garage_ = enabled;
@@ -545,15 +520,10 @@ class LibBgfxBackend final : public IRenderBackend {
                   enabled ? 1 : 0, osd_buttons);
     }
   }
-
-  void set_osd_overlay(bool enabled) { osd_overlay_ = enabled; }
-  bool osd_draw_enabled() const { return garage_ || osd_overlay_; }
-
-  void* native_hwnd() const { return hwnd_; }
-
-  void set_scx_mesh(int32_t version, int32_t groups, int32_t vertices,
+  void LibBgfxBackend::set_scx_mesh(int32_t version, int32_t groups, int32_t vertices,
                     int32_t triangles, const float bbox_min[3],
-                    const float bbox_max[3]) {
+                    const float bbox_max[3])
+{
     mesh_ok_ = vertices > 0 || triangles > 0;
     if (bbox_min && bbox_max) {
       for (int i = 0; i < 3; ++i) {
@@ -564,13 +534,13 @@ class LibBgfxBackend final : public IRenderBackend {
     std::printf("[bgfx] SCX mesh v=%d groups=%d verts=%d tris=%d ok=%d\n",
                 version, groups, vertices, triangles, mesh_ok_ ? 1 : 0);
   }
-
-  void set_scx_geometry(ScxGeometry geo) {
+  void LibBgfxBackend::set_scx_geometry(ScxGeometry geo)
+{
     clear_scene();
     add_scx_geometry(std::move(geo));
   }
-
-  void clear_scene() {
+  void LibBgfxBackend::clear_scene()
+{
     for(auto& entry:instance_meshes_)destroy_part(entry.second);
     instance_meshes_.clear();instances_.clear();previews_.clear();
     projected_shadows_.clear();
@@ -580,8 +550,8 @@ class LibBgfxBackend final : public IRenderBackend {
     mesh_min_[0] = mesh_min_[1] = mesh_min_[2] = 0;
     mesh_max_[0] = mesh_max_[1] = mesh_max_[2] = 0;
   }
-
-  void add_scx_geometry(ScxGeometry geo) {
+  void LibBgfxBackend::add_scx_geometry(ScxGeometry geo)
+{
     if (!geo.info.ok) return;
     ScenePart part;
     part.geo = std::move(geo);
@@ -606,38 +576,8 @@ class LibBgfxBackend final : public IRenderBackend {
     }
     set_scx_mesh(3, sum_groups, sum_verts, sum_tris, mesh_min_, mesh_max_);
   }
-
- private:
-  struct ScenePart {
-    ScxGeometry geo;
-    std::shared_ptr<const ScxGeometry> source;
-    bgfx::VertexBufferHandle vbh = BGFX_INVALID_HANDLE;
-    bgfx::IndexBufferHandle ibh = BGFX_INVALID_HANDLE;
-    std::vector<bgfx::TextureHandle> tex;
-  };
-  struct Preview { GameRefState camera; GameRefState viewport; std::vector<SceneInstance> instances; };
-  // Projection depends on scene geometry, never on the viewing camera.
-  // Keep parked cars out of the per-vertex floor queries on subsequent frames.
-  struct ProjectedShadow {
-    struct Stamp {
-      void* key = nullptr;
-      std::shared_ptr<const ScxGeometry> source;
-      std::array<float, 16> transform{};
-    };
-    std::vector<Stamp> stamps;
-    std::array<float, 3> light{};
-    void* owner = nullptr;
-    float ceiling = 0.f;
-    uint64_t floor_revision = 0;
-    std::vector<MeshVertex> vertices;
-    std::vector<uint32_t> indices;
-  };
-  std::unordered_map<void*, ProjectedShadow> projected_shadows_;
-  std::vector<SceneInstance> instances_;
-  std::vector<Preview> previews_;
-  std::unordered_map<const ScxGeometry*,ScenePart> instance_meshes_;
-
-  void sync_instances() {
+  void LibBgfxBackend::sync_instances()
+{
     instances_=scene_instances_collect();previews_.clear();
     for(const auto* camera:gameref_active_cameras()) {
       const auto* vp=gameref_get(camera->viewport);
@@ -659,181 +599,8 @@ class LibBgfxBackend final : public IRenderBackend {
       if(used.count(it->first)){++it;continue;}destroy_part(it->second);it=instance_meshes_.erase(it);
     }
   }
-  // Diffuse * baked lightmap, the way the exe draws a map. No lightmap
-  // (OSD, FMV, a mesh without the slot) keeps the existing shading.
-  void bind_baked_light(const ScxGroup* group,
-                        const std::vector<bgfx::TextureHandle>* tex) {
-    float u[4] = {0.f, 0.f, 1.f, 0.f};
-    float xf[4] = {1.f, 1.f, 0.f, 0.f};
-    bgfx::TextureHandle lm = white_tex_;
-    if (group) u[1] = static_cast<float>(group->base_map.channel);
-    if (group && tex && group->lightmap_index != 0xffff &&
-        group->lightmap_index < tex->size() &&
-        bgfx::isValid((*tex)[group->lightmap_index])) {
-      lm = (*tex)[group->lightmap_index];
-      u[0] = 1.f;
-      u[2] = static_cast<float>(group->lightmap_map.channel);
-      xf[0] = group->lightmap_map.scale_u;
-      xf[1] = group->lightmap_map.scale_v;
-      xf[2] = group->lightmap_map.offset_u;
-      xf[3] = group->lightmap_map.offset_v;
-    }
-    bgfx::setUniform(u_lightmap_, u);
-    bgfx::setUniform(u_lightmap_uv_, xf);
-    bgfx::setTexture(1, s_lightmap_, lm);
-  }
-
-  void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass) {
-    const auto& part=instance_meshes_.at(instance.geometry.get());
-    if(!bgfx::isValid(part.vbh)||!bgfx::isValid(part.ibh))return;
-    if (instance.vehicle_material && bgfx::isValid(vehicle_program_)) {
-      for (const auto& group : part.geo.groups) {
-        auto texture = [&](uint16_t slot) {
-          return slot < part.tex.size() && bgfx::isValid(part.tex[slot]) ? part.tex[slot] : white_tex_;
-        };
-        auto base = texture(group.texture_index);
-        const bool painted = instance.paint_slot >= 0 && group.texture_index == instance.paint_slot;
-        if (painted && !instance.paint_texture.empty()) base = tex_for_osd_icon(instance.paint_texture);
-        auto mix = texture(group.mix_index);
-        bool mixed = group.mix_index != 0xffff && group.mix_index != group.texture_index && mix.idx != white_tex_.idx;
-        auto env = texture(group.reflection_index);
-        bool generated = group.reflection_map.channel == 0xfffffffeu;
-        const float strength = std::isfinite(group.reflection_strength) ? std::clamp(group.reflection_strength,0.f,1.f) : .5f;
-        // 0x40000000 only sends the section through the transparent group.
-        // Glass is ColorSpecularSpheremap (0x33) in that group. A grille is
-        // ColorMixTex (0x03): texture alpha, not the glass tint.
-        // 5 = ColorMixTex with a spheremap (headlight lens).
-        // 4 = ColorMixTex. 3 = glass. 2 = chrome (0x33, no color map, or a
-        // 0x0c cap whose color slot never loaded). A bare pipe is flags 0.
-        const bool transparent = (group.material_flags & 0x40000000u) != 0;
-        if (transparent != (pass == 1)) continue;
-        const uint32_t kind_id = group.material_type;
-        const bool glass = transparent && kind_id == 0x33u;
-        const bool color_mix_env = kind_id == 0x0bu || kind_id == 0x13u || kind_id == 0x23u ||
-                                   kind_id == 0x0fu || kind_id == 0x17u || kind_id == 0x27u;
-        const bool color_mix = color_mix_env || kind_id == 0x03u || kind_id == 0x1bu ||
-                               kind_id == 0x07u || kind_id == 0x1fu;
-        const bool tex_missing = group.texture_index != 0xffff &&
-            (group.texture_index >= part.tex.size() || !bgfx::isValid(part.tex[group.texture_index]));
-        const bool chrome = !glass && kind_id == 0x33u && group.texture_index == 0xffff;
-        const bool bare_cap = !glass && !chrome && tex_missing && group.material_type == 0x0cu &&
-                              group.reflection_index != 0xffff;
-        // A headlight lens names a reflection slot the render leaves empty.
-        // Cabin glass already asks for a generated spheremap. Only the lens
-        // keeps the stock alpha, so the housing texture shows through.
-        const bool lens = glass && env.idx == white_tex_.idx && !generated;
-        // A missing reflection slot is the global envmap, and the exe
-        // builds its UVs from the reflection vector, not the mesh.
-        if (env.idx == white_tex_.idx &&
-            (painted || generated || chrome || bare_cap || glass)) {
-          auto path = scene_instances_envmap();
-          if(!path.empty()) env = tex_for_osd_icon(path);
-          generated = true;
-        }
-        const float kind = glass ? 3.f : color_mix_env ? 5.f : color_mix ? 4.f
-                                : (chrome || bare_cap) ? 2.f : painted ? 1.f : 0.f;
-        const float layers[4] = {mixed?1.f:0.f, env.idx!=white_tex_.idx?strength:0.f, group.material_type==0x15&&mixed?1.f:0.f, kind};
-        const float channels[4] = {static_cast<float>(group.base_map.channel),static_cast<float>(group.mix_map.channel),static_cast<float>(group.reflection_map.channel),lens?2.f:generated?1.f:0.f};
-        auto map = [&](bgfx::UniformHandle uniform, const ScxTextureMap& uv) {
-          const float value[4]={uv.scale_u,uv.scale_v,uv.offset_u,uv.offset_v}; bgfx::setUniform(uniform,value);
-        };
-        bgfx::setUniform(u_layers_,layers); bgfx::setUniform(u_channels_,channels);
-        // Paint replaces the slot, so the body keeps the texture color.
-        // Tex / TexSpecular (tyre is 0x04) replace colour 0 with white:
-        // the tread is the texture. A second multiply by the file diffuse
-        // turns that tread black. Colour classes and bare metal keep it.
-        const bool tex_family = group.material_type == 0x00u || group.material_type == 0x04u ||
-                                group.material_type == 0x08u || group.material_type == 0x0cu ||
-                                group.material_type == 0x10u || group.material_type == 0x14u ||
-                                group.material_type == 0x20u || group.material_type == 0x24u;
-        const bool has_tex = group.texture_index < part.geo.textures.size();
-        float diffuse[4]={1,1,1,group.diffuse[3]};
-        if(!has_tex || (!tex_family && !painted))
-          std::copy(group.diffuse,group.diffuse+3,diffuse);
-        // The create string's colour index. White is "no paint".
-        if (instance.color != 0xffffffu) {
-          const float paint[3] = {((instance.color >> 16) & 255) / 255.f,
-                                  ((instance.color >> 8) & 255) / 255.f,
-                                  (instance.color & 255) / 255.f};
-          if (has_tex && !painted)
-            for (int i = 0; i < 3; ++i) diffuse[i] *= paint[i];
-          else if (!painted)
-            std::copy(paint, paint + 3, diffuse);
-        }
-        // A spheremap ColorMixTex outputs texture.a times the env factor.
-        if (color_mix_env) diffuse[3] = strength;
-        const SceneSun sun = instance.lighting;
-        const float sun_d[4] = {sun.diffuse[0], sun.diffuse[1], sun.diffuse[2],
-                                sun.set ? 1.f : 0.f};
-        const float sun_a[4] = {sun.ambient[0], sun.ambient[1], sun.ambient[2], 0.f};
-        const float sun_s[4] = {sun.specular[0], sun.specular[1], sun.specular[2],
-                                sun.set ? 1.f : 0.f};
-        // Game direction is where the light travels. Toward it, with Z
-        // flipped into the same space as the rendered vertices.
-        const float sun_r[4] = {-sun.direction[0], -sun.direction[1],
-                                sun.direction[2], sun.has_direction ? 1.f : 0.f};
-        bgfx::setUniform(u_sun_diff_, sun_d);
-        bgfx::setUniform(u_sun_amb_, sun_a);
-        bgfx::setUniform(u_sun_spec_, sun_s);
-        bgfx::setUniform(u_sun_dir_, sun_r);
-        bgfx::setUniform(u_diffuse_,diffuse);
-        const float spec[4] = {group.specular[0], group.specular[1], group.specular[2],
-                               group.shininess > 0.f ? group.shininess : 1.f};
-        bgfx::setUniform(u_spec_, spec);
-        map(u_base_uv_,group.base_map);map(u_mix_uv_,group.mix_map);map(u_env_uv_,group.reflection_map);
-        bgfx::TextureHandle bake = white_tex_;
-        float bake_u[4] = {0.f, static_cast<float>(group.base_map.channel), 1.f, 0.f};
-        float bake_xf[4] = {1.f, 1.f, 0.f, 0.f};
-        if (group.lightmap_index != 0xffff &&
-            group.lightmap_index < part.tex.size() &&
-            bgfx::isValid(part.tex[group.lightmap_index])) {
-          bake = part.tex[group.lightmap_index];
-          bake_u[0] = 1.f;
-          bake_u[2] = static_cast<float>(group.lightmap_map.channel);
-          bake_xf[0] = group.lightmap_map.scale_u;
-          bake_xf[1] = group.lightmap_map.scale_v;
-          bake_xf[2] = group.lightmap_map.offset_u;
-          bake_xf[3] = group.lightmap_map.offset_v;
-        }
-        if (transparent && color_mix) bake_u[3] = 1.f;
-        // A switched-on lamp is the glow texture, not a surface in shade.
-        if (instance.light_flags) bake_u[0] = 1.f;
-        bgfx::setUniform(u_lightmap_, bake_u);
-        bgfx::setUniform(u_lightmap_uv_, bake_xf);
-        bgfx::setTexture(0,s_tex_,base);bgfx::setTexture(1,s_mix_,mix);
-        // Global environment textures share the image cache with OSD, but
-        // material UV transforms need the scene's wrapping sampler here.
-        bgfx::setTexture(2, s_env_, env, BGFX_SAMPLER_NONE);
-        bgfx::setTexture(3,s_bake_,bake);
-        bgfx::setTransform(matrix);bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,group.index_start,group.index_count);
-        uint64_t state=BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_MSAA|BGFX_STATE_DEPTH_TEST_LESS;
-        if (glass)
-          state |= BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
-        else if (transparent || group.diffuse[3] < .99f)
-          state |= BGFX_STATE_BLEND_ALPHA;
-        else
-          state |= BGFX_STATE_WRITE_Z;
-        bgfx::setState(state);bgfx::submit(view_id,vehicle_program_);
-      }
-      return;
-    }
-    auto draw=[&](uint32_t first,uint32_t count,uint16_t texture_index,uint32_t flags,const ScxGroup* group){
-      auto tex=texture_index<part.tex.size()?part.tex[texture_index]:white_tex_;if(!bgfx::isValid(tex))tex=white_tex_;
-      bool cut=!preview&&!instance.sky&&(part.geo.info.version!=3||(flags&1));
-      const float settings[4]={cut?1.f:0.f,instance.sky?1.f:preview?.5f:0.f,0.f,preview&&tex.idx!=white_tex_.idx?1.f:0.f};
-      uint32_t color=preview?instance.color:0xffffff;
-      const float tint[4]={((color>>16)&255)/255.f,((color>>8)&255)/255.f,(color&255)/255.f,1};
-      bgfx::setUniform(u_alpha_test_,settings);bgfx::setUniform(u_color_,tint);bgfx::setTransform(matrix);
-      bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,first,count);bgfx::setTexture(0,s_tex_,tex);
-      bind_baked_light(group,&part.tex);
-      bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_MSAA|
-        (instance.sky?0:BGFX_STATE_WRITE_Z|BGFX_STATE_DEPTH_TEST_LESS));bgfx::submit(view_id,program_);
-    };
-    if (pass != 0) return;
-    if(part.geo.groups.empty())draw(0,static_cast<uint32_t>(part.geo.indices.size()),0,0,nullptr);
-    else for(const auto&g:part.geo.groups)draw(g.index_start,g.index_count,g.texture_index,g.material_flags,&g);
-  }
-  void draw_dynamic_world(const float* view, uint16_t view_id) {
+  void LibBgfxBackend::draw_dynamic_world(const float* view, uint16_t view_id)
+{
     float camera[16];bx::mtxInverse(camera,view);
     for(const auto&i:instances_)if(i.sky) {
       auto matrix=i.transform;float radius=0;
@@ -845,724 +612,8 @@ class LibBgfxBackend final : public IRenderBackend {
     for (int pass = 0; pass < 2; ++pass)
       for(const auto&i:instances_)if(!i.sky)draw_instance(view_id,i,i.transform.data(),false,pass);
   }
-  void draw_vehicle_shadows(uint16_t view_id) {
-    // One owner is one car. Traffic carries a kocsiarnyek quad and does not
-    // cast. A body with render flags (flags & 9) == 8 is drawn white into
-    // that car's shadow map, then the ground is multiplied by it.
-    struct CarShadow {
-      void* owner = nullptr;
-      bool decal = false;
-      SceneShadowDecal blob;
-      const float* xform = nullptr;
-      float script[16]{};
-      std::vector<const SceneInstance*> casters;
-    };
-    std::vector<CarShadow> cars;
-    std::unordered_map<void*, size_t> car_index;
-    for (const auto& instance : instances_) {
-      if (instance.sky || !instance.geometry) continue;
-      uint32_t flags = 0;
-      SceneShadowDecal decal;
-      scene_shadow_info(static_cast<uint32_t>(instance.type_id), &flags, &decal);
-      const bool casts = decal.present || (flags & 9u) == 8u;
-      if (!casts) continue;
-      float frame[16]{};
-      void* owner = part_shadow_source(instance.key, frame);
-      if (!owner) {
-        // A dealer display still casts. Its render matrix is the pose.
-        owner = instance.key;
-        frame[0] = frame[5] = frame[10] = frame[15] = 1.f;
-        frame[12] = instance.transform[12];
-        frame[13] = instance.transform[13];
-        frame[14] = -instance.transform[14];
-      }
-      auto found = car_index.find(owner);
-      if (found == car_index.end()) {
-        found = car_index.emplace(owner, cars.size()).first;
-        CarShadow car;
-        car.owner = owner;
-        std::memcpy(car.script, frame, sizeof(frame));
-        cars.push_back(std::move(car));
-      }
-      CarShadow& car = cars[found->second];
-      if (decal.present) {
-        if (!car.decal) {
-          car.decal = true;
-          car.blob = std::move(decal);
-          car.xform = instance.transform.data();
-        }
-      } else if ((flags & 9u) == 8u) {
-        car.casters.push_back(&instance);
-      }
-    }
-
-    struct Slot {
-      bool used = false;
-      float mtx[16]{};
-      float view[16]{};
-      float centre[3]{};
-      float centre_y = 0.f;
-      float ramp = 0.f;
-      float radius = 0.f;
-      float bottom = 0.f;
-      float script_x = 0.f, script_y = 0.f, script_z = 0.f;
-      void* owner = nullptr;
-      bgfx::TextureHandle tex = BGFX_INVALID_HANDLE;
-    };
-    Slot slots[kShadowSlots];
-    // The offscreen map never reached the courtyard. Flatten the body onto
-    // the ground along the sun; the stencil keeps overlapping panels from
-    // stacking the ink.
-    SceneSun sun = scene_instances_light();
-    float travel[3] = {sun.direction[0], sun.direction[1], -sun.direction[2]};
-    {
-      const float tlen = std::sqrt(travel[0] * travel[0] + travel[1] * travel[1] +
-                                   travel[2] * travel[2]);
-      if (tlen < 1e-5f) {
-        travel[0] = 0.f;
-        travel[1] = -1.f;
-        travel[2] = 0.f;
-      } else {
-        travel[0] /= tlen;
-        travel[1] /= tlen;
-        travel[2] /= tlen;
-      }
-    }
-    const uint64_t flat_state =
-        BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LEQUAL |
-        BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA,
-                              BGFX_STATE_BLEND_INV_SRC_ALPHA);
-    const uint32_t flat_stencil =
-        BGFX_STENCIL_TEST_NOTEQUAL | BGFX_STENCIL_FUNC_REF(1) |
-        BGFX_STENCIL_FUNC_RMASK(0xff) | BGFX_STENCIL_OP_FAIL_S_KEEP |
-        BGFX_STENCIL_OP_FAIL_Z_KEEP | BGFX_STENCIL_OP_PASS_Z_REPLACE;
-    // Stock multiplies the ground by black inside the silhouette. The
-    // fill is that ink, one write, so the middle matches the contour.
-    const float flat_tint[4] = {0.f, 0.f, 0.f, 1.f};
-    const float flat_alpha[4] = {0.f, 1.f, 0.f, 0.f};
-    std::unordered_set<void*> active_shadows;
-    const auto floor_revision = scene_instances_floor_revision();
-    const std::array<float, 3> shadow_light = {travel[0], travel[1], travel[2]};
-    if (std::fabs(travel[1]) > 0.05f && bgfx::isValid(program_) &&
-        bgfx::isValid(white_tex_)) {
-      for (const CarShadow& car : cars) {
-        if (car.decal || car.casters.empty()) continue;
-        // Each vertex sits on the surface under it. A triangle that jumps
-        // from the deck to the pit is split until the pieces lie on one
-        // surface; the sliver that still bridges is dropped.
-        struct Cell {
-          bool hit = false;
-          float h = 0, nx = 0, ny = 1, nz = 0;
-        };
-        std::unordered_map<uint64_t, Cell> cells;
-        auto probe = [&](float sx, float sz, float below, Cell& cell) {
-          // Five centimetres follows the lip of the pit. The shadow's
-          // plan position is the mesh, so this key only caches height.
-          const int ix = static_cast<int>(std::floor(sx * 20.f));
-          const int iz = static_cast<int>(std::floor(sz * 20.f));
-          const uint64_t key =
-              (static_cast<uint64_t>(static_cast<uint32_t>(ix)) << 32) |
-              static_cast<uint32_t>(iz);
-          auto found = cells.find(key);
-          if (found != cells.end()) {
-            cell = found->second;
-            return;
-          }
-          Cell stored;
-          SceneFloorHit hit;
-          if (scene_instances_sample_floor(sx, sz, below, car.owner, hit)) {
-            stored.hit = true;
-            stored.h = hit.height;
-            stored.nx = hit.normal[0];
-            stored.ny = hit.normal[1];
-            stored.nz = hit.normal[2];
-          }
-          cells.emplace(key, stored);
-          cell = stored;
-        };
-        struct Placed {
-          bool ok = false;
-          float x = 0, y = 0, z = 0, h = 0;
-        };
-        auto place = [&](float rx, float ry, float rz) {
-          Placed out;
-          float sx = rx, sz = rz;
-          for (int iter = 0; iter < 2; ++iter) {
-            Cell cell;
-            // Chassis height stays under the ceiling and over the deck.
-            // A wheel vertex below the deck must not cache the pit for the
-            // whole column.
-            probe(sx, -sz, car.script[13] + 0.45f, cell);
-            if (!cell.hit) return out;
-            const float ny = std::fabs(cell.ny) > 0.2f ? cell.ny : 1.f;
-            if (std::fabs(travel[1]) < 0.05f || iter == 1) {
-              out.ok = true;
-              out.h = cell.h;
-              // Stay under the vertex. A nudge along the floor normal
-              // walks the shadow off the tyre and the sill.
-              out.x = sx;
-              out.y = cell.h + 0.004f;
-              out.z = sz;
-              (void)ny;
-              return out;
-            }
-            const float t = (cell.h + 0.02f - ry) / travel[1];
-            if (!(t > -0.02f)) return out;
-            sx = rx + travel[0] * t;
-            sz = rz + travel[2] * t;
-          }
-          return out;
-        };
-        // Already projected. Sampling again would walk the shadow sideways.
-        auto drop = [&](float rx, float rz) {
-          Placed out;
-          Cell cell;
-          probe(rx, -rz, car.script[13] + 0.45f, cell);
-          if (!cell.hit) return out;
-          const float ny = std::fabs(cell.ny) > 0.2f ? cell.ny : 1.f;
-          out.ok = true;
-          out.h = cell.h;
-          out.x = rx;
-          out.y = cell.h + 0.004f;
-          out.z = rz;
-          (void)ny;
-          return out;
-        };
-        // A parked car still jitters by a millimetre. Rebuilding the
-        // silhouette on that jitter was the frame hitch.
-        auto quant = [](std::array<float, 16> m) {
-          for (float& v : m) v = std::round(v * 100.f) * 0.01f;
-          return m;
-        };
-        const float ceiling = std::round(car.script[13] * 100.f) * 0.01f;
-        active_shadows.insert(car.owner);
-        auto& cached = projected_shadows_[car.owner];
-        bool dirty = cached.owner != car.owner || cached.light != shadow_light ||
-                     cached.ceiling != ceiling ||
-                     cached.floor_revision != floor_revision ||
-                     cached.stamps.size() != car.casters.size();
-        if (!dirty) {
-          for (size_t i = 0; i < car.casters.size(); ++i) {
-            const SceneInstance* inst = car.casters[i];
-            const auto& stamp = cached.stamps[i];
-            if (stamp.key != inst->key || stamp.source != inst->geometry ||
-                stamp.transform != quant(inst->transform)) {
-              dirty = true;
-              break;
-            }
-          }
-        }
-        if (dirty) {
-          cached.owner = car.owner;
-          cached.light = shadow_light;
-          cached.ceiling = ceiling;
-          cached.floor_revision = floor_revision;
-          cached.stamps.clear();
-          cached.vertices.clear();
-          cached.indices.clear();
-          struct Tri {
-            float x[3], z[3];
-          };
-          std::vector<Tri> tris;
-          float minz = 0.f, maxz = 0.f;
-          bool any = false;
-          for (const SceneInstance* inst : car.casters) {
-            ProjectedShadow::Stamp stamp;
-            stamp.key = inst->key;
-            stamp.source = inst->geometry;
-            stamp.transform = quant(inst->transform);
-            cached.stamps.push_back(std::move(stamp));
-            if (!inst->geometry) continue;
-            const auto& geo = *inst->geometry;
-            const size_t n = geo.positions.size() / 3;
-            if (n == 0 || geo.indices.size() < 3) continue;
-            const float scale =
-                geo.position_scale > 0.f ? geo.position_scale : 0.01f;
-            const float* m = inst->transform.data();
-            std::vector<Placed> placed(n);
-            for (size_t i = 0; i < n; ++i) {
-              const float lx = geo.positions[i * 3 + 0] * scale;
-              const float ly = geo.positions[i * 3 + 1] * scale;
-              const float lz = -geo.positions[i * 3 + 2] * scale;
-              placed[i] = place(m[0] * lx + m[4] * ly + m[8] * lz + m[12],
-                                m[1] * lx + m[5] * ly + m[9] * lz + m[13],
-                                m[2] * lx + m[6] * ly + m[10] * lz + m[14]);
-            }
-            for (size_t t = 0; t + 2 < geo.indices.size(); t += 3) {
-              const uint32_t ia = geo.indices[t];
-              const uint32_t ib = geo.indices[t + 1];
-              const uint32_t ic = geo.indices[t + 2];
-              if (ia >= n || ib >= n || ic >= n) continue;
-              if (!placed[ia].ok || !placed[ib].ok || !placed[ic].ok) continue;
-              Tri tri{{placed[ia].x, placed[ib].x, placed[ic].x},
-                      {placed[ia].z, placed[ib].z, placed[ic].z}};
-              const float zlo = std::min(tri.z[0], std::min(tri.z[1], tri.z[2]));
-              const float zhi = std::max(tri.z[0], std::max(tri.z[1], tri.z[2]));
-              if (!any) {
-                minz = zlo;
-                maxz = zhi;
-                any = true;
-              } else {
-                minz = std::min(minz, zlo);
-                maxz = std::max(maxz, zhi);
-              }
-              tris.push_back(tri);
-            }
-          }
-          // One band per centimetre. Its left and right edges are the
-          // real contour, and everything between them is filled, so the
-          // gaps between the sill and the wheels close.
-          if (any && maxz - minz > 1e-3f && !tris.empty()) {
-            constexpr float kWant = 0.004f;
-            int nrows = static_cast<int>(std::ceil((maxz - minz) / kWant));
-            if (nrows < 1) nrows = 1;
-            if (nrows > 1400) nrows = 1400;
-            const float row = (maxz - minz) / static_cast<float>(nrows);
-            struct Span {
-              float lo = 1e9f, hi = -1e9f;
-            };
-            std::vector<Span> spans(static_cast<size_t>(nrows));
-            auto cover = [&](const Tri& tri, float z, Span& span) {
-              float lo = 1e9f, hi = -1e9f;
-              auto edge = [&](int a, int b) {
-                const float az = tri.z[a], bz = tri.z[b];
-                const float ax = tri.x[a], bx = tri.x[b];
-                if (std::fabs(az - bz) < 1e-6f) {
-                  if (std::fabs(az - z) > 1e-4f) return;
-                  lo = std::min(lo, std::min(ax, bx));
-                  hi = std::max(hi, std::max(ax, bx));
-                  return;
-                }
-                const float t = (z - az) / (bz - az);
-                if (t < -1e-4f || t > 1.f + 1e-4f) return;
-                const float x = ax + t * (bx - ax);
-                lo = std::min(lo, x);
-                hi = std::max(hi, x);
-              };
-              edge(0, 1);
-              edge(1, 2);
-              edge(2, 0);
-              if (hi < lo) return;
-              span.lo = std::min(span.lo, lo);
-              span.hi = std::max(span.hi, hi);
-            };
-            for (const Tri& tri : tris) {
-              const float zlo = std::min(tri.z[0], std::min(tri.z[1], tri.z[2]));
-              const float zhi = std::max(tri.z[0], std::max(tri.z[1], tri.z[2]));
-              int r0 = static_cast<int>(std::floor((zlo - minz) / row));
-              int r1 = static_cast<int>(std::floor((zhi - minz) / row));
-              if (r0 < 0) r0 = 0;
-              if (r1 >= nrows) r1 = nrows - 1;
-              if (r0 > r1) continue;
-              for (int r = r0; r <= r1; ++r) {
-                const float za = minz + static_cast<float>(r) * row;
-                const float zb = za + row;
-                cover(tri, std::max(za, zlo), spans[static_cast<size_t>(r)]);
-                cover(tri, std::min(zb, zhi), spans[static_cast<size_t>(r)]);
-              }
-            }
-            auto emit_quad = [&](float x0, float x1, float z0, float z1, float h) {
-              if (x1 < x0 + 1e-4f) return;
-              const float y = h + 0.012f;
-              const auto base = static_cast<uint32_t>(cached.vertices.size());
-              auto push = [&](float x, float z) {
-                MeshVertex vertex{};
-                vertex.x = x;
-                vertex.y = y;
-                vertex.z = z;
-                vertex.ny = 1.f;
-                cached.vertices.push_back(vertex);
-              };
-              push(x0, z0);
-              push(x1, z0);
-              push(x1, z1);
-              push(x0, z0);
-              push(x1, z1);
-              push(x0, z1);
-              for (uint32_t i = 0; i < 6; ++i) cached.indices.push_back(base + i);
-            };
-            for (int r = 0; r < nrows; ++r) {
-              const Span& span = spans[static_cast<size_t>(r)];
-              if (span.hi < span.lo) continue;
-              const float z0 = minz + static_cast<float>(r) * row;
-              const float z1 = z0 + row;
-              const float midz = 0.5f * (z0 + z1);
-              struct Sample {
-                float x, h;
-                bool ok;
-              };
-              std::vector<Sample> samples;
-              for (float x = span.lo; x < span.hi + 1e-4f; x += 0.05f) {
-                const float sx = std::min(x, span.hi);
-                const Placed p = drop(sx, midz);
-                samples.push_back(Sample{sx, p.ok ? p.h : 0.f, p.ok});
-              }
-              if (samples.empty()) continue;
-              // A crack in the lift mesh sees the pit and used to skip a
-              // chunk of the silhouette. Compare against the original
-              // samples: healing in place would climb out of the whole pit.
-              const std::vector<Sample> raw = samples;
-              for (size_t i = 0; i < samples.size(); ++i) {
-                float deck = -1e9f;
-                for (size_t j = 0; j < raw.size(); ++j) {
-                  if (!raw[j].ok) continue;
-                  if (std::fabs(raw[j].x - raw[i].x) > 0.2f) continue;
-                  deck = std::max(deck, raw[j].h);
-                }
-                if (deck < -1e8f) continue;
-                if (!samples[i].ok || samples[i].h < deck - 0.22f) {
-                  samples[i].h = deck;
-                  samples[i].ok = true;
-                }
-              }
-              size_t i = 0;
-              while (i < samples.size()) {
-                if (!samples[i].ok) {
-                  ++i;
-                  continue;
-                }
-                size_t j = i;
-                while (j + 1 < samples.size() && samples[j + 1].ok &&
-                       std::fabs(samples[j + 1].h - samples[i].h) <= 0.22f)
-                  ++j;
-                emit_quad(samples[i].x, samples[j].x, z0 - row * 0.5f,
-                          z1 + row * 0.5f, samples[i].h);
-                i = j + 1;
-              }
-            }
-          }
-        }
-        const auto& idx = cached.indices;
-        if (idx.size() < 3 || cached.vertices.empty()) continue;
-        const auto vn = static_cast<uint32_t>(cached.vertices.size());
-        // One car's panels do not fit a single transient buffer. The
-        // indices are local to each triangle, so the soup splits cleanly.
-        constexpr uint32_t kBatch = 9000;
-        float ident[16];
-        bx::mtxIdentity(ident);
-        for (uint32_t start = 0; start + 2 < vn; start += kBatch) {
-          uint32_t count = std::min(kBatch, vn - start);
-          count -= count % 3;
-          if (count < 3) break;
-          if (bgfx::getAvailTransientVertexBuffer(count, layout_) < count ||
-              bgfx::getAvailTransientIndexBuffer(count, true) < count)
-            break;
-          bgfx::TransientVertexBuffer tvb;
-          bgfx::TransientIndexBuffer tib;
-          bgfx::allocTransientVertexBuffer(&tvb, count, layout_);
-          bgfx::allocTransientIndexBuffer(&tib, count, true);
-          std::memcpy(tvb.data, cached.vertices.data() + start,
-                      count * sizeof(MeshVertex));
-          auto* ids = reinterpret_cast<uint32_t*>(tib.data);
-          for (uint32_t i = 0; i < count; ++i) ids[i] = i;
-          bgfx::setTransform(ident);
-          bgfx::setVertexBuffer(0, &tvb);
-          bgfx::setIndexBuffer(&tib);
-          bgfx::setTexture(0, s_tex_, white_tex_);
-          bind_baked_light(nullptr, nullptr);
-          bgfx::setUniform(u_color_, flat_tint);
-          bgfx::setUniform(u_alpha_test_, flat_alpha);
-          bgfx::setStencil(flat_stencil, flat_stencil);
-          bgfx::setState(flat_state);
-          // Pull the ink toward the camera so the coplanar tread cannot
-          // win the depth test in spots.
-          bgfx::setDepthControl(-8, -2.f);
-          bgfx::submit(view_id, program_);
-        }
-      }
-      bgfx::setDepthControl(0, 0.f);
-    }
-    for (auto it = projected_shadows_.begin(); it != projected_shadows_.end();) {
-      if (!active_shadows.count(it->first)) it = projected_shadows_.erase(it);
-      else ++it;
-    }
-    const bool maps = false;
-    if (maps) {
-      SceneSun sun = scene_instances_light();
-      float travel[3] = {sun.direction[0], sun.direction[1], -sun.direction[2]};
-      const float tlen = std::sqrt(travel[0] * travel[0] + travel[1] * travel[1] +
-                                   travel[2] * travel[2]);
-      if (tlen < 1e-5f) {
-        travel[0] = 0.f;
-        travel[1] = -1.f;
-        travel[2] = 0.f;
-      } else {
-        travel[0] /= tlen;
-        travel[1] /= tlen;
-        travel[2] /= tlen;
-      }
-      auto light_view = [](const float d[3], const float centre[3], float* view) {
-        float rx, ry = 0.f, rz;
-        if (std::fabs(d[0]) < 1e-5f && std::fabs(d[2]) < 1e-5f) {
-          rx = 1.f;
-          rz = 0.f;
-        } else {
-          rx = -d[2];
-          rz = d[0];
-          const float rl = std::sqrt(rx * rx + rz * rz);
-          rx /= rl;
-          rz /= rl;
-        }
-        float ux = ry * d[2] - rz * d[1];
-        float uy = rz * d[0] - rx * d[2];
-        float uz = rx * d[1] - ry * d[0];
-        const float ul = std::sqrt(ux * ux + uy * uy + uz * uz);
-        if (ul > 1e-8f) {
-          ux /= ul;
-          uy /= ul;
-          uz /= ul;
-        }
-        std::fill(view, view + 16, 0.f);
-        view[0] = rx;
-        view[1] = ux;
-        view[2] = d[0];
-        view[4] = ry;
-        view[5] = uy;
-        view[6] = d[1];
-        view[8] = rz;
-        view[9] = uz;
-        view[10] = d[2];
-        view[12] = -(rx * centre[0] + ry * centre[1] + rz * centre[2]);
-        view[13] = -(ux * centre[0] + uy * centre[1] + uz * centre[2]);
-        view[14] = -(d[0] * centre[0] + d[1] * centre[1] + d[2] * centre[2]);
-        view[15] = 1.f;
-      };
-      const bgfx::Caps* caps = bgfx::getCaps();
-      const float sy = caps->originBottomLeft ? 0.5f : -0.5f;
-      int slot_n = 0;
-      const uint64_t caster_state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
-      for (const CarShadow& car : cars) {
-        if (car.decal || car.casters.empty() || slot_n >= kShadowSlots) continue;
-        if (!bgfx::isValid(shadow_fb_[slot_n])) break;
-        float mn[3] = {1e30f, 1e30f, 1e30f};
-        float mx[3] = {-1e30f, -1e30f, -1e30f};
-        bool any = false;
-        for (const SceneInstance* inst : car.casters) {
-          const float scale = inst->geometry->position_scale > 0.f
-                                  ? inst->geometry->position_scale
-                                  : 0.01f;
-          const float* m = inst->transform.data();
-          for (int ix = 0; ix < 2; ++ix)
-            for (int iy = 0; iy < 2; ++iy)
-              for (int iz = 0; iz < 2; ++iz) {
-                const float lx =
-                    (ix ? inst->geometry->info.bbox_max[0]
-                       : inst->geometry->info.bbox_min[0]) *
-                    scale;
-                const float ly =
-                    (iy ? inst->geometry->info.bbox_max[1]
-                       : inst->geometry->info.bbox_min[1]) *
-                    scale;
-                const float lz =
-                    -((iz ? inst->geometry->info.bbox_max[2]
-                         : inst->geometry->info.bbox_min[2]) *
-                      scale);
-                const float x = m[0] * lx + m[4] * ly + m[8] * lz + m[12];
-                const float y = m[1] * lx + m[5] * ly + m[9] * lz + m[13];
-                const float z = m[2] * lx + m[6] * ly + m[10] * lz + m[14];
-                mn[0] = std::min(mn[0], x);
-                mn[1] = std::min(mn[1], y);
-                mn[2] = std::min(mn[2], z);
-                mx[0] = std::max(mx[0], x);
-                mx[1] = std::max(mx[1], y);
-                mx[2] = std::max(mx[2], z);
-                any = true;
-              }
-        }
-        if (!any) continue;
-        const float dx = mx[0] - mn[0], dy = mx[1] - mn[1], dz = mx[2] - mn[2];
-        float radius = 0.5f * std::sqrt(dx * dx + dy * dy + dz * dz);
-        if (radius < 1e-4f) continue;
-        if (radius < 0.5f) radius = 0.5f;
-        // The sun is not straight down. The contact patch sits outside the
-        // body box; a tighter map clips it.
-        radius *= 1.35f;
-        const float centre[3] = {(mn[0] + mx[0]) * 0.5f, (mn[1] + mx[1]) * 0.5f,
-                                 (mn[2] + mx[2]) * 0.5f};
-        float view[16], proj[16];
-        light_view(travel, centre, view);
-        bx::mtxOrtho(proj, -radius, radius, -radius, radius, -30.f, 30.f, 0.f,
-                     caps->homogeneousDepth);
-        const auto shadow_view = static_cast<uint16_t>(slot_n);
-        bgfx::setViewTransform(shadow_view, view, proj);
-        for (const SceneInstance* inst : car.casters) {
-          auto mesh = instance_meshes_.find(inst->geometry.get());
-          if (mesh == instance_meshes_.end()) continue;
-          const ScenePart& part = mesh->second;
-          if (!bgfx::isValid(part.vbh) || !bgfx::isValid(part.ibh)) continue;
-          bgfx::setTransform(inst->transform.data());
-          bgfx::setVertexBuffer(0, part.vbh);
-          bgfx::setIndexBuffer(part.ibh);
-          bgfx::setState(caster_state);
-          bgfx::submit(shadow_view, shadow_program_);
-        }
-        const float crop[16] = {
-            0.5f, 0.f, 0.f, 0.f, 0.f, sy, 0.f, 0.f, 0.f, 0.f,
-            caps->homogeneousDepth ? 0.5f : 1.f, 0.f, 0.5f, 0.5f,
-            caps->homogeneousDepth ? 0.5f : 0.f, 1.f};
-        float pv[16], tex[16];
-        bx::mtxMul(pv, view, proj);
-        bx::mtxMul(tex, pv, crop);
-        Slot& slot = slots[slot_n];
-        slot.used = true;
-        std::memcpy(slot.mtx, tex, sizeof(tex));
-        std::memcpy(slot.view, view, sizeof(view));
-        std::memcpy(slot.centre, centre, sizeof(centre));
-        slot.centre_y = centre[1];
-        slot.ramp = 0.25f / radius;
-        slot.radius = radius;
-        slot.bottom = mn[1];
-        slot.script_x = car.script[12];
-        slot.script_y = car.script[13];
-        slot.script_z = car.script[14];
-        slot.owner = car.owner;
-        slot.tex = shadow_tex_[slot_n];
-        ++slot_n;
-      }
-      const uint64_t recv_state =
-          BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LEQUAL |
-          BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_INV_SRC_COLOR) |
-          BGFX_STATE_MSAA;
-      auto receive = [&](bgfx::VertexBufferHandle vb, bgfx::IndexBufferHandle ib,
-                         const float* matrix) {
-        if (!bgfx::isValid(vb) || !bgfx::isValid(ib)) return;
-        for (const Slot& slot : slots) {
-          if (!slot.used || !bgfx::isValid(slot.tex)) continue;
-          bgfx::setUniform(u_shadow_mtx_, slot.mtx);
-          const float ramp[4] = {0.f, slot.centre_y, 0.f, slot.ramp};
-          bgfx::setUniform(u_shadow_ramp_, ramp);
-          bgfx::setTransform(matrix);
-          bgfx::setVertexBuffer(0, vb);
-          bgfx::setIndexBuffer(ib);
-          bgfx::setTexture(0, s_tex_, slot.tex);
-          bgfx::setState(recv_state);
-          bgfx::submit(view_id, shadow_recv_);
-        }
-      };
-      float identity[16];
-      bx::mtxIdentity(identity);
-      for (const ScenePart& part : parts_) receive(part.vbh, part.ibh, identity);
-      for (const auto& instance : instances_) {
-        if (instance.sky || instance.vehicle_material || !instance.geometry)
-          continue;
-        auto mesh = instance_meshes_.find(instance.geometry.get());
-        if (mesh == instance_meshes_.end()) continue;
-        receive(mesh->second.vbh, mesh->second.ibh, instance.transform.data());
-      }
-      // The map mesh is not always the surface under the car. A quad in the
-      // light's window, sitting on the floor, carries the same silhouette.
-      const uint64_t patch_state =
-          BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LEQUAL |
-          BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_INV_SRC_COLOR);
-      const float patch_tint[4] = {0.55f, 0.55f, 0.55f, 1.f};
-      const float patch_alpha[4] = {0.f, 1.f, 0.f, 0.f};
-      const float sy_sign = sy > 0.f ? 1.f : -1.f;
-      for (const Slot& slot : slots) {
-        if (!slot.used || !bgfx::isValid(slot.tex)) continue;
-        SceneFloorHit hit;
-        const bool on_floor = scene_instances_sample_floor(
-            slot.script_x, slot.script_z, slot.script_y + 1.f, slot.owner, hit);
-        const float y0 = (on_floor ? hit.height : slot.bottom) + 0.03f;
-        const float* lv = slot.view;
-        const float rx = lv[0], ry = lv[4], rz = lv[8];
-        const float ux = lv[1], uy = lv[5], uz = lv[9];
-        const float nx = lv[2], ny = lv[6], nz = lv[10];
-        if (std::fabs(ny) < 0.15f) continue;
-        const float r = slot.radius;
-        const float corner[4][2] = {{-r, -r}, {r, -r}, {r, r}, {-r, r}};
-        MeshVertex verts[4]{};
-        for (int i = 0; i < 4; ++i) {
-          const float lx = corner[i][0], ly = corner[i][1];
-          const float lz = (y0 - slot.centre[1] - lx * ry - ly * uy) / ny;
-          verts[i].x = slot.centre[0] + lx * rx + ly * ux + lz * nx;
-          verts[i].y = y0;
-          verts[i].z = slot.centre[2] + lx * rz + ly * uz + lz * nz;
-          verts[i].ny = 1.f;
-          verts[i].u = 0.5f + 0.5f * lx / r;
-          verts[i].v = 0.5f + sy_sign * 0.5f * ly / r;
-        }
-        const uint16_t idx[6] = {0, 1, 2, 0, 2, 3};
-        if (bgfx::getAvailTransientVertexBuffer(4, layout_) < 4 ||
-            bgfx::getAvailTransientIndexBuffer(6) < 6)
-          continue;
-        bgfx::TransientVertexBuffer tvb;
-        bgfx::TransientIndexBuffer tib;
-        bgfx::allocTransientVertexBuffer(&tvb, 4, layout_);
-        bgfx::allocTransientIndexBuffer(&tib, 6);
-        std::memcpy(tvb.data, verts, sizeof(verts));
-        std::memcpy(tib.data, idx, sizeof(idx));
-        float ident[16];
-        bx::mtxIdentity(ident);
-        bgfx::setTransform(ident);
-        bgfx::setVertexBuffer(0, &tvb);
-        bgfx::setIndexBuffer(&tib);
-        bgfx::setTexture(0, s_tex_, slot.tex);
-        bind_baked_light(nullptr, nullptr);
-        bgfx::setUniform(u_color_, patch_tint);
-        bgfx::setUniform(u_alpha_test_, patch_alpha);
-        bgfx::setState(patch_state);
-        bgfx::submit(view_id, program_);
-      }
-    }
-
-    const uint64_t blob_state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                                BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_BLEND_ALPHA |
-                                BGFX_STATE_MSAA;
-    const float blob_tint[4] = {1.f, 1.f, 1.f, 1.f};
-    const float blob_alpha[4] = {0.f, 1.f, 1.f, 0.f};
-    for (const CarShadow& car : cars) {
-      if (!car.decal || !car.xform) continue;
-      bgfx::TextureHandle tex = tex_for_osd_icon(car.blob.texture);
-      if (!bgfx::isValid(tex)) continue;
-      SceneFloorHit hit;
-      const bool on_floor = scene_instances_sample_floor(
-          car.script[12], car.script[14], car.script[13] + 0.5f, car.owner, hit);
-      const float* m = car.xform;
-      const float* c = car.blob.center;
-      const float* u = car.blob.axis_u;
-      const float* v = car.blob.axis_v;
-      MeshVertex verts[4]{};
-      const float su[4] = {-1.f, 1.f, 1.f, -1.f};
-      const float sv[4] = {-1.f, -1.f, 1.f, 1.f};
-      const float uu[4] = {car.blob.uv[0], car.blob.uv[2], car.blob.uv[2],
-                           car.blob.uv[0]};
-      const float vv[4] = {car.blob.uv[1], car.blob.uv[1], car.blob.uv[3],
-                           car.blob.uv[3]};
-      for (int i = 0; i < 4; ++i) {
-        const float lx = c[0] + su[i] * u[0] + sv[i] * v[0];
-        const float ly = c[1] + su[i] * u[1] + sv[i] * v[1];
-        const float lz = -(c[2] + su[i] * u[2] + sv[i] * v[2]);
-        verts[i].x = m[0] * lx + m[4] * ly + m[8] * lz + m[12];
-        verts[i].y = on_floor ? hit.height + 0.03f : m[13] + 0.03f;
-        verts[i].z = m[2] * lx + m[6] * ly + m[10] * lz + m[14];
-        verts[i].ny = 1.f;
-        verts[i].u = uu[i];
-        verts[i].v = vv[i];
-      }
-      const uint16_t idx[6] = {0, 1, 2, 0, 2, 3};
-      if (bgfx::getAvailTransientVertexBuffer(4, layout_) < 4 ||
-          bgfx::getAvailTransientIndexBuffer(6) < 6)
-        continue;
-      bgfx::TransientVertexBuffer tvb;
-      bgfx::TransientIndexBuffer tib;
-      bgfx::allocTransientVertexBuffer(&tvb, 4, layout_);
-      bgfx::allocTransientIndexBuffer(&tib, 6);
-      std::memcpy(tvb.data, verts, sizeof(verts));
-      std::memcpy(tib.data, idx, sizeof(idx));
-      float identity[16];
-      bx::mtxIdentity(identity);
-      bgfx::setTransform(identity);
-      bgfx::setVertexBuffer(0, &tvb);
-      bgfx::setIndexBuffer(&tib);
-      bgfx::setTexture(0, s_tex_, tex);
-      bind_baked_light(nullptr, nullptr);
-      bgfx::setUniform(u_color_, blob_tint);
-      bgfx::setUniform(u_alpha_test_, blob_alpha);
-      bgfx::setState(blob_state);
-      bgfx::submit(view_id, program_);
-    }
-  }
-  void draw_previews() {
+  void LibBgfxBackend::draw_previews()
+{
     uint16_t id = kPreview0;
     for(const auto&p:previews_) {
       if(id>=64)break;
@@ -1605,8 +656,8 @@ class LibBgfxBackend final : public IRenderBackend {
       ++id;
     }
   }
-
-  void expand_scene_bbox(const float mn[3], const float mx[3]) {
+  void LibBgfxBackend::expand_scene_bbox(const float mn[3], const float mx[3])
+{
     if (!mesh_ok_ && parts_.empty()) {
       for (int i = 0; i < 3; ++i) {
         mesh_min_[i] = mn[i];
@@ -1619,8 +670,8 @@ class LibBgfxBackend final : public IRenderBackend {
       mesh_max_[i] = std::max(mesh_max_[i], mx[i]);
     }
   }
-
-  void destroy_part(ScenePart& p) {
+  void LibBgfxBackend::destroy_part(ScenePart& p)
+{
     if (bgfx::isValid(p.ibh)) bgfx::destroy(p.ibh);
     if (bgfx::isValid(p.vbh)) bgfx::destroy(p.vbh);
     for (bgfx::TextureHandle& t : p.tex) {
@@ -1631,7 +682,8 @@ class LibBgfxBackend final : public IRenderBackend {
     p.vbh = BGFX_INVALID_HANDLE;
     p.tex.clear();
   }
-  void build_camera(float* view, float* proj) {
+  void LibBgfxBackend::build_camera(float* view, float* proj)
+{
     const float aspect =
         height_ > 0 ? static_cast<float>(width_) / static_cast<float>(height_)
                     : 1.333f;
@@ -1653,8 +705,8 @@ class LibBgfxBackend final : public IRenderBackend {
     bx::mtxProj(proj, 45.f, aspect, 0.1f, dist + radius * 4.f,
                 bgfx::getCaps()->homogeneousDepth);
   }
-
-  void upload_part(ScenePart& part) {
+  void LibBgfxBackend::upload_part(ScenePart& part)
+{
     const size_t n = part.geo.positions.size() / 3;
     if (n == 0 || part.geo.indices.empty()) return;
     std::vector<MeshVertex> verts(n);
@@ -1692,8 +744,8 @@ class LibBgfxBackend final : public IRenderBackend {
         static_cast<uint32_t>(part.geo.indices.size() * sizeof(uint32_t)));
     part.ibh = bgfx::createIndexBuffer(imem, BGFX_BUFFER_INDEX32);
   }
-
-  static bool is_logo_texture_slot(const ScxGeometry& geo, uint16_t tex_i) {
+  bool LibBgfxBackend::is_logo_texture_slot(const ScxGeometry& geo, uint16_t tex_i)
+{
     if (tex_i == 0xffff) return false;
     if (tex_i >= geo.textures.size()) return false;
     std::string p = geo.textures[tex_i];
@@ -1701,17 +753,16 @@ class LibBgfxBackend final : public IRenderBackend {
       c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return p.find("logo") != std::string::npos;
   }
-
-  static bool is_logo_group(const ScxGroup& g, const ScxGeometry& geo) {
+  bool LibBgfxBackend::is_logo_group(const ScxGroup& g, const ScxGeometry& geo)
+{
     std::string n = g.name;
     for (char& c : n)
       c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     if (n.find("reklam") != std::string::npos) return true;
     return is_logo_texture_slot(geo, g.texture_index);
   }
-
-  // Horizontal mirror (u → 1-u) for banner/logo groups only.
-  static void flip_logo_uv_horizontal(ScxGeometry& geo) {
+  void LibBgfxBackend::flip_logo_uv_horizontal(ScxGeometry& geo)
+{
     if (geo.uvs.empty() || geo.groups.empty()) return;
     std::vector<char> mark(geo.uvs.size() / 2, 0);
     for (const ScxGroup& g : geo.groups) {
@@ -1731,8 +782,8 @@ class LibBgfxBackend final : public IRenderBackend {
     if (flipped)
       std::printf("[bgfx] logo UV horizontal flip verts=%d\n", flipped);
   }
-
-  void draw_scene(uint16_t view_id) {
+  void LibBgfxBackend::draw_scene(uint16_t view_id)
+{
     float mtx[16];
     bx::mtxIdentity(mtx);
     // Stock map faces are two-sided. Culling either winding hid a side of
@@ -1788,8 +839,8 @@ class LibBgfxBackend final : public IRenderBackend {
       }
     }
   }
-
-  void load_part_textures(ScenePart& part) {
+  void LibBgfxBackend::load_part_textures(ScenePart& part)
+{
     std::vector<std::string> paths = part.geo.textures;
     if (paths.empty() && !part.geo.info.path.empty()) {
       std::string dir = part.geo.info.path;
@@ -1883,9 +934,9 @@ class LibBgfxBackend final : public IRenderBackend {
     }
     std::printf("[bgfx] DDS GPU uploaded %d / %zu\n", loaded, paths.size());
   }
-
 #ifdef _WIN32
-  static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+  LRESULT CALLBACK LibBgfxBackend::wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
     if (msg == WM_NCCREATE) {
       auto* cs = reinterpret_cast<CREATESTRUCTA*>(lp);
       SetWindowLongPtrA(hwnd, GWLP_USERDATA,
@@ -2015,836 +1066,7 @@ class LibBgfxBackend final : public IRenderBackend {
     }
     return DefWindowProcA(hwnd, msg, wp, lp);
   }
-  bgfx::TextureHandle tex_for_osd_icon(const std::string& path) {
-    if (path.empty()) return white_tex_;
-    auto it = osd_tex_.find(path);
-    if (it != osd_tex_.end()) return it->second;
-    DdsImage img = load_texture_file(path);
-    bgfx::TextureHandle th = BGFX_INVALID_HANDLE;
-    if (img.ok) {
-      bgfx::TextureFormat::Enum fmt = bgfx::TextureFormat::Unknown;
-      if (img.format == DdsFormat::DXT1) fmt = bgfx::TextureFormat::BC1;
-      else if (img.format == DdsFormat::DXT3) fmt = bgfx::TextureFormat::BC2;
-      else if (img.format == DdsFormat::DXT5) fmt = bgfx::TextureFormat::BC3;
-      else if (img.format == DdsFormat::RGBA8) {
-        std::string ext=path.size()>=4?path.substr(path.size()-4):"";
-        for(char& c:ext)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        fmt=ext==".dds"?bgfx::TextureFormat::BGRA8:bgfx::TextureFormat::RGBA8;
-      }
-      if (fmt != bgfx::TextureFormat::Unknown) {
-        const bgfx::Memory* mem =
-            bgfx::copy(img.data.data(), img.mip0_size);
-        th = bgfx::createTexture2D(
-            static_cast<uint16_t>(img.width),
-            static_cast<uint16_t>(img.height), false, 1, fmt,
-            BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP, mem);
-      }
-    }
-    if (!bgfx::isValid(th)) {
-      std::printf("[bgfx] OSD icon miss %s (%s)\n", path.c_str(),
-                  img.error.c_str());
-      th = white_tex_;
-    } else {
-      std::printf("[bgfx] OSD icon %ux%u %s\n", img.width, img.height,
-                  path.c_str());
-    }
-    osd_tex_[path] = th;
-    return th;
-  }
-
-  void draw_osd_quad(const OsdWidget& w, float cr = 1.f, float cg = 1.f,
-                     float cb = 1.f, float ca = 1.f) {
-    MeshVertex v[4];
-    const float x0 = w.x - w.half_w, x1 = w.x + w.half_w;
-    const float y0 = w.y - w.half_h, y1 = w.y + w.half_h;
-    // FE_upper_stripe: chrome at V=1 (bottom → under icons). alkatreszcsik:
-    // chrome at V=0 (top of lower bar). Stock UV, no V-flip.
-    const float v0 = 0.f;
-    const float v1 = 1.f;
-    auto setv = [](MeshVertex& o, float x, float y, float u, float vv) {
-      o.x = x;
-      o.y = y;
-      o.z = 0.f;
-      o.nx = 0;
-      o.ny = 0;
-      o.nz = 1;
-      o.u = u;
-      o.v = vv;
-    };
-    setv(v[0], x0, y0, 0, v0);
-    setv(v[1], x1, y0, 1, v0);
-    setv(v[2], x1, y1, 1, v1);
-    setv(v[3], x0, y1, 0, v1);
-    const uint16_t idx[6] = {0, 1, 2, 0, 2, 3};
-    if (bgfx::getAvailTransientVertexBuffer(4, layout_) < 4 ||
-        bgfx::getAvailTransientIndexBuffer(6) < 6)
-      return;
-    bgfx::TransientVertexBuffer tvb;
-    bgfx::TransientIndexBuffer tib;
-    bgfx::allocTransientVertexBuffer(&tvb, 4, layout_);
-    bgfx::allocTransientIndexBuffer(&tib, 6);
-    std::memcpy(tvb.data, v, sizeof(v));
-    std::memcpy(tib.data, idx, sizeof(idx));
-    float mtx[16];
-    bx::mtxIdentity(mtx);
-    bgfx::setTransform(mtx);
-    bgfx::setVertexBuffer(0, &tvb);
-    bgfx::setIndexBuffer(&tib);
-    bgfx::setTexture(0, s_tex_, tex_for_osd_icon(w.icon_path));
-    bind_baked_light(nullptr, nullptr);
-    // Icons: cutout low-alpha (kills green JPEG plate).
-    // OpeningPic.ptx is a JPEG with no alpha. Blending with tex.a hides it
-    // when the channel is 0. Other plates (GPS frame over FMV) keep tex.a.
-    // Button icons cut out the JPEG plate. The modal darken and dialog
-    // plates keep tex.a so the scene stays visible through them.
-    bool splash_plate = false;
-    if (w.background && !w.icon_path.empty()) {
-      std::string low = w.icon_path;
-      for (char& c : low)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-      splash_plate = low.find("opening") != std::string::npos ||
-                     low.find("loading") != std::string::npos;
-    }
-    // PTX RGB is premultiplied. Discarding a<0.5 chewed the icon edges.
-    // tex.a keeps the antialiasing. Splash/loading have no usable alpha.
-    const float u[4] = {0.f, 1.f, splash_plate ? 0.f : 1.f, 0.f};
-    bgfx::setUniform(u_alpha_test_, u);
-    const float tint[4] = {cr, cg, cb, ca};
-    bgfx::setUniform(u_color_, tint);
-    // PTX RGB is already multiplied by alpha. SRC_ALPHA would darken the
-    // menu plate a second time (rgb * a * a). Premultiplied blend keeps
-    // the gold frame and lets prime.avi through the transparent center.
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                   BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE,
-                                         BGFX_STATE_BLEND_INV_SRC_ALPHA) |
-                   BGFX_STATE_MSAA);
-    bgfx::submit(osd_view_, program_);
-  }
-
-  bgfx::TextureHandle tex_for_font(void* font_key) {
-    if (!font_key) return white_tex_;
-    auto it = font_tex_.find(font_key);
-    if (it != font_tex_.end()) return it->second;
-    const SlrrFont* font = slrr_font_get(font_key);
-    if (!font || font->rgba.empty() || font->atlas_w <= 0 || font->atlas_h <= 0)
-      return white_tex_;
-    const bgfx::Memory* mem = bgfx::copy(
-        font->rgba.data(),
-        static_cast<uint32_t>(font->rgba.size()));
-    bgfx::TextureHandle th = bgfx::createTexture2D(
-        static_cast<uint16_t>(font->atlas_w),
-        static_cast<uint16_t>(font->atlas_h), false, 1,
-        bgfx::TextureFormat::RGBA8,
-        BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
-            BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT |
-            BGFX_SAMPLER_MIP_POINT,
-        mem);
-    if (!bgfx::isValid(th)) return white_tex_;
-    font_tex_[font_key] = th;
-    return th;
-  }
-
-  void draw_osd_texts(int32_t only_layer, bool filter_layer, bool behind_ui) {
-    const auto& texts = slrr_osd_texts();
-    if (texts.empty() || width_ <= 0 || height_ <= 0) return;
-    const float sw = static_cast<float>(width_);
-    const float sh = static_cast<float>(height_);
-
-    // Text-menu hover: stock HL_LABELCOLOR → COLOR_SELECTED (full white).
-    const OsdWidget* hover = osd_hover_widget();
-
-    for (const SlrrOsdText& t : texts) {
-      if (!t.visible || !t.font_key || t.text.empty()) continue;
-      if (t.behind_ui != behind_ui) continue;
-      if (filter_layer && t.layer != only_layer) continue;
-      const SlrrFont* font = slrr_font_get(t.font_key);
-      if (!font || !font->ready) continue;
-      bgfx::TextureHandle tex = tex_for_font(t.font_key);
-      if (!bgfx::isValid(tex)) continue;
-
-      float width_px = slrr_font_measure_px(t.font_key, t.text.c_str());
-      const float width_osd = 2.f * width_px / sw;
-      float pen_x = t.x;
-      if (t.align == 1) pen_x -= width_osd * 0.5f;  // CENTER
-      else if (t.align == 0) pen_x -= width_osd;     // RIGHT
-      // Host OSD: y+ down (top = -1). Glyph extends downward.
-      const float top_y = t.y;
-
-      uint32_t argb = t.color;
-      const bool glow = hover && hover->label_src == t.text_key;
-      // changeSelection2(-1) focuses the first row (NEW CAREER) in yellow
-      // even when the pointer is elsewhere. That color is the hover state.
-      if (argb == 0xFFFFCB00u && !glow) argb = 0xFFC0C0C0u;
-      if (glow) argb = 0xFFFFFFFFu;
-      const float cr = ((argb >> 16) & 0xff) / 255.f;
-      const float cg = ((argb >> 8) & 0xff) / 255.f;
-      const float cb = (argb & 0xff) / 255.f;
-      const float ca = ((argb >> 24) & 0xff) / 255.f;
-      const float col[4] = {cr, cg, cb, ca};
-      bgfx::setUniform(u_color_, col);
-      const float u_at[4] = {0.f, 1.f, 1.f, 0.f};
-      bgfx::setUniform(u_alpha_test_, u_at);
-
-      const float to_x = 2.f / sw;
-      const float to_y = 2.f / sh;
-      for (unsigned char ch : t.text) {
-        const size_t gi = static_cast<size_t>(ch);
-        const bool has = gi < font->glyphs.size();
-        const SlrrFontGlyph* g = has ? &font->glyphs[gi] : nullptr;
-        const float adv_px =
-            (g && g->adv_px > 0.f) ? g->adv_px
-                                   : static_cast<float>(font->px_height) * 0.35f;
-        const bool draw =
-            g && (g->u1 > g->u0 + 1e-6f) && (g->v1 > g->v0 + 1e-6f);
-        const float adv_osd = adv_px * to_x;
-        if (draw) {
-          // Mesh order: TL, TR, BL, BR. Quad winding matches the old UV box.
-          const int corner[4] = {0, 1, 3, 2};
-          MeshVertex v[4];
-          auto setv = [](MeshVertex& o, float x, float y, float uu, float vv) {
-            o.x = x;
-            o.y = y;
-            o.z = 0.f;
-            o.nx = 0;
-            o.ny = 0;
-            o.nz = 1;
-            o.u = uu;
-            o.v = vv;
-          };
-          for (int i = 0; i < 4; ++i) {
-            const int c = corner[i];
-            setv(v[i], pen_x + g->px[c] * to_x, top_y + g->py[c] * to_y,
-                 g->tu[c], g->tv[c]);
-          }
-          const uint16_t idx[6] = {0, 1, 2, 0, 2, 3};
-          if (bgfx::getAvailTransientVertexBuffer(4, layout_) < 4 ||
-              bgfx::getAvailTransientIndexBuffer(6) < 6)
-            break;
-          bgfx::TransientVertexBuffer tvb;
-          bgfx::TransientIndexBuffer tib;
-          bgfx::allocTransientVertexBuffer(&tvb, 4, layout_);
-          bgfx::allocTransientIndexBuffer(&tib, 6);
-          std::memcpy(tvb.data, v, sizeof(v));
-          std::memcpy(tib.data, idx, sizeof(idx));
-          float mtx[16];
-          bx::mtxIdentity(mtx);
-          bgfx::setTransform(mtx);
-          bgfx::setVertexBuffer(0, &tvb);
-          bgfx::setIndexBuffer(&tib);
-          bgfx::setTexture(0, s_tex_, tex);
-          bind_baked_light(nullptr, nullptr);
-          bgfx::setUniform(u_color_, col);
-          bgfx::setUniform(u_alpha_test_, u_at);
-          bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                         BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
-          bgfx::submit(osd_view_, program_);
-        }
-        pen_x += adv_osd;
-      }
-    }
-    const float white_c[4] = {1.f, 1.f, 1.f, 1.f};
-    bgfx::setUniform(u_color_, white_c);
-  }
-
-  // One OSD line. y is the glyph top (y+ down). align 1 centers on x.
-  void draw_osd_line(void* font_key, const std::string& text, float x, float y,
-                     int align, uint32_t argb) {
-    if (!font_key || text.empty() || width_ <= 0 || height_ <= 0) return;
-    const SlrrFont* font = slrr_font_get(font_key);
-    if (!font || !font->ready) return;
-    bgfx::TextureHandle tex = tex_for_font(font_key);
-    if (!bgfx::isValid(tex)) return;
-    const float sw = static_cast<float>(width_);
-    const float sh = static_cast<float>(height_);
-    float pen_x = x;
-    const float width_osd = 2.f * slrr_font_measure_px(font_key, text.c_str()) / sw;
-    if (align == 1) pen_x -= width_osd * 0.5f;
-    else if (align == 0) pen_x -= width_osd;
-    const float cr = ((argb >> 16) & 0xff) / 255.f;
-    const float cg = ((argb >> 8) & 0xff) / 255.f;
-    const float cb = (argb & 0xff) / 255.f;
-    const float ca = ((argb >> 24) & 0xff) / 255.f;
-    const float col[4] = {cr, cg, cb, ca};
-    const float u_at[4] = {0.f, 1.f, 1.f, 0.f};
-    const float to_x = 2.f / sw;
-    const float to_y = 2.f / sh;
-    for (unsigned char ch : text) {
-      const size_t gi = static_cast<size_t>(ch);
-      const SlrrFontGlyph* g =
-          gi < font->glyphs.size() ? &font->glyphs[gi] : nullptr;
-      const float adv_px = (g && g->adv_px > 0.f)
-                               ? g->adv_px
-                               : static_cast<float>(font->px_height) * 0.35f;
-      const bool draw =
-          g && (g->u1 > g->u0 + 1e-6f) && (g->v1 > g->v0 + 1e-6f);
-      if (draw) {
-        const int corner[4] = {0, 1, 3, 2};
-        MeshVertex v[4];
-        auto setv = [](MeshVertex& o, float px, float py, float uu, float vv) {
-          o.x = px;
-          o.y = py;
-          o.z = 0.f;
-          o.nx = 0;
-          o.ny = 0;
-          o.nz = 1;
-          o.u = uu;
-          o.v = vv;
-        };
-        for (int i = 0; i < 4; ++i) {
-          const int c = corner[i];
-          setv(v[i], pen_x + g->px[c] * to_x, y + g->py[c] * to_y, g->tu[c],
-               g->tv[c]);
-        }
-        const uint16_t idx[6] = {0, 1, 2, 0, 2, 3};
-        if (bgfx::getAvailTransientVertexBuffer(4, layout_) < 4 ||
-            bgfx::getAvailTransientIndexBuffer(6) < 6)
-          break;
-        bgfx::TransientVertexBuffer tvb;
-        bgfx::TransientIndexBuffer tib;
-        bgfx::allocTransientVertexBuffer(&tvb, 4, layout_);
-        bgfx::allocTransientIndexBuffer(&tib, 6);
-        std::memcpy(tvb.data, v, sizeof(v));
-        std::memcpy(tib.data, idx, sizeof(idx));
-        float mtx[16];
-        bx::mtxIdentity(mtx);
-        bgfx::setTransform(mtx);
-        bgfx::setVertexBuffer(0, &tvb);
-        bgfx::setIndexBuffer(&tib);
-        bgfx::setTexture(0, s_tex_, tex);
-        bind_baked_light(nullptr, nullptr);
-        bgfx::setUniform(u_color_, col);
-        bgfx::setUniform(u_alpha_test_, u_at);
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                       BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
-        bgfx::submit(osd_view_, program_);
-      }
-      pen_x += adv_px * to_x;
-    }
-  }
-
-  // Osd.animate builds this after idleFor(1). The host never runs that
-  // loop except for the credits scroller, so the plate is drawn here.
-  // Row titles live in tip too; they are already painted beside the slider.
-  void draw_tooltip() {
-    if (width_ <= 0 || height_ <= 0) return;
-    // The city button under the cursor still owns its tip while the dealer
-    // picture is up. That plate is the black square on the loading screen.
-    if (osd_loading_dialog() || !osd_loading_overlay().empty()) {
-      tip_hover_ = -2;
-      return;
-    }
-    if (host_input().rmb_down) {
-      tip_hover_ = -2;
-      return;
-    }
-    const int32_t idx = osd_hover_index();
-    const OsdWidget* h = osd_hover_widget();
-    if (!h) {
-      const OsdWidget* raw = osd_widget_at(idx);
-      if (raw && raw->disabled && !raw->hidden) h = raw;
-    }
-    const bool showable = h && !h->row_label && !h->string_input &&
-                          !h->background && !h->tip.empty();
-    const float now = gameref_now();
-    if (!showable || idx != tip_hover_) {
-      tip_hover_ = showable ? idx : -2;
-      tip_since_ = now;
-      return;
-    }
-    if (now - tip_since_ < 1.f) return;
-
-    void* font_key = slrr_font_ui_small();
-    if (!font_key) return;
-    if (!slrr_font_ready(font_key) && !tip_font_tried_) {
-      tip_font_tried_ = true;
-      slrr_font_load(font_key, "slii11");
-    }
-    const SlrrFont* font = slrr_font_get(font_key);
-    if (!font || !font->ready || font->px_height <= 0) return;
-
-    const float sw = static_cast<float>(width_);
-    const float sh = static_cast<float>(height_);
-    const float text_w =
-        2.f * slrr_font_measure_px(font_key, h->tip.c_str()) / sw;
-    const float text_h = 2.f * static_cast<float>(font->px_height) / sh;
-    // Osd.animate: border = line height * 0.6, then grow the plate.
-    const float border = text_h * 0.6f;
-    const float box_w = text_w + border;
-    const float box_h = text_h + border;
-    if (box_w < 0.02f || box_h < 0.02f) return;
-
-    float cx = 0.f, cy = 0.f;
-    osd_pixel_to_text(mouse_x_, mouse_y_, width_, height_, &cx, &cy);
-    float bx = cx + box_w * 0.5f + 0.05f;
-    float by = cy + box_h * 0.5f + 0.1f;
-    const float hw = box_w * 0.5f;
-    const float hh = box_h * 0.5f;
-    if (bx + hw > 1.f) bx = 1.f - hw;
-    if (by + hh > 1.f) by = 1.f - hh;
-    if (bx - hw < -1.f) bx = -1.f + hw;
-    if (by - hh < -1.f) by = -1.f + hh;
-
-    OsdWidget plate;
-    plate.x = bx;
-    plate.y = by;
-    plate.half_w = hw;
-    plate.half_h = hh;
-    draw_osd_quad(plate, 0.f, 0.f, 0.f, 1.f);
-    const float px = 1.f / sw;
-    const float py = 1.f / sh;
-    OsdWidget edge;
-    edge.x = bx;
-    edge.y = by - hh;
-    edge.half_w = hw;
-    edge.half_h = py;
-    draw_osd_quad(edge, 1.f, 1.f, 1.f, 1.f);
-    edge.y = by + hh;
-    draw_osd_quad(edge, 1.f, 1.f, 1.f, 1.f);
-    edge.x = bx - hw;
-    edge.y = by;
-    edge.half_w = px;
-    edge.half_h = hh;
-    draw_osd_quad(edge, 1.f, 1.f, 1.f, 1.f);
-    edge.x = bx + hw;
-    draw_osd_quad(edge, 1.f, 1.f, 1.f, 1.f);
-
-    draw_osd_line(font_key, h->tip, bx, by - text_h * 0.5f, 1, 0xFFFFFFFFu);
-    const float white_c[4] = {1.f, 1.f, 1.f, 1.f};
-    bgfx::setUniform(u_color_, white_c);
-  }
-
-  void draw_fmv(uint16_t view_id) {
-    if (!video_fmv_is_playing() || !video_fmv_is_non_exclusive()) return;
-    if (!video_fmv_frame_ready() || !bgfx::isValid(program_)) return;
-    const uint8_t* bgra = video_fmv_bgra();
-    const int32_t fw = video_fmv_width();
-    const int32_t fh = video_fmv_height();
-    if (!bgra || fw <= 0 || fh <= 0) return;
-
-    if (!bgfx::isValid(fmv_tex_) || fmv_tex_w_ != fw || fmv_tex_h_ != fh) {
-      if (bgfx::isValid(fmv_tex_)) bgfx::destroy(fmv_tex_);
-      fmv_tex_ = bgfx::createTexture2D(
-          static_cast<uint16_t>(fw), static_cast<uint16_t>(fh), false, 1,
-          bgfx::TextureFormat::BGRA8,
-          BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP,
-          nullptr);
-      fmv_tex_w_ = fw;
-      fmv_tex_h_ = fh;
-    }
-    const bgfx::Memory* mem =
-        bgfx::copy(bgra, static_cast<uint32_t>(fw * fh * 4));
-    bgfx::updateTexture2D(fmv_tex_, 0, 0, 0, 0, static_cast<uint16_t>(fw),
-                          static_cast<uint16_t>(fh), mem);
-
-    // The video-options columns are placed on the full viewport. A 4:3
-    // island left those labels on the empty side bars.
-    const float x0 = -1.f, x1 = 1.f, y0 = -1.f, y1 = 1.f;
-
-    float ortho[16];
-    bx::mtxOrtho(ortho, -1.f, 1.f, 1.f, -1.f, 0.f, 100.f, 0.f,
-                 bgfx::getCaps()->homogeneousDepth);
-    bgfx::setViewRect(view_id, 0, 0, static_cast<uint16_t>(width_),
-                      static_cast<uint16_t>(height_));
-    bgfx::setViewTransform(view_id, nullptr, ortho);
-    bgfx::touch(view_id);
-
-    MeshVertex v[4];
-    auto setv = [](MeshVertex& o, float x, float y, float uu, float vv) {
-      o.x = x;
-      o.y = y;
-      o.z = 0.f;
-      o.nx = 0;
-      o.ny = 0;
-      o.nz = 1;
-      o.u = uu;
-      o.v = vv;
-    };
-    setv(v[0], x0, y0, 0.f, 0.f);
-    setv(v[1], x1, y0, 1.f, 0.f);
-    setv(v[2], x1, y1, 1.f, 1.f);
-    setv(v[3], x0, y1, 0.f, 1.f);
-    const uint16_t idx[6] = {0, 1, 2, 0, 2, 3};
-    if (bgfx::getAvailTransientVertexBuffer(4, layout_) < 4 ||
-        bgfx::getAvailTransientIndexBuffer(6) < 6)
-      return;
-    bgfx::TransientVertexBuffer tvb;
-    bgfx::TransientIndexBuffer tib;
-    bgfx::allocTransientVertexBuffer(&tvb, 4, layout_);
-    bgfx::allocTransientIndexBuffer(&tib, 6);
-    std::memcpy(tvb.data, v, sizeof(v));
-    std::memcpy(tib.data, idx, sizeof(idx));
-    float mtx[16];
-    bx::mtxIdentity(mtx);
-    bgfx::setTransform(mtx);
-    bgfx::setVertexBuffer(0, &tvb);
-    bgfx::setIndexBuffer(&tib);
-    bgfx::setTexture(0, s_tex_, fmv_tex_);
-    bind_baked_light(nullptr, nullptr);
-    const float white[4] = {1.f, 1.f, 1.f, 1.f};
-    bgfx::setUniform(u_color_, white);
-    // Unlit. The mesh light (~0.44 on a flat quad) was the black filter
-    // on intros and on prime.avi.
-    const float u_at[4] = {0.f, 1.f, 0.f, 0.f};
-    bgfx::setUniform(u_alpha_test_, u_at);
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                   BGFX_STATE_MSAA);
-    bgfx::submit(view_id, program_);
-  }
-
-  // Draw a string in OSD text-space (same path as SlrrOsdText glyphs).
-  void draw_osd_string(float x, float y, int32_t align, uint32_t argb,
-                       const std::string& text, void* font_key) {
-    if (text.empty() || !font_key || width_ <= 0 || height_ <= 0) return;
-    const SlrrFont* font = slrr_font_get(font_key);
-    if (!font || !font->ready) return;
-    bgfx::TextureHandle tex = tex_for_font(font_key);
-    if (!bgfx::isValid(tex)) return;
-    const float sw = static_cast<float>(width_);
-    const float sh = static_cast<float>(height_);
-    float width_px = slrr_font_measure_px(font_key, text.c_str());
-    const float width_osd = 2.f * width_px / sw;
-    float pen_x = x;
-    if (align == 1) pen_x -= width_osd * 0.5f;
-    else if (align == 0) pen_x -= width_osd;
-    const float top_y = y;
-    const float cr = ((argb >> 16) & 0xff) / 255.f;
-    const float cg = ((argb >> 8) & 0xff) / 255.f;
-    const float cb = (argb & 0xff) / 255.f;
-    const float ca = ((argb >> 24) & 0xff) / 255.f;
-    const float col[4] = {cr, cg, cb, ca};
-    const float u_at[4] = {0.f, 1.f, 1.f, 0.f};
-    bgfx::setUniform(u_color_, col);
-    bgfx::setUniform(u_alpha_test_, u_at);
-    const float to_x = 2.f / sw;
-    const float to_y = 2.f / sh;
-    for (unsigned char ch : text) {
-      const size_t gi = static_cast<size_t>(ch);
-      const bool has = gi < font->glyphs.size();
-      const SlrrFontGlyph* g = has ? &font->glyphs[gi] : nullptr;
-      const float adv_px =
-          (g && g->adv_px > 0.f) ? g->adv_px
-                                 : static_cast<float>(font->px_height) * 0.35f;
-      const bool draw =
-          g && (g->u1 > g->u0 + 1e-6f) && (g->v1 > g->v0 + 1e-6f);
-      const float adv_osd = adv_px * to_x;
-      if (draw) {
-        const int corner[4] = {0, 1, 3, 2};
-        MeshVertex v[4];
-        auto setv = [](MeshVertex& o, float px, float py, float uu, float vv) {
-          o.x = px;
-          o.y = py;
-          o.z = 0.f;
-          o.nx = 0;
-          o.ny = 0;
-          o.nz = 1;
-          o.u = uu;
-          o.v = vv;
-        };
-        for (int i = 0; i < 4; ++i) {
-          const int c = corner[i];
-          setv(v[i], pen_x + g->px[c] * to_x, top_y + g->py[c] * to_y, g->tu[c],
-               g->tv[c]);
-        }
-        const uint16_t idx[6] = {0, 1, 2, 0, 2, 3};
-        if (bgfx::getAvailTransientVertexBuffer(4, layout_) < 4 ||
-            bgfx::getAvailTransientIndexBuffer(6) < 6)
-          break;
-        bgfx::TransientVertexBuffer tvb;
-        bgfx::TransientIndexBuffer tib;
-        bgfx::allocTransientVertexBuffer(&tvb, 4, layout_);
-        bgfx::allocTransientIndexBuffer(&tib, 6);
-        std::memcpy(tvb.data, v, sizeof(v));
-        std::memcpy(tib.data, idx, sizeof(idx));
-        float mtx[16];
-        bx::mtxIdentity(mtx);
-        bgfx::setTransform(mtx);
-        bgfx::setVertexBuffer(0, &tvb);
-        bgfx::setIndexBuffer(&tib);
-        bgfx::setTexture(0, s_tex_, tex);
-        bind_baked_light(nullptr, nullptr);
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                       BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
-        bgfx::submit(osd_view_, program_);
-      }
-      pen_x += adv_osd;
-    }
-    const float white_c[4] = {1.f, 1.f, 1.f, 1.f};
-    bgfx::setUniform(u_color_, white_c);
-  }
-
-  void draw_osd() {
-    osd_sync_button_pictures();
-    const auto& widgets = osd_widgets();
-    const auto& texts = slrr_osd_texts();
-    const bool loading = !osd_loading_overlay().empty();
-    if ((widgets.empty() && texts.empty() && !loading) ||
-        !bgfx::isValid(program_))
-      return;
-    float ortho[16];
-    // OSD text space: x right, y down (top = -1). Plates stay under the car
-    // preview (views 8+). Buttons and text sit on kOsdView, above it.
-    bx::mtxOrtho(ortho, -1.f, 1.f, 1.f, -1.f, 0.f, 100.f, 0.f,
-                 bgfx::getCaps()->homogeneousDepth);
-    auto setup_osd = [&](uint16_t view) {
-      bgfx::setViewRect(view, 0, 0, static_cast<uint16_t>(width_),
-                        static_cast<uint16_t>(height_));
-      bgfx::setViewTransform(view, nullptr, ortho);
-      bgfx::setViewMode(view, bgfx::ViewMode::Sequential);
-      bgfx::touch(view);
-    };
-    setup_osd(kOsdUnder);
-    setup_osd(kOsdView);
-    osd_view_ = kOsdUnder;
-
-    // Menu plate: dark translucent fullscreen when GENERALBG path missing.
-    bool have_bg_tex = false;
-    for (const OsdWidget& w : widgets) {
-      if (!w.hidden && w.background && !w.icon_path.empty()) {
-        have_bg_tex = true;
-        break;
-      }
-    }
-    // Fallback veil only when there is no plate and no movie. Over prime.avi
-    // it reads as a black opacity layer on top of the FMV.
-    if (!have_bg_tex && osd_overlay_ && !garage_ && !video_fmv_is_playing()) {
-      OsdWidget plate;
-      plate.x = 0.f;
-      plate.y = 0.f;
-      plate.half_w = 1.f;
-      plate.half_h = 1.f;
-      plate.background = true;
-      // White tex + darken via color uniform — draw after setting color.
-      const float dark[4] = {0.05f, 0.05f, 0.07f, 0.82f};
-      bgfx::setUniform(u_color_, dark);
-      const float u_at[4] = {0.f, 1.f, 1.f, 0.f};
-      bgfx::setUniform(u_alpha_test_, u_at);
-      draw_osd_quad(plate);
-      const float white_c[4] = {1.f, 1.f, 1.f, 1.f};
-      bgfx::setUniform(u_color_, white_c);
-    }
-
-    // Viewport priority: menu, then the darken shield, then the dialog plate.
-    // Within a layer, plates sit under icons and those sit under that layer's
-    // text, so the gold frame is not covered by the black veil.
-    std::vector<int32_t> layers;
-    auto note_layer = [&](int32_t layer) {
-      for (int32_t have : layers)
-        if (have == layer) return;
-      layers.push_back(layer);
-    };
-    for (const OsdWidget& w : widgets) {
-      if (!w.hidden) note_layer(w.layer);
-    }
-    for (const SlrrOsdText& t : texts) {
-      if (t.visible && !t.text.empty()) note_layer(t.layer);
-    }
-    std::sort(layers.begin(), layers.end());
-
-    // Openingpic (frontend:0x0005) is the splash still, drawn opaque on the
-    // OSD view, which sits above the movie. Once the menu plate or a real
-    // prime.avi frame is up, that still must not fill the frame hole.
-    auto is_opening = [](const std::string& path) {
-      std::string low = path;
-      for (char& c : low)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-      return low.find("opening") != std::string::npos;
-    };
-    bool other_plate = false;
-    for (const OsdWidget& w : widgets) {
-      if (w.hidden || !w.background || w.icon_path.empty()) continue;
-      if (!is_opening(w.icon_path)) other_plate = true;
-    }
-    const bool movie = video_fmv_is_playing() && video_fmv_frame_ready();
-    // Once the menu (or the movie) has covered the splash, do not bring
-    // Openingpic back when a section hides its plate. Back from the track
-    // selector was showing that still instead of the loading picture.
-    if (other_plate || movie) opening_retired_ = true;
-
-    // The parts bar is an opaque plate. On a later OSD layer it is submitted
-    // above the slot cameras and the cans disappear. A plate that only covers
-    // a preview slot stays under that camera. A fullscreen plate still covers
-    // the preview, so a dialog does not open a hole onto the car.
-    auto plate_behind_preview = [&](const OsdWidget& w) {
-      if (w.half_w > 0.9f && w.half_h > 0.9f) return false;
-      const float left = (w.x - w.half_w + 1.f) * 0.5f;
-      const float top = (w.y - w.half_h + 1.f) * 0.5f;
-      const float right = (w.x + w.half_w + 1.f) * 0.5f;
-      const float bot = (w.y + w.half_h + 1.f) * 0.5f;
-      for (const auto& p : previews_) {
-        const float x0 = std::max(left, p.viewport.vp_x);
-        const float y0 = std::max(top, p.viewport.vp_y);
-        const float x1 = std::min(right, p.viewport.vp_x + p.viewport.vp_w);
-        const float y1 = std::min(bot, p.viewport.vp_y + p.viewport.vp_h);
-        if (x1 - x0 > 0.01f && y1 - y0 > 0.01f) return true;
-      }
-      return false;
-    };
-
-    for (int32_t layer : layers) {
-      // Credits first, then plates and icons, then labels. The frame and
-      // button textures cover the scroller; the header and BACK stay readable.
-      // Plates under the car. Labels and buttons above it, so the color chip
-      // is not covered and the chassis stays visible.
-      osd_view_ = kOsdView;
-      draw_osd_texts(layer, true, true);
-      // The page background is the lowest layer. A dialog plate is higher
-      // and has to cover the car, so it stays with the buttons. The parts
-      // strip is the exception: the slot cameras draw into it.
-      for (const OsdWidget& w : widgets) {
-        if (w.layer != layer || w.hidden || w.dead || w.disabled || !w.background)
-          continue;
-        if (w.icon_path.empty()) continue;  // RRT_NONE — no mesh (Osd.java)
-        if ((opening_retired_ || movie || other_plate) &&
-            is_opening(w.icon_path))
-          continue;
-        // A modal dialog (BUY PART) overlaps the catalog previews. Sending
-        // that plate to view 2 put it under the parts and under their names.
-        osd_view_ = (!osd_owner_modal(w.owner) &&
-                     (layer == layers.front() || plate_behind_preview(w)))
-                        ? kOsdUnder
-                        : kOsdView;
-        draw_osd_quad(w);
-      }
-      osd_view_ = kOsdView;
-      if (const OsdWidget* hw = osd_hover_widget()) {
-        // Text buttons hover the label, same as the main menu. The hl
-        // texture stays on icon buttons (garage) and slider tracks.
-        const bool text_button =
-            !hw->string_input && !hw->row_label && hw->label_src;
-        if (hw->layer == layer && !hw->string_input && !text_button &&
-            !hw->icon_path.empty()) {
-          OsdWidget hl = *hw;
-          // Square icons: stock ×1.1. Slider bars are wide and opaque, so the
-          // same plate stays hidden unless the short axis grows past the track.
-          if (hw->row_label && hw->half_w > hw->half_h * 2.5f) {
-            hl.half_w *= 1.02f;
-            hl.half_h *= 2.4f;
-          } else {
-            hl.half_w *= kOsdHighlightScale;
-            hl.half_h *= kOsdHighlightScale;
-          }
-          hl.icon_path = osd_highlight_path();
-          if (!hl.icon_path.empty()) draw_osd_quad(hl);
-        }
-      }
-      auto draw_icon = [&](const OsdWidget& w, int pass) {
-        if (w.layer != layer || w.hidden || w.dead) return;
-        const uint32_t local = w.icon_id & 0xFFFFu;
-        // frontend:0x00AF is Empty.ptx. A disabled pager keeps that texture
-        // and shows frontend:0x013C only while Gadget.focus is on it.
-        std::string low = w.icon_path;
-        for (char& c : low)
-          c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        const bool blank = local == 0x00AFu ||
-                           low.find("empty.ptx") != std::string::npos;
-        // Chassis leaves this button disabled. Only a complete vehicle
-        // offers the color chip, and it starts white.
-        const bool color_chip =
-            w.cmd == 116 && blank && !w.hit_only && !w.disabled;
-        if (w.background || w.hit_only) return;
-        if (w.disabled && !color_chip) return;
-        if (blank && !color_chip) return;
-        if ((local == 0x12bu || local == 0x13cu) && !osd_focus_plate_visible(w)) return;
-        const bool knob = local == 0x0091u;
-        // Gadget.focus builds this plate 1.1× and slightly behind the icon.
-        // Creation order painted it on top, so hover hid the button.
-        const bool glow = local == 0x012Bu || local == 0x013Cu;
-        const int which = knob ? 2 : (glow ? 0 : 1);
-        if (which != pass) return;
-        if(glow) {
-          OsdWidget plate=w;
-          const auto& path=osd_highlight_disabled(w)?osd_disabled_highlight_path():osd_highlight_path();
-          if(!path.empty())plate.icon_path=path;
-          if(!plate.icon_path.empty())draw_osd_quad(plate);
-        } else if (color_chip) {
-          OsdWidget chip = w;
-          chip.icon_path.clear();
-          draw_osd_quad(chip);
-        } else if (!w.icon_path.empty()) draw_osd_quad(w);
-      };
-      for (const OsdWidget& w : widgets) draw_icon(w, 0);
-      for (const OsdWidget& w : widgets) draw_icon(w, 1);
-      for (const OsdWidget& w : widgets) draw_icon(w, 2);
-      // Current button pictures are foreground icons, drawn once after the
-      // highlight pass. Never repaint a cached hit-box glyph on hover.
-      draw_osd_texts(layer, true, false);
-    }
-    osd_view_ = kOsdView;
-    draw_tooltip();
-    // After every layer, so a hidden menu group cannot sit on Loading.dds.
-    if (loading) {
-      OsdWidget plate;
-      plate.half_w = 1.f;
-      plate.half_h = 1.f;
-      plate.background = true;
-      plate.icon_path = osd_loading_overlay();
-      osd_view_ = kOsdView;
-      draw_osd_quad(plate);
-    }
-  }
-
-  HWND hwnd_ = nullptr;
-  bool shown_ = false;
-  int mouse_x_ = 0;
-  int mouse_y_ = 0;
-  int32_t tip_hover_ = -2;
-  float tip_since_ = 0.f;
-  bool tip_font_tried_ = false;
-  int lmb_x_ = 0;
-  int lmb_y_ = 0;
-  bool have_mouse_ = false;
-  bool lmb_down_ = false;
 #endif
-
-  bool ready_ = false;
-  bool quit_ = false;
-  bool garage_ = false;
-  bool osd_overlay_ = false;
-  // Openingpic stays up after the boot movie. Once the menu or its movie
-  // has covered it, a later empty frame must not bring that still back.
-  bool opening_retired_ = false;
-  bool scx_ok_ = false;
-  bool mesh_ok_ = false;
-  int32_t osd_buttons_ = 0;
-  uint16_t osd_view_ = kOsdUnder;
-  int32_t width_ = 0;
-  int32_t height_ = 0;
-  int32_t frames_ = 0;
-  float mesh_min_[3] = {0, 0, 0};
-  float mesh_max_[3] = {0, 0, 0};
-  std::vector<ScenePart> parts_;
-  bgfx::VertexLayout layout_;
-  bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle white_tex_ = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle fmv_tex_ = BGFX_INVALID_HANDLE;
-  int32_t fmv_tex_w_ = 0;
-  int32_t fmv_tex_h_ = 0;
-  bgfx::UniformHandle s_tex_ = BGFX_INVALID_HANDLE;
-  bgfx::UniformHandle s_lightmap_ = BGFX_INVALID_HANDLE;
-  bgfx::UniformHandle u_lightmap_ = BGFX_INVALID_HANDLE;
-  bgfx::UniformHandle u_lightmap_uv_ = BGFX_INVALID_HANDLE;
-  std::unordered_map<std::string, bgfx::TextureHandle> osd_tex_;
-  std::unordered_map<void*, bgfx::TextureHandle> font_tex_;
-  bgfx::UniformHandle u_alpha_test_ = BGFX_INVALID_HANDLE;
-  bgfx::UniformHandle u_color_ = BGFX_INVALID_HANDLE;
-  bgfx::ProgramHandle vehicle_program_ = BGFX_INVALID_HANDLE;
-  bgfx::UniformHandle s_mix_=BGFX_INVALID_HANDLE,s_env_=BGFX_INVALID_HANDLE,s_bake_=BGFX_INVALID_HANDLE;
-  bgfx::UniformHandle u_layers_=BGFX_INVALID_HANDLE,u_channels_=BGFX_INVALID_HANDLE;
-  bgfx::UniformHandle u_base_uv_=BGFX_INVALID_HANDLE,u_mix_uv_=BGFX_INVALID_HANDLE,u_env_uv_=BGFX_INVALID_HANDLE,u_diffuse_=BGFX_INVALID_HANDLE,u_spec_=BGFX_INVALID_HANDLE,u_sun_diff_=BGFX_INVALID_HANDLE,u_sun_amb_=BGFX_INVALID_HANDLE,u_sun_spec_=BGFX_INVALID_HANDLE,u_sun_dir_=BGFX_INVALID_HANDLE;
-  bgfx::ProgramHandle shadow_program_ = BGFX_INVALID_HANDLE;
-  bgfx::ProgramHandle shadow_recv_ = BGFX_INVALID_HANDLE;
-  bgfx::UniformHandle u_shadow_mtx_ = BGFX_INVALID_HANDLE;
-  bgfx::UniformHandle u_shadow_ramp_ = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle shadow_tex_[4] = {
-      BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE,
-      BGFX_INVALID_HANDLE};
-  bgfx::FrameBufferHandle shadow_fb_[4] = {
-      BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE,
-      BGFX_INVALID_HANDLE};
-};
-
-}  // namespace
-
 std::unique_ptr<IRenderBackend> create_lib_bgfx_backend() {
   return std::make_unique<LibBgfxBackend>();
 }
