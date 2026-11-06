@@ -43,7 +43,7 @@ class LibBgfxBackend final : public IRenderBackend {
   // or view 5 when an FMV backdrop occupies 4. Previews start at 8. The
   // interface stays on kOsdView, above those rects.
   static constexpr int kShadowSlots = 4;
-  static constexpr uint16_t kShadowSize = 512;
+  static constexpr uint16_t kShadowSize = 1024;
   static constexpr uint16_t kWorldView = 4;
   static constexpr uint16_t kFmvLayer = 5;
   static constexpr uint16_t kOsdUnder = 6;

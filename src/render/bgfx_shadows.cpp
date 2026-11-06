@@ -608,7 +608,7 @@ namespace slrr {
         for (const Slot& slot : slots) {
           if (!slot.used || !bgfx::isValid(slot.tex)) continue;
           bgfx::setUniform(u_shadow_mtx_, slot.mtx);
-          const float ramp[4] = {0.f, slot.centre_y, 0.f, slot.ramp};
+          const float ramp[4] = {1.f / kShadowSize, slot.centre_y, 0.f, slot.ramp};
           bgfx::setUniform(u_shadow_ramp_, ramp);
           bgfx::setTransform(matrix);
           bgfx::setVertexBuffer(0, vb);
