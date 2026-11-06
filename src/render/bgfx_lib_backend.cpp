@@ -1106,6 +1106,14 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     return DefWindowProcA(hwnd, msg, wp, lp);
   }
 #endif
+bool LibBgfxBackend::request_screenshot(const std::string& path) {
+  if (!ready_ || path.empty()) return false;
+  // bgfx's built-in callback writes TGA and appends the extension itself.
+  std::string base = path;
+  if (base.size() >= 4 && base.substr(base.size()-4) == ".tga") base.resize(base.size()-4);
+  bgfx::requestScreenShot(BGFX_INVALID_HANDLE, base.c_str());
+  return true;
+}
 std::unique_ptr<IRenderBackend> create_lib_bgfx_backend() {
   return std::make_unique<LibBgfxBackend>();
 }

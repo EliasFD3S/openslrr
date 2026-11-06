@@ -27,6 +27,7 @@ class IRenderBackend {
 
   // GfxEngine.flush() — clear / draw queued work / present.
   virtual void flush() = 0;
+  virtual bool request_screenshot(const std::string&) { return false; }
 
   virtual int32_t width() const = 0;
   virtual int32_t height() const = 0;

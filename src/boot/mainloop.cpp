@@ -2,6 +2,7 @@
 #include "slrr/mainloop.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/video_fmv.hpp"
+#include "slrr/host_music.hpp"
 
 #include "slrr/gameref.hpp"
 #include "slrr/part_runtime.hpp"
@@ -349,6 +350,7 @@ void dispatch_mechanic_pointer(Jvm& jvm) {
 
 MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
                                    SectionMachine& sections, float dt) {
+  host_music_update();
   // The click that saved CopyCar already ran, inside pump, before this frame.
   part_release_live_hold();
   MainLoopFrameResult out;

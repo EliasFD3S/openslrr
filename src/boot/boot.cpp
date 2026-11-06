@@ -4,6 +4,7 @@
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/host_sfx.hpp"
+#include "slrr/host_music.hpp"
 #include "slrr/mainloop.hpp"
 #include "slrr/natives_boot.hpp"
 #include "slrr/object.hpp"
@@ -215,6 +216,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
   if (!jvm.bootstrap_classpath()) return 2;
 
   host_sfx_set_game_root(opt.game_root);
+  host_music_set_root(opt.game_root);
   host_cursor_set_search_roots(opt.game_root);
   slrr_font_set_game_root(opt.game_root);
   video_fmv_set_game_root(opt.game_root);
@@ -260,6 +262,12 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
       return 3;
     }
     osd_set_framebuffer(render.width(), render.height());
+    host_set_render_callbacks([&render]() {
+      if (!render.ready() || !bgfx_osd_draw_enabled(render)) return;
+      // Both stock natives present seven times. Loads are synchronous here;
+      // repeated frames also drain deferred bgfx resource destruction.
+      for (int i = 0; i < 7; ++i) render.flush();
+    }, [&render](const std::string& path) { return render.request_screenshot(path); });
     // Click → LoadingScreen.show presents this plate before the rest of the
     // handler (garage enter, track load). Skipped until the splash is up,
     // so Init's own show() cannot flash the clear color.
@@ -520,7 +528,9 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     }
     host_set_script_pump(nullptr);
     video_fmv_close();
+    host_music_stop();
     render.close();
+    host_set_render_callbacks({}, {});
   }
   std::printf("[boot] game exit=0 frames=%d section=%s\n", frames,
               sections.actual_name().c_str());

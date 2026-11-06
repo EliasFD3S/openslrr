@@ -5,6 +5,7 @@
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/host_sfx.hpp"
+#include "slrr/host_music.hpp"
 #include "slrr/osd_registry.hpp"
 #include "slrr/render_backend.hpp"
 #include "slrr/script_cfg.hpp"
@@ -226,9 +227,25 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
   // Init before GameLogic and the main loop exits with no section. The host
   // already presents a frame each pump.
   jvm.natives().register_method(
-      "java.render.GfxEngine", "forceRendering", "()V", native_noop);
+      "java.render.GfxEngine", "forceRendering", "()V",
+      [](Object*, const std::vector<Value>&) {
+        host_force_present(); return Value::make_void();
+      });
   jvm.natives().register_method("java.render.GfxEngine", "flush", "()V",
-                                native_noop);
+      [](Object*, const std::vector<Value>&) {
+        host_force_present(); return Value::make_void();
+      });
+  jvm.natives().register_method("java.render.GfxEngine", "printScreen", "(Ljava.lang.String;)V",
+      [&jvm](Object*, const std::vector<Value>& args) {
+        if (!args.empty() && args[0].tag == ValueTag::Obj && args[0].v.o) {
+          const auto path = under_game(jvm.game_root(), args[0].v.o->str);
+          std::error_code ec;
+          std::filesystem::create_directories(path.parent_path(), ec);
+          if (!ec && host_print_screen(path.string())) host_force_present();
+          else std::fprintf(stderr, "[gfx] screenshot unavailable: %s\n", path.string().c_str());
+        }
+        return Value::make_void();
+      });
   jvm.natives().register_method(
       "java.render.GfxEngine", "setGlobalEnvmap", "(Ljava.lang.Object;)V",
       [](Object*,const std::vector<Value>& args){
@@ -242,7 +259,26 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
         scene_instances_set_envmap(resource_id_of(ref));return Value::make_void();
       });
   jvm.natives().register_method(
-      "java.sound.Sound", "changeMusicSet", "(I)V", native_noop);
+      "java.sound.Sound", "changeMusicSet", "(I)V",
+      [](Object*, const std::vector<Value>& a) {
+        host_music_change_set(a.empty() || a[0].tag != ValueTag::Int ? -1 : a[0].v.i);
+        return Value::make_void();
+      });
+  for (int step : {-1, 1})
+    jvm.natives().register_method("java.sound.Sound", step > 0 ? "nextTrack" : "prevTrack", "()V",
+        [step](Object*, const std::vector<Value>&) { host_music_next(step); return Value::make_void(); });
+  jvm.natives().register_method("java.sound.Sound", "getMode", "()I",
+      [](Object*, const std::vector<Value>&) { return Value::make_int(host_music_mode()); });
+  jvm.natives().register_method("java.sound.Sound", "setMode", "(I)I",
+      [](Object*, const std::vector<Value>& a) {
+        return Value::make_int(host_music_set_mode(a.empty() || a[0].tag != ValueTag::Int ? 0 : a[0].v.i));
+      });
+  for (const char* capability : {"has3DHardware", "hasMixHardware"})
+    jvm.natives().register_method("java.sound.Sound", capability, "()I",
+        [](Object*, const std::vector<Value>&) {
+          // Our software XAudio2/MCI backend offers no DirectSound hardware buffers.
+          return Value::make_int(0);
+        });
   // OptionsDialog.show reads the three channel volumes while building the
   // sound page. Missing the native aborted the rest of show().
   {
@@ -274,6 +310,7 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           if (v > 1.f) v = 1.f;
           volumes[c] = v;
           if(c==0)host_sfx_set_volume(v);
+          if(c==1)host_music_set_volume(v);
           return Value::make_void();
         });
   }

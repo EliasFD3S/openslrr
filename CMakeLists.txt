@@ -15,6 +15,7 @@ add_executable(slrr_host
   src/platform/game_root.cpp
   src/platform/host_input.cpp
   src/platform/host_sfx.cpp
+  src/platform/host_music.cpp
   src/platform/host_cursor.cpp
   src/platform/video_fmv.cpp
   src/natives/native_registry.cpp

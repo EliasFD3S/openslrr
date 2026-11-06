@@ -20,6 +20,7 @@ namespace {
 
 std::string g_root;
 std::unordered_map<void*, SlrrFont> g_fonts;
+uint32_t g_text_default_color = 0xffffffffu;
 
 struct TextState {
   void* font = nullptr;
@@ -428,13 +429,15 @@ float slrr_font_measure_px(void* key, const char* text) {
   return w;
 }
 
+void slrr_text_set_default_color(uint32_t color) { g_text_default_color = color; }
+uint32_t slrr_text_default_color() { return g_text_default_color; }
 void slrr_text_create(void* key, void* font, float x, float y) {
   if (!key) return;
   TextState& t = g_texts[key];
   t.font = font;
   t.x = x;
   t.y = y;
-  t.color = 0xFFFFFFFFu;
+  t.color = g_text_default_color;
   t.align = 2;
   t.group = 0;
   t.font_slot = SlrrFontSlot::None;

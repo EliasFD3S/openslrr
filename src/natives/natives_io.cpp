@@ -10,6 +10,7 @@
 #include "slrr/script_cfg.hpp"
 #include "slrr/slrr_font.hpp"
 #include "slrr/video_fmv.hpp"
+#include "slrr/scene_instances.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -711,6 +712,35 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
       });
 
   // Platform cursor. The script queues "mode 0 <letter>"; the host applies it.
+  for (bool picked : {false, true})
+    jvm.natives().register_method("java.io.MouseCursor", picked ? "getPickedPos" : "getPos",
+        "()Ljava.lang.Vector3;", [&jvm, picked](Object* self, const std::vector<Value>&) {
+          if (!self) return Value::make_obj(nullptr);
+          auto ci = self->fields.find("cursor");
+          if (ci == self->fields.end() || ci->second.tag != ValueTag::Obj || !ci->second.v.o)
+            return Value::make_obj(nullptr);
+          Object* inner = ci->second.v.o;
+          auto& in = host_input();
+          float xyz[3]{};
+          if (!picked && in.pointer_valid)
+            osd_pixel_to_text(in.pointer_x, in.pointer_y, in.view_w, in.view_h, &xyz[0], &xyz[1]);
+          if (picked) {
+            const char* names[3] = {"_pick_x", "_pick_y", "_pick_z"};
+            for (int i = 0; i < 3; ++i) {
+              auto f = inner->fields.find(names[i]);
+              if (f != inner->fields.end() && f->second.tag == ValueTag::Float) xyz[i] = f->second.v.f;
+            }
+            float origin[3], direction[3];
+            if (in.pointer_valid && scene_instances_pointer_ray(in.pointer_x, in.pointer_y,
+                in.view_w, in.view_h, origin, direction) && scene_instances_pick(origin, direction, xyz))
+              for (int i = 0; i < 3; ++i) inner->fields[names[i]] = Value::make_float(xyz[i]);
+          }
+          Object* out = jvm.new_object("java.lang.Vector3");
+          out->fields["x"] = Value::make_float(xyz[0]);
+          out->fields["y"] = Value::make_float(xyz[1]);
+          out->fields["z"] = Value::make_float(xyz[2]);
+          return Value::make_obj(out);
+        });
   jvm.natives().register_method(
       "java.io.MouseCursor", "setPointer",
       "(Ljava.util.resource.ResourceRef;Ljava.lang.String;)V",

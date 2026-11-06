@@ -66,6 +66,7 @@ class LibBgfxBackend final : public IRenderBackend {
 
   bool quit_requested() const override { return quit_; }
   void request_quit() override { quit_ = true; }
+  bool request_screenshot(const std::string& path) override;
 
   void flush() override;
 

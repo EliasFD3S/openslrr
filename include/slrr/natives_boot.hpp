@@ -21,6 +21,10 @@ void host_set_script_pump(HostScriptPump fn);
 // while the click handler keeps running. Empty until boot installs it.
 void host_set_loading_present(std::function<void()> fn);
 void host_loading_present();
+void host_set_render_callbacks(std::function<void()> present,
+                               std::function<bool(const std::string&)> screenshot);
+void host_force_present();
+bool host_print_screen(const std::string& path);
 void install_osd_script_hover(Jvm& jvm);
 
 // Frontend.setFonts + Config.video_x/y — pick SLII11 vs SLII17 from resolution

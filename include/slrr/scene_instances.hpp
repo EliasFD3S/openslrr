@@ -52,7 +52,9 @@ bool scene_instances_script_matrix(void *key, float *matrix);
 // Nearest mesh the ray enters, in unreflected script metres. Sky and
 // instances outside the active world are ignored. Null when the ray only
 // starts inside a volume (the garage shell around the camera).
-void *scene_instances_pick(const float origin[3], const float direction[3]);
+void *scene_instances_pick(const float origin[3], const float direction[3], float* point = nullptr);
+bool scene_instances_pointer_ray(int px, int py, int width, int height,
+                                 float origin[3], float direction[3]);
 // Ground maps (dealer, car lot, Valo City) keep their triangles in the
 // typeof-1 instance tree. `params` names the material table. On success
 // *render_id is that render; *poly is the mesh in metres, or null when the

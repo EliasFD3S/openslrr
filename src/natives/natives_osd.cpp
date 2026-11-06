@@ -288,6 +288,17 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
       });
   // java.render.Text natives — legacy RenderNatives path (SCX+atlas).
   jvm.natives().register_method(
+      "java.render.Text", "setDefaultColor", "(I)V",
+      [](Object*, const std::vector<Value>& a) {
+        if (!a.empty() && a[0].tag == ValueTag::Int)
+          slrr_text_set_default_color(static_cast<uint32_t>(a[0].v.i));
+        return Value::make_void();
+      });
+  jvm.natives().register_method("java.render.Text", "getDefaultColor", "()I",
+      [](Object*, const std::vector<Value>&) {
+        return Value::make_int(static_cast<int32_t>(slrr_text_default_color()));
+      });
+  jvm.natives().register_method(
       "java.render.Text", "create",
       "(Ljava.util.resource.ResourceRef;Ljava.util.resource.ResourceRef;FF)V",
       [&jvm](Object* self, const std::vector<Value>& args) {

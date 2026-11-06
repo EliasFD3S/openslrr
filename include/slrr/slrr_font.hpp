@@ -70,6 +70,8 @@ void* slrr_font_ui_large();
 enum class SlrrFontSlot : int32_t { None = 0, Small = 1, Medium = 2, Large = 3 };
 
 void slrr_text_create(void* key, void* font, float x, float y);
+void slrr_text_set_default_color(uint32_t color);
+uint32_t slrr_text_default_color();
 void slrr_text_destroy(void* key);
 void slrr_text_set_color(void* key, uint32_t argb);
 void slrr_text_set_align(void* key, int32_t align);

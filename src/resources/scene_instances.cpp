@@ -1010,7 +1010,31 @@ bool ray_triangle(const float o[3], const float d[3], const float a[3],
   return t > 1e-4f;
 }
 
-void *scene_instances_pick(const float origin[3], const float direction[3]) {
+bool scene_instances_pointer_ray(int px, int py, int width, int height,
+                                 float origin[3], float direction[3]) {
+  if (width <= 0 || height <= 0) return false;
+  float at[3], fov = 60.f, zn, zf;
+  if (!gameref_world_camera(origin, at, &fov, &zn, &zf)) return false;
+  float fx = at[0] - origin[0], fy = at[1] - origin[1], fz = at[2] - origin[2];
+  const float fl = std::sqrt(fx*fx + fy*fy + fz*fz);
+  if (fl < 1e-4f) return false;
+  fx /= fl; fy /= fl; fz /= fl;
+  float rx = -fz, rz = fx;
+  const float rl = std::sqrt(rx*rx + rz*rz);
+  if (rl < 1e-4f) { rx = 1.f; rz = 0.f; }
+  else { rx /= rl; rz /= rl; }
+  const float tangent = std::tan(fov * 3.14159265f / 360.f);
+  const float x = (2.f*px/width - 1.f) * tangent * width/height;
+  const float y = (1.f - 2.f*py/height) * tangent;
+  direction[0] = fx + rx*x - rz*fy*y;
+  direction[1] = fy + (rz*fx - rx*fz)*y;
+  direction[2] = fz + rz*x + rx*fy*y;
+  const float dl = std::sqrt(direction[0]*direction[0] + direction[1]*direction[1] + direction[2]*direction[2]);
+  if (dl < 1e-6f) return false;
+  for (int i = 0; i < 3; ++i) direction[i] /= dl;
+  return true;
+}
+void *scene_instances_pick(const float origin[3], const float direction[3], float* point) {
   if (!origin || !direction)
     return nullptr;
   float best = 1e9f;
@@ -1086,6 +1110,8 @@ void *scene_instances_pick(const float origin[3], const float direction[3]) {
       hit = instance.key;
     }
   }
+  if (hit && point)
+    for (int i = 0; i < 3; ++i) point[i] = origin[i] + direction[i] * best;
   return hit;
 }
 

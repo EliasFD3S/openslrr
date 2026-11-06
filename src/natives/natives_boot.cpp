@@ -295,6 +295,8 @@ void ensure_charset_loaded(Object* charset) {
 
 std::function<bool()> g_script_pump;
 std::function<void()> g_loading_present;
+std::function<void()> g_force_present;
+std::function<bool(const std::string&)> g_screen_capture;
 // 1 = inside wait, 2 = notify arrived for this object.
 std::unordered_map<Object*, int> g_object_wait;
 
@@ -419,6 +421,21 @@ void host_set_loading_present(std::function<void()> fn) {
 
 void host_loading_present() {
   if (g_loading_present) g_loading_present();
+}
+void host_set_render_callbacks(std::function<void()> present,
+                               std::function<bool(const std::string&)> screenshot) {
+  g_force_present = std::move(present);
+  g_screen_capture = std::move(screenshot);
+}
+void host_force_present() {
+  static bool presenting = false;
+  if (!g_force_present || presenting) return;
+  presenting = true;
+  struct Guard { bool& value; ~Guard() { value = false; } } guard{presenting};
+  g_force_present();
+}
+bool host_print_screen(const std::string& path) {
+  return g_screen_capture && g_screen_capture(path);
 }
 
 void frontend_set_fonts(Jvm& jvm, int32_t video_x, int32_t video_y) {
