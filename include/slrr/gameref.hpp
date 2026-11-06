@@ -184,6 +184,8 @@ void gameref_orbit_world_camera(float yaw_delta, float pitch_delta,
                                 float zoom_axis, float dt);
 std::vector<GameRefState*> gameref_nodes_with_mesh();
 std::vector<GameRefState*> gameref_render_nodes();
+void gameref_register_light(void* key);
+std::vector<GameRefState*> gameref_directional_lights();
 std::vector<void*> gameref_world_roots();  // flags & WORLDTREEROOT
 
 void gameref_set_fog(int32_t color, float near_z, float far_z);

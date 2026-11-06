@@ -1260,14 +1260,58 @@ void apply_part_filter(Object *part, int category, int mode) {
   for (const auto &child : rec->children)
     apply_part_filter(child.second, category, mode);
 }
+void paint_one(Object *part, uint32_t texture) {
+  auto *rec = record(part);
+  if (!rec || !rec->config->texture)
+    return;
+  rec->state.texture = texture;
+  for (auto *render : rec->renders)
+    if (auto *node = gameref_get(render))
+      node->paint_texture = texture;
+}
+void paint_tree(Object *root, uint32_t texture) {
+  std::vector<Object *> pending{root};
+  std::unordered_set<Object *> seen;
+  for (size_t i = 0; i < pending.size() && i < 512; ++i) {
+    if (!seen.insert(pending[i]).second)
+      continue;
+    paint_one(pending[i], texture);
+    if (auto *rec = record(pending[i]))
+      for (const auto &child : rec->children)
+        pending.push_back(child.second);
+  }
+}
 bool part_command(Object *part, const std::string &command) {
   part = canonical(part);
-  auto *rec = record(part);
-  if (!rec)
-    return false;
   std::istringstream input(command);
   std::string verb;
   input >> verb;
+  if (verb == "texture") {
+    // Catalog and the car selector send this on the Vehicle, which is the
+    // chassis's owner. The second number, 1, repaints every painted part.
+    Object *root = part;
+    if (!record(root) && part) {
+      auto it = part->fields.find("chassis");
+      if (it != part->fields.end() && it->second.tag == ValueTag::Obj &&
+          it->second.v.o)
+        root = canonical(it->second.v.o);
+    }
+    if (!record(root))
+      return false;
+    unsigned long id = 0;
+    int mode = 1;
+    if (!(input >> id))
+      return false;
+    input >> mode;
+    if (mode)
+      paint_tree(root, static_cast<uint32_t>(id));
+    else
+      paint_one(root, static_cast<uint32_t>(id));
+    return true;
+  }
+  auto *rec = record(part);
+  if (!rec)
+    return false;
   if (verb == "setsteer" && rec->config->native_kind == "car") {
     float value = 0;
     if (!(input >> value) || !std::isfinite(value))

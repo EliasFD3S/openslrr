@@ -75,6 +75,8 @@ bool scene_instances_floor(float x, float z, float below, void *ignore,
 // Refresh once per frame; unchanged terrain keeps its spatial index.
 void scene_instances_prepare_physics();
 uint64_t scene_instances_floor_builds();
+// Changes whenever the world-space floor used by projected shadows changes.
+uint64_t scene_instances_floor_revision();
 struct SceneFloorHit {
   float height = 0;
   float normal[3] = {0, 1, 0};

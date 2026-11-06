@@ -51,6 +51,7 @@ struct FloorMesh {
 std::unordered_map<void *, FloorMesh> g_floor_meshes;
 bool g_floor_prepared = false;
 uint64_t g_floor_builds = 0;
+uint64_t g_floor_revision = 1;
 void index_floor(StaticMesh &mesh) {
   // Static garage triangles are indexed once in script space. Physics asks
   // for several support samples per 240 Hz tick; rescanning the whole shell
@@ -421,6 +422,7 @@ void scene_instances_set_resources(const RpkIndex *resources) {
   g_floor_meshes.clear();
   g_floor_prepared = false;
   g_floor_builds = 0;
+  ++g_floor_revision;
   g_static_enabled = true;
   g_environment = 0;
 }
@@ -430,6 +432,7 @@ std::string scene_instances_envmap() {
                      : std::string{};
 }
 void scene_instances_select(void *world, void *skydome) {
+  if (g_world != world) ++g_floor_revision;
   g_world = world;
   g_sky = skydome;
   g_floor_prepared = false;
@@ -662,6 +665,7 @@ void scene_instances_prepare_physics() {
         }
         index_floor(mesh);
         ++g_floor_builds;
+        ++g_floor_revision;
       }
       cached.ancestors.clear();
       void *parent = n->key;
@@ -672,13 +676,15 @@ void scene_instances_prepare_physics() {
       }
     }
   for (auto it = g_floor_meshes.begin(); it != g_floor_meshes.end();)
-    if (!active.count(it->first))
+    if (!active.count(it->first)) {
+      ++g_floor_revision;
       it = g_floor_meshes.erase(it);
-    else
+    } else
       ++it;
   g_floor_prepared = true;
 }
 uint64_t scene_instances_floor_builds() { return g_floor_builds; }
+uint64_t scene_instances_floor_revision() { return g_floor_revision; }
 bool scene_instances_sample_floor(float x, float z, float below, void *ignore,
                                   SceneFloorHit &sample) {
   float best = 0.f;
@@ -770,7 +776,7 @@ bool scene_instances_supports(void *root,
 SceneSun scene_instances_light(void* root) {
   if(!root)root=g_world;
   SceneSun selected=scene_sun();int newest=0;
-  for(auto* node:gameref_render_nodes()) {
+  for(auto* node:gameref_directional_lights()) {
     if(!node->directional_light.set || node->live_id<=newest)continue;
     float frame[16];
     // chain_matrix rejects inventory world roots and hidden subtrees.
@@ -850,6 +856,7 @@ void scene_instances_override_mesh(uint32_t id,
     g_overrides[id] = std::move(geo);
 }
 void scene_instances_enable_static_floor(bool enabled) {
+  if (g_static_enabled != enabled) ++g_floor_revision;
   g_static_enabled = enabled;
 }
 void scene_instances_add_static_mesh(const ScxGeometry &geo) {
@@ -860,6 +867,7 @@ void scene_instances_add_static_mesh(const ScxGeometry &geo) {
   mesh.indices = geo.indices;
   mesh.scale = geo.position_scale;
   index_floor(mesh);
+  ++g_floor_revision;
   g_static.push_back(std::move(mesh));
 }
 

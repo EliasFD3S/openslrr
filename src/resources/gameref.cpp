@@ -9,11 +9,13 @@
 #include <cstring>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace slrr {
 namespace {
 
 std::unordered_map<void*, GameRefState> g_refs;
+std::unordered_set<void*> g_lights;
 int32_t g_next_live = 0x70000000;
 int32_t g_fog_color = 0;
 float g_fog_near = 0.f;
@@ -38,6 +40,7 @@ float gameref_now() {
 
 void gameref_clear() {
   g_refs.clear();
+  g_lights.clear();
   g_next_live = 0x70000000;
   g_fog = false;
 }
@@ -93,6 +96,7 @@ void gameref_remove(void* key) {
   for (auto& kv : g_refs) {
     if (kv.second.parent == key) kv.second.parent = nullptr;
   }
+  g_lights.erase(key);
   g_refs.erase(key);
 }
 
@@ -719,6 +723,19 @@ std::vector<GameRefState*> gameref_nodes_with_mesh() {
   std::vector<GameRefState*> out;
   for (auto& kv : g_refs) {
     if (kv.second.has_mesh && kv.second.mesh.info.ok) out.push_back(&kv.second);
+  }
+  return out;
+}
+void gameref_register_light(void* key) {
+  if (auto* node = gameref_get(key)) g_lights.insert(node->key);
+}
+std::vector<GameRefState*> gameref_directional_lights() {
+  std::vector<GameRefState*> out;
+  out.reserve(g_lights.size());
+  for (void* key : g_lights) {
+    auto* node = gameref_get(key);
+    if (node && node->kind == GameRefKind::RenderRef && !node->empty &&
+        node->type_id && node->directional_light.set) out.push_back(node);
   }
   return out;
 }

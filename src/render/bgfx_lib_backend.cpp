@@ -37,6 +37,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -572,6 +573,7 @@ class LibBgfxBackend final : public IRenderBackend {
   void clear_scene() {
     for(auto& entry:instance_meshes_)destroy_part(entry.second);
     instance_meshes_.clear();instances_.clear();previews_.clear();
+    projected_shadows_.clear();
     for (ScenePart& p : parts_) destroy_part(p);
     parts_.clear();
     mesh_ok_ = false;
@@ -614,6 +616,19 @@ class LibBgfxBackend final : public IRenderBackend {
     std::vector<bgfx::TextureHandle> tex;
   };
   struct Preview { GameRefState camera; GameRefState viewport; std::vector<SceneInstance> instances; };
+  // Projection depends on scene geometry, never on the viewing camera.
+  // Keep parked cars out of the per-vertex floor queries on subsequent frames.
+  struct ProjectedShadow {
+    std::shared_ptr<const ScxGeometry> source;
+    std::array<float, 16> transform{};
+    std::array<float, 3> light{};
+    void* owner = nullptr;
+    float ceiling = 0.f;
+    uint64_t floor_revision = 0;
+    std::vector<MeshVertex> vertices;
+    std::vector<uint32_t> indices;
+  };
+  std::unordered_map<void*, ProjectedShadow> projected_shadows_;
   std::vector<SceneInstance> instances_;
   std::vector<Preview> previews_;
   std::unordered_map<const ScxGeometry*,ScenePart> instance_meshes_;
@@ -917,62 +932,151 @@ class LibBgfxBackend final : public IRenderBackend {
         BGFX_STENCIL_TEST_NOTEQUAL | BGFX_STENCIL_FUNC_REF(1) |
         BGFX_STENCIL_FUNC_RMASK(0xff) | BGFX_STENCIL_OP_FAIL_S_KEEP |
         BGFX_STENCIL_OP_FAIL_Z_KEEP | BGFX_STENCIL_OP_PASS_Z_REPLACE;
-    const float flat_tint[4] = {0.f, 0.f, 0.f, 0.5f};
+    // Stock inks the ground with a multiply. Half-alpha black leaves the
+    // concrete showing through; the garage shadow reads as a solid patch.
+    const float flat_tint[4] = {0.f, 0.f, 0.f, 0.9f};
     const float flat_alpha[4] = {0.f, 1.f, 0.f, 0.f};
+    std::unordered_set<void*> active_shadows;
+    const auto floor_revision = scene_instances_floor_revision();
+    const std::array<float, 3> shadow_light = {travel[0], travel[1], travel[2]};
     if (std::fabs(travel[1]) > 0.05f && bgfx::isValid(program_) &&
         bgfx::isValid(white_tex_)) {
-      const float dot = travel[1];
       for (const CarShadow& car : cars) {
         if (car.decal || car.casters.empty()) continue;
-        float y_min = 1e30f;
-        bool any = false;
+        // One height is a sheet across the pit. Each vertex sits on the
+        // surface under it (lift deck, then the pit), and a triangle that
+        // jumps from the deck to the floor is dropped so it does not bridge.
+        struct Cell {
+          bool hit = false;
+          float h = 0, nx = 0, ny = 1, nz = 0;
+        };
+        std::unordered_map<uint64_t, Cell> cells;
+        auto probe = [&](float sx, float sz, float below, Cell& cell) {
+          const int ix = static_cast<int>(std::floor(sx * 40.f));
+          const int iz = static_cast<int>(std::floor(sz * 40.f));
+          const uint64_t key =
+              (static_cast<uint64_t>(static_cast<uint32_t>(ix)) << 32) |
+              static_cast<uint32_t>(iz);
+          auto found = cells.find(key);
+          if (found != cells.end()) {
+            cell = found->second;
+            return;
+          }
+          Cell stored;
+          SceneFloorHit hit;
+          if (scene_instances_sample_floor(sx, sz, below, car.owner, hit)) {
+            stored.hit = true;
+            stored.h = hit.height;
+            stored.nx = hit.normal[0];
+            stored.ny = hit.normal[1];
+            stored.nz = hit.normal[2];
+          }
+          cells.emplace(key, stored);
+          cell = stored;
+        };
+        struct Placed {
+          bool ok = false;
+          float x = 0, y = 0, z = 0, h = 0;
+        };
+        auto place = [&](float rx, float ry, float rz) {
+          Placed out;
+          float sx = rx, sz = rz;
+          for (int iter = 0; iter < 2; ++iter) {
+            Cell cell;
+            // Chassis height stays under the ceiling and over the deck.
+            // A wheel vertex below the deck must not cache the pit for the
+            // whole column.
+            probe(sx, -sz, car.script[13] + 0.45f, cell);
+            if (!cell.hit) return out;
+            const float ny = std::fabs(cell.ny) > 0.2f ? cell.ny : 1.f;
+            if (std::fabs(travel[1]) < 0.05f || iter == 1) {
+              out.ok = true;
+              out.h = cell.h;
+              out.x = sx + cell.nx * 0.02f;
+              out.y = cell.h + ny * 0.02f + 0.012f;
+              out.z = sz - cell.nz * 0.02f;
+              return out;
+            }
+            const float t = (cell.h + 0.02f - ry) / travel[1];
+            if (!(t > -0.02f)) return out;
+            sx = rx + travel[0] * t;
+            sz = rz + travel[2] * t;
+          }
+          return out;
+        };
         for (const SceneInstance* inst : car.casters) {
           if (!inst->geometry) continue;
-          const float scale = inst->geometry->position_scale > 0.f
-                                  ? inst->geometry->position_scale
-                                  : 0.01f;
+          const auto& geo = *inst->geometry;
+          const size_t n = geo.positions.size() / 3;
+          if (n == 0 || geo.indices.size() < 3) continue;
+          const float scale =
+              geo.position_scale > 0.f ? geo.position_scale : 0.01f;
           const float* m = inst->transform.data();
-          for (int ix = 0; ix < 2; ++ix)
-            for (int iy = 0; iy < 2; ++iy)
-              for (int iz = 0; iz < 2; ++iz) {
-                const float lx =
-                    (ix ? inst->geometry->info.bbox_max[0]
-                       : inst->geometry->info.bbox_min[0]) *
-                    scale;
-                const float ly =
-                    (iy ? inst->geometry->info.bbox_max[1]
-                       : inst->geometry->info.bbox_min[1]) *
-                    scale;
-                const float lz =
-                    -((iz ? inst->geometry->info.bbox_max[2]
-                         : inst->geometry->info.bbox_min[2]) *
-                      scale);
-                const float y = m[1] * lx + m[5] * ly + m[9] * lz + m[13];
-                y_min = std::min(y_min, y);
-                any = true;
-              }
-        }
-        if (!any) continue;
-        SceneFloorHit hit;
-        const bool on_floor = scene_instances_sample_floor(
-            car.script[12], car.script[14], car.script[13] + 1.f, car.owner, hit);
-        const float y0 = (on_floor ? hit.height : y_min) + 0.04f;
-        float flatten[16]{};
-        flatten[0] = flatten[5] = flatten[10] = flatten[15] = 1.f;
-        for (int r = 0; r < 3; ++r) flatten[4 + r] -= travel[r] / dot;
-        flatten[12] = travel[0] * y0 / dot;
-        flatten[13] = travel[1] * y0 / dot;
-        flatten[14] = travel[2] * y0 / dot;
-        for (const SceneInstance* inst : car.casters) {
-          auto mesh = instance_meshes_.find(inst->geometry.get());
-          if (mesh == instance_meshes_.end()) continue;
-          const ScenePart& part = mesh->second;
-          if (!bgfx::isValid(part.vbh) || !bgfx::isValid(part.ibh)) continue;
-          float model[16];
-          bx::mtxMul(model, inst->transform.data(), flatten);
-          bgfx::setTransform(model);
-          bgfx::setVertexBuffer(0, part.vbh);
-          bgfx::setIndexBuffer(part.ibh);
+          active_shadows.insert(inst->key);
+          auto& cached = projected_shadows_[inst->key];
+          if (cached.source != inst->geometry || cached.transform != inst->transform ||
+              cached.light != shadow_light || cached.owner != car.owner ||
+              cached.ceiling != car.script[13] || cached.floor_revision != floor_revision) {
+            cached.source = inst->geometry;
+            cached.transform = inst->transform;
+            cached.light = shadow_light;
+            cached.owner = car.owner;
+            cached.ceiling = car.script[13];
+            cached.floor_revision = floor_revision;
+            std::vector<Placed> placed(n);
+            for (size_t i = 0; i < n; ++i) {
+              const float lx = geo.positions[i * 3 + 0] * scale;
+              const float ly = geo.positions[i * 3 + 1] * scale;
+              const float lz = -geo.positions[i * 3 + 2] * scale;
+              placed[i] = place(m[0] * lx + m[4] * ly + m[8] * lz + m[12],
+                                m[1] * lx + m[5] * ly + m[9] * lz + m[13],
+                                m[2] * lx + m[6] * ly + m[10] * lz + m[14]);
+            }
+            auto& idx = cached.indices;
+            idx.clear();
+            idx.reserve(geo.indices.size());
+            for (size_t t = 0; t + 2 < geo.indices.size(); t += 3) {
+              const uint32_t a = geo.indices[t];
+              const uint32_t b = geo.indices[t + 1];
+              const uint32_t c = geo.indices[t + 2];
+              if (a >= n || b >= n || c >= n) continue;
+              if (!placed[a].ok || !placed[b].ok || !placed[c].ok) continue;
+              const float h0 = placed[a].h, h1 = placed[b].h, h2 = placed[c].h;
+              const float span =
+                  std::max(h0, std::max(h1, h2)) - std::min(h0, std::min(h1, h2));
+              if (span > 0.22f) continue;
+              idx.push_back(a);
+              idx.push_back(b);
+              idx.push_back(c);
+            }
+            cached.vertices.assign(n, MeshVertex{});
+            for (size_t i = 0; i < n; ++i) {
+              if (!placed[i].ok) continue;
+              auto& vertex = cached.vertices[i];
+              vertex.x = placed[i].x;
+              vertex.y = placed[i].y;
+              vertex.z = placed[i].z;
+              vertex.ny = 1.f;
+            }
+          }
+          const auto& idx = cached.indices;
+          if (idx.size() < 3) continue;
+          const auto vn = static_cast<uint32_t>(n);
+          const auto in = static_cast<uint32_t>(idx.size());
+          if (bgfx::getAvailTransientVertexBuffer(vn, layout_) < vn ||
+              bgfx::getAvailTransientIndexBuffer(in, true) < in)
+            continue;
+          bgfx::TransientVertexBuffer tvb;
+          bgfx::TransientIndexBuffer tib;
+          bgfx::allocTransientVertexBuffer(&tvb, vn, layout_);
+          bgfx::allocTransientIndexBuffer(&tib, in, true);
+          std::memcpy(tvb.data, cached.vertices.data(), n * sizeof(MeshVertex));
+          std::memcpy(tib.data, idx.data(), idx.size() * sizeof(uint32_t));
+          float ident[16];
+          bx::mtxIdentity(ident);
+          bgfx::setTransform(ident);
+          bgfx::setVertexBuffer(0, &tvb);
+          bgfx::setIndexBuffer(&tib);
           bgfx::setTexture(0, s_tex_, white_tex_);
           bind_baked_light(nullptr, nullptr);
           bgfx::setUniform(u_color_, flat_tint);
@@ -982,6 +1086,10 @@ class LibBgfxBackend final : public IRenderBackend {
           bgfx::submit(view_id, program_);
         }
       }
+    }
+    for (auto it = projected_shadows_.begin(); it != projected_shadows_.end();) {
+      if (!active_shadows.count(it->first)) it = projected_shadows_.erase(it);
+      else ++it;
     }
     const bool maps = false;
     if (maps) {

@@ -86,6 +86,7 @@ void apply_directional_light(const RpkIndex& rpk, int32_t full_id, Object* type,
   std::copy(spec,spec+3,light.specular);
   std::copy(dir,dir+3,light.direction);
   light.set=true;
+  gameref_register_light(instance.key);
   light.has_direction=dir[0]*dir[0]+dir[1]*dir[1]+dir[2]*dir[2]>1e-8f;
   auto packed = [](Object* o, const char* key, int32_t* out) {
     if (!o) return false;
@@ -380,8 +381,10 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
           self->fields["_sun_a"] = Value::make_int(ambient);
           self->fields["_sun_s"] = Value::make_int(specular);
         }
-        if(auto* light=gameref_get(self))
+        if(auto* light=gameref_get(self)) {
           scene_sun_apply_packed(light->directional_light,diffuse,ambient,specular);
+          gameref_register_light(light->key);
+        }
         return Value::make_void();
       });
   jvm.natives().register_method(
