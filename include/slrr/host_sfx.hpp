@@ -18,5 +18,10 @@ int32_t host_sfx_play_file(const std::string& path, float pitch=1.f, float volum
 void host_sfx_stop(int32_t instance);
 bool host_sfx_is_playing(int32_t instance);
 void host_sfx_set_volume(float volume);
+struct HostSfxStats {
+  uint32_t active = 0;
+  uint64_t coalesced = 0;
+};
+HostSfxStats host_sfx_stats();
 
 }  // namespace slrr

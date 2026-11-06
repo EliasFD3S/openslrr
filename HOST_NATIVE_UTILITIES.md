@@ -24,3 +24,22 @@ bootstrap do not establish their visual or audible output.
 
 `SLRR_rev` remains a resource/script reference; no directly portable audio
 device or screenshot implementation was taken from it.
+
+## Repeated effects and UI bursts
+
+Transient XAudio2 effects are grouped by normalized WAV path. Requests closer
+than 35 ms are coalesced before reading/allocating another voice. At most two
+copies of one transient cue may overlap; their gains are divided by the copy
+count so correlated waveforms cannot multiply that cue's peak amplitude.
+Coalesced requests return the already playing voice handle.
+
+Menu hover/select/back each allow only one active copy. Select/back remove
+lingering hover voices, and hover cannot obscure an active select/back sound.
+Looping sounds are excluded from grouping. The existing overall 32-voice
+budget evicts a transient first; it no longer interrupts a loop to admit a
+new voice when all slots are occupied by loops.
+
+`host_sfx_stats()` exposes the active voice and coalesced-request counts.
+A temporary muted XAudio2 diagnostic confirmed 1,000 hover requests -> one
+voice, 1,000 wrench requests -> one voice, two spaced wrench requests -> two
+voices, click priority, and preservation of independent looping voices.
