@@ -20,11 +20,33 @@ inline Value native_noop(Object*, const std::vector<Value>&) {
   return Value::make_void();
 }
 
+// One row of an SDAT trailer. ordinal is the file-local pack slot;
+// pack_id is the host slot the path resolved to.
+struct SdatPackRef {
+  int32_t ordinal = 0;
+  int32_t pack_id = 0;
+  std::string path;
+};
+
+// Kind 7 carries embedded bytes. Other kinds are recorded with an empty
+// payload. abs_id is only known for a resource written in this session.
+struct SdatBlobRef {
+  int32_t ordinal = 0;
+  int32_t kind = 0;
+  int32_t abs_id = 0;
+  std::vector<uint8_t> bytes;
+};
+
 struct HostFile {
   std::vector<uint8_t> bytes;
   size_t pos = 0;
   bool writing = false;
+  // True when bytes is the Java payload of an SDAT container. A raw file
+  // left by an older host stays false, so readResID returns the stored id.
+  bool sdat = false;
   std::filesystem::path path;
+  std::vector<SdatPackRef> sdat_packs;
+  std::vector<SdatBlobRef> sdat_blobs;
 };
 
 extern std::unordered_map<Object*, HostFile> g_host_files;

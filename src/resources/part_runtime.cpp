@@ -1190,13 +1190,14 @@ Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
       records.at(part).renders.size());
   return part;
 }
-bool part_install(Object *child, Object *root, int own, int target) {
+bool part_install(Object *child, Object *root, int own, int target,
+                   const float *hint) {
   child = canonical(child);
   root = canonical(root);
   auto *c = record(child);
   if (!c || c->state.parent)
     return false;
-  auto selected = select(child, root, own, target);
+  auto selected = select(child, root, own, target, true, hint);
   if (!selected.parent) {
     std::fprintf(
         stderr, "[part] no compatible free slot child=0x%x root=0x%x\n",
@@ -1324,11 +1325,23 @@ bool part_command(Object *part, const std::string &command) {
     return true;
   }
   if (verb == "install") {
-    int own = 0, target = 0;
-    if (input >> own >> target) {
-      if (auto *node = gameref_find_live(target))
-        part_install(part, static_cast<Object *>(node->key), own);
-    }
+    // `install <cursor> <root> <ownSlot> <target> <slot> [x y z]`.
+    // Loading a car names the exact parent slot. A drop also sends the
+    // point, and the nearest free slot there wins. The own slot is unused,
+    // as in the original command.
+    int cursor = 0, root_id = 0, own_slot = 0, target_id = 0, slot = 0;
+    if (!(input >> cursor >> root_id))
+      return true;
+    const bool have_own = static_cast<bool>(input >> own_slot);
+    (void)own_slot;
+    const bool have_target = have_own && static_cast<bool>(input >> target_id);
+    const bool have_slot = have_target && static_cast<bool>(input >> slot);
+    float hint[3];
+    const bool have_hint = have_slot && (input >> hint[0] >> hint[1] >> hint[2]);
+    const int object_id = have_target && target_id ? target_id : root_id;
+    if (auto *node = gameref_find_live(object_id))
+      part_install(part, static_cast<Object *>(node->key), 0,
+                   have_slot ? slot : 0, have_hint ? hint : nullptr);
     return true;
   }
   if (verb == "remove") {
@@ -2384,11 +2397,19 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
     int old = p ? p->state.texture : 0;
     if (live_held(s))
       return Value::make_int(old);
-    if (p) {
-      p->state.texture = number(a, 0);
-      for (auto *render : p->renders)
-        gameref_get(render)->paint_texture = p->state.texture;
-    }
+    if (!p || !p->config->texture)
+      return Value::make_int(old);
+    const auto id = static_cast<uint32_t>(number(a, 0));
+    // 0, and anything that is not a texture record, leaves the part as it
+    // is. A loaded car writes 0 for an unpainted piece and a factory color
+    // for the rest; clearing the render there made the panels vanish.
+    const RpkEntry *entry = id && index ? index->resolve(id) : nullptr;
+    if (!entry || entry->typeof_ != 7)
+      return Value::make_int(old);
+    p->state.texture = static_cast<int>(id);
+    for (auto *render : p->renders)
+      if (auto *node = gameref_get(render))
+        node->paint_texture = p->state.texture;
     return Value::make_int(old);
   });
   bind(
@@ -2514,11 +2535,19 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   bind("setMesh", "(I)I", [](Object *s, const std::vector<Value> &a) {
     if (live_held(s))
       return Value::make_int(1);
-    if (auto *p = record(s)) {
-      p->mesh_set = true;
-      p->mesh_id = static_cast<uint32_t>(number(a, 0));
-      retarget(*p, p->mesh_id);
-    }
+    auto *p = record(s);
+    if (!p)
+      return Value::make_int(1);
+    const auto id = static_cast<uint32_t>(number(a, 0));
+    // The cfg mesh is already the render's mesh. Pointing the render at
+    // the bare scx drops its textures and its flags, so a loaded hood or
+    // door is no longer drawn. 0 and a non-mesh id are ignored.
+    const RpkEntry *entry = id && index ? index->resolve(id) : nullptr;
+    if (!entry || entry->typeof_ != 5 || id == p->config->mesh)
+      return Value::make_int(1);
+    p->mesh_set = true;
+    p->mesh_id = id;
+    retarget(*p, p->mesh_id);
     return Value::make_int(1);
   });
   bind("getRenderType", "()I", [](Object *s, const std::vector<Value> &) {

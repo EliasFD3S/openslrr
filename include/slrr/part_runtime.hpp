@@ -21,7 +21,7 @@ Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
                     uint32_t resource, const std::string &alias,
                     const std::string &params = {});
 bool part_install(Object *child, Object *root, int own_slot = 0,
-                  int parent_slot = 0);
+                  int parent_slot = 0, const float *hint = nullptr);
 bool part_destroy(Object *part);
 bool part_command(Object *part, const std::string &command);
 // Car setMatrix: loaded springs, contacts on the given point, body asleep.
