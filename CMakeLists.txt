@@ -44,6 +44,7 @@ add_executable(slrr_host
   src/jvm/tufa.cpp
   src/jvm/tree_eval.cpp
   src/jvm/jvm.cpp
+  src/jvm/gc.cpp
   src/boot/section_machine.cpp
   src/boot/mainloop.cpp
   src/boot/boot.cpp

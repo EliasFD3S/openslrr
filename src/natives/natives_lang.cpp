@@ -201,7 +201,41 @@ Object* arg_o(const std::vector<Value>& args, size_t i) {
 
 }  // namespace
 
+void register_gc_natives(Jvm& jvm) {
+  jvm.natives().register_method("java.lang.System", "gc", "()I",
+      [&jvm](Object*, const std::vector<Value>&) { return Value::make_int(jvm.request_gc()); });
+  // The original native returns zero; finalizers are part of the GC cycle.
+  jvm.natives().register_method("java.lang.System", "runFinalization", "()I",
+      [](Object*, const std::vector<Value>&) { return Value::make_int(0); });
+  jvm.natives().register_method("java.lang.Object", "disableGC", "()V",
+      [](Object* o, const std::vector<Value>&) {
+        if (o) o->gc_disabled = true;
+        return Value::make_void();
+      });
+  jvm.natives().register_method("java.lang.Object", "enableGC", "()V",
+      [](Object* o, const std::vector<Value>&) {
+        if (o) o->gc_disabled = false;
+        return Value::make_void();
+      });
+  jvm.natives().register_method("java.lang.Object", "hashCode", "()I",
+      [](Object* o, const std::vector<Value>&) {
+        return Value::make_int(o ? static_cast<int32_t>(o->identity_hash) : 0);
+      });
+  jvm.natives().register_method("java.lang.Object", "toString", "()Ljava.lang.String;",
+      [&jvm](Object* o, const std::vector<Value>&) {
+        char identity[24];
+        std::snprintf(identity, sizeof(identity), "@%x", o ? o->identity_hash : 0);
+        return Value::make_obj(jvm.new_string(o ? o->class_name + identity : "null"));
+      });
+  jvm.natives().register_method("java.lang.String", "finalize", "()V",
+      [](Object* o, const std::vector<Value>&) {
+        if (o) o->str.clear();
+        return Value::make_void();
+      });
+}
+
 void register_lang_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
+  register_gc_natives(jvm);
   jvm.natives().register_method("java.lang.Vector3", "rotate", "(Ljava.lang.Ypr;)Ljava.lang.Vector3;",
       [&jvm](Object* self,const std::vector<Value>& args){
         jvm.natives().invoke("java.lang.Vector3","rotate","(Ljava.lang.Ypr;)V",self,args);

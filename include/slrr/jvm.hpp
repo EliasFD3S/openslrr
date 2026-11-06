@@ -4,6 +4,7 @@
 #include "slrr/object.hpp"
 #include "slrr/tree_eval.hpp"
 #include "slrr/tufa.hpp"
+#include "slrr/gc_roots.hpp"
 #include "slrr/types.hpp"
 
 #include <memory>
@@ -45,6 +46,12 @@ class Jvm : public TreeHost {
 
   bool classpath_ready() const { return classpath_ready_; }
   int classes_loaded() const { return static_cast<int>(by_name_.size()); }
+  void add_gc_roots(GcRootProvider provider);
+  int request_gc(); // -1: queued/busy; collection runs at the host safe point.
+  int collect_garbage();
+  void gc_safe_point();
+  size_t heap_size() const { return heap_.size(); }
+  size_t gc_last_freed() const { return gc_last_freed_; }
 
   // While set, the first native method with no host binding aborts that call
   // chain (nested TREE invokes propagate the stop to the outermost invoke).
@@ -71,6 +78,17 @@ class Jvm : public TreeHost {
                       const std::string& field) override;
 
  private:
+  struct GcCallScope {
+    int& depth;
+    explicit GcCallScope(int& d) : depth(d) { ++depth; }
+    ~GcCallScope() { --depth; }
+  };
+  int gc_call_depth_ = 0;
+  bool gc_pending_ = false, gc_running_ = false, gc_report_ready_ = false;
+  int gc_report_ = 0;
+  size_t gc_allocated_ = 0, gc_last_freed_ = 0, gc_threshold_ = 8192;
+  uint32_t gc_next_identity_ = 1;
+  std::vector<GcRootProvider> gc_roots_;
   std::string resolve_class_path(const std::string& fqn) const;
   void seed_static_fields(const TufaClass& cls);
   void enrich_static_fields(const TufaClass& cls);

@@ -391,7 +391,7 @@ void object_wait(Object* self) {
     }
     woken = g_object_wait[self] == 2;
   }
-  g_object_wait[self] = 0;
+  g_object_wait.erase(self);
   // display() hides next. Drop the shield here too: hide()'s
   // `if (backShieldOsd)` can miss the quad that actually covers the menu.
   if (woken) osd_drop_modal_shield();
@@ -499,6 +499,18 @@ void frontend_set_fonts(Jvm& jvm, int32_t video_x, int32_t video_y) {
 }
 
 void register_boot_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
+  jvm.add_gc_roots([&sections](const GcRootVisitor& visit) {
+    visit(sections.actual()); visit(sections.garage());
+    for (const auto& entry : g_host_files) visit(entry.first);
+    for (const auto& entry : g_object_wait) visit(entry.first);
+    gameref_visit_gc_roots(visit);
+    part_visit_gc_roots(visit);
+    osd_visit_gc_roots(visit);
+    font_visit_gc_roots(visit);
+    mainloop_visit_gc_roots(visit);
+    dyno_visit_gc_roots(visit);
+    scene_visit_gc_roots(visit);
+  });
   scene_instances_set_resources(&rpk);
   register_io_natives(jvm, rpk, sections);
   register_lang_natives(jvm, rpk, sections);

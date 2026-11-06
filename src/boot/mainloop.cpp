@@ -1,3 +1,4 @@
+#include "slrr/gc_roots.hpp"
 #include "slrr/mainloop.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/video_fmv.hpp"
@@ -740,4 +741,8 @@ void mainloop_note_thread(Jvm& jvm, Object* thread, bool started) {
   apply_mechanic_infoline(jvm, tgt);
 }
 
+
+void mainloop_visit_gc_roots(const GcRootVisitor& visit) {
+  visit(g_spinning_mechanic); visit(g_mechanic_hover);
+}
 }  // namespace slrr

@@ -10,6 +10,7 @@ namespace slrr {
 
 // Registers System / File / FindFile / GameLogic / OSD stubs for career boot.
 void register_boot_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections);
+void register_gc_natives(Jvm& jvm);
 
 // Object.wait pumps this until notify. Empty pump: wait returns at once
 // (boot paths that run before the window loop).

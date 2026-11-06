@@ -1,10 +1,14 @@
 #include "slrr/natives_boot.hpp"
 #include "slrr/osd_registry.hpp"
 #include "slrr/object.hpp"
+#include <memory>
 
 namespace slrr {
 void install_osd_script_hover(Jvm& jvm) {
-  osd_set_hover_handler([&jvm, last_osd = static_cast<Object*>(nullptr)](const OsdWidget* w) mutable {
+  auto last = std::make_shared<Object*>(nullptr);
+  jvm.add_gc_roots([last](const GcRootVisitor& visit) { visit(*last); });
+  osd_set_hover_handler([&jvm, last](const OsdWidget* w) {
+    Object*& last_osd = *last;
     // Physics hit volumes carry the gadget. The 0x012B plate is not a button.
     Object* g = (w && w->button) ? w->button : nullptr;
     Object* osd = nullptr;

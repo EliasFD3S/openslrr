@@ -1,3 +1,4 @@
+#include "slrr/gc_roots.hpp"
 #include "slrr/slrr_font.hpp"
 
 #include "slrr/object.hpp"
@@ -705,4 +706,15 @@ void slrr_text_clear_all() {
 
 const std::vector<SlrrOsdText>& slrr_osd_texts() { return g_osd_text; }
 
+
+void font_visit_gc_roots(const GcRootVisitor& visit) {
+  visit(g_ui_small); visit(g_ui_medium); visit(g_ui_large);
+  for (const auto& entry : g_fonts) visit(entry.first);
+  for (const auto& entry : g_texts) {
+    visit(entry.first); visit(entry.second.font); visit(entry.second.osd);
+  }
+  for (const auto& line : g_osd_text) {
+    visit(line.text_key); visit(line.font_key); visit(line.osd);
+  }
+}
 }  // namespace slrr

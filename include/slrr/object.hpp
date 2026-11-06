@@ -10,6 +10,9 @@ namespace slrr {
 
 // Minimal script instance. Identity = pointer (Object.equals).
 struct Object {
+  bool gc_disabled = false;
+  bool gc_finalized = false;
+  uint32_t identity_hash = 0;
   std::string class_name;
   std::unordered_map<std::string, Value> fields;
   // java.lang.String payload (Invictus string objects).

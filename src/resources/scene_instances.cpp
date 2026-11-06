@@ -1,3 +1,4 @@
+#include "slrr/gc_roots.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/part_runtime.hpp"
@@ -1086,5 +1087,9 @@ void *scene_instances_pick(const float origin[3], const float direction[3]) {
     }
   }
   return hit;
+}
+
+void scene_visit_gc_roots(const GcRootVisitor& visit) {
+  visit(g_world); visit(g_sky);
 }
 } // namespace slrr

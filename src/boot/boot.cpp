@@ -509,6 +509,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
       mainloop_sync_section_render(render, sections);
       MainLoopFrameResult fr =
           mainloop_frame(jvm, render, sections, wall_dt);
+      jvm.gc_safe_point();
       ++frames;
       if (fr.quit) break;
       if (until_quit) {

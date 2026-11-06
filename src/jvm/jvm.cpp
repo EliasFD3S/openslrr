@@ -383,9 +383,12 @@ const TufaClass* Jvm::find_class(const std::string& fqn) const {
 }
 
 Object* Jvm::new_object(const std::string& class_fqn) {
+  GcCallScope gc_scope(gc_call_depth_);
   if (!find_class(class_fqn)) load_class(class_fqn);
   auto obj = std::make_unique<Object>();
   obj->class_name = class_fqn;
+  obj->identity_hash = gc_next_identity_++;
+  ++gc_allocated_;
   Object* raw = obj.get();
   heap_.push_back(std::move(obj));
   apply_field_defaults(raw);
@@ -705,6 +708,7 @@ Object* Jvm::tree_new_string(const std::string& utf8) {
 Value Jvm::invoke_by_name(const std::string& class_fqn,
                           const std::string& method,
                           const std::vector<Value>& args, bool prefer_static) {
+  GcCallScope gc_scope(gc_call_depth_);
   if (!find_class(class_fqn)) load_class(class_fqn);
   const TufaClass* cls = find_class(class_fqn);
   if (!cls) {
@@ -878,6 +882,7 @@ Value Jvm::invoke_by_name(const std::string& class_fqn,
 Value Jvm::invoke(const std::string& class_fqn, const std::string& method,
                   const std::string& jni_sig, const std::vector<Value>& args,
                   bool is_static) {
+  GcCallScope gc_scope(gc_call_depth_);
   Object* self = nullptr;
   std::vector<Value> call_args = args;
   if (!is_static && !call_args.empty() && call_args[0].tag == ValueTag::Obj) {

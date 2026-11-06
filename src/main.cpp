@@ -5,6 +5,8 @@
 #include "slrr/render_backend.hpp"
 #include "slrr/dyno_model.hpp"
 #include "slrr/sl2_pacejka.hpp"
+#include "slrr/natives_boot.hpp"
+#include "slrr/gameref.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -21,6 +23,7 @@ void usage() {
       "  slrr_host --probe [--root DIR]\n"
       "  slrr_host --probe-pacejka\n"
       "  slrr_host --probe-dyno\n"
+      "  slrr_host --probe-gc [--root DIR]\n"
       "  slrr_host --game [--root DIR] [--window] [--no-wait] [--auto-new]\n"
       "           [--auto-cmd mainmenu|street|N] [--render null|d3d9|bgfx]\n"
       "           [--spawn-car cars/racers/Baiern.rpk:0x6]\n"
@@ -44,6 +47,7 @@ int main(int argc, char** argv) {
   bool want_pacejka = false;
   bool want_dyno = false;
   bool want_game = false;
+  bool want_gc = false;
   BootOptions opt;
   const char* root_arg = nullptr;
 
@@ -64,6 +68,10 @@ int main(int argc, char** argv) {
     }
     if (std::strcmp(a, "--probe-dyno") == 0) {
       want_dyno = true;
+      continue;
+    }
+    if (std::strcmp(a, "--probe-gc") == 0) {
+      want_gc = true;
       continue;
     }
     if (std::strcmp(a, "--game") == 0) {
@@ -115,7 +123,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  if (!want_probe && !want_game && !want_pacejka && !want_dyno) {
+  if (!want_probe && !want_game && !want_pacejka && !want_dyno && !want_gc) {
     usage();
     return 1;
   }
@@ -151,6 +159,92 @@ int main(int argc, char** argv) {
 
   NativeRegistry natives;
   Jvm jvm(&natives);
+  if (want_gc) {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    jvm.set_game_root(opt.game_root);
+    if (!jvm.bootstrap_classpath()) return 3;
+    // Isolated, headless diagnostic. Never starts Init, a game or a renderer.
+    Object* host_root = nullptr;
+    jvm.add_gc_roots([&](const GcRootVisitor& visit) { visit(host_root); });
+    jvm.collect_garbage();
+    const size_t baseline = jvm.heap_size();
+    Object* a = jvm.new_object("java.lang.Object");
+    Object* b = jvm.new_object("java.lang.Object");
+    a->fields["peer"] = Value::make_obj(b);
+    b->fields["peer"] = Value::make_obj(a);
+    host_root = a;
+    jvm.collect_garbage();
+    if (jvm.heap_size() != baseline + 2) return 11;
+    a->gc_disabled = true;
+    host_root = nullptr;
+    jvm.collect_garbage();
+    if (jvm.heap_size() != baseline + 2) return 12;
+    a->gc_disabled = false;
+    jvm.collect_garbage();
+    if (jvm.heap_size() != baseline) return 13;
+    Object* array = jvm.new_object("java.lang.Object");
+    array->is_array = true;
+    array->slots.push_back(Value::make_obj(jvm.new_string("gc retained string")));
+    jvm.set_static("java.lang.Object", "_gcProbe", Value::make_obj(array));
+    jvm.collect_garbage();
+    if (jvm.heap_size() != baseline + 2) return 14;
+    jvm.set_static("java.lang.Object", "_gcProbe", Value::make_obj(nullptr));
+    jvm.collect_garbage();
+    if (jvm.heap_size() != baseline) return 15;
+    Object* resurrect = jvm.new_object("java.lang.Object");
+    int finalized = 0;
+    bool deferred = false;
+    bool can_resurrect = true;
+    natives.register_method("java.lang.Object", "finalize", "()V",
+        [&](Object* o, const std::vector<Value>&) {
+          if (can_resurrect && o == resurrect) {
+            ++finalized;
+            jvm.set_static("java.lang.Object", "_gcProbe", Value::make_obj(o));
+            jvm.new_string("allocated by finalizer");
+            deferred = jvm.collect_garbage() == -1;
+          }
+          return Value::make_void();
+        });
+    jvm.collect_garbage();
+    if (finalized != 1 || !deferred || !resurrect->gc_finalized) return 16;
+    jvm.set_static("java.lang.Object", "_gcProbe", Value::make_obj(nullptr));
+    jvm.collect_garbage();
+    if (finalized != 1 || jvm.heap_size() != baseline) return 17;
+    can_resurrect = false;
+    for (int i = 0; i < 20000; ++i) jvm.new_string("temporary");
+    jvm.gc_safe_point();
+    if (jvm.heap_size() != baseline) return 18;
+    register_gc_natives(jvm);
+    Object* pinned = jvm.new_object("java.lang.Object");
+    natives.invoke("java.lang.Object", "disableGC", "()V", pinned, {});
+    natives.invoke("java.lang.Object", "disableGC", "()V", pinned, {});
+    if (!pinned->gc_disabled) return 19;
+    const auto code = natives.invoke("java.lang.Object", "hashCode", "()I", pinned, {});
+    if (code.tag != ValueTag::Int || !code.v.i) return 20;
+    natives.invoke("java.lang.Object", "enableGC", "()V", pinned, {});
+    if (pinned->gc_disabled) return 21; // Idempotent flags, not nested counters.
+    jvm.collect_garbage();
+    if (jvm.heap_size() != baseline) return 22;
+    Object* native_root = jvm.new_object("java.lang.Object");
+    native_root->fields["payload"] = Value::make_obj(jvm.new_string("native-owned"));
+    gameref_upsert(native_root);
+    jvm.add_gc_roots(gameref_visit_gc_roots);
+    jvm.collect_garbage();
+    if (jvm.heap_size() != baseline + 2) return 23;
+    gameref_remove(native_root);
+    jvm.collect_garbage();
+    if (jvm.heap_size() != baseline) return 24;
+    for (int i = 0; i < 16; ++i) jvm.new_string("requested cycle");
+    Value pending = jvm.invoke("java.lang.System", "gc", "()I", {}, true);
+    if (pending.tag != ValueTag::Int) return 25;
+    if (pending.v.i >= 0) pending = jvm.invoke("java.lang.System", "gc", "()I", {}, true);
+    if (pending.v.i != -1) return 26;
+    jvm.gc_safe_point();
+    const Value finished = jvm.invoke("java.lang.System", "gc", "()I", {}, true);
+    if (finished.tag != ValueTag::Int || finished.v.i < 16) return 27;
+    std::printf("[gc] probe: roots, cycles, arrays, pinning, resurrection, deferred collection and allocation pressure OK\n");
+    return 0;
+  }
 
   if (want_probe && !want_game) return boot_probe(jvm, opt);
 

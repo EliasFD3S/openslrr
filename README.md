@@ -34,6 +34,7 @@ These milestones describe existing functionality, rather than a percentage of th
 | Area | Current state |
 | --- | --- |
 | Scripts | ✅ TUFA classes and TREE programs, inheritance, Java and native calls |
+| VM memory | ✅ Mark/sweep garbage collection, pin/unpin and finalizers; conservative native roots. See [VM_GC.md](VM_GC.md) |
 | Resources | ✅ RPK packs, SCX models, DDS/PTX textures, and CFG configurations |
 | Garage and rendering | ✅ bgfx/D3D11, textures, script camera, instances, and sky |
 | Interface | ✅ Menus, career dialogs, catalog, car showroom, track selection, and paint inventory |

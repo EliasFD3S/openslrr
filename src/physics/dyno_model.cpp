@@ -1,3 +1,4 @@
+#include "slrr/gc_roots.hpp"
 #include "slrr/dyno_model.hpp"
 
 #include <algorithm>
@@ -719,4 +720,8 @@ bool dyno_self_check(char* msg, std::size_t msg_cap) {
   return true;
 }
 
+
+void dyno_visit_gc_roots(const GcRootVisitor& visit) {
+  for (const auto& entry : g_sessions) visit(entry.first);
+}
 }  // namespace slrr

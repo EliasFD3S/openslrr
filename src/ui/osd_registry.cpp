@@ -1,3 +1,4 @@
+#include "slrr/gc_roots.hpp"
 #include "slrr/osd_registry.hpp"
 
 #include "slrr/object.hpp"
@@ -973,4 +974,13 @@ void osd_on_group_leaf(Object* group, bool leaf) {
     show_group_exact(it->second.v.i);
 }
 
+
+void osd_visit_gc_roots(const GcRootVisitor& visit) {
+  // Hidden pages may be shown again. Retain their backing script objects,
+  // including retired widgets until the registry itself releases them.
+  for (const auto& w : g_widgets) {
+    visit(w.handler); visit(w.owner); visit(w.button); visit(w.picture_source);
+    visit(w.highlight_for); visit(w.label_src); visit(w.value_str); visit(w.gadget); visit(w.text_key);
+  }
+}
 }  // namespace slrr

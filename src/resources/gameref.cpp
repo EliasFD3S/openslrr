@@ -1,3 +1,4 @@
+#include "slrr/gc_roots.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/part_runtime.hpp"
@@ -770,4 +771,12 @@ bool gameref_get_fog(int32_t* color, float* near_z, float* far_z) {
   return true;
 }
 
+
+void gameref_visit_gc_roots(const GcRootVisitor& visit) {
+  for (const auto& entry : g_refs) {
+    const auto& n = entry.second;
+    visit(entry.first); visit(n.binding); visit(n.parent); visit(n.script); visit(n.viewport);
+    for (void* child : n.children) visit(child);
+  }
+}
 }  // namespace slrr

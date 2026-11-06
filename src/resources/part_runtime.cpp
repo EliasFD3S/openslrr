@@ -1,3 +1,4 @@
+#include "slrr/gc_roots.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/dyno_model.hpp"
 #include "slrr/gameref.hpp"
@@ -3124,5 +3125,18 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
             w.has_hub = true;
           });
         });
+}
+
+void part_visit_gc_roots(const GcRootVisitor& visit) {
+  for (const auto& entry : records) {
+    const auto& r = entry.second;
+    visit(entry.first); visit(r.state.object); visit(r.state.parent); visit(r.physics_parent);
+    for (const auto& child : r.children) visit(child.second);
+    for (auto* render : r.renders) visit(render);
+    for (const auto& link : r.links) visit(link.node);
+    for (auto* sfx : r.sfx) visit(sfx);
+  }
+  for (const auto& entry : sfx_items) visit(entry.first);
+  for (auto* held : g_live_hold.order) visit(held);
 }
 } // namespace slrr
