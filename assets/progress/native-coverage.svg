@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="430" viewBox="0 0 1120 430" role="img" aria-labelledby="title desc">
 <title id="title">Open SLRR native binding coverage</title>
-<desc id="desc">287 with a body, 12 no-op, 77 missing, out of 376. Bars show counts, not percentages of game completion.</desc>
+<desc id="desc">289 with a body, 12 no-op, 75 missing, out of 376. Bars show counts, not percentages of game completion.</desc>
 <rect width="1120" height="430" rx="12" fill="#0d1117"/>
 <g font-family="Segoe UI,Arial,sans-serif">
 <text x="28" y="34" font-size="21" fill="#f0f6fc" text-anchor="start">Native binding coverage</text>
-<text x="28" y="58" font-size="13" fill="#c9d1d9" text-anchor="start">287 with a body  /  12 no-op  /  77 missing  ·  376 stock natives</text>
+<text x="28" y="58" font-size="13" fill="#c9d1d9" text-anchor="start">289 with a body  /  12 no-op  /  75 missing  ·  376 stock natives</text>
 <line x1="170.0" x2="170.0" y1="80" y2="326" stroke="#21262d"/>
 <text x="170.0" y="346" font-size="12" fill="#8b949e" text-anchor="middle">0</text>
 <line x1="387.5" x2="387.5" y1="80" y2="326" stroke="#21262d"/>
@@ -21,11 +21,11 @@
 <text x="417.95" y="102" font-size="12" fill="#ffffff" text-anchor="middle">51</text>
 <text x="649.8" y="102" font-size="12" fill="#8b949e" text-anchor="start">54</text>
 <text x="156" y="137" font-size="13" fill="#c9d1d9" text-anchor="end">Language</text>
-<rect x="170" y="120" width="522.0" height="25" fill="#49a58d"><title>Language: 60 with a body</title></rect>
-<text x="431.0" y="137" font-size="12" fill="#ffffff" text-anchor="middle">60</text>
-<rect x="692.0" y="120" width="17.4" height="25" fill="#d39338"><title>Language: 2 no-op</title></rect>
-<rect x="709.4" y="120" width="104.39999999999999" height="25" fill="#ab474b"><title>Language: 12 missing</title></rect>
-<text x="761.6" y="137" font-size="12" fill="#ffffff" text-anchor="middle">12</text>
+<rect x="170" y="120" width="539.4" height="25" fill="#49a58d"><title>Language: 62 with a body</title></rect>
+<text x="439.7" y="137" font-size="12" fill="#ffffff" text-anchor="middle">62</text>
+<rect x="709.4" y="120" width="17.4" height="25" fill="#d39338"><title>Language: 2 no-op</title></rect>
+<rect x="726.8" y="120" width="87.0" height="25" fill="#ab474b"><title>Language: 10 missing</title></rect>
+<text x="770.3" y="137" font-size="12" fill="#ffffff" text-anchor="middle">10</text>
 <text x="823.8" y="137" font-size="12" fill="#8b949e" text-anchor="start">74</text>
 <text x="156" y="172" font-size="13" fill="#c9d1d9" text-anchor="end">Sound &amp; scripts</text>
 <rect x="170" y="155" width="95.69999999999999" height="25" fill="#49a58d"><title>Sound &amp; scripts: 11 with a body</title></rect>

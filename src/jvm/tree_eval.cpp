@@ -318,6 +318,18 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
       case 3:
         r = ai | bi;
         break;
+      case 4:
+        r = ai ^ bi;
+        break;
+      case 12:
+        r = static_cast<int32_t>(static_cast<uint32_t>(ai) << (static_cast<uint32_t>(bi) & 31u));
+        break;
+      case 13:
+        r = ai >> (static_cast<uint32_t>(bi) & 31u);
+        break;
+      case 14:
+        r = static_cast<int32_t>(static_cast<uint32_t>(ai) >> (static_cast<uint32_t>(bi) & 31u));
+        break;
       case 5:
         r = ai & bi;
         break;
@@ -1038,8 +1050,7 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
             push(Value::make_int(r ? 1 : 0));
           }
           pending_expr = -1;
-        } else if (pending_expr == 5 ||
-                   (pending_expr >= 6 && pending_expr <= 11) ||
+        } else if ((pending_expr >= 3 && pending_expr <= 14) ||
                    pending_expr == 15 || pending_expr == 16 ||
                    pending_expr == 17 || pending_expr == 18 ||
                    pending_expr == 19) {
@@ -1189,8 +1200,12 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
         {
           const size_t after = ip + 1 + static_cast<size_t>(n.imm);
           if (after < tree.size() && tree[after].wide && tree[after].imm == 35 &&
-              (tree[after].op == 0x07 || tree[after].op == 0x08))
+              (tree[after].op == 0x07 || tree[after].op == 0x08)) {
+            // Store paths still evaluate intermediate instance receivers.
+            // A later class carrier explicitly selects a static path.
+            path_static = false;
             break;
+          }
         }
         const size_t path_ip = ip;
         const int segs = static_cast<int>(n.imm);
@@ -1748,6 +1763,18 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
             case 3:
               r = ai | bi;
               break;  // bor
+            case 4:
+              r = ai ^ bi;
+              break;
+            case 12:
+              r = static_cast<int32_t>(static_cast<uint32_t>(ai) << (static_cast<uint32_t>(bi) & 31u));
+              break;
+            case 13:
+              r = ai >> (static_cast<uint32_t>(bi) & 31u);
+              break;
+            case 14:
+              r = static_cast<int32_t>(static_cast<uint32_t>(ai) >> (static_cast<uint32_t>(bi) & 31u));
+              break;
             case 5:
               r = ai & bi;
               break;  // band

@@ -68,40 +68,36 @@ void install_osd_script_hover(Jvm& jvm) {
   auto last = std::make_shared<Object*>(nullptr);
   jvm.add_gc_roots([last](const GcRootVisitor& visit) { visit(*last); });
   osd_set_hover_handler([&jvm, last](const OsdWidget* w) {
-    Object*& last_osd = *last;
-    // Physics hit volumes carry the gadget. The 0x012B plate is not a button.
-    Object* g = (w && w->button) ? w->button : nullptr;
-    Object* osd = nullptr;
-    if (g) {
-      auto it = g->fields.find("osd");
-      if (it != g->fields.end() && it->second.tag == ValueTag::Obj)
-        osd = it->second.v.o;
-    }
-    if (last_osd && osd && last_osd != osd) {
-      auto previous = last_osd->fields.find("pointedGadget");
-      if (previous != last_osd->fields.end() && previous->second.tag == ValueTag::Obj &&
-          previous->second.v.o) {
-        Object* old = previous->second.v.o;
-        jvm.invoke(old->class_name, "unfocus", "()V", {Value::make_obj(old)}, false);
-      }
-      last_osd->fields["pointedGadget"] = Value::make_obj(nullptr);
-    }
-    if (!osd) osd = last_osd;
-    if (g && osd) last_osd = osd;
-    if (!osd) return;
-    Object* cur = nullptr;
-    auto pit = osd->fields.find("pointedGadget");
-    if (pit != osd->fields.end() && pit->second.tag == ValueTag::Obj)
-      cur = pit->second.v.o;
-    osd->fields["controlMode"] = Value::make_int(0);
-    if (cur == g) return;
-    if (cur && !cur->class_name.empty())
-      jvm.invoke(cur->class_name, "unfocus", "()V", {Value::make_obj(cur)},
-                 false);
-    osd->fields["pointedGadget"] = Value::make_obj(g);
-    osd->fields["controlMode"] = Value::make_int(0);
-    if (g && !g->class_name.empty())
-      jvm.invoke(g->class_name, "focus", "()V", {Value::make_obj(g)}, false);
+    auto object=[](Object* o,const char* key)->Object* {
+      if(!o)return nullptr;auto i=o->fields.find(key);
+      return i!=o->fields.end()&&i->second.tag==ValueTag::Obj?i->second.v.o:nullptr;
+    };
+    auto clear=[&](Object* osd){
+      if(!osd)return;
+      jvm.invoke("java.render.Osd","deactivateText","()V",{Value::make_obj(osd)},false);
+      // Also clean an orphaned tooltip left by an earlier manual unfocus.
+      if(Object* text=object(osd,"tooltipText"))
+        jvm.invoke("java.render.Text","changeText","(Ljava.lang.String;)V",{Value::make_obj(text),Value::make_obj(nullptr)},false);
+      if(Object* rect=object(osd,"tooltipRect"))
+        jvm.invoke_by_name(rect->class_name,"finalize",{Value::make_obj(rect)},false);
+      osd->fields["tooltipText"]=Value::make_obj(nullptr);
+      osd->fields["tooltipRect"]=Value::make_obj(nullptr);
+      osd->fields["pointedGadget"]=Value::make_obj(nullptr);
+    };
+    Object* g=w?w->button:nullptr;
+    if(Object* parent=object(g,"parent"))
+      if(jvm.tree_instance_of(parent,"java.render.osd.Slider"))g=parent;
+    Object* osd=object(g,"osd");
+    if(*last && *last!=osd)clear(*last);
+    if(!osd){*last=nullptr;return;}
+    *last=osd;
+    osd->fields["controlMode"]=Value::make_int(0);
+    if(object(osd,"pointedGadget")==g)return;
+    clear(osd);
+    osd->fields["pointedGadget"]=Value::make_obj(g);
+    osd->fields["lastPointedGadget"]=Value::make_obj(g);
+    osd->fields["lastUserActivityTimeStamp"]=jvm.invoke("java.lang.System","currentTime","()F",{},true);
+    if(g)jvm.invoke(g->class_name,"focus","()V",{Value::make_obj(g)},false);
   });
 }
 }  // namespace slrr

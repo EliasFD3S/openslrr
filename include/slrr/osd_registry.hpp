@@ -69,6 +69,7 @@ struct OsdWidget {
 void osd_clear_widgets();
 bool osd_focus_plate_visible(const OsdWidget& plate);
 bool osd_highlight_disabled(const OsdWidget& plate);
+bool osd_widget_is_slider(const OsdWidget& widget);
 // Hide one widget (ResourceRef.destroy of a rectangle instance).
 void osd_hide_widget(int32_t index);
 OsdWidget* osd_widget_mut(int32_t index);
@@ -134,7 +135,7 @@ void osd_set_cmd_disabled(int32_t cmd, bool disabled);
 void osd_hide_cmd(int32_t cmd);
 // Dialog.show plants a fullscreen button (cmd 9999999) on a second OSD.
 // Closing the plate must drop that shield, or NO leaves the menu covered.
-void osd_drop_modal_shield();
+void osd_drop_modal_shield(Object* owner);
 
 // Hover (Gadget.focus / HL_BACKLIGHT). Returns true when pointed widget changes.
 bool osd_set_hover_at(float osd_x, float osd_y);

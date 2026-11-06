@@ -416,7 +416,14 @@ void object_wait(Object* self, Jvm* vm) {
   }
   // display() hides next. Drop the shield here too: hide()'s
   // `if (backShieldOsd)` can miss the quad that actually covers the menu.
-  if (woken) osd_drop_modal_shield();
+  if(woken && vm && vm->tree_instance_of(self,"java.render.osd.dialog.Dialog")) {
+    auto field=[&](const char* name)->Object* {
+      auto i=self->fields.find(name);
+      return i!=self->fields.end()&&i->second.tag==ValueTag::Obj?i->second.v.o:nullptr;
+    };
+    Object* shield=field("backShieldOsd");
+    osd_drop_modal_shield(shield?shield:field("osd"));
+  }
   // An aborted wait must not look like OK (result stays 0 and NEW career
   // saves and enters the garage). notify() is the only success path.
   if (!woken) {

@@ -453,8 +453,10 @@ void restore_other_osds(Object* except) {
 
 }  // namespace
 
-void osd_drop_modal_shield() {
+void osd_drop_modal_shield(Object* owner) {
+  if(!owner)return;
   for (OsdWidget& w : g_widgets) {
+    if(w.owner!=owner)continue;
     if (w.cmd != 9999999 || w.hidden) continue;
     w.hidden = true;
     hide_shield_group(w.group);
@@ -474,7 +476,7 @@ void osd_drop_modal_shield() {
     slrr_text_set_osd_visible(w.owner, false);
   }
   for (OsdWidget& w : g_widgets) {
-    if (!w.owner) continue;
+    if (w.owner!=owner) continue;
     auto fit = w.owner->fields.find("flags");
     if (fit == w.owner->fields.end() || fit->second.tag != ValueTag::Int)
       continue;
@@ -483,9 +485,27 @@ void osd_drop_modal_shield() {
   }
 }
 
+bool osd_widget_is_slider(const OsdWidget& widget) {
+  Object* gadget=widget.button;
+  for(int depth=0;gadget && depth<4;++depth) {
+    if(gadget->class_name=="java.render.osd.Slider")return true;
+    const auto parent=gadget->fields.find("parent");
+    gadget=parent!=gadget->fields.end() && parent->second.tag==ValueTag::Obj
+        ?parent->second.v.o:nullptr;
+  }
+  return false;
+}
+
 bool osd_set_hover_at(float osd_x, float osd_y) {
   const int32_t idx = osd_hit_index(osd_x, osd_y);
-  const bool changed = idx != g_hover_index;
+  auto target=[](const OsdWidget* w)->Object* {
+    if(!w || !w->button)return nullptr;
+    auto i=w->button->fields.find("parent");
+    if(i!=w->button->fields.end()&&i->second.tag==ValueTag::Obj&&i->second.v.o &&
+       i->second.v.o->class_name=="java.render.osd.Slider")return i->second.v.o;
+    return w->button;
+  };
+  const bool changed = target(osd_widget_at(idx)) != target(osd_widget_at(g_hover_index));
   g_hover_index = idx;
   if (g_hover) g_hover(osd_widget_at(idx));
   return changed;
@@ -598,7 +618,7 @@ void osd_set_owner_visible(Object* osd, bool visible) {
   // Hiding the plate alone left that quad up after NO. Restoring the
   // other OSDs puts the menu labels back if the shield shared an owner.
   if (!visible) {
-    osd_drop_modal_shield();
+    osd_drop_modal_shield(osd);
     restore_other_osds(osd);
   }
 }

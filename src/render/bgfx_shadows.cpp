@@ -625,7 +625,8 @@ namespace slrr {
       };
       float identity[16];
       bx::mtxIdentity(identity);
-      for (const ScenePart& part : parts_) receive(part.vbh, part.ibh, identity);
+      if(garage_)
+        for (const ScenePart& part : parts_) receive(part.vbh, part.ibh, identity);
       for (const auto& instance : instances_) {
         if (instance.sky || instance.vehicle_material || !instance.geometry)
           continue;

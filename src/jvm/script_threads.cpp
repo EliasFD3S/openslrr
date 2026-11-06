@@ -56,7 +56,11 @@ void WINAPI entry(void* p){
   std::terminate();
 }
 void resume(Scheduler& s,Thread& t){
-  s.current=&t;s.deadline=Clock::now()+std::chrono::milliseconds(1);
+  // MAX_PRIORITY is used by script loaders. Give CPU-bound loading a
+  // bounded frame-sized burst instead of spreading it over dozens of frames.
+  const int priority=std::max(0,script_thread_priority(t.object));
+  const int slice=1+(priority*15)/10;
+  s.current=&t;s.deadline=Clock::now()+std::chrono::milliseconds(slice);
   s.vm->exchange_execution_state(s.host_execution);
   s.vm->exchange_execution_state(t.execution);
   SwitchToFiber(t.fiber);
@@ -93,6 +97,11 @@ void script_thread_start(Jvm& vm,Object* object){
   object->fields["_thread_alive"]=Value::make_int(t.alive?1:0);
 }
 bool script_thread_alive(Jvm& vm,Object* o){auto* t=find(vm,o);return t&&t->alive&&!t->stopping;}
+int script_thread_priority(Object* o){
+  if(!o)return 0;auto i=o->fields.find("_thread_priority");
+  return i!=o->fields.end()&&i->second.tag==ValueTag::Int?std::clamp(i->second.v.i,-10,10):0;
+}
+void script_thread_set_priority(Object* o,int priority){if(o)o->fields["_thread_priority"]=Value::make_int(std::clamp(priority,-10,10));}
 void script_thread_stop(Jvm& vm,Object* o){
   auto* t=find(vm,o);if(!t||!t->alive)return;
   t->stopping=true;t->suspended=false;t->wake=0;
@@ -131,7 +140,9 @@ void script_threads_tick(Jvm& vm){
   struct Guard{bool& b;~Guard(){b=false;}} guard{s.ticking};
   std::vector<Thread*> ready;
   for(auto& p:s.threads)if(p.second->alive&&!p.second->suspended&&p.second->wake<=now())ready.push_back(p.second.get());
-  const auto frame_deadline=Clock::now()+std::chrono::milliseconds(4);
+  std::stable_sort(ready.begin(),ready.end(),[](const Thread* a,const Thread* b){return script_thread_priority(a->object)>script_thread_priority(b->object);});
+  const bool urgent=!ready.empty()&&script_thread_priority(ready.front()->object)==10;
+  const auto frame_deadline=Clock::now()+std::chrono::milliseconds(urgent?16:8);
   if(!ready.empty()) {
     const size_t start=s.next%ready.size();size_t ran=0;
     while(ran<ready.size()){

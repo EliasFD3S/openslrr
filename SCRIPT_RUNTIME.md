@@ -22,13 +22,16 @@ thread; there are no concurrent Java worker threads.
 - `stop` requests cancellation and wakes a suspended/sleeping thread. The next
   resume/checkpoint unwinds interpreter scopes before releasing the fiber.
 - TREE checks its time slice every 2,048 operations. Each resumption gets about
-  1 ms; the host scheduling pass has a 4 ms budget and rotates through runnable
-  threads. Ordinary native C++ work cannot be preempted mid-call.
+  1-16 ms according to `Thread.setPriority` (-10 to 10; nonpositive priorities
+  retain a 1 ms slice). The scheduling pass has an 8 ms soft budget, raised
+  to 16 ms while a MAX_PRIORITY thread is ready, and rotates eligible threads.
+  Ordinary native C++ work cannot be preempted mid-call.
 
 `Object.wait` yields within a script fiber and uses the existing modal pump on
 the host context. Waiters are tracked separately: `notify` wakes one waiting
 execution, `notifyAll` wakes all. MessagePort waits return immediately if a
-message is already queued. VM/GC depth counters are switched with each stack;
+message is already queued. Waking a message port never clears dialog modal
+flags; dialog completion removes only its own modal shield. VM/GC depth counters are switched with each stack;
 scoped roots retain suspended locals, operands, arguments and construction
 state. See [VM_GC.md](VM_GC.md).
 
@@ -69,6 +72,14 @@ Live thread objects, notification endpoints and callback receivers are GC
 roots. Resource destruction removes associated watches/hooks; VM teardown
 cancels suspended executions before freeing their stacks and registries.
 
+## Section presentation
+
+`GameLogic.changeActiveSection` and GameState `exit` hold world presentation
+while their cooperative stacks are suspended. The last complete frame stays
+visible until the transition finishes; explicit loading overlays can still
+be presented. This prevents a destroyed CarLot camera from exposing the free
+camera and partially detached cars. The scope unwinds on cancellation as well.
+
 ## Validation
 
 Temporary headless diagnostics exercised:
@@ -81,6 +92,13 @@ Temporary headless diagnostics exercised:
   notification aliases, custom messages, replacement, one-shot/removal and
   native registration entry points.
 - Stock Init followed by cooperative frames and repeated collections.
+- The actual `Mechanic.handleEvent` tuning path with stock styles and
+  rectangle synchronization: slider clicks reach the part, and only explicit
+  OK closes the dialog. Assignment paths such as `dlg.osd.globalHandler = part`
+  evaluate the intermediate instance receiver before writing the field.
+- Cold CarLot navigation using the six local saved vehicles: the first
+  transition dropped from about 1.7 s to 0.84 s in the headless probe. This
+  excludes GPU uploads and does not imply instantaneous cold loading.
 - Fuel-rail pointer hit-testing and dragging through a live part message
   thread while a modal dialog stays open until explicit OK.
 

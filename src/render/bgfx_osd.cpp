@@ -569,10 +569,11 @@ namespace slrr {
       osd_view_ = kOsdView;
       if (const OsdWidget* hw = osd_hover_widget()) {
         // Text buttons hover the label, same as the main menu. The hl
-        // texture stays on icon buttons (garage) and slider tracks.
+        // texture stays on icon buttons. Sliders retain their own track/knob.
         const bool text_button =
             !hw->string_input && !hw->row_label && hw->label_src;
-        if (hw->layer == layer && !hw->string_input && !text_button &&
+        if (hw->layer == layer && !osd_widget_is_slider(*hw) &&
+            !hw->string_input && !text_button &&
             !hw->icon_path.empty()) {
           OsdWidget hl = *hw;
           // Square icons: stock ×1.1. Slider bars are wide and opaque, so the

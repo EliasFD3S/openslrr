@@ -1,4 +1,5 @@
 #include "slrr/jvm.hpp"
+#include "slrr/scene_presentation.hpp"
 #include "slrr/script_threads.hpp"
 #include "slrr/script_events.hpp"
 #include <optional>
@@ -862,6 +863,8 @@ Value Jvm::invoke_by_name(const std::string& class_fqn,
     }
     return Value::make_void();
   }
+  SceneTransitionScope transition(jni == "(Ljava.game.GameState;)V" &&
+      (method == "exit" || (method == "changeActiveSection" && owner == "java.game.GameLogic")));
   ++invoke_depth_;
   TreeEvalResult tr;
   try {
@@ -963,6 +966,8 @@ Value Jvm::invoke(const std::string& class_fqn, const std::string& method,
     }
     return Value::make_void();
   }
+  SceneTransitionScope transition(jni_sig == "(Ljava.game.GameState;)V" &&
+      (method == "exit" || (method == "changeActiveSection" && owner == "java.game.GameLogic")));
   ++invoke_depth_;
   TreeEvalResult tr;
   try {

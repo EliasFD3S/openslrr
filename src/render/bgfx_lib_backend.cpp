@@ -1,4 +1,5 @@
 #include "slrr/render_backend.hpp"
+#include "slrr/scene_presentation.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/part_runtime.hpp"
@@ -349,6 +350,9 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
 {
     ++frames_;
     if (!ready_) return;
+    // A yielded section change must not expose its half-destroyed world or
+    // the fallback camera. An opaque loading plate can still be presented.
+    if (scene_transition_active() && osd_loading_overlay().empty()) return;
 
 #ifdef _WIN32
     RECT rc{};
