@@ -82,7 +82,8 @@ Object* script_instance_for(Jvm& jvm, const RpkIndex& rpk, uint32_t full_id) {
 // VehicleType resources carry only `script Brand_VT.class`. Stock create
 // builds that class so the constructor fills vtdarr; init() then ORs the
 // set mask. Returning the blank GameRef left every new-dealer slot null.
-Object* script_construct(Jvm& jvm, const RpkIndex& rpk, uint32_t full_id) {
+Object* script_construct(Jvm& jvm, const RpkIndex& rpk, uint32_t full_id,
+                         const std::string& alias = "VehicleType") {
   std::string script = rpk.payload_prop(full_id, "script");
   while (!script.empty() && (script.back() == '\r' || script.back() == '\n' ||
                              script.back() == ' '))
@@ -111,7 +112,7 @@ Object* script_construct(Jvm& jvm, const RpkIndex& rpk, uint32_t full_id) {
     st->type_id = static_cast<int32_t>(full_id);
     st->script = inst;
     st->class_name = tc->name();
-    st->alias = "VehicleType";
+    st->alias = alias;
     st->empty = false;
     st->flags &= ~kWorldTreeRoot;
   }
@@ -120,6 +121,13 @@ Object* script_construct(Jvm& jvm, const RpkIndex& rpk, uint32_t full_id) {
       tc->name(), "<init>",
       {Value::make_obj(inst), Value::make_int(static_cast<int32_t>(full_id))},
       false);
+
+  // A catalog kit is a scripted Set, not a VehicleType or a plain handle.
+  // Its constructor supplies the label; build(Inventory) supplies the parts.
+  if (jvm.tree_instance_of(inst, "java.game.parts.Set")) {
+    std::printf("[set] created %s id=0x%x\n", inst->class_name.c_str(), full_id);
+    return inst;
+  }
 
   int models = 0;
   int mask = 0;
@@ -584,6 +592,14 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
           if (Object* inst =
                   script_construct(jvm, rpk, static_cast<uint32_t>(id)))
             return Value::make_obj(inst);
+        }
+        if (id && alias_s == "set_loader") {
+          if (Object* inst = script_construct(jvm, rpk, static_cast<uint32_t>(id), alias_s)) {
+            gameref_set_parent(inst, parent);
+            gameref_bind_alias(self, inst);
+            return Value::make_obj(inst);
+          }
+          return Value::make_obj(nullptr);
         }
         return Value::make_obj(self);
       });
