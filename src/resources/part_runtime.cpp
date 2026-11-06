@@ -643,8 +643,8 @@ bool mesh_span(uint32_t resource, float &min_y, float &max_y, float &cx,
         if (mesh.info.ok) {
           box.ok = true;
           for (int i = 0; i < 3; ++i) {
-            box.min[i] = mesh.info.bbox_min[i] * 0.01f;
-            box.max[i] = mesh.info.bbox_max[i] * 0.01f;
+            box.min[i] = mesh.info.bbox_min[i] * mesh.position_scale;
+            box.max[i] = mesh.info.bbox_max[i] * mesh.position_scale;
           }
         }
       }
@@ -1764,6 +1764,13 @@ void finish_dynamics_sync(Object *chassis, Record &rec) {
     ++rec.physics_status_lines;
   }
 }
+bool chassis_rest_contact(const Record& rec, physics::Vec3& contact) {
+  float low, high, x, z;
+  const uint32_t render = rec.render_set ? rec.render_id : rec.config->render;
+  if (!mesh_span(render, low, high, x, z)) return false;
+  contact = {x, low, z};
+  return true;
+}
 // setMatrix of a car puts the midpoint of the four static tyre contacts on
 // the given point and writes the loaded spring length. The body stays asleep.
 void park_chassis(Object *chassis, bool shift) {
@@ -1779,11 +1786,17 @@ void park_chassis(Object *chassis, bool shift) {
   for (const auto &wheel : rec->dynamics.wheels)
     if (wheel.enabled)
       ++count;
-  if (!count || !(mass > 0.f))
+  if (!(mass > 0.f))
     return;
-  const float share = mass / static_cast<float>(count);
+  const float share = count ? mass / static_cast<float>(count) : mass;
   physics::Vec3 contact;
   int used = 0;
+  if (!count) {
+    // Bare shells have no tyre contact frame. Use their own bottom instead
+    // of returning with the model origin (often inside the shell) on the floor.
+    if (!chassis_rest_contact(*rec, contact)) return;
+    used = 1;
+  }
   for (size_t i = 0; i < 4; ++i) {
     auto &cfg = rec->dynamics.wheels[i];
     auto &state = rec->dynamics.state[i];
@@ -1844,11 +1857,15 @@ bool script_pos(void *key, float *x, float *y, float *z) {
   for (const auto &wheel : rec->dynamics.wheels)
     if (wheel.enabled)
       ++count;
-  if (!count || !(mass > 0.f))
+  if (!(mass > 0.f))
     return false;
-  const float share = mass / static_cast<float>(count);
+  const float share = count ? mass / static_cast<float>(count) : mass;
   physics::Vec3 contact;
   int used = 0;
+  if (!count) {
+    if (!chassis_rest_contact(*rec, contact)) return false;
+    used = 1;
+  }
   for (size_t i = 0; i < 4; ++i) {
     const auto &cfg = rec->dynamics.wheels[i];
     const auto &state = rec->dynamics.state[i];
