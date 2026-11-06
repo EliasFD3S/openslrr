@@ -5,6 +5,15 @@
 #include <unordered_set>
 
 namespace slrr {
+Jvm::RootScope::RootScope(Jvm& vm,GcRootProvider provider):vm_(vm),id_(++vm.gc_frame_id_) {
+  vm_.gc_frames_.emplace(id_,std::move(provider));
+}
+Jvm::RootScope::~RootScope(){vm_.gc_frames_.erase(id_);}
+void Jvm::exchange_execution_state(ExecutionState& state) {
+  std::swap(state.calls,gc_call_depth_);
+  std::swap(state.invokes,invoke_depth_);
+  std::swap(state.constructors,field_init_depth_);
+}
 void Jvm::add_gc_roots(GcRootProvider provider) {
   gc_roots_.push_back(std::move(provider));
 }
@@ -20,8 +29,8 @@ void Jvm::gc_safe_point() {
   if (gc_pending_ || gc_allocated_ >= gc_threshold_) collect_garbage();
 }
 int Jvm::collect_garbage() {
-  // Native callbacks can pump nested frames (dialogs/Object.wait). No sweep
-  // may run while TREE locals, operand stacks or native arguments are live.
+  // Active callbacks can pump nested frames. Only the quiescent host context
+  // may sweep; suspended cooperative stacks have explicit frame-root scopes.
   if (gc_call_depth_ || gc_running_) {
     gc_pending_ = true;
     return -1;
@@ -46,6 +55,7 @@ int Jvm::collect_garbage() {
         if (field.second.tag == ValueTag::Obj) mark(field.second.v.o);
     for (const auto& o : heap_) if (o->gc_disabled) mark(o.get());
     for (const auto& provider : gc_roots_) provider(mark);
+    for (const auto& frame : gc_frames_) frame.second(mark);
   };
   auto trace = [&] {
     for (size_t cursor = 0; cursor < work.size(); ++cursor) {

@@ -26,8 +26,12 @@ are deferred. Allocation pressure also requests collection (initial threshold:
 
 Roots include class statics and pinned objects, plus explicit providers for
 scene handles, installed/inventory part records, UI widgets/text/fonts, open
-files, monitors, active sections, mechanic state, hover callbacks and dyno
-sessions. Object fields and array slots are traced recursively, including
+files, monitors, active sections, mechanic state, hover callbacks, dyno
+sessions, notifications, callback registrations and live script threads.
+Suspended cooperative stacks retain scoped roots for TREE locals/operands,
+pending receivers and arrays, invocation arguments, and constructed objects.
+The scheduler saves/restores VM call-depth state when switching contexts; a
+quiescent host safe point can collect while other stacks are suspended. Object fields and array slots are traced recursively, including
 cycles. Native addresses are checked against the managed heap before use.
 
 Native ownership is deliberately conservative: an object retained by a native
@@ -50,6 +54,8 @@ It does not start the game or open a window.
 - `repos/SLRR_rev/docs/formats/tufa.md` distinguishes the source declarations
   from the installed classes and does not establish a complete GC algorithm.
 
-This batch implements VM lifetime natives. Notification/callback dispatch,
-thread scheduling, collision activation and the other missing game subsystems
-remain separate work; they have not been replaced by success-returning stubs.
+Notification/callback dispatch and cooperative thread scheduling are described
+in [SCRIPT_RUNTIME.md](SCRIPT_RUNTIME.md). Collision activation and the other
+missing game subsystems remain separate work. Native code retaining managed
+locals across a cooperative yield must use `Jvm::RootScope` or another explicit
+root provider.

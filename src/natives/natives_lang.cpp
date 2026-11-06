@@ -1,5 +1,6 @@
 #include "slrr/mainloop.hpp"
 #include "slrr/natives_boot.hpp"
+#include "slrr/script_threads.hpp"
 #include "slrr/ui_time.hpp"
 #include "natives_internal.hpp"
 
@@ -342,10 +343,13 @@ void register_lang_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         std::srand(static_cast<unsigned>(std::time(nullptr)));
         return Value::make_void();
       });
-  // HotkeyWatcher.run and the game-time refresher loop. start() must return
-  // so Init can continue; the watcher is not entered.
+  // Cooperative stacks resume run() from the host frame; start remains asynchronous.
   jvm.natives().register_method(
-      "java.lang.Thread", "init", "(Ljava.lang.String;)V", native_noop);
+      "java.lang.Thread", "init", "(Ljava.lang.String;)V",
+      [&jvm](Object* self,const std::vector<Value>& args){
+        script_thread_init(jvm,self,!args.empty()&&args[0].tag==ValueTag::Obj&&args[0].v.o?args[0].v.o->str:"");
+        return Value::make_void();
+      });
   jvm.natives().register_method(
       "java.lang.Thread", "start", "()V",
       [&jvm](Object* self, const std::vector<Value>&) {
@@ -357,28 +361,36 @@ void register_lang_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
             tgt = it->second.v.o->class_name.c_str();
         }
         std::printf("[native] Thread.start %s\n", tgt);
-        // GameLogic.run stays unscheduled. Mechanic.run only refreshes
-        // the info line, and that tick is applied here.
+        // Preserve mechanic pointer/inventory ownership while its Java loop runs.
         mainloop_note_thread(jvm, self, true);
+        script_thread_start(jvm,self);
         return Value::make_void();
       });
   jvm.natives().register_method(
       "java.lang.Thread", "stop", "()V",
       [&jvm](Object* self, const std::vector<Value>&) {
         mainloop_note_thread(jvm, self, false);
+        script_thread_stop(jvm,self);
         return Value::make_void();
       });
-  jvm.natives().register_method("java.lang.Thread", "sleep", "(F)V", native_noop);
+  jvm.natives().register_method("java.lang.Thread", "sleep", "(F)V",
+    [&jvm](Object*,const std::vector<Value>& args){
+      float ms=args.empty()?0.f:args[0].tag==ValueTag::Float?args[0].v.f:
+               args[0].tag==ValueTag::Int?static_cast<float>(args[0].v.i):0.f;
+      script_thread_sleep(jvm,ms);return Value::make_void();
+    });
+  for(bool suspend:{true,false})jvm.natives().register_method("java.lang.Thread",suspend?"suspend":"resume","()V",
+    [&jvm,suspend](Object* self,const std::vector<Value>&){script_thread_suspend(jvm,self,suspend);return Value::make_void();});
   jvm.natives().register_method(
       "java.lang.Thread", "isAlive", "()I",
-      [](Object*, const std::vector<Value>&) { return Value::make_int(0); });
+      [&jvm](Object* self, const std::vector<Value>&) { return Value::make_int(script_thread_alive(jvm,self)?1:0); });
 
   // Dialog.display is the script: show, Object.wait, hide, return result.
   // notify wakes only the object that is inside wait (nested dialogs).
   jvm.natives().register_method(
       "java.lang.Object", "wait", "()V",
-      [](Object* self, const std::vector<Value>&) {
-        object_wait(self);
+      [&jvm](Object* self, const std::vector<Value>&) {
+        object_wait(self,&jvm);
         return Value::make_void();
       });
   jvm.natives().register_method(
@@ -390,7 +402,7 @@ void register_lang_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   jvm.natives().register_method(
       "java.lang.Object", "notifyAll", "()V",
       [](Object* self, const std::vector<Value>&) {
-        object_notify(self);
+        object_notify(self,true);
         return Value::make_void();
       });
 

@@ -35,19 +35,19 @@ These milestones describe existing functionality, rather than a percentage of th
 
 ![Native bindings by family: with a body, no-op, or missing](assets/progress/native-coverage.svg)
 
-**277 with a body · 20 no-op · 79 missing**, out of **376 stock natives** (6 November 2026).
+**287 with a body · 12 no-op · 77 missing**, out of **376 stock natives** (6 November 2026).
 The bars show **numbers of functions**, not percentages. A body can still be partial or return a fixed value; these counts do not establish full behavior or validation in game. The separately counted no-op functions are explicitly registered as `native_noop`.
 
 | Family | With a body | No-op | Missing |
 | --- | ---: | ---: | ---: |
 | World | 3 | 0 | 51 |
-| Language | 50 | 10 | 14 |
+| Language | 60 | 2 | 12 |
 | Sound & scripts | 11 | 0 | 7 |
 | Resources | 49 | 5 | 6 |
 | Rendering | 35 | 0 | 1 |
 | Files & input | 32 | 5 | 0 |
 | Parts | 97 | 0 | 0 |
-| **Total** | **277** | **20** | **79** |
+| **Total** | **287** | **12** | **77** |
 
 World covers GroundRef, particles, animation and PhysicsRef; language covers `java.lang`. Resources covers GameRef, ResourceRef, RenderRef and SfxRef; rendering covers GfxEngine, Text, Camera and Viewport. Files & input includes File, FindFile, Input, Controller and MouseCursor; parts includes Part, Chassis, WheelRef, DynoData and SfxTable. Sound & scripts covers Sound, Vehicle, Painter, Navigator and GameLogic.
 
@@ -58,6 +58,7 @@ The snapshot matches the stock native table against registered class, method and
 | Area | Current state |
 | --- | --- |
 | Scripts | ✅ TUFA classes and TREE programs, inheritance, Java and native calls |
+| Script scheduling | ✅ Cooperative Windows fiber stacks; real run/sleep/wait, isAlive, stop, suspend/resume, and frame budgets. GameType callback lists and notification routing. See [SCRIPT_RUNTIME.md](SCRIPT_RUNTIME.md) |
 | VM memory | ✅ Mark/sweep garbage collection, pin/unpin and finalizers; conservative native roots. See [VM_GC.md](VM_GC.md) |
 | Resources | ✅ RPK packs, SCX models, DDS/PTX textures, and CFG configurations |
 | Garage and rendering | ✅ bgfx/D3D11, textures, script camera, sky, environment reflections and filtered projected car shadows |
@@ -81,6 +82,9 @@ The snapshot matches the stock native table against registered class, method and
 Some native functions are still placeholders. Engine-loop audio and the original music-mode shuffle/repeat policies are not implemented; track progression is currently sequential. The engine-volume setting is stored for future engine audio. You can browse the catalog and work on the car in the garage. Buying a part and saving the car have not been validated yet. Multiplayer is outside the current scope.
 
 ### Recent changes
+
+- Implemented cooperative script threads and scoped GC roots for suspended stacks. Java message loops, the mechanic refresher and showroom camera can now run directly.
+- Added GameType notification replacement/removal, event aliases/custom handlers/one-shot delivery, and control/drive/animate registrations.
 
 - Added an engine-owned Config instance, audio sliders, and debounced option saving, with a final save on normal shutdown.
 - Replaced the failing MCI music player with bounded PCM streaming through Media Foundation and XAudio2. Music volume is independent of effects and FMV.

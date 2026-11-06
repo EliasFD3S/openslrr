@@ -47,8 +47,10 @@ add_executable(slrr_host
   src/jvm/tree_eval.cpp
   src/jvm/jvm.cpp
   src/jvm/gc.cpp
+  src/jvm/script_threads.cpp
   src/boot/section_machine.cpp
   src/boot/mainloop.cpp
+  src/boot/script_events.cpp
   src/boot/boot.cpp
   src/physics/sl2_pacejka.cpp
   src/physics/dyno_model.cpp

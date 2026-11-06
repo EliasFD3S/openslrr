@@ -2,6 +2,7 @@
 #include "natives_internal.hpp"
 
 #include "slrr/gameref.hpp"
+#include "slrr/script_events.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
@@ -262,21 +263,27 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
                                   gameref_remove_all_timers(self);
                                   return Value::make_void();
                                 });
-  // Soft PE stubs — register/unregisterCallback modes (cursor/command).
-  jvm.natives().register_method(kGameType, "registerCallback", "(I)V", native_noop);
-  jvm.natives().register_method(kGameType, "unregisterCallback", "(I)V",
-                                native_noop);
-  jvm.natives().register_method(kGameType, "unregisterCallbacks", "()V",
-                                native_noop);
-  jvm.natives().register_method(
-      kGameType, "remNotification", "(Ljava.util.resource.GameRef;I)V", native_noop);
-  jvm.natives().register_method(
-      kGameType, "addNotification",
-      "(Ljava.util.resource.GameRef;IILjava.lang.String;)V", native_noop);
-  jvm.natives().register_method(
-      kGameType, "addNotification",
-      "(Ljava.util.resource.GameRef;IILjava.lang.String;Ljava.lang.String;)V",
-      native_noop);
+  for(bool enabled:{true,false})jvm.natives().register_method(kGameType,enabled?"registerCallback":"unregisterCallback","(I)V",
+    [&jvm,enabled](Object* self,const std::vector<Value>& args){
+      if(!args.empty()&&args[0].tag==ValueTag::Int)script_callback_set(jvm,self,args[0].v.i,enabled);
+      return Value::make_void();
+    });
+  jvm.natives().register_method(kGameType,"unregisterCallbacks","()V",
+    [&jvm](Object* self,const std::vector<Value>&){script_callbacks_remove(jvm,self);return Value::make_void();});
+  jvm.natives().register_method(kGameType,"remNotification","(Ljava.util.resource.GameRef;I)V",
+    [&jvm](Object* self,const std::vector<Value>& args){
+      if(args.size()>=2&&args[0].tag==ValueTag::Obj&&args[1].tag==ValueTag::Int)
+        script_notification_remove(jvm,self,args[0].v.o,args[1].v.i);
+      return Value::make_void();
+    });
+  auto add_notification=[&jvm](Object* self,const std::vector<Value>& args){
+    auto text=[&](size_t i){return args.size()>i&&args[i].tag==ValueTag::Obj&&args[i].v.o?args[i].v.o->str:std::string{};};
+    if(args.size()>=4&&args[0].tag==ValueTag::Obj&&args[1].tag==ValueTag::Int&&args[2].tag==ValueTag::Int)
+      script_notification_add(jvm,self,args[0].v.o,args[1].v.i,args[2].v.i,text(3),text(4));
+    return Value::make_void();
+  };
+  jvm.natives().register_method(kGameType,"addNotification","(Ljava.util.resource.GameRef;IILjava.lang.String;)V",add_notification);
+  jvm.natives().register_method(kGameType,"addNotification","(Ljava.util.resource.GameRef;IILjava.lang.String;Ljava.lang.String;)V",add_notification);
 
   // GameRef pose / flags / parent — used by Dummy, RenderRef, Camera, Scene.
   jvm.natives().register_method(

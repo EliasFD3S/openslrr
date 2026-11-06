@@ -1,4 +1,7 @@
 #include "slrr/jvm.hpp"
+#include "slrr/script_threads.hpp"
+#include "slrr/script_events.hpp"
+#include <optional>
 #include "slrr/natives_boot.hpp"
 #include "slrr/rpk_index.hpp"
 #include <algorithm>
@@ -71,6 +74,7 @@ float bits_to_float_u32(uint32_t bits) {
 }  // namespace
 
 Jvm::Jvm(NativeRegistry* natives) : natives_(natives) {}
+Jvm::~Jvm() { script_threads_shutdown(*this); script_events_shutdown(*this); }
 
 void Jvm::halt_unbound(const std::string& owner, const std::string& method,
                        const std::string& jni) {
@@ -391,6 +395,8 @@ Object* Jvm::new_object(const std::string& class_fqn) {
   ++gc_allocated_;
   Object* raw = obj.get();
   heap_.push_back(std::move(obj));
+  std::optional<RootScope> roots;
+  if(script_thread_active(*this))roots.emplace(*this,[&](const GcRootVisitor& visit){visit(raw);});
   apply_field_defaults(raw);
   return raw;
 }
@@ -709,6 +715,10 @@ Value Jvm::invoke_by_name(const std::string& class_fqn,
                           const std::string& method,
                           const std::vector<Value>& args, bool prefer_static) {
   GcCallScope gc_scope(gc_call_depth_);
+  std::optional<RootScope> roots;
+  if(script_thread_active(*this))roots.emplace(*this,[&](const GcRootVisitor& visit){
+    for(const auto& v:args)if(v.tag==ValueTag::Obj)visit(v.v.o);
+  });
   if (!find_class(class_fqn)) load_class(class_fqn);
   const TufaClass* cls = find_class(class_fqn);
   if (!cls) {
@@ -885,6 +895,10 @@ Value Jvm::invoke(const std::string& class_fqn, const std::string& method,
   GcCallScope gc_scope(gc_call_depth_);
   Object* self = nullptr;
   std::vector<Value> call_args = args;
+  std::optional<RootScope> roots;
+  if(script_thread_active(*this))roots.emplace(*this,[&](const GcRootVisitor& visit){
+    visit(self);for(const auto& v:call_args)if(v.tag==ValueTag::Obj)visit(v.v.o);
+  });
   if (!is_static && !call_args.empty() && call_args[0].tag == ValueTag::Obj) {
     self = call_args[0].v.o;
     call_args.erase(call_args.begin());

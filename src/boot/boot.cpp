@@ -6,6 +6,7 @@
 #include "slrr/host_sfx.hpp"
 #include "slrr/host_music.hpp"
 #include "slrr/host_game_options.hpp"
+#include "slrr/script_threads.hpp"
 #include "slrr/mainloop.hpp"
 #include "slrr/natives_boot.hpp"
 #include "slrr/object.hpp"
@@ -530,6 +531,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
       }
     }
     host_set_script_pump(nullptr);
+    script_threads_shutdown(jvm);
     video_fmv_close();
     host_game_options_update(jvm, true);
     host_music_stop();

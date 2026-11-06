@@ -1,6 +1,7 @@
 #include "slrr/natives_boot.hpp"
 #include "slrr/osd_registry.hpp"
 #include "slrr/object.hpp"
+#include "slrr/script_threads.hpp"
 #include <memory>
 #include <algorithm>
 #include <cmath>
@@ -41,8 +42,8 @@ void install_osd_script_hover(Jvm& jvm) {
     if(osd)osd->fields["sliderValue"]=Value::make_float(value);
     // Gadget.sendMessage uses Events for async GameType handlers (tuned
     // parts), and osdCommand for synchronous dialogs such as OptionsDialog.
-    // The host pumps sections only; deliver the part event synchronously
-    // instead of leaving it in a port with no running Java thread.
+    // Live Java threads consume their message port; retain synchronous
+    // delivery for handlers that have a port but no running script thread.
     Object* handler=object(slider,"handler");
     const int cmd=static_cast<int>(number(slider,"cmd",static_cast<float>(w.cmd)));
     if(handler && jvm.tree_instance_of(handler,"java.lang.GameType") && object(handler,"mp")) {
@@ -50,8 +51,14 @@ void install_osd_script_hover(Jvm& jvm) {
       jvm.invoke_by_name(event->class_name,"<init>",
          {Value::make_obj(event),Value::make_int(cmd),Value::make_int(4)},false);
       event->fields["gadget"]=Value::make_obj(slider);
-      jvm.invoke(handler->class_name,"handleMessage","(Ljava.util.Event;)V",
-         {Value::make_obj(handler),Value::make_obj(event)},false);
+      if(script_thread_alive(jvm,object(handler,"t"))) {
+        Object* port=object(handler,"mp");
+        jvm.invoke_by_name(port->class_name,"putMessage",
+           {Value::make_obj(port),Value::make_obj(event)},false);
+      } else {
+        jvm.invoke(handler->class_name,"handleMessage","(Ljava.util.Event;)V",
+           {Value::make_obj(handler),Value::make_obj(event)},false);
+      }
     } else if(handler) {
       jvm.invoke_by_name(handler->class_name,"osdCommand",
          {Value::make_obj(handler),Value::make_int(cmd)},false);

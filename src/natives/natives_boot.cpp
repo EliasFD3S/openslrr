@@ -1,4 +1,6 @@
 #include "slrr/natives_boot.hpp"
+#include "slrr/script_threads.hpp"
+#include "slrr/script_events.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/part_runtime.hpp"
 #include "natives_internal.hpp"
@@ -26,6 +28,7 @@
 #include <fstream>
 #include <functional>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -298,12 +301,12 @@ std::function<void()> g_loading_present;
 std::function<void()> g_force_present;
 std::function<bool(const std::string&)> g_screen_capture;
 // 1 = inside wait, 2 = notify arrived for this object.
-std::unordered_map<Object*, int> g_object_wait;
+struct ObjectWaiter { int state=1; };
+std::unordered_map<Object*, std::vector<ObjectWaiter*>> g_object_wait;
 
-void object_notify(Object* self) {
-  if (!self) return;
-  auto it = g_object_wait.find(self);
-  if (it != g_object_wait.end() && it->second == 1) it->second = 2;
+void object_notify(Object* self,bool all) {
+  auto it=g_object_wait.find(self);if(it==g_object_wait.end())return;
+  for(auto* waiter:it->second)if(waiter->state==1){waiter->state=2;if(!all)break;}
 }
 
 float osd_field_f(Object* o, const char* key, float fallback) {
@@ -373,27 +376,44 @@ void osd_mesh_halves(Object* osd, float mesh_w, float mesh_h, float* hw,
   if (plate) *plate = is_plate;
 }
 
-void object_wait(Object* self) {
+void object_wait(Object* self, Jvm* vm) {
   if (!self) return;
-  g_object_wait[self] = 1;
-  std::printf("[native] Object.wait %s pump=%d\n", self->class_name.c_str(),
+  if(self->class_name=="java.util.MessagePort") {
+    auto f=self->fields.find("fifo");
+    if(f!=self->fields.end()&&f->second.tag==ValueTag::Obj&&f->second.v.o) {
+      auto n=f->second.v.o->fields.find("elementCount");
+      if(n!=f->second.v.o->fields.end()&&n->second.tag==ValueTag::Int&&n->second.v.i>0)return;
+    }
+  }
+  ObjectWaiter waiter;
+  const bool cooperative=vm && script_thread_active(*vm);
+  g_object_wait[self].push_back(&waiter);
+  struct WaitGuard {
+    Object* key;ObjectWaiter* waiter;
+    ~WaitGuard(){auto i=g_object_wait.find(key);if(i==g_object_wait.end())return;
+      auto& list=i->second;list.erase(std::remove(list.begin(),list.end(),waiter),list.end());
+      if(list.empty())g_object_wait.erase(i);}
+  } wait_guard{self,&waiter};
+  if(!cooperative)std::printf("[native] Object.wait %s pump=%d\n", self->class_name.c_str(),
               g_script_pump ? 1 : 0);
   std::fflush(stdout);
   bool woken = false;
-  if (!g_script_pump) {
+  if(cooperative) {
+    while(waiter.state==1)script_thread_sleep(*vm,1.f);
+    woken=true;
+  } else if (!g_script_pump) {
     std::printf("[native] Object.wait %s no pump\n",
                 self->class_name.c_str());
   } else {
-    while (g_object_wait[self] == 1) {
+    while (waiter.state == 1) {
       if (!g_script_pump()) {
         std::printf("[native] Object.wait %s pump stop\n",
                     self->class_name.c_str());
         break;
       }
     }
-    woken = g_object_wait[self] == 2;
+    woken = waiter.state == 2;
   }
-  g_object_wait.erase(self);
   // display() hides next. Drop the shield here too: hide()'s
   // `if (backShieldOsd)` can miss the quad that actually covers the menu.
   if (woken) osd_drop_modal_shield();
@@ -405,7 +425,7 @@ void object_wait(Object* self) {
         it->second.v.i == 0)
       self->fields["result"] = Value::make_int(-1);
   }
-  std::printf("[native] Object.wait resume %s woken=%d\n",
+  if(!cooperative)std::printf("[native] Object.wait resume %s woken=%d\n",
               self->class_name.c_str(), woken ? 1 : 0);
   std::fflush(stdout);
 }
@@ -413,6 +433,14 @@ void object_wait(Object* self) {
 
 void host_set_script_pump(std::function<bool()> fn) {
   g_script_pump = std::move(fn);
+}
+void host_script_sleep(float milliseconds) {
+  if(!std::isfinite(milliseconds)||milliseconds<=0)return;
+  const auto start=std::chrono::steady_clock::now();
+  while(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count()<milliseconds) {
+    if(g_script_pump && !g_script_pump())break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
 }
 
 void host_set_loading_present(std::function<void()> fn) {
@@ -516,7 +544,9 @@ void frontend_set_fonts(Jvm& jvm, int32_t video_x, int32_t video_y) {
 }
 
 void register_boot_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
-  jvm.add_gc_roots([&sections](const GcRootVisitor& visit) {
+  jvm.add_gc_roots([&sections,&jvm](const GcRootVisitor& visit) {
+    script_threads_roots(jvm,visit);
+    script_events_roots(jvm,visit);
     visit(sections.actual()); visit(sections.garage());
     for (const auto& entry : g_host_files) visit(entry.first);
     for (const auto& entry : g_object_wait) visit(entry.first);

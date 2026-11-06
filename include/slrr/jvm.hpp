@@ -18,6 +18,17 @@ namespace slrr {
 class Jvm : public TreeHost {
  public:
   explicit Jvm(NativeRegistry* natives);
+  ~Jvm();
+  struct ExecutionState { int calls=0, invokes=0, constructors=0; };
+  void exchange_execution_state(ExecutionState& state);
+  class RootScope {
+   public:
+    RootScope(Jvm& vm, GcRootProvider provider);
+    ~RootScope();
+    RootScope(const RootScope&)=delete;
+   private:
+    Jvm& vm_; uint64_t id_;
+  };
 
   void set_game_root(std::string root);
   const std::string& game_root() const { return game_root_; }
@@ -89,6 +100,8 @@ class Jvm : public TreeHost {
   size_t gc_allocated_ = 0, gc_last_freed_ = 0, gc_threshold_ = 8192;
   uint32_t gc_next_identity_ = 1;
   std::vector<GcRootProvider> gc_roots_;
+  uint64_t gc_frame_id_=0;
+  std::unordered_map<uint64_t,GcRootProvider> gc_frames_;
   std::string resolve_class_path(const std::string& fqn) const;
   void seed_static_fields(const TufaClass& cls);
   void enrich_static_fields(const TufaClass& cls);

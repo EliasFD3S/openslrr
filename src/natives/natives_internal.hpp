@@ -87,8 +87,8 @@ void osd_world_to_ndc(Object* osd, float wx, float wy, float* nx, float* ny);
 // *plate is true for createRectangle backgrounds (vp baked into the mesh).
 void osd_mesh_halves(Object* osd, float mesh_w, float mesh_h, float* hw,
                      float* hh, bool* plate);
-void object_notify(Object* self);
-void object_wait(Object* self);
+void object_notify(Object* self,bool all=false);
+void object_wait(Object* self, Jvm* vm=nullptr);
 
 void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections);
 void register_lang_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections);

@@ -1,10 +1,13 @@
 #include "slrr/tree_eval.hpp"
+#include "slrr/jvm.hpp"
+#include "slrr/script_threads.hpp"
 
 #include "slrr/object.hpp"
 #include "slrr/osd_registry.hpp"
 #include "slrr/rpk_index.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -204,6 +207,15 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
   Object* last_osd = nullptr;
   // Garage OSD: Menu receiver often buried under args — track last createMenu.
   Object* last_menu = nullptr;
+  auto* vm=dynamic_cast<Jvm*>(host);
+  std::optional<Jvm::RootScope> frame_roots;
+  if(vm && script_thread_active(*vm))frame_roots.emplace(*vm,[&](const GcRootVisitor& visit){
+    auto value=[&](const Value& v){if(v.tag==ValueTag::Obj)visit(v.v.o);};
+    visit(self);for(const auto& v:args)value(v);
+    for(const auto& v:locals)value(v);for(const auto& v:stack)value(v);
+    visit(pending_put_recv);visit(pending_arr);visit(last_arr);visit(last_ifield_recv);
+    value(call_recv_value);visit(last_osd);visit(last_menu);
+  });
 
   auto fail = [&](const std::string& msg) -> TreeEvalResult {
     out.ok = false;
@@ -715,7 +727,8 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
       jump_err = "jump OOB";
       return false;
     }
-    if (rel < 0 && ++back_edges[static_cast<size_t>(next)] > 8192) return true;
+    if (rel < 0 && !(vm && script_thread_active(*vm)) &&
+        ++back_edges[static_cast<size_t>(next)] > 8192) return true;
     ip = static_cast<size_t>(next) - 1;
     return true;
   };
@@ -797,7 +810,11 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
     }
   };
   for (; ip < tree.size(); ++ip) {
-    if (++steps > kMaxSteps) return fail("step budget exceeded");
+    if(vm && (steps % 2048)==0 && script_thread_checkpoint(*vm))steps=0;
+    if (++steps > kMaxSteps) {
+      if(vm && script_thread_active(*vm))steps=0;
+      else return fail("step budget exceeded");
+    }
     const auto& n = tree[ip];
     switch (n.op) {
       case 0x01: {  // local
@@ -1310,6 +1327,12 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
         break;
       case 0x19: {  // class
         if (!n.wide) return fail("class missing imm");
+        if(pending_expr==32) {
+          Object* object=!stack.empty()&&stack.back().tag==ValueTag::Obj?pop().v.o:nullptr;
+          push(Value::make_int(host->tree_instance_of(object,cls.class_name(n.imm))?1:0));
+          pending_expr=-1;pending_class.clear();path_static=false;saw_class=false;
+          break;
+        }
         if (pending_expr == 33) {
           // A reference cast keeps the object on the stack. Its class
           // carrier is not a static-access prefix: ((Slider)e.gadget).value

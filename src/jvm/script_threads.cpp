@@ -1,0 +1,163 @@
+#include "slrr/script_threads.hpp"
+#include "slrr/jvm.hpp"
+#include "slrr/natives_boot.hpp"
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <memory>
+#include <unordered_map>
+#include <vector>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+namespace slrr {
+namespace {
+using Clock=std::chrono::steady_clock;
+double now(){return std::chrono::duration<double>(Clock::now().time_since_epoch()).count();}
+struct Cancelled {};
+struct Scheduler;
+struct Thread {
+  Scheduler* scheduler=nullptr; Object* object=nullptr;
+  void* fiber=nullptr; bool alive=false, suspended=false, stopping=false;
+  double wake=0; Jvm::ExecutionState execution;
+};
+struct Scheduler {
+  Jvm* vm=nullptr;void* host=nullptr;bool converted=false, ticking=false;
+  Thread* current=nullptr;Clock::time_point deadline;
+  size_t next=0;
+  Jvm::ExecutionState host_execution;
+  std::unordered_map<Object*,std::unique_ptr<Thread>> threads;
+};
+std::unordered_map<Jvm*,std::unique_ptr<Scheduler>> schedulers;
+Scheduler& state(Jvm& vm){auto& p=schedulers[&vm];if(!p){p=std::make_unique<Scheduler>();p->vm=&vm;}return *p;}
+Thread* find(Jvm& vm,Object* o){auto s=schedulers.find(&vm);if(s==schedulers.end())return nullptr;auto i=s->second->threads.find(o);return i==s->second->threads.end()?nullptr:i->second.get();}
+#ifdef _WIN32
+void yield(Scheduler& s){
+  auto& t=*s.current;
+  s.vm->exchange_execution_state(t.execution);
+  s.vm->exchange_execution_state(s.host_execution);
+  SwitchToFiber(s.host);
+  if(t.stopping)throw Cancelled{};
+}
+void WINAPI entry(void* p){
+  auto& t=*static_cast<Thread*>(p);auto& s=*t.scheduler;
+  try {
+    if(t.stopping)throw Cancelled{};
+    Object* target=t.object;
+    auto i=target->fields.find("target");
+    if(i!=target->fields.end()&&i->second.tag==ValueTag::Obj&&i->second.v.o)target=i->second.v.o;
+    s.vm->invoke_by_name(target->class_name,"run",{Value::make_obj(target)},false);
+  } catch(const Cancelled&) {} catch(const std::exception& e){std::fprintf(stderr,"[thread] %s\n",e.what());}
+  t.alive=false;t.object->fields["_thread_alive"]=Value::make_int(0);
+  yield(s);
+  std::terminate();
+}
+void resume(Scheduler& s,Thread& t){
+  s.current=&t;s.deadline=Clock::now()+std::chrono::milliseconds(1);
+  s.vm->exchange_execution_state(s.host_execution);
+  s.vm->exchange_execution_state(t.execution);
+  SwitchToFiber(t.fiber);
+  s.current=nullptr;
+  if(!t.alive && t.fiber){DeleteFiber(t.fiber);t.fiber=nullptr;}
+}
+#endif
+}
+void script_thread_init(Jvm& vm,Object* object,const std::string& name){
+  if(!object||script_thread_alive(vm,object))return;
+  object->fields["_thread_name"]=Value::make_obj(vm.new_string(name));
+  object->fields["_thread_alive"]=Value::make_int(0);
+  auto& s=state(vm);auto& t=s.threads[object];
+#ifdef _WIN32
+  if(t&&t->fiber)DeleteFiber(t->fiber);
+#endif
+  t=std::make_unique<Thread>();t->scheduler=&s;t->object=object;
+}
+void script_thread_start(Jvm& vm,Object* object){
+  if(!object||script_thread_alive(vm,object))return;
+  if(!find(vm,object)){
+    auto name=object->fields.find("_thread_name");
+    script_thread_init(vm,object,name!=object->fields.end()&&name->second.tag==ValueTag::Obj&&name->second.v.o?name->second.v.o->str:object->class_name);
+  }
+  auto& s=state(vm);auto& t=*find(vm,object);
+#ifdef _WIN32
+  if(t.fiber){DeleteFiber(t.fiber);t.fiber=nullptr;}
+  t.execution={};t.stopping=false;t.suspended=false;t.wake=0;
+  t.fiber=CreateFiberEx(64*1024,1024*1024,FIBER_FLAG_FLOAT_SWITCH,entry,&t);
+  t.alive=t.fiber!=nullptr;
+#else
+  std::fprintf(stderr,"[thread] cooperative stacks require Windows\n");
+#endif
+  object->fields["_thread_alive"]=Value::make_int(t.alive?1:0);
+}
+bool script_thread_alive(Jvm& vm,Object* o){auto* t=find(vm,o);return t&&t->alive&&!t->stopping;}
+void script_thread_stop(Jvm& vm,Object* o){
+  auto* t=find(vm,o);if(!t||!t->alive)return;
+  t->stopping=true;t->suspended=false;t->wake=0;
+  o->fields["_thread_alive"]=Value::make_int(0);
+  if(t->scheduler->current==t)throw Cancelled{};
+}
+void script_thread_suspend(Jvm& vm,Object* o,bool suspended){
+  auto* t=find(vm,o);if(!t||!t->alive||t->stopping)return;t->suspended=suspended;
+#ifdef _WIN32
+  if(suspended&&t->scheduler->current==t)yield(*t->scheduler);
+#endif
+}
+bool script_thread_active(Jvm& vm){auto i=schedulers.find(&vm);return i!=schedulers.end()&&i->second->current;}
+void script_thread_sleep(Jvm& vm,float ms){
+  if(!std::isfinite(ms)||ms<0)ms=0;
+  auto& s=state(vm);
+#ifdef _WIN32
+  if(s.current){s.current->wake=now()+double(ms)*.001;yield(s);return;}
+#endif
+  host_script_sleep(ms);
+}
+bool script_thread_checkpoint(Jvm& vm){
+  auto i=schedulers.find(&vm);if(i==schedulers.end()||!i->second->current)return false;
+  auto& s=*i->second;
+#ifdef _WIN32
+  if(s.current->stopping)throw Cancelled{};
+  if(Clock::now()>=s.deadline){yield(s);return true;}
+#endif
+  return false;
+}
+void script_threads_tick(Jvm& vm){
+  auto& s=state(vm);if(s.ticking||s.current)return;
+#ifdef _WIN32
+  if(!s.host){s.converted=!IsThreadAFiber();s.host=s.converted?ConvertThreadToFiberEx(nullptr,FIBER_FLAG_FLOAT_SWITCH):GetCurrentFiber();if(!s.host)return;}
+  s.ticking=true;
+  struct Guard{bool& b;~Guard(){b=false;}} guard{s.ticking};
+  std::vector<Thread*> ready;
+  for(auto& p:s.threads)if(p.second->alive&&!p.second->suspended&&p.second->wake<=now())ready.push_back(p.second.get());
+  const auto frame_deadline=Clock::now()+std::chrono::milliseconds(4);
+  if(!ready.empty()) {
+    const size_t start=s.next%ready.size();size_t ran=0;
+    while(ran<ready.size()){
+      auto* t=ready[(start+ran)%ready.size()];++ran;
+      if(t->alive&&!t->suspended&&t->wake<=now())resume(s,*t);
+      if(Clock::now()>=frame_deadline)break;
+    }
+    s.next=(start+ran)%ready.size();
+  }
+  for(auto i=s.threads.begin();i!=s.threads.end();) {
+    if(!i->second->alive && !i->second->fiber)i=s.threads.erase(i);
+    else ++i;
+  }
+#endif
+}
+void script_threads_roots(Jvm& vm,const GcRootVisitor& visit){
+  auto i=schedulers.find(&vm);if(i==schedulers.end())return;
+  for(auto& p:i->second->threads)if(p.second->alive)visit(p.second->object);
+}
+void script_threads_shutdown(Jvm& vm){
+  auto i=schedulers.find(&vm);if(i==schedulers.end())return;auto& s=*i->second;
+#ifdef _WIN32
+  if(s.current)return;
+  for(auto& p:s.threads){auto& t=*p.second;if(t.alive){t.stopping=true;t.suspended=false;if(s.host)resume(s,t);}if(t.fiber)DeleteFiber(t.fiber);}
+  if(s.converted)ConvertFiberToThread();
+#endif
+  schedulers.erase(i);
+}
+}

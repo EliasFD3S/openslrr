@@ -1,5 +1,7 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/mainloop.hpp"
+#include "slrr/script_threads.hpp"
+#include "slrr/script_events.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/video_fmv.hpp"
 #include "slrr/host_music.hpp"
@@ -37,6 +39,7 @@ void dispatch_due_timers(Jvm& jvm, float now, int32_t* fired) {
   for (const DueTimer& t : gameref_poll_timers(now)) {
     auto* o = static_cast<Object*>(t.key);
     if (!o) continue;
+    script_event_emit(jvm,o,nullptr,kEventTime,Value::make_int(t.timer_id));
     const bool game_clock = o->class_name == "java.game.GameLogic";
     if (actual && o != actual && !game_clock) continue;
     GameRefState* st = gameref_get(o);
@@ -55,6 +58,7 @@ void dispatch_due_timers(Jvm& jvm, float now, int32_t* fired) {
 // Mechanic.show starts this thread. hide stops it. The script loop is
 // the only writer that replaces Garage infoline after createText.
 static Object* g_spinning_mechanic = nullptr;
+static Object* g_mechanic_thread = nullptr;
 static Object* g_mechanic_hover = nullptr;
 static int g_mechanic_pointer_depth = 0;
 static float g_inventory_spin = 0.f;
@@ -123,6 +127,7 @@ void mainloop_adopt_section(Jvm& jvm, SectionMachine& sections) {
 // Drain the live section's port the way that loop would, between frames.
 void pump_async_messages(Jvm& jvm, Object* game) {
   if (!game) return;
+  if(script_thread_alive(jvm,field_obj(game,"t")))return;
   for (int n = 0; n < 16; ++n) {
     Object* mp = field_obj(game, "mp");
     Object* fifo = field_obj(mp, "fifo");
@@ -145,10 +150,8 @@ void pump_async_messages(Jvm& jvm, Object* game) {
   }
 }
 
-// CarSelect.run is an infinite camera loop. Thread.start never enters it,
-// so the lens stayed at the origin, inside the car. The garage camera has
-// already received "render", so its sequence outranks this one and its
-// look/move chase (drive-style, not ext_camera) stays locked behind the car.
+// Keep the showroom camera above the garage camera. Its actual pose now
+// comes from CarSelect.run; retain the fallback only without a live thread.
 void spin_car_select_camera(Object* section) {
   static void* held = nullptr;
   auto release = []() {
@@ -177,6 +180,7 @@ void spin_car_select_camera(Object* section) {
   held = cam->key;
   cam->cam_active = true;
   cam->cam_seq = 0x7fffffff;
+  if(field_int(field_obj(section,"CamThread"),"_thread_alive"))return;
   cam->aim_look = false;
   cam->aim_move = false;
   const float yaw = -0.01f + gameref_now() * 0.5f;
@@ -312,6 +316,7 @@ void dispatch_mechanic_pointer(Jvm& jvm) {
   };
   auto cursor = [&](Object* part, const char* param) {
     Object* text = jvm.new_string(param);
+    script_event_emit(jvm,part,part,0x00010000,Value::make_obj(text));
     struct Depth {
       int &n;
       explicit Depth(int &n) : n(n) { ++n; }
@@ -353,6 +358,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
                                    SectionMachine& sections, float dt) {
   host_music_update();
   host_game_options_update(jvm);
+  script_threads_tick(jvm);
   // The click that saved CopyCar already ran, inside pump, before this frame.
   part_release_live_hold();
   MainLoopFrameResult out;
@@ -363,6 +369,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   float frame_dt = dt;
   if (frame_dt < 0.f) frame_dt = 0.f;
   if (frame_dt > kDtClamp) frame_dt = kDtClamp;
+  script_callbacks_tick(jvm,frame_dt);
 
   auto& in = host_input();
   const float yaw = host_input_get_axis(7, 0);
@@ -405,7 +412,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     const int32_t cred =
         (cg != scroll->fields.end()) ? as_i(cg->second, &cg_ok) : 0;
     if (ag_ok && cg_ok && cred != 0 && act == cred) {
-      jvm.invoke(scroll->class_name, "animate", "()V",
+      if(!script_callback_registered(jvm,scroll,28))jvm.invoke(scroll->class_name, "animate", "()V",
                  {Value::make_obj(scroll)}, false);
       // animate() writes creditsPos then renderinst.setMatrix. That call
       // does not move the OSD glyph, so place the lines the script has
@@ -646,10 +653,9 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     }
   }
 
-  // GameLogic.run is the time thread. Thread.start does not schedule it,
-  // so DAY / TIME stayed as empty labels. Same tick the script would do
-  // after timeRefresher.notify: timeToString + changeText.
-  {
+  // Compatibility tick only without a running Java time refresher.
+  Value refresher=jvm.get_static("java.game.GameLogic","timeRefresher");
+  if(!script_thread_alive(jvm,refresher.tag==ValueTag::Obj?refresher.v.o:nullptr)) {
     auto text_of = [](const Value& v) -> Object* {
       return (v.tag == ValueTag::Obj) ? v.v.o : nullptr;
     };
@@ -706,7 +712,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
 
   dispatch_mechanic_pointer(jvm);
   spin_mechanic_inventory(jvm, frame_dt);
-  apply_mechanic_infoline(jvm, g_spinning_mechanic);
+  if(!script_thread_alive(jvm,g_mechanic_thread))apply_mechanic_infoline(jvm, g_spinning_mechanic);
   // The solver caps work itself and retains debt; the camera's dt clamp must
   // not silently discard elapsed simulation time.
   part_physics_advance(dt < 0.f ? 0.0 : static_cast<double>(dt));
@@ -735,18 +741,20 @@ void mainloop_note_thread(Jvm& jvm, Object* thread, bool started) {
   if (!started) {
     if (g_spinning_mechanic == tgt) {
       g_spinning_mechanic = nullptr;
+        g_mechanic_thread = nullptr;
       g_mechanic_hover = nullptr;
       g_inventory_spin = 0.f;
     }
     return;
   }
   g_spinning_mechanic = tgt;
+  g_mechanic_thread = thread;
   // Same moment the script thread would take its first 20 ms tick.
   apply_mechanic_infoline(jvm, tgt);
 }
 
 
 void mainloop_visit_gc_roots(const GcRootVisitor& visit) {
-  visit(g_spinning_mechanic); visit(g_mechanic_hover);
+  visit(g_spinning_mechanic); visit(g_mechanic_hover); visit(g_mechanic_thread);
 }
 }  // namespace slrr

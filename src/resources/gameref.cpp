@@ -1,5 +1,6 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/gameref.hpp"
+#include "slrr/script_events.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/part_runtime.hpp"
 
@@ -89,6 +90,7 @@ bool gameref_bind_alias(void* reference,void* target) {
 
 void gameref_remove(void* key) {
   if (!key) return;
+  script_events_destroy(static_cast<Object*>(key));
   auto own=g_refs.find(key);
   if(own!=g_refs.end()&&own->second.binding){g_refs.erase(own);return;}
   GameRefState* n = gameref_get(key);
