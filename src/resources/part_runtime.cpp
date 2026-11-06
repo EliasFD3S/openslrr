@@ -68,6 +68,7 @@ struct Record {
     Object *node = nullptr;
     uint32_t resource = 0;
     std::vector<PartLink> rules;
+    PartMatrix rest_pose{};
   };
   std::vector<LinkVisual> links;
   float max_wear = 1.f;
@@ -346,7 +347,7 @@ void render_part(Jvm &jvm, Object *self, Record &rec) {
     render->fields["id"] = Value::make_int(resource);
     rec.renders.push_back(render);
     if (rules && !rules->empty())
-      rec.links.push_back({render, resource, *rules});
+      rec.links.push_back({render, resource, *rules, local});
   };
   const PartRender *chosen =
       rec.config->renders.empty() ? nullptr : &rec.config->renders[0];
@@ -700,7 +701,18 @@ void relink_one(Object *part) {
   auto *rec = record(part);
   if (!rec)
     return;
+  const bool mounted = car(part) != nullptr;
   for (const auto &vis : rec->links) {
+    auto *node = gameref_get(vis.node);
+    if (!node)
+      continue;
+    // Linked suspension visuals overwrite the render matrix, not the mesh.
+    // Always start from the authored pose; an inventory part has no chassis
+    // anchors and must not keep its last compressed/tilted matrix.
+    std::copy(vis.rest_pose.begin(), vis.rest_pose.end(), node->local_matrix);
+    node->matrix_override = true;
+    if (!mounted)
+      continue;
     const PartLink *rule = nullptr;
     for (const auto &candidate : vis.rules)
       if (!candidate.filter ||
@@ -726,9 +738,6 @@ void relink_one(Object *part) {
         continue;
       pose = span_between(first, second, min_y, max_y, cx, cz);
     }
-    auto *node = gameref_get(vis.node);
-    if (!node)
-      continue;
     std::copy(pose.begin(), pose.end(), node->local_matrix);
     node->matrix_override = true;
   }
@@ -1374,6 +1383,7 @@ bool part_command(Object *part, const std::string &command) {
     rec->state.parent_slot = rec->state.own_slot = 0;
     gameref_set_parent(part, node->key);
     gameref_set_matrix(part, 0, 0, 0, 0, 0, 0);
+    relink_assembly(part);
     refresh_chassis(chassis);
     return true;
   }
