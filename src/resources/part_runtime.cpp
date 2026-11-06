@@ -73,6 +73,7 @@ struct Record {
   std::vector<LinkVisual> links;
   float max_wear = 1.f;
   int flap = 0;
+  float flap_progress = 0.f;
   // Seventh field of the create string, an index into each render's colors.
   bool colour_set = false;
   int colour_index = 0;
@@ -841,7 +842,7 @@ void place_child(Object *parent, int slot_id, bool refresh_links = true) {
     }
   }
   // Open flap: the hinge lives on the parent slot. Closed is the CFG pose.
-  if (mount->has_flap && c->flap) {
+  if (mount->has_flap && c->flap_progress > 0.f) {
     float ax = mount->flap_axis[0], ay = mount->flap_axis[1],
           az = mount->flap_axis[2];
     const float len = std::sqrt(ax * ax + ay * ay + az * az);
@@ -849,8 +850,11 @@ void place_child(Object *parent, int slot_id, bool refresh_links = true) {
       ax /= len;
       ay /= len;
       az /= len;
-      const float c0 = std::cos(mount->flap_hi);
-      const float s0 = std::sin(mount->flap_hi);
+      const float t = c->flap_progress;
+      const float eased = t * t * (3.f - 2.f * t);
+      const float angle = mount->flap_hi * eased;
+      const float c0 = std::cos(angle);
+      const float s0 = std::sin(angle);
       const float t0 = 1.f - c0;
       PartMatrix rot{};
       rot[0] = t0 * ax * ax + c0;
@@ -1419,8 +1423,6 @@ bool part_command(Object *part, const std::string &command) {
   }
   if (verb == "flap_toggle") {
     rec->flap ^= 1;
-    if (rec->state.parent)
-      place_child(rec->state.parent, rec->state.parent_slot);
     return true;
   }
   if (verb == "filter") {
@@ -1891,6 +1893,20 @@ bool part_car_script_pos(void *key, float *x, float *y, float *z) {
 void part_physics_advance(double seconds) {
   if (!std::isfinite(seconds) || seconds < 0)
     throw std::invalid_argument("invalid vehicle elapsed time");
+  // Hinges also animate while the chassis physics is suspended in the garage.
+  // Advance a normalized phase so reversing mid-motion preserves the pose.
+  const float hinge_step = static_cast<float>(seconds / 0.5);
+  for (auto& entry : records) {
+    auto& rec = entry.second;
+    const float target = rec.flap ? 1.f : 0.f;
+    if (!rec.state.parent || rec.flap_progress == target) continue;
+    PartMatrix world;
+    if (!scene_instances_script_matrix(entry.first, world.data())) continue;
+    rec.flap_progress = rec.flap
+                            ? std::min(1.f, rec.flap_progress + hinge_step)
+                            : std::max(0.f, rec.flap_progress - hinge_step);
+    place_child(rec.state.parent, rec.state.parent_slot);
+  }
   scene_instances_prepare_physics();
   for (auto &entry : records) {
     Object *chassis = entry.first;
@@ -2614,8 +2630,6 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
       return Value::make_int(-1);
     if (number(a, 0) == 1) {
       p->flap ^= 1;
-      if (p->state.parent)
-        place_child(p->state.parent, p->state.parent_slot);
     }
     return Value::make_int(p->flap);
   });
