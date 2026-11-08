@@ -1,5 +1,6 @@
 #include "slrr/suspension_geometry.hpp"
 #include "slrr/vehicle_dynamics.hpp"
+#include "slrr/sl2_pacejka.hpp"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -183,7 +184,8 @@ double suspension_force(double length, double speed, double rest, double max,
 // the unsprung mass are internal. A massless ray (no arm, no type mass)
 // never enters here.
 void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
-                  const Terrain &terrain, double ceiling, double dt) {
+                  const Terrain &terrain, double ceiling, double dt,
+                  bool parked_friction) {
   const Vec3 down = w.down.normalized();
   const Vec3 hard = body_point(body, w.center - down * w.anchor_length());
   if (!s.seeded) {
@@ -299,6 +301,7 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
   s.patch = s.center - normal * w.radius;
   if (!s.contact)
     return;
+  if (!parked_friction) return;
   Vec3 velocity = body.point_velocity(s.patch);
   Vec3 tangent = velocity - normal * velocity.dot(normal);
   const double slip = tangent.length();
@@ -322,6 +325,95 @@ double suspension_force(double length, double speed, double rest, double max,
       -velocity * (velocity >= 0 ? (rebound > 0 ? rebound : .7 * bump) : bump) -
           (length - rest) * k);
 }
+void VehicleDynamics::step_drive() {
+  constexpr double rpm_per_rad = 9.54929658551372;
+  constexpr double wheel_inertia = 1.6;
+  const double idle = drive.idle / rpm_per_rad;
+  if (engine_omega <= 0) engine_omega = idle;
+  const double rpm = engine_omega * rpm_per_rad;
+  // Match the SLRR_rev host's SI drag and idle governor. The raw Java
+  // engine_friction_fwd value is not a torque-per-angular-speed coefficient.
+  const double drag = 14.0 + std::max(0.0, rpm - drive.idle) * .012;
+  const double idle_torque = rpm < drive.idle
+      ? std::min(80.0, 25.0 + (drive.idle - rpm) * .25) : 0.0;
+  const double combustion = std::clamp((rpm - 200.0) / 450.0, 0.0, 1.0);
+  const double torque = rpm < drive.limit
+      ? (2.0 * drive.torque(rpm) * drive.throttle + idle_torque) * combustion : 0.0;
+  const double net = torque - drag;
+  engine_omega = std::max(0.0, engine_omega + net * timestep / drive.inertia);
+
+  double weights = 0, shaft = 0, square_weights = 0;
+  for (size_t i = 0; i < wheels.size(); ++i) {
+    if (!wheels[i].enabled) continue;
+    const double w = drive.wheels[i].weight;
+    weights += w;
+    shaft += w * state[i].spin;
+    square_weights += w * w;
+  }
+  if (weights > 0 && drive.ratio != 0) {
+    // SLRR_rev native-vehicle-physics.ts, clutchExchange. Reflect the
+    // same wheel inertias that receive the impulse back to the engine.
+    const double transmission = wheel_inertia * weights * weights / square_weights;
+    const double reflected = transmission / (drive.ratio * drive.ratio);
+    const double mix = reflected / (drive.inertia + reflected);
+    const double mismatch = shaft / weights * drive.ratio - engine_omega;
+    double grip = drive.clutch * .9990000128746033;
+    if (mismatch < 0 && mix > 0)
+      grip = std::min(grip, std::max(0.0, (engine_omega - idle * .85) / (-mismatch * mix)));
+    engine_omega += mismatch * mix * grip;
+    const double impulse = -mismatch * (1 - mix) * grip / drive.ratio * transmission;
+    for (size_t i = 0; i < wheels.size(); ++i)
+      if (wheels[i].enabled)
+        state[i].spin += impulse * drive.wheels[i].weight / (weights * wheel_inertia);
+  }
+
+  for (size_t i = 0; i < wheels.size(); ++i) {
+    const auto &wheel = wheels[i];
+    const auto &cfg = drive.wheels[i];
+    auto &s = state[i];
+    if (!wheel.enabled) continue;
+    const double braking = 500 * timestep * (drive.brake * cfg.brake +
+        drive.handbrake * cfg.handbrake + cfg.bearing) / wheel_inertia;
+    s.spin = std::copysign(std::max(0.0, std::abs(s.spin) - braking), s.spin);
+    if (!s.contact || s.force <= 0 || cfg.tyre[11] <= 0) {
+      s.longitudinal_slip = s.lateral_slip = 0;
+      continue;
+    }
+    Vec3 forward = body.orientation.rotate({-std::sin(cfg.steer), 0, -std::cos(cfg.steer)});
+    forward = (forward - s.normal * forward.dot(s.normal)).normalized();
+    const Vec3 side = forward.cross(s.normal);
+    const Vec3 speed = body.point_velocity(s.patch);
+    const double road = speed.dot(forward), lateral = speed.dot(side);
+    const double rolling = s.spin * wheel.radius - road;
+    const double abs_road = std::abs(road);
+    const double blend = std::clamp((abs_road - .1) * .1, 0.0, 1.0);
+    const auto relax = [&](double previous, double speed, double length, double damping) {
+      return std::clamp((previous + speed * timestep / length) /
+                        (1 + 500 * damping * timestep), -1.0, 1.0);
+    };
+    const double target_long = abs_road > .1 ? rolling / abs_road : 0;
+    const double target_lat = abs_road > .1 ? std::atan(lateral / abs_road) : 0;
+    s.longitudinal_slip = std::lerp(relax(s.longitudinal_slip, rolling, .3, .1), target_long, blend);
+    s.lateral_slip = std::lerp(relax(s.lateral_slip, lateral, .5, .2), target_lat, blend);
+    const double lon = std::cos(s.lateral_slip) * s.longitudinal_slip * cfg.tyre[12];
+    const double lat = std::sin(s.lateral_slip);
+    const double slip = std::hypot(lon, lat);
+    if (slip < .0001) continue;
+    constexpr double half_pi = 1.5707963267948966;
+    const double maximum = cfg.tyre[11];
+    const double load = std::lerp(std::min(s.force, maximum),
+        std::atan(s.force * half_pi / maximum) * maximum / half_pi, cfg.tyre[14]);
+    Sl2PacejkaCoef curve;
+    std::copy_n(cfg.tyre.begin(), curve.size(), curve.begin());
+    if (cfg.tyre[16] > 0)
+      curve[4] *= (cfg.tyre[15] + cfg.tyre[16]) / (load + cfg.tyre[16]);
+    const double magnitude = sl2_pacejka_force(curve, slip, load, true) / slip;
+    const double longitudinal = magnitude * lon;
+    body.add_force(forward * longitudinal - side * (magnitude * lat), s.patch);
+    s.spin -= longitudinal * wheel.radius * timestep / wheel_inertia;
+  }
+}
+
 void VehicleDynamics::step(const Terrain &terrain) {
   // Recover initial overlaps through physical contacts, not a floor teleport.
   double ceiling = body.position.y;
@@ -343,7 +435,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
       continue; // The rigid contact pass below supports the tyre.
     }
     if (w.linked()) {
-      solve_linked(body, w, s, terrain, ceiling, timestep);
+      solve_linked(body, w, s, terrain, ceiling, timestep, !drive.torque);
       continue;
     }
     s.length = w.maximum;
@@ -370,6 +462,8 @@ void VehicleDynamics::step(const Terrain &terrain) {
     body.add_force(s.normal * s.force, hard);
     // Parked tyre friction consumes kinetic motion, bounded by normal load.
     Vec3 point = hard + down * length + Vec3{0, -w.radius, 0};
+    s.patch = point;
+    if (drive.torque) continue;
     Vec3 v = body.point_velocity(point),
          tangent = v - s.normal * v.dot(s.normal);
     double speed = tangent.length();
@@ -383,6 +477,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
       body.add_force(direction * (-amount), point);
     }
   }
+  if (drive.torque && drive.inertia > 0) step_drive();
   body.integrate(timestep);
   for (int iteration = 0; iteration < 4; ++iteration) {
     double depth = 0;

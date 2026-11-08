@@ -31,9 +31,9 @@ void part_park_chassis(Object *car, bool shift = true);
 // the static tyre contacts. getPos of a car returns this, so a saved pose
 // placed again does not climb by the ride height.
 bool part_car_script_pos(void *key, float *x, float *y, float *z);
-// City lamps follow the world clock (on outside 6:00–21:00). Brake, reverse
-// and indicators stay off until the car asks for them.
-bool part_lamp_lit(uint32_t flags);
+// City lamps require a running engine at night. The showroom preview can
+// demonstrate the lights with its own time-of-day toggle.
+bool part_lamp_lit(void *part, uint32_t flags, bool preview);
 // Render node or one of its parents, when that node is an installed part.
 Object *part_render_owner(void *key);
 // World height of the tyre contact under a car. The camera's `move` spring

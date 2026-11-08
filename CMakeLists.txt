@@ -92,7 +92,7 @@ if(WIN32)
   # strmiids = DirectShow GUIDs for FMV (GfxEngine.openVideo).
   # vfw32 = Cinepak (prime.avi is cvid). The 32-bit codec does not connect
   # through the Sample Grabber graph, so menu playback uses AVIFile.
-  target_link_libraries(slrr_host PRIVATE user32 gdi32 opengl32 winmm ole32
+  target_link_libraries(slrr_host PRIVATE user32 gdi32 opengl32 winmm ole32 xinput
                                           oleaut32 strmiids vfw32 xaudio2 mfplat mfreadwrite mfuuid)
 endif()
 

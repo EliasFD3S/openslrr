@@ -41,7 +41,7 @@ struct SceneShadowDecal {
 void scene_instances_set_resources(const RpkIndex *resources);
 void scene_instances_set_envmap(uint32_t resource);
 std::string scene_instances_envmap();
-void scene_instances_select(void *world, void *skydome);
+void scene_instances_select(void *world, void *skydome, bool preview_lamps);
 std::vector<SceneInstance> scene_instances_collect();
 std::vector<SceneInstance> scene_instances_collect_root(void *root);
 SceneSun scene_instances_light(void* root=nullptr);

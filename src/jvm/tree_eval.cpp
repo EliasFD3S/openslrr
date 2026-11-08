@@ -474,8 +474,16 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
         if (cls.utf8(im.name) == name) in_instance = true;
       own_static_method = in_static && !in_instance;
     }
+    Object* receiver_hint = nullptr;
+    if (have_call_recv && call_recv_value.tag == ValueTag::Obj)
+      receiver_hint = call_recv_value.v.o;
+    else if (call_recv_on_stack && !stack.empty() && stack.back().tag == ValueTag::Obj)
+      receiver_hint = stack.back().v.o;
+    const bool menu_receiver = !receiver_hint ||
+        receiver_hint->class_name == "java.render.osd.Menu";
     const bool menu_call =
-        (name == "addItem" && (argc_unset || argc >= 2)) || name == "addSeparator" || name == "setSliderStyle";
+        (name == "addItem" && menu_receiver && argc != 6 &&
+         (argc_unset || argc >= 2)) || name == "addSeparator" || name == "setSliderStyle";
     const bool osd_build = name == "createMenu" || name == "createButton" ||
                            name == "createText" || name == "createRectangle" ||
                            name == "createHeader" ||

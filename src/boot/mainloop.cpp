@@ -202,12 +202,13 @@ void mainloop_sync_section_render(IRenderBackend& render,
   spin_car_select_camera(actual);
   // Garage and city publish a map. The car selector parents the car to
   // CarScene and has no map, so the mesh was never collected.
+  void* car_preview = object_field("CarScene");
   void* world = object_field("map");
-  if (!world) world = object_field("CarScene");
+  if (!world) world = car_preview;
   if (!world) world = object_field("Scene");
   if (!world)
     if (GameRefState* cam = fullscreen_script_camera()) world = cam->parent;
-  scene_instances_select(world, object_field("skydome"));
+  scene_instances_select(world, object_field("skydome"), world && world == car_preview);
   const bool in_garage =
       actual && actual->class_name.find("Garage") != std::string::npos;
   scene_instances_enable_static_floor(in_garage);

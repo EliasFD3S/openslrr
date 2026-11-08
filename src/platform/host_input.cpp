@@ -1,16 +1,40 @@
 #include "slrr/host_input.hpp"
 
+#include <algorithm>
+#include <cmath>
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <xinput.h>
 #endif
 
 namespace slrr {
 namespace {
 
 HostInput g_input;
+
+#ifdef _WIN32
+XINPUT_GAMEPAD poll_gamepad() {
+  static DWORD slot = XUSER_MAX_COUNT;
+  static ULONGLONG next_scan = 0;
+  XINPUT_STATE state{};
+  if (slot < XUSER_MAX_COUNT && XInputGetState(slot, &state) == ERROR_SUCCESS)
+    return state.Gamepad;
+  slot = XUSER_MAX_COUNT;
+  const auto now = GetTickCount64();
+  if (now < next_scan) return {};
+  next_scan = now + 1000;
+  for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
+    if (XInputGetState(i, &state) != ERROR_SUCCESS) continue;
+    slot = i;
+    return state.Gamepad;
+  }
+  return {};
+}
+#endif
 
 }  // namespace
 
@@ -32,6 +56,32 @@ void host_input_poll_keys() {
   in.keys_down = (GetAsyncKeyState(VK_DOWN) & 0x8000) != 0;
   in.keys_pgup = (GetAsyncKeyState(VK_PRIOR) & 0x8000) != 0;
   in.keys_pgdn = (GetAsyncKeyState(VK_NEXT) & 0x8000) != 0;
+  auto down = [](int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; };
+  const HWND foreground = GetForegroundWindow();
+  DWORD owner = 0;
+  GetWindowThreadProcessId(foreground, &owner);
+  const bool focused = owner == GetCurrentProcessId();
+  in.drive_steer = focused ? float(down('D')) - float(down('A')) : 0.f;
+  in.drive_throttle = focused && down('W') ? 1.f : 0.f;
+  in.drive_brake = focused && down('S') ? 1.f : 0.f;
+  in.drive_reverse = focused && down('R');
+  in.drive_handbrake = focused && down(VK_SPACE);
+  if (focused) {
+    const auto pad = poll_gamepad();
+    const float x = static_cast<float>(pad.sThumbLX);
+    const float steer = std::copysign(std::clamp(
+        (std::abs(x) - XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE) /
+            (32767.f - XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE), 0.f, 1.f), x);
+    const auto trigger = [](BYTE value) {
+      return std::max(0.f, (value - XINPUT_GAMEPAD_TRIGGER_THRESHOLD) /
+                              (255.f - XINPUT_GAMEPAD_TRIGGER_THRESHOLD));
+    };
+    if (in.drive_steer == 0.f) in.drive_steer = steer;
+    in.drive_throttle = std::max(in.drive_throttle, trigger(pad.bRightTrigger));
+    in.drive_brake = std::max(in.drive_brake, trigger(pad.bLeftTrigger));
+    in.drive_reverse |= (pad.wButtons & XINPUT_GAMEPAD_Y) != 0;
+    in.drive_handbrake |= (pad.wButtons & XINPUT_GAMEPAD_B) != 0;
+  }
 #endif
 }
 
@@ -65,6 +115,9 @@ float host_input_get_axis(int32_t axis, int32_t /*device*/) {
       return in.cursor_x;
     case 2:
       return in.cursor_y;
+    case 28: return in.drive_throttle;
+    case 29: return in.drive_brake;
+    case 48: return in.drive_handbrake ? 1.f : 0.f;
     default:
       return 0.f;
   }

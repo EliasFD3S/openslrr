@@ -32,6 +32,8 @@ struct HostInput {
   bool keys_down = false;
   bool keys_pgup = false;
   bool keys_pgdn = false;
+  float drive_steer = 0, drive_throttle = 0, drive_brake = 0;
+  bool drive_reverse = false, drive_handbrake = false;
 };
 
 HostInput& host_input();

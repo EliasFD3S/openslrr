@@ -89,13 +89,23 @@ struct WheelState {
   bool contact = false, seeded = false;
   double length = 0, speed = 0, force = 0;
   Vec3 center, normal{0, 1, 0}, hub, patch;
+  double spin = 0, longitudinal_slip = 0, lateral_slip = 0;
+};
+struct DriveWheel {
+  double weight = 0, steer = 0, brake = 0, handbrake = 0, bearing = 0;
+  std::array<float, 17> tyre{};
+};
+struct DriveInput {
+  std::array<DriveWheel, 4> wheels{};
+  double ratio = 0, throttle = 0, brake = 0, handbrake = 0;
+  double inertia = 0, idle = 0, limit = 0;
+  double clutch = 1;
+  std::function<double(double)> torque;
 };
 double suspension_force(double length, double velocity, double rest,
                         double maximum, double spring, double bump,
                         double rebound);
 
-// First dynamic vertical/contact stage of Vehicle3D/Suspension3D. No engine
-// thrust or tyre slip is invented here: drivetrain is a separate port stage.
 class VehicleDynamics {
 public:
   static constexpr unsigned frequency = 700;
@@ -104,6 +114,8 @@ public:
   RigidBody body;
   std::array<WheelConfig, 4> wheels;
   std::array<WheelState, 4> state;
+  DriveInput drive;
+  double engine_omega = 0;
   uint64_t ticks = 0;
   unsigned advance(double seconds, const Terrain &terrain);
   void reset_clock();
@@ -114,5 +126,6 @@ public:
 private:
   double accumulator_ = 0;
   void step(const Terrain &terrain);
+  void step_drive();
 };
 } // namespace slrr::physics

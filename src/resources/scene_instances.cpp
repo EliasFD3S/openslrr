@@ -22,6 +22,7 @@ namespace {
 const RpkIndex *g_resources = nullptr;
 void *g_world = nullptr;
 void *g_sky = nullptr;
+bool g_preview_lamps = false;
 uint32_t g_environment = 0;
 struct ShadowInfo {
   uint32_t flags = 0;
@@ -418,6 +419,7 @@ read_ground_materials(const std::filesystem::path &path) {
 void scene_instances_set_resources(const RpkIndex *resources) {
   g_resources = resources;
   g_world = g_sky = nullptr;
+  g_preview_lamps = false;
   g_meshes.clear();
   g_overrides.clear();
   g_static.clear();
@@ -433,10 +435,11 @@ std::string scene_instances_envmap() {
   return g_resources ? g_resources->texture_path_for_id(g_environment)
                      : std::string{};
 }
-void scene_instances_select(void *world, void *skydome) {
+void scene_instances_select(void *world, void *skydome, bool preview_lamps) {
   if (g_world != world) ++g_floor_revision;
   g_world = world;
   g_sky = skydome;
+  g_preview_lamps = preview_lamps;
   g_floor_prepared = false;
   if (auto *sky = gameref_get(skydome))
     sky->sky_render = true;
@@ -917,7 +920,8 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root) {
     // alive until script cleanup. Never render it as ordinary foreground.
     if (n->sky_render && n->key != g_sky)
       continue;
-    if (n->light_flags && !part_lamp_lit(n->light_flags))
+    if (n->light_flags &&
+        !part_lamp_lit(n->parent, n->light_flags, root == g_world && g_preview_lamps))
       continue;
     SceneInstance instance;
     instance.lighting=lighting;

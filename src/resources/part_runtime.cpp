@@ -2,6 +2,9 @@
 #include "slrr/part_runtime.hpp"
 #include "slrr/dyno_model.hpp"
 #include "slrr/gameref.hpp"
+#include "slrr/host_input.hpp"
+#include "slrr/host_sfx.hpp"
+#include "slrr/osd_registry.hpp"
 #include "slrr/jvm.hpp"
 #include "slrr/rpk_index.hpp"
 #include "slrr/scene_instances.hpp"
@@ -46,11 +49,14 @@ struct WheelPhys {
   float input_position[3]{};
 };
 struct SfxItem {
-  int sfx = 0;
+  std::string path;
+  int32_t voice = 0;
   float pitch = 1, pmin = 0, pmax = 0, vmin = 0, vmax = 0;
 };
 struct Record {
   float steering_input = 0;
+  int drive_gear = 1;
+  bool engine_running = false;
   bool has_steering_transform = false;
   PartMatrix steering_transform{};
   InstalledPart state;
@@ -117,6 +123,7 @@ struct Record {
 };
 std::unordered_map<Object *, std::vector<SfxItem>> sfx_items;
 std::unordered_map<Object *, Record> records;
+int32_t controlled_vehicle = 0;
 constexpr double kPhysicsTick = 1.0 / physics::VehicleDynamics::update_frequency;
 constexpr unsigned kMaxPhysicsTicksPerFrame = 4;
 double physics_elapsed = 0;
@@ -466,9 +473,12 @@ Object *add_part(Jvm &jvm, Object *parent, uint32_t resource,
   return child;
 }
 void release_side(Record &rec) {
-  for (Object *tab : rec.sfx)
-    if (tab)
-      sfx_items.erase(tab);
+  for (Object *tab : rec.sfx) {
+    auto table = sfx_items.find(tab);
+    if (table == sfx_items.end()) continue;
+    for (auto &item : table->second) host_sfx_stop(item.voice);
+    sfx_items.erase(table);
+  }
 }
 float comp(Object *o, const char *name) {
   if (!o)
@@ -1071,10 +1081,15 @@ void install_cfg_stock(Jvm &jvm, Object *part, int depth = 0) {
   }
 }
 
-bool lamp_lit(uint32_t flags) {
-  const uint32_t bits = flags & 0x13fu;
-  if (!bits || (flags & 0x40u) || !runtime)
+} // namespace
+
+bool part_lamp_lit(void *part, uint32_t flags, bool preview) {
+  if (!(flags & 4u) || (flags & 0x40u) || !runtime)
     return false;
+  if (!preview) {
+    const auto *chassis = record(car(static_cast<Object *>(part)));
+    if (!chassis || !chassis->engine_running) return false;
+  }
   Value time = runtime->get_static("java.game.GameLogic", "time");
   float sec = 0.f;
   if (time.tag == ValueTag::Float)
@@ -1086,12 +1101,8 @@ bool lamp_lit(uint32_t flags) {
     sec += 86400.f;
   // Stock night: outside 6:00..21:00. The selector starts at midnight and
   // LIGHTS ON/OFF adds twelve hours.
-  const bool night = sec < 21600.f || sec >= 75600.f;
-  return (bits & 4u) != 0 && night;
+  return sec < 21600.f || sec >= 75600.f;
 }
-} // namespace
-
-bool part_lamp_lit(uint32_t flags) { return lamp_lit(flags); }
 
 Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
                     uint32_t resource, const std::string &alias,
@@ -1276,6 +1287,16 @@ bool part_command(Object *part, const std::string &command) {
   std::istringstream input(command);
   std::string verb;
   input >> verb;
+  if (part && part->class_name == "java.io.Controller" &&
+      (verb == "controllable" || verb == "leave")) {
+    int32_t id = 0;
+    if (!(input >> id)) return false;
+    if (verb == "controllable")
+      controlled_vehicle = id;
+    else if (controlled_vehicle == id)
+      controlled_vehicle = 0;
+    return true;
+  }
   if (verb == "texture") {
     // Catalog and the car selector send this on the Vehicle, which is the
     // chassis's owner. The second number, 1, repaints every painted part.
@@ -1367,6 +1388,8 @@ bool part_command(Object *part, const std::string &command) {
     rec->steering_input = 0.f;
     rec->dynamics.body.velocity = {};
     rec->dynamics.body.momentum = {};
+    rec->dynamics.engine_omega = 0;
+    rec->engine_running = false;
     part_park_chassis(part, false);
     for (const auto &slot : rec->config->slots)
       if (slot.type >= 101 && slot.type <= 304)
@@ -1377,6 +1400,10 @@ bool part_command(Object *part, const std::string &command) {
   if (verb == "start" && rec->config->native_kind == "car") {
     rec->physics_suspended = false;
     rec->physics_released = true;
+    return true;
+  }
+  if (verb == "stop" && rec->config->native_kind == "car") {
+    rec->physics_released = false;
     return true;
   }
   if (verb == "suspend" && rec->config->native_kind == "car") {
@@ -1861,10 +1888,107 @@ bool part_car_script_pos(void *key, float *x, float *y, float *z) {
   return script_pos(key, x, y, z);
 }
 namespace {
+Object *part_field(Object *part, const char *name) {
+  auto value = part->fields.find(name);
+  return value != part->fields.end() && value->second.tag == ValueTag::Obj
+             ? value->second.v.o : nullptr;
+}
+
+void configure_drive(Object *chassis, Record &rec) {
+  auto &drive = rec.dynamics.drive;
+  drive.torque = {};
+  auto *target = gameref_find_live(controlled_vehicle);
+  if (!target || as_part(static_cast<Object *>(target->key)) != chassis)
+    return;
+  auto *ratios = part_field(chassis, "ratio");
+  if (!ratios || ratios->slots.size() < 8 || field_int(chassis, "gears") < 1)
+    return;
+  Object *dyno = nullptr;
+  for (const auto &[slot, child] : rec.children) {
+    if ((dyno = part_field(child, "dynodata"))) break;
+  }
+  if (!dyno || comp(chassis, "maxRPM") <= 0) return;
+  const auto &in = host_input();
+  const bool controls = !osd_has_modal();
+  rec.steering_input = controls ? in.drive_steer : 0.f;
+  drive.throttle = controls ? in.drive_throttle : 0.f;
+  drive.brake = controls ? in.drive_brake : 0.f;
+  drive.handbrake = controls && in.drive_handbrake;
+  drive.idle = std::max(400.f, comp(chassis, "engine_rpm_idle"));
+  drive.limit = std::max(drive.idle + 100.0, double(comp(chassis, "RPM_limit")));
+  drive.inertia = .28 + .01 * std::max(0.f, comp(chassis, "engine_inertia"));
+  drive.torque = [dyno](double rpm) { return dyno_sample(dyno, float(rpm), 0, false); };
+  const bool reverse = controls && in.drive_reverse;
+  const int gears = std::clamp(field_int(chassis, "gears"), 1, 6);
+  if (reverse) rec.drive_gear = 7;
+  else if (rec.drive_gear > gears) rec.drive_gear = 1;
+  else if (rec.dynamics.engine_omega * 9.5492965855 > drive.limit * .9 &&
+           rec.drive_gear < gears)
+    ++rec.drive_gear;
+  else if (rec.drive_gear > 1 &&
+           rec.dynamics.engine_omega * 9.5492965855 < drive.limit * .35)
+    --rec.drive_gear;
+  drive.ratio = rec.physics_released
+      ? scalar(ratios->slots, rec.drive_gear, 0) * comp(chassis, "rearend_ratio")
+      : 0;
+  const auto forward = rec.dynamics.body.orientation.rotate({0, 0, -1});
+  if (rec.dynamics.body.velocity.dot(forward) * drive.ratio < -1.0) {
+    drive.ratio = 0;
+    drive.brake = 1;
+  }
+  for (size_t i = 0; i < drive.wheels.size(); ++i) {
+    auto &out = drive.wheels[i];
+    const auto &wheel = rec.wheels[i];
+    out.weight = std::max(0.f, wheel.drive);
+    const float steer = wheel.steer_set ? wheel.steer :
+        (i < rec.config->wheel_steering.size() ? rec.config->wheel_steering[i] : 0.f);
+    out.steer = rec.steering_input * rec.config->max_steer * steer;
+    out.brake = std::max(0.f, wheel.brake);
+    out.handbrake = std::max(0.f, wheel.hbrake);
+    out.bearing = std::max(0.f, wheel.bearing) * .002;
+    std::copy_n(wheel.pacejka, out.tyre.size(), out.tyre.begin());
+  }
+}
+
+void update_engine_audio(Record &rec, bool active) {
+  const float rpm = static_cast<float>(rec.dynamics.engine_omega * 9.54929658551372);
+  for (size_t i : {0u, 2u}) {
+    const auto table = sfx_items.find(rec.sfx[i]);
+    if (table == sfx_items.end()) continue;
+    auto &items = table->second;
+    for (size_t j = 0; j < items.size(); ++j) {
+      auto &item = items[j];
+      float gain = 0;
+      if (active && rpm >= item.pmin && rpm <= item.pmax) {
+        const float t = (rpm - item.pmin) / (item.pmax - item.pmin);
+        gain = std::lerp(item.vmin, item.vmax, t);
+        if (j > 0 && items[j - 1].pmax > item.pmin)
+          gain *= std::clamp((rpm - item.pmin) / (items[j - 1].pmax - item.pmin), 0.f, 1.f);
+        if (j + 1 < items.size() && items[j + 1].pmin < item.pmax)
+          gain *= std::clamp((item.pmax - rpm) / (item.pmax - items[j + 1].pmin), 0.f, 1.f);
+        if (i == 2)
+          gain *= std::lerp(std::clamp(rec.exhaust_min, 0.f, 1.f), 1.f,
+                            static_cast<float>(rec.dynamics.drive.throttle));
+      }
+      if (gain > .001f) {
+        const float pitch = std::clamp(rpm / item.pitch, .58f, 3.f);
+        if (!item.voice)
+          item.voice = host_sfx_play_file(item.path, pitch, gain, true);
+        else
+          host_sfx_update_loop(item.voice, pitch, gain);
+      } else if (item.voice) {
+        host_sfx_stop(item.voice);
+        item.voice = 0;
+      }
+    }
+  }
+}
+
 void advance_chassis_tick() {
   for (auto &entry : records) {
     Object *chassis = entry.first;
     auto &rec = entry.second;
+    rec.engine_running = false;
     if (rec.config->native_kind != "car" || rec.state.parent ||
         (rec.physics_suspended && !rec.physics_pending_placement))
       continue;
@@ -1888,6 +2012,7 @@ void advance_chassis_tick() {
       if (!dynamics_configure(chassis, rec, frame))
         continue;
     dynamics_wheels(rec);
+    configure_drive(chassis, rec);
     // An unreleased chassis (catalog, before start) may drop onto a floor.
     // With no floor the step only applies gravity, and the car leaves the shot.
     if (!rec.physics_released && rec.physics_pending_placement) {
@@ -1910,6 +2035,7 @@ void advance_chassis_tick() {
     // Carry fractional substep time across ticks because 700 is not a
     // multiple of 60. The solver alternates between 11 and 12 substeps.
     const auto steps = rec.dynamics.advance(kPhysicsTick, terrain);
+    rec.engine_running = rec.dynamics.drive.torque && rec.dynamics.engine_omega > 0;
     if (steps)
       dynamics_sync(chassis, rec, parent);
     else
@@ -1970,6 +2096,10 @@ void part_physics_advance(double seconds) {
   while (physics_elapsed + tolerance >= kPhysicsTick) {
     advance_chassis_tick();
     physics_elapsed = std::max(0.0, physics_elapsed - kPhysicsTick);
+  }
+  for (auto &[key, rec] : records) {
+    if (rec.config->native_kind == "car")
+      update_engine_audio(rec, rec.engine_running);
   }
 }
 bool part_physics_state(Object *key, PartPhysicsState &state) {
@@ -2074,12 +2204,21 @@ Object *vehicle_spawn_stock(Jvm &jvm, RpkIndex &resources, Object *parent,
 
 void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   runtime = &jvm;
+  for (auto &[key, rec] : records) release_side(rec);
   records.clear();
+  controlled_vehicle = 0;
   physics_elapsed = 0;
   sfx_items.clear();
   configurations.clear();
   slot_aliases.clear();
   index = &resources;
+  jvm.natives().register_method("java.game.Vehicle", "getSpeedSquare", "()F",
+    [](Object *self, const std::vector<Value> &) {
+      const auto *rec = record(as_part(self));
+      return Value::make_float(rec && rec->physics_ready
+          ? static_cast<float>(rec->dynamics.body.velocity.dot(rec->dynamics.body.velocity))
+          : 0.f);
+    });
   const std::string owner = "java.game.parts.Part";
   auto bind = [&](const char *name, const char *signature, NativeFn fn) {
     jvm.natives().register_method(owner, name, signature, std::move(fn));
@@ -2867,8 +3006,11 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
                                   std::move(fn));
   };
   sfx("finalize", "()V", [](Object *s, const std::vector<Value> &) {
-    if (s)
-      sfx_items.erase(s);
+    const auto found = sfx_items.find(s);
+    if (found != sfx_items.end()) {
+      for (auto &item : found->second) host_sfx_stop(item.voice);
+      sfx_items.erase(found);
+    }
     return Value::make_void();
   });
   sfx("getItems", "()I", [](Object *s, const std::vector<Value> &) {
@@ -2878,8 +3020,10 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   });
   sfx("clear", "()V", [](Object *s, const std::vector<Value> &) {
     auto it = sfx_items.find(s);
-    if (it != sfx_items.end())
+    if (it != sfx_items.end()) {
+      for (auto &item : it->second) host_sfx_stop(item.voice);
       it->second.clear();
+    }
     return Value::make_void();
   });
   sfx("addItem", "(Ljava.util.resource.ResourceRef;FFFFF)V",
@@ -2888,15 +3032,18 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
         if (it == sfx_items.end() || it->second.size() >= 16)
           return Value::make_void();
         SfxItem item;
-        item.sfx = res_id(object(a, 0));
-        const float pitch = scalar(a, 1, 1);
-        item.pitch = pitch;
+        if (!index) return Value::make_void();
+        auto path = index->payload_prop(res_id(object(a, 0)), "sourcefile");
+        if (path.empty()) return Value::make_void();
+        std::replace(path.begin(), path.end(), '\\', '/');
+        item.path = (std::filesystem::path(index->game_root()) / path).string();
+        item.pitch = scalar(a, 1, 1);
         item.pmin = scalar(a, 2, 0);
         item.pmax = scalar(a, 3, 0);
         item.vmin = scalar(a, 4, 0);
         item.vmax = scalar(a, 5, 0);
-        (void)pitch;
-        it->second.push_back(item);
+        if (item.pitch > 0 && item.pmax > item.pmin)
+          it->second.push_back(std::move(item));
         return Value::make_void();
       });
   auto wheel = [&](const char *name, const char *signature, NativeFn fn) {
