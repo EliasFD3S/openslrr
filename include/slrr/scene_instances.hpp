@@ -49,6 +49,8 @@ SceneSun scene_instances_light(void* root=nullptr);
 bool scene_instance_transform(void *key, void *root, float *matrix);
 // Active world, unreflected script metres. False for inventory/other worlds.
 bool scene_instances_script_matrix(void *key, float *matrix);
+std::shared_ptr<const ScxGeometry> scene_instances_geometry(uint32_t resource);
+std::string scene_instances_texture(uint32_t resource);
 // Nearest mesh the ray enters, in unreflected script metres. Sky and
 // instances outside the active world are ignored. Null when the ray only
 // starts inside a volume (the garage shell around the camera).

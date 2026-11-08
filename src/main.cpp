@@ -27,6 +27,7 @@ void usage() {
       "  slrr_host --game [--root DIR] [--window] [--no-wait] [--auto-new]\n"
       "           [--auto-cmd mainmenu|street|N]\n"
       "           [--spawn-car cars/racers/Baiern.rpk:0x6]\n"
+      "           [--vehicle-osd PATH]\n"
       "           [PlayerName]\n"
       "\n"
       "Default --game: FMV intros → Init(int) (Soft splash / menu).\n"
@@ -93,6 +94,10 @@ int main(int argc, char** argv) {
     }
     if(std::strcmp(a,"--spawn-car")==0&&i+1<argc){
       opt.spawn_car=argv[++i];opt.auto_new=true;continue;
+    }
+    if (std::strcmp(a, "--vehicle-osd") == 0 && i + 1 < argc) {
+      opt.vehicle_osd = argv[++i];
+      continue;
     }
     if (std::strcmp(a, "--auto-cmd") == 0 && i + 1 < argc) {
       const char* c = argv[++i];

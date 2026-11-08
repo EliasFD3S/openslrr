@@ -172,7 +172,31 @@ PartConfig parse_part_config(const std::string &source,
     try {
       if (command == "eof")
         break;
-      if (command == "slot") {
+      if (command.starts_with("osd_")) {
+        constexpr const char *names[] = {"osd_gauge", "osd_rpmpin", "osd_spdpin",
+            "osd_rpm", "osd_speed", "osd_gear", "osd_mileage", "osd_hbrake"};
+        const auto field = std::find(std::begin(names), std::end(names), command);
+        if (field == std::end(names)) continue;
+        const size_t slot = static_cast<size_t>(field - std::begin(names));
+        HudElement item;
+        const auto raw_id = std::stoull(t.at(1), nullptr, 0);
+        if (raw_id > UINT32_MAX) continue;
+        item.resource = raw_id == 0 || raw_id == UINT32_MAX ? 0 : rid(t[1]);
+        for (size_t i = 0; i < item.position.size(); ++i)
+          item.position[i] = std::stof(t.at(i + 2));
+        if (slot == size_t(HudSlot::RpmPin) || slot == size_t(HudSlot::SpeedPin)) {
+          for (size_t i = 0; i < item.needle.size(); ++i)
+            item.needle[i] = std::stof(t.at(i + 5));
+        } else if (slot >= size_t(HudSlot::Rpm) && slot <= size_t(HudSlot::Mileage)) {
+          if (t.size() > 5) item.color = static_cast<uint32_t>(std::stoull(t[5], nullptr, 0));
+          if (t.size() > 6) item.format = t[6];
+        }
+        if (std::all_of(item.position.begin(), item.position.end(), [](float n) { return std::isfinite(n); }) &&
+            std::all_of(item.needle.begin(), item.needle.end(), [](float n) { return std::isfinite(n); })) {
+          item.defined = true;
+          out.hud[slot] = std::move(item);
+        }
+      } else if (command == "slot") {
         open_wheel = -1;
         PartSlot slot;
         slot.pose = pose(t);
@@ -318,6 +342,7 @@ PartConfig parse_part_config(const std::string &source,
       } else
         out.unknown.push_back(raw);
     } catch (const std::exception &e) {
+      if (command.starts_with("osd_")) continue;
       out.errors.push_back("line " + std::to_string(line) + " (" + command +
                            "): " + e.what());
     }

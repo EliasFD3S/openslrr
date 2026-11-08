@@ -68,6 +68,18 @@ struct PartRender {
   std::vector<uint32_t> colors;
   std::vector<PartLink> links;
 };
+enum class HudSlot : size_t {
+  Gauge, RpmPin, SpeedPin, Rpm, Speed, Gear, Mileage, Handbrake, Count
+};
+struct HudElement {
+  bool defined = false;
+  uint32_t resource = 0;
+  std::array<float, 3> position{};
+  std::array<float, 4> needle{}; // offset, radians per unit, lower/upper bounds
+  uint32_t color = 0xffffffffu;
+  std::string format;
+};
+using VehicleHudLayout = std::array<HudElement, static_cast<size_t>(HudSlot::Count)>;
 struct PartConfig {
   uint32_t resource = 0;
   std::string source;
@@ -87,6 +99,7 @@ struct PartConfig {
   std::vector<PartSlot> slots;
   std::vector<uint32_t> stock;
   std::vector<PartRender> renders;
+  VehicleHudLayout hud{};
   std::vector<std::string> unknown;
   std::vector<std::string> errors;
   bool valid = false;

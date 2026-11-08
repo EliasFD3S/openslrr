@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <sstream>
 #include <unordered_map>
@@ -124,6 +125,8 @@ struct Record {
 std::unordered_map<Object *, std::vector<SfxItem>> sfx_items;
 std::unordered_map<Object *, Record> records;
 int32_t controlled_vehicle = 0;
+VehicleHudLayout hud_preview;
+std::string hud_preview_directory;
 constexpr double kPhysicsTick = 1.0 / physics::VehicleDynamics::update_frequency;
 constexpr unsigned kMaxPhysicsTicksPerFrame = 4;
 double physics_elapsed = 0;
@@ -2034,7 +2037,12 @@ void advance_chassis_tick() {
     };
     // Carry fractional substep time across ticks because 700 is not a
     // multiple of 60. The solver alternates between 11 and 12 substeps.
+    const auto before = rec.dynamics.body.position;
     const auto steps = rec.dynamics.advance(kPhysicsTick, terrain);
+    if (rec.physics_released && rec.dynamics.drive.torque) {
+      const auto delta = rec.dynamics.body.position - before;
+      rec.mileage += static_cast<float>(std::hypot(delta.x, delta.z) * .1);
+    }
     rec.engine_running = rec.dynamics.drive.torque && rec.dynamics.engine_omega > 0;
     if (steps)
       dynamics_sync(chassis, rec, parent);
@@ -2102,6 +2110,40 @@ void part_physics_advance(double seconds) {
       update_engine_audio(rec, rec.engine_running);
   }
 }
+void part_set_hud_preview(const std::string &path) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) {
+    std::fprintf(stderr, "[hud] cannot open %s\n", path.c_str());
+    return;
+  }
+  std::ostringstream text;
+  text << input.rdbuf();
+  hud_preview = parse_part_config(text.str()).hud;
+  hud_preview_directory = std::filesystem::absolute(path).parent_path().string();
+}
+
+bool part_vehicle_hud(VehicleHudState &state) {
+  if (!runtime) return false;
+  const Value player = runtime->get_static("java.game.GameLogic", "player");
+  if (player.tag != ValueTag::Obj || !player.v.o) return false;
+  Object *osd = part_field(player.v.o, "osd");
+  const auto *viewport = osd ? gameref_get(part_field(osd, "vp")) : nullptr;
+  if (!field_int(player.v.o, "_hostVehicleHud", viewport && viewport->vp_active))
+    return false;
+  state.owner = osd;
+  const auto *target = gameref_find_live(controlled_vehicle);
+  const auto *rec = target ? record(as_part(static_cast<Object *>(target->key))) : nullptr;
+  if (!rec) return true; // The GPS frame also belongs to the empty HUD.
+  state.layout = hud_preview_directory.empty() ? &rec->config->hud : &hud_preview;
+  state.preview_directory = hud_preview_directory.empty() ? nullptr : &hud_preview_directory;
+  state.rpm = rec->engine_running ? rec->dynamics.engine_omega * 9.54929658551372 : 0;
+  state.speed = rec->dynamics.body.velocity.length() * 3.6;
+  state.mileage = rec->mileage * .01;
+  state.gear = rec->dynamics.drive.ratio != 0 ? rec->drive_gear : 0;
+  state.handbrake = rec->dynamics.drive.handbrake > 0;
+  return true;
+}
+
 bool part_physics_state(Object *key, PartPhysicsState &state) {
   auto *rec = record(as_part(key));
   if (!rec)
@@ -2207,6 +2249,8 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   for (auto &[key, rec] : records) release_side(rec);
   records.clear();
   controlled_vehicle = 0;
+  hud_preview = {};
+  hud_preview_directory.clear();
   physics_elapsed = 0;
   sfx_items.clear();
   configurations.clear();

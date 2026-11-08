@@ -53,6 +53,16 @@ struct PartPhysicsState {
   std::array<bool, 4> geometry_solved{};
 };
 bool part_physics_state(Object *car, PartPhysicsState &state);
+struct VehicleHudState {
+  const VehicleHudLayout *layout = nullptr;
+  const std::string *preview_directory = nullptr;
+  Object *owner = nullptr;
+  double rpm = 0, speed = 0, mileage = 0;
+  int gear = 0;
+  bool handbrake = false;
+};
+void part_set_hud_preview(const std::string &path);
+bool part_vehicle_hud(VehicleHudState &state);
 std::vector<InstalledPart> part_installed_tree(Object *root);
 Object *vehicle_spawn_stock(Jvm &jvm, RpkIndex &resources, Object *parent,
                             uint32_t chassis, uint32_t texture = 0);

@@ -233,6 +233,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
   host_game_options_load(jvm);
 
   const int32_t opened = rpk.open_all();
+  if (!opt.vehicle_osd.empty()) part_set_hud_preview(opt.vehicle_osd);
   const RpkPack* fe_found = rpk.pack_by_path("frontend.rpk");
   const RpkPack* garage_found = rpk.pack_by_path("misc\\garage.rpk");
   const RpkPack* mwm_found = rpk.pack_by_path("MW_Mod.rpk");

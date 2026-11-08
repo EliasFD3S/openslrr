@@ -760,6 +760,17 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   // Player.<init> during start_init is a long TREE. A miss there aborts boot.
   // Career creation fills the existing player from the menu script.
   jvm.natives().register_method("java.game.Player", "<init>", "()V", native_noop);
+  for (const bool visible : {true, false}) {
+    jvm.natives().register_method("java.game.Player", visible ? "showOsd" : "hideOsd", "()V",
+      [&jvm, visible](Object* player, const std::vector<Value>&) {
+        if (!player) return Value::make_void();
+        player->fields["_hostVehicleHud"] = Value::make_int(visible ? 1 : 0);
+        const auto osd = player->fields.find("osd");
+        if (osd != player->fields.end() && osd->second.tag == ValueTag::Obj && osd->second.v.o)
+          jvm.invoke("java.render.Osd", visible ? "show" : "hide", "()V", {osd->second}, false);
+        return Value::make_void();
+      });
+  }
 
   // Controller.reset() calls these. Unbound, Init stops and the window closes.
   auto ret_int0 = [](Object*, const std::vector<Value>&) {

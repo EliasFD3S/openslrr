@@ -431,6 +431,12 @@ void scene_instances_set_resources(const RpkIndex *resources) {
   g_environment = 0;
 }
 void scene_instances_set_envmap(uint32_t resource) { g_environment = resource; }
+std::shared_ptr<const ScxGeometry> scene_instances_geometry(uint32_t resource) {
+  return geometry(resource);
+}
+std::string scene_instances_texture(uint32_t resource) {
+  return g_resources ? g_resources->texture_path_for_id(resource) : std::string{};
+}
 std::string scene_instances_envmap() {
   return g_resources ? g_resources->texture_path_for_id(g_environment)
                      : std::string{};

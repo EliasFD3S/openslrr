@@ -269,6 +269,8 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
         bgfx::destroy(kv.second);
     }
     osd_tex_.clear();
+    gps_hud_path_.clear();
+    hud_preview_meshes_.clear();
     for (auto& kv : font_tex_) {
       if (bgfx::isValid(kv.second)) bgfx::destroy(kv.second);
     }

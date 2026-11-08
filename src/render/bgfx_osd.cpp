@@ -7,6 +7,7 @@
 #include "slrr/host_input.hpp"
 #include "slrr/host_sfx.hpp"
 #include "slrr/ptx_image.hpp"
+#include "slrr/rpk_index.hpp"
 #include "slrr/slrr_font.hpp"
 #include "slrr/video_fmv.hpp"
 
@@ -17,6 +18,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <unordered_set>
 #include <utility>
 
@@ -446,13 +448,182 @@ namespace slrr {
   }
 #endif
 #ifdef _WIN32
+void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
+  const uint32_t gps_id = rpk_resolve_resource("frontend.rpk", 0x83);
+  const auto &widgets = osd_widgets();
+  if (std::none_of(widgets.begin(), widgets.end(), [&](const OsdWidget& w) {
+        return hud.owner && w.owner == hud.owner &&
+               (w.icon_id == gps_id || w.icon_id == 0x83) &&
+               !w.hidden && !w.dead && !w.icon_path.empty();
+      })) {
+    OsdWidget gps;
+    if (gps_hud_path_.empty()) gps_hud_path_ = scene_instances_texture(gps_id);
+    gps.icon_path = gps_hud_path_;
+    gps.x = -.75f;
+    gps.y = .715f;
+    gps.half_w = .275f;
+    gps.half_h = .335f;
+    if (!gps.icon_path.empty()) draw_osd_quad(gps);
+  }
+  if (!hud.layout) return;
+
+  const auto cars_resource = [](uint32_t local) {
+    return rpk_resolve_resource("cars.rpk", local);
+  };
+  const auto draw = [&](const ScxGeometry& mesh, size_t begin, size_t count,
+                        const uint16_t *indices, size_t index_count,
+                        float x, float y, float sx, float sy, float angle,
+                        float min_x, float min_y, uint32_t color, bool opaque = false) {
+    if (!count || count > 65535 || !index_count || mesh.textures.empty() ||
+        mesh.uvs.size() < (begin + count) * 2 ||
+        bgfx::getAvailTransientVertexBuffer(static_cast<uint32_t>(count), layout_) < count ||
+        bgfx::getAvailTransientIndexBuffer(static_cast<uint32_t>(index_count)) < index_count)
+      return;
+    const auto texture = tex_for_osd_icon(mesh.textures.front());
+    if (texture.idx == white_tex_.idx) return;
+    bgfx::TransientVertexBuffer vb;
+    bgfx::TransientIndexBuffer ib;
+    bgfx::allocTransientVertexBuffer(&vb, static_cast<uint32_t>(count), layout_);
+    bgfx::allocTransientIndexBuffer(&ib, static_cast<uint32_t>(index_count));
+    auto *vertices = reinterpret_cast<MeshVertex*>(vb.data);
+    const float c = std::cos(angle), s = std::sin(angle);
+    for (size_t i = 0; i < count; ++i) {
+      const size_t v = begin + i;
+      const float px = mesh.positions[v * 3] - min_x;
+      const float py = mesh.positions[v * 3 + 1] - min_y;
+      vertices[i] = {x + sx * (c * px - s * py),
+                     y + sy * (s * px + c * py), 0.f, 0.f, 0.f, 1.f,
+                     mesh.uvs[v * 2], mesh.uvs[v * 2 + 1]};
+    }
+    std::memcpy(ib.data, indices, index_count * sizeof(uint16_t));
+    float identity[16];
+    bx::mtxIdentity(identity);
+    const float tint[] = {float((color >> 16) & 255) / 255.f, float((color >> 8) & 255) / 255.f,
+                          float(color & 255) / 255.f, float(color >> 24) / 255.f};
+    const float alpha[] = {0.f, 1.f, opaque ? 0.f : 1.f, 0.f};
+    bgfx::setTransform(identity);
+    bgfx::setVertexBuffer(0, &vb);
+    bgfx::setIndexBuffer(&ib);
+    bgfx::setTexture(0, s_tex_, texture);
+    bind_baked_light(nullptr, nullptr);
+    bgfx::setUniform(u_color_, tint);
+    bgfx::setUniform(u_alpha_test_, alpha);
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA);
+    bgfx::submit(osd_view_, program_);
+  };
+  const auto safe_numeric_format = [](const std::string& fmt) {
+    if (fmt.size() < 2 || fmt.size() > 6 || fmt.front() != '%' || fmt.back() != 'f')
+      return false;
+    const auto body = fmt.substr(1, fmt.size() - 2);
+    const auto dot = body.find('.');
+    const auto width = body.substr(0, dot);
+    return width.size() <= 2 && width.find_first_not_of("0123456789") == std::string::npos &&
+           (dot == std::string::npos || (body.size() == dot + 2 && body.back() >= '0' && body.back() <= '3'));
+  };
+
+  // Build 606 defaults, recovered from the chassis type initializer.
+  const VehicleHudLayout stock{{
+      {true, cars_resource(0x55), {3.24f, -2.4f, -3.59f}},
+      {true, cars_resource(0x56), {1.43f, -4.36f, -3.58f}, {.48f, -.0001f, -.48f, .48f}},
+      {}, {},
+      {true, cars_resource(0x58), {.30f, .86f, 0}, {}, 0xff4fe015, "%03.0f"},
+      {true, cars_resource(0x58), {.72f, .755f, 0}, {}, 0xffd0d0ff, "N123456R"},
+      {true, cars_resource(0x58), {.55f, .86f, 0}, {}, 0xff4fe015, "%06.0f"},
+      {true, cars_resource(0x63), {.07f, .92f, 0}},
+  }};
+  const bool custom = std::any_of(hud.layout->begin(), hud.layout->end(),
+                                  [](const HudElement& item) { return item.defined; });
+  for (size_t i = 0; i < stock.size(); ++i) {
+    const HudSlot slot = static_cast<HudSlot>(i);
+    const auto &override = (*hud.layout)[i];
+    const HudElement& item = override.defined ? override : stock[i];
+    if (!item.resource || (slot == HudSlot::Handbrake && !hud.handbrake)) continue;
+
+    std::shared_ptr<const ScxGeometry> resource;
+    const ScxGeometry *mesh = nullptr;
+    bool opaque = false;
+    if (hud.preview_directory && override.defined) {
+      // The loose OSDPACK fixture has no RPK entries for its two custom
+      // render IDs. Resolve those from the SCX and PNG beside cfg.txt.
+      const bool font = item.resource == 0x0002baa4 && slot == HudSlot::Rpm;
+      const bool pin = item.resource == 0x0002baa5 && slot == HudSlot::RpmPin;
+      if (font || pin) {
+        opaque = pin; // The loose fixture's fff.PNG has zero alpha everywhere.
+        const std::filesystem::path dir(*hud.preview_directory);
+        const auto path = (dir / "meshes" / (font ? "font.scx" : "osdpin.SCX")).string();
+        auto [entry, fresh] = hud_preview_meshes_.try_emplace(path);
+        if (fresh) {
+          entry->second = load_scx_geometry(path);
+          entry->second.textures = {(dir / "textures" / (font ? "font.png" : "fff.PNG")).string()};
+        }
+        mesh = &entry->second;
+      } else if ((item.resource >> 16) == 2) {
+        resource = scene_instances_geometry(cars_resource(item.resource & 0xffff));
+      }
+    } else {
+      resource = scene_instances_geometry(item.resource);
+    }
+    if (!mesh) mesh = resource.get();
+    if (!mesh || !mesh->info.ok) continue;
+    if (slot == HudSlot::Rpm || slot == HudSlot::Speed ||
+        slot == HudSlot::Gear || slot == HudSlot::Mileage) {
+      char buffer[128]{};
+      if (slot == HudSlot::Gear) {
+        const std::string labels = item.format.empty() ? "N123456R" : item.format;
+        if (hud.gear >= 0 && size_t(hud.gear) < labels.size()) buffer[0] = labels[hud.gear];
+      } else {
+        const char *format = safe_numeric_format(item.format) ? item.format.c_str() : "%.0f";
+        const double value = slot == HudSlot::Rpm ? hud.rpm :
+                             slot == HudSlot::Speed ? hud.speed : hud.mileage;
+        std::snprintf(buffer, sizeof(buffer), format, value);
+      }
+      float x = item.position[0], y = item.position[1];
+      if (std::abs(x) > 1.f || item.position[2] != 0.f) {
+        x *= .42f;
+        y *= -.82f;
+      }
+      constexpr uint16_t quad[] = {0, 1, 2, 1, 3, 2};
+      const float sy = .00018f, sx = sy * height_ / width_;
+      for (const unsigned char ch : std::string(buffer)) {
+        const size_t start = size_t(ch) * 4;
+        if ((start + 4) * 3 > mesh->positions.size()) continue;
+        const float *p = mesh->positions.data() + start * 3;
+        const float w = p[3] - p[0], h = p[7] - p[1];
+        if (w <= 0 || h <= 0 || w > 2000 || h > 2000) continue;
+        draw(*mesh, start, 4, quad, 6, x, y, sx, sy, 0, p[0], p[1], item.color);
+        x += (w + 20.f) * sx;
+      }
+      continue;
+    }
+
+    float angle = 0;
+    if (slot == HudSlot::RpmPin || slot == HudSlot::SpeedPin) {
+      const auto &a = item.needle;
+      const double value = slot == HudSlot::RpmPin ? hud.rpm : hud.speed;
+      angle = std::clamp(a[0] + a[1] * static_cast<float>(value),
+                         std::min(a[2], a[3]), std::max(a[2], a[3]));
+    }
+    const size_t count = mesh->positions.size() / 3;
+    if (count > 65535) continue;
+    const std::vector<uint16_t> indices(mesh->indices.begin(), mesh->indices.end());
+    const float xscale = custom && override.defined ? .42f : .28f;
+    const float yscale = custom && override.defined ? -.82f : -.39f;
+    draw(*mesh, 0, count, indices.data(), indices.size(),
+         item.position[0] * xscale, item.position[1] * yscale,
+         xscale * mesh->position_scale, yscale * mesh->position_scale,
+         angle, 0, 0, item.color, opaque);
+  }
+}
+
   void LibBgfxBackend::draw_osd()
 {
     osd_sync_button_pictures();
     const auto& widgets = osd_widgets();
     const auto& texts = slrr_osd_texts();
     const bool loading = !osd_loading_overlay().empty();
-    if ((widgets.empty() && texts.empty() && !loading) ||
+    VehicleHudState hud;
+    const bool have_hud = part_vehicle_hud(hud);
+    if ((widgets.empty() && texts.empty() && !loading && !have_hud) ||
         !bgfx::isValid(program_))
       return;
     float ortho[16];
@@ -513,6 +684,7 @@ namespace slrr {
     for (const SlrrOsdText& t : texts) {
       if (t.visible && !t.text.empty()) note_layer(t.layer);
     }
+    if (have_hud) note_layer(18);
     std::sort(layers.begin(), layers.end());
 
     // Openingpic (frontend:0x0005) is the splash still, drawn opaque on the
@@ -561,6 +733,7 @@ namespace slrr {
       // Plates under the car. Labels and buttons above it, so the color chip
       // is not covered and the chassis stays visible.
       osd_view_ = kOsdView;
+      if (have_hud && layer == 18) draw_vehicle_hud(hud);
       draw_osd_texts(layer, true, true);
       // The page background is the lowest layer. A dialog plate is higher
       // and has to cover the car, so it stays with the buttons. The parts
