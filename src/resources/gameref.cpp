@@ -3,6 +3,7 @@
 #include "slrr/script_events.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/part_runtime.hpp"
+#include "slrr/scene_instances.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -207,8 +208,13 @@ void gameref_bind_scene_camera(void* key, const std::string& params) {
   st->dmax = 500.f;
   gameref_make_live(key);
   float p[6] = {};
-  if (std::sscanf(params.c_str(), " %f , %f , %f , %f , %f , %f", &p[0], &p[1],
-                  &p[2], &p[3], &p[4], &p[5]) >= 3)
+  int flags = 0;
+  const int fields = std::sscanf(params.c_str(), " %f , %f , %f , %f , %f , %f , %i",
+                                 &p[0], &p[1], &p[2], &p[3], &p[4], &p[5], &flags);
+  st->cam_collision = fields == 7 && (flags & 0x10) != 0;
+  st->cam_pose_init = false;
+  st->cam_az_set = false;
+  if (fields >= 3)
     gameref_set_matrix(key, p[0], p[1], p[2], p[3], p[4], p[5]);
 }
 
@@ -421,12 +427,39 @@ GameRefState* fullscreen_script_camera() {
 
 // Pori step: current += (dest - current) * rate, once per tick at 60 Hz.
 void pori_step(float* cur, const float* dest, float rate, float dt) {
+  if (dt <= 0.f) return;
   float k = rate;
   if (dt > 0.f && rate > 0.f && rate < 1.f)
     k = 1.f - std::pow(1.f - rate, dt * 60.f);
   if (k < 0.f) k = 0.f;
   if (k > 1.f) k = 1.f;
   for (int i = 0; i < 3; ++i) cur[i] += (dest[i] - cur[i]) * k;
+}
+
+void move_orbit_body(GameRefState* cam, float delta[3], float dt) {
+  float* p = cam->eye_s;
+  float* v = cam->eye_vel;
+  // The 606 camera uses a 0.15 m sphere. In the traced garage impact its
+  // contact had no friction and a restitution of 0.20.
+  for (int contact = 0; contact < 3; ++contact) {
+    SceneSphereHit hit;
+    if (!cam->cam_collision ||
+        !scene_instances_sweep_sphere(p, delta, 0.15f, hit)) {
+      for (int i = 0; i < 3; ++i) p[i] += delta[i];
+      return;
+    }
+    float vn = 0.f;
+    for (int i = 0; i < 3; ++i) {
+      p[i] += delta[i] * hit.fraction + hit.normal[i] * 0.0001f;
+      vn += v[i] * hit.normal[i];
+    }
+    const float bounce = 0.20f * std::max(0.f, -vn - 0.2f);
+    dt *= 1.f - hit.fraction;
+    for (int i = 0; i < 3; ++i) {
+      v[i] += (bounce - std::min(vn, 0.f)) * hit.normal[i];
+      delta[i] = v[i] * dt;
+    }
+  }
 }
 
 // PE camera body (FUN_004897b0 / FUN_0048a430). The mouse is a force on a
@@ -442,7 +475,7 @@ void drive_orbit(GameRefState* cam, const float* hub, float dist, float frame_dt
   float rem = frame_dt;
   if (rem < 0.f) rem = 0.f;
   if (rem > 0.1f) rem = 0.1f;
-  constexpr float kStep = 0.02f;
+  constexpr float kStep = 1.f / 120.f;
   while (rem > 1e-4f) {
     float dt = rem;
     if (rem >= kStep) {
@@ -526,17 +559,18 @@ void drive_orbit(GameRefState* cam, const float* hub, float dist, float frame_dt
     const float axa = Fx * kInvMass;
     const float aya = Fy * kInvMass;
     const float aza = Fz * kInvMass;
-    p[0] += v[0] * dt + axa * 0.5f * dt * dt;
-    p[1] += v[1] * dt + aya * 0.5f * dt * dt;
-    p[2] += v[2] * dt + aza * 0.5f * dt * dt;
+    float delta[] = {v[0] * dt + axa * 0.5f * dt * dt,
+                     v[1] * dt + aya * 0.5f * dt * dt,
+                     v[2] * dt + aza * 0.5f * dt * dt};
     v[0] += axa * dt;
     v[1] += aya * dt;
     v[2] += aza * dt;
+    move_orbit_body(cam, delta, dt);
   }
 }
 
-bool gameref_world_camera(float eye[3], float at[3], float* fov, float* znear,
-                          float* zfar) {
+static bool world_camera_pose(float eye[3], float at[3], float* fov, float* znear,
+                              float* zfar, float dt) {
   GameRefState* cam = fullscreen_script_camera();
   if (!cam || !eye || !at) return false;
   // SLRR_rev javaSceneCamera (codex/physics-reverse-port @ c65675f): the
@@ -572,11 +606,6 @@ bool gameref_world_camera(float eye[3], float at[3], float* fov, float* znear,
   // `smooth` is a Pori step on the two anchors, so changing car slides
   // instead of cutting. The drag then pulls the eye toward the pose on
   // that anchor; the spring is the resistance.
-  const float now = gameref_now();
-  float dt = cam->cam_clock < 0.f ? 0.f : now - cam->cam_clock;
-  cam->cam_clock = now;
-  if (dt < 0.f) dt = 0.f;
-  if (dt > 0.1f) dt = 0.1f;
   if (!cam->cam_pose_init) {
     std::copy(at, at + 3, cam->look_s);
     std::copy(follow, follow + 3, cam->move_s);
@@ -626,7 +655,7 @@ bool gameref_world_camera(float eye[3], float at[3], float* fov, float* znear,
       cam->eye_vel[0] = cam->eye_vel[1] = cam->eye_vel[2] = 0.f;
       cam->cam_pose_init = true;
     }
-    drive_orbit(cam, hub, dist, dt);
+    if (dt > 0.f) drive_orbit(cam, hub, dist, dt);
     std::copy(cam->eye_s, cam->eye_s + 3, eye);
     std::copy(cam->look_s, cam->look_s + 3, at);
   } else if (have_follow && !cam->aim_look) {
@@ -658,6 +687,21 @@ bool gameref_world_camera(float eye[3], float at[3], float* fov, float* znear,
   if (znear) *znear = cam->dmin > 0.001f ? cam->dmin : 0.05f;
   if (zfar) *zfar = cam->dmax > 1.f ? cam->dmax : 500.f;
   return true;
+}
+
+bool gameref_world_camera(float eye[3], float at[3], float* fov, float* znear,
+                          float* zfar) {
+  return world_camera_pose(eye, at, fov, znear, zfar, 0.f);
+}
+
+void gameref_advance_world_camera(float dt) {
+  float eye[3], at[3];
+  world_camera_pose(eye, at, nullptr, nullptr, nullptr, dt);
+}
+
+bool gameref_world_camera_can_drag() {
+  const auto* cam = fullscreen_script_camera();
+  return cam && cam->aim_move && cam->aim_look && cam->move_dist > 0.25f;
 }
 
 void gameref_orbit_world_camera(float yaw_delta, float pitch_delta,

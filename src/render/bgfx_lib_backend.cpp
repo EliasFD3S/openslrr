@@ -124,6 +124,8 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
       std::fprintf(stderr, "[bgfx] CreateWindow failed\n");
       return false;
     }
+    const RAWINPUTDEVICE mouse{0x01, 0x02, 0, hwnd_};
+    raw_mouse_ = RegisterRawInputDevices(&mouse, 1, sizeof(mouse)) != FALSE;
     if (wc.hIcon) {
       SendMessageA(hwnd_, WM_SETICON, ICON_BIG,
                    reinterpret_cast<LPARAM>(wc.hIcon));
@@ -955,10 +957,27 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     auto* self = reinterpret_cast<LibBgfxBackend*>(
         GetWindowLongPtrA(hwnd, GWLP_USERDATA));
     auto& in = host_input();
+    const auto end_camera_drag = [&] {
+      if (!in.rmb_down) return;
+      in.rmb_down = false;
+      if (self && self->camera_cursor_clipped_) {
+        ClipCursor(nullptr);
+        self->camera_cursor_clipped_ = false;
+      }
+      host_cursor_end_camera_drag();
+    };
     if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN) {
       SetCapture(hwnd);
       if (msg == WM_RBUTTONDOWN) {
         in.rmb_down = true;
+        if (self && self->raw_mouse_ && gameref_world_camera_can_drag() &&
+            !osd_has_modal() && !video_fmv_block_osd()) {
+          POINT cursor;
+          if (GetCursorPos(&cursor)) {
+            const RECT clip{cursor.x, cursor.y, cursor.x + 1, cursor.y + 1};
+            self->camera_cursor_clipped_ = ClipCursor(&clip) != FALSE;
+          }
+        }
         // Garage EC_RDRAGBEGIN → move=1 → changePointer → "M".
         host_cursor_begin_camera_drag();
       }
@@ -1025,15 +1044,19 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
         }
       }
       if (msg == WM_RBUTTONUP) {
-        in.rmb_down = false;
         // EC_RDRAGEND → move=0 → Garage.changePointer (mode letter).
-        host_cursor_end_camera_drag();
+        end_camera_drag();
       }
       if (msg == WM_LBUTTONUP && self) self->lmb_down_ = false;
       if (!in.rmb_down) ReleaseCapture();
       return 0;
     }
-    if (msg == WM_CAPTURECHANGED || msg == WM_CANCELMODE) {
+    if (msg == WM_CAPTURECHANGED || msg == WM_CANCELMODE ||
+        msg == WM_KILLFOCUS || msg == WM_DESTROY) {
+      if (in.rmb_down) {
+        end_camera_drag();
+        in.look_yaw = in.look_pitch = in.mouse_dx = in.mouse_dy = 0.f;
+      }
       if (self) {
         self->slider_drag_index_=-1;
         self->lmb_down_ = false;
@@ -1041,6 +1064,19 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
         if (self->inventory_dragging_) host_cursor_set_pointer(self->inventory_drag_cursor_);
         self->inventory_dragging_ = false;
       }
+      if (msg != WM_CAPTURECHANGED && GetCapture() == hwnd) ReleaseCapture();
+    }
+    if (msg == WM_INPUT && self && self->camera_cursor_clipped_) {
+      RAWINPUT raw{};
+      UINT size = sizeof(raw);
+      if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lp), RID_INPUT,
+                          &raw, &size, sizeof(RAWINPUTHEADER)) == sizeof(raw) &&
+          raw.header.dwType == RIM_TYPEMOUSE &&
+          (raw.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) == 0) {
+        in.mouse_dx += static_cast<float>(raw.data.mouse.lLastX);
+        in.mouse_dy += static_cast<float>(raw.data.mouse.lLastY);
+      }
+      return DefWindowProcA(hwnd, msg, wp, lp);
     }
     if (msg == WM_CHAR) {
       const int ch = static_cast<int>(wp);
@@ -1079,12 +1115,12 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
       if (self && self->have_mouse_) {
         const float dx = static_cast<float>(x - self->mouse_x_) / 200.f;
         const float dy = static_cast<float>(y - self->mouse_y_) / 200.f;
-        if (in.rmb_down) {
+        if (in.rmb_down && !self->camera_cursor_clipped_) {
           in.look_yaw -= dx;
           in.look_pitch -= dy;
           in.mouse_dx += static_cast<float>(x - self->mouse_x_);
           in.mouse_dy += static_cast<float>(y - self->mouse_y_);
-        } else {
+        } else if (!in.rmb_down) {
           in.cursor_x = dx;
           in.cursor_y = dy;
         }

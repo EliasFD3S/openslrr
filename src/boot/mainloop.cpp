@@ -711,7 +711,6 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     }
   }
 
-  dispatch_mechanic_pointer(jvm);
   spin_mechanic_inventory(jvm, frame_dt);
   if(!script_thread_alive(jvm,g_mechanic_thread))apply_mechanic_infoline(jvm, g_spinning_mechanic);
   part_physics_advance(dt < 0.0 ? 0.0 : dt);
@@ -719,6 +718,8 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   // Last write before the view is built. The chase camera must not cover
   // the showroom orbit, and nothing after the earlier spin may put it back.
   spin_car_select_camera(sections.actual());
+  gameref_advance_world_camera(frame_dt);
+  dispatch_mechanic_pointer(jvm);
 
   // --- Present: AltPresentGate (FMV) else PresentFrame ---
   // Soft: backend flush pumps FMV SampleGrabber + Present (libbgfx path).

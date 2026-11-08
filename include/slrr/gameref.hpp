@@ -69,6 +69,7 @@ struct GameRefState {
   int32_t cam_pri = 0;
   int32_t cam_seq = 0;
   bool cam_active = false;
+  bool cam_collision = false;
   float vp_x = 0.f, vp_y = 0.f, vp_w = 1.f, vp_h = 1.f;
   int32_t vp_pri = 0;
   int32_t vp_flags = 0;
@@ -112,7 +113,6 @@ struct GameRefState {
   // This frame's look axes (PE mouse rate). The orbit body consumes them.
   float ctl_x = 0.f;
   float ctl_y = 0.f;
-  float cam_clock = -1.f;
   // Parent-local eye and look point. The preview rebuilds its view from
   // these: the Z reflection that matches the mesh also reverses a look-at basis.
   float aim_eye[3] = {};
@@ -180,6 +180,8 @@ bool gameref_scene_command(void* key, const std::string& line);
 // metres; the renderer still flips Z to match the uploaded meshes.
 bool gameref_world_camera(float eye[3], float at[3], float* fov, float* znear,
                           float* zfar);
+void gameref_advance_world_camera(float dt);
+bool gameref_world_camera_can_drag();
 void gameref_orbit_world_camera(float yaw_delta, float pitch_delta,
                                 float zoom_axis, float dt);
 std::vector<GameRefState*> gameref_nodes_with_mesh();

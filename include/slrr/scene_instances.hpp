@@ -76,6 +76,13 @@ bool scene_instances_floor(float x, float z, float below, void *ignore,
                            float *height);
 // Refresh once per frame; unchanged terrain keeps its spatial index.
 void scene_instances_prepare_physics();
+struct SceneSphereHit {
+  float fraction = 1.f;
+  float normal[3] = {};
+};
+// Sweep through the indexed static scene in script metres.
+bool scene_instances_sweep_sphere(const float start[3], const float delta[3],
+                                  float radius, SceneSphereHit &hit);
 uint64_t scene_instances_floor_builds();
 // Changes whenever the world-space floor used by projected shadows changes.
 uint64_t scene_instances_floor_revision();

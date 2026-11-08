@@ -3,6 +3,7 @@
 #include "slrr/gameref.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/rpk_index.hpp"
+#include "slrr/vehicle_dynamics.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -703,6 +704,107 @@ void scene_instances_prepare_physics() {
 }
 uint64_t scene_instances_floor_builds() { return g_floor_builds; }
 uint64_t scene_instances_floor_revision() { return g_floor_revision; }
+
+namespace {
+using physics::Vec3;
+
+Vec3 closest_on_edge(Vec3 p, Vec3 a, Vec3 b) {
+  const Vec3 edge = b - a;
+  const double length2 = edge.dot(edge);
+  return length2 > 0.0
+             ? a + edge * std::clamp((p - a).dot(edge) / length2, 0.0, 1.0)
+             : a;
+}
+
+void sweep_triangles(const StaticMesh &mesh, const std::vector<uint32_t> &indices,
+                     Vec3 start, Vec3 delta, double radius, SceneSphereHit &hit) {
+  const Vec3 end = start + delta;
+  for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+    Vec3 v[3];
+    bool valid = true;
+    for (int j = 0; j < 3; ++j) {
+      const size_t offset = static_cast<size_t>(indices[i + j]) * 3;
+      if (offset + 2 >= mesh.positions.size()) {
+        valid = false;
+        break;
+      }
+      const float *p = mesh.positions.data() + offset;
+      v[j] = Vec3{p[0], p[1], p[2]} * mesh.scale;
+    }
+    if (!valid || std::min({v[0].y, v[1].y, v[2].y}) > std::max(start.y, end.y) + radius ||
+        std::max({v[0].y, v[1].y, v[2].y}) < std::min(start.y, end.y) - radius)
+      continue;
+    const Vec3 n = (v[1] - v[0]).cross(v[2] - v[0]).normalized();
+    if (n.dot(n) < 0.5) continue;
+
+    double t = 0.0;
+    // Conservative advancement against the face, edges and vertices.
+    for (int step = 0; step < 12 && t < hit.fraction; ++step) {
+      const Vec3 p = start + delta * t;
+      const double height = (p - v[0]).dot(n);
+      const Vec3 projected = p - n * height;
+      Vec3 closest = projected;
+      double edge_distance2 = 0.0;
+      bool outside = false;
+      for (int j = 0; j < 3; ++j) {
+        const Vec3 a = v[j], b = v[(j + 1) % 3];
+        if ((b - a).cross(projected - a).dot(n) >= 0.0) continue;
+        const Vec3 on_edge = closest_on_edge(projected, a, b);
+        const Vec3 offset = on_edge - projected;
+        const double distance2 = offset.dot(offset);
+        if (!outside || distance2 < edge_distance2) {
+          closest = on_edge;
+          edge_distance2 = distance2;
+        }
+        outside = true;
+      }
+      const Vec3 offset = p - closest;
+      const double distance = offset.length();
+      const Vec3 normal = distance > 1e-8 ? offset / distance
+                                         : (delta.dot(n) > 0.0 ? -n : n);
+      const double closing = -delta.dot(normal);
+      if (closing <= 1e-8) break;
+      if (distance <= radius + 1e-5) {
+        hit.fraction = static_cast<float>(t);
+        hit.normal[0] = static_cast<float>(normal.x);
+        hit.normal[1] = static_cast<float>(normal.y);
+        hit.normal[2] = static_cast<float>(normal.z);
+        break;
+      }
+      t += (distance - radius) / closing;
+    }
+  }
+}
+} // namespace
+
+bool scene_instances_sweep_sphere(const float start[3], const float delta[3],
+                                  float radius, SceneSphereHit &hit) {
+  const Vec3 from{start[0], start[1], start[2]};
+  const Vec3 movement{delta[0], delta[1], delta[2]};
+  if (!from.finite() || !movement.finite() || movement.dot(movement) < 1e-12)
+    return false;
+  if (!g_floor_prepared) scene_instances_prepare_physics();
+  hit = {};
+  const Vec3 to = from + movement;
+  const int32_t x0 = static_cast<int32_t>(std::floor((std::min(from.x, to.x) - radius) / 2));
+  const int32_t x1 = static_cast<int32_t>(std::floor((std::max(from.x, to.x) + radius) / 2));
+  const int32_t z0 = static_cast<int32_t>(std::floor((std::min(from.z, to.z) - radius) / 2));
+  const int32_t z1 = static_cast<int32_t>(std::floor((std::max(from.z, to.z) + radius) / 2));
+  const auto sweep_mesh = [&](const StaticMesh &mesh) {
+    for (int32_t x = x0; x <= x1; ++x)
+      for (int32_t z = z0; z <= z1; ++z) {
+        const auto cell = mesh.cells.find(floor_cell(x, z));
+        if (cell != mesh.cells.end())
+          sweep_triangles(mesh, cell->second, from, movement, radius, hit);
+      }
+    sweep_triangles(mesh, mesh.large_triangles, from, movement, radius, hit);
+  };
+  if (g_static_enabled)
+    for (const auto &mesh : g_static) sweep_mesh(mesh);
+  for (const auto &entry : g_floor_meshes) sweep_mesh(entry.second.mesh);
+  return hit.fraction < 1.f;
+}
+
 bool scene_instances_sample_floor(float x, float z, float below, void *ignore,
                                   SceneFloorHit &sample) {
   float best = 0.f;
