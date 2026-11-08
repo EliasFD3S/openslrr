@@ -100,7 +100,9 @@ int Jvm::collect_garbage() {
   }
   const size_t sweep_size = heap_.size();
   heap_.erase(std::remove_if(heap_.begin(), heap_.end(), [&](const auto& o) {
-    return !marked.count(o.get());
+    if (marked.count(o.get())) return false;
+    host_input_forget(o.get());
+    return true;
   }), heap_.end());
   gc_last_freed_ = sweep_size - heap_.size();
   if (requested) {

@@ -57,6 +57,9 @@ struct SfxItem {
 struct Record {
   float steering_input = 0;
   int drive_gear = 1;
+  int transmission = 1;
+  int previous_shift = 0;
+  bool horn_down = false;
   bool engine_running = false;
   bool has_steering_transform = false;
   PartMatrix steering_transform{};
@@ -1300,6 +1303,13 @@ bool part_command(Object *part, const std::string &command) {
       controlled_vehicle = 0;
     return true;
   }
+  if (verb == "transmission") {
+    auto* rec = record(as_part(part));
+    int mode;
+    if (!rec || !(input >> mode)) return false;
+    rec->transmission = mode;
+    return true;
+  }
   if (verb == "texture") {
     // Catalog and the car selector send this on the Vehicle, which is the
     // chassis's owner. The second number, 1, repaints every painted part.
@@ -1917,20 +1927,40 @@ void configure_drive(Object *chassis, Record &rec) {
   drive.throttle = controls ? in.drive_throttle : 0.f;
   drive.brake = controls ? in.drive_brake : 0.f;
   drive.handbrake = controls && in.drive_handbrake;
+  drive.clutch = controls ? 1.f - std::clamp(in.drive_clutch, 0.f, 1.f) : 1.f;
   drive.idle = std::max(400.f, comp(chassis, "engine_rpm_idle"));
   drive.limit = std::max(drive.idle + 100.0, double(comp(chassis, "RPM_limit")));
   drive.inertia = .28 + .01 * std::max(0.f, comp(chassis, "engine_inertia"));
   drive.torque = [dyno](double rpm) { return dyno_sample(dyno, float(rpm), 0, false); };
   const bool reverse = controls && in.drive_reverse;
   const int gears = std::clamp(field_int(chassis, "gears"), 1, 6);
+  const int shift = !controls ? 0 : in.drive_shift > .5f ? 1 : in.drive_shift < -.5f ? -1 : 0;
+  const bool shift_pressed = shift && shift != rec.previous_shift;
+  rec.previous_shift = shift;
+  const bool automatic = rec.transmission == 1 || rec.transmission == 5;
   if (reverse) rec.drive_gear = 7;
   else if (rec.drive_gear > gears) rec.drive_gear = 1;
-  else if (rec.dynamics.engine_omega * 9.5492965855 > drive.limit * .9 &&
+  else if (shift_pressed && rec.transmission != 1)
+    rec.drive_gear = std::clamp(rec.drive_gear + shift, 1, gears);
+  else if (automatic && rec.dynamics.engine_omega * 9.5492965855 > drive.limit * .9 &&
            rec.drive_gear < gears)
     ++rec.drive_gear;
-  else if (rec.drive_gear > 1 &&
+  else if (automatic && rec.drive_gear > 1 &&
            rec.dynamics.engine_omega * 9.5492965855 < drive.limit * .35)
     --rec.drive_gear;
+  const bool horn = controls && in.drive_horn;
+  if (horn && !rec.horn_down && index) {
+    auto it = rec.horns.find(1);
+    if (it != rec.horns.end()) {
+      auto path = index->payload_prop(it->second.sfx, "sourcefile");
+      if (!path.empty()) {
+        std::replace(path.begin(), path.end(), '\\', '/');
+        host_sfx_play_file((std::filesystem::path(index->game_root()) / path).string(),
+                           it->second.pitch);
+      }
+    }
+  }
+  rec.horn_down = horn;
   drive.ratio = rec.physics_released
       ? scalar(ratios->slots, rec.drive_gear, 0) * comp(chassis, "rearend_ratio")
       : 0;
@@ -2282,6 +2312,11 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
     auto *state = gameref_get(self);
     auto *p = record(self);
     const int query = number(args, 0);
+    if (query == 25 && state && state->alias == "controller") {
+      const float axis = host_input_controller_axis(
+          static_cast<Object*>(state->key), number(args, 1));
+      return Value::make_int(static_cast<int>(std::clamp(axis, -1.f, 1.f) * 128.f));
+    }
     if (!state)
       return Value::make_int(0);
     if (query == 5 || query == 1)

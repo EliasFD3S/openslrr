@@ -1095,6 +1095,13 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
       if (ch >= 32 && ch < 127) osd_on_char(ch);
       return 0;
     }
+    if (msg == WM_KILLFOCUS) host_input_clear_keys();
+    if (msg == WM_KEYDOWN || msg == WM_KEYUP ||
+        msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) {
+      const int scan = static_cast<int>((lp >> 16) & 0x7f) |
+                       static_cast<int>((lp >> 17) & 0x80);
+      host_input_key(scan, msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN);
+    }
     if (msg == WM_KEYDOWN) {
       if (wp == VK_BACK) {
         osd_on_char(8);

@@ -233,7 +233,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
           st->type_id = args[1].v.i;
         if (args.size() >= 4 && args[3].tag == ValueTag::Obj && args[3].v.o)
           st->alias = args[3].v.o->str;
-        if (st->alias == "dummy") gameref_make_live(self);
+        if (st->alias == "dummy" || st->alias == "controller") gameref_make_live(self);
         gameref_set_flags(self, kWorldTreeRoot);
         return Value::make_void();
       };
@@ -484,7 +484,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
   jvm.natives().register_method(
       "java.util.resource.GameRef", "queueEvent",
       "(Ljava.util.resource.ResourceRef;ILjava.lang.String;)V",
-      [](Object* self, const std::vector<Value>& args) {
+      [&jvm](Object* self, const std::vector<Value>& args) {
         // EVENT_COMMAND = 0x10. Garage.cameraSetup sends smooth/dist/zoom/force/torque.
         int type = 0;
         if (args.size() > 1) {
@@ -497,6 +497,11 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
           return Value::make_void();
         GameRefState* st = gameref_get(self);
         const std::string& line = args[2].v.o->str;
+        if (st && st->alias == "controller" && line == "setcontrol") {
+          jvm.invoke("java.io.Controller", "setcontrol", "()V",
+                     {Value::make_obj(self)}, false);
+          return Value::make_void();
+        }
         if (part_command(self, line)) return Value::make_void();
         if (!st || (st->type_id & 0xFFFF) != 0x33) return Value::make_void();
         gameref_scene_command(st->key, line);

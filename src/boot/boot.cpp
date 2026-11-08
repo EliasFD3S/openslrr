@@ -7,6 +7,7 @@
 #include "slrr/host_music.hpp"
 #include "slrr/host_game_options.hpp"
 #include "slrr/script_threads.hpp"
+#include "slrr/script_events.hpp"
 #include "slrr/mainloop.hpp"
 #include "slrr/natives_boot.hpp"
 #include "slrr/object.hpp"
@@ -20,8 +21,10 @@
 #include "slrr/video_fmv.hpp"
 #include "slrr_version.h"
 
+#include <array>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <exception>
 
 #ifdef _WIN32
@@ -177,6 +180,9 @@ int boot_probe(Jvm& jvm, const BootOptions& opt) {
   rpk.set_root(opt.game_root);
   SectionMachine sections(&jvm);
   register_boot_natives(jvm, rpk, sections);
+  if (std::getenv("SLRR_INPUT_AUDIT")) {
+    for (const auto& sig : jvm.natives().signatures()) std::printf("[audit-binding] %s\n", sig.c_str());
+  }
 
   const int32_t opened = rpk.open_all();
   const RpkPack* fe_pack = rpk.pack_by_path("frontend.rpk");
@@ -446,6 +452,66 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
                false);
   }
 
+  if (std::getenv("SLRR_INPUT_AUDIT")) {
+    const auto field = [](Object* o, const char* key) {
+      return o && o->fields.count(key) ? o->fields.at(key) : Value::make_void();
+    };
+    const auto obj = [](Value v) { return v.tag == ValueTag::Obj ? v.v.o : nullptr; };
+    auto* ctl = host_input_player_controller(jvm);
+    std::printf("[input-test] initial controller=%p bindings=%zu\n", static_cast<void*>(ctl),
+                ctl && ctl->input ? ctl->input->bindings.size() : 0);
+    if (!ctl || !ctl->input) return 81;
+    jvm.invoke("java.io.Controller", "setcontrol", "()V", {Value::make_obj(ctl)}, false);
+    if (ctl->input->bindings.size() < 30) return 82;
+    const Value orig = jvm.get_static("java.game.GameLogic", "activeControlFile");
+    const Value tmp = Value::make_obj(jvm.new_string("save/controls/openslrr-input-probe"));
+    jvm.set_static("java.game.GameLogic", "activeControlFile", tmp);
+    auto* options = jvm.new_object("java.game.OptionsDialog");
+    auto invoke = [&](const char* method, int arg) {
+      return arg < 0
+        ? jvm.invoke(options->class_name, method, "()V", {Value::make_obj(options)}, false)
+        : jvm.invoke(options->class_name, method, "(I)V", {Value::make_obj(options), Value::make_int(arg)}, false);
+    };
+    invoke("<init>", 1);
+    invoke("show", -1);
+    if (!script_callback_registered(jvm, options, 28)) return 87;
+    for (const auto& binding : {std::array<int, 4>{4, 0, 0x21, 28},
+                                std::array<int, 4>{413, 65, 0x22, 68},
+                                std::array<int, 4>{26, 11, 0x24, 61}}) {
+      const auto [page, row, scan, axis] = binding;
+      invoke("osdCommand", page);
+      auto* set = obj(field(options, "controlSet"));
+      auto* axes = obj(field(set, "axisID"));
+      if (!axes || axes->slots.size() <= static_cast<size_t>(row)) return 83;
+      invoke("osdCommand", 100 + row);
+      script_callbacks_tick(jvm, 0.016f);
+      host_input_key(scan, true);
+      script_callbacks_tick(jvm, 0.016f);
+      if (axes->slots[row].tag != ValueTag::Int || axes->slots[row].v.i != scan) {
+        std::printf("[input-test] remap failed page=%d row=%d axis=%d getKey=%d state=%d actGroup=%d\n",
+          page,row,axes->slots[row].v.i,field(options,"getKey").v.i,
+          field(options,"getKeyStat").v.i,field(options,"actGroup").v.i);
+        return 84;
+      }
+      host_input_update_controller(ctl, 1.f);
+      const auto mapped = jvm.invoke("java.io.Input", "getInput", "(I)I", {Value::make_int(axis)}, true);
+      if (mapped.tag != ValueTag::Int || mapped.v.i < 110) {
+        std::printf("[input-test] axis failed %d value=%d controller=%f\n", axis,mapped.v.i,
+                    host_input_controller_axis(ctl, axis));
+        return 85;
+      }
+      host_input_key(scan, false);
+      script_callbacks_tick(jvm, 0.016f);
+      invoke("osdCommand", 6);
+      invoke("osdCommand", page);
+      auto* saved = obj(field(obj(field(options, "controlSet")), "axisID"));
+      if (!saved || saved->slots[row].v.i != scan) return 86;
+      std::printf("[input-test] captured, applied and reloaded page=%d row=%d %s\n",
+                  page, row, host_input_axis_name(0, scan).c_str());
+    }
+    jvm.set_static("java.game.GameLogic", "activeControlFile", orig);
+    return 0;
+  }
   int32_t osd_n = osd_widget_count();
   Object* garage_obj = sections.garage();
   if (!garage_obj) garage_obj = sections.actual();

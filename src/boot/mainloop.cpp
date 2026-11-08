@@ -368,12 +368,27 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   float frame_dt = static_cast<float>(dt);
   if (frame_dt < 0.f) frame_dt = 0.f;
   if (frame_dt > kDtClamp) frame_dt = kDtClamp;
+  Object* controller = host_input_player_controller(jvm);
+  host_input_update_controller(controller, frame_dt);
+  const Value queue = jvm.get_static("java.render.Frontend", "inputQueue");
+  if (!video_fmv_block_osd() && controller) {
+    Object* focus = nullptr;
+    if (queue.tag == ValueTag::Obj && queue.v.o) {
+      Object* entries = field_obj(queue.v.o, "elementData");
+      const int size = field_int(queue.v.o, "elementCount");
+      if (entries && size > 0 && static_cast<size_t>(size) <= entries->slots.size()) {
+        const Value& last = entries->slots[size - 1];
+        if (last.tag == ValueTag::Obj) focus = last.v.o;
+      }
+    }
+    host_input_check_hotkeys(jvm, controller, focus);
+  }
   script_callbacks_tick(jvm,frame_dt);
 
   auto& in = host_input();
-  const float yaw = host_input_get_axis(7, 0);
-  const float pitch = host_input_get_axis(8, 0);
-  const float zoom = host_input_get_axis(10, 0);
+  const float yaw = host_input_camera_axis(7);
+  const float pitch = host_input_camera_axis(8);
+  const float zoom = host_input_camera_axis(10);
   // One camera: the script camera. Orbit, spring and Pori all live on it.
   gameref_orbit_world_camera(yaw * 2.5f, pitch * 1.5f, zoom, frame_dt);
   in.look_yaw = 0.f;

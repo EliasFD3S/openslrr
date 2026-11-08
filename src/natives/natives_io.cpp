@@ -772,28 +772,77 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
       });
   }
 
-  // Controller.reset() calls these. Unbound, Init stops and the window closes.
-  auto ret_int0 = [](Object*, const std::vector<Value>&) {
-    return Value::make_int(0);
+  const char* controller = "java.io.Controller";
+  auto integer = [](const std::vector<Value>& args, size_t i) {
+    return i < args.size() && args[i].tag == ValueTag::Int ? args[i].v.i : -1;
   };
-  jvm.natives().register_method("java.io.Controller", "<init>", "()V", native_noop);
-  jvm.natives().register_method("java.io.Controller", "user_Reset", "()V",
-                                native_noop);
-  jvm.natives().register_method(
-      "java.io.Controller", "user_Add", "(IIIFFFF)I", ret_int0);
-  jvm.natives().register_method("java.io.Controller", "user_Del", "(III)I",
-                                ret_int0);
-  jvm.natives().register_method(
-      "java.io.Controller", "user_SetAxisSmooth", "(IFFFFF)I", ret_int0);
-  jvm.natives().register_method(
-      "java.io.Controller", "user_SetAxisSpeed", "(IF)V", native_noop);
-  jvm.natives().register_method(
-      "java.io.Controller", "user_GetAxisVal", "(I)F",
-      [](Object*, const std::vector<Value>&) {
-        return Value::make_float(0.f);
+  auto real = [](const Value& value) {
+    if (value.tag == ValueTag::Float) return value.v.f;
+    return value.tag == ValueTag::Int ? float(value.v.i) : 0.f;
+  };
+  auto state = [](Object* self) -> ControllerInput& {
+    if (!self->input) self->input = std::make_unique<ControllerInput>();
+    return *self->input;
+  };
+  jvm.natives().register_method(controller, "<init>", "()V",
+      [state](Object* self, const std::vector<Value>&) {
+        if (self) state(self);
+        return Value::make_void();
       });
-  jvm.natives().register_method(
-      "java.io.Controller", "user_SetAxisForce", "(IFF)V", native_noop);
+  jvm.natives().register_method(controller, "user_Reset", "()V",
+      [state](Object* self, const std::vector<Value>&) {
+        if (self) state(self) = {};
+        return Value::make_void();
+      });
+  jvm.natives().register_method(controller, "user_Add", "(IIIFFFF)I",
+      [integer, real, state](Object* self, const std::vector<Value>& args) {
+        const int axis = integer(args, 0), device = integer(args, 1);
+        const int physical = integer(args, 2);
+        if (!self || args.size() < 7 || axis <= 0 || physical < 0 ||
+            !host_input_device_name(device)) return Value::make_int(0);
+        auto& bindings = state(self).bindings;
+        InputBinding binding{axis, device, physical, real(args[3]), real(args[4]),
+                             real(args[5]), real(args[6])};
+        if (!std::isfinite(binding.from) || !std::isfinite(binding.to) ||
+            !std::isfinite(binding.low) || !std::isfinite(binding.high))
+          return Value::make_int(0);
+        // Stock remapping assumes a newly detected joystick axis is bipolar.
+        // XInput exposes each direction independently. Retain the configured
+        // dead zone while mapping the active half to the full output range.
+        if (device == 2 && binding.from < 0.f && binding.to == 1.f)
+          binding.from = (binding.from + 1.f) * .5f;
+        auto same = [&](const InputBinding& other) {
+          return other.axis == axis && other.device == device &&
+                 other.physical == physical && other.high == binding.high;
+        };
+        const auto existing = std::find_if(bindings.begin(), bindings.end(), same);
+        if (existing == bindings.end()) bindings.push_back(binding);
+        else *existing = binding;
+        return Value::make_int(1);
+      });
+  jvm.natives().register_method(controller, "user_Del", "(III)I",
+      [integer](Object* self, const std::vector<Value>& args) {
+        if (!self || !self->input) return Value::make_int(0);
+        const auto count = std::erase_if(self->input->bindings, [&](const InputBinding& b) {
+          return b.axis == integer(args, 0) && b.device == integer(args, 1) &&
+                 b.physical == integer(args, 2);
+        });
+        return Value::make_int(count != 0);
+      });
+  jvm.natives().register_method(controller, "user_SetAxisSmooth", "(IFFFFF)I",
+      [integer, real, state](Object* self, const std::vector<Value>& args) {
+        if (!self || args.size() < 6) return Value::make_int(0);
+        auto& smooth = state(self).smoothing[integer(args, 0)];
+        smooth = {real(args[1]), real(args[2]), real(args[3]), real(args[4]),
+                  std::max(1.f, real(args[5])), smooth.value};
+        return Value::make_int(1);
+      });
+  jvm.natives().register_method(controller, "user_SetAxisSpeed", "(IF)V", native_noop);
+  jvm.natives().register_method(controller, "user_GetAxisVal", "(I)F",
+      [integer](Object* self, const std::vector<Value>& args) {
+        return Value::make_float(host_input_controller_axis(self, integer(args, 0)));
+      });
+  jvm.natives().register_method(controller, "user_SetAxisForce", "(IFF)V", native_noop);
 }
 
 }  // namespace slrr
