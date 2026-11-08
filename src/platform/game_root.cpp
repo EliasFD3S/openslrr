@@ -14,6 +14,12 @@ bool probe(const fs::path& root) {
   return fs::is_regular_file(marker, ec);
 }
 
+std::string absolute_root(const fs::path& path) {
+  std::error_code ec;
+  const fs::path absolute = fs::absolute(path, ec);
+  return ec ? std::string{} : absolute.lexically_normal().make_preferred().string();
+}
+
 }  // namespace
 
 bool game_root_looks_valid(const std::string& root) {
@@ -23,8 +29,7 @@ bool game_root_looks_valid(const std::string& root) {
 
 std::string find_game_root(const char* explicit_path) {
   if (explicit_path && explicit_path[0]) {
-    if (probe(fs::path(explicit_path))) return explicit_path;
-    return {};
+    return probe(explicit_path) ? absolute_root(explicit_path) : std::string{};
   }
 
   static const char* kCandidates[] = {
@@ -37,11 +42,7 @@ std::string find_game_root(const char* explicit_path) {
   };
 
   for (const char* c : kCandidates) {
-    if (probe(fs::path(c))) {
-      std::error_code ec;
-      fs::path abs = fs::absolute(c, ec);
-      return ec ? std::string(c) : abs.string();
-    }
+    if (probe(c)) return absolute_root(c);
   }
   return {};
 }

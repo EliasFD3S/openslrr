@@ -234,7 +234,13 @@ void Jvm::enrich_static_fields(const TufaClass& cls) {
     // `new ResourceRef(MW_Mod:0xABC)` is a call. Skip other calls so a stray
     // argc int cannot overwrite a host static. Keep the constructed object.
     if (call && !has_new) continue;
-    bool rich = has_new;
+    // A qualified static field read is a path with two segments: the
+    // declaring class and the field. It needs the evaluator even when it
+    // contains no operators or calls.
+    const bool static_read =
+        tree.size() == 4 && tree[0].op == 0x11 && tree[0].imm == 2 &&
+        tree[1].op == 0x19 && tree[2].op == 0x1b && tree[3].op == 0x10;
+    bool rich = has_new || static_read;
     for (const auto& n : tree) {
       if (n.op == 0x07 && n.wide && n.imm >= 15 && n.imm <= 22) rich = true;
       // `new String[n]` (CLUBNAMES, speedymen). Expr 31 is the array alloc.

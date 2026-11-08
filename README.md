@@ -9,7 +9,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-in_development-8b5cf6" alt="In development">
-  <img src="https://img.shields.io/badge/platform-Windows_x86-0078d4" alt="Windows x86">
+  <img src="https://img.shields.io/badge/platform-Windows_x86%2Fx64-0078d4" alt="Windows x86 and x64">
   <img src="https://img.shields.io/badge/C%2B%2B-20-00599c" alt="C++20">
   <img src="https://img.shields.io/badge/reference-SLRR_2.2.1_MWM-c0c0c0" alt="SLRR 2.2.1 MWM">
 </p>
@@ -103,7 +103,7 @@ Headless diagnostics cover all four music sets (muted), audio-volume save/reload
 - Windows Media Foundation for music decoding (included in standard Windows installations; Windows N editions need the Media Feature Pack).
 - An Internet connection while preparing and initially configuring dependencies.
 
-The reference configuration is **Win32**, including on 64-bit Windows: the original scripts and AVI codecs expect a 32-bit environment.
+Win32 and x64 use the same game scripts and assets. The x64 build uses **VLC 3.x for Windows x64** for Cinepak AVI intros, the menu background, and formats such as H.264/AAC in MP4. It looks in the standard VideoLAN installation directory. For a custom installation, set `SLRR_VLC_DIR` to the absolute folder containing `libvlc.dll`, `libvlccore.dll`, and `plugins`.
 
 ### Get the project
 
@@ -130,6 +130,8 @@ cmake --build build-bgfx --config Release --parallel
 ```
 
 The executable is generated at `build-bgfx/Release/slrr_host.exe`. The first build includes bgfx and its shader tools, so it may take a while.
+
+For x64, use `-A x64` and a separate build directory such as `build-bgfx-x64`.
 
 ## Run
 

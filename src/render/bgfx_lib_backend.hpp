@@ -250,6 +250,7 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::TextureHandle white_tex_ = BGFX_INVALID_HANDLE;
   bgfx::TextureHandle fmv_tex_ = BGFX_INVALID_HANDLE;
   int32_t fmv_tex_w_ = 0;
+  uint64_t fmv_tex_serial_ = 0;
   int32_t fmv_tex_h_ = 0;
   bgfx::UniformHandle s_tex_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle s_lightmap_ = BGFX_INVALID_HANDLE;

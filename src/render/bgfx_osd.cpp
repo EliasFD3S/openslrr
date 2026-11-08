@@ -354,7 +354,7 @@ namespace slrr {
 #ifdef _WIN32
   void LibBgfxBackend::draw_fmv(uint16_t view_id)
 {
-    if (!video_fmv_is_playing() || !video_fmv_is_non_exclusive()) return;
+    if (!video_fmv_is_playing()) return;
     if (!video_fmv_frame_ready() || !bgfx::isValid(program_)) return;
     const uint8_t* bgra = video_fmv_bgra();
     const int32_t fw = video_fmv_width();
@@ -370,15 +370,29 @@ namespace slrr {
           nullptr);
       fmv_tex_w_ = fw;
       fmv_tex_h_ = fh;
+      fmv_tex_serial_ = 0;
     }
-    const bgfx::Memory* mem =
-        bgfx::copy(bgra, static_cast<uint32_t>(fw * fh * 4));
-    bgfx::updateTexture2D(fmv_tex_, 0, 0, 0, 0, static_cast<uint16_t>(fw),
-                          static_cast<uint16_t>(fh), mem);
+    if (!bgfx::isValid(fmv_tex_)) return;
+    const uint64_t serial = video_fmv_frame_serial();
+    if (serial == 0 || serial != fmv_tex_serial_) {
+      const bgfx::Memory* mem =
+          bgfx::copy(bgra, static_cast<uint32_t>(fw * fh * 4));
+      bgfx::updateTexture2D(fmv_tex_, 0, 0, 0, 0, static_cast<uint16_t>(fw),
+                            static_cast<uint16_t>(fh), mem);
+      fmv_tex_serial_ = serial;
+    }
 
     // The video-options columns are placed on the full viewport. A 4:3
     // island left those labels on the empty side bars.
-    const float x0 = -1.f, x1 = 1.f, y0 = -1.f, y1 = 1.f;
+    float x0 = -1.f, x1 = 1.f, y0 = -1.f, y1 = 1.f;
+    if (video_fmv_block_osd()) {
+      float left, top, w, h;
+      video_fmv_letterbox(width_, height_, &left, &top, &w, &h);
+      x0 = 2.f * left / width_ - 1.f;
+      x1 = 2.f * (left + w) / width_ - 1.f;
+      y0 = 2.f * top / height_ - 1.f;
+      y1 = 2.f * (top + h) / height_ - 1.f;
+    }
 
     float ortho[16];
     bx::mtxOrtho(ortho, -1.f, 1.f, 1.f, -1.f, 0.f, 100.f, 0.f,

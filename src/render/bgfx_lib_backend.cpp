@@ -408,7 +408,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
       return low.find("opening") != std::string::npos;
     };
-    bool show = fmv_bg || garage_ || loading;
+    bool show = video_fmv_frame_ready() || garage_ || loading;
     if (!show) {
       for (const OsdWidget& w : osd_widgets()) {
         if (w.hidden || w.dead || !w.background || w.icon_path.empty())

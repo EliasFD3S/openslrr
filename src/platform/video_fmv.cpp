@@ -1,5 +1,9 @@
 #include "slrr/video_fmv.hpp"
 
+#ifdef _WIN64
+#include "video_fmv_vlc.hpp"
+#endif
+
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -66,6 +70,10 @@ bool g_playing = false;
 bool g_loop = false;
 bool g_non_exclusive = false;
 bool g_frame_ready = false;
+#ifdef _WIN64
+bool g_use_vlc = false;
+uint64_t g_vlc_frame_serial = 0;
+#endif
 int g_w = 0;
 int g_h = 0;
 char g_path[MAX_PATH] = {};
@@ -643,8 +651,6 @@ int32_t video_fmv_open(const char *path, int32_t non_exclusive, int32_t loop) {
 #ifdef _WIN32
   if (!path || !path[0])
     return -1;
-  if (!ensure_com())
-    return -1;
   video_fmv_close();
 
   const std::string resolved = resolve_path(path);
@@ -657,6 +663,18 @@ int32_t video_fmv_open(const char *path, int32_t non_exclusive, int32_t loop) {
   if (wpath.empty())
     return -1;
 
+#ifdef _WIN64
+  if (vlc_fmv_open(wpath, loop != 0)) {
+    g_use_vlc = true;
+    g_non_exclusive = non_exclusive != 0;
+    g_playing = true;
+    std::printf("[fmv] LibVLC open %s loop=%d\n", resolved.c_str(), loop != 0);
+    return 0;
+  }
+#endif
+
+  if (!ensure_com())
+    return -1;
   HRESULT hr =
       CoCreateInstance(CLSID_FilterGraph, nullptr, CLSCTX_INPROC_SERVER,
                        IID_IGraphBuilder, reinterpret_cast<void **>(&g_graph));
@@ -717,6 +735,7 @@ int32_t video_fmv_open(const char *path, int32_t non_exclusive, int32_t loop) {
                        : build_graph_exclusive(wpath.c_str());
   if (FAILED(hr) || !qi_open_interfaces(!g_non_exclusive)) {
     release_graph();
+#ifndef _WIN64
     // Menu bg (non_exclusive): Soft Java treats openVideo==0 as success and
     // skips the Dummy/Vehicle fallback. Prefer that over a hard fail when the
     // file exists but DirectShow cannot build a texture graph yet.
@@ -729,6 +748,7 @@ int32_t video_fmv_open(const char *path, int32_t non_exclusive, int32_t loop) {
       std::snprintf(g_path, sizeof(g_path), "%s", resolved.c_str());
       return 0;
     }
+#endif
     return -1;
   }
   if (!g_non_exclusive) {
@@ -765,20 +785,28 @@ int32_t video_fmv_open(const char *path, int32_t non_exclusive, int32_t loop) {
 void video_fmv_close() {
   g_audio_streams = 0;
 #ifdef _WIN32
-  avi_release();
-  if (!g_ds_ready && !g_graph) {
-    g_playing = false;
-    g_frame_ready = false;
-    g_non_exclusive = false;
-    return;
+#ifdef _WIN64
+  if (g_use_vlc) {
+    vlc_fmv_close();
+    g_use_vlc = false;
   }
+#endif
+  avi_release();
   release_graph();
 #endif
 }
 
-int32_t video_fmv_audio_stream_count() { return g_audio_streams; }
+int32_t video_fmv_audio_stream_count() {
+#ifdef _WIN64
+  if (g_use_vlc) return vlc_fmv_audio_tracks();
+#endif
+  return g_audio_streams;
+}
 bool video_fmv_audio_running() {
 #ifdef _WIN32
+#ifdef _WIN64
+  if (g_use_vlc) return vlc_fmv_audio_running();
+#endif
   OAFilterState state = State_Stopped;
   return g_audio_streams > 0 && g_control &&
          SUCCEEDED(g_control->GetState(500, &state)) && state == State_Running;
@@ -798,7 +826,12 @@ bool g_block_osd = false;
 
 void video_fmv_set_block_osd(bool block) { g_block_osd = block; }
 
-bool video_fmv_block_osd() { return g_block_osd; }
+bool video_fmv_block_osd() {
+#ifdef _WIN64
+  if (g_use_vlc && g_playing && !g_non_exclusive) return true;
+#endif
+  return g_block_osd;
+}
 
 int32_t video_fmv_is_non_exclusive() {
 #ifdef _WIN32
@@ -812,6 +845,21 @@ void video_fmv_pump() {
 #ifdef _WIN32
   if (!g_playing)
     return;
+#ifdef _WIN64
+  if (g_use_vlc) {
+    const auto frame = vlc_fmv_pump(g_bgra, g_w, g_h);
+    if (frame == VlcFrame::Stopped) {
+      video_fmv_close();
+    } else if (frame == VlcFrame::Ready) {
+      if (!g_frame_ready)
+        std::printf("[fmv] LibVLC frame %dx%d audio=%d\n",
+                    g_w, g_h, vlc_fmv_audio_tracks());
+      g_frame_ready = true;
+      ++g_vlc_frame_serial;
+    }
+    return;
+  }
+#endif
   if (g_use_avi) {
     avi_pump();
     return;
@@ -852,6 +900,13 @@ bool video_fmv_frame_ready() {
 #else
   return false;
 #endif
+}
+
+uint64_t video_fmv_frame_serial() {
+#ifdef _WIN64
+  if (g_use_vlc) return g_vlc_frame_serial;
+#endif
+  return 0;
 }
 
 void video_fmv_letterbox(int32_t screen_w, int32_t screen_h, float *out_left,

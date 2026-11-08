@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 project(slrr_host LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake/CMakeLists.txt")
@@ -19,6 +19,7 @@ add_executable(slrr_host
   src/platform/host_game_options.cpp
   src/platform/host_cursor.cpp
   src/platform/video_fmv.cpp
+  src/platform/video_fmv_vlc.cpp
   src/natives/native_registry.cpp
   src/natives/natives_boot.cpp
   src/natives/natives_io.cpp
@@ -82,9 +83,6 @@ target_include_directories(slrr_host PRIVATE include "${CMAKE_BINARY_DIR}/genera
 if(MSVC)
   target_compile_options(slrr_host PRIVATE /W3 /utf-8)
   target_compile_definitions(slrr_host PRIVATE _CRT_SECURE_NO_WARNINGS)
-  if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-    message(WARNING "slrr_host: building x64 — stock scripts assume 32-bit layouts; prefer -A Win32 for now")
-  endif()
 endif()
 
 if(WIN32)
@@ -99,7 +97,6 @@ if(SLRR_WITH_LIBBGFX)
   if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake/CMakeLists.txt")
     message(FATAL_ERROR "SLRR_WITH_LIBBGFX=ON but third_party/bgfx.cmake missing")
   endif()
-  set(CMAKE_CXX_STANDARD 20)
   set(BGFX_BUILD_TOOLS ON CACHE BOOL "" FORCE)
   set(BGFX_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
   set(BGFX_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -110,7 +107,14 @@ if(SLRR_WITH_LIBBGFX)
 
   set(SLRR_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders")
   file(MAKE_DIRECTORY "${SLRR_SHADER_OUT}")
-  set(_bgfx_shader_inc "${CMAKE_CURRENT_BINARY_DIR}/_deps/bgfx-src/src")
+  # Allow each architecture to use its own build tree with the same sources.
+  if(NOT BGFX_DIR)
+    set(BGFX_DIR "${CMAKE_CURRENT_BINARY_DIR}/_deps/bgfx-src")
+  endif()
+  if(NOT BIMG_DIR)
+    set(BIMG_DIR "${CMAKE_CURRENT_BINARY_DIR}/_deps/bimg-src")
+  endif()
+  set(_bgfx_shader_inc "${BGFX_DIR}/src")
 
   bgfx_compile_shaders(
     TYPE VERTEX
@@ -147,7 +151,7 @@ if(SLRR_WITH_LIBBGFX)
   )
   target_include_directories(slrr_host PRIVATE
     "${SLRR_SHADER_OUT}"
-    "${CMAKE_CURRENT_BINARY_DIR}/_deps/bimg-src/3rdparty"
+    "${BIMG_DIR}/3rdparty"
   )
   target_link_libraries(slrr_host PRIVATE bgfx bx bimg)
   target_compile_features(slrr_host PRIVATE cxx_std_20)
