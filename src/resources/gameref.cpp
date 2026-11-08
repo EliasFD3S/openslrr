@@ -96,8 +96,13 @@ void gameref_remove(void* key) {
   GameRefState* n = gameref_get(key);
   if (n) unlink_from_parent(n);
   // Orphan children stay keyed but parent cleared.
-  for (auto& kv : g_refs) {
-    if (kv.second.parent == key) kv.second.parent = nullptr;
+  for (auto it = g_refs.begin(); it != g_refs.end();) {
+    if (it->second.binding == key) {
+      it = g_refs.erase(it);
+    } else {
+      if (it->second.parent == key) it->second.parent = nullptr;
+      ++it;
+    }
   }
   g_lights.erase(key);
   g_refs.erase(key);
@@ -777,6 +782,12 @@ bool gameref_get_fog(int32_t* color, float* near_z, float* far_z) {
 void gameref_visit_gc_roots(const GcRootVisitor& visit) {
   for (const auto& entry : g_refs) {
     const auto& n = entry.second;
+    // A detached RenderRef type is owned by its script references.
+    // ResourceRef.finalize releases its registry entry when the type dies.
+    if (n.kind == GameRefKind::RenderRef && !n.live_id && !n.binding &&
+        !n.parent && n.children.empty() && !n.flags &&
+        n.class_name == "java.util.resource.RenderRef")
+      continue;
     visit(entry.first); visit(n.binding); visit(n.parent); visit(n.script); visit(n.viewport);
     for (void* child : n.children) visit(child);
   }

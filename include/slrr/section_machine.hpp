@@ -24,6 +24,7 @@ class SectionMachine {
   // Java changeActiveSection already called exit/enter. Keep the host
   // pointer on GameLogic.actualState without entering a second time.
   void adopt_actual(Object* next);
+  void dispatch_osd_command(Object* handler, int32_t command);
   // --auto-new shortcut: MainMenu → Garage, skip modal dialogs.
   bool auto_new_career(const std::string& player_name);
 

@@ -483,6 +483,23 @@ bool scene_instances_script_matrix(void *key, float *matrix) {
 }
 
 namespace {
+void collect_render_nodes(GameRefState* node, std::vector<GameRefState*>& out,
+                          unsigned depth = 0) {
+  if (!node || node->empty || (node->flags & kWorldTreeLeaf) ||
+      (depth && (node->flags & kWorldTreeRoot)) || depth >= 128)
+    return;
+  if (node->kind == GameRefKind::RenderRef && node->type_id)
+    out.push_back(node);
+  for (auto* child : node->children)
+    collect_render_nodes(gameref_get(child), out, depth + 1);
+}
+
+std::vector<GameRefState*> render_nodes_in_world(void* root) {
+  std::vector<GameRefState*> nodes;
+  collect_render_nodes(gameref_get(root), nodes);
+  return nodes;
+}
+
 void floor_triangles(const float *m, const std::vector<float> &pos,
                      const std::vector<uint32_t> &idx, float scale, float x,
                      float z, float below, float &best, bool &hit,
@@ -637,7 +654,7 @@ bool scene_instances_floor(float x, float z, float below, void *ignore,
 void scene_instances_prepare_physics() {
   std::unordered_set<void *> active;
   if (g_world)
-    for (auto *n : gameref_render_nodes()) {
+    for (auto *n : render_nodes_in_world(g_world)) {
       if (!n || n->empty || n->sky_render || n->vehicle_material)
         continue;
       std::array<float, 16> m;
@@ -732,7 +749,7 @@ bool scene_instances_supports(void *root,
   points.clear();
   if (!g_world || !root)
     return false;
-  for (auto *n : gameref_render_nodes()) {
+  for (auto *n : render_nodes_in_world(root)) {
     if (!n || n->empty || n->sky_render)
       continue;
     bool under = false;
@@ -793,7 +810,7 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root) {
   if (!g_resources || !root)
     return out;
   const auto lighting=scene_instances_light(root);
-  for (auto *n : gameref_render_nodes()) {
+  for (auto *n : render_nodes_in_world(root)) {
     // Source scripts replace Scene.skydome; a superseded handle may remain
     // alive until script cleanup. Never render it as ordinary foreground.
     if (n->sky_render && n->key != g_sky)

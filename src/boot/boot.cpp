@@ -482,10 +482,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
   });
   osd_set_click_handler([&jvm, &sections, &render](const OsdWidget& w) {
     if (video_fmv_block_osd()) return;
-    Object* handler = w.handler;
-    if (!handler || handler->class_name.empty()) return;
-    jvm.invoke(handler->class_name, "osdCommand", "(I)V",
-               {Value::make_obj(handler), Value::make_int(w.cmd)}, false);
+    sections.dispatch_osd_command(w.handler, w.cmd);
     mainloop_adopt_section(jvm, sections);
     mainloop_sync_section_render(render, sections);
   });

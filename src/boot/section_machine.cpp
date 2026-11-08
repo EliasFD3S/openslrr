@@ -5,6 +5,49 @@
 namespace slrr {
 namespace {
 
+constexpr const char* kSelectorOwner = "_host_selector_career_player";
+
+Object* object_field(Object* object, const char* name) {
+  if (!object) return nullptr;
+  const auto field = object->fields.find(name);
+  return field != object->fields.end() && field->second.tag == ValueTag::Obj
+             ? field->second.v.o : nullptr;
+}
+
+void begin_selector_preview(Jvm& jvm, Object* selector) {
+  if (!selector || selector->class_name != "java.game.CarSelect") return;
+  const auto mode = selector->fields.find("Mode");
+  auto* player = object_field(selector, "player");
+  if (!player || object_field(selector, kSelectorOwner) ||
+      mode == selector->fields.end() || mode->second.tag != ValueTag::Int ||
+      mode->second.v.i != 0)
+    return;
+  const Value career = jvm.get_static("java.game.GameLogic", "player");
+  if (career.tag != ValueTag::Obj || career.v.o != player) return;
+  // MWM's standalone selector uses player.car as its preview slot. Keep the
+  // career player available to the menu and its automatic saves.
+  auto* preview_player = jvm.new_object("java.game.Player");
+  selector->fields[kSelectorOwner] = Value::make_obj(player);
+  selector->fields["player"] = Value::make_obj(preview_player);
+  if (auto* take = object_field(selector, "TakeButton"))
+    jvm.invoke_by_name(take->class_name, "disable", {Value::make_obj(take)}, false);
+}
+
+bool finish_selector_preview(Jvm& jvm, Object* selector, bool take_car) {
+  auto* player = object_field(selector, kSelectorOwner);
+  if (!player) return true;
+  auto* preview = object_field(object_field(selector, "player"), "car");
+  if (take_car && !preview) return false;
+  auto* discarded = take_car ? object_field(player, "car") : preview;
+  if (take_car) player->fields["car"] = Value::make_obj(preview);
+  selector->fields["player"] = Value::make_obj(player);
+  selector->fields.erase(kSelectorOwner);
+  if (discarded && (!take_car || discarded != preview))
+    jvm.invoke_by_name(discarded->class_name, "destroy",
+                       {Value::make_obj(discarded)}, false);
+  return true;
+}
+
 void call_lifecycle(Jvm* jvm, Object* target, const char* method, Object* other) {
   if (!jvm || !target) return;
   const std::string sig = "(Ljava.game.GameState;)V";
@@ -59,9 +102,26 @@ Object* SectionMachine::seed_player(const std::string& player_name) {
 
 void SectionMachine::adopt_actual(Object* next) {
   if (next == actual_) return;
+  auto* old = actual_;
   actual_ = next;
   actual_name_ = next ? next->class_name : "(null)";
+  if (jvm_) {
+    finish_selector_preview(*jvm_, old, false);
+    begin_selector_preview(*jvm_, next);
+  }
   std::printf("[section] adopt %s\n", actual_name_.c_str());
+}
+
+void SectionMachine::dispatch_osd_command(Object* handler, int32_t command) {
+  if (!jvm_ || !handler || handler->class_name.empty()) return;
+  if (handler == actual_ && object_field(handler, kSelectorOwner)) {
+    const Value take = jvm_->get_static(handler->class_name, "CMD_OK");
+    if (take.tag == ValueTag::Int && take.v.i == command &&
+        !finish_selector_preview(*jvm_, handler, true))
+      return;
+  }
+  jvm_->invoke(handler->class_name, "osdCommand", "(I)V",
+               {Value::make_obj(handler), Value::make_int(command)}, false);
 }
 
 void SectionMachine::change_active_section(Object* next) {
