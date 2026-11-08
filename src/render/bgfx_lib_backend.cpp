@@ -721,6 +721,14 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
 {
     const size_t n = part.geo.positions.size() / 3;
     if (n == 0 || part.geo.indices.empty()) return;
+    bool reverse_tread = false;
+    if (part.geo.textures.size() == 1) {
+      std::string path = part.geo.textures.front();
+      std::replace(path.begin(), path.end(), '\\', '/');
+      // The stock sport texture's chevrons point backwards with its SCX UVs.
+      // U runs around the tyre. Negating it preserves the repeat and the seam.
+      reverse_tread = path.ends_with("parts/wheels/tyres/textures/tyre_sport.dds");
+    }
     std::vector<MeshVertex> verts(n);
     for (size_t i = 0; i < n; ++i) {
       const float unit = part.geo.position_scale;
@@ -739,7 +747,8 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
         verts[i].nz = 0;
       }
       if (part.geo.uvs.size() >= (i + 1) * 2) {
-        verts[i].u = part.geo.uvs[i * 2 + 0];
+        const float u = part.geo.uvs[i * 2];
+        verts[i].u = reverse_tread ? -u : u;
         verts[i].v = part.geo.uvs[i * 2 + 1];
       } else {
         verts[i].u = 0;

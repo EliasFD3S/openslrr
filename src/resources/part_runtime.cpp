@@ -887,8 +887,6 @@ void place_child(Object *parent, int slot_id, bool refresh_links = true) {
     }
   }
   std::copy(transform.begin(), transform.end(), node->local_matrix);
-  if (type >= 101 && type <= 104)
-    std::fprintf(stderr, "tread-probe rim slot=%d mountYaw=%f childYaw=%f worldZ=%f\n", slot_id, posed_slot(*p, *mount).pose.rotation[0], posed_slot(*c, *mate).pose.rotation[0], transform[10]);
   node->matrix_override = true;
   if (type >= 101 && type <= 104) {
     auto &w = p->wheels[type - 101];
@@ -2559,8 +2557,6 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
              ov.y[1] = comp(ori, "p");
              ov.y[2] = comp(ori, "r");
              ov.ypr = true;
-             if (slot == 1)
-               std::fprintf(stderr, "tread-probe slot %s parent=%d yaw=%f\n", s->class_name.c_str(), p->state.parent_slot, ov.y[0]);
            }
          }
          if (p->state.parent && slot == p->state.own_slot)
