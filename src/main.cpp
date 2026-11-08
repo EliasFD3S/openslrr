@@ -25,7 +25,7 @@ void usage() {
       "  slrr_host --probe-dyno\n"
       "  slrr_host --probe-gc [--root DIR]\n"
       "  slrr_host --game [--root DIR] [--window] [--no-wait] [--auto-new]\n"
-      "           [--auto-cmd mainmenu|street|N] [--render null|d3d9|bgfx]\n"
+      "           [--auto-cmd mainmenu|street|N]\n"
       "           [--spawn-car cars/racers/Baiern.rpk:0x6]\n"
       "           [PlayerName]\n"
       "\n"
@@ -108,10 +108,6 @@ int main(int argc, char** argv) {
     }
     if (std::strcmp(a, "--root") == 0 && i + 1 < argc) {
       root_arg = argv[++i];
-      continue;
-    }
-    if (std::strcmp(a, "--render") == 0 && i + 1 < argc) {
-      opt.render = parse_render_backend(argv[++i]);
       continue;
     }
     if (a[0] != '-') {

@@ -9,7 +9,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-in_development-8b5cf6" alt="In development">
-  <img src="https://img.shields.io/badge/platform-Windows_x86%2Fx64-0078d4" alt="Windows x86 and x64">
+  <img src="https://img.shields.io/badge/platform-Windows_x64-0078d4" alt="Windows x64">
   <img src="https://img.shields.io/badge/C%2B%2B-20-00599c" alt="C++20">
   <img src="https://img.shields.io/badge/reference-SLRR_2.2.1_MWM-c0c0c0" alt="SLRR 2.2.1 MWM">
 </p>
@@ -97,13 +97,15 @@ Headless diagnostics cover all four music sets (muted), audio-volume save/reload
 
 ### Requirements
 
-- Windows and **Visual Studio 2022**, with the **Desktop development with C++** workload and the Windows SDK.
+- **Windows x64** and **Visual Studio 2022**, with the **Desktop development with C++** workload and the Windows SDK.
 - **CMake 3.21 or later** and **Git**, available in your terminal.
 - An installation of **SLRR 2.2.1 MWM**, containing `system/Scripts/lang/System.class`.
 - Windows Media Foundation for music decoding (included in standard Windows installations; Windows N editions need the Media Feature Pack).
 - An Internet connection while preparing and initially configuring dependencies.
 
-Win32 and x64 use the same game scripts and assets. The x64 build uses **VLC 3.x for Windows x64** for Cinepak AVI intros, the menu background, and formats such as H.264/AAC in MP4. It looks in the standard VideoLAN installation directory. For a custom installation, set `SLRR_VLC_DIR` to the absolute folder containing `libvlc.dll`, `libvlccore.dll`, and `plugins`.
+Open SLRR builds for Windows x64 and uses bgfx for rendering. It loads the original game scripts and assets.
+
+Install **VLC 3.x for Windows x64** for the original Cinepak AVI intros, the menu background, and formats such as H.264/AAC in MP4. Open SLRR looks in the standard VideoLAN installation directory. For a custom installation, set `SLRR_VLC_DIR` to the absolute folder containing `libvlc.dll`, `libvlccore.dll`, and `plugins`.
 
 ### Get the project
 
@@ -122,25 +124,21 @@ Run the following commands from this folder, which contains `CMakeLists.txt`. In
 ### Configure and build
 
 ```powershell
-cmake -S . -B build-bgfx -G "Visual Studio 17 2022" -A Win32 `
-  -DSLRR_WITH_LIBBGFX=ON `
-  -DSLRR_STAGE_BUILD=OFF
+cmake -S . -B build-bgfx-x64 -G "Visual Studio 17 2022" -A x64 -DSLRR_STAGE_BUILD=OFF
 
-cmake --build build-bgfx --config Release --parallel
+cmake --build build-bgfx-x64 --config Release --target slrr_host --parallel
 ```
 
-The executable is generated at `build-bgfx/Release/slrr_host.exe`. The first build includes bgfx and its shader tools, so it may take a while.
-
-For x64, use `-A x64` and a separate build directory such as `build-bgfx-x64`.
+The executable is generated at `build-bgfx-x64/Release/slrr_host.exe`. The first build includes bgfx and its shader tools, so it may take a while.
 
 ## Run
 
 ```powershell
 # Intros, then menus.
-.\build-bgfx\Release\slrr_host.exe --game --render bgfx --root "D:\Games\SLRR"
+.\build-bgfx-x64\Release\slrr_host.exe --game --root "D:\Games\SLRR"
 
 # Baiern assembled from its scripts and configurations.
-.\build-bgfx\Release\slrr_host.exe --game --spawn-car cars/racers/Baiern.rpk:0x6 --render bgfx --root "D:\Games\SLRR"
+.\build-bgfx-x64\Release\slrr_host.exe --game --spawn-car cars/racers/Baiern.rpk:0x6 --root "D:\Games\SLRR"
 ```
 
 In Sound Options, drag the volume sliders; changes are saved automatically to the game installation’s `save/game/options` file and restored on startup. A saved music volume of zero keeps music muted.
@@ -155,7 +153,7 @@ You can also set the game path with `$env:SLRR_GAME_ROOT`. The `--root` option t
 .\validate-and-promote.ps1
 ```
 
-This compiles the candidate, archives the sources and previous executable, then copies the new executable to `build-bgfx/Release/`. Close the running Release executable before promotion. There is no automated test suite.
+This compiles the x64 candidate, archives the sources and previous executable, then copies the new executable to `build-bgfx-x64/Release/`. Close the running Release executable before promotion.
 
 ## Sources and credits
 

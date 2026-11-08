@@ -1,5 +1,5 @@
 param(
-    [string]$BuildDirectory = (Join-Path $PSScriptRoot 'build-bgfx')
+    [string]$BuildDirectory = (Join-Path $PSScriptRoot 'build-bgfx-x64')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -11,7 +11,7 @@ $cmake = if ($cmakeCommand) { $cmakeCommand.Source } else {
 $configure = @('-S', $PSScriptRoot, '-B', $BuildDirectory,
     '-DSLRR_STAGE_BUILD=ON')
 if (-not (Test-Path -LiteralPath (Join-Path $BuildDirectory 'CMakeCache.txt'))) {
-    $configure += @('-A', 'Win32')
+    $configure += @('-G', 'Visual Studio 17 2022', '-A', 'x64')
 }
 & $cmake @configure
 if ($LASTEXITCODE -ne 0) { throw 'CMake configuration failed; release unchanged.' }

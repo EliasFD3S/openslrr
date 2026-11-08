@@ -36,7 +36,6 @@ class IRenderBackend {
 enum class RenderBackendKind { Null, D3D9, Bgfx };
 
 std::unique_ptr<IRenderBackend> create_render_backend(RenderBackendKind kind);
-RenderBackendKind parse_render_backend(const std::string& name);
 
 void bgfx_try_scx_smoke(IRenderBackend& render, const std::string& path);
 

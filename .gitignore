@@ -4,6 +4,7 @@
 /out/
 /build/
 /build-bgfx/
+/build-bgfx-x64/
 /tools/
 cmake-build-*/
 CMakeFiles/

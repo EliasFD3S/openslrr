@@ -791,13 +791,6 @@ std::unique_ptr<IRenderBackend> create_lib_bgfx_backend();
 
 namespace slrr {
 
-RenderBackendKind parse_render_backend(const std::string& name) {
-  if (name == "d3d9" || name == "D3D9") return RenderBackendKind::D3D9;
-  if (name == "bgfx" || name == "Bgfx" || name == "gl" || name == "opengl")
-    return RenderBackendKind::Bgfx;
-  return RenderBackendKind::Null;
-}
-
 std::unique_ptr<IRenderBackend> create_render_backend(RenderBackendKind kind) {
   switch (kind) {
     case RenderBackendKind::Null:

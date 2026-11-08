@@ -16,7 +16,7 @@ struct BootOptions {
   // After Garage: fire Garage.osdCommand (101 MAINMENU / 109 HITTHESTREET / 0=skip).
   int32_t auto_cmd = 0;
   int32_t max_frames = 0;  // 0 = until quit
-  RenderBackendKind render = RenderBackendKind::Null;
+  RenderBackendKind render = RenderBackendKind::Bgfx;
 };
 
 // Probe only: validate game root + classpath bootstrap, no window loop.
