@@ -520,7 +520,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
       bool own_plate = false;
       if (losd) {
         for (const OsdWidget& w : osd_widgets()) {
-          if (w.owner == losd && w.background && w.half_w > 0.4f &&
+          if (w.owner == losd && !w.hidden && !w.dead && w.background && w.half_w > 0.4f &&
               w.half_h > 0.4f && !w.icon_path.empty()) {
             own_plate = true;
             break;
@@ -644,7 +644,10 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
           }
         }
       }
-    } else {
+    }
+    // The timed wait can hide the dialog above. Update the presentation
+    // state before flushing this frame, including during a section change.
+    if (!shown("loadingDialog")) {
       load_seen = nullptr;
       osd_set_loading_dialog(false);
       osd_set_loading_overlay({});

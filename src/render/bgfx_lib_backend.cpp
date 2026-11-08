@@ -350,9 +350,10 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
 {
     ++frames_;
     if (!ready_) return;
+    const bool loading = osd_loading_dialog() || !osd_loading_overlay().empty();
     // A yielded section change must not expose its half-destroyed world or
-    // the fallback camera. An opaque loading plate can still be presented.
-    if (scene_transition_active() && osd_loading_overlay().empty()) return;
+    // the fallback camera. Both script and host loading plates may present.
+    if (scene_transition_active() && !loading) return;
 
 #ifdef _WIN32
     RECT rc{};
@@ -407,7 +408,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
       return low.find("opening") != std::string::npos;
     };
-    bool show = fmv_bg || garage_;
+    bool show = fmv_bg || garage_ || loading;
     if (!show) {
       for (const OsdWidget& w : osd_widgets()) {
         if (w.hidden || w.dead || !w.background || w.icon_path.empty())
@@ -499,7 +500,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     // rest of the interface is view 70.
     if (!fmv_bg) draw_fmv(kFmvLayer);
     // Boot intros own the frame. Menu OSD from the probe must not cover them.
-    if ((garage_ || osd_overlay_ || !osd_loading_overlay().empty()) &&
+    if ((garage_ || osd_overlay_ || loading) &&
         !video_fmv_block_osd())
       draw_osd();
     if (!video_fmv_block_osd()) draw_previews();
