@@ -65,7 +65,7 @@ The snapshot matches the stock native table against registered class, method and
 | Interface | ✅ Menus, career dialogs, catalog, car showroom, track selection, and paint inventory |
 | Cars | ✅ Assembly from scripts and CFG files; reference Baiern with 76 parts. Showroom camera orbit, vehicle information, powertrain layout, gear ratios and dyno calculations |
 | Workshop | ✅ Point at a part to read its name, hide the body or the engine, open panels with interpolated motion and adjust tunable parts. Remove or fit attached assemblies, and drag inventory parts onto Repair/Sell. Detached suspension parts regain their rest pose in the inventory |
-| Physics | ✅ Chassis, springs, dampers, and wheel contacts, verified with Baiern and Duhen. A released car settles on the garage floor. A parked car holds its standing height |
+| Physics | ✅ Chassis, springs, dampers, and wheel contacts. A released car settles on the garage floor. A parked car holds its standing height. The chassis rigid body is integrated by [Project Chrono](https://projectchrono.org) (optional, see [Physics backend](#physics-backend)). Native and Chrono free-fall/settling checks pass; Chrono still needs Baiern and Duhen in-game validation |
 | Audio and video | ✅ Effects, loops, FMV audio and four music playlists streamed with Media Foundation/XAudio2. Repeated effects and menu sounds have separate overlap limits |
 | Options | ✅ Mouse-operated sliders and all three audio volume values saved/reloaded through the stock `save/game/options` format |
 | Driving | ⏳ Tyre slip, engine, clutch, transmission, and controls still need to be connected |
@@ -83,6 +83,7 @@ Some native functions are still placeholders. Engine-loop audio and the original
 
 ### Recent changes
 
+- Added Project Chrono 10 as the default chassis rigid-body integrator, with a native fallback, automated physics checks, and a reproducible dependency build script.
 - Implemented cooperative script threads and scoped GC roots for suspended stacks. Java message loops, the mechanic refresher and showroom camera can now run directly.
 - Added GameType notification replacement/removal, event aliases/custom handlers/one-shot delivery, and control/drive/animate registrations.
 
@@ -112,11 +113,17 @@ Install **VLC 3.x for Windows x64** for the original Cinepak AVI intros, the men
 In PowerShell:
 
 ```powershell
-git clone https://github.com/EliasFD3S/openslrr.git
+git clone https://github.com/antomys/openslrr.git
 cd openslrr
 
 git clone https://github.com/bkaradzic/bgfx.cmake.git third_party/bgfx.cmake
 git -C third_party/bgfx.cmake checkout 5ea74ee66662daef4089695846d6322da0dde94e
+```
+
+Build the Project Chrono core module once (about 20–40 minutes; it installs Eigen and Chrono 10.0.0 into `third_party/chrono-install`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File cmake\build_chrono.ps1
 ```
 
 Run the following commands from this folder, which contains `CMakeLists.txt`. In the local development workspace, it is named `host/`.
@@ -129,7 +136,17 @@ cmake -S . -B build-bgfx-x64 -G "Visual Studio 17 2022" -A x64 -DSLRR_STAGE_BUIL
 cmake --build build-bgfx-x64 --config Release --target slrr_host --parallel
 ```
 
-The executable is generated at `build-bgfx-x64/Release/slrr_host.exe`. The first build includes bgfx and its shader tools, so it may take a while.
+The executable is generated at `build-bgfx-x64/Release/slrr_host.exe`, with `Chrono_core.dll` copied next to it. The first build includes bgfx and its shader tools, so it may take a while.
+
+### Physics backend
+
+By default the vehicle chassis is integrated by [Project Chrono](https://projectchrono.org) (`ChSystemNSC`, implicit Euler, 700 Hz). The SLRR suspension, tyre and contact stages in `src/physics/vehicle_dynamics.cpp` still compute the forces and impulses; Chrono advances the 6-DOF rigid body (gravity, applied wrench, gyroscopic terms). The Chrono glue lives in `src/physics/chrono_body.cpp`.
+
+- Use another Chrono build or install tree with `-DChrono_DIR=<path to its cmake folder>`.
+- Build without Chrono and keep the original integrator with `-DSLRR_PHYSICS_CHRONO=OFF`.
+- `-DSLRR_PHYSICS_CHECKS=ON` adds `slrr_physics_native` and `slrr_physics_chrono`, headless free-fall and sprung-box settling checks for each backend. Run them with `ctest --test-dir build-bgfx-x64 -C Release --output-on-failure`.
+
+The game log prints `backend=chrono` or `backend=native` on the `[phys]` line.
 
 ## Run
 

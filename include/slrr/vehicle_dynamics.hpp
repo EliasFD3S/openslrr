@@ -2,6 +2,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <memory>
 
 namespace slrr::physics {
 // Script-space metres, kilograms and seconds. Renderer handedness stays
@@ -34,6 +35,28 @@ struct Quaternion {
 };
 using Matrix = std::array<float, 16>;
 
+// Integration backend state (Project Chrono when SLRR_HAS_CHRONO). The
+// RigidBody fields stay the authoritative mirror: callers may overwrite
+// velocity/momentum at any time and the backend is resynchronized from them
+// on every step. Copies start with a fresh backend instead of sharing one.
+struct ChronoBodyState;
+class BackendHandle {
+public:
+  BackendHandle();
+  ~BackendHandle();
+  BackendHandle(const BackendHandle &);
+  BackendHandle &operator=(const BackendHandle &);
+  BackendHandle(BackendHandle &&) noexcept;
+  BackendHandle &operator=(BackendHandle &&) noexcept;
+  ChronoBodyState *get() const { return state_.get(); }
+  void reset(ChronoBodyState *state);
+
+private:
+  std::unique_ptr<ChronoBodyState> state_;
+};
+// "chrono" or "native": the integrator RigidBody::integrate uses.
+const char *backend_name();
+
 // Adapted contracts: SLRR_rev a2ee10de, rigid-body-3d.ts. Box inertia is the
 // upstream approximation; it is not the original game's compound inertia.
 class RigidBody {
@@ -55,7 +78,9 @@ public:
   std::array<Vec3, 8> corners() const;
 
 private:
+  friend struct ChronoIntegrator;
   Vec3 inverse_inertia_, force_, torque_;
+  BackendHandle backend_;
 };
 
 struct GroundHit {

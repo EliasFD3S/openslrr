@@ -101,9 +101,29 @@ void RigidBody::impulse(Vec3 j, Vec3 p) {
   velocity += j / mass;
   momentum += (p - position).cross(j);
 }
+#if SLRR_HAS_CHRONO
+// src/physics/chrono_body.cpp
+void chrono_integrate(RigidBody &body, double dt);
+#else
+struct ChronoBodyState {};
+BackendHandle::BackendHandle() = default;
+BackendHandle::~BackendHandle() = default;
+BackendHandle::BackendHandle(const BackendHandle &) {}
+BackendHandle &BackendHandle::operator=(const BackendHandle &) {
+  state_.reset();
+  return *this;
+}
+BackendHandle::BackendHandle(BackendHandle &&) noexcept = default;
+BackendHandle &BackendHandle::operator=(BackendHandle &&) noexcept = default;
+void BackendHandle::reset(ChronoBodyState *state) { state_.reset(state); }
+const char *backend_name() { return "native"; }
+#endif
 void RigidBody::integrate(double dt) {
   if (!std::isfinite(dt) || dt <= 0)
     throw std::invalid_argument("invalid physics dt");
+#if SLRR_HAS_CHRONO
+  chrono_integrate(*this, dt);
+#else
   velocity += force_ * (dt / mass);
   velocity.y -= 9.81 * dt;
   momentum = (momentum + torque_ * dt) * std::exp(-.08 * dt);
@@ -116,6 +136,7 @@ void RigidBody::integrate(double dt) {
         (Quaternion{axis.x, axis.y, axis.z, std::cos(angle * .5)} * orientation)
             .normalized();
   }
+#endif
   force_ = torque_ = {};
   if (!position.finite() || !velocity.finite() || !momentum.finite())
     throw std::runtime_error("non-finite rigid state");

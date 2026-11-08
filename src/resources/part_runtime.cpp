@@ -1505,8 +1505,9 @@ bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
   rec.physics_dirty = false;
   rec.physics_parent = gameref_get(chassis)->parent;
   if (!rec.physics_reported) {
-    std::printf("[phys] dynamic type=0x%x mass=%.2f fixed=%uHz\n",
-                rec.state.resource, mass, physics::VehicleDynamics::frequency);
+    std::printf("[phys] dynamic type=0x%x mass=%.2f fixed=%uHz backend=%s\n",
+                rec.state.resource, mass, physics::VehicleDynamics::frequency,
+                physics::backend_name());
     std::fflush(stdout);
     rec.physics_reported = true;
   }

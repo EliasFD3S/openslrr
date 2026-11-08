@@ -13,6 +13,8 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake/CMakeLists.txt
   message(FATAL_ERROR "Missing third_party/bgfx.cmake. See README.md for setup.")
 endif()
 
+option(SLRR_STAGE_BUILD "Build the host into candidate/ before backup and promotion" OFF)
+
 add_executable(slrr_host
   src/main.cpp
   src/platform/game_root.cpp
@@ -61,6 +63,30 @@ add_executable(slrr_host
   src/physics/vehicle_dynamics.cpp
   src/physics/suspension_geometry.cpp
 )
+
+# Project Chrono (https://projectchrono.org) integrates the chassis rigid body.
+# Build it once with cmake/build_chrono.ps1, or point Chrono_DIR at another
+# Chrono build/install tree. OFF keeps the original native integrator.
+option(SLRR_PHYSICS_CHRONO "Use Project Chrono for vehicle rigid-body dynamics" ON)
+if(SLRR_PHYSICS_CHRONO)
+  find_package(Chrono CONFIG
+    HINTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/chrono-install/cmake")
+  if(NOT Chrono_FOUND)
+    message(FATAL_ERROR "Project Chrono not found. Run cmake/build_chrono.ps1, "
+                        "set Chrono_DIR, or configure with -DSLRR_PHYSICS_CHRONO=OFF.")
+  endif()
+  target_sources(slrr_host PRIVATE src/physics/chrono_body.cpp)
+  target_link_libraries(slrr_host PRIVATE Chrono::Chrono_core)
+  target_compile_definitions(slrr_host PRIVATE SLRR_HAS_CHRONO=1)
+  if(MSVC)
+    set_target_properties(slrr_host PROPERTIES
+      MSVC_RUNTIME_LIBRARY ${CHRONO_MSVC_RUNTIME_LIBRARY})
+  endif()
+  message(STATUS "slrr_host: Project Chrono ${Chrono_VERSION} physics backend")
+else()
+  target_compile_definitions(slrr_host PRIVATE SLRR_HAS_CHRONO=0)
+  message(STATUS "slrr_host: native physics backend")
+endif()
 
 if(WIN32)
   target_sources(slrr_host PRIVATE slrr_host.rc)
@@ -158,9 +184,47 @@ target_compile_features(slrr_host PRIVATE cxx_std_20)
 target_compile_definitions(slrr_host PRIVATE SLRR_HAS_LIBBGFX=1)
 message(STATUS "slrr_host: libbgfx + mesh shaders enabled")
 
-install(TARGETS slrr_host RUNTIME DESTINATION bin)
+# Headless physics checks: native integrator vs. Chrono integrator.
+option(SLRR_PHYSICS_CHECKS "Build headless vehicle physics checks" OFF)
+if(SLRR_PHYSICS_CHECKS)
+  enable_testing()
+  set(_slrr_physics_sources src/physics/vehicle_dynamics.cpp
+                            src/physics/suspension_geometry.cpp
+                            tests/physics_settle.cpp)
+  add_executable(slrr_physics_native ${_slrr_physics_sources})
+  target_include_directories(slrr_physics_native PRIVATE include)
+  target_compile_definitions(slrr_physics_native PRIVATE SLRR_HAS_CHRONO=0)
+  add_test(NAME physics_native COMMAND slrr_physics_native)
+  if(SLRR_PHYSICS_CHRONO)
+    add_executable(slrr_physics_chrono ${_slrr_physics_sources} src/physics/chrono_body.cpp)
+    target_include_directories(slrr_physics_chrono PRIVATE include)
+    target_compile_definitions(slrr_physics_chrono PRIVATE SLRR_HAS_CHRONO=1)
+    target_link_libraries(slrr_physics_chrono PRIVATE Chrono::Chrono_core)
+    add_test(NAME physics_chrono COMMAND slrr_physics_chrono)
+    if(MSVC)
+      set_target_properties(slrr_physics_chrono PROPERTIES
+        MSVC_RUNTIME_LIBRARY ${CHRONO_MSVC_RUNTIME_LIBRARY})
+    endif()
+  endif()
+endif()
 
-option(SLRR_STAGE_BUILD "Build the host into candidate/ before backup and promotion" OFF)
+if(SLRR_PHYSICS_CHRONO)
+  # Copy Chrono_core.dll next to slrr_host.exe, also for --target builds.
+  if(SLRR_STAGE_BUILD)
+    set(CHRONO_PROJECT_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_BINARY_DIR}/candidate")
+  endif()
+  add_CHRONO_DLLS_copy_command("Chrono_core.dll")
+  add_dependencies(slrr_host COPY_CHRONO_DLLS)
+  if(TARGET slrr_physics_chrono)
+    add_dependencies(slrr_physics_chrono COPY_CHRONO_DLLS)
+  endif()
+endif()
+
+install(TARGETS slrr_host RUNTIME DESTINATION bin)
+if(SLRR_PHYSICS_CHRONO)
+  install(FILES "$<TARGET_FILE:Chrono::Chrono_core>" DESTINATION bin)
+endif()
+
 if(SLRR_STAGE_BUILD)
   set_target_properties(slrr_host PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_BINARY_DIR}/candidate")
