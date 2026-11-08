@@ -249,6 +249,17 @@ double advance_timing(const Bank& s, int start, int shift, int low, int high) {
   return fraction * s.get(shift) + s.get(start);
 }
 
+double turbo_pressure(const Bank& s, double rpm) {
+  const double multiplier = s.get(kTurboMultiplier);
+  const double range = s.get(kTurboRange);
+  if (multiplier <= 0 || range <= 0) return 0;
+  const double distance = std::fabs(rpm * multiplier - s.get(kTurboOptimum));
+  const double plateau = s.get(kTurboPlateau);
+  const double response = distance < plateau ? 1.0
+      : std::max(0.0, 1.0 - (distance - plateau) / (range - plateau));
+  return std::min(response * s.get(kTurboPressure), s.get(kWastePressure));
+}
+
 void prepare(Bank& s) {
   mixture(s);
   s.set(kSpark, advance_timing(s, kSparkStart, kSparkShift, kSparkRpm0, kSparkRpm1));
@@ -262,16 +273,7 @@ void prepare(Bank& s) {
   s.set(kEffectiveTemperature, s.get(kIntakeTemperature));
   s.set(kEffectiveDensity, s.get(kIntakeDensity));
   if (s.get(kTurboMultiplier) > 0 && s.get(kTurboRange) > 0) {
-    double boost = std::fabs(s.get(kRpm) * s.get(kTurboMultiplier) - s.get(kTurboOptimum));
-    if (s.get(kTurboPlateau) <= boost) {
-      boost = 1.0 - (boost - s.get(kTurboPlateau)) / (s.get(kTurboRange) - s.get(kTurboPlateau));
-      if (boost < 0) boost = 0;
-    } else {
-      boost = 1;
-    }
-    boost *= s.get(kTurboPressure);
-    if (s.get(kWastePressure) <= boost) boost = s.get(kWastePressure);
-    boost = std::sqrt(boost + 1.0);
+    const double boost = std::sqrt(turbo_pressure(s, s.get(kRpm)) + 1.0);
     s.set(kEffectivePressure, boost * boost * s.get(kIntakePressure));
     s.set(kEffectiveTemperature, s.get(kIntakeTemperature) * boost);
     s.set(kEffectiveDensity, s.get(kIntakeDensity) * boost);
@@ -663,6 +665,15 @@ float dyno_sample(void* key, float rpm, float nitro, bool watts) {
   const auto it = g_sessions.find(key);
   if (it == g_sessions.end()) return 0.f;
   return sample_curve(it->second.curve, rpm, nitro, watts);
+}
+
+float dyno_boost_fraction(void* key, float rpm) {
+  const auto it = g_sessions.find(key);
+  if (it == g_sessions.end() || !std::isfinite(rpm)) return 0.f;
+  const auto& state = it->second.state;
+  const double maximum = std::min(state.get(kTurboPressure), state.get(kWastePressure));
+  return maximum > 0 ? static_cast<float>(std::clamp(turbo_pressure(state, rpm) / maximum, 0.0, 1.0))
+                     : 0.f;
 }
 
 void dyno_forget(void* key) { g_sessions.erase(key); }

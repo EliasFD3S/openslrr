@@ -521,18 +521,23 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
            (dot == std::string::npos || (body.size() == dot + 2 && body.back() >= '0' && body.back() <= '3'));
   };
 
-  // Build 606 defaults, recovered from the chassis type initializer.
+  // Stock assets and the wide-screen placement from the original HUD.
+  // The odometer sits left of the gauge at this aspect in build 606.
   const VehicleHudLayout stock{{
-      {true, cars_resource(0x55), {3.24f, -2.4f, -3.59f}},
-      {true, cars_resource(0x56), {1.43f, -4.36f, -3.58f}, {.48f, -.0001f, -.48f, .48f}},
+      {true, cars_resource(0x55), {.742f, .994f, 0}},
+      {true, cars_resource(0x56), {.326f, 1.847f, 0}, {.48f, -.0001f, -.48f, .48f}},
       {}, {},
-      {true, cars_resource(0x58), {.30f, .86f, 0}, {}, 0xff4fe015, "%03.0f"},
-      {true, cars_resource(0x58), {.72f, .755f, 0}, {}, 0xffd0d0ff, "N123456R"},
-      {true, cars_resource(0x58), {.55f, .86f, 0}, {}, 0xff4fe015, "%06.0f"},
-      {true, cars_resource(0x63), {.07f, .92f, 0}},
+      {true, cars_resource(0x58), {.298f, .865f, 0}, {}, 0xff4fe015, "%03.0f"},
+      {true, cars_resource(0x58), {.548f, .865f, 0}, {}, 0xff4fe015, "N123456R"},
+      {true, cars_resource(0x58), {-.50f, .755f, 0}, {}, 0xff4fe015, "%07.0f"},
+      {true, cars_resource(0x63), {-.227f, .925f, 0}},
+      {true, cars_resource(0x57), {.914f, .735f, 0}},
+      {true, cars_resource(0x5c), {-.126f, .834f, 0}, {}, 0xff000000},
+      {true, cars_resource(0x5c), {-.126f, .950f, 0}, {}, 0xff000000},
   }};
-  const bool custom = std::any_of(hud.layout->begin(), hud.layout->end(),
-                                  [](const HudElement& item) { return item.defined; });
+  const float pixel_aspect = static_cast<float>(height_) / width_;
+  const float stock_scale = std::min(1.f, .5625f / pixel_aspect);
+  constexpr uint16_t quad[] = {0, 1, 2, 1, 3, 2};
   for (size_t i = 0; i < stock.size(); ++i) {
     const HudSlot slot = static_cast<HudSlot>(i);
     const auto &override = (*hud.layout)[i];
@@ -565,6 +570,28 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     }
     if (!mesh) mesh = resource.get();
     if (!mesh || !mesh->info.ok) continue;
+    if (slot == HudSlot::Damage || slot == HudSlot::Nitro || slot == HudSlot::Turbo) {
+      const bool damage = slot == HudSlot::Damage;
+      const float fill = slot == HudSlot::Nitro ? hud.nitro : hud.turbo;
+      const unsigned char glyph = damage ? 'A'
+          : static_cast<unsigned char>('0' + std::lround(std::clamp(fill, 0.f, 1.f) * 8));
+      const size_t start = size_t(glyph) * 4;
+      if ((start + 4) * 3 > mesh->positions.size()) continue;
+      const float *p = mesh->positions.data() + start * 3;
+      const float sy = (damage ? .00014f : .00032f) * stock_scale;
+      const float x = override.defined && damage && item.position[0] < 0.f
+          ? -item.position[0] : item.position[0];
+      uint32_t color = item.color;
+      if (damage) {
+        const float condition = std::clamp(hud.condition, 0.f, 1.f);
+        const auto red = static_cast<uint32_t>(255.f * std::min(1.f, 2.f * (1.f - condition)));
+        const auto green = static_cast<uint32_t>(255.f * std::min(1.f, 2.f * condition));
+        color = 0xff000000u | (red << 16) | (green << 8);
+      }
+      draw(*mesh, start, 4, quad, 6, x, item.position[1],
+           sy * pixel_aspect, sy, 0, p[0], p[1], color);
+      continue;
+    }
     if (slot == HudSlot::Rpm || slot == HudSlot::Speed ||
         slot == HudSlot::Gear || slot == HudSlot::Mileage) {
       char buffer[128]{};
@@ -582,8 +609,8 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
         x *= .42f;
         y *= -.82f;
       }
-      constexpr uint16_t quad[] = {0, 1, 2, 1, 3, 2};
-      const float sy = .00018f, sx = sy * height_ / width_;
+      const float sy = override.defined ? .00018f : .00012f * stock_scale;
+      const float sx = sy * pixel_aspect;
       for (const unsigned char ch : std::string(buffer)) {
         const size_t start = size_t(ch) * 4;
         if ((start + 4) * 3 > mesh->positions.size()) continue;
@@ -606,10 +633,12 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     const size_t count = mesh->positions.size() / 3;
     if (count > 65535) continue;
     const std::vector<uint16_t> indices(mesh->indices.begin(), mesh->indices.end());
-    const float xscale = custom && override.defined ? .42f : .28f;
-    const float yscale = custom && override.defined ? -.82f : -.39f;
+    const float yscale = override.defined ? -.82f : -.406f * stock_scale;
+    const float xscale = -yscale * pixel_aspect;
+    const float x = override.defined ? item.position[0] * xscale : item.position[0];
+    const float y = override.defined ? item.position[1] * yscale : item.position[1];
     draw(*mesh, 0, count, indices.data(), indices.size(),
-         item.position[0] * xscale, item.position[1] * yscale,
+         x, y,
          xscale * mesh->position_scale, yscale * mesh->position_scale,
          angle, 0, 0, item.color, opaque);
   }

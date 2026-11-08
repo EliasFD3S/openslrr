@@ -2139,6 +2139,17 @@ bool part_vehicle_hud(VehicleHudState &state) {
   state.rpm = rec->engine_running ? rec->dynamics.engine_omega * 9.54929658551372 : 0;
   state.speed = rec->dynamics.body.velocity.length() * 3.6;
   state.mileage = rec->mileage * .01;
+  state.condition = std::min(rec->state.wear, rec->state.tear);
+  state.nitro = comp(as_part(static_cast<Object *>(target->key)), "tank_nitro") > 0 ? 1.f : 0.f;
+  for (const auto &[slot, child] : rec->children) {
+    const auto *body = record(child);
+    if (body && body->config->category == 2)
+      state.condition = std::min({state.condition, body->state.wear, body->state.tear});
+    if (rec->engine_running)
+      if (Object *dyno = part_field(child, "dynodata"))
+        state.turbo = dyno_boost_fraction(dyno, static_cast<float>(state.rpm)) *
+                      static_cast<float>(rec->dynamics.drive.throttle);
+  }
   state.gear = rec->dynamics.drive.ratio != 0 ? rec->drive_gear : 0;
   state.handbrake = rec->dynamics.drive.handbrake > 0;
   return true;

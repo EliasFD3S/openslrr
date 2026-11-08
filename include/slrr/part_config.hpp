@@ -69,7 +69,8 @@ struct PartRender {
   std::vector<PartLink> links;
 };
 enum class HudSlot : size_t {
-  Gauge, RpmPin, SpeedPin, Rpm, Speed, Gear, Mileage, Handbrake, Count
+  Gauge, RpmPin, SpeedPin, Rpm, Speed, Gear, Mileage, Handbrake,
+  Damage, Nitro, Turbo, Count
 };
 struct HudElement {
   bool defined = false;
