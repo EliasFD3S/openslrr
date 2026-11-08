@@ -31,10 +31,6 @@ void part_park_chassis(Object *car, bool shift = true);
 // the static tyre contacts. getPos of a car returns this, so a saved pose
 // placed again does not climb by the ride height.
 bool part_car_script_pos(void *key, float *x, float *y, float *z);
-// CopyCar is the selector's save/destroy/load. SLRR_rev vehicle-serialization:
-// a live car is not moved by that file. The same parts stay in the world.
-void part_note_live_save(const std::string &path);
-void part_release_live_hold();
 // City lamps follow the world clock (on outside 6:00–21:00). Brake, reverse
 // and indicators stay off until the car asks for them.
 bool part_lamp_lit(uint32_t flags);

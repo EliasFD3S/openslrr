@@ -359,8 +359,6 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   host_music_update();
   host_game_options_update(jvm);
   script_threads_tick(jvm);
-  // The click that saved CopyCar already ran, inside pump, before this frame.
-  part_release_live_hold();
   MainLoopFrameResult out;
   mainloop_adopt_section(jvm, sections);
   pump_async_messages(jvm, sections.actual());

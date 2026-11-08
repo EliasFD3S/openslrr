@@ -1061,48 +1061,6 @@ void install_cfg_stock(Jvm &jvm, Object *part, int depth = 0) {
   }
 }
 
-// The selector saves CopyCar, destroys the car and loads the file. That
-// round-trip builds a second, thinner car. The live tree is handed back.
-struct LiveHold {
-  bool armed = false;
-  bool sealing = false;
-  std::vector<Object *> order;
-  size_t next = 0;
-};
-LiveHold g_live_hold;
-
-void collect_held(Object *part, std::vector<Object *> &out) {
-  part = canonical(part);
-  auto *rec = record(part);
-  if (!rec)
-    return;
-  out.push_back(part);
-  const int back = rec->state.own_slot;
-  for (const auto &slot : rec->config->slots) {
-    if (slot.id == back)
-      continue;
-    auto child = rec->children.find(slot.id);
-    if (child != rec->children.end())
-      collect_held(child->second, out);
-  }
-}
-bool live_held(Object *part) {
-  if (!g_live_hold.sealing)
-    return false;
-  part = canonical(part);
-  return std::find(g_live_hold.order.begin(), g_live_hold.order.end(), part) !=
-         g_live_hold.order.end();
-}
-Object *take_held_part(uint32_t resource) {
-  if (!g_live_hold.sealing || g_live_hold.next >= g_live_hold.order.size())
-    return nullptr;
-  Object *have = canonical(g_live_hold.order[g_live_hold.next]);
-  auto *rec = record(have);
-  if (!rec || rec->state.resource != resource)
-    return nullptr;
-  ++g_live_hold.next;
-  return have;
-}
 bool lamp_lit(uint32_t flags) {
   const uint32_t bits = flags & 0x13fu;
   if (!bits || (flags & 0x40u) || !runtime)
@@ -1128,8 +1086,6 @@ bool part_lamp_lit(uint32_t flags) { return lamp_lit(flags); }
 Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
                     uint32_t resource, const std::string &alias,
                     const std::string &params) {
-  if (Object *kept = take_held_part(resource))
-    return kept;
   index = &resources;
   auto cfg = configuration(resource);
   if (!cfg->valid) {
@@ -1445,34 +1401,11 @@ Object *part_render_owner(void *key) {
   }
   return nullptr;
 }
-void part_note_live_save(const std::string &path) {
-  const auto name = std::filesystem::path(path).filename().string();
-  std::string lower = name;
-  for (char &c : lower)
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  if (lower == "copycar")
-    g_live_hold.armed = true;
-}
-void part_release_live_hold() {
-  g_live_hold.armed = false;
-  g_live_hold.sealing = false;
-  g_live_hold.order.clear();
-  g_live_hold.next = 0;
-}
 bool part_destroy(Object *part) {
   part = canonical(part);
   auto *rec = record(part);
   if (!rec)
     return false;
-  if (g_live_hold.armed && !rec->state.parent &&
-      rec->config->native_kind == "car") {
-    g_live_hold.armed = false;
-    g_live_hold.sealing = true;
-    g_live_hold.order.clear();
-    g_live_hold.next = 0;
-    collect_held(part, g_live_hold.order);
-    return true;
-  }
   auto children = rec->children;
   for (auto entry : children)
     part_destroy(entry.second);
@@ -2466,8 +2399,6 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   bind("setTexture", "(I)I", [](Object *s, const std::vector<Value> &a) {
     auto *p = record(s);
     int old = p ? p->state.texture : 0;
-    if (live_held(s))
-      return Value::make_int(old);
     if (!p || !p->config->texture)
       return Value::make_int(old);
     const auto id = static_cast<uint32_t>(number(a, 0));
@@ -2604,8 +2535,6 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
                                        : static_cast<int>(p->config->mesh));
   });
   bind("setMesh", "(I)I", [](Object *s, const std::vector<Value> &a) {
-    if (live_held(s))
-      return Value::make_int(1);
     auto *p = record(s);
     if (!p)
       return Value::make_int(1);
@@ -2629,12 +2558,6 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
                                          : static_cast<int>(p->config->render));
   });
   bind("setRenderType", "(I)I", [](Object *s, const std::vector<Value> &a) {
-    if (live_held(s)) {
-      auto *p = record(s);
-      return Value::make_int(p ? static_cast<int>(p->render_set ? p->render_id
-                                                               : p->config->render)
-                               : 0);
-    }
     if (auto *p = record(s)) {
       p->render_set = true;
       p->render_id = static_cast<uint32_t>(number(a, 0));
@@ -3154,6 +3077,5 @@ void part_visit_gc_roots(const GcRootVisitor& visit) {
     for (auto* sfx : r.sfx) visit(sfx);
   }
   for (const auto& entry : sfx_items) visit(entry.first);
-  for (auto* held : g_live_hold.order) visit(held);
 }
 } // namespace slrr

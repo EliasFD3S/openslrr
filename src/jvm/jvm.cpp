@@ -17,6 +17,57 @@
 
 namespace slrr {
 namespace {
+Object* object_field(Object* object, const char* name) {
+  if (!object) return nullptr;
+  const auto field = object->fields.find(name);
+  return field != object->fields.end() && field->second.tag == ValueTag::Obj
+             ? field->second.v.o : nullptr;
+}
+
+bool prepare_car_selector_call(Jvm& jvm, Object* selector,
+                               const std::string& method,
+                               const std::string& descriptor,
+                               const std::vector<Value>& args) {
+  if (!selector) return true;
+  constexpr const char* kCareerPlayer = "_host_selector_career_player";
+  Object* player = object_field(selector, "player");
+  Object* career_player = object_field(selector, kCareerPlayer);
+
+  if (method == "enter" && descriptor == "(Ljava.game.GameState;)V") {
+    const auto mode = selector->fields.find("Mode");
+    if (!career_player && player && mode != selector->fields.end() &&
+        mode->second.tag == ValueTag::Int && mode->second.v.i == 0) {
+      // The standalone selector writes its preview through player.car.
+      // Give it a separate owner so career saves always see the career car.
+      Object* preview_player = jvm.new_object("java.game.Player");
+      selector->fields[kCareerPlayer] = Value::make_obj(player);
+      selector->fields["player"] = Value::make_obj(preview_player);
+    }
+    return true;
+  }
+
+  if (!career_player) return true;
+  const bool exiting = method == "exit" && descriptor == "(Ljava.game.GameState;)V";
+  bool taking_car = false;
+  if (method == "osdCommand" && descriptor == "(I)V" && !args.empty()) {
+    const Value take = jvm.get_static("java.game.CarSelect", "CMD_OK");
+    taking_car = take.tag == ValueTag::Int && args.front().tag == ValueTag::Int &&
+                 take.v.i == args.front().v.i;
+  }
+  if (!exiting && !taking_car) return true;
+
+  Object* preview = object_field(player, "car");
+  if (taking_car && !preview) return false;
+  Object* discarded = taking_car ? object_field(career_player, "car") : preview;
+  if (taking_car) career_player->fields["car"] = Value::make_obj(preview);
+  selector->fields["player"] = Value::make_obj(career_player);
+  selector->fields.erase(kCareerPlayer);
+  if (discarded && (!taking_car || discarded != preview))
+    jvm.invoke_by_name(discarded->class_name, "destroy",
+                       {Value::make_obj(discarded)}, false);
+  return true;
+}
+
 Value declared_return(Value value, const std::string& descriptor) {
   // TREE expressions retain their numeric type. The method boundary applies
   // the declared conversion (e.g. Catalog InventoryItem_Part.getPrice(): int).
@@ -865,6 +916,9 @@ Value Jvm::invoke_by_name(const std::string& class_fqn,
   }
   SceneTransitionScope transition(jni == "(Ljava.game.GameState;)V" &&
       (method == "exit" || (method == "changeActiveSection" && owner == "java.game.GameLogic")));
+  if (owner == "java.game.CarSelect" &&
+      !prepare_car_selector_call(*this, self, method, jni, call_args))
+    return Value::make_void();
   ++invoke_depth_;
   TreeEvalResult tr;
   try {
@@ -968,6 +1022,9 @@ Value Jvm::invoke(const std::string& class_fqn, const std::string& method,
   }
   SceneTransitionScope transition(jni_sig == "(Ljava.game.GameState;)V" &&
       (method == "exit" || (method == "changeActiveSection" && owner == "java.game.GameLogic")));
+  if (owner == "java.game.CarSelect" &&
+      !prepare_car_selector_call(*this, self, method, jni_sig, call_args))
+    return Value::make_void();
   ++invoke_depth_;
   TreeEvalResult tr;
   try {

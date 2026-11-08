@@ -2,7 +2,6 @@
 #include "natives_internal.hpp"
 
 #include "slrr/gameref.hpp"
-#include "slrr/part_runtime.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/osd_registry.hpp"
@@ -585,7 +584,6 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
               wrote && static_cast<bool>(out) ? 1 : 0,
               g_unflushed_saves.count(key) ? 1 : 0, it->second.sdat ? 1 : 0,
               it->second.sdat_packs.size());
-          part_note_live_save(it->second.path.string());
         }
         g_host_files.erase(self);
         return Value::make_void();
