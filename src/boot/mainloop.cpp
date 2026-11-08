@@ -355,7 +355,7 @@ void dispatch_mechanic_pointer(Jvm& jvm) {
 }
 
 MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
-                                   SectionMachine& sections, float dt) {
+                                   SectionMachine& sections, double dt) {
   host_music_update();
   host_game_options_update(jvm);
   script_threads_tick(jvm);
@@ -364,7 +364,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   pump_async_messages(jvm, sections.actual());
 
   // --- Input_tick @ 0x54DDA0 (Soft: live axes + garage orbit) ---
-  float frame_dt = dt;
+  float frame_dt = static_cast<float>(dt);
   if (frame_dt < 0.f) frame_dt = 0.f;
   if (frame_dt > kDtClamp) frame_dt = kDtClamp;
   script_callbacks_tick(jvm,frame_dt);
@@ -714,9 +714,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   dispatch_mechanic_pointer(jvm);
   spin_mechanic_inventory(jvm, frame_dt);
   if(!script_thread_alive(jvm,g_mechanic_thread))apply_mechanic_infoline(jvm, g_spinning_mechanic);
-  // The solver caps work itself and retains debt; the camera's dt clamp must
-  // not silently discard elapsed simulation time.
-  part_physics_advance(dt < 0.f ? 0.0 : static_cast<double>(dt));
+  part_physics_advance(dt < 0.0 ? 0.0 : dt);
 
   // Last write before the view is built. The chase camera must not cover
   // the showroom orbit, and nothing after the earlier spin may put it back.

@@ -20,7 +20,7 @@ struct MainLoopFrameResult {
 
 // One Soft frame. `dt` = wall seconds since previous pulse (clamped like PE).
 MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
-                                   SectionMachine& sections, float dt);
+                                   SectionMachine& sections, double dt);
 
 // Garage SCX vs menu OSD overlay from actual section.
 void mainloop_sync_section_render(IRenderBackend& render,

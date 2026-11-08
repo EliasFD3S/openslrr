@@ -117,6 +117,9 @@ struct Record {
 };
 std::unordered_map<Object *, std::vector<SfxItem>> sfx_items;
 std::unordered_map<Object *, Record> records;
+constexpr double kPhysicsTick = 1.0 / physics::VehicleDynamics::update_frequency;
+constexpr unsigned kMaxPhysicsTicksPerFrame = 4;
+double physics_elapsed = 0;
 std::unordered_map<uint32_t, std::shared_ptr<const PartConfig>> configurations;
 RpkIndex *index = nullptr;
 Jvm *runtime = nullptr;
@@ -1026,9 +1029,16 @@ void refresh_chassis(Object *chassis) {
   if (!runtime || !chassis || refresh_depth)
     return;
   chassis = canonical(chassis);
-  if (!record(chassis) || field_int(chassis, "suspend_update"))
+  auto *rec = record(chassis);
+  if (!rec || field_int(chassis, "suspend_update"))
     return;
   ++refresh_depth;
+  // Only installed parts write spring and damper settings during this pass.
+  // Clear the old contributions so removing a part cannot leave it active.
+  for (auto& wheel : rec->wheels) {
+    wheel.force = wheel.rest = wheel.min_len = wheel.max_len = 0.f;
+    wheel.damp_bound = wheel.damp_rebound = 0.f;
+  }
   runtime->invoke_by_name(chassis->class_name, "updatevariables",
                           {Value::make_obj(chassis)}, false);
   record(chassis)->physics_dirty = true;
@@ -1495,8 +1505,8 @@ bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
   rec.physics_dirty = false;
   rec.physics_parent = gameref_get(chassis)->parent;
   if (!rec.physics_reported) {
-    std::printf("[phys] dynamic type=0x%x mass=%.2f fixed=240Hz\n",
-                rec.state.resource, mass);
+    std::printf("[phys] dynamic type=0x%x mass=%.2f fixed=%uHz\n",
+                rec.state.resource, mass, physics::VehicleDynamics::frequency);
     std::fflush(stdout);
     rec.physics_reported = true;
   }
@@ -1507,6 +1517,7 @@ void dynamics_wheels(Record &rec) {
     auto &cfg = rec.dynamics.wheels[i];
     const auto &live = rec.wheels[i];
     cfg.enabled = false;
+    cfg.rigid_contact = false;
     if (i >= rec.config->wheels.size())
       continue;
     const PartSlot *mount = nullptr;
@@ -1573,8 +1584,16 @@ void dynamics_wheels(Record &rec) {
                 .normalized();
       }
     }
-    cfg.enabled = cfg.radius > 0 && cfg.rest > 0 &&
-                  cfg.maximum >= cfg.minimum && cfg.spring > 0;
+    cfg.enabled = cfg.radius > 0;
+    cfg.rigid_contact = cfg.enabled &&
+                        !(cfg.rest > 0 && cfg.maximum >= cfg.minimum &&
+                          cfg.spring > 0);
+    if (cfg.rigid_contact) {
+      // A mounted wheel without a working spring rests at its bump stop.
+      const double stop = live.min_len > 0 ? live.min_len : fallback.base;
+      cfg.minimum = cfg.maximum = cfg.rest = stop;
+      cfg.spring = 0;
+    }
   }
 }
 void pose_wheels(Object *chassis, Record &rec);
@@ -1619,6 +1638,7 @@ void pose_wheels(Object *chassis, Record &rec) {
     rec.travel_frame[i] = rec.carrier_frame[i] = rec.hub_frame[i] =
         eye_matrix();
     rec.geometry_solved[i] = false;
+    rec.wheels[i].contact = cfg.enabled && state.contact;
     if (!cfg.enabled)
       continue;
     const physics::Vec3 seat =
@@ -1674,7 +1694,6 @@ void pose_wheels(Object *chassis, Record &rec) {
         rec.geometry_solved[i] = true;
       }
     }
-    rec.wheels[i].contact = state.contact;
   }
   for (const auto &slot : rec.config->slots)
     if (corner_gear(slot.type))
@@ -1841,24 +1860,8 @@ void part_park_chassis(Object *car, bool shift) { park_chassis(car, shift); }
 bool part_car_script_pos(void *key, float *x, float *y, float *z) {
   return script_pos(key, x, y, z);
 }
-void part_physics_advance(double seconds) {
-  if (!std::isfinite(seconds) || seconds < 0)
-    throw std::invalid_argument("invalid vehicle elapsed time");
-  // Hinges also animate while the chassis physics is suspended in the garage.
-  // Advance a normalized phase so reversing mid-motion preserves the pose.
-  const float hinge_step = static_cast<float>(seconds / 0.5);
-  for (auto& entry : records) {
-    auto& rec = entry.second;
-    const float target = rec.flap ? 1.f : 0.f;
-    if (!rec.state.parent || rec.flap_progress == target) continue;
-    PartMatrix world;
-    if (!scene_instances_script_matrix(entry.first, world.data())) continue;
-    rec.flap_progress = rec.flap
-                            ? std::min(1.f, rec.flap_progress + hinge_step)
-                            : std::max(0.f, rec.flap_progress - hinge_step);
-    place_child(rec.state.parent, rec.state.parent_slot);
-  }
-  scene_instances_prepare_physics();
+namespace {
+void advance_chassis_tick() {
   for (auto &entry : records) {
     Object *chassis = entry.first;
     auto &rec = entry.second;
@@ -1904,7 +1907,9 @@ void part_physics_advance(double seconds) {
       ground.normal = {hit.normal[0], hit.normal[1], hit.normal[2]};
       return true;
     };
-    const auto steps = rec.dynamics.advance(seconds, terrain);
+    // Carry fractional substep time across ticks because 700 is not a
+    // multiple of 60. The solver alternates between 11 and 12 substeps.
+    const auto steps = rec.dynamics.advance(kPhysicsTick, terrain);
     if (steps)
       dynamics_sync(chassis, rec, parent);
     else
@@ -1926,13 +1931,45 @@ void part_physics_advance(double seconds) {
                            std::fabs(force - rec.dynamics.body.mass * 9.81) <
                                rec.dynamics.body.mass * 9.81 * .02;
         rec.physics_quiet_ticks = quiet ? rec.physics_quiet_ticks + steps : 0;
-        if (rec.physics_quiet_ticks >= 60) {
+        // Keep the quarter-second settling window across solver frequencies.
+        if (rec.physics_quiet_ticks >= physics::VehicleDynamics::frequency / 4) {
           rec.physics_pending_placement = false;
           rec.dynamics.body.velocity = {};
           rec.dynamics.body.momentum = {};
         }
       }
     }
+  }
+}
+} // namespace
+
+void part_physics_advance(double seconds) {
+  if (!std::isfinite(seconds) || seconds < 0)
+    throw std::invalid_argument("invalid vehicle elapsed time");
+  // Hinges also animate while the chassis physics is suspended in the garage.
+  // Advance a normalized phase so reversing mid-motion preserves the pose.
+  const float hinge_step = static_cast<float>(seconds / 0.5);
+  for (auto& entry : records) {
+    auto& rec = entry.second;
+    const float target = rec.flap ? 1.f : 0.f;
+    if (!rec.state.parent || rec.flap_progress == target) continue;
+    PartMatrix world;
+    if (!scene_instances_script_matrix(entry.first, world.data())) continue;
+    rec.flap_progress = rec.flap
+                            ? std::min(1.f, rec.flap_progress + hinge_step)
+                            : std::max(0.f, rec.flap_progress - hinge_step);
+    place_child(rec.state.parent, rec.state.parent_slot);
+  }
+
+  // Ignore excess time after a long stall so the next frame can still render.
+  physics_elapsed += std::min(seconds, kPhysicsTick * kMaxPhysicsTicksPerFrame);
+  constexpr double tolerance = kPhysicsTick * 1e-10;
+  if (physics_elapsed + tolerance < kPhysicsTick) return;
+
+  scene_instances_prepare_physics();
+  while (physics_elapsed + tolerance >= kPhysicsTick) {
+    advance_chassis_tick();
+    physics_elapsed = std::max(0.0, physics_elapsed - kPhysicsTick);
   }
 }
 bool part_physics_state(Object *key, PartPhysicsState &state) {
@@ -2038,6 +2075,7 @@ Object *vehicle_spawn_stock(Jvm &jvm, RpkIndex &resources, Object *parent,
 void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   runtime = &jvm;
   records.clear();
+  physics_elapsed = 0;
   sfx_items.clear();
   configurations.clear();
   slot_aliases.clear();

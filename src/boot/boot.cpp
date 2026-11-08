@@ -20,6 +20,7 @@
 #include "slrr/video_fmv.hpp"
 #include "slrr_version.h"
 
+#include <chrono>
 #include <cstdio>
 #include <exception>
 
@@ -28,6 +29,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <mmsystem.h>
 #endif
 
 namespace slrr {
@@ -460,7 +462,15 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
 
   // LBUTTON → the handler stored on the button. osdCommand is the TREE.
   // Object.wait (Dialog.display) pumps the same frame until notify.
-  host_set_script_pump([&jvm, &render, &sections]() -> bool {
+  using Clock = std::chrono::steady_clock;
+  auto last_frame = Clock::now();
+  auto elapsed = [&last_frame]() {
+    const auto now = Clock::now();
+    const double seconds = std::chrono::duration<double>(now - last_frame).count();
+    last_frame = now;
+    return seconds;
+  };
+  host_set_script_pump([&jvm, &render, &sections, &elapsed]() -> bool {
     render.pump(16);
     if (render.quit_requested()) {
       std::printf("[boot] script pump stop window\n");
@@ -468,7 +478,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     }
     mainloop_sync_section_render(render, sections);
     const MainLoopFrameResult fr =
-        mainloop_frame(jvm, render, sections, 1.f / 60.f);
+        mainloop_frame(jvm, render, sections, elapsed());
 #ifdef _WIN32
     Sleep(1);
 #endif
@@ -496,28 +506,19 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
 
   int32_t frames = 0;
   if (render.ready()) {
+#ifdef _WIN32
+    // Keep the loop's short yield from becoming a whole Windows timer tick.
+    const bool precise_sleep = timeBeginPeriod(1) == TIMERR_NOERROR;
+#endif
     const bool until_quit = opt.max_frames <= 0;
     if (until_quit)
       std::printf("[boot] Soft MainLoop until window close\n");
-#ifdef _WIN32
-    unsigned last_ms = GetTickCount();
-#endif
     while (until_quit || frames < opt.max_frames) {
       // Soft PollWindowQuit adjacency — pump before Input/sim like stock
       // neighbors (Input_tick still inside mainloop_frame).
       render.pump(16);
-#ifdef _WIN32
-      const unsigned now_ms = GetTickCount();
-      float wall_dt = 0.f;
-      if (last_ms != 0)
-        wall_dt = static_cast<float>(now_ms - last_ms) * 0.001f;
-      last_ms = now_ms;
-#else
-      float wall_dt = 1.f / 60.f;
-#endif
       mainloop_sync_section_render(render, sections);
-      MainLoopFrameResult fr =
-          mainloop_frame(jvm, render, sections, wall_dt);
+      MainLoopFrameResult fr = mainloop_frame(jvm, render, sections, elapsed());
       jvm.gc_safe_point();
       ++frames;
       if (fr.quit) break;
@@ -534,6 +535,9 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     host_music_stop();
     render.close();
     host_set_render_callbacks({}, {});
+#ifdef _WIN32
+    if (precise_sleep) timeEndPeriod(1);
+#endif
   }
   std::printf("[boot] game exit=0 frames=%d section=%s\n", frames,
               sections.actual_name().c_str());

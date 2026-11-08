@@ -336,6 +336,12 @@ void VehicleDynamics::step(const Terrain &terrain) {
       s.length = w.maximum;
     if (!w.enabled)
       continue;
+    if (w.rigid_contact) {
+      s.length = w.minimum;
+      s.speed = 0;
+      s.seeded = true;
+      continue; // The rigid contact pass below supports the tyre.
+    }
     if (w.linked()) {
       solve_linked(body, w, s, terrain, ceiling, timestep);
       continue;
@@ -384,23 +390,25 @@ void VehicleDynamics::step(const Terrain &terrain) {
     auto solve = [&](Vec3 point, double restitution) {
       GroundHit ground;
       if (!terrain(point.x, point.z, ceiling, ground))
-        return;
+        return false;
       double overlap = ground.height - point.y;
       if (overlap <= 0)
-        return;
+        return false;
       body.contact(point, ground.normal, restitution);
       if (overlap > depth) {
         depth = overlap;
         correction = ground.normal.normalized();
       }
+      return true;
     };
     for (Vec3 point : body.corners())
       solve(point, .12);
     // A fully compressed wheel is also a unilateral support constraint.
     // Without this hard stop an initially buried tyre remains underground
     // while the penalty spring pumps enough energy to launch the chassis.
-    for (const auto &wheel : wheels) {
-      if (!wheel.enabled || wheel.linked())
+    for (size_t i = 0; i < wheels.size(); ++i) {
+      const auto &wheel = wheels[i];
+      if (!wheel.enabled || (wheel.linked() && !wheel.rigid_contact))
         continue;
       const auto down = wheel.down.normalized();
       const auto local =
@@ -408,7 +416,8 @@ void VehicleDynamics::step(const Terrain &terrain) {
       const auto point = body.position +
                          body.orientation.rotate(local - body.center) -
                          Vec3{0, wheel.radius, 0};
-      solve(point, 0);
+      if (solve(point, 0) && wheel.rigid_contact)
+        state[i].contact = true;
     }
     // One patch correction per iteration prevents duplicate corners pumping
     // position/energy; contact impulses still act at their individual points.
@@ -433,7 +442,9 @@ unsigned VehicleDynamics::advance(double seconds, const Terrain &terrain) {
     throw std::invalid_argument("invalid elapsed physics time");
   accumulator_ += seconds;
   unsigned count = 0;
-  while (accumulator_ + timestep * 1e-10 >= timestep && count < 8) {
+  constexpr unsigned max_steps =
+      (frequency + update_frequency - 1) / update_frequency;
+  while (accumulator_ + timestep * 1e-10 >= timestep && count < max_steps) {
     step(terrain);
     accumulator_ = std::max(0.0, accumulator_ - timestep);
     ++ticks;

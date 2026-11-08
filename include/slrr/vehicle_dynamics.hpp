@@ -67,6 +67,7 @@ using Terrain =
     std::function<bool(double x, double z, double from_y, GroundHit &)>;
 struct WheelConfig {
   bool enabled = false;
+  bool rigid_contact = false;
   Vec3 center, down{0, -1, 0};
   double radius = 0, rest = 0, minimum = 0, maximum = 0;
   // CFG spring base + travel, independent of the tunable spring rest length.
@@ -97,7 +98,9 @@ double suspension_force(double length, double velocity, double rest,
 // thrust or tyre slip is invented here: drivetrain is a separate port stage.
 class VehicleDynamics {
 public:
-  static constexpr double timestep = 1.0 / 240.0;
+  static constexpr unsigned frequency = 700;
+  static constexpr unsigned update_frequency = 60;
+  static constexpr double timestep = 1.0 / frequency;
   RigidBody body;
   std::array<WheelConfig, 4> wheels;
   std::array<WheelState, 4> state;
