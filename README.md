@@ -65,7 +65,7 @@ The snapshot matches the stock native table against registered class, method and
 | Interface | ✅ Menus, career dialogs, catalog, car showroom, track selection, and paint inventory |
 | Cars | ✅ Assembly from scripts and CFG files; reference Baiern with 76 parts. Showroom camera orbit, vehicle information, powertrain layout, gear ratios and dyno calculations |
 | Workshop | ✅ Point at a part to read its name, hide the body or the engine, open panels with interpolated motion and adjust tunable parts. Remove or fit attached assemblies, and drag inventory parts onto Repair/Sell. Detached suspension parts regain their rest pose in the inventory |
-| Physics | ✅ Chassis, springs, dampers, and wheel contacts. A released car settles on the garage floor. A parked car holds its standing height. The chassis rigid body is integrated by [Project Chrono](https://projectchrono.org) (optional, see [Physics backend](#physics-backend)). Native and Chrono free-fall/settling checks pass; Chrono still needs Baiern and Duhen in-game validation |
+| Physics | ✅ Chassis, springs, dampers, and wheel contacts. [Project Chrono](https://projectchrono.org) integrates the chassis and resolves chassis-box/rigid-wheel contacts against scene triangle meshes, including walls. SLRR suspension and tyre forces remain intact. Native and Chrono headless checks pass; Baiern and Duhen in-game validation is still needed. See [Physics backend](#physics-backend) |
 | Audio and video | ✅ Effects, loops, FMV audio and four music playlists streamed with Media Foundation/XAudio2. Repeated effects and menu sounds have separate overlap limits |
 | Options | ✅ Mouse-operated sliders and all three audio volume values saved/reloaded through the stock `save/game/options` format |
 | Driving | ⏳ Tyre slip, engine, clutch, transmission, and controls still need to be connected |
@@ -74,7 +74,7 @@ The snapshot matches the stock native table against registered class, method and
 **Next major milestones**
 
 - [ ] Complete the simulation and controls needed to drive.
-- [ ] Extend wall collisions, suspension constraints, and deformation.
+- [ ] Validate chassis/wall mesh collisions in game; extend suspension constraints and deformation.
 - [ ] Finish buying a part and saving the car.
 - [ ] Complete transparency rendering.
 - [ ] Bring the city and traffic to life.
@@ -84,6 +84,7 @@ Some native functions are still placeholders. Engine-loop audio and the original
 ### Recent changes
 
 - Added Project Chrono 10 as the default chassis rigid-body integrator, with a native fallback, automated physics checks, and a reproducible dependency build script.
+- Moved chassis and rigid-wheel contacts to Chrono using world-space scene triangle meshes. Added wall, penetration-recovery, teleport, and rigid-wheel regression checks.
 - Implemented cooperative script threads and scoped GC roots for suspended stacks. Java message loops, the mechanic refresher and showroom camera can now run directly.
 - Added GameType notification replacement/removal, event aliases/custom handlers/one-shot delivery, and control/drive/animate registrations.
 
@@ -140,11 +141,15 @@ The executable is generated at `build-bgfx-x64/Release/slrr_host.exe`, with `Chr
 
 ### Physics backend
 
-By default the vehicle chassis is integrated by [Project Chrono](https://projectchrono.org) (`ChSystemNSC`, implicit Euler, 700 Hz). The SLRR suspension, tyre and contact stages in `src/physics/vehicle_dynamics.cpp` still compute the forces and impulses; Chrono advances the 6-DOF rigid body (gravity, applied wrench, gyroscopic terms). The Chrono glue lives in `src/physics/chrono_body.cpp`.
+By default [Project Chrono](https://projectchrono.org) integrates the 6-DOF chassis (`ChSystemNSC`, implicit Euler, 700 Hz) and resolves chassis/world contacts. The scene exports immutable world-space triangle snapshots; Chrono collides the COM-offset chassis box and rigid-wheel spheres against them. Contact-corrected state is copied back to the SLRR mirror every substep, and external placement clears old contact history.
+
+SLRR suspension, linked-wheel geometry, tyre forces, and floor sampling remain in `src/physics/vehicle_dynamics.cpp`. Their forces are supplied to Chrono through its external-force accumulator. When Chrono mesh contacts are active, the old corner impulse/penetration pass is skipped to avoid double response. The native backend retains that original pass.
 
 - Use another Chrono build or install tree with `-DChrono_DIR=<path to its cmake folder>`.
 - Build without Chrono and keep the original integrator with `-DSLRR_PHYSICS_CHRONO=OFF`.
-- `-DSLRR_PHYSICS_CHECKS=ON` adds `slrr_physics_native` and `slrr_physics_chrono`, headless free-fall and sprung-box settling checks for each backend. Run them with `ctest --test-dir build-bgfx-x64 -C Release --output-on-failure`.
+- `-DSLRR_PHYSICS_CHECKS=ON` adds `slrr_physics_native` and `slrr_physics_chrono`, headless free-fall and sprung-box settling checks for each backend. The Chrono executable also checks mesh floor drops, initial penetration, teleportation, wall impacts, and rigid-wheel support. A separate `scene_collision_cache` test (`slrr_host --probe-collision-cache`) checks multi-vehicle A/B/A snapshot stability, scale conversion, revision rebuilds, and triangle deduplication. Run them with `ctest --test-dir build-bgfx-x64 -C Release --output-on-failure`.
+
+The current implementation keeps one Chrono system per vehicle and duplicates its static collision body; large worlds and multiple traffic vehicles would benefit from a shared system. Scene render meshes do not yet have separate collision metadata, and discrete mesh contacts still need high-speed and in-game validation.
 
 The game log prints `backend=chrono` or `backend=native` on the `[phys]` line.
 

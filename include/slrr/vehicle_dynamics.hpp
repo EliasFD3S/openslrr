@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <vector>
 
 namespace slrr::physics {
 // Script-space metres, kilograms and seconds. Renderer handedness stays
@@ -12,6 +13,7 @@ struct Vec3 {
   Vec3 operator+(Vec3 b) const { return {x + b.x, y + b.y, z + b.z}; }
   Vec3 operator-(Vec3 b) const { return {x - b.x, y - b.y, z - b.z}; }
   Vec3 operator-() const { return {-x, -y, -z}; }
+  bool operator==(const Vec3 &) const = default;
   Vec3 operator*(double s) const { return {x * s, y * s, z * s}; }
   Vec3 operator/(double s) const { return *this * (1 / s); }
   Vec3 &operator+=(Vec3 b) {
@@ -34,6 +36,13 @@ struct Quaternion {
   Vec3 inverse_rotate(Vec3 v) const;
 };
 using Matrix = std::array<float, 16>;
+
+// World-space static collision triangles, in script metres. A null mesh keeps
+// the native corner-contact fallback; a non-null mesh enables Chrono contacts.
+struct CollisionMesh {
+  std::vector<float> positions; // xyz
+  std::vector<uint32_t> indices;
+};
 
 // Integration backend state (Project Chrono when SLRR_HAS_CHRONO). The
 // RigidBody fields stay the authoritative mirror: callers may overwrite
@@ -127,6 +136,9 @@ public:
   static constexpr unsigned update_frequency = 60;
   static constexpr double timestep = 1.0 / frequency;
   RigidBody body;
+  // Shared immutable scene snapshot. The native backend ignores this and the
+  // Chrono backend rebuilds its static collision body when the pointer changes.
+  std::shared_ptr<const CollisionMesh> collision;
   std::array<WheelConfig, 4> wheels;
   std::array<WheelState, 4> state;
   uint64_t ticks = 0;

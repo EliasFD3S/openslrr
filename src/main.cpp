@@ -7,6 +7,7 @@
 #include "slrr/sl2_pacejka.hpp"
 #include "slrr/natives_boot.hpp"
 #include "slrr/gameref.hpp"
+#include "slrr/scene_instances.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -24,6 +25,7 @@ void usage() {
       "  slrr_host --probe-pacejka\n"
       "  slrr_host --probe-dyno\n"
       "  slrr_host --probe-gc [--root DIR]\n"
+      "  slrr_host --probe-collision-cache\n"
       "  slrr_host --game [--root DIR] [--window] [--no-wait] [--auto-new]\n"
       "           [--auto-cmd mainmenu|street|N]\n"
       "           [--spawn-car cars/racers/Baiern.rpk:0x6]\n"
@@ -48,6 +50,7 @@ int main(int argc, char** argv) {
   bool want_dyno = false;
   bool want_game = false;
   bool want_gc = false;
+  bool want_collision_cache = false;
   BootOptions opt;
   const char* root_arg = nullptr;
 
@@ -72,6 +75,10 @@ int main(int argc, char** argv) {
     }
     if (std::strcmp(a, "--probe-gc") == 0) {
       want_gc = true;
+      continue;
+    }
+    if (std::strcmp(a, "--probe-collision-cache") == 0) {
+      want_collision_cache = true;
       continue;
     }
     if (std::strcmp(a, "--game") == 0) {
@@ -119,7 +126,8 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  if (!want_probe && !want_game && !want_pacejka && !want_dyno && !want_gc) {
+  if (!want_probe && !want_game && !want_pacejka && !want_dyno && !want_gc &&
+      !want_collision_cache) {
     usage();
     return 1;
   }
@@ -129,13 +137,20 @@ int main(int argc, char** argv) {
     const bool ok = sl2_pacejka_self_check(msg, sizeof(msg));
     std::printf("[phys] %s\n", msg);
     if (!ok) return 3;
-    if (!want_probe && !want_game && !want_dyno) return 0;
+    if (!want_probe && !want_game && !want_dyno && !want_collision_cache)
+      return 0;
   }
 
   if (want_dyno) {
     char msg[256];
     const bool ok = dyno_self_check(msg, sizeof(msg));
     std::printf("[phys] %s\n", msg);
+    if (!ok) return 3;
+    if (!want_probe && !want_game && !want_collision_cache) return 0;
+  }
+
+  if (want_collision_cache) {
+    const bool ok = scene_instances_collision_cache_self_check();
     if (!ok) return 3;
     if (!want_probe && !want_game) return 0;
   }

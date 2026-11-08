@@ -1908,6 +1908,11 @@ void advance_chassis_tick() {
       ground.normal = {hit.normal[0], hit.normal[1], hit.normal[2]};
       return true;
     };
+#if SLRR_HAS_CHRONO
+    // Suspension keeps the vertical Terrain query above. Chrono additionally
+    // receives full world triangles for chassis, walls, and rigid-wheel contacts.
+    rec.dynamics.collision = scene_instances_collision_mesh(chassis);
+#endif
     // Carry fractional substep time across ticks because 700 is not a
     // multiple of 60. The solver alternates between 11 and 12 substeps.
     const auto steps = rec.dynamics.advance(kPhysicsTick, terrain);

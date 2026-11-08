@@ -8,6 +8,9 @@
 #include <vector>
 
 namespace slrr {
+namespace physics {
+struct CollisionMesh;
+}
 class RpkIndex;
 struct GameRefState;
 
@@ -86,6 +89,13 @@ bool scene_instances_sweep_sphere(const float start[3], const float delta[3],
 uint64_t scene_instances_floor_builds();
 // Changes whenever the world-space floor used by projected shadows changes.
 uint64_t scene_instances_floor_revision();
+// Immutable world-space triangle snapshot for Chrono, in unreflected script
+// metres. Rebuilt only when the prepared floor revision or ignored car changes.
+// The original index-cell lists are not duplicated into the triangle soup.
+std::shared_ptr<const physics::CollisionMesh> scene_instances_collision_mesh(
+    void *ignore);
+// Synthetic static-mesh probe; does not require game resources.
+bool scene_instances_collision_cache_self_check();
 struct SceneFloorHit {
   float height = 0;
   float normal[3] = {0, 1, 0};

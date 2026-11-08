@@ -74,6 +74,9 @@ void RigidBody::set_frame(const Matrix &m) {
               m[1] * center.x + m[5] * center.y + m[9] * center.z + m[13],
               m[2] * center.x + m[6] * center.y + m[10] * center.z + m[14]};
   velocity = momentum = force_ = torque_ = {};
+  // A frame assignment is an external placement/teleport. Drop warm contacts
+  // and collision state instead of blending them into the new frame.
+  backend_.reset(nullptr);
 }
 Matrix RigidBody::frame() const {
   Vec3 x = orientation.rotate({1, 0, 0}), y = orientation.rotate({0, 1, 0}),
@@ -104,6 +107,7 @@ void RigidBody::impulse(Vec3 j, Vec3 p) {
 #if SLRR_HAS_CHRONO
 // src/physics/chrono_body.cpp
 void chrono_integrate(RigidBody &body, double dt);
+void chrono_integrate_vehicle(VehicleDynamics &vehicle, double dt);
 #else
 struct ChronoBodyState {};
 BackendHandle::BackendHandle() = default;
@@ -404,7 +408,35 @@ void VehicleDynamics::step(const Terrain &terrain) {
       body.add_force(direction * (-amount), point);
     }
   }
+#if SLRR_HAS_CHRONO
+  chrono_integrate_vehicle(*this, timestep);
+  if (collision) {
+    // Chrono's contact constraints have already changed the integrated state.
+    // Only refresh rigid-wheel diagnostics here; applying the native corner
+    // impulses as well would count the same contacts twice.
+    for (size_t i = 0; i < wheels.size(); ++i) {
+      const auto &wheel = wheels[i];
+      if (!wheel.enabled || !wheel.rigid_contact)
+        continue;
+      const auto down = wheel.down.normalized();
+      const auto local =
+          wheel.center + down * (wheel.minimum - wheel.anchor_length());
+      const auto center =
+          body.position + body.orientation.rotate(local - body.center);
+      GroundHit ground;
+      if (terrain(center.x, center.z,
+                  std::max(ceiling, center.y + wheel.radius + .1), ground)) {
+        state[i].contact =
+            center.y - wheel.radius <= ground.height + .01;
+        state[i].normal = ground.normal.normalized();
+      }
+    }
+    sync_wheels();
+    return;
+  }
+#else
   body.integrate(timestep);
+#endif
   for (int iteration = 0; iteration < 4; ++iteration) {
     double depth = 0;
     Vec3 correction;
