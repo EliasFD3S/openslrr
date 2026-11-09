@@ -30,6 +30,7 @@ struct Vec3 {
 };
 struct Quaternion {
   double x = 0, y = 0, z = 0, w = 1;
+  bool operator==(const Quaternion &) const = default;
   Quaternion operator*(Quaternion b) const;
   Quaternion normalized() const;
   Vec3 rotate(Vec3 v) const;
@@ -118,10 +119,16 @@ struct WheelConfig {
   std::array<float, 10> hub{};
   Quaternion hub_alignment;
   bool linked() const { return unsprung > 0 || arm_length > 0; }
+  bool operator==(const WheelConfig &) const = default;
 };
 struct WheelState {
+  // True when a Chrono body/constraint owns this wheel's suspension dynamics.
+  // Native code still consumes the mirrored pose, contact, load, and travel.
+  bool constrained = false;
   bool contact = false, seeded = false;
   double length = 0, speed = 0, force = 0;
+  // Raw wheel-ground normal load, separate from chassis spring support `force`.
+  double normal_load = 0;
   Vec3 center, normal{0, 1, 0}, hub, patch;
 };
 double suspension_force(double length, double velocity, double rest,
@@ -142,6 +149,8 @@ public:
   std::array<WheelConfig, 4> wheels;
   std::array<WheelState, 4> state;
   uint64_t ticks = 0;
+  // Incremented by external wheel reseeding so Chrono recreates body states.
+  uint64_t suspension_generation = 0;
   unsigned advance(double seconds, const Terrain &terrain);
   void reset_clock();
   void release_wheels();

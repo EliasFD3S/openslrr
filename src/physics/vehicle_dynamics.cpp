@@ -203,6 +203,46 @@ bool hinge_hub(const WheelConfig &w, Vec3 ray, Vec3 &hub) {
 }
 double suspension_force(double length, double speed, double rest, double max,
                         double k, double bump, double rebound);
+bool chrono_suspension_eligible(const VehicleDynamics &vehicle, size_t index) {
+#if SLRR_HAS_CHRONO
+  if (!vehicle.collision || index >= vehicle.wheels.size())
+    return false;
+  const auto &wheel = vehicle.wheels[index];
+  if (!wheel.enabled || wheel.rigid_contact || !(wheel.unsprung > 0) ||
+      wheel.has_hub || !(wheel.spring > 0) || !(wheel.radius > 0) ||
+      wheel.maximum < wheel.minimum || wheel.down.normalized().length() < .9)
+    return false;
+  // Ownership is configuration-stable. Mutable travel/seed values must not
+  // switch a live corner between native and Chrono ownership mid-step.
+  const double reference =
+      std::clamp(wheel.rest, wheel.minimum, wheel.maximum);
+  return chrono_suspension_geometry(wheel, reference);
+#else
+  return false;
+#endif
+}
+// Reduced legacy parked-friction model, deliberately chassis-only. Independent
+// wheel slip velocity, wheel reaction, and spin belong to the future driving
+// tyre stage; this is not a complete moving-vehicle tyre model.
+void constrained_parked_friction(RigidBody &body, const WheelState &state,
+                                 double dt) {
+  if (!state.contact || !(state.normal_load > 0))
+    return;
+  const Vec3 normal = state.normal.normalized();
+  Vec3 velocity = body.point_velocity(state.patch);
+  Vec3 tangent = velocity - normal * velocity.dot(normal);
+  const double slip = tangent.length();
+  if (slip <= 1e-9)
+    return;
+  tangent = tangent / slip;
+  const Vec3 arm = state.patch - body.position;
+  const double inverse =
+      1 / body.mass +
+      tangent.dot(body.inverse_world_inertia(arm.cross(tangent)).cross(arm));
+  const double amount =
+      std::min(state.normal_load * .8, slip / (inverse * dt * 4));
+  body.add_force(tangent * (-amount), state.patch);
+}
 // Spring force stays on the 1-DOF length. The chassis feels it at the
 // hinge-projected patch, which is the external support once the arm and
 // the unsprung mass are internal. A massless ray (no arm, no type mass)
@@ -318,6 +358,8 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
   s.speed = speed;
   s.force = ground ? force : 0;
   s.contact = contact && ground;
+  s.normal_load =
+      s.contact ? s.force + w.unsprung * 9.81 : 0.0;
   s.normal = normal;
   hinge_hub(w, ray_center(w, s.length), s.hub);
   s.center = body_point(body, s.hub);
@@ -355,12 +397,23 @@ void VehicleDynamics::step(const Terrain &terrain) {
   for (size_t i = 0; i < wheels.size(); ++i) {
     const auto &w = wheels[i];
     auto &s = state[i];
-    s.contact = false;
-    s.force = 0;
+    const bool constrained = chrono_suspension_eligible(*this, i);
+    s.constrained = constrained;
+    if (!constrained) {
+      s.contact = false;
+      s.force = 0;
+      s.normal_load = 0;
+    }
     if (!s.seeded)
       s.length = w.maximum;
     if (!w.enabled)
       continue;
+    if (constrained) {
+      // Chrono owns the spring, body, and ground contact. Keep only the legacy
+      // chassis-only parked-friction stage, driven by per-contact normal load.
+      constrained_parked_friction(body, s, timestep);
+      continue;
+    }
     if (w.rigid_contact) {
       s.length = w.minimum;
       s.speed = 0;
@@ -392,6 +445,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
         w.spring, w.bump_damping, w.rebound_damping);
     force += std::max(0.0, w.minimum - length) * w.spring * 8;
     s.force = std::clamp(force, 0.0, body.mass * 9.81 * 3);
+    s.normal_load = s.force;
     body.add_force(s.normal * s.force, hard);
     // Parked tyre friction consumes kinetic motion, bounded by normal load.
     Vec3 point = hard + down * length + Vec3{0, -w.radius, 0};
@@ -485,6 +539,8 @@ void VehicleDynamics::sync_wheels() {
   for (size_t i = 0; i < wheels.size(); ++i) {
     const auto &w = wheels[i];
     auto &s = state[i];
+    if (s.constrained)
+      continue;
     Vec3 local =
         w.center + w.down.normalized() * (s.length - w.anchor_length());
     s.center = body.position + body.orientation.rotate(local - body.center);
@@ -512,6 +568,7 @@ void VehicleDynamics::reset_clock() {
 void VehicleDynamics::release_wheels() {
   for (auto &wheel : state)
     wheel = {};
+  ++suspension_generation;
 }
 uint64_t VehicleDynamics::backlog() const {
   return static_cast<uint64_t>((accumulator_ + timestep * 1e-10) / timestep);

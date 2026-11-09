@@ -18,4 +18,12 @@ struct CornerFrames {
 bool solve_corner_geometry(const CornerGeometry &, Vec3 spring_point,
                            CornerFrames &);
 Matrix corner_matrix(Vec3 origin, Quaternion rotation);
+// Shared physical ray-to-arm/hub projection used by native and Chrono setup.
+bool hinge_hub(const WheelConfig &wheel, Vec3 ray, Vec3 &hub);
+// Backend-neutral hub travel, motion ratio, and full multi-body compatibility.
+// These contain no Chrono types and are shared by eligibility and construction.
+double suspension_hub_length(const WheelConfig &wheel, const Vec3 &hub);
+double suspension_motion_ratio(const WheelConfig &wheel, const Vec3 &hub,
+                               const Vec3 &direction);
+bool chrono_suspension_geometry(const WheelConfig &wheel, double initial);
 } // namespace slrr::physics

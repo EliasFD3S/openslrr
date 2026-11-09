@@ -1644,7 +1644,9 @@ void pose_wheels(Object *chassis, Record &rec) {
       continue;
     const physics::Vec3 seat =
         cfg.center - cfg.down.normalized() * cfg.anchor_length();
-    const physics::Vec3 center = seat + cfg.down.normalized() * state.length;
+    const physics::Vec3 center =
+        state.constrained ? state.hub
+                          : seat + cfg.down.normalized() * state.length;
     const auto base = rec.base_wheel_center[i];
     const auto delta = center - base;
     rec.travel_frame[i][12] = static_cast<float>(delta.x);
@@ -1667,13 +1669,18 @@ void pose_wheels(Object *chassis, Record &rec) {
         part_matrix_multiply(part_pose_matrix(to), rotation),
         part_pose_matrix(from));
     rec.hub_frame[i] = rec.carrier_frame[i];
-    if (rec.wheels[i].has_arm && rec.wheels[i].has_hub &&
+    if (rec.wheels[i].has_arm &&
+        (rec.wheels[i].has_hub || state.constrained) &&
         rec.wheels[i].opp < 0) {
       physics::CornerGeometry geometry;
       geometry.reference = cfg.center;
       std::copy(rec.wheels[i].arm, rec.wheels[i].arm + 7, geometry.arm.begin());
       std::copy(rec.wheels[i].hub, rec.wheels[i].hub + 10,
                 geometry.hub.begin());
+      // Chrono no-hub arms still need their physical arm rotation rendered.
+      // Reuse the native hub[0]=-1 reconstruction with the mirrored hub.
+      if (state.constrained && !rec.wheels[i].has_hub)
+        geometry.hub[0] = -1;
       const auto &ypr = live.rotation;
       geometry.alignment = (physics::Quaternion{0, std::sin(ypr[0] * .5), 0,
                                                 std::cos(ypr[0] * .5)} *
@@ -1750,6 +1757,9 @@ void park_chassis(Object *chassis, bool shift) {
     if (!chassis_rest_contact(*rec, contact)) return;
     used = 1;
   }
+  // The parked lengths are external seeds. Recreate constrained bodies on the
+  // next start instead of resuming stale dynamic transforms.
+  rec->dynamics.release_wheels();
   for (size_t i = 0; i < 4; ++i) {
     auto &cfg = rec->dynamics.wheels[i];
     auto &state = rec->dynamics.state[i];
@@ -1767,6 +1777,7 @@ void park_chassis(Object *chassis, bool shift) {
     state.seeded = true;
     state.contact = false;
     state.force = 0;
+    state.normal_load = 0;
     const auto down = cfg.down.normalized();
     const auto center = cfg.center + down * (state.length - cfg.anchor_length());
     contact += center + down * cfg.radius;
