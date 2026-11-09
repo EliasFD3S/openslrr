@@ -92,6 +92,8 @@ struct WheelState {
   Vec3 center, normal{0, 1, 0}, hub, patch;
   Quaternion hub_rotation;
   double spin = 0, rotation = 0;
+  double slip_speed = 0, lateral_speed = 0;
+  TireForces tire_force{};
 };
 struct DriveWheel {
   double weight = 0, steer = 0, brake = 0, handbrake = 0, bearing = 0;

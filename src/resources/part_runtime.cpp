@@ -61,6 +61,7 @@ struct Record {
   std::unique_ptr<ScxGeometry> collision, deformed_collision;
   unsigned deformation_upload_ticks = 0;
   float steering_input = 0;
+  float steering_request = 0, steering_correction = 0;
   float steering_help = 0, abs_strength = 0, launch_help = 0;
   int transmission = 1;
   uint64_t driving_options_revision = 0;
@@ -121,7 +122,6 @@ struct Record {
   unsigned physics_quiet_ticks = 0;
   std::array<PartMatrix, 4> travel_frame{}, steered_frame{}, rolling_frame{};
   std::array<bool, 4> geometry_solved{};
-  std::array<float, 4> wheel_spin_sign{};
   physics::VehicleDynamics dynamics;
   bool physics_ready = false, physics_dirty = true, physics_suspended = false;
   bool physics_reported = false;
@@ -751,11 +751,17 @@ void relink_assembly(Object *part) {
         pending.push_back(child.second);
   }
 }
+double chassis_steering_angle(const Record& rec) {
+  const double max_steer = std::max(0.f, rec.config->max_steer);
+  return std::clamp(rec.steering_input * max_steer + rec.steering_correction,
+                    -max_steer, max_steer);
+}
+
 double wheel_steering_angle(const Record& rec, size_t corner) {
   const auto& wheel = rec.wheels[corner];
   const double factor = wheel.steer_set ? wheel.steer
       : corner < rec.config->wheel_steering.size() ? rec.config->wheel_steering[corner] : 0;
-  const double angle = rec.steering_input * rec.config->max_steer;
+  const double angle = chassis_steering_angle(rec);
   const double length = rec.ackermann != 0 ? rec.ackermann : rec.config->ackermann_length;
   if (std::abs(angle) < 1e-7 || length <= 0) return angle * factor;
   const double radius = length / std::tan(angle);
@@ -1384,6 +1390,8 @@ bool part_command(Object *part, const std::string &command) {
     if (!(input >> value) || !std::isfinite(value))
       return false;
     rec->steering_input = std::clamp(value, -1.f, 1.f);
+    rec->steering_request = rec->steering_input;
+    rec->steering_correction = 0.f;
     for (const auto &slot : rec->config->slots)
       if (slot.type >= 101 && slot.type <= 304)
         place_child(part, slot.id, false);
@@ -1442,6 +1450,7 @@ bool part_command(Object *part, const std::string &command) {
     rec->physics_pending_placement = false;
     rec->physics_released = false;
     rec->steering_input = 0.f;
+    rec->steering_request = rec->steering_correction = 0.f;
     rec->dynamics.body.velocity = {};
     rec->dynamics.body.momentum = {};
     rec->dynamics.reset_drive();
@@ -1615,10 +1624,6 @@ void dynamics_wheels(Record &rec) {
       }
     if (!mount)
       continue;
-    PartMatrix mount_frame;
-    if (!part_slot_matrix(*rec.config, posed_slot(rec, *mount), mount_frame))
-      continue;
-    rec.wheel_spin_sign[i] = mount_frame[0] < 0 ? 1.f : -1.f;
     const auto fallback = i < rec.config->wheel_springs.size()
                               ? rec.config->wheel_springs[i]
                               : PartWheelSpring{};
@@ -1731,7 +1736,9 @@ void pose_wheels(Object *chassis, Record &rec) {
             ? frames.arm_rotation : frames.hub_rotation), inverse);
     rec.steered_frame[i] = part_matrix_multiply(
         physics::corner_matrix(frames.hub_origin, hub_steered), inverse);
-    const double spin = rec.physics_released ? state.rotation * rec.wheel_spin_sign[i] : 0;
+    // Forward is hub -Z, so positive road speed rolls about hub -X.
+    // The left/right mesh orientation is applied after this shared hub motion.
+    const double spin = rec.physics_released ? -state.rotation : 0;
     const physics::Quaternion rolling{std::sin(spin * .5), 0, 0, std::cos(spin * .5)};
     rec.rolling_frame[i] = part_matrix_multiply(
         physics::corner_matrix(frames.hub_origin, hub_steered * rolling), inverse);
@@ -1919,12 +1926,73 @@ Object *part_field(Object *part, const char *name) {
              ? value->second.v.o : nullptr;
 }
 
+void update_steering(Record &rec, bool controls) {
+  const auto &in = host_input();
+  const float steer = controls ? std::clamp(in.drive_steer, -1.f, 1.f) : 0.f;
+  rec.steering_request = steer;
+  const float max_steer = std::max(.01f, rec.config->max_steer);
+  const auto &body = rec.dynamics.body;
+  const auto velocity = body.velocity;
+  const double speed = std::hypot(velocity.x, velocity.z);
+  const float help = in.drive_steer_analog ? 0.f : rec.steering_help;
+  float target = steer;
+  const float wheelbase = rec.ackermann > 0 ? rec.ackermann : rec.config->ackermann_length;
+  if (help > 0 && wheelbase > 0 && speed > 0) {
+    // For keyboard steering, bound the requested curvature as speed rises.
+    // A rate limit alone still asks for full lock after a short button hold.
+    constexpr double lateral_acceleration = .85 * 9.81;
+    const double limit = std::atan(wheelbase * lateral_acceleration / (speed * speed * help));
+    target *= static_cast<float>(std::min(1., limit / max_steer));
+  }
+  const bool unwinding = target == 0.f || target * rec.steering_input < 0 ||
+                         std::abs(target) < std::abs(rec.steering_input);
+  const double normalized_speed = speed / 15;
+  const float helped_rate = static_cast<float>(
+      std::max(.2, 2. / (1 + normalized_speed * normalized_speed)));
+  const float rate = std::lerp(2.f, helped_rate, unwinding ? 0.f : help);
+  const float max_delta = rate / (max_steer * physics::VehicleDynamics::update_frequency);
+  rec.steering_input += std::clamp(target - rec.steering_input, -max_delta, max_delta);
+
+  const auto local_velocity = body.orientation.inverse_rotate(velocity);
+  const double forward_speed = -local_velocity.z;
+  const bool grounded = rec.dynamics.state[0].contact || rec.dynamics.state[1].contact;
+  if (!controls || rec.steering_help <= 0.f || in.drive_handbrake ||
+      !grounded || forward_speed <= 0.) {
+    rec.steering_correction = 0.f;
+    return;
+  }
+  // Positive steer points towards local -X. Align the tyres slightly with
+  // the direction of travel during a slide, through the normal tyre forces.
+  const double slip = -std::atan2(local_velocity.x, forward_speed);
+  const double blend = std::clamp((forward_speed - 5.) / 10., 0., 1.);
+  const double excess_slip = std::max(0., std::abs(slip) - .07);
+  const double limit = std::min(.12, excess_slip * .55);
+  const double requested = rec.steering_input * max_steer;
+  const double already_correcting = std::max(0., std::copysign(1., slip) * requested);
+  const float correction = static_cast<float>(rec.steering_help * blend *
+      std::copysign(std::max(0., limit - already_correcting), slip));
+  constexpr float response = 12.f;
+  const float alpha = 1.f - std::exp(-response / physics::VehicleDynamics::update_frequency);
+  rec.steering_correction = std::lerp(rec.steering_correction, correction, alpha);
+}
+
 void configure_drive(Object *chassis, Record &rec, bool controlled) {
   auto &drive = rec.dynamics.drive;
   drive.torque = {};
-  if (!controlled) return;
+  if (!controlled) {
+    if (rec.steering_correction != 0.f) {
+      rec.steering_correction = 0.f;
+      for (size_t i = 0; i < drive.wheels.size(); ++i)
+        drive.wheels[i].steer = wheel_steering_angle(rec, i);
+    }
+    return;
+  }
   if (rec.driving_options_revision != host_driving_options_revision())
     apply_driving_options(rec);
+  const bool controls = !osd_has_modal();
+  update_steering(rec, controls);
+  for (size_t i = 0; i < drive.wheels.size(); ++i)
+    drive.wheels[i].steer = wheel_steering_angle(rec, i);
   auto *ratios = part_field(chassis, "ratio");
   if (!ratios || ratios->slots.size() < 8 || field_int(chassis, "gears") < 1)
     return;
@@ -1934,17 +2002,6 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   }
   if (!dyno || comp(chassis, "maxRPM") <= 0) return;
   const auto &in = host_input();
-  const bool controls = !osd_has_modal();
-  const float steer = controls ? in.drive_steer : 0.f;
-  const float max_steer = std::max(.01f, rec.config->max_steer);
-  const float speed = float(rec.dynamics.body.velocity.length() / 15);
-  const bool unwinding = steer * rec.steering_input <= 0 ||
-                         std::abs(steer) < std::abs(rec.steering_input);
-  const float helped_rate = std::max(.2f, 2.f / (1 + speed * speed));
-  const float rate = std::lerp(2.f, helped_rate,
-      unwinding || in.drive_steer_analog ? 0.f : rec.steering_help);
-  const float max_delta = rate / (max_steer * physics::VehicleDynamics::update_frequency);
-  rec.steering_input += std::clamp(steer - rec.steering_input, -max_delta, max_delta);
   drive.throttle = controls ? in.drive_throttle : 0.f;
   drive.brake = controls ? in.drive_brake : 0.f;
   drive.handbrake = controls && in.drive_handbrake ? .3 : 0;
@@ -1992,13 +2049,12 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
     auto &out = drive.wheels[i];
     const auto &wheel = rec.wheels[i];
     out.weight = std::max(0.f, wheel.drive);
-    out.steer = wheel_steering_angle(rec, i);
     out.brake = std::max(0.f, wheel.brake);
     out.handbrake = std::max(0.f, wheel.hbrake);
     out.bearing = std::max(0.f, wheel.bearing);
     out.rolling_resistance = std::max(0., wheel.roll_res - .003625);
     out.tyre = {wheel.friction, wheel.stiffness, wheel.sliction,
-                wheel.max_load, wheel.frictn_x};
+                wheel.max_load, wheel.frictn_x, wheel.load_smooth};
   }
 }
 
@@ -2744,6 +2800,14 @@ bool part_physics_state(Object *key, PartPhysicsState &state) {
   state.vertical_speed = rec->dynamics.body.velocity.y;
   state.ticks = rec->dynamics.ticks;
   state.backlog = rec->dynamics.backlog();
+  state.speed_kph = rec->dynamics.body.velocity.length() * 3.6;
+  state.rpm = rec->dynamics.engine_omega * 9.54929658551372;
+  state.yaw_rate = rec->dynamics.body.omega().y;
+  state.steering_help = rec->steering_help;
+  state.steering_request = rec->steering_request * std::max(0.f, rec->config->max_steer);
+  state.steering_correction = rec->steering_correction;
+  state.steering_angle = chassis_steering_angle(*rec);
+  state.gear = rec->dynamics.gear;
   for (size_t i = 0; i < 4; ++i) {
     state.length[i] = rec->dynamics.state[i].length;
     state.force[i] = rec->dynamics.state[i].force;
@@ -2751,8 +2815,21 @@ bool part_physics_state(Object *key, PartPhysicsState &state) {
     state.geometry_solved[i] = rec->geometry_solved[i];
     const auto &center = rec->dynamics.wheels[i].center;
     state.wheel_center[i] = {center.x, center.y, center.z};
+    const auto& wheel = rec->dynamics.state[i];
+    state.tires[i] = {rec->dynamics.drive.wheels[i].steer,
+                     wheel.slip_speed, wheel.lateral_speed, wheel.tire_force.longitudinal,
+                     wheel.tire_force.lateral};
   }
   return true;
+}
+
+Object* part_controlled_chassis() {
+  const auto* target = gameref_find_live(controlled_vehicle);
+  return target ? as_part(static_cast<Object*>(target->key)) : nullptr;
+}
+
+Object* part_debug_chassis(Object* object) {
+  return car(as_part(object));
 }
 
 void *part_shadow_source(void *render, float *frame) {

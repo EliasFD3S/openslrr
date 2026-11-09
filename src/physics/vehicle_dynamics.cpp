@@ -485,6 +485,8 @@ void VehicleDynamics::step_drive() {
       const Vec3 speed = body.point_velocity(s.patch);
       const double road = speed.dot(forward), lateral = speed.dot(side);
       road_speed = road;
+      s.slip_speed = s.spin * wheel.radius - road;
+      s.lateral_speed = lateral;
       const double tilt = body.orientation.rotate(s.hub_rotation.rotate({0, -1, 0})).dot(s.normal);
       const double alignment = std::max(.25, tilt * tilt);
       auto force = tire_forces(s.force, alignment, s.spin * wheel.radius,
@@ -495,9 +497,10 @@ void VehicleDynamics::step_drive() {
       const double inverse_mass = 1 / body.mass +
           forward.dot(body.inverse_world_inertia(arm.cross(forward)).cross(arm));
       const double inverse_spin = wheel.radius * wheel.radius / wheel_inertia;
-      const double limit = std::abs(s.spin * wheel.radius - road) /
+      const double limit = std::abs(s.slip_speed) /
                            (timestep * (inverse_mass + inverse_spin));
       force.longitudinal = std::clamp(force.longitudinal, -limit, limit);
+      s.tire_force = force;
       body.add_force(forward * force.longitudinal + side * force.lateral, s.patch);
       const double rolling_torque = s.spin == 0 ? 0 :
           std::copysign(s.force * wheel.radius * cfg.rolling_resistance, s.spin);
@@ -534,6 +537,8 @@ void VehicleDynamics::step(const Terrain &terrain) {
     const double previous_load = s.force;
     s.contact = false;
     s.force = 0;
+    s.slip_speed = s.lateral_speed = 0;
+    s.tire_force = {};
     if (!s.seeded)
       s.length = w.maximum;
     if (!w.enabled)
@@ -547,9 +552,9 @@ void VehicleDynamics::step(const Terrain &terrain) {
       GroundHit hit;
       if (terrain(hub.x, hub.z, ceiling, hit)) {
         s.normal = hit.normal.normalized();
-        s.patch = hub - s.normal * w.radius;
-        const Vec3 ground{hub.x, hit.height, hub.z};
-        s.contact = (s.patch - ground).dot(s.normal) <= .004;
+        // Match the contact point of the hard-stop constraint below.
+        s.patch = hub - Vec3{0, w.radius, 0};
+        s.contact = s.patch.y - hit.height <= .004;
         // The rigid solver supplies vertical support. Feed its measured
         // reaction back into the same tyre model used by sprung wheels.
         s.force = s.contact ? previous_load : 0;

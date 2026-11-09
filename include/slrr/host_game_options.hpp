@@ -22,5 +22,6 @@ uint64_t host_driving_options_revision();
 void host_game_options_load(Jvm& jvm);
 void host_game_options_dirty();
 void host_game_options_apply(Jvm& jvm);
+void host_game_options_set_steering_help(Jvm& jvm, float strength);
 void host_game_options_update(Jvm& jvm, bool force = false);
 }

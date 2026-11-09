@@ -8,6 +8,7 @@
 #include "slrr/gameref.hpp"
 #include "slrr/scene_sun.hpp"
 #include "slrr/osd_registry.hpp"
+#include "debug_overlay.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -95,12 +96,17 @@ class LibBgfxBackend final : public IRenderBackend {
 
 
   void clear_scene();
+  void set_debug_context(Jvm& jvm, const SectionMachine& sections) {
+    debug_overlay_.set_context(jvm, sections);
+  }
 
 
   void add_scx_geometry(ScxGeometry geo);
 
 
  private:
+  DebugOverlay debug_overlay_;
+  bool debug_was_visible_ = false;
   struct ScenePart {
     ScxGeometry geo;
     std::shared_ptr<const ScxGeometry> source;

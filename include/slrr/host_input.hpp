@@ -45,6 +45,7 @@ struct HostInput {
   int view_w = 0;
   int view_h = 0;
   bool pointer_valid = false;
+  bool debug_mouse_capture = false;
   bool part_click = false;
   int part_click_x = 0;
   int part_click_y = 0;

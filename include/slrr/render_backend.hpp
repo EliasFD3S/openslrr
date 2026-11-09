@@ -7,6 +7,8 @@
 #include <string>
 
 namespace slrr {
+class Jvm;
+class SectionMachine;
 
 // Thin GPU backend behind GfxEngine / RenderRef / Viewport / Camera natives.
 // Slot name "bgfx" is the product target; Win32 build uses WGL/OpenGL until
@@ -66,5 +68,7 @@ void bgfx_set_osd_overlay(IRenderBackend& render, bool enabled);
 // True once the menu or the garage is allowed to draw OSD. Boot stays false
 // until the splash frame, so a loading present cannot flash the clear color.
 bool bgfx_osd_draw_enabled(IRenderBackend& render);
+void bgfx_set_debug_context(IRenderBackend& render, Jvm& jvm,
+                            const SectionMachine& sections);
 
 }  // namespace slrr

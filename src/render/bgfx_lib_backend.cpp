@@ -263,6 +263,9 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
   }
   void LibBgfxBackend::close()
 {
+    debug_overlay_.shutdown();
+    debug_was_visible_ = false;
+    host_input().debug_mouse_capture = false;
     clear_scene();
     for (auto& kv : osd_tex_) {
       if (bgfx::isValid(kv.second) &&
@@ -381,7 +384,8 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     sc.nwh = hwnd_;
     sc.width = static_cast<uint32_t>(width_);
     sc.height = static_cast<uint32_t>(height_);
-    bgfx::reset(BGFX_RESET_VSYNC, &sc);
+    const auto& debug_render = debug_overlay_.render_options();
+    bgfx::reset(debug_render.vsync ? BGFX_RESET_VSYNC : BGFX_RESET_NONE, &sc);
     float world_eye[3], world_at[3], world_up[3], world_fov = 60.f, world_zn = 0.05f,
                                      world_zf = 500.f;
     // Garage, dealer and car lot all use the script camera, which looks
@@ -466,13 +470,14 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
           show = true;
           break;
         }
-    if (shown_ && !show) return;
+    const bool show_debug = debug_overlay_.visible();
+    if (shown_ && !show && !show_debug && !debug_was_visible_) return;
     // Shadow maps render first (views 0..3, off the backbuffer). The world
     // follows on 4, or on 5 when the movie occupies 4.
     const uint16_t world_view = fmv_bg ? kFmvLayer : kWorldView;
     const auto ww = static_cast<uint16_t>(width_);
     const auto hh = static_cast<uint16_t>(height_);
-    for (int i = 0; !covered && i < kShadowSlots; ++i) {
+    for (int i = 0; !covered && debug_render.shadows && i < kShadowSlots; ++i) {
       if (!bgfx::isValid(shadow_fb_[i])) continue;
       const auto shadow_view = static_cast<uint16_t>(i);
       bgfx::setViewFrameBuffer(shadow_view, shadow_fb_[i]);
@@ -507,22 +512,47 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     if (!covered) {
       draw_dynamic_world(view, world_view);
       if (garage_ && !parts_.empty()) draw_scene(world_view);
-      draw_vehicle_shadows(world_view);
-      draw_sun_flare(view, proj, world_view);
+      if (debug_render.shadows) draw_vehicle_shadows(world_view);
+      if (debug_render.sun_flare) draw_sun_flare(view, proj, world_view);
     }
     // Previews start at view 8. OSD plates under the cars are view 6; the
     // rest of the interface is view 70.
     if (!covered && !fmv_bg) draw_fmv(kFmvLayer);
     // Boot intros own the frame. Menu OSD from the probe must not cover them.
     if ((garage_ || osd_overlay_ || loading) &&
+        (debug_render.game_osd || loading || osd_has_modal()) &&
         !video_fmv_block_osd())
       draw_osd();
     if (!covered && !video_fmv_block_osd()) draw_previews();
 
+    if (show_debug) {
+      std::vector<Object*> vehicles;
+      std::unordered_set<Object*> seen;
+      const auto add = [&](Object* vehicle) {
+        if (vehicle && seen.insert(vehicle).second) vehicles.push_back(vehicle);
+      };
+      const auto collect = [&](const auto& instances) {
+        for (const auto& instance : instances)
+          if (instance.vehicle_material)
+            add(part_debug_chassis(part_render_owner(instance.key)));
+      };
+      collect(instances_);
+      for (const auto& preview : previews_) collect(preview.instances);
+      add(part_controlled_chassis());
+      debug_overlay_.draw(hwnd_, ww, hh, vehicles);
+    }
+    debug_was_visible_ = show_debug;
+    auto& input = host_input();
+    const bool capture = !lmb_down_ && !input.rmb_down && debug_overlay_.captures_mouse();
+    if (capture && !input.debug_mouse_capture) {
+      input.pointer_valid = false;
+      osd_set_hover_at(-100.f, -100.f);
+    }
+    input.debug_mouse_capture = capture;
     bgfx::frame();
     // The swap chain is filled while the window is hidden. Showing it first
     // presented one clear (0x1a2230) before the movie or the splash plate.
-    const bool reveal = video_fmv_frame_ready() || garage_ || osd_overlay_;
+    const bool reveal = video_fmv_frame_ready() || garage_ || osd_overlay_ || show_debug;
     if (!shown_ && reveal && hwnd_) {
       ShowWindow(hwnd_, SW_SHOW);
       shown_ = true;
@@ -1002,6 +1032,18 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     auto* self = reinterpret_cast<LibBgfxBackend*>(
         GetWindowLongPtrA(hwnd, GWLP_USERDATA));
     auto& in = host_input();
+    if (self && self->debug_overlay_.handle_message(
+                    hwnd, msg, wp, lp, self->lmb_down_ || in.rmb_down)) {
+      in.debug_mouse_capture = self->debug_overlay_.captures_mouse();
+      if (msg == WM_MOUSEMOVE) {
+        self->mouse_x_ = static_cast<short>(LOWORD(lp));
+        self->mouse_y_ = static_cast<short>(HIWORD(lp));
+        self->have_mouse_ = true;
+        in.pointer_valid = false;
+        osd_set_hover_at(-100.f, -100.f);
+      }
+      return msg == WM_SETCURSOR ? TRUE : 0;
+    }
     const auto end_camera_drag = [&] {
       if (!in.rmb_down) return;
       in.rmb_down = false;
@@ -1276,6 +1318,11 @@ void bgfx_set_osd_overlay(IRenderBackend& render, bool enabled) {
 bool bgfx_osd_draw_enabled(IRenderBackend& render) {
   if (LibBgfxBackend* b = as_lib(render)) return b->osd_draw_enabled();
   return false;
+}
+
+void bgfx_set_debug_context(IRenderBackend& render, Jvm& jvm,
+                            const SectionMachine& sections) {
+  if (auto* backend = as_lib(render)) backend->set_debug_context(jvm, sections);
 }
 
 }  // namespace slrr

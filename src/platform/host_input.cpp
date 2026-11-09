@@ -173,11 +173,12 @@ void host_input_poll_keys() {
   in.keys_pgup = keys[0xc9];
   in.keys_pgdn = keys[0xd1];
 
-  auto held = [focused](int key) {
-    return focused && (GetAsyncKeyState(key) & 0x8000);
+  const bool game_mouse = focused && !in.debug_mouse_capture;
+  auto held = [game_mouse](int key) {
+    return game_mouse && (GetAsyncKeyState(key) & 0x8000);
   };
-  mouse = {focused ? in.cursor_x : 0.f, focused ? in.cursor_y : 0.f,
-           focused ? in.look_zoom : 0.f, float(held(VK_LBUTTON)),
+  mouse = {game_mouse ? in.cursor_x : 0.f, game_mouse ? in.cursor_y : 0.f,
+           game_mouse ? in.look_zoom : 0.f, float(held(VK_LBUTTON)),
            float(held(VK_RBUTTON)), float(held(VK_MBUTTON))};
   in.cursor_x = in.cursor_y = 0.f;
 

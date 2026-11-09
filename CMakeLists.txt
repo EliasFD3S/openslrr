@@ -118,6 +118,21 @@ if(NOT BIMG_DIR)
 endif()
 set(_bgfx_shader_inc "${BGFX_DIR}/src")
 
+# Use Dear ImGui and its renderer from the same bgfx checkout.
+set(SLRR_IMGUI_DIR "${BGFX_DIR}/3rdparty/dear-imgui")
+target_sources(slrr_host PRIVATE
+  src/render/debug_overlay.cpp
+  "${BGFX_DIR}/examples/common/imgui/imgui.cpp"
+  "${SLRR_IMGUI_DIR}/imgui.cpp"
+  "${SLRR_IMGUI_DIR}/imgui_draw.cpp"
+  "${SLRR_IMGUI_DIR}/imgui_tables.cpp"
+  "${SLRR_IMGUI_DIR}/imgui_widgets.cpp"
+)
+target_include_directories(slrr_host PRIVATE
+  "${BGFX_DIR}/examples/common"
+  "${BGFX_DIR}/3rdparty"
+)
+
 bgfx_compile_shaders(
   TYPE VERTEX
   SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow_recv.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow_cast.sc"

@@ -26,7 +26,7 @@ GameOptions read_options(Jvm& jvm) {
   GameOptions options;
   const int mode = integer("player_transmission", 1);
   options.driving.transmission = mode == 0 || mode == 2 || mode == 5 ? mode : 1;
-  options.driving.steering_help = read("player_steeringhelp", .666f);
+  options.driving.steering_help = std::clamp(read("player_steeringhelp", .666f), 0.f, 1.f);
   options.driving.abs = read("player_abs", 0.f);
   options.driving.asr = read("player_asr", 0.f);
   options.gps_mode = std::clamp(integer("gpsMode", 0), 0, 3);
@@ -71,6 +71,13 @@ void host_game_options_apply(Jvm& jvm) {
   if (updated.driving != current.driving) ++driving_revision;
   current = updated;
   host_game_options_dirty();
+}
+
+void host_game_options_set_steering_help(Jvm& jvm, float strength) {
+  if (!loaded || !std::isfinite(strength)) return;
+  jvm.set_static("java.util.Config", "player_steeringhelp",
+                 Value::make_float(std::clamp(strength, 0.f, 1.f)));
+  host_game_options_apply(jvm);
 }
 
 void host_game_options_update(Jvm& jvm, bool force) {

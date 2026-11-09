@@ -53,8 +53,19 @@ struct PartPhysicsState {
   std::array<std::array<double, 3>, 4> wheel_center{};
   std::array<bool, 4> contact{};
   std::array<bool, 4> geometry_solved{};
+  struct TireSample {
+    double steer = 0, slip_speed = 0, lateral_speed = 0;
+    double longitudinal_force = 0, lateral_force = 0;
+  };
+  std::array<TireSample, 4> tires{};
+  double speed_kph = 0, rpm = 0, yaw_rate = 0;
+  double steering_help = 0, steering_request = 0, steering_angle = 0;
+  double steering_correction = 0;
+  int gear = 0;
 };
 bool part_physics_state(Object *car, PartPhysicsState &state);
+Object* part_controlled_chassis();
+Object* part_debug_chassis(Object* object);
 struct VehicleHudState {
   const VehicleHudLayout *layout = nullptr;
   const std::string *preview_directory = nullptr;

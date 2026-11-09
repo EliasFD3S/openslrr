@@ -269,6 +269,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
       std::fprintf(stderr, "[boot] render.open failed (%s)\n", render.name());
       return 3;
     }
+    bgfx_set_debug_context(render, jvm, sections);
     osd_set_framebuffer(render.width(), render.height());
     host_set_render_callbacks([&render]() {
       if (!render.ready() || !bgfx_osd_draw_enabled(render)) return;

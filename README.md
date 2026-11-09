@@ -137,6 +137,14 @@ The executable is generated at `build-bgfx-x64/Release/slrr_host.exe`. The first
 .\build-bgfx-x64\Release\slrr_host.exe --game --spawn-car cars/racers/Baiern.rpk:0x6 --root "D:\Games\SLRR"
 ```
 
+Press **Ctrl+F12** in any game section to toggle the ImGui debug panel.
+Select a visible vehicle or a preview in **Vehicle**, or use **Freeze
+telemetry** to hold a sample. **Tuning** changes tyre parameters and
+simulation speed live. **Renderer** has visual toggles. **Section** shows
+VM statistics and lets you opt into editing numeric fields of the active
+script object. **OSD** and **Input** show interface and controller state.
+Debug tuning and render settings last for the current session.
+
 Use **Game Options** for transmission, distance units, GPS mode, damage difficulty and driver assists. **Advanced Game Options** adjusts cockpit motion from steering, speed and acceleration. **Sound Options** controls the three audio volumes. The game restores these values from `save/game/options` at startup.
 
 In the garage, **right-click and drag**, the **arrow keys**, and the **scroll wheel** control the camera. From the garage, enter the **Test Track** to drive with your keyboard or XInput profile. **Escape** skips the intros.
