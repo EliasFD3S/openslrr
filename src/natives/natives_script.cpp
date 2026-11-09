@@ -54,8 +54,10 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
     });
   jvm.natives().register_method("java.util.resource.SfxRef", "nplay", "(Ljava.lang.Vector3;FFFII)I",
     [&rpk](Object* self, const std::vector<Value>& args) {
-      uint32_t rid=resource_id_of(self); if(!rid) return Value::make_int(0);
-      auto path=under_game(rpk.game_root(),rpk.payload_prop(rid,"sourcefile"));
+      const auto* sound = gameref_get(self);
+      const auto path = sound && !sound->sound_file.empty()
+          ? std::filesystem::path(sound->sound_file)
+          : under_game(rpk.game_root(), rpk.payload_prop(resource_id_of(self), "sourcefile"));
       auto num=[&](size_t i,float fallback){return i>=args.size()?fallback:args[i].tag==ValueTag::Float?args[i].v.f:args[i].tag==ValueTag::Int?static_cast<float>(args[i].v.i):fallback;};
       if(path.empty())return Value::make_int(0);
       return Value::make_int(host_sfx_play_file(path.string(),num(2,1),num(3,1),static_cast<int>(num(4,0))&1,static_cast<int>(num(5,0))));

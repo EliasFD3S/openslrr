@@ -44,6 +44,7 @@ bool part_camera_pose(void* car, int camera, float* matrix);
 void *part_shadow_source(void *render, float *frame);
 // Advance only cars belonging to the active world, at a fixed physics step.
 void part_physics_advance(double seconds);
+void part_pause_engine_audio(bool paused);
 struct PartPhysicsState {
   bool active = false;
   double mass = 0, height = 0, vertical_speed = 0;

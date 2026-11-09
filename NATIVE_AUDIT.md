@@ -8,8 +8,8 @@ implementations and following selected calls to their consumers.
 
 | Status | Stock signatures |
 | --- | ---: |
-| Registered with a body | 303 |
-| Registered with the explicit `native_noop` handler | 10 |
+| Registered with a body | 307 |
+| Registered with the explicit `native_noop` handler | 6 |
 | Absent from the registry | 63 |
 | **Total** | **376** |
 
@@ -21,12 +21,10 @@ that category. It is not a compatibility score or a complete runtime trace.
 
 | Owner | Native signatures | Missing effect |
 | --- | --- | --- |
-| `Controller` | `user_SetAxisSpeed(int, float)`, `user_SetAxisForce(int, float, float)` | Override the axis rate and apply an axis force. Profile smoothing uses the separate `user_SetAxisSmooth` binding. |
 | `System` | `isLoadingReset()` | Seed the original resource streaming history. |
 | `System` | `analyze(Object)`, `analyze(float)`, `analyze(int)` | The original discards the arguments. |
 | `GameRef` | `setActiveCollision()` | Enable collision for a generic world object. |
-| `RenderRef` | `setMatrix(int, ResourceRef, Vector3, Ypr)`, `lineAdd(Vector3, Vector3, int, float)` | Transform in a referenced space and append line geometry. The other `setMatrix` overload has a body. |
-| `ResourceRef` | `makeSound(ResourceRef, String)` | Create a sound resource. Playing existing WAV resources uses a separate binding. |
+| `RenderRef` | `setMatrix(int, ResourceRef, Vector3, Ypr)` | Transform a bone in a referenced space. The other `setMatrix` overload has a body. |
 
 ## Known mocks and partial implementations
 
@@ -40,13 +38,15 @@ that category. It is not a compatibility score or a complete runtime trace.
 | `System.setMeasure`, `getConfigOptions` | The measure setting controls digital vehicle instruments. The options refresh reads gameplay settings and schedules a save when they change. |
 | `RenderRef.setFlare`, `Navigator.updateNavigator`, `GroundRef.getNearestCross` | Directional flares use the scene's texture and an approximate sprite layout. The GPS camera and markers follow scene objects. The crossing query returns null until the road index is available. |
 | `GfxEngine.numDisplayModes`, `currDisplayMode`, `displayModeName`, `changeVideoMode` | One fixed mode is exposed, 800×600×32 at index zero. The change call is empty. Startup window settings are a separate path. |
-| `RenderRef.getBoneId`, `lineCreate`, `plotRoute` | Always return zero. Bone lookup and route line construction are missing. |
+| `RenderRef.getBoneId`, `plotRoute` | Always return zero. Bone lookup and route line construction are missing. |
+| `RenderRef.lineCreate`, `lineAdd` | Build renderable ribbons from positions, normals and widths. Color is applied per segment. |
 | `Chassis.setCooling`, `setSteerWheelRadius`, `setSteerWheel`, `setBuck`, `setNitroSFX` | Store configuration. No temperature simulation, cockpit steering animation, bucking effect or nitro audio consumes these values yet. |
 | `Part.setSfxLoopParams` | Stores the two parameters without applying them to a voice. |
 | `Chassis.setHornSFX` | Stores all indexed sounds. The current player input plays the index 1 sample once per press. |
 | `GameRef.getInfo`, `queueEvent` | Implement selected queries and commands. Unhandled queries return zero. Unhandled command paths still need coverage as new sections are exercised. |
 | `GameType.registerCallback`, notifications | Control, drive and animate callbacks run. Notifications have event routing and GC roots. Other callback modes and event producers still need verification. |
 | `Input.getAxis`, `activeAxis`, `Controller.user_SetAxisSmooth` | Keyboard, mouse and one logical XInput pad are wired. Pointer movement is excluded from rebinding. Negative mouse axis requests reset deltas, while their sensitivity argument remains unused. Smoothing uses a host time-based approximation. |
+| `Controller.user_SetAxisSpeed`, `user_SetAxisForce` | Scale software smoothing and override the logical axis value. The force coefficient and hardware feedback are unimplemented. |
 | `Sound.has3DHardware`, `hasMixHardware`, `enableDebugDump` | Fixed capability responses. Zero reports the lack of legacy hardware mixing support and keeps the legacy debug overlay disabled. |
 | `System.runFinalization`, `WheelRef.finalize` | Compatibility bodies. VM finalizers run during collection. Wheel references borrow their state from the chassis. |
 

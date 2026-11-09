@@ -517,7 +517,7 @@ void collect_render_nodes(GameRefState* node, std::vector<GameRefState*>& out,
   if (!node || node->empty || (node->flags & kWorldTreeLeaf) ||
       (depth && (node->flags & kWorldTreeRoot)) || depth >= 128)
     return;
-  if (node->kind == GameRefKind::RenderRef && node->type_id)
+  if (node->kind == GameRefKind::RenderRef && (node->type_id || node->line_geometry))
     out.push_back(node);
   for (auto* child : node->children)
     collect_render_nodes(gameref_get(child), out, depth + 1);
@@ -684,7 +684,7 @@ void scene_instances_prepare_physics() {
   std::unordered_set<void *> active;
   if (g_world)
     for (auto *n : render_nodes_in_world(g_world)) {
-      if (!n || n->empty || n->sky_render || n->vehicle_material)
+      if (!n || n->empty || n->sky_render || n->vehicle_material || n->line_geometry)
         continue;
       std::array<float, 16> m;
       if (!chain_matrix(n->key, g_world, m.data(), false))
@@ -923,7 +923,7 @@ bool scene_instances_supports(void *root,
   if (!g_world || !root)
     return false;
   for (auto *n : render_nodes_in_world(root)) {
-    if (!n || n->empty || n->sky_render)
+    if (!n || n->empty || n->sky_render || n->line_geometry)
       continue;
     bool under = false;
     void *p = n->key;
@@ -995,8 +995,13 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root) {
     instance.lighting=lighting;
     if (!scene_instance_transform(n->key, root, instance.transform.data()))
       continue;
-    instance.geometry = n->deformed_geometry && n->deformed_type == n->type_id
-        ? n->deformed_geometry : geometry(static_cast<uint32_t>(n->type_id));
+    if (n->line_geometry) {
+      if (n->line_geometry->indices.empty()) continue;
+      instance.geometry = n->line_geometry;
+    } else {
+      instance.geometry = n->deformed_geometry && n->deformed_type == n->type_id
+          ? n->deformed_geometry : geometry(static_cast<uint32_t>(n->type_id));
+    }
     if (!instance.geometry)
       continue;
     instance.key = n->key;

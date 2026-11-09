@@ -120,8 +120,8 @@ void RigidBody::integrate(double dt) {
   if (!position.finite() || !velocity.finite() || !momentum.finite())
     throw std::runtime_error("non-finite rigid state");
 }
-void RigidBody::contact(Vec3 p, Vec3 normal, double restitution,
-                        double friction, RigidBody* other) {
+double RigidBody::contact(Vec3 p, Vec3 normal, double restitution,
+                         double friction, RigidBody* other) {
   const Vec3 n = normal.normalized();
   const auto relative_velocity = [&] {
     return point_velocity(p) - (other ? other->point_velocity(p) : Vec3{});
@@ -137,10 +137,10 @@ void RigidBody::contact(Vec3 p, Vec3 normal, double restitution,
   const Vec3 v = relative_velocity();
   double vn = v.dot(n);
   if (vn >= 0)
-    return;
+    return 0;
   const double denom = inverse_mass(*this, n) + (other ? inverse_mass(*other, n) : 0);
   if (!(denom > 0))
-    return;
+    return 0;
   double magnitude = -(1 + (vn < -.8 ? restitution : 0)) * vn / denom;
   exchange(n * magnitude);
   const Vec3 post = other ? relative_velocity() : v;
@@ -151,6 +151,7 @@ void RigidBody::contact(Vec3 p, Vec3 normal, double restitution,
     const double d = inverse_mass(*this, tangent) + (other ? inverse_mass(*other, tangent) : 0);
     exchange(tangent * (-std::min(friction * magnitude, speed / d)));
   }
+  return magnitude;
 }
 std::array<Vec3, 8> RigidBody::corners() const {
   std::array<Vec3, 8> out;
@@ -530,6 +531,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
   for (size_t i = 0; i < wheels.size(); ++i) {
     const auto &w = wheels[i];
     auto &s = state[i];
+    const double previous_load = s.force;
     s.contact = false;
     s.force = 0;
     if (!s.seeded)
@@ -540,7 +542,20 @@ void VehicleDynamics::step(const Terrain &terrain) {
       s.length = w.minimum;
       s.speed = 0;
       s.seeded = true;
-      continue; // The rigid contact pass below supports the tyre.
+      const auto pose = wheel_pose(w, s.length);
+      const Vec3 hub = body_point(body, pose.hub_origin);
+      GroundHit hit;
+      if (terrain(hub.x, hub.z, ceiling, hit)) {
+        s.normal = hit.normal.normalized();
+        s.patch = hub - s.normal * w.radius;
+        const Vec3 ground{hub.x, hit.height, hub.z};
+        s.contact = (s.patch - ground).dot(s.normal) <= .004;
+        // The rigid solver supplies vertical support. Feed its measured
+        // reaction back into the same tyre model used by sprung wheels.
+        s.force = s.contact ? previous_load : 0;
+        s.hub_rotation = pose.hub_rotation;
+      }
+      continue;
     }
     if (w.linked()) {
       solve_linked(body, w, s, terrain, ceiling, timestep, !drive.torque);
@@ -589,10 +604,12 @@ void VehicleDynamics::step(const Terrain &terrain) {
   }
   if (drive.torque && drive.inertia > 0) step_drive();
   body.integrate(timestep);
+  std::array<double, 4> rigid_impulses{};
   for (int iteration = 0; iteration < 4; ++iteration) {
     double depth = 0;
     Vec3 correction;
-    auto solve = [&](Vec3 point, double restitution, bool chassis = false) {
+    auto solve = [&](Vec3 point, double restitution, bool chassis = false,
+                     double* tyre_impulse = nullptr) {
       GroundHit ground;
       if (!terrain(point.x, point.z, ceiling, ground))
         return false;
@@ -604,7 +621,9 @@ void VehicleDynamics::step(const Terrain &terrain) {
         if (speed > ground_impact.speed)
           ground_impact = {point, ground.normal, speed};
       }
-      body.contact(point, ground.normal, restitution);
+      const double friction = tyre_impulse && drive.torque && drive.inertia > 0 ? 0 : .6;
+      const double impulse = body.contact(point, ground.normal, restitution, friction);
+      if (tyre_impulse) *tyre_impulse += impulse;
       if (overlap > depth) {
         depth = overlap;
         correction = ground.normal.normalized();
@@ -630,7 +649,8 @@ void VehicleDynamics::step(const Terrain &terrain) {
       const auto point = body.position +
                          body.orientation.rotate(local - body.center) -
                          Vec3{0, wheel.radius, 0};
-      if (solve(point, 0) && wheel.rigid_contact)
+      if (solve(point, 0, false, wheel.rigid_contact ? &rigid_impulses[i] : nullptr) &&
+          wheel.rigid_contact)
         state[i].contact = true;
     }
     // One patch correction per iteration prevents duplicate corners pumping
@@ -640,6 +660,9 @@ void VehicleDynamics::step(const Terrain &terrain) {
     else
       break;
   }
+  for (size_t i = 0; i < wheels.size(); ++i)
+    if (wheels[i].rigid_contact)
+      state[i].force = std::min(rigid_impulses[i] / timestep, body.mass * 9.81 * 3);
   sync_wheels();
 }
 void VehicleDynamics::sync_wheels() {

@@ -35,7 +35,7 @@ These milestones describe existing functionality, rather than a percentage of th
 
 ![Native bindings by family: with a body, no-op, or missing](assets/progress/native-coverage.svg)
 
-**303 with a body · 10 explicit no-ops · 63 missing**, out of **376 stock natives** (9 November 2026).
+**307 with a body · 6 explicit no-ops · 63 missing**, out of **376 stock natives** (9 November 2026).
 The bars show **numbers of functions**, not percentages. A body can still be partial or return a fixed value; these counts do not establish full behavior or validation in game. The separately counted no-op functions are explicitly registered as `native_noop`.
 
 | Family | With a body | No-op | Missing |
@@ -43,11 +43,11 @@ The bars show **numbers of functions**, not percentages. A body can still be par
 | World | 4 | 0 | 50 |
 | Language | 69 | 4 | 1 |
 | Sound & scripts | 13 | 0 | 5 |
-| Resources | 50 | 4 | 6 |
+| Resources | 52 | 2 | 6 |
 | Rendering | 35 | 0 | 1 |
-| Files & input | 35 | 2 | 0 |
+| Files & input | 37 | 0 | 0 |
 | Parts | 97 | 0 | 0 |
-| **Total** | **303** | **10** | **63** |
+| **Total** | **307** | **6** | **63** |
 
 World covers GroundRef, particles, animation and PhysicsRef; language covers `java.lang`. Resources covers GameRef, ResourceRef, RenderRef and SfxRef; rendering covers GfxEngine, Text, Camera and Viewport. Files & input includes File, FindFile, Input, Controller and MouseCursor; parts includes Part, Chassis, WheelRef, DynoData and SfxTable. Sound & scripts covers Sound, Vehicle, Painter, Navigator and GameLogic.
 

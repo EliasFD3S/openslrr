@@ -51,8 +51,8 @@ public:
   void add_force(Vec3 force, Vec3 point);
   void impulse(Vec3 impulse, Vec3 point);
   void integrate(double dt);
-  void contact(Vec3 point, Vec3 normal, double restitution = .12,
-               double friction = .6, RigidBody* other = nullptr);
+  double contact(Vec3 point, Vec3 normal, double restitution = .12,
+                 double friction = .6, RigidBody* other = nullptr);
   std::array<Vec3, 8> corners() const;
 
 private:

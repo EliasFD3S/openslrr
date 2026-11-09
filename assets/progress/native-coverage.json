@@ -23,8 +23,8 @@
     },
     {
       "name": "Resources",
-      "body": 50,
-      "noop": 4,
+      "body": 52,
+      "noop": 2,
       "missing": 6
     },
     {
@@ -35,8 +35,8 @@
     },
     {
       "name": "Files & input",
-      "body": 35,
-      "noop": 2,
+      "body": 37,
+      "noop": 0,
       "missing": 0
     },
     {

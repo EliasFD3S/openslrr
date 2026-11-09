@@ -18,11 +18,13 @@ struct InputBinding {
 struct InputSmoothing {
   float center, toward_center, opposite, same, power;
   float value = 0.f;
+  float speed = 1.f;
 };
 
 struct ControllerInput {
   std::vector<InputBinding> bindings;
   std::unordered_map<int, InputSmoothing> smoothing;
+  std::unordered_map<int, float> forced_axes;
 };
 
 // Shared Win32 → script and camera orbit input.

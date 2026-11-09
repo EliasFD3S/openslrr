@@ -11,6 +11,7 @@
 #include "slrr/scene_sun.hpp"
 #include "slrr/slrr_font.hpp"
 #include "slrr/video_fmv.hpp"
+#include "slrr/vehicle_dynamics.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -25,6 +26,70 @@
 #include <string>
 
 namespace slrr {
+namespace {
+std::array<float, 3> line_vector(Object* object, std::array<float, 3> fallback) {
+  if (!object) return fallback;
+  const char* fields[] = {"x", "y", "z"};
+  for (size_t i = 0; i < fallback.size(); ++i) {
+    const auto field = object->fields.find(fields[i]);
+    if (field == object->fields.end()) continue;
+    const auto value = field->second;
+    if (value.tag == ValueTag::Float) fallback[i] = value.v.f;
+    if (value.tag == ValueTag::Int) fallback[i] = static_cast<float>(value.v.i);
+  }
+  return fallback;
+}
+
+void append_line_segment(GameRefState& line, const RenderLinePoint& start,
+                         const RenderLinePoint& end, uint32_t color) {
+  using physics::Vec3;
+  const auto vector = [](const auto& p) { return Vec3{p[0], p[1], p[2]}; };
+  const Vec3 delta = vector(end.pos) - vector(start.pos);
+  const double length = delta.length();
+  if (length < 1e-5) return;
+  const auto side = [&](const RenderLinePoint& p) {
+    return vector(p.normal).cross(delta).normalized() * (p.width * .5f);
+  };
+  if (side(start).length() < 1e-6 || side(end).length() < 1e-6) return;
+  // Published geometry is immutable while the renderer owns a snapshot.
+  if (line.line_geometry.use_count() > 1)
+    line.line_geometry = std::make_shared<ScxGeometry>(*line.line_geometry);
+  auto& mesh = *line.line_geometry;
+  const auto first = static_cast<uint32_t>(mesh.positions.size() / 3);
+  const auto index_start = static_cast<uint32_t>(mesh.indices.size());
+  const float next_length = line.line_length + static_cast<float>(length);
+  const auto add_pair = [&](const RenderLinePoint& point, float distance) {
+    const auto pos = vector(point.pos);
+    const auto offset = side(point);
+    const auto normal = vector(point.normal).normalized();
+    for (const auto& vertex : {pos - offset, pos + offset}) {
+      mesh.positions.insert(mesh.positions.end(),
+          {float(vertex.x), float(vertex.y), float(vertex.z)});
+      mesh.normals.insert(mesh.normals.end(),
+          {float(normal.x), float(normal.y), float(normal.z)});
+    }
+    mesh.uvs.insert(mesh.uvs.end(), {0.f, distance, 1.f, distance});
+  };
+  add_pair(start, line.line_length);
+  add_pair(end, next_length);
+  line.line_length = next_length;
+  mesh.indices.insert(mesh.indices.end(),
+      {first, first + 2, first + 1, first + 1, first + 2, first + 3});
+  ScxGroup group;
+  group.index_start = index_start;
+  group.index_count = 6;
+  if (!mesh.textures.empty()) group.texture_index = 0;
+  for (int i = 0; i < 3; ++i) group.diffuse[i] = ((color >> (16 - i * 8)) & 255) / 255.f;
+  if (!mesh.groups.empty() && std::equal(std::begin(group.diffuse),
+      std::end(group.diffuse), std::begin(mesh.groups.back().diffuse)))
+    mesh.groups.back().index_count += group.index_count;
+  else
+    mesh.groups.push_back(group);
+  mesh.info.vertices = static_cast<int32_t>(mesh.positions.size() / 3);
+  mesh.info.triangles = static_cast<int32_t>(mesh.indices.size() / 3);
+  mesh.info.groups = static_cast<int32_t>(mesh.groups.size());
+}
+}
 
 // A directional light resource is text. Colours are "a r g b". Direction is
 // where the light travels. setLight on the type (time of day) wins over the
@@ -494,12 +559,53 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
   jvm.natives().register_method(
       "java.util.resource.RenderRef", "lineCreate",
       "(Ljava.util.resource.ResourceRef;Ljava.util.resource.ResourceRef;)I",
-      [](Object*, const std::vector<Value>&) {
-        return Value::make_int(0);
+      [&rpk](Object* self, const std::vector<Value>& args) {
+        if (!self || args.size() != 2 || args[0].tag != ValueTag::Obj ||
+            args[1].tag != ValueTag::Obj || !args[0].v.o || !args[1].v.o ||
+            args[0].v.o == self) return Value::make_int(0);
+        auto* line = gameref_upsert(self, GameRefKind::RenderRef);
+        line->binding = nullptr;
+        line->type_id = 0;
+        line->line_end.reset();
+        line->line_length = 0.f;
+        line->line_geometry = std::make_shared<ScxGeometry>();
+        auto& mesh = *line->line_geometry;
+        mesh.info.ok = true;
+        mesh.position_scale = 1.f;
+        const auto type = resource_id_of(args[1].v.o);
+        auto texture = rpk.texture_path_for_id(type);
+        if (texture.empty()) {
+          const auto material = scene_instances_geometry(type);
+          if (material && !material->textures.empty()) texture = material->textures.front();
+        }
+        if (!texture.empty()) mesh.textures.push_back(std::move(texture));
+        gameref_set_parent(self, args[0].v.o);
+        gameref_make_live(self);
+        return Value::make_int(1);
       });
   jvm.natives().register_method(
       "java.util.resource.RenderRef", "lineAdd",
-      "(Ljava.lang.Vector3;Ljava.lang.Vector3;IF)V", native_noop);
+      "(Ljava.lang.Vector3;Ljava.lang.Vector3;IF)V",
+      [](Object* self, const std::vector<Value>& args) {
+        auto* line = gameref_get(self);
+        if (!line || !line->line_geometry || args.size() != 4 ||
+            args[0].tag != ValueTag::Obj || args[1].tag != ValueTag::Obj ||
+            args[2].tag != ValueTag::Int || args[3].tag != ValueTag::Float)
+          return Value::make_void();
+        const RenderLinePoint point{line_vector(args[0].v.o, {}),
+                                    line_vector(args[1].v.o, {0.f, 1.f, 0.f}),
+                                    args[3].v.f};
+        const auto finite = [](const auto& v) {
+          return std::all_of(v.begin(), v.end(), [](float f) { return std::isfinite(f); });
+        };
+        if (!finite(point.pos) || !finite(point.normal) ||
+            !std::isfinite(point.width) || point.width <= 0.f)
+          return Value::make_void();
+        if (line->line_end)
+          append_line_segment(*line, *line->line_end, point, uint32_t(args[2].v.i));
+        line->line_end = point;
+        return Value::make_void();
+      });
   jvm.natives().register_method(
       "java.util.resource.RenderRef", "plotRoute",
       "(Ljava.util.resource.ResourceRef;Ljava.util.resource.ResourceRef;IF"

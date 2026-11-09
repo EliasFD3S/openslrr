@@ -273,6 +273,8 @@ float host_input_camera_axis(int axis) {
 float host_input_controller_axis(const Object* controller, int axis) {
   if (!controller || !controller->input) return 0.f;
   const auto& input = *controller->input;
+  if (const auto forced = input.forced_axes.find(axis); forced != input.forced_axes.end())
+    return forced->second;
   auto it = input.smoothing.find(axis);
   if (it != input.smoothing.end()) return it->second.value;
   return mapped_axis(input, axis);
@@ -287,7 +289,8 @@ void host_input_update_controller(Object* controller, float dt) {
       const float factor = std::abs(target) <= smooth.center ? smooth.toward_center
           : target * smooth.value < 0.f ? smooth.opposite : smooth.same;
       // Stock Config speed values are small rates (throttle defaults to .02).
-      const float alpha = 1.f - std::pow(1.f - std::clamp(factor, 0.f, 1.f), dt * 1000.f);
+      const float alpha = 1.f - std::pow(
+          1.f - std::clamp(factor, 0.f, 1.f), dt * 1000.f * smooth.speed);
       smooth.value = std::lerp(smooth.value, target, alpha);
     }
   }

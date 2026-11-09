@@ -5,6 +5,7 @@
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/osd_registry.hpp"
+#include "slrr/part_runtime.hpp"
 #include "slrr/render_backend.hpp"
 #include "slrr/script_cfg.hpp"
 #include "slrr/slrr_font.hpp"
@@ -333,9 +334,13 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   jvm.natives().register_method(
       "java.lang.System", "timeWarp", "(F)F",
       [&jvm](Object*, const std::vector<Value>& args) {
-        const float scale = !args.empty() && args[0].tag == ValueTag::Float
-                                ? args[0].v.f : -1.0f;
-        return Value::make_float(jvm.time_warp(scale));
+        float scale = -1.f;
+        if (!args.empty() && args[0].tag == ValueTag::Float) scale = args[0].v.f;
+        if (!args.empty() && args[0].tag == ValueTag::Int) scale = static_cast<float>(args[0].v.i);
+        const float previous = jvm.time_warp(scale);
+        if (std::isfinite(scale) && scale >= 0.f && (previous == 0.f) != (scale == 0.f))
+          part_pause_engine_audio(scale == 0.f);
+        return Value::make_float(previous);
       });
   // Compatibility calls in shipped System.java without runtime work.
   for (const char* method : {"netHost", "netJoin", "netLeave"}) {
@@ -879,15 +884,36 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         if (!self || args.size() < 6) return Value::make_int(0);
         auto& smooth = state(self).smoothing[integer(args, 0)];
         smooth = {real(args[1]), real(args[2]), real(args[3]), real(args[4]),
-                  std::max(1.f, real(args[5])), smooth.value};
+                  std::max(1.f, real(args[5])), smooth.value, smooth.speed};
         return Value::make_int(1);
       });
-  jvm.natives().register_method(controller, "user_SetAxisSpeed", "(IF)V", native_noop);
+  jvm.natives().register_method(controller, "user_SetAxisSpeed", "(IF)V",
+      [integer, real, state](Object* self, const std::vector<Value>& args) {
+        const int axis = integer(args, 0);
+        if (!self || args.size() != 2 || axis <= 0) return Value::make_void();
+        const float speed = real(args[1]);
+        if (!std::isfinite(speed) || speed < 0.f) return Value::make_void();
+        const float current = host_input_controller_axis(self, axis);
+        auto& smooth = state(self).smoothing.try_emplace(
+            axis, InputSmoothing{0.f, .002f, .004f, .002f, 1.f, current}).first->second;
+        smooth.speed = speed;
+        return Value::make_void();
+      });
   jvm.natives().register_method(controller, "user_GetAxisVal", "(I)F",
       [integer](Object* self, const std::vector<Value>& args) {
         return Value::make_float(host_input_controller_axis(self, integer(args, 0)));
       });
-  jvm.natives().register_method(controller, "user_SetAxisForce", "(IFF)V", native_noop);
+  jvm.natives().register_method(controller, "user_SetAxisForce", "(IFF)V",
+      [integer, real, state](Object* self, const std::vector<Value>& args) {
+        const int axis = integer(args, 0);
+        if (!self || args.size() != 3 || axis <= 0) return Value::make_void();
+        const float force = real(args[2]);
+        if (!std::isfinite(force)) return Value::make_void();
+        auto& forced = state(self).forced_axes;
+        if (force == 0.f) forced.erase(axis);
+        else forced[axis] = std::clamp(force, -1.f, 1.f);
+        return Value::make_void();
+      });
 }
 
 }  // namespace slrr

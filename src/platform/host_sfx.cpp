@@ -249,6 +249,17 @@ void host_sfx_stop(int32_t id) {
   audio.rebalance();
 #endif
 }
+void host_sfx_pause_loop(int32_t id, bool paused) {
+#ifdef _WIN32
+  if (id <= 0) return;
+  for (const auto& voice : audio.voices) {
+    if (voice->id != id || !voice->loop) continue;
+    if (paused) voice->source->Stop();
+    else voice->source->Start();
+    return;
+  }
+#endif
+}
 void host_sfx_update_loop(int32_t id, float pitch, float volume) {
 #ifdef _WIN32
   for (const auto &voice : audio.voices) {

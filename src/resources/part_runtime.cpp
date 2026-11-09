@@ -2642,6 +2642,14 @@ void advance_chassis_tick() {
 }
 } // namespace
 
+void part_pause_engine_audio(bool paused) {
+  // These voice IDs belong to the engine/exhaust loops, including any
+  // currently stopped chassis whose audio was last updated by the solver.
+  for (const auto& [table, items] : sfx_items)
+    for (const auto& item : items)
+      if (item.voice) host_sfx_pause_loop(item.voice, paused);
+}
+
 void part_physics_advance(double seconds) {
   if (!std::isfinite(seconds) || seconds < 0)
     throw std::invalid_argument("invalid vehicle elapsed time");

@@ -16,6 +16,7 @@ void host_sfx_set_game_root(const std::string& game_root);
 void host_sfx_play(HostSfx id);
 int32_t host_sfx_play_file(const std::string& path, float pitch=1.f, float volume=1.f, bool loop=false, int32_t instance=0);
 void host_sfx_stop(int32_t instance);
+void host_sfx_pause_loop(int32_t instance, bool paused);
 void host_sfx_update_loop(int32_t instance, float pitch, float volume);
 bool host_sfx_is_playing(int32_t instance);
 void host_sfx_set_volume(float volume);

@@ -159,6 +159,14 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
   auto res_sync_id_field = [](Object* self, int32_t id) {
     if (self) self->fields["id"] = Value::make_int(id);
   };
+  auto release_runtime_sound = [](Object* self) {
+    const auto* sound = gameref_get(self);
+    if (sound && sound->key == self && !sound->sound_file.empty()) {
+      gameref_remove(self);
+      self->fields.erase("loaded");
+      self->fields.erase("typeof");
+    }
+  };
   jvm.natives().register_method(
       kResRef, "newNative", "()V",
       [](Object* self, const std::vector<Value>&) {
@@ -178,7 +186,7 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
       });
   jvm.natives().register_method(
       kResRef, "set", "(I)V",
-      [&jvm, &rpk, res_sync_id_field](Object* self, const std::vector<Value>& args) {
+      [&jvm, &rpk, res_sync_id_field, release_runtime_sound](Object* self, const std::vector<Value>& args) {
         if (!self) return Value::make_void();
         int32_t id = 0;
         if (!args.empty()) {
@@ -188,10 +196,12 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
             id = static_cast<int32_t>(args[0].v.f);
         }
         if(auto* live=gameref_find_live(id)) {
+          if (live->key != self) release_runtime_sound(self);
           gameref_bind_alias(self,live->key);
           res_sync_id_field(self,id);
           return Value::make_void();
         }
+        release_runtime_sound(self);
         GameRefState* st = gameref_upsert(self);
         if(st)st->binding=nullptr;
         if (st) {
@@ -211,11 +221,15 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
       });
   jvm.natives().register_method(
       kResRef, "set", "(Ljava.util.resource.ResourceRef;)V",
-      [res_sync_id_field](Object* self, const std::vector<Value>& args) {
+      [res_sync_id_field, release_runtime_sound](Object* self, const std::vector<Value>& args) {
         if (!self) return Value::make_void();
         Object* other =
             (!args.empty() && args[0].tag == ValueTag::Obj) ? args[0].v.o
                                                             : nullptr;
+        if (other == self || (other && gameref_get(other) &&
+                              gameref_get(other) == gameref_get(self)))
+          return Value::make_void();
+        release_runtime_sound(self);
         if (!other) {
           // set(null) → clear bind (PE sub_545FC0(handle,0)).
           if (GameRefState* st = gameref_upsert(self)) {
@@ -239,6 +253,7 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
         }
         GameRefState* st = gameref_upsert(self);
         if (st) {
+          st->binding = nullptr;
           st->type_id = id;
           st->empty = (id == 0);
         }
@@ -249,6 +264,11 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
       kResRef, "load", "()V",
       [&jvm, &rpk](Object* self, const std::vector<Value>&) {
         if (!self) return Value::make_void();
+        if (const auto* runtime = gameref_get(self); runtime && !runtime->sound_file.empty()) {
+          self->fields["loaded"] = Value::make_int(1);
+          self->fields["typeof"] = Value::make_int(6);
+          return Value::make_void();
+        }
         GameRefState* st = gameref_upsert(self);
         int32_t id = st ? st->type_id : 0;
         if (id == 0) {
@@ -344,6 +364,8 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
       kResRef, "type", "()I",
       [](Object* self, const std::vector<Value>&) {
         if (!self) return Value::make_int(0);
+        if (const auto* sound = gameref_get(self); sound && !sound->sound_file.empty())
+          return Value::make_int(6);
         auto it = self->fields.find("typeof");
         if (it != self->fields.end() && it->second.tag == ValueTag::Int)
           return it->second;
@@ -456,7 +478,25 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
       });
   jvm.natives().register_method(
       kResRef, "makeSound",
-      "(Ljava.util.resource.ResourceRef;Ljava.lang.String;)V", native_noop);
+      "(Ljava.util.resource.ResourceRef;Ljava.lang.String;)V",
+      [&jvm, res_sync_id_field](Object* self, const std::vector<Value>& args) {
+        if (!self || args.size() != 2 || args[0].tag != ValueTag::Obj ||
+            args[1].tag != ValueTag::Obj || !args[0].v.o || !args[1].v.o ||
+            args[0].v.o == self) return Value::make_void();
+        const auto file = under_game(jvm.game_root(), args[1].v.o->str);
+        std::error_code ec;
+        if (file.empty() || !std::filesystem::is_regular_file(file, ec))
+          return Value::make_void();
+        auto* sound = gameref_upsert(self);
+        sound->binding = nullptr;
+        sound->type_id = 0;
+        sound->sound_file = file.string();
+        gameref_set_parent(self, args[0].v.o);
+        res_sync_id_field(self, gameref_make_live(self));
+        self->fields["typeof"] = Value::make_int(6);
+        self->fields["loaded"] = Value::make_int(1);
+        return Value::make_void();
+      });
   jvm.natives().register_method(
       kResRef, "scaleMesh", "(FFF)V",
       [](Object* self, const std::vector<Value>& args) {
