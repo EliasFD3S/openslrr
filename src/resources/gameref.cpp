@@ -676,8 +676,10 @@ static bool world_camera_pose(float eye[3], float at[3], float* fov, float* znea
   if (!cam || !eye || !at) return false;
   if (up) { up[0] = 0; up[1] = 1; up[2] = 0; }
   if (driving_camera_pose(*cam, eye, at, up, dt)) {
-    if (fov) *fov = cam->camera_attached && !cam->follow_variant ? cam->half_aov : 42.f;
-    if (znear) *znear = .03f;
+    const bool cockpit = cam->camera_attached && !cam->follow_variant;
+    if (fov) *fov = cockpit ? cam->half_aov : 42.f;
+    // Outside the cockpit, reserve more depth precision for close body seams.
+    if (znear) *znear = cockpit ? .03f : .20f;
     if (zfar) *zfar = 2000.f;
     return true;
   }

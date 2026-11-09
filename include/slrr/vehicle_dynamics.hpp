@@ -107,6 +107,7 @@ struct DriveInput {
   double brake_scale = 0, handbrake_scale = 0, bearing_scale = 0;
   double abs_strength = 0;
   double launch_help = 0;
+  double differential_lock = 0;
   double inertia = 0, idle = 0, limit = 0, starter = 0;
   double clutch = 1;
   std::function<double(double)> torque;

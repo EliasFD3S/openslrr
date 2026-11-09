@@ -23,7 +23,6 @@
 
 #include <chrono>
 #include <cstdio>
-#include <cstdlib>
 #include <exception>
 
 #ifdef _WIN32
@@ -449,44 +448,6 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
                false);
   }
 
-  if (std::getenv("SLRR_LOADING_PROBE")) {
-    mainloop_adopt_section(jvm, sections);
-    const auto loading = jvm.get_static("java.render.Frontend", "loadingScreen");
-    auto* screen = loading.v.o;
-    int frame = 0;
-    const auto pump = [&]() {
-      ++frame;
-      render.pump(16);
-      mainloop_sync_section_render(render, sections);
-      mainloop_frame(jvm, render, sections, 1.0 / 60);
-      return frame < 5;
-    };
-    for (int i = 0; i < 3; ++i) {
-      pump();
-      std::printf("[load-probe] frame=%d dialog=%d overlay=%d\n",
-          i + 1, osd_loading_dialog(), !osd_loading_overlay().empty());
-    }
-    if (osd_loading_dialog() || !osd_loading_overlay().empty()) return 2;
-    int leaked = 0, ui = 0;
-    for (const auto& widget : osd_widgets()) {
-      leaked += widget.tip.find("Platform") != std::string::npos &&
-                widget.tip.find("physic") != std::string::npos;
-      ui += widget.hit_only && widget.owner;
-    }
-    std::printf("[load-probe] section=%s leaked=%d ui=%d\n",
-                sections.actual_name().c_str(), leaked, ui);
-    if (leaked || !ui) return 3;
-    frame = 0;
-    host_set_script_pump(pump);
-    {
-      SceneTransitionScope transition(true);
-      jvm.invoke("java.render.LoadingScreen", "display", "()V",
-                 {Value::make_obj(screen)}, false);
-    }
-    host_set_script_pump(nullptr);
-    std::printf("[load-probe] display frames=%d dialog=%d\n", frame, osd_loading_dialog());
-    return frame > 0 && frame < 5 && !osd_loading_dialog() ? 0 : 4;
-  }
   int32_t osd_n = osd_widget_count();
   Object* garage_obj = sections.garage();
   if (!garage_obj) garage_obj = sections.actual();

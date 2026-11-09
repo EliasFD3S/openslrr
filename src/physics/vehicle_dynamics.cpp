@@ -393,9 +393,11 @@ void VehicleDynamics::step_drive() {
             limiter_factor(rpm, previous_rpm_, drive.limit)
       : 0;
   previous_rpm_ = rpm;
-  const double net = combustion_torque + (starting ? drive.starter : 0) - drag;
+  // Match the crank-up time in the original telemetry for the stock starter.
+  const double net = combustion_torque + (starting ? 4 * drive.starter : 0) - drag;
   engine_omega = std::max(0.0, engine_omega + net * timestep / drive.inertia);
 
+  double drive_impulse = 0;
   if (weights > 0 && ratio != 0 && shift_time_ == 0 && !direction_brake &&
       (engine_running || !drive.auto_clutch)) {
     // clutchExchange, with the same wheel inertias reflected to the engine
@@ -411,23 +413,50 @@ void VehicleDynamics::step_drive() {
         std::min(rpm, std::abs(shaft * ratio) * rpm_per_rad)) /
         std::max(1.0, drive.idle * .5), 0.0, 1.0);
     if (drive.auto_clutch && closed_delta < 0) {
-      const double idle_floor = drive.idle * .85 / rpm_per_rad;
-      grip = std::min(grip, std::max(0.0, engine_omega - idle_floor) / -closed_delta);
+      double engagement_rpm = drive.idle * .85;
+      if (drive.automatic_shift && (gear == 1 || gear == 7) && drive.brake < .05 &&
+          drive.handbrake < .05 && gas > 0) {
+        // Let the engine build torque through the automatic clutch at launch.
+        // The stock Nonus is already above 3000 RPM as first gear takes up.
+        engagement_rpm = std::lerp(engagement_rpm, std::max(engagement_rpm, drive.limit * .4), gas);
+      }
+      grip = std::min(grip, std::max(0.0, engine_omega - engagement_rpm / rpm_per_rad) /
+                           -closed_delta);
     }
     if (drive.auto_clutch && gas <= .05) {
       const double low_speed = std::clamp((12 - kph) / 10, 0.0, 1.0);
       grip *= 1 - stall_risk * low_speed;
     }
     engine_omega = std::max(0.0, engine_omega + closed_delta * grip);
-    const double impulse = -mismatch * (1 - mix) * grip * exchange_rate /
+    drive_impulse = -mismatch * (1 - mix) * grip * exchange_rate /
                            ratio * transmission;
     for (size_t i = 0; i < wheels.size(); ++i)
       if (wheels[i].enabled)
-        state[i].spin += impulse * drive.wheels[i].weight / (weights * wheel_inertia);
+        state[i].spin += drive_impulse * drive.wheels[i].weight / (weights * wheel_inertia);
   } else if (automatic_shift && engine_running) {
     const double target = std::max(drive.idle, std::abs(road_shaft * ratio) * rpm_per_rad);
     engine_omega = std::lerp(engine_omega, target / rpm_per_rad,
                             -std::expm1(-timestep / .07));
+  }
+
+  if (drive.differential_lock > 0 && weights > 0) {
+    for (size_t left = 0; left < wheels.size(); left += 2) {
+      const size_t right = left + 1;
+      const double left_weight = drive.wheels[left].weight;
+      const double right_weight = drive.wheels[right].weight;
+      if (!wheels[left].enabled || !wheels[right].enabled || left_weight <= 0 || right_weight <= 0)
+        continue;
+      // Transfer angular momentum within this axle, bounded by the torque
+      // delivered to it. Full lock couples the axle even off throttle.
+      double transfer = (state[left].spin - state[right].spin) * wheel_inertia * .5;
+      if (drive.differential_lock < 1) {
+        const double limit = std::abs(drive_impulse) * (left_weight + right_weight) / weights
+                             * drive.differential_lock;
+        transfer = std::clamp(transfer, -limit, limit);
+      }
+      state[left].spin -= transfer / wheel_inertia;
+      state[right].spin += transfer / wheel_inertia;
+    }
   }
 
   const double next_rpm = engine_omega * rpm_per_rad;

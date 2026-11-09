@@ -34,7 +34,9 @@ TireForces tire_forces(double load, double alignment, double wheel_speed,
   const double lateral = std::copysign(
       std::min(std::abs(lateral_curve), std::abs(lateral_speed) * 4200), lateral_curve);
   const double lateral_use = lateral_peak > 0 ? std::min(1., std::abs(lateral) / lateral_peak) : 0;
-  const double longitudinal_peak = aligned_load * .83 * effective_grip * tire.longitudinal_grip;
+  // Scale the longitudinal envelope by the game's absolute friction units.
+  const double longitudinal_peak =
+      aligned_load * .83 * effective_grip * stock.friction * tire.longitudinal_grip;
   const double longitudinal_curve = magic_formula(kappa, 30 * stiffness, 1, longitudinal_peak, .97)
                                   * std::sqrt(std::max(0., 1 - lateral_use * lateral_use));
   return {std::copysign(std::min(std::abs(longitudinal_curve), std::abs(slip_speed) * 3400),

@@ -1314,6 +1314,13 @@ bool part_command(Object *part, const std::string &command) {
     rec->transmission = mode;
     return true;
   }
+  if (verb == "difflock") {
+    auto* chassis = as_part(part);
+    float value;
+    if (!record(chassis) || !(input >> value) || !std::isfinite(value)) return false;
+    chassis->fields["diff_lock"] = Value::make_float(std::clamp(value, 0.f, 1.f));
+    return true;
+  }
   if (verb == "steerhelp" || verb == "abs" || verb == "asr") {
     auto* rec = record(as_part(part));
     float value;
@@ -1917,6 +1924,7 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   drive.handbrake = controls && in.drive_handbrake ? .3 : 0;
   drive.abs_strength = rec.abs_strength;
   drive.launch_help = rec.launch_help;
+  drive.differential_lock = std::clamp(comp(chassis, "diff_lock"), 0.f, 1.f);
   drive.clutch = controls ? 1.f - std::clamp(in.drive_clutch, 0.f, 1.f) : 0.f;
   drive.idle = std::max(400.f, comp(chassis, "engine_rpm_idle"));
   drive.limit = std::max(drive.idle + 100.0, double(comp(chassis, "RPM_limit")));
