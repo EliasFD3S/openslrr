@@ -136,7 +136,8 @@ class LibBgfxBackend final : public IRenderBackend {
   // Diffuse * baked lightmap, the way the exe draws a map. No lightmap
   // (OSD, FMV, a mesh without the slot) keeps the existing shading.
   void bind_baked_light(const ScxGroup* group,
-                        const std::vector<bgfx::TextureHandle>* tex);
+                        const std::vector<bgfx::TextureHandle>* tex,
+                        bgfx::TextureHandle mix = BGFX_INVALID_HANDLE);
 
 
   void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass);
@@ -262,6 +263,7 @@ class LibBgfxBackend final : public IRenderBackend {
   int32_t fmv_tex_h_ = 0;
   bgfx::UniformHandle s_tex_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle s_lightmap_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle s_mesh_mix_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_lightmap_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_lightmap_uv_ = BGFX_INVALID_HANDLE;
   std::unordered_map<std::string, bgfx::TextureHandle> osd_tex_;

@@ -2,6 +2,7 @@
 #include "slrr/part_runtime.hpp"
 #include "slrr/dyno_model.hpp"
 #include "slrr/gameref.hpp"
+#include "slrr/host_game_options.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/deformation_cage.hpp"
 #include "slrr/host_sfx.hpp"
@@ -62,6 +63,9 @@ struct Record {
   float steering_input = 0;
   float steering_help = 0, abs_strength = 0, launch_help = 0;
   int transmission = 1;
+  uint64_t driving_options_revision = 0;
+  float damage_multiplier = -1.f;
+  physics::Vec3 cockpit_offset;
   bool horn_down = false;
   bool engine_running = false;
   InstalledPart state;
@@ -1231,6 +1235,15 @@ void paint_tree(Object *root, uint32_t texture) {
         pending.push_back(child.second);
   }
 }
+static void apply_driving_options(Record& rec) {
+  const auto& options = host_game_options().driving;
+  rec.transmission = options.transmission;
+  rec.steering_help = std::clamp(options.steering_help, 0.f, 1.f);
+  rec.abs_strength = std::clamp(options.abs, 0.f, 1.f);
+  rec.launch_help = std::clamp(options.asr, 0.f, 1.f);
+  rec.driving_options_revision = host_driving_options_revision();
+}
+
 bool part_command(Object *part, const std::string &command) {
   part = canonical(part);
   std::istringstream input(command);
@@ -1250,6 +1263,10 @@ bool part_command(Object *part, const std::string &command) {
       auto* vehicle = gameref_find_live(id);
       Object* chassis = vehicle ? as_part(static_cast<Object*>(vehicle->key)) : nullptr;
       auto* car = record(chassis);
+      if (car) {
+        apply_driving_options(*car);
+        car->cockpit_offset = {};
+      }
       const auto* node = gameref_get(chassis);
       const auto* parent = node ? gameref_get(node->parent) : nullptr;
       // Track.lockCar resets the chassis before attaching the controller.
@@ -1312,6 +1329,13 @@ bool part_command(Object *part, const std::string &command) {
     int mode;
     if (!rec || !(input >> mode)) return false;
     rec->transmission = mode;
+    return true;
+  }
+  if (verb == "damage_multiplier") {
+    auto* rec = record(as_part(part));
+    float value;
+    if (!rec || !(input >> value) || !std::isfinite(value)) return false;
+    rec->damage_multiplier = std::max(0.f, value);
     return true;
   }
   if (verb == "difflock") {
@@ -1899,6 +1923,8 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   auto &drive = rec.dynamics.drive;
   drive.torque = {};
   if (!controlled) return;
+  if (rec.driving_options_revision != host_driving_options_revision())
+    apply_driving_options(rec);
   auto *ratios = part_field(chassis, "ratio");
   if (!ratios || ratios->slots.size() < 8 || field_int(chassis, "gears") < 1)
     return;
@@ -1934,6 +1960,7 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   drive.reverse = controls && in.drive_reverse;
   drive.shift = !controls ? 0 : in.drive_shift > .5f ? 1 : in.drive_shift < -.5f ? -1 : 0;
   drive.automatic_shift = rec.transmission == 1;
+  drive.automatic_first = rec.transmission == 5;
   drive.auto_clutch = rec.transmission != 2;
   drive.starter = std::max(0.f, comp(chassis, "starter_torque"));
   const double brake_inertia = std::max(.01f, rec.config->brake_inertia);
@@ -2225,17 +2252,25 @@ PanelContact panel_contact(Record& rec, physics::Vec3 impact) {
 }
 
 void damage_chassis(Object* chassis, Record& rec, const physics::VehicleDynamics::Impact& hit,
-                    std::vector<Object*>& released) {
+                    bool player, std::vector<Object*>& released) {
   using physics::Vec3;
   if (hit.speed < 2) return;
+  const auto& options = host_game_options();
+  const double multiplier = rec.damage_multiplier >= 0 ? rec.damage_multiplier
+                            : player ? options.player_damage : 1.f;
+  if (multiplier <= 0) return;
+  const double deformation = multiplier * options.deformation / 1.6;
+  const double internal = multiplier * options.internal_damage;
   const auto& body = rec.dynamics.body;
   const Vec3 local_hit = body.center + body.orientation.inverse_rotate(hit.point - body.position);
   const Vec3 normal = body.orientation.inverse_rotate(hit.normal);
-  if (!rec.deformation)
-    rec.deformation = std::make_unique<physics::DeformationCage>(
-        body.minimum, body.maximum, body.mass * .08);
-  rec.deformation->impact(local_hit, normal, hit.speed, .85);
-  rec.state.tear = std::max(0.f, rec.state.tear - float((hit.speed - 2) * .014));
+  if (deformation > 0) {
+    if (!rec.deformation)
+      rec.deformation = std::make_unique<physics::DeformationCage>(
+          body.minimum, body.maximum, body.mass * .08);
+    rec.deformation->impact(local_hit, normal, hit.speed * deformation, .85);
+  }
+  rec.state.tear = std::max(0.f, rec.state.tear - float((hit.speed - 2) * .014 * internal));
   const auto inverse = part_matrix_inverse_rigid(world_matrix(chassis));
   for (const auto& installed : part_installed_tree(chassis)) {
     auto* part = record(installed.object);
@@ -2261,12 +2296,13 @@ void damage_chassis(Object* chassis, Record& rec, const physics::VehicleDynamics
     const double speed = hit.speed * std::clamp(1 - contact.distance / .65, 0., 1.);
     if (speed < 2) continue;
     if (!panel) {
-      const double force = part->config->mass * speed / physics::VehicleDynamics::timestep;
+      const double force = part->config->mass * speed * internal / physics::VehicleDynamics::timestep;
       part->state.tear = std::min(part->state.tear, float(std::max(0., 1 - force / 1800)));
       installed.object->fields["tear"] = Value::make_float(part->state.tear);
       if (part->state.tear <= 0) released.push_back(installed.object);
       continue;
     }
+    if (deformation <= 0) continue;
     if (!part->deformation) {
       Vec3 mount;
       for (const auto& slot : part->config->slots)
@@ -2278,7 +2314,7 @@ void damage_chassis(Object* chassis, Record& rec, const physics::VehicleDynamics
           contact.minimum, contact.maximum, std::max(2.f, part->config->mass), mount, hood);
     }
     part->deformation->impact(contact.point, {normal.dot(x), normal.dot(y), normal.dot(z)},
-                              speed, .65);
+                              speed * deformation, .65);
   }
 }
 
@@ -2535,11 +2571,26 @@ void advance_chassis_tick() {
     };
     // Two fixed 120 Hz substeps per host vehicle update.
     const auto before = rec.dynamics.body.position;
+    const auto velocity_before = rec.dynamics.body.velocity;
     const auto steps = rec.dynamics.advance(kPhysicsTick, terrain);
     if (rec.physics_released && rec.dynamics.drive.torque) {
       const auto wall = collide_chassis(rec, before);
       const auto& ground = rec.dynamics.ground_impact;
-      damage_chassis(chassis, rec, wall.speed >= ground.speed ? wall : ground, released);
+      damage_chassis(chassis, rec, wall.speed >= ground.speed ? wall : ground,
+                     chassis == controlled, released);
+      if (chassis == controlled && steps) {
+        const auto& options = host_game_options();
+        const auto& body = rec.dynamics.body;
+        const auto local_acceleration = body.orientation.inverse_rotate(
+            (body.velocity - velocity_before) / (steps * physics::VehicleDynamics::timestep));
+        const physics::Vec3 lean{
+            std::clamp(rec.steering_input * .045 * options.head_steer -
+                           local_acceleration.x * .003 * options.head_acceleration, -.15, .15),
+            0,
+            std::clamp(body.velocity.length() * .0015 * options.head_velocity -
+                           local_acceleration.z * .004 * options.head_acceleration, -.15, .15)};
+        rec.cockpit_offset += (lean - rec.cockpit_offset) * -std::expm1(-kPhysicsTick / .14);
+      }
       const auto delta = rec.dynamics.body.position - before;
       rec.mileage += static_cast<float>(std::hypot(delta.x, delta.z) * .1);
     }
@@ -2653,6 +2704,7 @@ bool part_vehicle_hud(VehicleHudState &state) {
   state.rpm = rec->dynamics.drive.torque ? rec->dynamics.engine_omega * 9.54929658551372 : 0;
   state.speed = rec->dynamics.body.velocity.length() * 3.6;
   state.mileage = rec->mileage * .01;
+  state.unit_scale = 1000.f / host_game_options().unit_meters;
   state.condition = std::min(rec->state.wear, rec->state.tear);
   state.nitro = comp(as_part(static_cast<Object *>(target->key)), "tank_nitro") > 0 ? 1.f : 0.f;
   for (const auto &[slot, child] : rec->children) {
@@ -2713,6 +2765,14 @@ bool part_camera_pose(void* car, int camera, float* matrix) {
   if (camera >= 0) {
     if (static_cast<size_t>(camera) >= rec->config->cameras.size()) return false;
     frame = part_matrix_multiply(frame, part_pose_matrix(rec->config->cameras[camera]));
+    const auto* controlled = gameref_find_live(controlled_vehicle);
+    if (controlled && rec->physics_released &&
+        as_part(static_cast<Object*>(controlled->key)) == chassis) {
+      const auto offset = rec->dynamics.body.orientation.rotate(rec->cockpit_offset);
+      frame[12] += float(offset.x);
+      frame[13] += float(offset.y);
+      frame[14] += float(offset.z);
+    }
   }
   std::copy(frame.begin(), frame.end(), matrix);
   return true;

@@ -28,6 +28,11 @@
 namespace slrr {
 
 void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
+  jvm.natives().register_method("java.lang.System", "getConfigOptions", "()V",
+    [&jvm](Object*, const std::vector<Value>&) {
+      host_game_options_apply(jvm);
+      return Value::make_void();
+    });
   jvm.natives().register_method("java.lang.System", "setMeasure", "(F)V",
     [&jvm](Object*, const std::vector<Value>& args) {
       float meters = args.empty() ? 1000.f : args[0].tag==ValueTag::Float ? args[0].v.f :

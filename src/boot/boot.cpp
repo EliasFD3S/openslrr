@@ -495,7 +495,10 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
   });
   osd_set_click_handler([&jvm, &sections, &render](const OsdWidget& w) {
     if (video_fmv_block_osd()) return;
-    sections.dispatch_osd_command(w.handler, w.cmd);
+    if (w.button && jvm.tree_instance_of(w.button, "java.render.osd.MultiChoice"))
+      jvm.invoke(w.button->class_name, "click", "()V", {Value::make_obj(w.button)}, false);
+    else
+      sections.dispatch_osd_command(w.handler, w.cmd);
     mainloop_adopt_section(jvm, sections);
     mainloop_sync_section_render(render, sections);
   });

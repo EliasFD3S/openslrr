@@ -473,7 +473,8 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
   const auto draw = [&](const ScxGeometry& mesh, size_t begin, size_t count,
                         const uint16_t *indices, size_t index_count,
                         float x, float y, float sx, float sy, float angle,
-                        float min_x, float min_y, uint32_t color, bool opaque = false) {
+                        float min_x, float min_y, uint32_t color, bool opaque = false,
+                        bool color_mix = false) {
     if (!count || count > 65535 || !index_count || mesh.textures.empty() ||
         mesh.uvs.size() < (begin + count) * 2 ||
         bgfx::getAvailTransientVertexBuffer(static_cast<uint32_t>(count), layout_) < count ||
@@ -508,7 +509,8 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     const float tint[] = {float((color >> 16) & 255) * rgb_scale,
                           float((color >> 8) & 255) * rgb_scale,
                           float(color & 255) * rgb_scale, opacity};
-    const float alpha[] = {0.f, 1.f, opaque ? 0.f : 1.f, 0.f};
+    const float alpha[] = {0.f, 1.f, opaque ? 0.f : 1.f,
+                           color_mix && premultiplied ? 2.f : 0.f};
     bgfx::setTransform(identity);
     bgfx::setVertexBuffer(0, &vb);
     bgfx::setIndexBuffer(&ib);
@@ -613,7 +615,8 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       } else {
         const char *format = safe_numeric_format(item.format) ? item.format.c_str() : "%.0f";
         const double value = slot == HudSlot::Rpm ? hud.rpm :
-                             slot == HudSlot::Speed ? hud.speed : hud.mileage;
+                             slot == HudSlot::Speed ? hud.speed * hud.unit_scale
+                                                    : hud.mileage * hud.unit_scale;
         std::snprintf(buffer, sizeof(buffer), format, value);
       }
       float x = item.position[0], y = item.position[1];
@@ -652,7 +655,9 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     draw(*mesh, 0, count, indices.data(), indices.size(),
          x, y,
          xscale * mesh->position_scale, yscale * mesh->position_scale,
-         angle, 0, 0, item.color, opaque);
+         angle, 0, 0, item.color, opaque,
+         slot == HudSlot::Gauge && !override.defined && !mesh->groups.empty() &&
+             mesh->groups.front().material_type == 3u);
   }
 }
 

@@ -22,7 +22,7 @@
 
 Open SLRR brings the game's scripts, cars, and resources into a new engine. The project reimplements resource loading, script execution, rendering, the interface, and the native functions those scripts use.
 
-**The garage is coming to life, but the game is not fully playable yet.** Menus, the car showroom, parts previews, and car assembly are in place. In the garage you can inspect parts, hide assemblies, open panels with interpolated motion, and remove or fit parts together with their attachments. Car shadows, environment reflections, music playlists, and persistent audio settings are also implemented. Driving and a complete career remain to be built.
+**You can assemble a car in the garage and drive it on the Test Track.** The host runs the stock menus, catalog, showrooms and track selection. The Test Track has keyboard and XInput driving, chase and cockpit cameras, vehicle instruments and a GPS map. The city, traffic and the full career loop are still in development.
 
 Original game data is required and is not included. The reference version is **SLRR 2.2.1 MWM**; compatibility with other versions and mods is not guaranteed. This is an independent project, unaffiliated with the original game's developers or publishers.
 
@@ -35,19 +35,19 @@ These milestones describe existing functionality, rather than a percentage of th
 
 ![Native bindings by family: with a body, no-op, or missing](assets/progress/native-coverage.svg)
 
-**293 with a body · 9 explicit no-ops · 74 missing**, out of **376 stock natives** (9 November 2026).
+**297 with a body · 8 explicit no-ops · 71 missing**, out of **376 stock natives** (9 November 2026).
 The bars show **numbers of functions**, not percentages. A body can still be partial or return a fixed value; these counts do not establish full behavior or validation in game. The separately counted no-op functions are explicitly registered as `native_noop`.
 
 | Family | With a body | No-op | Missing |
 | --- | ---: | ---: | ---: |
-| World | 3 | 0 | 51 |
-| Language | 62 | 2 | 10 |
-| Sound & scripts | 12 | 0 | 6 |
-| Resources | 49 | 5 | 6 |
+| World | 4 | 0 | 50 |
+| Language | 63 | 2 | 9 |
+| Sound & scripts | 13 | 0 | 5 |
+| Resources | 50 | 4 | 6 |
 | Rendering | 35 | 0 | 1 |
 | Files & input | 35 | 2 | 0 |
 | Parts | 97 | 0 | 0 |
-| **Total** | **293** | **9** | **74** |
+| **Total** | **297** | **8** | **71** |
 
 World covers GroundRef, particles, animation and PhysicsRef; language covers `java.lang`. Resources covers GameRef, ResourceRef, RenderRef and SfxRef; rendering covers GfxEngine, Text, Camera and Viewport. Files & input includes File, FindFile, Input, Controller and MouseCursor; parts includes Part, Chassis, WheelRef, DynoData and SfxTable. Sound & scripts covers Sound, Vehicle, Painter, Navigator and GameLogic.
 
@@ -60,20 +60,24 @@ The snapshot matches the stock native table against registered class, method and
 | Scripts | ✅ TUFA classes and TREE programs, inheritance, Java and native calls |
 | Script scheduling | ✅ Cooperative Windows fiber stacks; real run/sleep/wait, isAlive, stop, suspend/resume, and frame budgets. GameType callback lists and notification routing. See [SCRIPT_RUNTIME.md](SCRIPT_RUNTIME.md) |
 | VM memory | ✅ Mark/sweep garbage collection, pin/unpin and finalizers; conservative native roots. See [VM_GC.md](VM_GC.md) |
-| Resources | ✅ RPK packs, SCX models, DDS/PTX textures, and CFG configurations |
-| Garage and rendering | ✅ bgfx/D3D11, textures, script camera, sky, environment reflections and filtered projected car shadows |
+| Resources | ✅ RPK packs, SCX models, DDS mipmaps, PTX textures and CFG configurations |
+| Rendering | ✅ bgfx/D3D11, skydomes, sun flares, environment reflections, projected car shadows and multilayer track materials |
 | Interface | ✅ Menus, career dialogs, catalog, car showroom, track selection, and paint inventory |
 | Cars | ✅ Assembly from scripts and CFG files; reference Baiern with 76 parts. Showroom camera orbit, vehicle information, powertrain layout, gear ratios and dyno calculations |
 | Workshop | ✅ Point at a part to read its name, hide the body or the engine, open panels with interpolated motion and adjust tunable parts. Remove or fit attached assemblies, and drag inventory parts onto Repair/Sell. Detached suspension parts regain their rest pose in the inventory |
-| Physics | ✅ Chassis, springs, dampers, and wheel contacts, verified with Baiern and Duhen. A released car settles on the garage floor. A parked car holds its standing height |
+| Physics | ⏳ Fixed-step chassis, suspension and tyre contacts, differential lock, impact deformation and panel detachment. Handling and damage still need comparison with the original |
 | Audio and video | ✅ Effects, loops, FMV audio and four music playlists streamed with Media Foundation/XAudio2. Repeated effects and menu sounds have separate overlap limits |
-| Options | ✅ Mouse-operated sliders and all three audio volume values saved/reloaded through the stock `save/game/options` format |
-| Driving | ⏳ Engine, tyre slip, clutch and gear logic connected. Keyboard and XInput bindings use the stock control profile. Track validation and remaining driver actions are pending |
+| Options | ✅ Game, Advanced Game and audio settings use the stock `save/game/options` format. Traffic and pedestrian density values are saved while their simulation is pending |
+| Driving | ⏳ Test Track driving with engine SFX tables, keyboard and XInput, stock and CFG-defined instruments, and GPS. Acceleration has been compared with stock Nonus and Einvagen telemetry, with differences remaining |
 | World and career | ⏳ City, traffic and complete career flow; vehicle purchase/save/load still need end-to-end validation |
 
 Engine loops use the scripts' SFX tables. Music playlists currently play in sequential order. The [roadmap](NATIVE_AUDIT.md#roadmap) tracks the next steps for driving, collision and damage, navigation, garage actions and platform support.
 
 ### Recent changes
+
+- Added GPS tile textures and markers, sun flares, DDS mipmaps and the Test Track's separate diffuse and decal UV channels. The Invictus Racing 500 logo appears on the circuit.
+- Corrected the stock instrument panel's proportions and translucent background.
+- Connected gameplay options to gearbox mode, steering help, ABS, launch ASR, units, damage and cockpit movement. The stock menu selectors and sliders save their values automatically.
 
 - Implemented cooperative script threads and scoped GC roots for suspended stacks. Java message loops, the mechanic refresher and showroom camera can now run directly.
 - Added GameType notification replacement/removal, event aliases/custom handlers/one-shot delivery, and control/drive/animate registrations.
@@ -133,9 +137,9 @@ The executable is generated at `build-bgfx-x64/Release/slrr_host.exe`. The first
 .\build-bgfx-x64\Release\slrr_host.exe --game --spawn-car cars/racers/Baiern.rpk:0x6 --root "D:\Games\SLRR"
 ```
 
-In Sound Options, drag the volume sliders; changes are saved automatically to the game installation’s `save/game/options` file and restored on startup. A saved music volume of zero keeps music muted.
+Use **Game Options** for transmission, distance units, GPS mode, damage difficulty and driver assists. **Advanced Game Options** adjusts cockpit motion from steering, speed and acceleration. **Sound Options** controls the three audio volumes. The game restores these values from `save/game/options` at startup.
 
-In the garage, **right-click and drag**, the **arrow keys**, and the **scroll wheel** control the camera. **Escape** skips the intros. Close the window to quit. The car rests on its wheels, but driving controls are not connected yet. In the showroom the view turns around the car on its own.
+In the garage, **right-click and drag**, the **arrow keys**, and the **scroll wheel** control the camera. From the garage, enter the **Test Track** to drive with your keyboard or XInput profile. **Escape** skips the intros.
 
 You can also set the game path with `$env:SLRR_GAME_ROOT`. The `--root` option takes priority; without either setting, the default folder is `../game`. Run `slrr_host.exe --help` for all options.
 

@@ -103,6 +103,7 @@ struct DriveInput {
   std::array<double, 8> ratios{};
   int gears = 0, shift = 0;
   bool engaged = false, reverse = false, automatic_shift = true, auto_clutch = true;
+  bool automatic_first = false;
   double throttle = 0, brake = 0, handbrake = 0;
   double brake_scale = 0, handbrake_scale = 0, bearing_scale = 0;
   double abs_strength = 0;

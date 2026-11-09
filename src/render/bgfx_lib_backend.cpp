@@ -244,6 +244,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
                                        0, bgfx::copy(&white, sizeof(white)));
     s_tex_ = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
     s_lightmap_ = bgfx::createUniform("s_lightmap", bgfx::UniformType::Sampler);
+    s_mesh_mix_ = bgfx::createUniform("s_meshMix", bgfx::UniformType::Sampler);
     u_alpha_test_ = bgfx::createUniform("u_alphaTest", bgfx::UniformType::Vec4);
     u_color_ = bgfx::createUniform("u_color", bgfx::UniformType::Vec4);
     u_lightmap_ = bgfx::createUniform("u_lightmap", bgfx::UniformType::Vec4);
@@ -286,6 +287,10 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     if (bgfx::isValid(s_lightmap_)) {
       bgfx::destroy(s_lightmap_);
       s_lightmap_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(s_mesh_mix_)) {
+      bgfx::destroy(s_mesh_mix_);
+      s_mesh_mix_ = BGFX_INVALID_HANDLE;
     }
     if (bgfx::isValid(u_lightmap_)) {
       bgfx::destroy(u_lightmap_);

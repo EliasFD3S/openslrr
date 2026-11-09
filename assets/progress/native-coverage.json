@@ -5,26 +5,26 @@
   "categories": [
     {
       "name": "World",
-      "body": 3,
+      "body": 4,
       "noop": 0,
-      "missing": 51
+      "missing": 50
     },
     {
       "name": "Language",
-      "body": 62,
+      "body": 63,
       "noop": 2,
-      "missing": 10
+      "missing": 9
     },
     {
       "name": "Sound & scripts",
-      "body": 12,
+      "body": 13,
       "noop": 0,
-      "missing": 6
+      "missing": 5
     },
     {
       "name": "Resources",
-      "body": 49,
-      "noop": 5,
+      "body": 50,
+      "noop": 4,
       "missing": 6
     },
     {

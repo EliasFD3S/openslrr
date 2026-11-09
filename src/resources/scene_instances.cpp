@@ -208,7 +208,7 @@ float rdf(const uint8_t *p) {
 
 struct PolySection {
   uint32_t material = 0;
-  std::vector<float> pos, nrm, uv0, uv1;
+  std::vector<float> pos, nrm, uv0, uv1, uv2;
   std::vector<uint32_t> indices;
 };
 
@@ -337,6 +337,7 @@ void walk_ground_node(GroundWalk &w, uint32_t offset, uint32_t size,
         sec.nrm.resize(sec.pos.size());
         sec.uv0.resize(static_cast<size_t>(nv) * 2u);
         sec.uv1.resize(sec.uv0.size());
+        sec.uv2.resize(sec.uv0.size());
         for (uint32_t vi = 0; vi < nv; ++vi) {
           const uint8_t *v = q + static_cast<size_t>(vi) * 56u;
           sec.pos[vi * 3] = rdf(v);
@@ -349,6 +350,8 @@ void walk_ground_node(GroundWalk &w, uint32_t offset, uint32_t size,
           sec.uv0[vi * 2 + 1] = rdf(v + 36);
           sec.uv1[vi * 2] = rdf(v + 40);
           sec.uv1[vi * 2 + 1] = rdf(v + 44);
+          sec.uv2[vi * 2] = rdf(v + 48);
+          sec.uv2[vi * 2 + 1] = rdf(v + 52);
         }
         q += static_cast<size_t>(nv) * 56u;
         bool oob = false;
@@ -374,7 +377,9 @@ void walk_ground_node(GroundWalk &w, uint32_t offset, uint32_t size,
 
 struct GroundMat {
   uint16_t tex = 0xffff;
+  uint16_t mix = 0xffff;
   int16_t lm = -1;
+  uint16_t tex_channel = 0, mix_channel = 0;
   uint32_t flags = 0;
 };
 
@@ -411,6 +416,12 @@ read_ground_materials(const std::filesystem::path &path) {
       m.lm = static_cast<int16_t>(buf[p + 0x38] | (buf[p + 0x39] << 8));
     }
     m.flags = rd32(buf.data() + p + 40);
+    if ((m.flags & 0x40u) && hsz >= 54)
+      m.mix = static_cast<uint16_t>(buf[p + 52] | (buf[p + 53] << 8));
+    if (hsz >= 74) {
+      m.tex_channel = static_cast<uint16_t>(buf[p + 70] | (buf[p + 71] << 8));
+      m.mix_channel = static_cast<uint16_t>(buf[p + 72] | (buf[p + 73] << 8));
+    }
     mats.push_back(m);
     p += static_cast<size_t>(hsz) + 8;
   }
@@ -1125,6 +1136,11 @@ bool scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id,
     group.index_start = static_cast<uint32_t>(geo->indices.size());
     group.index_count = static_cast<uint32_t>(sec.indices.size());
     group.texture_index = known ? mats[sec.material].tex : 0xffff;
+    if (known) {
+      group.base_map.channel = mats[sec.material].tex_channel;
+      group.mix_index = mats[sec.material].mix;
+      group.mix_map.channel = mats[sec.material].mix_channel;
+    }
     if (known && mats[sec.material].lm >= 0) {
       group.lightmap_index = static_cast<uint16_t>(mats[sec.material].lm);
       group.lightmap_map.channel = 1;
@@ -1137,6 +1153,7 @@ bool scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id,
     geo->normals.insert(geo->normals.end(), sec.nrm.begin(), sec.nrm.end());
     geo->uvs.insert(geo->uvs.end(), sec.uv0.begin(), sec.uv0.end());
     geo->uv2.insert(geo->uv2.end(), sec.uv1.begin(), sec.uv1.end());
+    geo->uv3.insert(geo->uv3.end(), sec.uv2.begin(), sec.uv2.end());
     for (uint32_t index : sec.indices)
       geo->indices.push_back(base + index);
     geo->groups.push_back(std::move(group));

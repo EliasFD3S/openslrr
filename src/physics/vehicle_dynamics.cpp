@@ -304,7 +304,7 @@ void VehicleDynamics::update_gear(double rpm, double shaft, double road_shaft) {
     shift_time_ = 0;
   } else if (!drive.reverse && forced_reverse_) {
     forced_reverse_ = false;
-    gear = drive.automatic_shift ? 1 : 0;
+    gear = drive.automatic_shift || drive.automatic_first ? 1 : 0;
   } else if (shift_pressed && shift_time_ == 0 && !forced_reverse_) {
     const int next = std::clamp((gear == 7 ? -1 : gear) + drive.shift,
                                 drive.ratios[7] < 0 ? -1 : 0, drive.gears);
@@ -312,10 +312,11 @@ void VehicleDynamics::update_gear(double rpm, double shaft, double road_shaft) {
     shift_time_ = .22;
   }
 
-  if (!drive.automatic_shift || !engine_running || shift_time_ > 0 ||
+  if ((!drive.automatic_shift && !drive.automatic_first) || !engine_running || shift_time_ > 0 ||
       drive.clutch < .5)
     return;
   if (gear == 0 && drive.throttle > .1) gear = 1;
+  if (!drive.automatic_shift) return;
   if (gear <= 0 || gear == 7 || shaft <= 2) return;
   const double ratio = drive.ratios[gear];
   const double coupled_rpm = std::abs(road_shaft * ratio) * rpm_per_rad;

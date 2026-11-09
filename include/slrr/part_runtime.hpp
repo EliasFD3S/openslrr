@@ -59,6 +59,7 @@ struct VehicleHudState {
   const std::string *preview_directory = nullptr;
   Object *owner = nullptr;
   double rpm = 0, speed = 0, mileage = 0;
+  float unit_scale = 1.f;
   float condition = 1, nitro = 0, turbo = 0;
   int gear = 0;
   bool handbrake = false;

@@ -108,12 +108,14 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
 }
 
   void LibBgfxBackend::bind_baked_light(const ScxGroup* group,
-                        const std::vector<bgfx::TextureHandle>* tex)
+                        const std::vector<bgfx::TextureHandle>* tex, bgfx::TextureHandle mix)
 {
     float u[4] = {0.f, 0.f, 1.f, 0.f};
     float xf[4] = {1.f, 1.f, 0.f, 0.f};
     bgfx::TextureHandle lm = white_tex_;
     if (group) u[1] = static_cast<float>(group->base_map.channel);
+    if (group && bgfx::isValid(mix))
+      u[3] = 1.f + static_cast<float>(group->mix_map.channel);
     if (group && tex && group->lightmap_index != 0xffff &&
         group->lightmap_index < tex->size() &&
         bgfx::isValid((*tex)[group->lightmap_index])) {
@@ -128,6 +130,7 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
     bgfx::setUniform(u_lightmap_, u);
     bgfx::setUniform(u_lightmap_uv_, xf);
     bgfx::setTexture(1, s_lightmap_, lm);
+    bgfx::setTexture(2, s_mesh_mix_, bgfx::isValid(mix) ? mix : white_tex_);
   }
   void LibBgfxBackend::draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass)
 {
@@ -283,7 +286,12 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
       bgfx::setUniform(u_alpha_test_,settings);bgfx::setUniform(u_color_,tint);bgfx::setTransform(matrix);
       bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,first,count);
       bgfx::setTexture(0, s_tex_, tex, BGFX_SAMPLER_NONE);
-      bind_baked_light(group,&part.tex);
+      bgfx::TextureHandle mix = BGFX_INVALID_HANDLE;
+      if (group && part.geo.position_scale == 1.f && group->mix_index != 0xffff) {
+        const auto candidate = texture(group->mix_index);
+        if (candidate.idx != white_tex_.idx) mix = candidate;
+      }
+      bind_baked_light(group, &part.tex, mix);
       uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_MSAA;
       if (blend) {
         std::string extension = texture_index < part.geo.textures.size()
