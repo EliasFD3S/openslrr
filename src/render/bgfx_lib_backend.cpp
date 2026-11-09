@@ -367,7 +367,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     // A yielded section change must not expose its half-destroyed world.
     // Loading plates can present, as can a modal that blocks enter() after
     // loading finishes, such as the welcome dialog in a new career.
-    if (scene_transition_active() && !loading && !osd_has_modal()) return;
+    if (scene_transition_blocks_presentation() && !loading && !osd_has_modal()) return;
 
 #ifdef _WIN32
     RECT rc{};

@@ -519,7 +519,9 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
         return static_cast<int32_t>(it->second.v.f);
       return 0;
     };
+    bool waited_for_loading = false;
     if (shown("loadingDialog")) {
+      waited_for_loading = host_wait_pending(field_obj(screen, "termSig"));
       osd_set_loading_dialog(true);
       Object* dlg = screen->fields["loadingDialog"].v.o;
       Object* losd = nullptr;
@@ -594,7 +596,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
       // Keep a plain show() up during enter(). A caller waiting on termSig
       // inside enter() must still be able to finish display()/userWait(0).
       if (!scene_transition_active() || wait_user != 0 ||
-          host_wait_pending(field_obj(screen, "termSig"))) {
+          waited_for_loading) {
         const int32_t init = as_int("init");
         if (init > 0) {
           screen->fields["init"] = Value::make_int(init - 1);
@@ -661,6 +663,10 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     // The timed wait can hide the dialog above. Update the presentation
     // state before flushing this frame, including during a section change.
     if (!shown("loadingDialog")) {
+      // A script blocked in display()/userWait() can now continue with
+      // in-scene work, including sleeps inside enter(). Present the scene
+      // during those waits instead of keeping the last loading frame.
+      if (waited_for_loading) scene_transition_loading_finished();
       // show() only sets init. A completed dealer wait must not carry over
       // to the next map's plain show().
       if (as_int("waitForUser"))
