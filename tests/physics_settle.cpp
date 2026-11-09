@@ -26,8 +26,17 @@ bool free_fall() {
   const double speed_error = std::fabs(vd.body.velocity.y + 9.81);
   std::printf("free-fall height=%.5f vertical-speed=%.5f\n",
               vd.body.position.y, vd.body.velocity.y);
+  // A detached body part is a bare RigidBody without collision shapes.
+  RigidBody panel;
+  panel.configure(4, {-.3, -.02, -.4}, {.3, .02, .4}, {0, 0, 0});
+  panel.set_frame(frame);
+  for (int i = 0; i < 60; ++i)
+    panel.integrate(1.0 / 60);
+  const bool panel_ok = std::fabs(panel.velocity.y + 9.81) < .01;
+  std::printf("loose-panel vertical-speed=%.5f\n", panel.velocity.y);
   // Semi-implicit Euler over one second lags by g * dt / 2.
-  return height_error < 9.81 * VehicleDynamics::timestep * .5 + .01 &&
+  return panel_ok &&
+         height_error < 9.81 * VehicleDynamics::timestep * .5 + .01 &&
          speed_error < 1e-6 &&
          std::fabs(vd.body.position.x) < 1e-9 &&
          std::fabs(vd.body.position.z) < 1e-9;

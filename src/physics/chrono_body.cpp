@@ -238,8 +238,10 @@ struct ChronoBodyState {
     body->EnableCollision(!colliders.empty() && triangles > 0);
     ground->EnableCollision(triangles > 0);
     // Family 1 contains independent suspension bodies. They collide with the
-    // ground, not with their own chassis or each other.
-    body->GetCollisionModel()->DisallowCollisionsWith(1);
+    // ground, not with their own chassis or each other. A bare rigid body
+    // (a detached panel) has no shapes and therefore no collision model.
+    if (auto model = body->GetCollisionModel())
+      model->DisallowCollisionsWith(1);
     system.AddBody(body);
     system.AddBody(ground);
     accumulator = body->AddAccumulator();

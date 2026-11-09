@@ -2463,7 +2463,16 @@ void advance_loose_panels() {
     auto& body = loose.body;
     const Vec3 before = body.position;
     const auto previous = body.corners();
-    if (!sleeping) body.integrate(kPhysicsTick);
+    if (!sleeping) {
+      try {
+        body.integrate(kPhysicsTick);
+      } catch (const std::exception &error) {
+        physics_log("[phys] loose panel dropped after solver failure: %s\n", error.what());
+        loose_panels.erase(part);
+        part_destroy(part);
+        continue;
+      }
+    }
     const bool carrier_contact = collide_loose_with_car(
         body, previous, before, chassis, *vehicle, previous_carrier);
     if (sleeping && !carrier_contact) continue;
@@ -2605,7 +2614,21 @@ void advance_chassis_tick() {
 #endif
     // Two fixed 120 Hz substeps per host vehicle update.
     const auto before = rec.dynamics.body.position;
-    const auto steps = rec.dynamics.advance(kPhysicsTick, terrain);
+    unsigned steps = 0;
+    try {
+      steps = rec.dynamics.advance(kPhysicsTick, terrain);
+    } catch (const std::exception &error) {
+      // A diverged solve must not take the whole game down. Report it and
+      // rebuild the vehicle from its script frame on the next tick.
+      physics_log("[phys] vehicle type=0x%x reset after solver failure: %s "
+                  "pos=(%.3f,%.3f,%.3f) vel=(%.3f,%.3f,%.3f)\n",
+                  rec.state.resource, error.what(), before.x, before.y, before.z,
+                  rec.dynamics.body.velocity.x, rec.dynamics.body.velocity.y,
+                  rec.dynamics.body.velocity.z);
+      rec.physics_ready = false;
+      rec.dynamics.body.velocity = rec.dynamics.body.momentum = {};
+      continue;
+    }
     if (rec.physics_released && rec.dynamics.drive.torque) {
       const auto wall = collide_chassis(rec, before);
       const auto& ground = rec.dynamics.ground_impact;

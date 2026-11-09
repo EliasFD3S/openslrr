@@ -736,7 +736,12 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
 
   spin_mechanic_inventory(jvm, frame_dt);
   if(!script_thread_alive(jvm,g_mechanic_thread))apply_mechanic_infoline(jvm, g_spinning_mechanic);
-  part_physics_advance(dt < 0.0 ? 0.0 : dt);
+  try {
+    part_physics_advance(dt < 0.0 ? 0.0 : dt);
+  } catch (const std::exception& error) {
+    // Keep the game running; the failing step is reported, not fatal.
+    physics_log("[phys] frame skipped after physics failure: %s\n", error.what());
+  }
   const auto physics_done = std::chrono::steady_clock::now();
 
   // Last write before the view is built. The chase camera must not cover
