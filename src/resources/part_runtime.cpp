@@ -115,6 +115,7 @@ struct Record {
   // Explicit development spawn may use its root world matrix directly.
   bool world_root = false;
   bool physics_reported = false, physics_wheels_reported = false;
+  bool drive_reported = false;
   int reported_contacts = -1, physics_status_lines = 0;
   void *physics_parent = nullptr;
   PartMatrix published_frame{};
@@ -1963,8 +1964,26 @@ void advance_chassis_tick() {
     dynamics_wheels(rec);
     const bool driving = rec.physics_released && !rec.physics_suspended &&
                          part_player_controlled(chassis);
+    if (std::getenv("SLRR_PHYSICS_DUMP") && rec.physics_reported &&
+        !rec.drive_reported) {
+      rec.drive_reported = true;
+      physics_log("[phys] drive type=0x%x player=%d released=%d "
+                  "suspended=%d world_root=%d throttle=%.2f brake=%.2f "
+                  "steering=%.2f\n",
+                  rec.state.resource, part_player_controlled(chassis),
+                  rec.physics_released, rec.physics_suspended,
+                  rec.world_root, rec.dynamics.throttle,
+                  rec.dynamics.brake, rec.dynamics.steering);
+    }
     rec.dynamics.throttle = driving ? host_input_get_axis(28, 0) : 0;
     rec.dynamics.brake = driving ? host_input_get_axis(29, 0) : 0;
+    if (std::getenv("SLRR_PHYSICS_DUMP") &&
+        (rec.dynamics.throttle > 0 || rec.dynamics.brake > 0))
+      physics_log("[phys] input type=0x%x throttle=%.2f brake=%.2f "
+                  "steering=%.2f released=%d speed2=%.3f\n",
+                  rec.state.resource, rec.dynamics.throttle,
+                  rec.dynamics.brake, rec.dynamics.steering,
+                  rec.physics_released, part_speed_square(chassis));
     rec.dynamics.steering =
         driving ? std::clamp(host_input_get_axis(1, 0), -1.f, 1.f) : 0;
     if (driving)
@@ -2101,7 +2120,8 @@ bool part_player_controlled(Object *key) {
       const auto car = player.v.o->fields.find("car");
       if (car != player.v.o->fields.end() &&
           car->second.tag == ValueTag::Obj)
-        return as_part(car->second.v.o) == rec->state.object;
+        return as_part(car->second.v.o) == rec->state.object ||
+               canonical(car->second.v.o) == rec->state.object;
     }
   }
   // A development spawn is the fallback only when no script player exists.

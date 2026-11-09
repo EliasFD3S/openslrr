@@ -535,8 +535,21 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
     }
     call_args.reserve(static_cast<size_t>(argc));
     for (int i = 0; i < argc; ++i) {
-      if (stack.empty()) return fail("call arg underflow calling " + owner + "." + name +
-                                     " argc=" + std::to_string(argc));
+      if (stack.empty()) {
+        // Legacy queueEvent(null, type, text) can arrive with a missing
+        // receiver/argument slot. It is a notification, not a track-fatal
+        // operation; preserve the script instead of closing the scene.
+        if (name.find("queueEvent") != std::string::npos) {
+          call_pushed = false;
+          path_static = false;
+          saw_class = false;
+          path_base_on_stack = false;
+          pending_class.clear();
+          return TreeEvalResult{true, Value::make_void(), {}};
+        }
+        return fail("call arg underflow calling " + owner + "." + name +
+                    " argc=" + std::to_string(argc));
+      }
       call_args.insert(call_args.begin(), pop());
     }
     // createText(chas.ratio[i], ...) and the dyno tick labels pass a number

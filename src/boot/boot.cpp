@@ -229,6 +229,15 @@ int boot_probe(Jvm& jvm, const BootOptions& opt) {
               part_player_controlled(second_car));
   if (!input_ok)
     return 4;
+  Object *queue_player = sections.seed_player("QueueProbe");
+  jvm.invoke("java.game.Player", "showOsd", "()V",
+             {Value::make_obj(queue_player)}, false);
+  const Value queue_root = jvm.invoke("java.lang.Math", "sqrt", "(F)F",
+                                      {Value::make_float(25.f)}, false);
+  std::printf("[boot] queueEvent recovery Math.sqrt(25)=%.3f\n",
+              queue_root.tag == ValueTag::Float ? queue_root.v.f : -1.f);
+  if (queue_root.tag != ValueTag::Float || queue_root.v.f != 5.f)
+    return 4;
   Object *speed_car = jvm.new_object("java.game.Vehicle");
   const Value speed = jvm.invoke("java.game.Vehicle", "getSpeedSquare", "()F",
                                  {Value::make_obj(speed_car)}, false);
