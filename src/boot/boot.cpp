@@ -214,6 +214,32 @@ int boot_probe(Jvm& jvm, const BootOptions& opt) {
               scx.version, scx.groups, scx.vertices, scx.triangles,
               scx.ok ? 1 : 0, scx.error.c_str());
 
+  if (!host_input_self_check())
+    return 4;
+  Object *input_player = sections.seed_player("InputProbe");
+  Object *first_car = vehicle_spawn_stock(
+      jvm, rpk, input_player, RpkIndex::make_full_id(9, 0x0006));
+  Object *second_car = vehicle_spawn_stock(
+      jvm, rpk, input_player, RpkIndex::make_full_id(9, 0x0006));
+  input_player->fields["car"] = Value::make_obj(first_car);
+  const bool input_ok = part_player_controlled(first_car) &&
+                        !part_player_controlled(second_car);
+  std::printf("[boot] player input first=%d second=%d\n",
+              part_player_controlled(first_car),
+              part_player_controlled(second_car));
+  if (!input_ok)
+    return 4;
+  Object *speed_car = jvm.new_object("java.game.Vehicle");
+  const Value speed = jvm.invoke("java.game.Vehicle", "getSpeedSquare", "()F",
+                                 {Value::make_obj(speed_car)}, false);
+  const Value root = jvm.invoke("java.lang.Math", "sqrt", "(F)F",
+                                {Value::make_float(25.f)}, false);
+  std::printf("[boot] Vehicle.getSpeedSquare=%.3f Math.sqrt(25)=%.3f\n",
+              speed.tag == ValueTag::Float ? speed.v.f : -1.f,
+              root.tag == ValueTag::Float ? root.v.f : -1.f);
+  if (speed.tag != ValueTag::Float || root.tag != ValueTag::Float ||
+      root.v.f != 5.f)
+    return 4;
   return run_tree_smokes(jvm, sections);
 }
 
@@ -463,10 +489,10 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     Object* car=pack&&local?vehicle_spawn_stock(jvm,rpk,player,RpkIndex::make_full_id(pack->pack_id,local)):nullptr;
     if(!car){std::fprintf(stderr,"[boot] cannot spawn car %s\n",opt.spawn_car.c_str());if(render.ready())render.close();return 11;}
     player->fields["car"]=Value::make_obj(car);
-    if (std::getenv("SLRR_START_CAR")) part_command(car, "start");
     // A development session enters the garage directly; it never submits
     // the NEW CAREER dialog or writes a save as a side effect of spawning.
     sections.change_active_section(sections.garage());
+    if (std::getenv("SLRR_START_CAR")) part_command(car, "start");
     std::printf("[boot] spawned %s parts=%zu\n",opt.spawn_car.c_str(),part_installed_tree(car).size());
   } else if (opt.auto_new) {
     std::fprintf(stderr,

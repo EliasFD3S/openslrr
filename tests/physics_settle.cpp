@@ -512,6 +512,85 @@ bool ridge_contacts() { return true; }
 bool ownership_suspension() { return true; }
 #endif
 
+bool driver_controls() {
+  VehicleDynamics vd;
+  vd.body.configure(1000, {-.8, -.2, -1.5}, {.8, .4, 1.5}, {0, 0, 0});
+  Matrix frame{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, .8f, 0, 1};
+  vd.body.set_frame(frame);
+  for (int i = 0; i < 4; ++i) {
+    auto &wheel = vd.wheels[i];
+    wheel.enabled = true;
+    wheel.center = {i % 2 ? .7 : -.7, -.1, i < 2 ? 1.1 : -1.1};
+    wheel.radius = .3;
+    wheel.rest = .25;
+    wheel.minimum = .05;
+    wheel.maximum = .35;
+    wheel.spring = 40000;
+    wheel.bump_damping = 3000;
+    wheel.rebound_damping = 4000;
+  }
+  const Terrain flat = [](double, double, double, GroundHit &hit) {
+    hit.height = 0;
+    hit.normal = {0, 1, 0};
+    return true;
+  };
+  const Vec3 forward{0, 0, -1};
+  const double tick = 1.0 / VehicleDynamics::update_frequency;
+  vd.throttle = 1;
+  for (int i = 0; i < 2 * 60; ++i)
+    vd.advance(tick, flat);
+  const double forward_speed = vd.body.velocity.dot(forward);
+  vd.throttle = 0;
+  vd.brake = 1;
+  for (int i = 0; i < 2 * 60; ++i)
+    vd.advance(tick, flat);
+  const double brake_speed = vd.body.velocity.dot(forward);
+  vd.brake = 0;
+  vd.throttle = 1;
+  vd.steering = 1;
+  const auto initial = vd.body.orientation;
+  for (int i = 0; i < 60; ++i)
+    vd.advance(tick, flat);
+  const Vec3 turned = vd.body.orientation.rotate(forward);
+  const double initial_forward = initial.rotate(forward).z;
+  const double steering_change = std::fabs(turned.x) +
+                                 std::fabs(turned.z - initial_forward);
+  VehicleDynamics parked;
+  parked.body.configure(1000, {-.8, -.2, -1.5}, {.8, .4, 1.5}, {0, 0, 0});
+  parked.body.set_frame(frame);
+  for (int i = 0; i < 4; ++i) {
+    auto &wheel = parked.wheels[i];
+    wheel.enabled = true;
+    wheel.center = {i % 2 ? .7 : -.7, -.1, i < 2 ? 1.1 : -1.1};
+    wheel.radius = .3;
+    wheel.rest = .25;
+    wheel.minimum = .05;
+    wheel.maximum = .35;
+    wheel.spring = 40000;
+    wheel.bump_damping = 3000;
+    wheel.rebound_damping = 4000;
+  }
+  parked.steering = 1;
+  const Terrain slope = [](double x, double, double, GroundHit &hit) {
+    hit.height = .15 * x;
+    hit.normal = Vec3{-.15, 1, 0}.normalized();
+    return true;
+  };
+  for (int i = 0; i < 60; ++i)
+    parked.advance(tick, slope);
+  const double parked_speed =
+      Vec3{parked.body.velocity.x, 0, parked.body.velocity.z}.length();
+  const bool parked_ok = std::fabs(parked.body.position.x) < .1 &&
+                         std::fabs(parked.body.position.z) < .1 &&
+                         parked_speed < .2;
+  const bool ok = forward_speed > 1 && brake_speed < forward_speed * .5 &&
+                  steering_change > .005 && vd.body.position.y < 2 &&
+                  parked_ok;
+  std::printf("driver forward=%.3f brake=%.3f steering=%.4f parked=%.4f\n",
+              forward_speed, brake_speed, steering_change, parked_speed);
+  return ok;
+}
+
 int main() {
   VehicleDynamics vd;
   const double mass = 1200;
@@ -553,6 +632,7 @@ int main() {
                        std::fabs(force - weight) < weight * .02;
   const bool fallen = free_fall();
   const bool collisions = mesh_contacts();
+  const bool driving = driver_controls();
   const bool suspension = suspension_contacts(false, true) &&
                           suspension_contacts(true, false) &&
                           suspension_contacts(false, false, false) &&
@@ -560,6 +640,7 @@ int main() {
                           suspension_contacts(true, false, true, .12f) &&
                           seeded_suspension() && singular_suspension() &&
                           ridge_contacts() && ownership_suspension();
-  std::puts(settled && fallen && collisions && suspension ? "PASS" : "FAIL");
-  return settled && fallen && collisions && suspension ? 0 : 1;
+  std::puts(settled && fallen && collisions && driving && suspension ? "PASS"
+                                                                     : "FAIL");
+  return settled && fallen && collisions && driving && suspension ? 0 : 1;
 }

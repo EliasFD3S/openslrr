@@ -1,5 +1,7 @@
 #include "slrr/host_input.hpp"
 
+#include <algorithm>
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -61,13 +63,40 @@ float host_input_get_axis(int32_t axis, int32_t /*device*/) {
       if (in.keys_pgdn) v -= 0.010f;
       return v;
     }
-    case 1:  // AXIS_TURN_LEFTRIGHT — mouse X when not orbiting
-      return in.cursor_x;
+    case 1: {  // AXIS_TURN_LEFTRIGHT — clamped keyboard steering
+      const float value = (in.keys_left ? 1.f : 0.f) -
+                          (in.keys_right ? 1.f : 0.f);
+      return std::clamp(value, -1.f, 1.f);
+    }
+    case 28:  // AXIS_THROTTLE
+      return in.keys_up ? 1.f : 0.f;
+    case 29:  // AXIS_BRAKE
+      return in.keys_down ? 1.f : 0.f;
     case 2:
       return in.cursor_y;
     default:
       return 0.f;
   }
+}
+
+bool host_input_self_check() {
+  auto& in = host_input();
+  const HostInput saved = in;
+  in.cursor_x = 1000.f;
+  in.keys_left = true;
+  in.keys_right = false;
+  in.keys_up = true;
+  in.keys_down = false;
+  const float left = host_input_get_axis(1, 0);
+  const float throttle = host_input_get_axis(28, 0);
+  in.keys_left = false;
+  in.keys_right = true;
+  in.keys_up = false;
+  in.keys_down = true;
+  const float right = host_input_get_axis(1, 0);
+  const float brake = host_input_get_axis(29, 0);
+  in = saved;
+  return left == 1.f && right == -1.f && throttle == 1.f && brake == 1.f;
 }
 
 }  // namespace slrr

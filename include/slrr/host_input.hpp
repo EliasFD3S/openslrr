@@ -44,5 +44,7 @@ void host_input_poll_keys();
 
 // Map HostInput → stock Input axis id. device ignored for now.
 float host_input_get_axis(int32_t axis, int32_t device);
+// Keyboard steering/throttle/brake regression without changing live input.
+bool host_input_self_check();
 
 }  // namespace slrr

@@ -149,6 +149,8 @@ public:
   std::array<WheelConfig, 4> wheels;
   std::array<WheelState, 4> state;
   uint64_t ticks = 0;
+  // Basic native driver controls, normalized to 0..1 and -1..1 for steering.
+  float throttle = 0, brake = 0, steering = 0;
   // Incremented by external wheel reseeding so Chrono recreates body states.
   uint64_t suspension_generation = 0;
   unsigned advance(double seconds, const Terrain &terrain);

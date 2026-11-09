@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="430" viewBox="0 0 1120 430" role="img" aria-labelledby="title desc">
 <title id="title">Open SLRR native binding coverage</title>
-<desc id="desc">289 with a body, 12 no-op, 75 missing, out of 376. Bars show counts, not percentages of game completion.</desc>
+<desc id="desc">290 with a body, 12 no-op, 74 missing, out of 376. Bars show counts, not percentages of game completion.</desc>
 <rect width="1120" height="430" rx="12" fill="#0d1117"/>
 <g font-family="Segoe UI,Arial,sans-serif">
 <text x="28" y="34" font-size="21" fill="#f0f6fc" text-anchor="start">Native binding coverage</text>
@@ -28,10 +28,10 @@
 <text x="770.3" y="137" font-size="12" fill="#ffffff" text-anchor="middle">10</text>
 <text x="823.8" y="137" font-size="12" fill="#8b949e" text-anchor="start">74</text>
 <text x="156" y="172" font-size="13" fill="#c9d1d9" text-anchor="end">Sound &amp; scripts</text>
-<rect x="170" y="155" width="95.69999999999999" height="25" fill="#49a58d"><title>Sound &amp; scripts: 11 with a body</title></rect>
-<text x="217.85" y="172" font-size="12" fill="#ffffff" text-anchor="middle">11</text>
-<rect x="265.7" y="155" width="60.89999999999999" height="25" fill="#ab474b"><title>Sound &amp; scripts: 7 missing</title></rect>
-<text x="296.15" y="172" font-size="12" fill="#ffffff" text-anchor="middle">7</text>
+<rect x="170" y="155" width="104.4" height="25" fill="#49a58d"><title>Sound &amp; scripts: 12 with a body</title></rect>
+<text x="222.2" y="172" font-size="12" fill="#ffffff" text-anchor="middle">12</text>
+<rect x="274.4" y="155" width="52.2" height="25" fill="#ab474b"><title>Sound &amp; scripts: 6 missing</title></rect>
+<text x="300.5" y="172" font-size="12" fill="#ffffff" text-anchor="middle">6</text>
 <text x="336.59999999999997" y="172" font-size="12" fill="#8b949e" text-anchor="start">18</text>
 <text x="156" y="207" font-size="13" fill="#c9d1d9" text-anchor="end">Resources</text>
 <rect x="170" y="190" width="426.29999999999995" height="25" fill="#49a58d"><title>Resources: 49 with a body</title></rect>
@@ -63,6 +63,6 @@
 <text x="380" y="391" font-size="13" fill="#c9d1d9" text-anchor="start">No-op</text>
 <rect x="493" y="380" width="12" height="12" rx="2" fill="#ab474b"/>
 <text x="513" y="391" font-size="13" fill="#c9d1d9" text-anchor="start">Missing</text>
-<text x="1090" y="411" font-size="11" fill="#8b949e" text-anchor="end">Audited 2026-11-06 · Bodies may be partial implementations</text>
+<text x="1090" y="411" font-size="11" fill="#8b949e" text-anchor="end">Audited 2026-11-08 · Bodies may be partial implementations</text>
 </g>
 </svg>

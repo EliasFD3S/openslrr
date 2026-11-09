@@ -43,6 +43,10 @@ bool part_car_ground(void *key, float *y);
 void *part_shadow_source(void *render, float *frame);
 // Advance only cars belonging to the active world, at a fixed physics step.
 void part_physics_advance(double seconds);
+// Squared chassis speed in script metres/second, or zero for a missing car.
+float part_speed_square(Object *car);
+// True only for the active player/development-controlled chassis.
+bool part_player_controlled(Object *car);
 struct PartPhysicsState {
   bool active = false;
   double mass = 0, height = 0, vertical_speed = 0;

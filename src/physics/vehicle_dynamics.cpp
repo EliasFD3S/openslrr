@@ -249,7 +249,8 @@ void constrained_parked_friction(RigidBody &body, const WheelState &state,
 // the unsprung mass are internal. A massless ray (no arm, no type mass)
 // never enters here.
 void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
-                  const Terrain &terrain, double ceiling, double dt) {
+                  const Terrain &terrain, double ceiling, double dt,
+                  bool parked_friction) {
   const Vec3 down = w.down.normalized();
   const Vec3 hard = body_point(body, w.center - down * w.anchor_length());
   if (!s.seeded) {
@@ -365,7 +366,7 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
   hinge_hub(w, ray_center(w, s.length), s.hub);
   s.center = body_point(body, s.hub);
   s.patch = s.center - normal * w.radius;
-  if (!s.contact)
+  if (!s.contact || !parked_friction)
     return;
   Vec3 velocity = body.point_velocity(s.patch);
   Vec3 tangent = velocity - normal * velocity.dot(normal);
@@ -390,6 +391,36 @@ double suspension_force(double length, double speed, double rest, double max,
       -velocity * (velocity >= 0 ? (rebound > 0 ? rebound : .7 * bump) : bump) -
           (length - rest) * k);
 }
+void apply_driver_controls(RigidBody &body, float throttle, float brake,
+                           float steering) {
+  throttle = std::clamp(throttle, 0.f, 1.f);
+  brake = std::clamp(brake, 0.f, 1.f);
+  steering = std::clamp(steering, -1.f, 1.f);
+  const Vec3 forward = body.orientation.rotate({0, 0, -1});
+  const double speed = body.velocity.dot(forward);
+  if (throttle > 0 && brake < .5 && speed < 20) {
+    const double force =
+        throttle * body.mass * 3 * std::max(0.0, 1 - speed / 20);
+    body.add_force(forward * force, body.position);
+  }
+  if (brake > 0) {
+    if (speed > .5) {
+      body.add_force(forward * (-brake * body.mass * 8), body.position);
+    } else if (throttle == 0 && speed > -8) {
+      // Basic reverse when no throttle is applied; not a transmission model.
+      body.add_force(forward * (-brake * body.mass * 2), body.position);
+    }
+  }
+  if (std::fabs(steering) > 1e-4 && std::fabs(speed) > .5) {
+    const Vec3 right = body.orientation.rotate({1, 0, 0});
+    const double force = std::clamp(-steering * speed * body.mass * .06,
+                                    -body.mass * 2, body.mass * 2);
+    const Vec3 front = body.position +
+                       body.orientation.rotate(Vec3{0, 0, -1.5} - body.center);
+    body.add_force(right * force, front);
+  }
+}
+
 void VehicleDynamics::step(const Terrain &terrain) {
 #if SLRR_HAS_CHRONO
   bool native_sprung = false, constrained_any = false, rigid_any = false;
@@ -408,6 +439,10 @@ void VehicleDynamics::step(const Terrain &terrain) {
   const bool mesh_contacts =
       collision && (!native_sprung || constrained_any || rigid_any);
 #endif
+  apply_driver_controls(body, throttle, brake, steering);
+  // Steering alone must not release parked friction at rest. Only propulsion
+  // or braking bypasses the reduced parked model.
+  const bool driver_active = throttle > 0 || brake > 0;
   // Recover initial overlaps through physical contacts, not a floor teleport.
   double ceiling = body.position.y;
   for (Vec3 p : body.corners())
@@ -429,7 +464,8 @@ void VehicleDynamics::step(const Terrain &terrain) {
     if (constrained) {
       // Chrono owns the spring, body, and ground contact. Keep only the legacy
       // chassis-only parked-friction stage, driven by per-contact normal load.
-      constrained_parked_friction(body, s, timestep);
+      if (!driver_active)
+        constrained_parked_friction(body, s, timestep);
       continue;
     }
     if (w.rigid_contact) {
@@ -439,7 +475,8 @@ void VehicleDynamics::step(const Terrain &terrain) {
       continue; // The rigid contact pass below supports the tyre.
     }
     if (w.linked()) {
-      solve_linked(body, w, s, terrain, ceiling, timestep);
+      solve_linked(body, w, s, terrain, ceiling, timestep,
+                   !driver_active);
       continue;
     }
     s.length = w.maximum;
@@ -470,7 +507,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
     Vec3 v = body.point_velocity(point),
          tangent = v - s.normal * v.dot(s.normal);
     double speed = tangent.length();
-    if (speed > 1e-9) {
+    if (!driver_active && speed > 1e-9) {
       Vec3 direction = tangent / speed, r = point - body.position;
       double inverse =
           1 / body.mass +

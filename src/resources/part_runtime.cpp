@@ -3,6 +3,7 @@
 #include "slrr/physics_log.hpp"
 #include "slrr/dyno_model.hpp"
 #include "slrr/gameref.hpp"
+#include "slrr/host_input.hpp"
 #include "slrr/jvm.hpp"
 #include "slrr/rpk_index.hpp"
 #include "slrr/scene_instances.hpp"
@@ -111,6 +112,8 @@ struct Record {
   std::array<physics::Vec3, 4> base_wheel_center{};
   physics::VehicleDynamics dynamics;
   bool physics_ready = false, physics_dirty = true, physics_suspended = false;
+  // Explicit development spawn may use its root world matrix directly.
+  bool world_root = false;
   bool physics_reported = false, physics_wheels_reported = false;
   int reported_contacts = -1, physics_status_lines = 0;
   void *physics_parent = nullptr;
@@ -1275,6 +1278,12 @@ void paint_tree(Object *root, uint32_t texture) {
 }
 bool part_command(Object *part, const std::string &command) {
   part = canonical(part);
+  if (!record(part) && part) {
+    auto chassis = part->fields.find("chassis");
+    if (chassis != part->fields.end() &&
+        chassis->second.tag == ValueTag::Obj)
+      part = canonical(chassis->second.v.o);
+  }
   std::istringstream input(command);
   std::string verb;
   input >> verb;
@@ -1748,8 +1757,9 @@ void finish_dynamics_sync(Object *chassis, Record &rec) {
     support += state.force;
   }
   if (contacts != rec.reported_contacts && rec.physics_status_lines < 8) {
-    physics_log("[phys] contacts=%d/4 y=%.3f vy=%.3f support=%.1fN\n", contacts,
-                node->pos[1], rec.dynamics.body.velocity.y, support);
+    physics_log("[phys] contacts=%d/4 y=%.3f vy=%.3f support=%.1fN speed2=%.3f\n",
+                contacts, node->pos[1], rec.dynamics.body.velocity.y, support,
+                part_speed_square(chassis));
     if (std::getenv("SLRR_PHYSICS_DUMP")) {
       for (size_t i = 0; i < 4; ++i) {
         const auto &state = rec.dynamics.state[i];
@@ -1928,7 +1938,14 @@ void advance_chassis_tick() {
     if (!node)
       continue;
     PartMatrix frame, parent = eye_matrix();
-    if (!scene_instances_script_matrix(chassis, frame.data()))
+    bool has_frame = scene_instances_script_matrix(chassis, frame.data());
+    if (!has_frame && rec.world_root && !rec.state.parent) {
+      // Development/root cars are already in world coordinates and do not
+      // have a scene-parent chain. Inventory roots remain isolated.
+      frame = node_local(chassis);
+      has_frame = true;
+    }
+    if (!has_frame)
       continue;
     if (node->parent &&
         !scene_instances_script_matrix(node->parent, parent.data()))
@@ -1944,6 +1961,14 @@ void advance_chassis_tick() {
       if (!dynamics_configure(chassis, rec, frame))
         continue;
     dynamics_wheels(rec);
+    const bool driving = rec.physics_released && !rec.physics_suspended &&
+                         part_player_controlled(chassis);
+    rec.dynamics.throttle = driving ? host_input_get_axis(28, 0) : 0;
+    rec.dynamics.brake = driving ? host_input_get_axis(29, 0) : 0;
+    rec.dynamics.steering =
+        driving ? std::clamp(host_input_get_axis(1, 0), -1.f, 1.f) : 0;
+    if (driving)
+      rec.steering_input = rec.dynamics.steering;
     // An unreleased chassis (catalog, before start) may drop onto a floor.
     // With no floor the step only applies gravity, and the car leaves the shot.
     if (!rec.physics_released && rec.physics_pending_placement) {
@@ -2058,6 +2083,31 @@ void part_physics_advance(double seconds) {
     previous_revision = revision;
   }
 }
+float part_speed_square(Object *key) {
+  const auto *rec = record(as_part(key));
+  if (!rec)
+    return 0;
+  const auto velocity = rec->dynamics.body.velocity;
+  return static_cast<float>(velocity.dot(velocity));
+}
+
+bool part_player_controlled(Object *key) {
+  const auto *rec = record(as_part(key));
+  if (!rec)
+    return false;
+  if (runtime) {
+    const Value player = runtime->get_static("java.game.GameLogic", "player");
+    if (player.tag == ValueTag::Obj && player.v.o) {
+      const auto car = player.v.o->fields.find("car");
+      if (car != player.v.o->fields.end() &&
+          car->second.tag == ValueTag::Obj)
+        return as_part(car->second.v.o) == rec->state.object;
+    }
+  }
+  // A development spawn is the fallback only when no script player exists.
+  return rec->world_root;
+}
+
 bool part_physics_state(Object *key, PartPhysicsState &state) {
   auto *rec = record(as_part(key));
   if (!rec)
@@ -2141,6 +2191,8 @@ Object *vehicle_spawn_stock(Jvm &jvm, RpkIndex &resources, Object *parent,
   auto *part = part_create(jvm, resources, parent, chassis, "Vehicle chassis");
   if (!part)
     return nullptr;
+  if (auto *rec = record(part))
+    rec->world_root = true;
   auto *descriptor = jvm.new_object("java.game.parts.Descriptor");
   for (const char *name : {"optical", "power", "wear", "tear"})
     descriptor->fields[name] = Value::make_float(1);

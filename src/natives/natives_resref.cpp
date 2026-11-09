@@ -328,6 +328,11 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
                                   return Value::make_void();
                                 });
   jvm.natives().register_method(
+      "java.game.Vehicle", "getSpeedSquare", "()F",
+      [](Object *self, const std::vector<Value> &) {
+        return Value::make_float(part_speed_square(self));
+      });
+  jvm.natives().register_method(
       kResRef, "id", "()I",
       [](Object* self, const std::vector<Value>&) {
         if (!self) return Value::make_int(0);
