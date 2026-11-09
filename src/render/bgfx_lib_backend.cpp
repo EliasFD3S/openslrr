@@ -361,9 +361,10 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     if (!ready_) return;
     const bool loading = osd_loading_dialog() || !osd_loading_overlay().empty();
     const bool covered = !osd_loading_overlay().empty() && !video_fmv_block_osd();
-    // A yielded section change must not expose its half-destroyed world or
-    // the fallback camera. Both script and host loading plates may present.
-    if (scene_transition_active() && !loading) return;
+    // A yielded section change must not expose its half-destroyed world.
+    // Loading plates can present, as can a modal that blocks enter() after
+    // loading finishes, such as the welcome dialog in a new career.
+    if (scene_transition_active() && !loading && !osd_has_modal()) return;
 
 #ifdef _WIN32
     RECT rc{};
