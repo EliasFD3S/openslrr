@@ -391,6 +391,12 @@ void register_lang_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
       if(!args.empty()&&args[0].tag==ValueTag::Int)script_thread_set_priority(self,args[0].v.i);
       return Value::make_void();
     });
+  jvm.natives().register_method("java.lang.Thread","setDaemon","(I)V",
+    [](Object* self,const std::vector<Value>& args){
+      if(!args.empty()&&args[0].tag==ValueTag::Int)
+        script_thread_set_daemon(self,args[0].v.i!=0);
+      return Value::make_void();
+    });
 
   // Dialog.display is the script: show, Object.wait, hide, return result.
   // notify wakes only the object that is inside wait (nested dialogs).

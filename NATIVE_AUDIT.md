@@ -8,9 +8,9 @@ implementations and following selected calls to their consumers.
 
 | Status | Stock signatures |
 | --- | ---: |
-| Registered with a body | 297 |
-| Registered with the explicit `native_noop` handler | 8 |
-| Absent from the registry | 71 |
+| Registered with a body | 303 |
+| Registered with the explicit `native_noop` handler | 10 |
+| Absent from the registry | 63 |
 | **Total** | **376** |
 
 The first category includes constant responses, inline empty bodies and
@@ -22,7 +22,8 @@ that category. It is not a compatibility score or a complete runtime trace.
 | Owner | Native signatures | Missing effect |
 | --- | --- | --- |
 | `Controller` | `user_SetAxisSpeed(int, float)`, `user_SetAxisForce(int, float, float)` | Override the axis rate and apply an axis force. Profile smoothing uses the separate `user_SetAxisSmooth` binding. |
-| `System` | `isLoadingReset()`, `setLdPriority(int)` | Reset loader state and set a loader priority. |
+| `System` | `isLoadingReset()` | Seed the original resource streaming history. |
+| `System` | `analyze(Object)`, `analyze(float)`, `analyze(int)` | The original discards the arguments. |
 | `GameRef` | `setActiveCollision()` | Enable collision for a generic world object. |
 | `RenderRef` | `setMatrix(int, ResourceRef, Vector3, Ypr)`, `lineAdd(Vector3, Vector3, int, float)` | Transform in a referenced space and append line geometry. The other `setMatrix` overload has a body. |
 | `ResourceRef` | `makeSound(ResourceRef, String)` | Create a sound resource. Playing existing WAV resources uses a separate binding. |
@@ -31,8 +32,12 @@ that category. It is not a compatibility score or a complete runtime trace.
 
 | Native or group | Current behavior |
 | --- | --- |
-| `System.isLoading` | Always returns zero. The visible loading screen is managed separately by the host. |
-| `System.simTime`, `timeWarp`, `setMeasure`, `getConfigOptions` | Sim time reads the host clock. Time warp echoes its argument. The measure setting controls digital vehicle instruments. The options refresh reads gameplay settings and schedules a save when they change. |
+| `System.isLoading`, `setLdPriority` | Report in-progress RPK scans and choose their cooperative work cadence. Mesh and texture streaming have no corresponding queue. |
+| `System.info` | Selector 5 returns the live host VM heap count. Other selectors return an empty string. |
+| `System.netHost`, `netJoin`, `netLeave` | Compatibility calls return zero. |
+| `Thread.setDaemon` | Sets and clears the per-thread flag. Shutdown still cancels every fiber. |
+| `System.simTime`, `timeWarp` | The simulation clock follows the warp factor, and setting it returns the previous factor. Physics uses the scaled elapsed time. UI clocks, sleeps and host timer dispatch use real time. |
+| `System.setMeasure`, `getConfigOptions` | The measure setting controls digital vehicle instruments. The options refresh reads gameplay settings and schedules a save when they change. |
 | `RenderRef.setFlare`, `Navigator.updateNavigator`, `GroundRef.getNearestCross` | Directional flares use the scene's texture and an approximate sprite layout. The GPS camera and markers follow scene objects. The crossing query returns null until the road index is available. |
 | `GfxEngine.numDisplayModes`, `currDisplayMode`, `displayModeName`, `changeVideoMode` | One fixed mode is exposed, 800×600×32 at index zero. The change call is empty. Startup window settings are a separate path. |
 | `RenderRef.getBoneId`, `lineCreate`, `plotRoute` | Always return zero. Bone lookup and route line construction are missing. |
@@ -57,7 +62,7 @@ presence in the registry does not imply that every use in a race is covered.
 | `PhysicsRef` | 8 | `create`, `createSphere`, `setStatic`, `getPos`, `getVel` (2 overloads), `getAngVel`, `getOri` |
 | `Animation` | 9 | Constructor, `finalize`, `setSpeed`, `setFade`, `play`, `loopPlay`, `pause`, `seek`, `getPos` |
 | `ParticleSystem` | 9 | `init`, `stop`, `setFreq`, `setDirectSource`, `setSource`, `setCounter`, `getCounter`, `delAction`, `modePermanent` |
-| `System`, `Thread` | 9 | `System.info`, `compileAll`, `analyze` (3 overloads), `netHost`, `netJoin`, `netLeave`, `Thread.setDaemon` |
+| `System` | 1 | `compileAll` |
 | `GameRef`, `RenderRef` | 6 | `GameRef.setState`, `getDetail`, `RenderRef.getDetail`, `addPoints`, `weld`, `progress` |
 | `Camera` | 1 | `setFog` |
 | `Painter`, `Vehicle` | 5 | `Painter.doPaint`, `paintPart`, `xPaint`, `Vehicle.getHorn`, `hasCrime` |

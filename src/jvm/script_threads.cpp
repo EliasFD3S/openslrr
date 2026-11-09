@@ -70,25 +70,26 @@ void resume(Scheduler& s,Thread& t){
 #endif
 }
 void script_thread_init(Jvm& vm,Object* object,const std::string& name){
-  if(!object||script_thread_alive(vm,object))return;
+  if(!object)return;
+  if(auto* thread=find(vm,object);thread&&thread->alive)return;
   object->fields["_thread_name"]=Value::make_obj(vm.new_string(name));
   object->fields["_thread_alive"]=Value::make_int(0);
-  auto& s=state(vm);auto& t=s.threads[object];
-#ifdef _WIN32
-  if(t&&t->fiber)DeleteFiber(t->fiber);
-#endif
-  t=std::make_unique<Thread>();t->scheduler=&s;t->object=object;
+  object->fields["_thread_daemon"]=Value::make_int(0);
 }
 void script_thread_start(Jvm& vm,Object* object){
-  if(!object||script_thread_alive(vm,object))return;
-  if(!find(vm,object)){
-    auto name=object->fields.find("_thread_name");
-    script_thread_init(vm,object,name!=object->fields.end()&&name->second.tag==ValueTag::Obj&&name->second.v.o?name->second.v.o->str:object->class_name);
-  }
-  auto& s=state(vm);auto& t=*find(vm,object);
+  if(!object)return;
+  // A stopped fiber can still own VM frames until it resumes to unwind.
+  if(auto* thread=find(vm,object);thread&&thread->alive)return;
+  if(!object->fields.contains("_thread_name"))
+    script_thread_init(vm,object,object->class_name);
+  auto& s=state(vm);
+  auto& entry_state=s.threads[object];
+  if(!entry_state)entry_state=std::make_unique<Thread>();
+  auto& t=*entry_state;
+  t=Thread{};
+  t.scheduler=&s;
+  t.object=object;
 #ifdef _WIN32
-  if(t.fiber){DeleteFiber(t.fiber);t.fiber=nullptr;}
-  t.execution={};t.stopping=false;t.suspended=false;t.wake=0;
   t.fiber=CreateFiberEx(64*1024,1024*1024,FIBER_FLAG_FLOAT_SWITCH,entry,&t);
   t.alive=t.fiber!=nullptr;
 #else
@@ -102,6 +103,10 @@ int script_thread_priority(Object* o){
   return i!=o->fields.end()&&i->second.tag==ValueTag::Int?std::clamp(i->second.v.i,-10,10):0;
 }
 void script_thread_set_priority(Object* o,int priority){if(o)o->fields["_thread_priority"]=Value::make_int(std::clamp(priority,-10,10));}
+void script_thread_set_daemon(Object* object,bool daemon){
+  if(object&&object->fields.contains("_thread_name"))
+    object->fields["_thread_daemon"]=Value::make_int(daemon?1:0);
+}
 void script_thread_stop(Jvm& vm,Object* o){
   auto* t=find(vm,o);if(!t||!t->alive)return;
   t->stopping=true;t->suspended=false;t->wake=0;

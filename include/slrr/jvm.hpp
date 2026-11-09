@@ -64,6 +64,10 @@ class Jvm : public TreeHost {
   size_t heap_size() const { return heap_.size(); }
   size_t gc_last_freed() const { return gc_last_freed_; }
 
+  double advance_sim_time(double seconds);
+  double sim_time() const { return sim_time_; }
+  float time_warp(float scale);
+
   // While set, the first native method with no host binding aborts that call
   // chain (nested TREE invokes propagate the stop to the outermost invoke).
   void set_halt_on_unbound(bool on) { halt_on_unbound_ = on; }
@@ -89,6 +93,9 @@ class Jvm : public TreeHost {
                       const std::string& field) override;
 
  private:
+  double sim_time_ = 0.0;
+  float time_warp_ = 1.0f;
+
   struct GcCallScope {
     int& depth;
     explicit GcCallScope(int& d) : depth(d) { ++depth; }

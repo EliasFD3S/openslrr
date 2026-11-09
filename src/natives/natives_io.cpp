@@ -10,6 +10,7 @@
 #include "slrr/slrr_font.hpp"
 #include "slrr/video_fmv.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/script_threads.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -20,6 +21,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 
 namespace slrr {
@@ -260,6 +262,11 @@ int32_t sdat_remap_resource(const HostFile& file, uint32_t wired) {
 }  // namespace
 
 void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
+  struct PackLoading {
+    unsigned scans = 0;
+    bool high_priority = false;
+  };
+  const auto loading = std::make_shared<PackLoading>();
   jvm.natives().register_method(
       "java.render.Frontend", "setFonts", "()V",
       [&jvm](Object*, const std::vector<Value>&) {
@@ -320,14 +327,33 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
       });
   jvm.natives().register_method(
       "java.lang.System", "simTime", "()F",
-      [](Object*, const std::vector<Value>&) {
-        return Value::make_float(now_seconds());
+      [&jvm](Object*, const std::vector<Value>&) {
+        return Value::make_float(static_cast<float>(jvm.sim_time()));
       });
   jvm.natives().register_method(
       "java.lang.System", "timeWarp", "(F)F",
-      [](Object*, const std::vector<Value>& args) {
-        if (!args.empty() && args[0].tag == ValueTag::Float) return args[0];
-        return Value::make_float(1.f);
+      [&jvm](Object*, const std::vector<Value>& args) {
+        const float scale = !args.empty() && args[0].tag == ValueTag::Float
+                                ? args[0].v.f : -1.0f;
+        return Value::make_float(jvm.time_warp(scale));
+      });
+  // Compatibility calls in shipped System.java without runtime work.
+  for (const char* method : {"netHost", "netJoin", "netLeave"}) {
+    jvm.natives().register_method(
+        "java.lang.System", method, "()I",
+        [](Object*, const std::vector<Value>&) { return Value::make_int(0); });
+  }
+  for (const char* signature : {"(Ljava.lang.Object;)V", "(F)V", "(I)V"})
+    jvm.natives().register_method("java.lang.System", "analyze", signature,
+                                  native_noop);
+  jvm.natives().register_method(
+      "java.lang.System", "info", "(I)Ljava.lang.String;",
+      [&jvm](Object*, const std::vector<Value>& args) {
+        // Selector 5 is the live VM object count in the original.
+        const bool heap_count = !args.empty() && args[0].tag == ValueTag::Int &&
+                                args[0].v.i == 5;
+        return Value::make_obj(
+            jvm.new_string(heap_count ? std::to_string(jvm.heap_size()) : ""));
       });
   jvm.natives().register_method(
       "java.lang.System", "openLib", "(Ljava.lang.String;)I",
@@ -339,28 +365,47 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
       });
   jvm.natives().register_method(
       "java.lang.System", "rpkScan", "(Ljava.lang.String;)I",
-      [&jvm, &rpk](Object*, const std::vector<Value>& args) {
+      [&jvm, &rpk, loading](Object*, const std::vector<Value>& args) {
         std::string dir;
         if (!args.empty() && args[0].tag == ValueTag::Obj)
           dir = obj_str(args[0].v.o);
         const auto names = rpk.list_rpks(dir);
+        struct ScanScope {
+          unsigned& scans;
+          explicit ScanScope(unsigned& count) : scans(count) { ++scans; }
+          ~ScanScope() { --scans; }
+        } scan(loading->scans);
         int32_t n = 0;
+        unsigned batch = 0;
         for (const auto& name : names) {
-          rpk.open_lib(dir + name);
+          const auto path = (std::filesystem::path(dir) / name).string();
+          const bool was_open = rpk.pack_by_path(path) != nullptr;
+          rpk.open_lib(path);
           ++n;
+          if (was_open || n == names.size() || !script_thread_active(jvm))
+            continue;
+          if (loading->high_priority)
+            script_thread_checkpoint(jvm);
+          else if (++batch == 8) {
+            batch = 0;
+            script_thread_sleep(jvm, 0.0f);
+          }
         }
         std::printf("[native] System.rpkScan(%s) -> %d\n", dir.c_str(), n);
-        (void)jvm;
         return Value::make_int(n);
       });
   jvm.natives().register_method(
       "java.lang.System", "isLoading", "()I",
-      [](Object*, const std::vector<Value>&) { return Value::make_int(0); });
-  // Loader-thread priority. Init calls it from LoadingScreen.show; the host
-  // has one thread, so the hint is a no-op. Leaving it unbound aborted Init
-  // after the boot intros and the window closed with no section.
+      [loading](Object*, const std::vector<Value>&) {
+        return Value::make_int(loading->scans != 0);
+      });
   jvm.natives().register_method(
-      "java.lang.System", "setLdPriority", "(I)V", native_noop);
+      "java.lang.System", "setLdPriority", "(I)V",
+      [loading](Object*, const std::vector<Value>& args) {
+        loading->high_priority = !args.empty() &&
+                                 args[0].tag == ValueTag::Int && args[0].v.i != 0;
+        return Value::make_void();
+      });
   jvm.natives().register_method(
       "java.lang.System", "isLoadingReset", "()V", native_noop);
   // PE System.arraycopy: copy `length` slots. Same array uses a temp so

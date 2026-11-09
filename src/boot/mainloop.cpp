@@ -729,7 +729,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
 
   spin_mechanic_inventory(jvm, frame_dt);
   if(!script_thread_alive(jvm,g_mechanic_thread))apply_mechanic_infoline(jvm, g_spinning_mechanic);
-  part_physics_advance(dt < 0.0 ? 0.0 : dt);
+  part_physics_advance(jvm.advance_sim_time(dt));
 
   // Last write before the view is built. The chase camera must not cover
   // the showroom orbit, and nothing after the earlier spin may put it back.

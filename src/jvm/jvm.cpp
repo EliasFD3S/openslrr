@@ -77,6 +77,20 @@ float bits_to_float_u32(uint32_t bits) {
 Jvm::Jvm(NativeRegistry* natives) : natives_(natives) {}
 Jvm::~Jvm() { script_threads_shutdown(*this); script_events_shutdown(*this); }
 
+double Jvm::advance_sim_time(double seconds) {
+  constexpr double max_step = 0.1;
+  if (!std::isfinite(seconds) || seconds <= 0.0) return 0.0;
+  const double elapsed = std::clamp(seconds * time_warp_, 0.0, max_step);
+  sim_time_ += elapsed;
+  return elapsed;
+}
+
+float Jvm::time_warp(float scale) {
+  const float previous = time_warp_;
+  if (std::isfinite(scale) && scale >= 0.0f) time_warp_ = scale;
+  return previous;
+}
+
 void Jvm::halt_unbound(const std::string& owner, const std::string& method,
                        const std::string& jni) {
   if (unbound_.empty()) {

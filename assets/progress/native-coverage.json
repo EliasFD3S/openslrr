@@ -11,9 +11,9 @@
     },
     {
       "name": "Language",
-      "body": 63,
-      "noop": 2,
-      "missing": 9
+      "body": 69,
+      "noop": 4,
+      "missing": 1
     },
     {
       "name": "Sound & scripts",
