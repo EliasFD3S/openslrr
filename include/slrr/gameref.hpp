@@ -4,6 +4,7 @@
 #include "slrr/scene_sun.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -42,6 +43,8 @@ struct GameRefTimer {
 };
 
 struct GameRefState {
+  std::shared_ptr<const ScxGeometry> deformed_geometry;
+  int32_t deformed_type = 0;
   SceneSun directional_light;
   void* key = nullptr;  // java.util.resource.GameRef* / GameType*
   void* binding = nullptr; // reference handle alias; never another scene node
@@ -70,6 +73,11 @@ struct GameRefState {
   int32_t cam_seq = 0;
   bool cam_active = false;
   bool cam_collision = false;
+  int32_t follow_vehicle = 0;
+  int cockpit_index = -1;
+  int follow_variant = 0;
+  bool camera_free = false, camera_autozoom = false, camera_attached = false;
+  float camera_roll = 0.f;
   float vp_x = 0.f, vp_y = 0.f, vp_w = 1.f, vp_h = 1.f;
   int32_t vp_pri = 0;
   int32_t vp_flags = 0;
@@ -179,7 +187,8 @@ bool gameref_scene_command(void* key, const std::string& line);
 // Fullscreen script camera (dealer, car lot). Eye and look are script
 // metres; the renderer still flips Z to match the uploaded meshes.
 bool gameref_world_camera(float eye[3], float at[3], float* fov, float* znear,
-                          float* zfar);
+                          float* zfar, float* up = nullptr);
+void gameref_activate_camera(GameRefState& camera, GameRefState& viewport, int priority);
 void gameref_advance_world_camera(float dt);
 bool gameref_world_camera_can_drag();
 void gameref_orbit_world_camera(float yaw_delta, float pitch_delta,

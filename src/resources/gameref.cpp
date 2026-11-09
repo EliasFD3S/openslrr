@@ -4,6 +4,7 @@
 #include "slrr/host_input.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/vehicle_dynamics.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -24,6 +25,7 @@ int32_t g_fog_color = 0;
 float g_fog_near = 0.f;
 float g_fog_far = 0.f;
 bool g_fog = false;
+int32_t g_camera_sequence = 0;
 
 void unlink_from_parent(GameRefState* n) {
   if (!n || !n->parent) return;
@@ -312,6 +314,13 @@ void refresh_aim(GameRefState* cam) {
   aim_matrix(cam, eye, at);
 }
 
+void gameref_activate_camera(GameRefState& camera, GameRefState& viewport, int priority) {
+  camera.viewport = viewport.key;
+  camera.cam_pri = priority;
+  camera.cam_active = true;
+  camera.cam_seq = ++g_camera_sequence;
+}
+
 bool gameref_scene_command(void* key, const std::string& line) {
   GameRefState* st = gameref_get(key);
   if (!st || (st->type_id & 0xFFFF) != 0x33) return false;
@@ -323,11 +332,7 @@ bool gameref_scene_command(void* key, const std::string& line) {
     int vp_id = 0, b = 0, c = 0, pri = 0;
     std::sscanf(text, "%*s %d %d %d %d", &vp_id, &b, &c, &pri);
     if (GameRefState* vp = gameref_find_live(vp_id)) {
-      st->viewport = vp->key;
-      st->cam_pri = pri;
-      st->cam_active = true;
-      static int32_t seq = 0;
-      st->cam_seq = ++seq;
+      gameref_activate_camera(*st, *vp, pri);
     }
     return false;
   }
@@ -349,12 +354,16 @@ bool gameref_scene_command(void* key, const std::string& line) {
     int id = 0;
     float off[3] = {};
     float dist = 0.f;
-    std::sscanf(text, "%*s %d %f , %f , %f %f", &id, &off[0], &off[1], &off[2],
-                &dist);
+    float attach[3]{};
+    const int count = std::sscanf(text, "%*s %d %f , %f , %f %f %f , %f , %f",
+        &id, &off[0], &off[1], &off[2], &dist, &attach[0], &attach[1], &attach[2]);
+    st->camera_attached = count == 8 && dist <= .25f;
+    if (st->camera_attached)
+      for (int i = 0; i < 3; ++i) off[i] += attach[i];
     st->move_id = id;
     std::copy(off, off + 3, st->move_off);
     st->move_dist = dist;
-    st->cam_distance = dist;
+    if (!st->camera_attached) st->cam_distance = dist;
     if (st->script_dist_set) {
       if (st->cam_distance < st->script_dist_min)
         st->cam_distance = st->script_dist_min;
@@ -369,6 +378,14 @@ bool gameref_scene_command(void* key, const std::string& line) {
     if (std::sscanf(text, "%*s %f", &st->cam_height) == 1)
       st->cam_height_set = true;
     return false;
+  }
+  if (std::strcmp(word, "roll") == 0) {
+    std::sscanf(text, "%*s %f", &st->camera_roll);
+    return true;
+  }
+  if (std::strcmp(word, "autozoom") == 0) {
+    st->camera_autozoom = true;
+    return true;
   }
   if (std::strcmp(word, "dist") == 0) {
     float a = 0.f, b = 0.f;
@@ -414,6 +431,8 @@ GameRefState* fullscreen_script_camera() {
   for (GameRefState* c : gameref_active_cameras()) {
     if (!c || !c->cam_active) continue;
     GameRefState* vp = c->viewport ? gameref_get(c->viewport) : nullptr;
+    if (c->cockpit_index >= 0 && (!vp || !vp->vp_active ||
+        !gameref_find_live(c->follow_vehicle))) continue;
     if (vp && (vp->vp_w < 0.99f || vp->vp_h < 0.99f)) continue;
     // Osd.show() adds a second fullscreen camera (priority 2, parent = the
     // Osd) after the scene camera. It exists for 3D widgets; those are drawn
@@ -569,10 +588,99 @@ void drive_orbit(GameRefState* cam, const float* hub, float dist, float frame_dt
   }
 }
 
+static bool driving_camera_pose(GameRefState& cam, float* eye, float* at,
+                                float* up, float dt) {
+  using physics::Vec3;
+  if (cam.camera_free) {
+    const float yaw = cam.ypr[0] + cam.orbit_yaw;
+    const float pitch = std::clamp(cam.ypr[1] + cam.orbit_pitch, -1.5f, 1.5f);
+    const Vec3 forward{-std::sin(yaw) * std::cos(pitch), std::sin(pitch),
+                       -std::cos(yaw) * std::cos(pitch)};
+    const Vec3 right{std::cos(yaw), 0, -std::sin(yaw)};
+    const auto& input = host_input();
+    const Vec3 motion = (forward * input.free_camera_z + right * input.free_camera_x +
+                         Vec3{0, input.free_camera_y, 0}) * (dt * 12);
+    cam.pos[0] += float(motion.x);
+    cam.pos[1] += float(motion.y);
+    cam.pos[2] += float(motion.z);
+    std::copy_n(cam.pos, 3, eye);
+    at[0] = eye[0] + float(forward.x);
+    at[1] = eye[1] + float(forward.y);
+    at[2] = eye[2] + float(forward.z);
+    return true;
+  }
+
+  const bool attached = cam.camera_attached && !cam.follow_variant;
+  const int target_id = attached ? cam.move_id : cam.follow_vehicle;
+  const auto* target = gameref_find_live(target_id);
+  PartMatrix frame;
+  if (!target || !part_camera_pose(target->key, cam.cockpit_index, frame.data()))
+    return false;
+  if (cam.cockpit_index >= 0) {
+    std::copy_n(frame.data() + 12, 3, eye);
+    for (int i = 0; i < 3; ++i) at[i] = eye[i] - frame[8 + i];
+    if (up) std::copy_n(frame.data() + 4, 3, up);
+    return true;
+  }
+  if (attached) {
+    target_point(&cam, cam.move_id, cam.move_off, eye);
+    target_point(&cam, cam.look_id, cam.look_off, at);
+    return true;
+  }
+
+  // SLRR_rev FollowCamera keeps the car's actual translation and damps
+  // the offset. This avoids camera lag when a render frame has fewer ticks.
+  const double azimuth = std::atan2(frame[8], frame[10]) + cam.orbit_yaw +
+                         (cam.follow_variant == 4 ? 3.141592653589793 : 0);
+  const double distance = cam.follow_variant == 4 ? 11. : cam.follow_variant == 3 ? 12. :
+      std::clamp(cam.cam_distance > 0.f ? cam.cam_distance : 7.f,
+                 cam.script_dist_min, cam.script_dist_max);
+  const double lift = cam.follow_variant == 4 ? 1.9 : cam.follow_variant == 3 ? 2.4 : 1.4;
+  const double radius = std::hypot(distance, lift);
+  const double elevation = std::clamp(std::atan2(lift, distance) + cam.orbit_pitch, -1.35, 1.35);
+  const Vec3 offset{std::sin(azimuth) * std::cos(elevation) * radius,
+                    std::sin(elevation) * radius,
+                    std::cos(azimuth) * std::cos(elevation) * radius};
+  const Vec3 focus{frame[12], frame[13] + 1.1, frame[14]};
+  const Vec3 desired = focus + offset;
+  const float position[3] = {float(desired.x), float(desired.y), float(desired.z)};
+  const float center[3] = {float(focus.x), float(focus.y), float(focus.z)};
+  if (!cam.cam_pose_init) {
+    std::copy_n(position, 3, cam.eye_s);
+    cam.cam_pose_init = true;
+  } else {
+    const float weight = -std::expm1(-dt * (cam.follow_variant ? 9.f : 5.f));
+    for (int i = 0; i < 3; ++i)
+      cam.eye_s[i] = std::lerp(cam.eye_s[i] + center[i] - cam.look_s[i], position[i], weight);
+  }
+  std::copy_n(center, 3, cam.look_s);
+  std::copy_n(center, 3, at);
+  std::copy_n(cam.eye_s, 3, eye);
+  float delta[3] = {eye[0] - at[0], eye[1] - at[1], eye[2] - at[2]};
+  SceneSphereHit hit;
+  if (scene_instances_sweep_sphere(at, delta, .15f, hit)) {
+    const float fraction = std::clamp(hit.fraction - .02f, .05f, 1.f);
+    for (int i = 0; i < 3; ++i) eye[i] = at[i] + delta[i] * fraction;
+  }
+  if (dt > 0.f) {
+    std::copy_n(eye, 3, cam.pos);
+    cam.ypr[0] = std::atan2(eye[0] - at[0], eye[2] - at[2]);
+    cam.ypr[1] = std::atan2(at[1] - eye[1], std::hypot(eye[0] - at[0], eye[2] - at[2]));
+  }
+  return true;
+}
+
 static bool world_camera_pose(float eye[3], float at[3], float* fov, float* znear,
-                              float* zfar, float dt) {
+                              float* zfar, float dt, float* up = nullptr) {
   GameRefState* cam = fullscreen_script_camera();
   if (!cam || !eye || !at) return false;
+  if (up) { up[0] = 0; up[1] = 1; up[2] = 0; }
+  if (driving_camera_pose(*cam, eye, at, up, dt)) {
+    if (fov) *fov = cam->camera_attached && !cam->follow_variant ? cam->half_aov : 42.f;
+    if (znear) *znear = .03f;
+    if (zfar) *zfar = 2000.f;
+    return true;
+  }
   // SLRR_rev javaSceneCamera (codex/physics-reverse-port @ c65675f): the
   // eye keeps its horizontal offset from the move target, clamped to the
   // dist range. Height is the `height` command, or how far the body already
@@ -683,15 +791,28 @@ static bool world_camera_pose(float eye[3], float at[3], float* fov, float* znea
     eye[1] = follow[1];
     eye[2] = follow[2];
   }
-  if (fov) *fov = cam->half_aov > 1.f ? cam->half_aov : 60.f;
+  if (up && cam->camera_roll != 0.f) {
+    const auto forward = physics::Vec3{at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]}.normalized();
+    const auto right = forward.cross({0, 1, 0}).normalized();
+    if (right.dot(right) > 0) {
+      const auto rolled = right.cross(forward) * std::cos(cam->camera_roll) +
+                          right * std::sin(cam->camera_roll);
+      up[0] = float(rolled.x); up[1] = float(rolled.y); up[2] = float(rolled.z);
+    }
+  }
+  if (fov) {
+    const auto delta = physics::Vec3{eye[0] - at[0], eye[1] - at[1], eye[2] - at[2]};
+    *fov = cam->camera_autozoom ? float(std::clamp(240.0 / std::max(1.0, delta.length()), 18.0, 65.0))
+                               : cam->half_aov > 1.f ? cam->half_aov : 60.f;
+  }
   if (znear) *znear = cam->dmin > 0.001f ? cam->dmin : 0.05f;
   if (zfar) *zfar = cam->dmax > 1.f ? cam->dmax : 500.f;
   return true;
 }
 
 bool gameref_world_camera(float eye[3], float at[3], float* fov, float* znear,
-                          float* zfar) {
-  return world_camera_pose(eye, at, fov, znear, zfar, 0.f);
+                          float* zfar, float* up) {
+  return world_camera_pose(eye, at, fov, znear, zfar, 0.f, up);
 }
 
 void gameref_advance_world_camera(float dt) {
@@ -701,7 +822,8 @@ void gameref_advance_world_camera(float dt) {
 
 bool gameref_world_camera_can_drag() {
   const auto* cam = fullscreen_script_camera();
-  return cam && cam->aim_move && cam->aim_look && cam->move_dist > 0.25f;
+  return cam && (cam->camera_free || (cam->follow_vehicle && cam->cockpit_index < 0) ||
+                 (cam->aim_move && cam->aim_look && cam->move_dist > .25f));
 }
 
 void gameref_orbit_world_camera(float yaw_delta, float pitch_delta,
@@ -720,16 +842,19 @@ void gameref_orbit_world_camera(float yaw_delta, float pitch_delta,
   if (in.keys_right) ax -= 0.005f;
   if (in.keys_up) ay += 0.003f;
   if (in.keys_down) ay -= 0.003f;
-  in.mouse_dx = 0.f;
-  in.mouse_dy = 0.f;
   GameRefState* cam = fullscreen_script_camera();
-  if (!cam) return;
+  if (cam && (cam->camera_free || (cam->follow_vehicle && cam->cockpit_index < 0))) {
+    cam->orbit_yaw = std::remainder(cam->orbit_yaw + in.mouse_dx * .003f, 6.2831853f);
+    cam->orbit_pitch = std::clamp(cam->orbit_pitch + in.mouse_dy * .003f, -1.1f, 1.1f);
+  }
+  in.mouse_dx = in.mouse_dy = 0.f;
+  if (!cam || cam->cockpit_index >= 0) return;
   // Orbit cameras take the axes as a force. A free pose still tracks the
   // pointer directly.
   if (cam->aim_look && cam->move_dist > 0.25f) {
     cam->ctl_x = ax;
     cam->ctl_y = ay;
-  } else {
+  } else if (!cam->follow_vehicle && !cam->camera_free) {
     cam->orbit_yaw += yaw_delta;
     const float pitch_lim = cam->cam_height_set ? 0.3f : 1.3f;
     cam->orbit_pitch = std::max(-pitch_lim, std::min(pitch_lim,
@@ -738,7 +863,8 @@ void gameref_orbit_world_camera(float yaw_delta, float pitch_delta,
   if (dt < 0.f) dt = 0.f;
   if (dt > 0.1f) dt = 0.1f;
   if (cam->cam_distance < 0.05f) {
-    cam->cam_distance = cam->move_dist > 0.05f ? cam->move_dist : 3.5f;
+    cam->cam_distance = cam->move_dist > 0.05f ? cam->move_dist :
+                         cam->follow_vehicle ? 7.f : 3.5f;
   }
   // Native camera: distance *= 1 + axis10 * 100 * dt, then the dist clamp.
   // A wheel detent arrives as ±1; the script maps that to a short pulse,

@@ -53,7 +53,9 @@ struct HostInput {
   bool keys_pgup = false;
   bool keys_pgdn = false;
   float drive_steer = 0, drive_throttle = 0, drive_brake = 0;
+  bool drive_steer_analog = false;
   float drive_clutch = 0.f, drive_shift = 0.f;
+  float free_camera_x = 0.f, free_camera_y = 0.f, free_camera_z = 0.f;
   bool drive_horn = false;
   bool drive_reverse = false, drive_handbrake = false;
 };

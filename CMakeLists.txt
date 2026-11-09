@@ -59,6 +59,7 @@ add_executable(slrr_host
   src/physics/sl2_pacejka.cpp
   src/physics/dyno_model.cpp
   src/physics/vehicle_dynamics.cpp
+  src/physics/deformation_cage.cpp
   src/physics/suspension_geometry.cpp
 )
 

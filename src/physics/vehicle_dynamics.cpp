@@ -405,7 +405,7 @@ void VehicleDynamics::step_drive() {
     previous_rpm_ = drive.idle;
   }
   const double rpm = engine_omega * rpm_per_rad;
-  double weights = 0, shaft = 0, road_shaft = 0, square_weights = 0;
+  double weights = 0, shaft = 0, road_shaft = 0, square_weights = 0, launch_slip = 0;
   for (size_t i = 0; i < wheels.size(); ++i) {
     if (!wheels[i].enabled) continue;
     const auto& cfg = drive.wheels[i];
@@ -417,7 +417,11 @@ void VehicleDynamics::step_drive() {
     if (s.contact && wheels[i].radius > 0) {
       const Vec3 forward = wheel_forward(body, cfg.steer);
       const Vec3 tangent = (forward - s.normal * forward.dot(s.normal)).normalized();
-      road_shaft += w * body.point_velocity(s.patch).dot(tangent) / wheels[i].radius;
+      const double road_speed = body.point_velocity(s.patch).dot(tangent);
+      road_shaft += w * road_speed / wheels[i].radius;
+      if (drive.launch_help > 0 && w > 0)
+        launch_slip = std::max(launch_slip, (std::abs(s.spin) * wheels[i].radius -
+            std::abs(road_speed)) / std::max(2.5, std::abs(road_speed)));
     }
   }
   if (weights > 0) {
@@ -435,7 +439,20 @@ void VehicleDynamics::step_drive() {
   const double idle_torque = rpm < drive.idle
       ? std::min(80.0, 25.0 + (drive.idle - rpm) * .25) : 0;
   const double combustion = std::clamp((rpm - 200) / 450, 0.0, 1.0);
-  const double gas = direction_brake ? 0 : drive.throttle;
+  const double kph = std::abs(forward_speed) * 3.6;
+  double gas = direction_brake ? 0 : drive.throttle;
+  if (drive.launch_help <= 0 || !engine_running || drive.clutch < .5 ||
+      drive.brake > 0 || drive.handbrake > .2 || gas < .2 ||
+      (gear != 1 && gear != 7) || kph >= 30) {
+    launch_active_ = false;
+    launch_factor_ = 1;
+  } else if (launch_active_ || (kph < 2 && gas >= .6)) {
+    launch_active_ = true;
+    const double target = std::clamp(1 - std::max(0.0, launch_slip - .15) * 2, .05, 1.0);
+    launch_factor_ = std::lerp(launch_factor_, target,
+        -std::expm1(-timestep / (target < launch_factor_ ? .04 : .15)));
+    gas *= std::lerp(1.0, launch_factor_, drive.launch_help);
+  }
   const double combustion_torque = engine_running && rpm < drive.limit && !automatic_shift
       ? (2 * drive.torque(rpm) * gas + idle_torque) * combustion *
             limiter_factor(rpm, previous_rpm_, drive.limit)
@@ -455,10 +472,16 @@ void VehicleDynamics::step_drive() {
     constexpr double exchange_rate = .9990000128746033;
     const double closed_delta = mismatch * mix * exchange_rate;
     double grip = drive.clutch;
+    const double demand = std::clamp((drive.brake - .8) * 5, 0.0, 1.0);
+    const double stall_risk = std::clamp((drive.idle * 1.5 -
+        std::min(rpm, std::abs(shaft * ratio) * rpm_per_rad)) /
+        std::max(1.0, drive.idle * .5), 0.0, 1.0);
+    const double brake_help = demand * stall_risk * std::clamp((kph - 20) / 10, 0.0, 1.0);
     if (drive.auto_clutch && closed_delta < 0) {
       const double idle_floor = drive.idle * .85 / rpm_per_rad;
       grip = std::min(grip, std::max(0.0, engine_omega - idle_floor) / -closed_delta);
     }
+    grip *= 1 - brake_help;
     engine_omega = std::max(0.0, engine_omega + closed_delta * grip);
     const double impulse = -mismatch * (1 - mix) * grip * exchange_rate /
                            ratio * transmission;
@@ -483,6 +506,7 @@ void VehicleDynamics::step_drive() {
     const auto &cfg = drive.wheels[i];
     auto &s = state[i];
     if (!wheel.enabled) continue;
+    double road_speed = 0;
     if (!s.contact || s.force <= 0 || cfg.tyre[11] <= 0) {
       s.longitudinal_slip = s.lateral_slip = 0;
       s.spin *= 1 - .25 * timestep / wheel_inertia;
@@ -494,6 +518,7 @@ void VehicleDynamics::step_drive() {
       const Vec3 side = forward.cross(s.normal);
       const Vec3 speed = body.point_velocity(s.patch);
       const double road = speed.dot(forward), lateral = speed.dot(side);
+      road_speed = road;
       const double rolling = s.spin * wheel.radius - road;
       const double abs_road = std::abs(road);
       const double blend = std::clamp((abs_road - .1) * .1, 0.0, 1.0);
@@ -528,11 +553,20 @@ void VehicleDynamics::step_drive() {
       s.spin -= (longitudinal * wheel.radius + rolling_torque + s.spin * .15) *
                 timestep / wheel_inertia;
     }
-    const double braking = 500 * timestep * (
-        (direction_brake ? 1 : drive.brake) * cfg.brake * drive.brake_scale +
-        drive.handbrake * cfg.handbrake * drive.handbrake_scale +
-        cfg.bearing * drive.bearing_scale);
-    s.spin = std::copysign(std::max(0.0, std::abs(s.spin) - braking), s.spin);
+    const double brake_step = 500 * timestep;
+    const auto brake = [](double speed, double amount) {
+      return std::copysign(std::max(0.0, std::abs(speed) - amount), speed);
+    };
+    const double free_spin = brake(s.spin, brake_step * cfg.bearing * drive.bearing_scale);
+    double braked = brake(free_spin, brake_step * (direction_brake ? 1 : drive.brake) *
+                                      cfg.brake * drive.brake_scale);
+    if (s.contact && std::abs(road_speed) >= 3 && free_spin * road_speed > 0) {
+      const double minimum = std::abs(road_speed) / std::max(.01, wheel.radius) * .85;
+      const double allowed = std::max(0.0, std::abs(free_spin) - minimum);
+      const double released = std::max(0.0, std::abs(free_spin - braked) - allowed);
+      braked += std::copysign(released * drive.abs_strength, road_speed);
+    }
+    s.spin = brake(braked, brake_step * drive.handbrake * cfg.handbrake * drive.handbrake_scale);
     s.rotation = std::remainder(s.rotation + s.spin * timestep, 6.283185307179586);
   }
 }
@@ -677,6 +711,8 @@ void VehicleDynamics::reset_clock() {
 void VehicleDynamics::reset_drive() {
   engine_omega = previous_rpm_ = shift_time_ = 0;
   gear = previous_shift_ = 0;
+  launch_active_ = false;
+  launch_factor_ = 1;
   ignition_ = engine_running = forced_reverse_ = false;
 }
 

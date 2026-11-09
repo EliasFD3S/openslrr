@@ -103,6 +103,8 @@ struct DriveInput {
   bool engaged = false, reverse = false, automatic_shift = true, auto_clutch = true;
   double throttle = 0, brake = 0, handbrake = 0;
   double brake_scale = 0, handbrake_scale = 0, bearing_scale = 0;
+  double abs_strength = 0;
+  double launch_help = 0;
   double inertia = 0, idle = 0, limit = 0, starter = 0;
   double clutch = 1;
   std::function<double(double)> torque;
@@ -113,7 +115,8 @@ double suspension_force(double length, double velocity, double rest,
 
 class VehicleDynamics {
 public:
-  static constexpr unsigned frequency = 700;
+  // SLRR_rev physics-timing.ts driving frequency.
+  static constexpr unsigned frequency = 120;
   static constexpr unsigned update_frequency = 60;
   static constexpr double timestep = 1.0 / frequency;
   RigidBody body;
@@ -134,8 +137,10 @@ public:
 private:
   double accumulator_ = 0;
   double previous_rpm_ = 0, shift_time_ = 0;
+  double launch_factor_ = 1;
   int previous_shift_ = 0;
   bool ignition_ = false, forced_reverse_ = false;
+  bool launch_active_ = false;
   void step(const Terrain &terrain);
   void step_drive();
   void update_gear(double rpm, double shaft, double road_shaft);

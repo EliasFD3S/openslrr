@@ -39,6 +39,7 @@ Object *part_render_owner(void *key);
 // World height of the tyre contact under a car. The camera's `move` spring
 // hangs on this point; `look` stays on the chassis origin.
 bool part_car_ground(void *key, float *y);
+bool part_camera_pose(void* car, int camera, float* matrix);
 // Chassis owning a render node, with its active-world script frame.
 void *part_shadow_source(void *render, float *frame);
 // Advance only cars belonging to the active world, at a fixed physics step.

@@ -375,12 +375,12 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     sc.width = static_cast<uint32_t>(width_);
     sc.height = static_cast<uint32_t>(height_);
     bgfx::reset(BGFX_RESET_VSYNC, &sc);
-    float world_eye[3], world_at[3], world_fov = 60.f, world_zn = 0.05f,
+    float world_eye[3], world_at[3], world_up[3], world_fov = 60.f, world_zn = 0.05f,
                                      world_zf = 500.f;
     // Garage, dealer and car lot all use the script camera, which looks
     // at the car (or the empty bay). The free orbit is only a fallback.
     const bool world_cam = gameref_world_camera(world_eye, world_at, &world_fov,
-                                                 &world_zn, &world_zf);
+                                                 &world_zn, &world_zf, world_up);
 
     float view[16];
     float proj[16];
@@ -390,7 +390,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
                       : 1.333f;
       const bx::Vec3 eye{world_eye[0], world_eye[1], -world_eye[2]};
       const bx::Vec3 at{world_at[0], world_at[1], -world_at[2]};
-      const bx::Vec3 up{0.f, 1.f, 0.f};
+      const bx::Vec3 up{world_up[0], world_up[1], -world_up[2]};
       bx::mtxLookAt(view, eye, at, up);
       bx::mtxProj(proj, world_fov, aspect, world_zn, world_zf,
                   bgfx::getCaps()->homogeneousDepth);
@@ -556,7 +556,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
   void LibBgfxBackend::clear_scene()
 {
     for(auto& entry:instance_meshes_)destroy_part(entry.second);
-    instance_meshes_.clear();instances_.clear();previews_.clear();
+    instance_meshes_.clear();deformed_meshes_.clear();instances_.clear();previews_.clear();
     projected_shadows_.clear();
     for (ScenePart& p : parts_) destroy_part(p);
     parts_.clear();
@@ -606,12 +606,35 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     }
     std::sort(previews_.begin(),previews_.end(),[](const Preview&a,const Preview&b){return a.viewport.vp_pri!=b.viewport.vp_pri?a.viewport.vp_pri<b.viewport.vp_pri:a.viewport.vp_x<b.viewport.vp_x;});
     std::unordered_map<const ScxGeometry*,bool> used;
-    auto cache=[&](const SceneInstance& i){const auto* key=i.geometry.get();used[key]=true;if(instance_meshes_.count(key))return;
-      ScenePart part;part.source=i.geometry;part.geo=*i.geometry;upload_part(part);load_part_textures(part);instance_meshes_.emplace(key,std::move(part));};
+    std::unordered_map<void*, const ScxGeometry*> current_deformed;
+    auto cache = [&](const SceneInstance& instance) {
+      const auto* key = instance.geometry.get();
+      used[key] = true;
+      const auto* node = gameref_get(instance.key);
+      const bool deformed = node && node->deformed_geometry.get() == key;
+      if (deformed) current_deformed[instance.key] = key;
+      if (instance_meshes_.contains(key)) return;
+      ScenePart part;
+      part.source = instance.geometry;
+      part.geo = *instance.geometry;
+      upload_part(part);
+      if (deformed) {
+        const auto previous = deformed_meshes_.find(instance.key);
+        if (previous != deformed_meshes_.end()) {
+          auto old = instance_meshes_.find(previous->second);
+          if (old != instance_meshes_.end() && old->second.geo.textures == part.geo.textures &&
+              old->second.geo.info.path == part.geo.info.path)
+            part.tex = std::move(old->second.tex);
+        }
+      }
+      if (part.tex.empty()) load_part_textures(part);
+      instance_meshes_.emplace(key, std::move(part));
+    };
     for(const auto&i:instances_)cache(i);for(const auto&p:previews_)for(const auto&i:p.instances)cache(i);
     for(auto it=instance_meshes_.begin();it!=instance_meshes_.end();) {
       if(used.count(it->first)){++it;continue;}destroy_part(it->second);it=instance_meshes_.erase(it);
     }
+    deformed_meshes_ = std::move(current_deformed);
   }
   void LibBgfxBackend::draw_dynamic_world(const float* view, uint16_t view_id)
 {

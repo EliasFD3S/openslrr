@@ -129,6 +129,7 @@ class LibBgfxBackend final : public IRenderBackend {
   std::vector<SceneInstance> instances_;
   std::vector<Preview> previews_;
   std::unordered_map<const ScxGeometry*,ScenePart> instance_meshes_;
+  std::unordered_map<void*, const ScxGeometry*> deformed_meshes_;
 
   void sync_instances();
 

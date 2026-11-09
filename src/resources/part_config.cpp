@@ -282,6 +282,9 @@ PartConfig parse_part_config(const std::string &source,
       } else if (command == "enginepower" && t.size() > 6) {
         open_wheel = -1;
         out.brake_inertia = number(t, 6);
+      } else if (command == "camera" && t.size() >= 7) {
+        open_wheel = -1;
+        out.cameras.push_back(pose(t));
       } else if (command == "steering") {
         open_wheel = -1;
         out.steering = pose(t);

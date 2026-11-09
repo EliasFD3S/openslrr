@@ -726,7 +726,8 @@ Vec3 closest_on_edge(Vec3 p, Vec3 a, Vec3 b) {
 }
 
 void sweep_triangles(const StaticMesh &mesh, const std::vector<uint32_t> &indices,
-                     Vec3 start, Vec3 delta, double radius, SceneSphereHit &hit) {
+                     Vec3 start, Vec3 delta, double radius, SceneSphereHit &hit,
+                     float max_vertical_normal) {
   const Vec3 end = start + delta;
   for (size_t i = 0; i + 2 < indices.size(); i += 3) {
     Vec3 v[3];
@@ -744,7 +745,7 @@ void sweep_triangles(const StaticMesh &mesh, const std::vector<uint32_t> &indice
         std::max({v[0].y, v[1].y, v[2].y}) < std::min(start.y, end.y) - radius)
       continue;
     const Vec3 n = (v[1] - v[0]).cross(v[2] - v[0]).normalized();
-    if (n.dot(n) < 0.5) continue;
+    if (n.dot(n) < 0.5 || std::abs(n.y) > max_vertical_normal) continue;
 
     double t = 0.0;
     // Conservative advancement against the face, edges and vertices.
@@ -787,7 +788,8 @@ void sweep_triangles(const StaticMesh &mesh, const std::vector<uint32_t> &indice
 } // namespace
 
 bool scene_instances_sweep_sphere(const float start[3], const float delta[3],
-                                  float radius, SceneSphereHit &hit) {
+                                  float radius, SceneSphereHit &hit,
+                                  float max_vertical_normal) {
   const Vec3 from{start[0], start[1], start[2]};
   const Vec3 movement{delta[0], delta[1], delta[2]};
   if (!from.finite() || !movement.finite() || movement.dot(movement) < 1e-12)
@@ -804,9 +806,11 @@ bool scene_instances_sweep_sphere(const float start[3], const float delta[3],
       for (int32_t z = z0; z <= z1; ++z) {
         const auto cell = mesh.cells.find(floor_cell(x, z));
         if (cell != mesh.cells.end())
-          sweep_triangles(mesh, cell->second, from, movement, radius, hit);
+          sweep_triangles(mesh, cell->second, from, movement, radius, hit,
+                          max_vertical_normal);
       }
-    sweep_triangles(mesh, mesh.large_triangles, from, movement, radius, hit);
+    sweep_triangles(mesh, mesh.large_triangles, from, movement, radius, hit,
+                    max_vertical_normal);
   };
   if (g_static_enabled)
     for (const auto &mesh : g_static) sweep_mesh(mesh);
@@ -933,7 +937,8 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root) {
     instance.lighting=lighting;
     if (!scene_instance_transform(n->key, root, instance.transform.data()))
       continue;
-    instance.geometry = geometry(static_cast<uint32_t>(n->type_id));
+    instance.geometry = n->deformed_geometry && n->deformed_type == n->type_id
+        ? n->deformed_geometry : geometry(static_cast<uint32_t>(n->type_id));
     if (!instance.geometry)
       continue;
     instance.key = n->key;

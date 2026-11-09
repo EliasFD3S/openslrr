@@ -84,7 +84,8 @@ struct SceneSphereHit {
 };
 // Sweep through the indexed static scene in script metres.
 bool scene_instances_sweep_sphere(const float start[3], const float delta[3],
-                                  float radius, SceneSphereHit &hit);
+                                  float radius, SceneSphereHit &hit,
+                                  float max_vertical_normal = 1.f);
 uint64_t scene_instances_floor_builds();
 // Changes whenever the world-space floor used by projected shadows changes.
 uint64_t scene_instances_floor_revision();

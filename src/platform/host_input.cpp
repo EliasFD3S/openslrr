@@ -295,10 +295,29 @@ void host_input_update_controller(Object* controller, float dt) {
   auto axis = [&](int id) { return host_input_controller_axis(controller, id); };
   // Stock AXIS_TURN_LEFTRIGHT is positive to the left, like the chassis yaw.
   in.drive_steer = axis(1);
+  in.drive_steer_analog = false;
+  if (controller && controller->input) {
+    const auto& bindings = controller->input->bindings;
+    bool has_pad = false, digital_steering = false;
+    for (const auto& binding : bindings) {
+      has_pad |= binding.device == kPad;
+      if (binding.axis != 1) continue;
+      const bool analog = binding.device == kPad && binding.physical < 10;
+      const bool active = std::abs(host_input_physical_axis(binding.device, binding.physical)) > .01f;
+      in.drive_steer_analog |= analog && active;
+      digital_steering |= !analog && active;
+    }
+    if (!has_pad && !digital_steering && std::abs(pad[0] - pad[1]) > .01f)
+      in.drive_steer_analog = true;
+    in.drive_steer_analog &= !digital_steering;
+  }
   in.drive_throttle = axis(28);
   in.drive_brake = axis(29);
   in.drive_handbrake = axis(48) > .5f;
   in.drive_clutch = axis(49);
+  in.free_camera_x = -axis(4);
+  in.free_camera_y = axis(5);
+  in.free_camera_z = axis(6);
   in.drive_shift = axis(50);
   in.drive_horn = axis(54) > .5f;
   const bool pad_y_mapped = controller && controller->input &&
