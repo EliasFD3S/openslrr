@@ -35,23 +35,23 @@ These milestones describe existing functionality, rather than a percentage of th
 
 ![Native bindings by family: with a body, no-op, or missing](assets/progress/native-coverage.svg)
 
-**289 with a body · 12 no-op · 75 missing**, out of **376 stock natives** (6 November 2026).
+**293 with a body · 9 explicit no-ops · 74 missing**, out of **376 stock natives** (9 November 2026).
 The bars show **numbers of functions**, not percentages. A body can still be partial or return a fixed value; these counts do not establish full behavior or validation in game. The separately counted no-op functions are explicitly registered as `native_noop`.
 
 | Family | With a body | No-op | Missing |
 | --- | ---: | ---: | ---: |
 | World | 3 | 0 | 51 |
 | Language | 62 | 2 | 10 |
-| Sound & scripts | 11 | 0 | 7 |
+| Sound & scripts | 12 | 0 | 6 |
 | Resources | 49 | 5 | 6 |
 | Rendering | 35 | 0 | 1 |
-| Files & input | 32 | 5 | 0 |
+| Files & input | 35 | 2 | 0 |
 | Parts | 97 | 0 | 0 |
-| **Total** | **289** | **12** | **75** |
+| **Total** | **293** | **9** | **74** |
 
 World covers GroundRef, particles, animation and PhysicsRef; language covers `java.lang`. Resources covers GameRef, ResourceRef, RenderRef and SfxRef; rendering covers GfxEngine, Text, Camera and Viewport. Files & input includes File, FindFile, Input, Controller and MouseCursor; parts includes Part, Chassis, WheelRef, DynoData and SfxTable. Sound & scripts covers Sound, Vehicle, Painter, Navigator and GameLogic.
 
-The snapshot matches the stock native table against registered class, method and parameter signatures, with explicit no-op bindings reviewed separately. Counts and definitions are stored in [native-coverage.json](assets/progress/native-coverage.json). After auditing a new snapshot, regenerate the graphic with `python tools/render-native-coverage.py` (standard library only).
+The snapshot matches the stock native table against registered class, method and parameter signatures. See the [native audit and roadmap](NATIVE_AUDIT.md) for the explicit no-ops, known mocks and missing signatures. Counts are stored in [native-coverage.json](assets/progress/native-coverage.json). After auditing a new snapshot, regenerate the graphic with `python tools/render-native-coverage.py` (standard library only).
 
 ### Features
 
@@ -68,18 +68,10 @@ The snapshot matches the stock native table against registered class, method and
 | Physics | ✅ Chassis, springs, dampers, and wheel contacts, verified with Baiern and Duhen. A released car settles on the garage floor. A parked car holds its standing height |
 | Audio and video | ✅ Effects, loops, FMV audio and four music playlists streamed with Media Foundation/XAudio2. Repeated effects and menu sounds have separate overlap limits |
 | Options | ✅ Mouse-operated sliders and all three audio volume values saved/reloaded through the stock `save/game/options` format |
-| Driving | ⏳ Tyre slip, engine, clutch, transmission, and controls still need to be connected |
+| Driving | ⏳ Engine, tyre slip, clutch and gear logic connected. Keyboard and XInput bindings use the stock control profile. Track validation and remaining driver actions are pending |
 | World and career | ⏳ City, traffic and complete career flow; vehicle purchase/save/load still need end-to-end validation |
 
-**Next major milestones**
-
-- [ ] Complete the simulation and controls needed to drive.
-- [ ] Extend wall collisions, suspension constraints, and deformation.
-- [ ] Finish buying a part and saving the car.
-- [ ] Complete transparency rendering.
-- [ ] Bring the city and traffic to life.
-
-Some native functions are still placeholders. Engine-loop audio and the original music-mode shuffle/repeat policies are not implemented; track progression is currently sequential. The engine-volume setting is stored for future engine audio. You can browse the catalog and work on the car in the garage. Buying a part and saving the car have not been validated yet. Multiplayer is outside the current scope.
+Engine loops use the scripts' SFX tables. Music playlists currently play in sequential order. The [roadmap](NATIVE_AUDIT.md#roadmap) tracks the next steps for driving, collision and damage, navigation, garage actions and platform support.
 
 ### Recent changes
 
