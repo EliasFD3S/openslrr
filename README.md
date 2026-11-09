@@ -155,7 +155,7 @@ Massless rays, rigid wheels, and complex hub-struts retain the existing native s
 
 The current implementation keeps one Chrono system per vehicle and duplicates its static collision body; large worlds and multiple traffic vehicles would benefit from a shared system. Scene render meshes do not yet have separate collision metadata, and discrete mesh contacts still need high-speed and in-game validation. Complex `setHub` struts, opposite-wheel/live-axle constraints, wheel spin, and stock-car corner categories remain unvalidated; no stock-car suspension coverage is claimed without game data. Tyre behavior is still the reduced chassis-only parked-friction model; independent wheel slip velocity, wheel reaction, and moving-vehicle tyre dynamics are not migrated.
 
-For a deterministic stock Baiern/garage benchmark, run `slrr_host --probe-stock-physics --root "C:\path\to\SLRR"`; it reports 700 Hz tick cost, contacts, support, and backend. `SLRR_PHYSICS_DUMP=1` logs effective corner geometry and contact state, `SLRR_PHYSICS_PROFILE=1` enables aggregate frame/physics timings, and `SLRR_START_CAR=1` explicitly releases a spawned car for testing.
+For a deterministic stock Baiern/garage benchmark, run `slrr_host --probe-stock-physics --root "C:\path\to\SLRR"`; it reports 700 Hz tick cost, contacts, support, and backend. `SLRR_PHYSICS_DUMP=1` logs effective corner geometry and contact state, `SLRR_PHYSICS_PROFILE=1` enables aggregate frame/physics timings, and `SLRR_START_CAR=1` explicitly releases a spawned car for testing. Diagnostics are also written and flushed after every message to `slrr-physics.log` in the current directory; set `SLRR_PHYSICS_LOG` to override that path.
 
 The game log prints `backend=chrono` or `backend=native` on the `[phys]` line.
 

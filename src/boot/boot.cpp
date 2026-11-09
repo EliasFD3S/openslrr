@@ -1,4 +1,5 @@
 #include "slrr/boot.hpp"
+#include "slrr/physics_log.hpp"
 
 #include "slrr/gameref.hpp"
 #include "slrr/host_cursor.hpp"
@@ -238,7 +239,7 @@ int boot_stock_physics_probe(Jvm& jvm, const BootOptions& opt) {
   }
 
   const auto garage_shell = load_scx_geometry(
-      opt.game_root + "\misc\garage\g1\garazs_01.scx");
+      opt.game_root + "\\misc\\garage\\g1\\garazs_01.scx");
   if (garage_shell.info.ok) scene_instances_add_static_mesh(garage_shell);
 
   physics::VehicleDynamics vd;
@@ -255,7 +256,7 @@ int boot_stock_physics_probe(Jvm& jvm, const BootOptions& opt) {
                      chassis.info.bbox_max[2] * scale},
                     {0, 0, 0});
   constexpr float spawn_x = 0, spawn_z = 0, spawn_y = .51f;
-  std::printf("[profile] stock spawn=(%.2f,%.2f,%.2f)\n", spawn_x,
+  physics_log("[profile] stock spawn=(%.2f,%.2f,%.2f)\n", spawn_x,
               spawn_y, spawn_z);
   physics::Matrix frame{1, 0, 0, 0, 0, 1, 0, 0,
                         0, 0, 1, 0, spawn_x, spawn_y, spawn_z, 1};
@@ -318,7 +319,7 @@ int boot_stock_physics_probe(Jvm& jvm, const BootOptions& opt) {
     support += state.force;
     contacts += state.contact;
   }
-  std::printf("[profile] stock physics ticks=%llu total=%.2fms per-tick=%.3fms "
+  physics_log("[profile] stock physics ticks=%llu total=%.2fms per-tick=%.3fms "
               "height=%.5f contacts=%d support=%.1f backend=%s\n",
               static_cast<unsigned long long>(vd.ticks), milliseconds,
               milliseconds / vd.ticks, vd.body.position.y, contacts, support,

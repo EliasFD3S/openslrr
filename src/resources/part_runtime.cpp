@@ -1,5 +1,6 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/part_runtime.hpp"
+#include "slrr/physics_log.hpp"
 #include "slrr/dyno_model.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/jvm.hpp"
@@ -1174,7 +1175,7 @@ Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
   render_part(jvm, part, records.at(part));
   if (script.empty() && cfg->native_kind == "car")
     install_cfg_stock(jvm, part);
-  std::printf(
+  physics_log(
       "[part] create id=0x%x type=0x%x class=%s slots=%zu renders=%zu\n", id,
       resource, class_name.c_str(), cfg->slots.size(),
       records.at(part).renders.size());
@@ -1453,7 +1454,7 @@ namespace {
 bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
   auto unavailable = [&](const char *reason) {
     if (!rec.physics_reported) {
-      std::printf("[phys] unavailable type=0x%x: %s\n", rec.state.resource,
+      physics_log("[phys] unavailable type=0x%x: %s\n", rec.state.resource,
                   reason);
       std::fflush(stdout);
       rec.physics_reported = true;
@@ -1506,7 +1507,7 @@ bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
   rec.physics_dirty = false;
   rec.physics_parent = gameref_get(chassis)->parent;
   if (!rec.physics_reported) {
-    std::printf("[phys] dynamic type=0x%x mass=%.2f fixed=%uHz backend=%s\n",
+    physics_log("[phys] dynamic type=0x%x mass=%.2f fixed=%uHz backend=%s\n",
                 rec.state.resource, mass, physics::VehicleDynamics::frequency,
                 physics::backend_name());
     std::fflush(stdout);
@@ -1601,7 +1602,7 @@ void dynamics_wheels(Record &rec) {
     for (size_t i = 0; i < 4; ++i) {
       const auto &cfg = rec.dynamics.wheels[i];
       const auto &live = rec.wheels[i];
-      std::printf(
+      physics_log(
           "[phys] wheel=%zu enabled=%d rigid=%d unsprung=%.3f arm=%.4f "
           "has_hub=%d hub0=%.0f opp=%d center=(%.4f,%.4f,%.4f) "
           "down=(%.3f,%.3f,%.3f) rest=%.4f min=%.4f max=%.4f "
@@ -1612,7 +1613,7 @@ void dynamics_wheels(Record &rec) {
           cfg.minimum, cfg.maximum, cfg.anchor_length(), cfg.radius,
           cfg.spring, cfg.bump_damping, cfg.rebound_damping);
       if (cfg.arm_length > 0) {
-        std::printf(
+        physics_log(
             "[phys] wheel=%zu pivot=(%.4f,%.4f,%.4f) axis=(%.3f,%.3f,%.3f) "
             "hub=(%.0f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f) "
             "alignment=(%.5f,%.5f,%.5f,%.5f) ypr=(%.4f,%.4f,%.4f)\n",
@@ -1747,12 +1748,12 @@ void finish_dynamics_sync(Object *chassis, Record &rec) {
     support += state.force;
   }
   if (contacts != rec.reported_contacts && rec.physics_status_lines < 8) {
-    std::printf("[phys] contacts=%d/4 y=%.3f vy=%.3f support=%.1fN\n", contacts,
+    physics_log("[phys] contacts=%d/4 y=%.3f vy=%.3f support=%.1fN\n", contacts,
                 node->pos[1], rec.dynamics.body.velocity.y, support);
     if (std::getenv("SLRR_PHYSICS_DUMP")) {
       for (size_t i = 0; i < 4; ++i) {
         const auto &state = rec.dynamics.state[i];
-        std::printf(
+        physics_log(
             "[phys] state=%zu constrained=%d contact=%d length=%.5f "
             "speed=%.4f support=%.1f normal=%.1f center=(%.4f,%.4f,%.4f) "
             "hub=(%.4f,%.4f,%.4f) normal=(%.3f,%.3f,%.3f)\n",
@@ -2048,7 +2049,7 @@ void part_physics_advance(double seconds) {
     const uint64_t revision = scene_instances_floor_revision();
     if ((revision != previous_revision || prepare_ms > 5 || advance_ms > 10) &&
         profile_lines++ < 64) {
-      std::printf("[profile] physics prepare=%.2fms advance=%.2fms ticks=%u "
+      physics_log("[profile] physics prepare=%.2fms advance=%.2fms ticks=%u "
                   "floor_revision=%llu\n",
                   prepare_ms, advance_ms, ticks,
                   static_cast<unsigned long long>(revision));

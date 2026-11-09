@@ -1,5 +1,6 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/physics_log.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/rpk_index.hpp"
@@ -767,7 +768,7 @@ std::shared_ptr<const physics::CollisionMesh> scene_instances_collision_mesh(
         std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - profile_start)
             .count();
-    std::printf("[profile] collision snapshot %.2fms vertices=%zu "
+    physics_log("[profile] collision snapshot %.2fms vertices=%zu "
                 "triangles=%zu revision=%llu ignore=%p\n",
                 milliseconds, result->positions.size() / 3,
                 result->indices.size() / 3,

@@ -1,5 +1,6 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/mainloop.hpp"
+#include "slrr/physics_log.hpp"
 #include "slrr/script_threads.hpp"
 #include "slrr/script_events.hpp"
 #include "slrr/scene_instances.hpp"
@@ -749,7 +750,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     static unsigned profile_lines = 0;
     if ((total_ms > 50 || physics_ms > 20 || flush_ms > 20) &&
         profile_lines++ < 128) {
-      std::printf("[profile] frame total=%.2fms before_physics=%.2fms "
+      physics_log("[profile] frame total=%.2fms before_physics=%.2fms "
                   "flush=%.2fms dt=%.4f\n",
                   total_ms, physics_ms, flush_ms, dt);
       std::fflush(stdout);
