@@ -479,7 +479,8 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
         bgfx::getAvailTransientVertexBuffer(static_cast<uint32_t>(count), layout_) < count ||
         bgfx::getAvailTransientIndexBuffer(static_cast<uint32_t>(index_count)) < index_count)
       return;
-    const auto texture = tex_for_osd_icon(mesh.textures.front());
+    const auto& path = mesh.textures.front();
+    const auto texture = tex_for_osd_icon(path);
     if (texture.idx == white_tex_.idx) return;
     bgfx::TransientVertexBuffer vb;
     bgfx::TransientIndexBuffer ib;
@@ -498,8 +499,15 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     std::memcpy(ib.data, indices, index_count * sizeof(uint16_t));
     float identity[16];
     bx::mtxIdentity(identity);
-    const float tint[] = {float((color >> 16) & 255) / 255.f, float((color >> 8) & 255) / 255.f,
-                          float(color & 255) / 255.f, float(color >> 24) / 255.f};
+    std::string extension = std::filesystem::path(path).extension().string();
+    for (char& c : extension)
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const bool premultiplied = !opaque && extension != ".dds";
+    const float opacity = float(color >> 24) / 255.f;
+    const float rgb_scale = premultiplied ? opacity / 255.f : 1.f / 255.f;
+    const float tint[] = {float((color >> 16) & 255) * rgb_scale,
+                          float((color >> 8) & 255) * rgb_scale,
+                          float(color & 255) * rgb_scale, opacity};
     const float alpha[] = {0.f, 1.f, opaque ? 0.f : 1.f, 0.f};
     bgfx::setTransform(identity);
     bgfx::setVertexBuffer(0, &vb);
@@ -508,7 +516,10 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     bind_baked_light(nullptr, nullptr);
     bgfx::setUniform(u_color_, tint);
     bgfx::setUniform(u_alpha_test_, alpha);
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA);
+    const uint64_t blend = premultiplied
+        ? BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA)
+        : BGFX_STATE_BLEND_ALPHA;
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | blend);
     bgfx::submit(osd_view_, program_);
   };
   const auto safe_numeric_format = [](const std::string& fmt) {
@@ -536,7 +547,8 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       {true, cars_resource(0x5c), {-.126f, .950f, 0}, {}, 0xff000000},
   }};
   const float pixel_aspect = static_cast<float>(height_) / width_;
-  const float stock_scale = std::min(1.f, .5625f / pixel_aspect);
+  // Size the stock strip from the viewport width while preserving its aspect.
+  const float stock_scale = .5625f / pixel_aspect;
   constexpr uint16_t quad[] = {0, 1, 2, 1, 3, 2};
   for (size_t i = 0; i < stock.size(); ++i) {
     const HudSlot slot = static_cast<HudSlot>(i);

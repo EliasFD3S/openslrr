@@ -32,6 +32,7 @@ struct ShadowInfo {
 std::unordered_map<uint32_t, ShadowInfo> g_shadow_info;
 std::unordered_map<uint32_t, std::shared_ptr<const ScxGeometry>> g_meshes;
 std::unordered_map<uint32_t, std::shared_ptr<const ScxGeometry>> g_overrides;
+std::unordered_map<uint32_t, std::string> g_texture_paths;
 struct StaticMesh {
   std::vector<float> positions;
   std::vector<uint32_t> indices;
@@ -423,6 +424,7 @@ void scene_instances_set_resources(const RpkIndex *resources) {
   g_preview_lamps = false;
   g_meshes.clear();
   g_overrides.clear();
+  g_texture_paths.clear();
   g_static.clear();
   g_floor_meshes.clear();
   g_floor_prepared = false;
@@ -436,7 +438,12 @@ std::shared_ptr<const ScxGeometry> scene_instances_geometry(uint32_t resource) {
   return geometry(resource);
 }
 std::string scene_instances_texture(uint32_t resource) {
-  return g_resources ? g_resources->texture_path_for_id(resource) : std::string{};
+  if (!resource || !g_resources) return {};
+  if (const auto it = g_texture_paths.find(resource); it != g_texture_paths.end())
+    return it->second;
+  auto path = g_resources->texture_path_for_id(resource);
+  if (!path.empty()) g_texture_paths.emplace(resource, path);
+  return path;
 }
 std::string scene_instances_envmap() {
   return g_resources ? g_resources->texture_path_for_id(g_environment)
@@ -987,10 +994,9 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root) {
     instance.color = n->color;
     instance.vehicle_material = n->vehicle_material;
     instance.light_flags = n->light_flags;
-    if (n->paint_source) {
-      // The mesh list prefers a .dds next to the source, while the CFG id
-      // still names the .png. Compare the game-relative path without the
-      // extension so the paint color replaces that one slot.
+    if (n->paint_source || !n->texture_replacements.empty()) {
+      // The mesh list may prefer a DDS sidecar while the resource names the
+      // original image. Match the path without the extension.
       auto key = [](std::string path) {
         std::replace(path.begin(), path.end(), '\\', '/');
         for (char &c : path)
@@ -1005,17 +1011,24 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root) {
           path = path.substr(game + 5);
         return path;
       };
-      const auto from = key(g_resources->texture_path_for_id(n->paint_source));
-      for (size_t i = 0;
-           !from.empty() && i < instance.geometry->textures.size(); ++i) {
-        if (key(instance.geometry->textures[i]) == from) {
-          instance.paint_slot = static_cast<int>(i);
-          break;
+      const auto paint = key(scene_instances_texture(n->paint_source));
+      if (!paint.empty()) {
+        for (size_t i = 0; i < instance.geometry->textures.size(); ++i) {
+          if (key(instance.geometry->textures[i]) == paint) {
+            instance.paint_slot = static_cast<int>(i);
+            break;
+          }
         }
       }
+      for (const auto& [from, to] : n->texture_replacements) {
+        const auto source = key(scene_instances_texture(from));
+        if (source.empty()) continue;
+        for (size_t i = 0; i < instance.geometry->textures.size(); ++i)
+          if (source == key(instance.geometry->textures[i]))
+            instance.texture_replacements.emplace_back(i, scene_instances_texture(to));
+      }
       if (n->paint_texture)
-        instance.paint_texture =
-            g_resources->texture_path_for_id(n->paint_texture);
+        instance.paint_texture = scene_instances_texture(n->paint_texture);
     }
     out.push_back(std::move(instance));
   }

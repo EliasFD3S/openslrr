@@ -16,11 +16,11 @@ uint32_t block_bytes(DdsFormat fmt) {
   return (fmt == DdsFormat::DXT1) ? 8u : 16u;
 }
 
-uint32_t mip_size(DdsFormat fmt, uint32_t w, uint32_t h) {
-  if (fmt == DdsFormat::RGBA8) return w * h * 4;
-  if (fmt == DdsFormat::RGB8) return w * h * 3;
-  const uint32_t bw = (w + 3) / 4;
-  const uint32_t bh = (h + 3) / 4;
+size_t mip_size(DdsFormat fmt, uint32_t w, uint32_t h) {
+  if (fmt == DdsFormat::RGBA8) return size_t(w) * h * 4;
+  if (fmt == DdsFormat::RGB8) return size_t(w) * h * 3;
+  const size_t bw = (size_t(w) + 3) / 4;
+  const size_t bh = (size_t(h) + 3) / 4;
   return bw * bh * block_bytes(fmt);
 }
 
@@ -56,6 +56,10 @@ DdsImage load_dds_file(const std::string& path) {
   const uint32_t flags = rd_u32(buf.data() + 8);
   img.height = rd_u32(buf.data() + 12);
   img.width = rd_u32(buf.data() + 16);
+  if (!img.width || !img.height || img.width > UINT16_MAX || img.height > UINT16_MAX) {
+    img.error = "invalid dimensions";
+    return img;
+  }
   img.mip_count = rd_u32(buf.data() + 28);
   if (img.mip_count == 0) img.mip_count = 1;
   (void)flags;
@@ -104,12 +108,44 @@ DdsImage load_dds_file(const std::string& path) {
     img.error = "no payload";
     return img;
   }
-  img.mip0_size = mip_size(img.format, img.width, img.height);
-  if (data_off + img.mip0_size > sz) {
+  const size_t top_size = mip_size(img.format, img.width, img.height);
+  if (top_size > sz - data_off || top_size > UINT32_MAX) {
     img.error = "truncated mip0";
     return img;
   }
+  img.mip0_size = static_cast<uint32_t>(top_size);
   img.data.assign(buf.begin() + static_cast<std::ptrdiff_t>(data_off), buf.end());
+  size_t chain_size = 0;
+  uint32_t levels = 0;
+  const bool compressed = img.format == DdsFormat::DXT1 || img.format == DdsFormat::DXT3 ||
+                          img.format == DdsFormat::DXT5;
+  std::vector<uint8_t> tail_block;
+  for (uint32_t w = img.width, h = img.height; w && h;) {
+    const size_t level_size = mip_size(img.format, w, h);
+    if (levels >= img.mip_count) {
+      // Stock DDS chains can end just before the final BC blocks. bgfx
+      // allocates either one mip or the full chain. Fill the tiny tail from
+      // the coarsest authored mip so the whole authored chain can be used.
+      if (!compressed || levels < 2 || w > 4 || h > 4) break;
+      if (tail_block.empty()) {
+        const size_t offset = chain_size - level_size;
+        tail_block.assign(img.data.data() + offset, img.data.data() + chain_size);
+        img.data.resize(chain_size);
+      }
+      img.data.insert(img.data.end(), tail_block.begin(), tail_block.end());
+    } else if (level_size > img.data.size() - chain_size) {
+      break;
+    }
+    chain_size += level_size;
+    ++levels;
+    if (w == 1 && h == 1) {
+      if (levels > 1 && chain_size <= UINT32_MAX)
+        img.complete_mip_size = static_cast<uint32_t>(chain_size);
+      break;
+    }
+    if (w > 1) w /= 2;
+    if (h > 1) h /= 2;
+  }
   img.ok = img.width > 0 && img.height > 0 && !img.data.empty();
   if (!img.ok) img.error = "empty image";
   return img;

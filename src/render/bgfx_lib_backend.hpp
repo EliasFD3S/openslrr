@@ -142,6 +142,7 @@ class LibBgfxBackend final : public IRenderBackend {
   void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass);
 
   void draw_dynamic_world(const float* view, uint16_t view_id);
+  void draw_sun_flare(const float* view, const float* projection, uint16_t view_id);
 
   void draw_vehicle_shadows(uint16_t view_id);
 

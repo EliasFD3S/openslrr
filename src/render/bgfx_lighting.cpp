@@ -17,10 +17,95 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <unordered_set>
 #include <utility>
 
 namespace slrr {
+
+void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, uint16_t view_id) {
+  if (std::none_of(instances_.begin(), instances_.end(),
+                   [](const SceneInstance& instance) { return instance.sky; }))
+    return;
+  const auto sun = instances_.front().lighting;
+  const auto& flare = sun.flare;
+  if (!sun.has_direction || !flare.texture || flare.max_size <= 0.f) return;
+
+  // Directional lights point away from the sun. Reflect script Z into bgfx.
+  const bx::Vec3 direction{-sun.direction[0], -sun.direction[1], sun.direction[2]};
+  const float depth = direction.x * view[2] + direction.y * view[6] + direction.z * view[10];
+  if (depth <= 0.f) return;
+  const float x = projection[0] * (direction.x * view[0] + direction.y * view[4] +
+                                   direction.z * view[8]) / depth;
+  const float y = projection[5] * (direction.x * view[1] + direction.y * view[5] +
+                                   direction.z * view[9]) / depth;
+  const float edge = std::max(std::abs(x), std::abs(y));
+  if (edge >= 1.1f) return;
+  const float visibility = std::clamp((1.1f - edge) * 5.f, 0.f, 1.f);
+  const auto texture = tex_for_osd_icon(scene_instances_texture(flare.texture));
+  if (texture.idx == white_tex_.idx) return;
+  float combined[16], inverse[16], identity[16];
+  bx::mtxMul(combined, view, projection);
+  bx::mtxInverse(inverse, combined);
+  bx::mtxIdentity(identity);
+
+  const uint32_t count = 1 + flare.rays + flare.flares;
+  if (bgfx::getAvailTransientVertexBuffer(count * 4, layout_) < count * 4 ||
+      bgfx::getAvailTransientIndexBuffer(count * 6) < count * 6) return;
+  bgfx::TransientVertexBuffer vb;
+  bgfx::TransientIndexBuffer ib;
+  bgfx::allocTransientVertexBuffer(&vb, count * 4, layout_);
+  bgfx::allocTransientIndexBuffer(&ib, count * 6);
+  auto* vertices = reinterpret_cast<MeshVertex*>(vb.data);
+  auto* indices = reinterpret_cast<uint16_t*>(ib.data);
+  const float aspect = float(height_) / width_;
+  unsigned next = 0;
+  auto sprite = [&](float cx, float cy, float half_x, float half_y, float angle,
+                    float u, float v, float w, float h) {
+    const float cos_angle = std::cos(angle), sin_angle = std::sin(angle);
+    const uint16_t base = static_cast<uint16_t>(next * 4);
+    for (unsigned i = 0; i < 4; ++i) {
+      const float sx = i & 1 ? half_x : -half_x;
+      const float sy = i & 2 ? -half_y : half_y;
+      const auto p = bx::mulH({cx + (sx * cos_angle - sy * sin_angle) * aspect,
+                               cy + sx * sin_angle + sy * cos_angle, .9999f}, inverse);
+      vertices[base + i] = {p.x, p.y, p.z, 0.f, 0.f, 1.f,
+                            u + (i & 1 ? w : 0.f), v + (i & 2 ? h : 0.f)};
+    }
+    constexpr uint16_t quad[] = {0, 1, 2, 1, 3, 2};
+    for (unsigned i = 0; i < 6; ++i) indices[next * 6 + i] = base + quad[i];
+    ++next;
+  };
+  const float size = .02f * std::lerp(std::min(flare.min_size, flare.max_size),
+                                     flare.max_size, visibility);
+  sprite(x, y, size, size, 0, 0, 0, .5f, .5f);
+  for (int i = 0; i < flare.rays; ++i) {
+    const float angle = 3.14159265f * i / flare.rays;
+    sprite(x, y, size * (1.25f + .65f * (i % 3)), size * .10f,
+           angle, .5f, 0, .5f, .125f);
+  }
+  for (int i = 0; i < flare.flares; ++i) {
+    const float t = 1.f - 1.8f * (i + 1) / (flare.flares + 1);
+    const float radius = size * (.16f + .07f * (i % 4));
+    sprite(x * t, y * t, radius, radius, 0, .25f * (i % 4),
+           .5f + .25f * ((i / 4) % 2), .25f, .25f);
+  }
+  const float alpha = .32f * visibility * float(flare.color & 255) / 255.f;
+  const float tint[] = {alpha * float(flare.color >> 24) / 255.f,
+                        alpha * float((flare.color >> 16) & 255) / 255.f,
+                        alpha * float((flare.color >> 8) & 255) / 255.f, 1.f};
+  const float settings[] = {0.f, 1.f, 0.f, 0.f};
+  bind_baked_light(nullptr, nullptr);
+  bgfx::setUniform(u_color_, tint);
+  bgfx::setUniform(u_alpha_test_, settings);
+  bgfx::setTransform(identity);
+  bgfx::setVertexBuffer(0, &vb);
+  bgfx::setIndexBuffer(&ib);
+  bgfx::setTexture(0, s_tex_, texture);
+  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_LEQUAL |
+                 BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_ONE));
+  bgfx::submit(view_id, program_);
+}
 
   void LibBgfxBackend::bind_baked_light(const ScxGroup* group,
                         const std::vector<bgfx::TextureHandle>* tex)
@@ -48,11 +133,16 @@ namespace slrr {
 {
     const auto& part=instance_meshes_.at(instance.geometry.get());
     if(!bgfx::isValid(part.vbh)||!bgfx::isValid(part.ibh))return;
+    const auto texture = [&](uint16_t slot) {
+      for (const auto& [index, path] : instance.texture_replacements)
+        if (slot == index && !path.empty()) {
+          const auto replacement = tex_for_osd_icon(path);
+          if (replacement.idx != white_tex_.idx) return replacement;
+        }
+      return slot < part.tex.size() && bgfx::isValid(part.tex[slot]) ? part.tex[slot] : white_tex_;
+    };
     if (instance.vehicle_material && bgfx::isValid(vehicle_program_)) {
       for (const auto& group : part.geo.groups) {
-        auto texture = [&](uint16_t slot) {
-          return slot < part.tex.size() && bgfx::isValid(part.tex[slot]) ? part.tex[slot] : white_tex_;
-        };
         auto base = texture(group.texture_index);
         const bool painted = instance.paint_slot >= 0 && group.texture_index == instance.paint_slot;
         if (painted && !instance.paint_texture.empty()) base = tex_for_osd_icon(instance.paint_texture);
@@ -180,18 +270,34 @@ namespace slrr {
       return;
     }
     auto draw=[&](uint32_t first,uint32_t count,uint16_t texture_index,uint32_t flags,const ScxGroup* group){
-      auto tex=texture_index<part.tex.size()?part.tex[texture_index]:white_tex_;if(!bgfx::isValid(tex))tex=white_tex_;
-      bool cut=!preview&&!instance.sky&&(part.geo.info.version!=3||(flags&1));
-      const float settings[4]={cut?1.f:0.f,instance.sky?1.f:preview?.5f:0.f,0.f,preview&&tex.idx!=white_tex_.idx?1.f:0.f};
+      // SCX3 alpha-blended sprites, including map markers, belong above
+      // the opaque tiles. Their JPEG/PNG alpha is already premultiplied.
+      const bool blend = !instance.sky && part.geo.info.version == 3 && (flags & 0x101u) == 0x101u;
+      if (pass != int(blend)) return;
+      const auto tex = texture(texture_index);
+      const bool cut = !blend && !preview && !instance.sky && (part.geo.info.version != 3 || (flags & 1));
+      const float settings[4] = {cut ? 1.f : 0.f, instance.sky || blend ? 1.f : preview ? .5f : 0.f,
+                                 blend ? 1.f : 0.f, !blend && preview && tex.idx != white_tex_.idx ? 1.f : 0.f};
       uint32_t color=preview?instance.color:0xffffff;
       const float tint[4]={((color>>16)&255)/255.f,((color>>8)&255)/255.f,(color&255)/255.f,1};
       bgfx::setUniform(u_alpha_test_,settings);bgfx::setUniform(u_color_,tint);bgfx::setTransform(matrix);
-      bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,first,count);bgfx::setTexture(0,s_tex_,tex);
+      bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,first,count);
+      bgfx::setTexture(0, s_tex_, tex, BGFX_SAMPLER_NONE);
       bind_baked_light(group,&part.tex);
-      bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_MSAA|
-        (instance.sky?0:BGFX_STATE_WRITE_Z|BGFX_STATE_DEPTH_TEST_LESS));bgfx::submit(view_id,program_);
+      uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_MSAA;
+      if (blend) {
+        std::string extension = texture_index < part.geo.textures.size()
+            ? std::filesystem::path(part.geo.textures[texture_index]).extension().string() : "";
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        state |= BGFX_STATE_DEPTH_TEST_LESS | (extension == ".dds" ? BGFX_STATE_BLEND_ALPHA
+            : BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA));
+      } else if (!instance.sky) {
+        state |= BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS;
+      }
+      bgfx::setState(state);
+      bgfx::submit(view_id, program_);
     };
-    if (pass != 0) return;
     if(part.geo.groups.empty())draw(0,static_cast<uint32_t>(part.geo.indices.size()),0,0,nullptr);
     else for(const auto&g:part.geo.groups)draw(g.index_start,g.index_count,g.texture_index,g.material_flags,&g);
   }

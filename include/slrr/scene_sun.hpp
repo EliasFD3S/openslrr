@@ -4,6 +4,12 @@
 
 namespace slrr {
 
+struct SceneFlare {
+  uint32_t texture = 0, color = 0xffffffff;
+  float min_size = 0.f, max_size = 0.f;
+  int flares = 0, rays = 0;
+};
+
 // The directional light of the current scene. The garage does not spawn the
 // skydome sun (internalScene): it instances misc.garage:0x001D, which points
 // straight down. Outdoors, maps.skydome:0x0124 supplies the direction and
@@ -17,6 +23,7 @@ struct SceneSun {
   float direction[3] = {0.f, -1.f, 0.f};
   bool set = false;
   bool has_direction = false;
+  SceneFlare flare;
 };
 
 void scene_sun_set_packed(int32_t diffuse, int32_t ambient, int32_t specular);

@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace slrr {
@@ -22,6 +23,7 @@ struct SceneInstance {
   uint32_t color = 0xffffff;
   int paint_slot = -1;
   std::string paint_texture;
+  std::vector<std::pair<size_t, std::string>> texture_replacements;
   bool vehicle_material = false;
   uint32_t light_flags = 0;
   // Render-object id. Carries `flags` (dynamic shadow caster) and `shd_*`.

@@ -489,8 +489,16 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
         }
         if (id != 0) {
           self->fields["id"] = Value::make_int(id);
-          if (GameRefState* dst = gameref_upsert(self, GameRefKind::RenderRef))
+          if (GameRefState* dst = gameref_upsert(self, GameRefKind::RenderRef)) {
             dst->type_id = id;
+            if (const auto* source = gameref_get(src)) {
+              dst->texture_replacements = source->texture_replacements;
+              dst->directional_light.flare = source->directional_light.flare;
+            } else {
+              dst->texture_replacements.clear();
+              dst->directional_light.flare = {};
+            }
+          }
         }
         for (const char* k : {"_mw", "_mh", "_tid", "_texpath"}) {
           auto it = src->fields.find(k);

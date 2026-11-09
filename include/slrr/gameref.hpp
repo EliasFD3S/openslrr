@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace slrr {
@@ -130,6 +131,7 @@ struct GameRefState {
   bool sky_render = false;
   uint32_t color = 0xffffff;
   uint32_t paint_source = 0, paint_texture = 0;
+  std::vector<std::pair<uint32_t, uint32_t>> texture_replacements;
   bool vehicle_material = false;
   // Cfg light bits (1 brake, 2 reverse, 4 city, 16 indicator). Drawn only
   // while that light is on.

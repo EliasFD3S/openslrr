@@ -7,11 +7,13 @@
 #include "slrr/osd_registry.hpp"
 #include "slrr/render_backend.hpp"
 #include "slrr/script_cfg.hpp"
+#include "slrr/scene_instances.hpp"
 #include "slrr/scene_sun.hpp"
 #include "slrr/slrr_font.hpp"
 #include "slrr/video_fmv.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -81,11 +83,13 @@ void apply_directional_light(const RpkIndex& rpk, int32_t full_id, Object* type,
   if (!have_s) spec[0] = spec[1] = spec[2] = 1.f;
   if (!have_dir) dir[0] = dir[1] = dir[2] = 0.f;
   auto& light=instance.directional_light;
+  if (const auto* source = gameref_get(type)) light.flare = source->directional_light.flare;
   std::copy(diff,diff+3,light.diffuse);
   std::copy(amb,amb+3,light.ambient);
   std::copy(spec,spec+3,light.specular);
   std::copy(dir,dir+3,light.direction);
   light.set=true;
+  if (instance.parent) gameref_make_live(instance.key);
   gameref_register_light(instance.key);
   light.has_direction=dir[0]*dir[0]+dir[1]*dir[1]+dir[2]*dir[2]>1e-8f;
   auto packed = [](Object* o, const char* key, int32_t* out) {
@@ -102,6 +106,65 @@ void apply_directional_light(const RpkIndex& rpk, int32_t full_id, Object* type,
 }
 
 void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
+  jvm.natives().register_method(
+      "java.game.Navigator", "updateNavigator", "(Ljava.util.resource.GameRef;I)V",
+      [](Object* self, const std::vector<Value>& args) {
+        const auto field = [](const Object* object, const char* name) {
+          if (!object) return Value::make_void();
+          const auto value = object->fields.find(name);
+          return value == object->fields.end() ? Value::make_void() : value->second;
+        };
+        const auto object = [&](const Object* owner, const char* name) -> Object* {
+          const auto value = field(owner, name);
+          return value.tag == ValueTag::Obj ? value.v.o : nullptr;
+        };
+        const auto number = [&](const Object* owner, const char* name) {
+          const auto value = field(owner, name);
+          if (value.tag == ValueTag::Int) return float(value.v.i);
+          return value.tag == ValueTag::Float ? value.v.f : 0.f;
+        };
+        const auto pose = [](Object* ref, float& x, float& z, float& yaw) {
+          const auto* state = gameref_get(ref);
+          if (!state || state->empty) return false;
+          x = state->pos[0];
+          z = state->pos[2];
+          yaw = state->ypr[0];
+          float frame[16];
+          if (scene_instances_script_matrix(ref, frame)) {
+            x = frame[12];
+            z = frame[14];
+            yaw = std::atan2(frame[8], frame[10]);
+          }
+          return true;
+        };
+        Object* car = !args.empty() && args[0].tag == ValueTag::Obj ? args[0].v.o : nullptr;
+        const int mode = args.size() >= 2 && args[1].tag == ValueTag::Int ? args[1].v.i : 0;
+        float x = 0, z = 0, yaw = 0;
+        auto* camera = object(self, "cam");
+        auto* target = mode >= 2 ? object(self, "gmCamera") : car;
+        if (auto* cam = gameref_get(camera); cam && pose(target ? target : car, x, z, yaw))
+          gameref_set_matrix(camera, x * .01f, cam->pos[1], z * .01f,
+                             (mode & 1) ? yaw : 0.f, -1.5707963f, 0.f);
+        for (const char* name : {"marker", "dynamarker"}) {
+          const auto* list = object(self, name);
+          const auto* entries = object(list, "elementData");
+          const auto count = field(list, "elementCount");
+          if (!entries || count.tag != ValueTag::Int || count.v.i <= 0) continue;
+          const size_t end = std::min(entries->slots.size(), size_t(count.v.i));
+          for (size_t i = 0; i < end; ++i) {
+            const auto entry = entries->slots[i];
+            if (entry.tag != ValueTag::Obj) continue;
+            auto* symbol = object(entry.v.o, "symbol");
+            if (const auto* pos = object(entry.v.o, "pos")) {
+              gameref_set_matrix(symbol, number(pos, "x") * .01f, number(pos, "y"),
+                                 number(pos, "z") * .01f, 0, 0, 0);
+            } else if (pose(object(entry.v.o, "mover"), x, z, yaw)) {
+              gameref_set_matrix(symbol, x * .01f, .1f, z * .01f, yaw, 0, 0);
+            }
+          }
+        }
+        return Value::make_void();
+      });
   // ---- java.util.resource.RenderRef (declaring class) ----
   // Java: create(parent,rid,alias) → create(parent, new RenderRef(rid), alias).
   jvm.natives().register_method(
@@ -128,7 +191,10 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
         if (parent) gameref_set_parent(self, parent);
         if (type) {
           int32_t tid = 0;
-          if (GameRefState* ts = gameref_get(type)) tid = ts->type_id;
+          if (GameRefState* ts = gameref_get(type)) {
+            tid = ts->type_id;
+            st->texture_replacements = ts->texture_replacements;
+          }
           if (tid == 0) {
             auto it = type->fields.find("id");
             if (it != type->fields.end() && it->second.tag == ValueTag::Int)
@@ -322,7 +388,7 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
   jvm.natives().register_method(
       "java.util.resource.RenderRef", "changeResource",
       "(Ljava.util.resource.ResourceRef;Ljava.util.resource.ResourceRef;)V",
-      [](Object* self, const std::vector<Value>& args) {
+      [&rpk](Object* self, const std::vector<Value>& args) {
         if (!self) return Value::make_void();
         Object* neu =
             (args.size() >= 2 && args[1].tag == ValueTag::Obj) ? args[1].v.o
@@ -355,6 +421,25 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
             kept->second.tag == ValueTag::Int)
           id = kept->second.v.i;
         if (id != 0) self->fields["_tid"] = Value::make_int(id);
+        const uint32_t from = args[0].tag == ValueTag::Obj ? resource_id_of(args[0].v.o) : 0;
+        if (from && id && from != uint32_t(id)) {
+          const auto image = [&rpk](uint32_t resource) {
+            auto ext = std::filesystem::path(rpk.texture_path_for_id(resource)).extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+            return ext == ".dds" || ext == ".ptx" || ext == ".png" || ext == ".tga" ||
+                   ext == ".bmp" || ext == ".jpg" || ext == ".jpeg";
+          };
+          if (image(from) && image(id)) {
+            auto& replacements = gameref_upsert(self, GameRefKind::RenderRef)->texture_replacements;
+            bool found = false;
+            for (auto& [original, current] : replacements) {
+              if (original != from && current != from) continue;
+              current = id;
+              found = true;
+            }
+            if (!found) replacements.emplace_back(from, id);
+          }
+        }
         auto path = neu->fields.find("_texpath");
         if (path != neu->fields.end()) self->fields["_texpath"] = path->second;
         return Value::make_void();
@@ -389,7 +474,19 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
       });
   jvm.natives().register_method(
       "java.util.resource.RenderRef", "setFlare",
-      "(Ljava.util.resource.ResourceRef;IFFII)V", native_noop);
+      "(Ljava.util.resource.ResourceRef;IFFII)V",
+      [](Object* self, const std::vector<Value>& args) {
+        if (!self || args.size() != 6 || args[0].tag != ValueTag::Obj ||
+            args[1].tag != ValueTag::Int || args[2].tag != ValueTag::Float ||
+            args[3].tag != ValueTag::Float || args[4].tag != ValueTag::Int ||
+            args[5].tag != ValueTag::Int || !std::isfinite(args[2].v.f) ||
+            !std::isfinite(args[3].v.f)) return Value::make_void();
+        auto& flare = gameref_upsert(self, GameRefKind::RenderRef)->directional_light.flare;
+        flare = {uint32_t(resource_id_of(args[0].v.o)), uint32_t(args[1].v.i),
+                 std::max(0.f, args[2].v.f), std::max(0.f, args[3].v.f),
+                 std::clamp(args[4].v.i, 0, 32), std::clamp(args[5].v.i, 0, 32)};
+        return Value::make_void();
+      });
   jvm.natives().register_method(
       "java.util.resource.RenderRef", "setMatrix",
       "(ILjava.util.resource.ResourceRef;Ljava.lang.Vector3;Ljava.lang.Ypr;)V",

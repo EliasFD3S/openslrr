@@ -23,6 +23,7 @@ struct DdsImage {
   DdsFormat format = DdsFormat::Unknown;
   std::vector<uint8_t> data;  // mip0 (+ optional trailing mips packed)
   uint32_t mip0_size = 0;
+  uint32_t complete_mip_size = 0;
   std::string path;
   std::string error;
 };

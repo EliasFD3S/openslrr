@@ -502,6 +502,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
       draw_dynamic_world(view, world_view);
       if (garage_ && !parts_.empty()) draw_scene(world_view);
       draw_vehicle_shadows(world_view);
+      draw_sun_flare(view, proj, world_view);
     }
     // Previews start at view 8. OSD plates under the cars are view 6; the
     // rest of the interface is view 70.
@@ -972,13 +973,14 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
       }
       else
         continue;
+      const bool has_mips = img.complete_mip_size != 0;
       const bgfx::Memory* mem =
-          bgfx::copy(img.data.data(), img.mip0_size);
+          bgfx::copy(img.data.data(), has_mips ? img.complete_mip_size : img.mip0_size);
       // Wrap, same as the stock sampler. Mirror flips a tread that tiles
       // past 1 (the tyre runs U 0..4) so the grooves reverse every repeat.
       part.tex[i] = bgfx::createTexture2D(
           static_cast<uint16_t>(img.width), static_cast<uint16_t>(img.height),
-          false, 1, fmt, 0, mem);
+          has_mips, 1, fmt, 0, mem);
       if (bgfx::isValid(part.tex[i])) ++loaded;
     }
     std::printf("[bgfx] DDS GPU uploaded %d / %zu\n", loaded, paths.size());
