@@ -1,6 +1,5 @@
 #include "slrr/suspension_geometry.hpp"
 #include "slrr/vehicle_dynamics.hpp"
-#include "slrr/sl2_pacejka.hpp"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -122,23 +121,35 @@ void RigidBody::integrate(double dt) {
     throw std::runtime_error("non-finite rigid state");
 }
 void RigidBody::contact(Vec3 p, Vec3 normal, double restitution,
-                        double friction) {
-  Vec3 n = normal.normalized(), r = p - position, v = point_velocity(p);
+                        double friction, RigidBody* other) {
+  const Vec3 n = normal.normalized();
+  const auto relative_velocity = [&] {
+    return point_velocity(p) - (other ? other->point_velocity(p) : Vec3{});
+  };
+  const auto inverse_mass = [&](const RigidBody& body, Vec3 axis) {
+    const Vec3 r = p - body.position;
+    return 1 / body.mass + axis.dot(body.inverse_world_inertia(r.cross(axis)).cross(r));
+  };
+  const auto exchange = [&](Vec3 j) {
+    impulse(j, p);
+    if (other) other->impulse(-j, p);
+  };
+  const Vec3 v = relative_velocity();
   double vn = v.dot(n);
   if (vn >= 0)
     return;
-  double denom = 1 / mass + n.dot(inverse_world_inertia(r.cross(n)).cross(r));
+  const double denom = inverse_mass(*this, n) + (other ? inverse_mass(*other, n) : 0);
   if (!(denom > 0))
     return;
   double magnitude = -(1 + (vn < -.8 ? restitution : 0)) * vn / denom;
-  impulse(n * magnitude, p);
-  Vec3 tangent = v - n * vn;
+  exchange(n * magnitude);
+  const Vec3 post = other ? relative_velocity() : v;
+  Vec3 tangent = post - n * post.dot(n);
   double speed = tangent.length();
   if (speed > 1e-8) {
     tangent = tangent / speed;
-    double d = 1 / mass +
-               tangent.dot(inverse_world_inertia(r.cross(tangent)).cross(r));
-    impulse(tangent * (-std::min(friction * magnitude, speed / d)), p);
+    const double d = inverse_mass(*this, tangent) + (other ? inverse_mass(*other, tangent) : 0);
+    exchange(tangent * (-std::min(friction * magnitude, speed / d)));
   }
 }
 std::array<Vec3, 8> RigidBody::corners() const {
@@ -152,30 +163,6 @@ std::array<Vec3, 8> RigidBody::corners() const {
 }
 Vec3 body_point(const RigidBody &body, Vec3 local) {
   return body.position + body.orientation.rotate(local - body.center);
-}
-Vec3 ray_center(const WheelConfig &w, double length) {
-  return w.center + w.down.normalized() * (length - w.anchor_length());
-}
-bool hinge_hub(const WheelConfig &w, Vec3 ray, Vec3 &hub) {
-  if (!(w.arm_length > 0)) {
-    hub = ray;
-    return ray.finite();
-  }
-  CornerGeometry geometry;
-  geometry.reference = w.center;
-  const Vec3 pivot = w.arm_pivot - w.center, axis = w.arm_axis;
-  geometry.arm = {float(w.arm_length), float(pivot.x), float(pivot.y),
-                  float(pivot.z),       float(axis.x),  float(axis.y),
-                  float(axis.z)};
-  geometry.hub = w.hub;
-  geometry.alignment = w.hub_alignment;
-  if (!w.has_hub)
-    geometry.hub[0] = -1;
-  CornerFrames frames;
-  if (!solve_corner_geometry(geometry, ray, frames))
-    return false;
-  hub = frames.hub_origin;
-  return hub.finite();
 }
 double suspension_force(double length, double speed, double rest, double max,
                         double k, double bump, double rebound);
@@ -191,92 +178,51 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
     s.speed = 0;
     s.seeded = true;
   }
-  auto project = [&](double length, Vec3 &local, Vec3 &world) {
-    local = ray_center(w, length);
-    hinge_hub(w, local, local);
-    world = body_point(body, local);
+  s.length = std::clamp(s.length, w.minimum, w.maximum);
+  const auto project = [&](double length) {
+    return body_point(body, wheel_pose(w, length).hub_origin);
   };
-  Vec3 hub, hub_w;
-  project(s.length, hub, hub_w);
-  GroundHit hit;
-  bool ground =
-      down.y < -.05 &&
-      terrain(hub_w.x, hub_w.z, std::max(ceiling, hub_w.y + 1), hit);
-  auto tyre_error = [&](double value, Vec3 &local, Vec3 &world, GroundHit &sample,
-                        bool &hit_ground) {
-    project(value, local, world);
-    hit_ground = down.y < -.05 && terrain(world.x, world.z,
-                                          std::max(ceiling, world.y + 1),
-                                          sample);
-    if (!hit_ground)
-      return 0.0;
-    const Vec3 n = sample.normal.normalized();
-    return n.dot(Vec3{world.x, sample.height, world.z} -
-                 (world - n * w.radius));
+  const auto sample = [&](Vec3 world, GroundHit& hit) {
+    return down.y < -.05 &&
+           terrain(world.x, world.z, std::max(ceiling, world.y + 1), hit);
   };
-  double speed = s.speed;
-  double length = s.length;
-  bool contact = false;
-  if (!(w.unsprung > 0)) {
-    if (ground && down.y < -.05) {
-      const double raw = (hard.y - hit.height - w.radius) / -down.y;
-      length = raw;
-      contact = raw < w.maximum;
-    }
-  } else {
-    const Vec3 gravity{0, -9.81, 0};
-    const double hold =
-        suspension_force(length, speed, w.rest, w.maximum, w.spring,
-                         w.bump_damping, w.rebound_damping);
-    const double free_speed =
-        speed + (hold + w.unsprung * gravity.dot(down)) / w.unsprung * dt;
-    const double free_length = length + free_speed * dt;
-    double seated = std::clamp(length, w.minimum, w.maximum);
-    bool landed = false;
-    if (down.y < -.05) {
-      for (int i = 0; i < 8; ++i) {
-        Vec3 local, world, nudged, nudged_w;
-        GroundHit sample;
-        bool hit_ground = false;
-        const double error =
-            tyre_error(seated, local, world, sample, hit_ground);
-        if (!hit_ground || std::fabs(error) < 1e-4)
-          break;
-        const Vec3 n = sample.normal.normalized();
-        const double probe =
-            seated < w.maximum - 1e-4 ? seated + 1e-3 : seated - 1e-3;
-        project(probe, nudged, nudged_w);
-        const double slope = (nudged_w.dot(n) - world.dot(n)) / (probe - seated);
-        if (std::fabs(slope) < 1e-5)
-          break;
-        const double next =
-            std::clamp(seated + error / slope, w.minimum, w.maximum);
-        if (next == seated)
-          break;
-        seated = next;
-      }
-      Vec3 local, world;
-      GroundHit sample;
-      bool hit_ground = false;
-      const double error = tyre_error(seated, local, world, sample, hit_ground);
-      // Free motion that would put the tyre through the surface is replaced
-      // by the seated length. A wheel still in the air keeps its integral.
-      landed = hit_ground && error >= -2e-3 && free_length >= seated - 1e-4;
-    }
-    if (landed) {
-      length = seated;
-      speed = 0;
-      contact = true;
-    } else {
-      length = free_length;
-      speed = free_speed;
-    }
+  const auto tyre_error = [&](Vec3 world, const GroundHit& hit) {
+    const Vec3 normal = hit.normal.normalized();
+    return normal.dot(Vec3{world.x, hit.height, world.z} - world) + w.radius;
+  };
+  double speed = 0;
+  double free_length = w.maximum;
+  if (w.unsprung > 0) {
+    const double hold = suspension_force(s.length, s.speed, w.rest, w.maximum,
+                                         w.spring, w.bump_damping, w.rebound_damping);
+    speed = s.speed + (hold - w.unsprung * 9.81 * down.y) / w.unsprung * dt;
+    free_length = s.length + speed * dt;
   }
-  length = std::clamp(length, w.minimum, w.maximum);
-  project(length, hub, hub_w);
-  ground = down.y < -.05 &&
-           terrain(hub_w.x, hub_w.z, std::max(ceiling, hub_w.y + 1), hit);
-  const Vec3 normal = ground ? hit.normal.normalized() : Vec3{0, 1, 0};
+  double seated = std::clamp(s.length, w.minimum, w.maximum);
+  for (int i = 0; i < 8; ++i) {
+    const Vec3 world = project(seated);
+    GroundHit hit;
+    if (!sample(world, hit)) break;
+    const double error = tyre_error(world, hit);
+    if (std::fabs(error) < 1e-4) break;
+    const double probe = seated < w.maximum - 1e-4 ? seated + 1e-3 : seated - 1e-3;
+    const double slope = (project(probe) - world).dot(hit.normal.normalized()) / (probe - seated);
+    if (std::fabs(slope) < 1e-5) break;
+    const double next = std::clamp(seated + error / slope, w.minimum, w.maximum);
+    if (next == seated) break;
+    seated = next;
+  }
+  GroundHit hit;
+  const Vec3 seated_hub = project(seated);
+  // A spring without unsprung mass seats immediately. With unsprung mass,
+  // retain its free motion until the projected hub reaches the tyre contact.
+  const bool contact = free_length >= seated - 1e-4 &&
+      sample(seated_hub, hit) && tyre_error(seated_hub, hit) >= -2e-3;
+  const double length = contact ? seated : std::clamp(free_length, w.minimum, w.maximum);
+  if (contact) speed = 0;
+  const auto pose = wheel_pose(w, length);
+  const Vec3 hub_w = body_point(body, pose.hub_origin);
+  const Vec3 normal = contact ? hit.normal.normalized() : Vec3{0, 1, 0};
   const double rate = speed + body.point_velocity(hard).dot(normal);
   double force = suspension_force(length, rate, w.rest, w.maximum, w.spring,
                                   w.bump_damping, w.rebound_damping);
@@ -287,12 +233,13 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
     speed = 0;
   s.length = length;
   s.speed = speed;
-  s.contact = contact && ground;
+  s.contact = contact;
   s.force = s.contact ? force : 0;
   if (s.contact) body.add_force(normal * s.force, hard);
   s.normal = normal;
-  hinge_hub(w, ray_center(w, s.length), s.hub);
-  s.center = body_point(body, s.hub);
+  s.hub = pose.hub_origin;
+  s.hub_rotation = pose.hub_rotation;
+  s.center = hub_w;
   s.patch = s.center - normal * w.radius;
   if (!s.contact)
     return;
@@ -324,8 +271,8 @@ namespace {
 constexpr double rpm_per_rad = 9.54929658551372;
 constexpr double wheel_inertia = 1.6;
 
-Vec3 wheel_forward(const RigidBody& body, double steer) {
-  return body.orientation.rotate({-std::sin(steer), 0, -std::cos(steer)});
+Vec3 wheel_forward(const RigidBody& body, double steer, Quaternion hub = {}) {
+  return body.orientation.rotate((hub * wheel_steering(steer)).rotate({0, 0, -1}));
 }
 
 // SLRR_rev cf4fd30, native-vehicle-physics.ts engineLimiter.
@@ -336,15 +283,6 @@ double limiter_factor(double rpm, double previous, double limit) {
   return rpm > limit ? 0 : (limit - rpm) / (predicted - rpm);
 }
 
-double relaxed_slip(double previous, double speed, double length, double damping) {
-  return std::clamp((previous + speed * VehicleDynamics::timestep / length) /
-                    (1 + 500 * damping * VehicleDynamics::timestep), -1.0, 1.0);
-}
-
-double longitudinal_slip(double previous, double rolling, double road, double blend) {
-  const double target = road > .1 ? rolling / road : 0;
-  return std::lerp(relaxed_slip(previous, rolling, .3, .1), target, blend);
-}
 }  // namespace
 
 // SLRR_rev cf4fd30, MechanicalSystem.advance. Host gear 7 denotes reverse.
@@ -404,7 +342,7 @@ void VehicleDynamics::step_drive() {
     shaft += w * s.spin;
     square_weights += w * w;
     if (s.contact && wheels[i].radius > 0) {
-      const Vec3 forward = wheel_forward(body, cfg.steer);
+      const Vec3 forward = wheel_forward(body, cfg.steer, s.hub_rotation);
       const Vec3 tangent = (forward - s.normal * forward.dot(s.normal)).normalized();
       const double road_speed = body.point_velocity(s.patch).dot(tangent);
       road_shaft += w * road_speed / wheels[i].radius;
@@ -507,50 +445,32 @@ void VehicleDynamics::step_drive() {
     auto &s = state[i];
     if (!wheel.enabled) continue;
     double road_speed = 0;
-    if (!s.contact || s.force <= 0 || cfg.tyre[11] <= 0) {
-      s.longitudinal_slip = s.lateral_slip = 0;
+    if (!s.contact || s.force <= 0) {
       s.spin *= 1 - .25 * timestep / wheel_inertia;
     } else {
-      const Vec3 heading = wheel_forward(body, cfg.steer);
-      const Vec3 axle = body.orientation.rotate({std::cos(cfg.steer), 0, -std::sin(cfg.steer)});
-      Vec3 forward = heading;
-      forward = (forward - s.normal * forward.dot(s.normal)).normalized();
+      const Vec3 heading = wheel_forward(body, cfg.steer, s.hub_rotation);
+      const Vec3 forward = (heading - s.normal * heading.dot(s.normal)).normalized();
       const Vec3 side = forward.cross(s.normal);
       const Vec3 speed = body.point_velocity(s.patch);
       const double road = speed.dot(forward), lateral = speed.dot(side);
       road_speed = road;
-      const double rolling = s.spin * wheel.radius - road;
-      const double abs_road = std::abs(road);
-      const double blend = std::clamp((abs_road - .1) * .1, 0.0, 1.0);
-      const double target_lat = abs_road > .1 ? std::atan(lateral / abs_road) : 0;
-      s.longitudinal_slip = longitudinal_slip(s.longitudinal_slip, rolling, abs_road, blend);
-      s.lateral_slip = std::lerp(relaxed_slip(s.lateral_slip, lateral, .5, .2), target_lat, blend);
-      const double lon = std::cos(s.lateral_slip) * s.longitudinal_slip * cfg.tyre[12];
-      const double lat = std::sin(s.lateral_slip);
-      const double slip = std::hypot(lon, lat);
-      constexpr double half_pi = 1.5707963267948966;
-      const double maximum = cfg.tyre[11];
-      const double lateral_normal = axle.dot(s.normal);
-      const double slope = (std::sqrt(std::max(0.0, 1 - lateral_normal * lateral_normal)) + 1) * .5;
-      const double load = slope * std::lerp(std::min(s.force, maximum),
-          std::atan(s.force * half_pi / maximum) * maximum / half_pi, cfg.tyre[14]);
-      Sl2PacejkaCoef curve;
-      std::copy_n(cfg.tyre.begin(), curve.size(), curve.begin());
-      if (cfg.tyre[16] > 0)
-        curve[4] *= (cfg.tyre[15] + cfg.tyre[16]) / (load + cfg.tyre[16]);
-      const double magnitude = slip >= .0001 ? sl2_pacejka_force(curve, slip, load, false) / slip : 0;
-      double longitudinal = magnitude * lon;
-      // SLRR_rev suspension-3d.ts clamps the reaction if it would drive
-      // longitudinal slip through zero within this step.
-      const double predicted = longitudinal_slip(s.longitudinal_slip,
-          rolling - longitudinal * wheel.radius * wheel.radius * timestep / wheel_inertia,
-          abs_road, blend);
-      if (predicted * s.longitudinal_slip < 0)
-        longitudinal *= std::abs(s.longitudinal_slip / (predicted - s.longitudinal_slip));
-      body.add_force(forward * longitudinal - side * (magnitude * lat), s.patch);
+      const double tilt = body.orientation.rotate(s.hub_rotation.rotate({0, -1, 0})).dot(s.normal);
+      const double alignment = std::max(.25, tilt * tilt);
+      auto force = tire_forces(s.force, alignment, s.spin * wheel.radius,
+                               road, lateral, cfg.tyre);
+      // At 120 Hz the curve can reverse small slip within one explicit step.
+      // Bound the exchange by the impulse needed to match the two velocities.
+      const Vec3 arm = s.patch - body.position;
+      const double inverse_mass = 1 / body.mass +
+          forward.dot(body.inverse_world_inertia(arm.cross(forward)).cross(arm));
+      const double inverse_spin = wheel.radius * wheel.radius / wheel_inertia;
+      const double limit = std::abs(s.spin * wheel.radius - road) /
+                           (timestep * (inverse_mass + inverse_spin));
+      force.longitudinal = std::clamp(force.longitudinal, -limit, limit);
+      body.add_force(forward * force.longitudinal + side * force.lateral, s.patch);
       const double rolling_torque = s.spin == 0 ? 0 :
           std::copysign(s.force * wheel.radius * cfg.rolling_resistance, s.spin);
-      s.spin -= (longitudinal * wheel.radius + rolling_torque + s.spin * .15) *
+      s.spin -= (force.longitudinal * wheel.radius + rolling_torque + s.spin * .15) *
                 timestep / wheel_inertia;
     }
     const double brake_step = 500 * timestep;
@@ -608,6 +528,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
       continue;
     const double length = (hard.y - hit.height - w.radius) / -down.y;
     s.length = std::clamp(length, w.minimum, w.maximum);
+    s.hub_rotation = w.hub_alignment;
     s.contact = length < w.maximum;
     if (!s.contact)
       continue;
@@ -619,7 +540,8 @@ void VehicleDynamics::step(const Terrain &terrain) {
     s.force = std::clamp(force, 0.0, body.mass * 9.81 * 3);
     body.add_force(s.normal * s.force, hard);
     // Parked tyre friction consumes kinetic motion, bounded by normal load.
-    Vec3 point = hard + down * length + Vec3{0, -w.radius, 0};
+    const Vec3 point = body_point(body, wheel_pose(w, s.length).hub_origin) -
+                       s.normal * w.radius;
     s.patch = point;
     if (drive.torque) continue;
     Vec3 v = body.point_velocity(point),
@@ -674,9 +596,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
       const auto down = wheel.down.normalized();
       if (!wheel.rigid_contact && body.orientation.rotate(down).y >= -.05)
         continue;
-      auto local = ray_center(wheel, wheel.minimum);
-      if (linked)
-        hinge_hub(wheel, local, local);
+      const auto local = wheel_pose(wheel, wheel.minimum).hub_origin;
       const auto point = body.position +
                          body.orientation.rotate(local - body.center) -
                          Vec3{0, wheel.radius, 0};
@@ -696,9 +616,10 @@ void VehicleDynamics::sync_wheels() {
   for (size_t i = 0; i < wheels.size(); ++i) {
     const auto &w = wheels[i];
     auto &s = state[i];
-    Vec3 local =
-        w.center + w.down.normalized() * (s.length - w.anchor_length());
-    s.center = body.position + body.orientation.rotate(local - body.center);
+    const auto pose = wheel_pose(w, s.length);
+    s.hub = pose.hub_origin;
+    s.hub_rotation = pose.hub_rotation;
+    s.center = body_point(body, s.hub);
   }
 }
 unsigned VehicleDynamics::advance(double seconds, const Terrain &terrain) {

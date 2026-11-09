@@ -57,6 +57,7 @@ add_executable(slrr_host
   src/boot/script_events.cpp
   src/boot/boot.cpp
   src/physics/sl2_pacejka.cpp
+  src/physics/tire_model.cpp
   src/physics/dyno_model.cpp
   src/physics/vehicle_dynamics.cpp
   src/physics/deformation_cage.cpp

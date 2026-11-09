@@ -10,6 +10,7 @@
 namespace slrr {
 class RpkIndex;
 struct GameRefState;
+namespace physics { struct Vec3; }
 
 struct SceneInstance {
   SceneSun lighting;
@@ -81,11 +82,17 @@ void scene_instances_prepare_physics();
 struct SceneSphereHit {
   float fraction = 1.f;
   float normal[3] = {};
+  float penetration = 0.f;
 };
 // Sweep through the indexed static scene in script metres.
 bool scene_instances_sweep_sphere(const float start[3], const float delta[3],
                                   float radius, SceneSphereHit &hit,
                                   float max_vertical_normal = 1.f);
+// Part-local triangle queries. The sweep retains an earlier hit if supplied.
+bool scene_mesh_sweep_sphere(const ScxGeometry& mesh, physics::Vec3 start,
+                             physics::Vec3 movement, double radius, SceneSphereHit& hit);
+double scene_mesh_nearest(const ScxGeometry& mesh, physics::Vec3 point,
+                          physics::Vec3& closest);
 uint64_t scene_instances_floor_builds();
 // Changes whenever the world-space floor used by projected shadows changes.
 uint64_t scene_instances_floor_revision();

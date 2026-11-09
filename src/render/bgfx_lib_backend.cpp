@@ -355,6 +355,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     ++frames_;
     if (!ready_) return;
     const bool loading = osd_loading_dialog() || !osd_loading_overlay().empty();
+    const bool covered = !osd_loading_overlay().empty() && !video_fmv_block_osd();
     // A yielded section change must not expose its half-destroyed world or
     // the fallback camera. Both script and host loading plates may present.
     if (scene_transition_active() && !loading) return;
@@ -400,12 +401,12 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
 
     video_fmv_pump();
     // prime.avi is the backdrop. Drawing it after the world hid the car.
-    const bool fmv_bg = video_fmv_is_playing() && video_fmv_is_non_exclusive() &&
+    const bool fmv_bg = !covered && video_fmv_is_playing() && video_fmv_is_non_exclusive() &&
                         video_fmv_frame_ready();
     // Back to the menu closes that movie before the next one is ready.
     // A retired splash still counts as a widget but is not drawn, so the
     // frame was only the clear color. Keep the previous image instead.
-    sync_instances();
+    if (!covered) sync_instances();
     auto is_opening = [](const std::string& path) {
       std::string low = path;
       for (char& c : low)
@@ -465,7 +466,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     const uint16_t world_view = fmv_bg ? kFmvLayer : kWorldView;
     const auto ww = static_cast<uint16_t>(width_);
     const auto hh = static_cast<uint16_t>(height_);
-    for (int i = 0; i < kShadowSlots; ++i) {
+    for (int i = 0; !covered && i < kShadowSlots; ++i) {
       if (!bgfx::isValid(shadow_fb_[i])) continue;
       const auto shadow_view = static_cast<uint16_t>(i);
       bgfx::setViewFrameBuffer(shadow_view, shadow_fb_[i]);
@@ -497,17 +498,19 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     bgfx::touch(world_view);
 
     // Menu/Splash: no garage SCX — stock MainMenu uses FMV or Dummy scene.
-    draw_dynamic_world(view, world_view);
-    if (garage_ && !parts_.empty()) draw_scene(world_view);
-    draw_vehicle_shadows(world_view);
+    if (!covered) {
+      draw_dynamic_world(view, world_view);
+      if (garage_ && !parts_.empty()) draw_scene(world_view);
+      draw_vehicle_shadows(world_view);
+    }
     // Previews start at view 8. OSD plates under the cars are view 6; the
     // rest of the interface is view 70.
-    if (!fmv_bg) draw_fmv(kFmvLayer);
+    if (!covered && !fmv_bg) draw_fmv(kFmvLayer);
     // Boot intros own the frame. Menu OSD from the probe must not cover them.
     if ((garage_ || osd_overlay_ || loading) &&
         !video_fmv_block_osd())
       draw_osd();
-    if (!video_fmv_block_osd()) draw_previews();
+    if (!covered && !video_fmv_block_osd()) draw_previews();
 
     bgfx::frame();
     // The swap chain is filled while the window is hidden. Showing it first

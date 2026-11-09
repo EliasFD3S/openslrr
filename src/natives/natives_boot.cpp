@@ -441,6 +441,12 @@ void object_wait(Object* self, Jvm* vm) {
 void host_set_script_pump(std::function<bool()> fn) {
   g_script_pump = std::move(fn);
 }
+bool host_wait_pending(Object* signal) {
+  const auto it = g_object_wait.find(signal);
+  return it != g_object_wait.end() && std::any_of(
+      it->second.begin(), it->second.end(),
+      [](const ObjectWaiter* waiter) { return waiter->state == 1; });
+}
 void host_script_sleep(float milliseconds) {
   if(!std::isfinite(milliseconds)||milliseconds<=0)return;
   const auto start=std::chrono::steady_clock::now();

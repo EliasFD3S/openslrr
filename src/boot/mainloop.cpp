@@ -3,6 +3,8 @@
 #include "slrr/script_threads.hpp"
 #include "slrr/script_events.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/scene_presentation.hpp"
+#include "slrr/natives_boot.hpp"
 #include "slrr/video_fmv.hpp"
 #include "slrr/host_music.hpp"
 #include "slrr/host_game_options.hpp"
@@ -517,10 +519,6 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
         return static_cast<int32_t>(it->second.v.f);
       return 0;
     };
-    // The script builds the next screen before it pumps, then display()
-    // only waited one frame. Loading.dds never reached the glass.
-    static Object* load_seen = nullptr;
-    static std::chrono::steady_clock::time_point load_until{};
     if (shown("loadingDialog")) {
       osd_set_loading_dialog(true);
       Object* dlg = screen->fields["loadingDialog"].v.o;
@@ -554,10 +552,6 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
         osd_set_loading_overlay(pic);
       }
       const auto now = std::chrono::steady_clock::now();
-      if (dlg != load_seen) {
-        load_seen = dlg;
-        load_until = now + std::chrono::milliseconds(500);
-      }
       auto as_float = [&](const char* name) -> float {
         if (!screen) return 0.f;
         auto it = screen->fields.find(name);
@@ -597,7 +591,10 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
         held = down;
       }
 #endif
-      if (now >= load_until) {
+      // Keep a plain show() up during enter(). A caller waiting on termSig
+      // inside enter() must still be able to finish display()/userWait(0).
+      if (!scene_transition_active() || wait_user != 0 ||
+          host_wait_pending(field_obj(screen, "termSig"))) {
         const int32_t init = as_int("init");
         if (init > 0) {
           screen->fields["init"] = Value::make_int(init - 1);
@@ -664,7 +661,10 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     // The timed wait can hide the dialog above. Update the presentation
     // state before flushing this frame, including during a section change.
     if (!shown("loadingDialog")) {
-      load_seen = nullptr;
+      // show() only sets init. A completed dealer wait must not carry over
+      // to the next map's plain show().
+      if (as_int("waitForUser"))
+        screen->fields["waitForUser"] = Value::make_int(0);
       osd_set_loading_dialog(false);
       osd_set_loading_overlay({});
     }

@@ -233,6 +233,8 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
             osd = oit->second.v.o;
         }
         float hw = 0.f, hh = 0.f;
+        // World colliders have no OSD owner. Their names are for debugging.
+        if (!osd) return Value::make_void();
         osd_mesh_halves(osd, sx, sy, &hw, &hh, nullptr);
         OsdWidget w;
         w.cmd = 0;

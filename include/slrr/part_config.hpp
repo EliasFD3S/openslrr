@@ -16,6 +16,7 @@ struct PartPose {
 struct PartBody {
   PartPose pose;
   float mass = 0;
+  std::string collision_mesh;
 };
 // `spring base travel damping` consumed by the next `wheel`. Missing lines
 // keep the stock fallback (0.29, 0.10, 0.05). Radius comes from `type sphere`.

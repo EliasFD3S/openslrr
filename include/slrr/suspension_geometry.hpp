@@ -18,4 +18,6 @@ struct CornerFrames {
 bool solve_corner_geometry(const CornerGeometry &, Vec3 spring_point,
                            CornerFrames &);
 Matrix corner_matrix(Vec3 origin, Quaternion rotation);
+CornerFrames wheel_pose(const WheelConfig& wheel, double length, bool* fitted = nullptr);
+Quaternion wheel_steering(double angle);
 } // namespace slrr::physics

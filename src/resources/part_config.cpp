@@ -341,8 +341,16 @@ PartConfig parse_part_config(const std::string &source,
         body.mass = number(t, 7);
         if (body.mass < 0.f)
           throw std::runtime_error("body mass must be non-negative");
+        if (t.size() > 8) {
+          auto extension = std::filesystem::path(t[8]).extension().string();
+          std::transform(extension.begin(), extension.end(), extension.begin(),
+                         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+          if (extension == ".scx") body.collision_mesh = t[8];
+        }
         out.bodies.push_back(body);
         out.mass += body.mass;
+      } else if (command == "nocollision" && !out.bodies.empty()) {
+        out.bodies.back().collision_mesh.clear();
       } else if (command == "name") {
         open_wheel = -1;
         for (size_t i = 1; i < t.size(); i++) {

@@ -1,4 +1,5 @@
 #pragma once
+#include "slrr/tire_model.hpp"
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -51,7 +52,7 @@ public:
   void impulse(Vec3 impulse, Vec3 point);
   void integrate(double dt);
   void contact(Vec3 point, Vec3 normal, double restitution = .12,
-               double friction = .6);
+               double friction = .6, RigidBody* other = nullptr);
   std::array<Vec3, 8> corners() const;
 
 private:
@@ -89,12 +90,13 @@ struct WheelState {
   bool contact = false, seeded = false;
   double length = 0, speed = 0, force = 0;
   Vec3 center, normal{0, 1, 0}, hub, patch;
-  double spin = 0, rotation = 0, longitudinal_slip = 0, lateral_slip = 0;
+  Quaternion hub_rotation;
+  double spin = 0, rotation = 0;
 };
 struct DriveWheel {
   double weight = 0, steer = 0, brake = 0, handbrake = 0, bearing = 0;
   double rolling_resistance = 0;
-  std::array<float, 17> tyre{};
+  TireParameters tyre;
 };
 struct DriveInput {
   std::array<DriveWheel, 4> wheels{};

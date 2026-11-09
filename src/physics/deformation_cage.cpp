@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <utility>
 
 namespace slrr::physics {
 namespace {
@@ -23,7 +25,7 @@ DeformationCage::DeformationCage(Vec3 minimum, Vec3 maximum, double mass)
                                          extent_.y * y / (ny - 1),
                                          extent_.z * z / (nz - 1)};
         const bool mount = (z == 2 || z == 4) && (x == 1 || x == 3);
-        nodes_.push_back({point, point, {}, {}, {}, mount});
+        nodes_.push_back({point, point, {}, {}, {}, mount, {}, {}});
       }
   for (int z = 0; z < nz; ++z)
     for (int y = 0; y < ny; ++y)
@@ -38,6 +40,13 @@ DeformationCage::DeformationCage(Vec3 minimum, Vec3 maximum, double mass)
               const double length = (nodes_[a].rest - nodes_[b].rest).length();
               beams_.push_back({a, b, length, length, 1.0 / 900000});
             }
+        // The longer flex beams in the upstream cage have 30% stiffness.
+        for (const auto& [dx, dz] : {std::pair{2, 0}, std::pair{0, 2}}) {
+          if (x + dx >= nx || z + dz >= nz) continue;
+          const int b = index(x + dx, y, z + dz);
+          const double length = (nodes_[a].rest - nodes_[b].rest).length();
+          beams_.push_back({a, b, length, length, 1.0 / (900000 * .3)});
+        }
       }
 }
 
@@ -49,23 +58,30 @@ DeformationCage::DeformationCage(Vec3 minimum, Vec3 maximum, double mass,
   plastic_rate_ = hood ? 1 : 120;
   mount_strength_ = 1.1 * (hood ? 60000 : std::max(12000.0, mass * 2000));
   inverse_mass_ = static_cast<double>(nodes_.size()) / std::max(2.0, mass);
-  for (auto& beam : beams_) beam.compliance = 1 / stiffness;
+  for (auto& beam : beams_) beam.compliance *= 900000 / stiffness;
   for (auto& node : nodes_) node.fixed = false;
   auto anchor = [&](Vec3 target) {
-    auto nearest = std::min_element(nodes_.begin(), nodes_.end(),
-        [&](const Node& a, const Node& b) {
-          return (a.rest - target).dot(a.rest - target) <
-                 (b.rest - target).dot(b.rest - target);
-        });
-    nearest->fixed = true;
+    for (int y = 0; y < ny; ++y) {
+      int nearest = -1;
+      double distance = std::numeric_limits<double>::infinity();
+      for (int z = 0; z < nz; ++z)
+        for (int x = 0; x < nx; ++x) {
+          const int i = index(x, y, z);
+          const Vec3 offset = nodes_[i].rest - target;
+          const double squared = offset.dot(offset);
+          if (!nodes_[i].fixed && squared < distance) {
+            nearest = i;
+            distance = squared;
+          }
+        }
+      if (nearest >= 0) nodes_[nearest].fixed = true;
+    }
   };
   for (double side : {-1., 1.})
     anchor(mount + Vec3{extent_.x * .32 * side, 0, 0});
-  if (hood) {
-    const double far_z = mount.z - minimum_.z > extent_.z * .5
-                             ? minimum_.z : maximum.z;
-    anchor({minimum_.x + extent_.x * .5, mount.y, far_z});
-  }
+  const int front = mount.z - minimum_.z > extent_.z * .5 ? 0 : nz - 1;
+  anchor({minimum_.x + extent_.x * .5, mount.y, front == 0 ? minimum_.z : maximum.z});
+  if (hood) hood_stops_ = {index(0, 0, front), index(nx - 1, 0, front)};
 }
 
 void DeformationCage::impact(Vec3 point, Vec3 normal, double speed, double radius) {
@@ -95,13 +111,15 @@ void DeformationCage::impact(Vec3 point, Vec3 normal, double speed, double radiu
   age_ = quiet_ = 0;
 }
 
-double DeformationCage::step() {
+double DeformationCage::step(const GroundContact& ground) {
   constexpr double dt2 = dt * dt;
   const double damping = std::exp(-14 * dt);
   for (auto& n : nodes_) {
     n.previous = n.position;
     n.position += n.velocity * (dt * damping);
     n.lambda = {};
+    n.floor_normal = {};
+    if (ground && !n.fixed) ground(n.position, n.floor_point, n.floor_normal);
   }
   for (auto& b : beams_) b.lambda = 0;
   for (int iteration = 0; iteration < 12; ++iteration) {
@@ -126,6 +144,19 @@ double DeformationCage::step() {
                       (inverse_mass_ + alpha);
       n.lambda += dl;
       n.position += dl * inverse_mass_;
+    }
+    for (int i : hood_stops_) {
+      if (i < 0) continue;
+      auto& n = nodes_[i];
+      const Vec3 delta = n.position - n.rest;
+      if (delta.x * delta.x + delta.z * delta.z < .08 * .08)
+        n.position.y = std::max(n.position.y, n.rest.y);
+    }
+    if (ground) {
+      for (auto& n : nodes_) {
+        const double depth = (n.floor_point - n.position).dot(n.floor_normal);
+        if (depth > 0) n.position += n.floor_normal * depth;
+      }
     }
   }
   if (mount_strength_ > 0 && !released_) {
@@ -156,14 +187,14 @@ void DeformationCage::yield_beams() {
   }
 }
 
-bool DeformationCage::advance(unsigned steps) {
+bool DeformationCage::advance(unsigned steps, const GroundContact& ground) {
   if (!steps || !active_) return false;
   for (unsigned i = 0; i < steps && active_; ++i) {
-    const double speed = step();
+    const double speed = step(ground);
     ++age_;
     quiet_ = speed < .03 ? quiet_ + 1 : 0;
     if (released_ || (age_ >= VehicleDynamics::frequency / 2 &&
-                      quiet_ >= VehicleDynamics::frequency / 10)) {
+                      quiet_ >= VehicleDynamics::frequency / 5)) {
       active_ = false;
       for (auto& node : nodes_) node.velocity = {};
     }
@@ -200,6 +231,27 @@ Vec3 DeformationCage::displacement(Vec3 point) const {
         sum += (node.position - node.rest) * weight;
       }
   return sum;
+}
+
+// SLRR_rev deformed-frame.ts. Displacement preserves the material probe's
+// original offset when its binding lies outside the cage.
+Matrix DeformationCage::carry_frame(const Matrix& original) const {
+  const Vec3 origin{original[12], original[13], original[14]};
+  const Vec3 moved = origin + displacement(origin);
+  const auto probe = [&](int column) {
+    const Vec3 axis{original[column], original[column + 1], original[column + 2]};
+    const Vec3 point = origin + axis * .1;
+    return point + displacement(point) - moved;
+  };
+  const Vec3 x = probe(0).normalized();
+  const Vec3 up = probe(4);
+  const Vec3 y = (up - x * up.dot(x)).normalized();
+  const Vec3 z = x.cross(y);
+  if (z.dot(z) < .5) return original;
+  return {float(x.x), float(x.y), float(x.z), 0,
+          float(y.x), float(y.y), float(y.z), 0,
+          float(z.x), float(z.y), float(z.z), 0,
+          float(moved.x), float(moved.y), float(moved.z), 1};
 }
 
 }  // namespace slrr::physics

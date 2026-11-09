@@ -17,6 +17,7 @@ void register_gc_natives(Jvm& jvm);
 using HostScriptPump = std::function<bool()>;
 void host_set_script_pump(HostScriptPump fn);
 void host_script_sleep(float milliseconds);
+bool host_wait_pending(Object* signal);
 
 // LoadingScreen.show paints one frame before its body, so the plate is up
 // while the click handler keeps running. Empty until boot installs it.
