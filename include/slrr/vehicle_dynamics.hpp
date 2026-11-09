@@ -120,6 +120,10 @@ public:
   static constexpr unsigned update_frequency = 60;
   static constexpr double timestep = 1.0 / frequency;
   RigidBody body;
+  struct Impact {
+    Vec3 point, normal;
+    double speed = 0;
+  } ground_impact;
   std::array<WheelConfig, 4> wheels;
   std::array<WheelState, 4> state;
   DriveInput drive;
@@ -137,9 +141,10 @@ public:
 private:
   double accumulator_ = 0;
   double previous_rpm_ = 0, shift_time_ = 0;
+  double starter_remaining_ = 0, service_brake_ = 0;
   double launch_factor_ = 1;
   int previous_shift_ = 0;
-  bool ignition_ = false, forced_reverse_ = false;
+  bool accelerator_down_ = false, forced_reverse_ = false;
   bool launch_active_ = false;
   void step(const Terrain &terrain);
   void step_drive();

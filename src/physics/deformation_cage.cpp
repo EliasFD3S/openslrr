@@ -41,26 +41,63 @@ DeformationCage::DeformationCage(Vec3 minimum, Vec3 maximum, double mass)
       }
 }
 
-void DeformationCage::impact(Vec3 point, Vec3 normal, double speed) {
+DeformationCage::DeformationCage(Vec3 minimum, Vec3 maximum, double mass,
+                                 Vec3 mount, bool hood)
+    : DeformationCage(minimum, maximum, mass) {
+  const double stiffness = hood ? 500000 : 750000;
+  yield_ = hood ? .012 : .018;
+  plastic_rate_ = hood ? 1 : 120;
+  mount_strength_ = 1.1 * (hood ? 60000 : std::max(12000.0, mass * 2000));
+  inverse_mass_ = static_cast<double>(nodes_.size()) / std::max(2.0, mass);
+  for (auto& beam : beams_) beam.compliance = 1 / stiffness;
+  for (auto& node : nodes_) node.fixed = false;
+  auto anchor = [&](Vec3 target) {
+    auto nearest = std::min_element(nodes_.begin(), nodes_.end(),
+        [&](const Node& a, const Node& b) {
+          return (a.rest - target).dot(a.rest - target) <
+                 (b.rest - target).dot(b.rest - target);
+        });
+    nearest->fixed = true;
+  };
+  for (double side : {-1., 1.})
+    anchor(mount + Vec3{extent_.x * .32 * side, 0, 0});
+  if (hood) {
+    const double far_z = mount.z - minimum_.z > extent_.z * .5
+                             ? minimum_.z : maximum.z;
+    anchor({minimum_.x + extent_.x * .5, mount.y, far_z});
+  }
+}
+
+void DeformationCage::impact(Vec3 point, Vec3 normal, double speed, double radius) {
   if (speed < 2.0) return;
-  const double velocity = std::min(18.0, (speed - 2) * 1.25);
-  const double crush = std::min(.45, (speed - 2) * .022);
+  const double excess = speed - 2;
+  const double velocity = std::min(16.0, excess * .65);
+  const double crush = std::min(radius * .45, excess * excess * .0018);
+  if (mount_strength_ > 0) {
+    const double mass = static_cast<double>(nodes_.size()) / inverse_mass_;
+    // The chassis sweep resolves the wall before XPBD sees the contact.
+    // Transfer its short load pulse over the estimated mount travel.
+    constexpr double mount_travel = .045;
+    impact_load_ = std::max(impact_load_, mass * speed * speed / (2 * mount_travel));
+  }
   for (auto& node : nodes_) {
     if (node.fixed) continue;
-    const double distance = (node.position - point).length() / .85;
-    const double weight = std::exp(-distance * distance * 2);
+    const double distance = (node.position - point).length() / radius;
+    if (distance >= 1) continue;
+    const double weight = (1 - distance * distance) * (1 - distance * distance);
     node.position += normal * (crush * weight);
     node.velocity += normal * (velocity * weight);
   }
   // The chassis sweep resolves world contact before the local XPBD step.
   // Apply its local crush before the constraints can spring back.
   yield_beams();
-  active_ = VehicleDynamics::frequency * 3 / 4;
+  active_ = true;
+  age_ = quiet_ = 0;
 }
 
-void DeformationCage::step() {
+double DeformationCage::step() {
   constexpr double dt2 = dt * dt;
-  const double damping = std::exp(-7 * dt);
+  const double damping = std::exp(-14 * dt);
   for (auto& n : nodes_) {
     n.previous = n.position;
     n.position += n.velocity * (dt * damping);
@@ -91,27 +128,57 @@ void DeformationCage::step() {
       n.position += dl * inverse_mass_;
     }
   }
+  if (mount_strength_ > 0 && !released_) {
+    double load = impact_load_;
+    for (const auto& node : nodes_)
+      if (node.fixed) load += node.lambda.length() / dt2;
+    // The reference's two overloaded 240 Hz ticks equal one driving step.
+    released_ = load > mount_strength_;
+    impact_load_ = 0;
+  }
   yield_beams();
-  for (auto& n : nodes_) n.velocity = (n.position - n.previous) / dt;
+  double peak_speed = 0;
+  for (auto& n : nodes_) {
+    n.velocity = (n.position - n.previous) / dt;
+    peak_speed = std::max(peak_speed, n.velocity.length());
+  }
+  return peak_speed;
 }
 
 void DeformationCage::yield_beams() {
   for (auto& b : beams_) {
     const double length = (nodes_[b.a].position - nodes_[b.b].position).length();
     const double strain = (length - b.rest) / b.original;
-    constexpr double yield = .003;
-    if (std::abs(strain) > yield)
-      b.rest = std::clamp(b.rest + std::copysign((std::abs(strain) - yield) *
-                                   b.original * std::min(1., 120 * dt), strain),
+    if (std::abs(strain) > yield_)
+      b.rest = std::clamp(b.rest + std::copysign((std::abs(strain) - yield_) *
+                                   b.original * std::min(1., plastic_rate_ * dt), strain),
                           b.original * .5, b.original * 1.5);
   }
 }
 
 bool DeformationCage::advance(unsigned steps) {
-  const unsigned count = std::min(steps, active_);
-  for (unsigned i = 0; i < count; ++i) step();
-  active_ -= count;
-  return count != 0;
+  if (!steps || !active_) return false;
+  for (unsigned i = 0; i < steps && active_; ++i) {
+    const double speed = step();
+    ++age_;
+    quiet_ = speed < .03 ? quiet_ + 1 : 0;
+    if (released_ || (age_ >= VehicleDynamics::frequency / 2 &&
+                      quiet_ >= VehicleDynamics::frequency / 10)) {
+      active_ = false;
+      for (auto& node : nodes_) node.velocity = {};
+    }
+  }
+  return true;
+}
+
+float DeformationCage::condition() const {
+  double strain2 = 0;
+  for (const auto& beam : beams_) {
+    const double strain = (beam.rest - beam.original) / beam.original;
+    strain2 += strain * strain;
+  }
+  const double scaled = std::sqrt(strain2 / static_cast<double>(beams_.size())) / .02;
+  return static_cast<float>(1 / (1 + scaled * scaled));
 }
 
 Vec3 DeformationCage::displacement(Vec3 point) const {

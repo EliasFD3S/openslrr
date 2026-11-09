@@ -129,6 +129,12 @@ struct Record {
 };
 std::unordered_map<Object *, std::vector<SfxItem>> sfx_items;
 std::unordered_map<Object *, Record> records;
+struct LoosePanel {
+  physics::RigidBody body;
+  int32_t vehicle = 0;
+  bool sleeping = false;
+};
+std::unordered_map<Object *, LoosePanel> loose_panels;
 int32_t controlled_vehicle = 0;
 VehicleHudLayout hud_preview;
 std::string hud_preview_directory;
@@ -852,10 +858,11 @@ void place_child(Object *parent, int slot_id, bool refresh_links = true) {
     const double roll = p->dynamics.state[corner].rotation;
     if (type < 201 && p->physics_released && std::abs(roll) > 1e-7) {
       PartPose rotation;
-      rotation.rotation[1] = -static_cast<float>(roll);
-      const auto spin = part_matrix_multiply(part_matrix_multiply(part_pose_matrix(pivot),
-                                             part_pose_matrix(rotation)), part_pose_matrix(back));
-      transform = part_matrix_multiply(spin, transform);
+      const float side = parent_frame[0] < 0.f ? -1.f : 1.f;
+      rotation.rotation[1] = -static_cast<float>(roll) * side;
+      transform = part_matrix_multiply(
+          part_matrix_multiply(parent_frame, part_pose_matrix(rotation)),
+          part_matrix_inverse_rigid(child_frame));
     }
     const double turn = wheel_steering_angle(*p, corner);
     if (std::fabs(turn) > 1e-7) {
@@ -1245,6 +1252,7 @@ bool part_install(Object *child, Object *root, int own, int target,
   c->state.parent_slot = selected.mount->id;
   c->state.own_slot = selected.mate->id;
   p->children[selected.mount->id] = child;
+  loose_panels.erase(child);
   if (runtime)
     if (auto *chassis = car(child)) {
       // A rim put back on the car still carries its tyre. Register the
@@ -1533,6 +1541,7 @@ bool part_destroy(Object *part) {
   auto *rec = record(part);
   if (!rec)
     return false;
+  loose_panels.erase(part);
   if (auto camera = part->fields.find("_hostCockpitCamera"); camera != part->fields.end())
     gameref_remove(camera->second.v.o);
   auto children = rec->children;
@@ -2026,9 +2035,13 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   drive.automatic_shift = rec.transmission == 1;
   drive.auto_clutch = rec.transmission != 2;
   drive.starter = std::max(0.f, comp(chassis, "starter_torque"));
-  drive.bearing_scale = .1 / std::max(.01f, rec.config->brake_inertia);
-  drive.brake_scale = drive.bearing_scale * std::max(0.f, rec.config->brake_power);
-  drive.handbrake_scale = drive.bearing_scale * std::max(0.f, rec.config->handbrake_power);
+  const double brake_inertia = std::max(.01f, rec.config->brake_inertia);
+  drive.bearing_scale = .1 / brake_inertia;
+  // DiscBrake supplies torque. Normalize the CFG gains before using the
+  // physical wheel inertia, which is already expressed in SI units.
+  const double inertia_gain = 50 / brake_inertia;
+  drive.brake_scale = inertia_gain * std::max(0.f, rec.config->brake_power) / 1000;
+  drive.handbrake_scale = inertia_gain * std::max(0.f, rec.config->handbrake_power) / 2000;
   drive.gears = std::clamp(field_int(chassis, "gears"), 1, 6);
   const double final_drive = comp(chassis, "rearend_ratio");
   drive.ratios[0] = 0;
@@ -2094,15 +2107,21 @@ void update_engine_audio(Record &rec, bool active) {
   }
 }
 
-void collide_chassis(Record& rec, physics::Vec3 before) {
+physics::VehicleDynamics::Impact collide_chassis(Record& rec, physics::Vec3 before) {
   using physics::Vec3;
   auto& body = rec.dynamics.body;
   const Vec3 delta = body.position - before;
-  if (delta.dot(delta) < 1e-6) return;
+  if (delta.dot(delta) < 1e-6) return {};
   const float movement[] = {float(delta.x), float(delta.y), float(delta.z)};
   constexpr float radius = .18f;
+  struct SweepContact {
+    SceneSphereHit hit;
+    Vec3 arm;
+  };
+  std::array<SweepContact, 4> contacts;
+  size_t contact_count = 0;
   SceneSphereHit closest;
-  Vec3 arm;
+  Vec3 closest_arm;
   for (double x : {body.minimum.x + radius, body.maximum.x - radius})
     for (double z : {body.minimum.z + radius, body.maximum.z - radius}) {
       const Vec3 offset = body.orientation.rotate(
@@ -2110,83 +2129,299 @@ void collide_chassis(Record& rec, physics::Vec3 before) {
       const Vec3 position = before + offset;
       const float start[] = {float(position.x), float(position.y), float(position.z)};
       SceneSphereHit hit;
-      if (scene_instances_sweep_sphere(start, movement, radius, hit, .65f) &&
-          hit.fraction < closest.fraction) {
-        closest = hit;
-        arm = offset;
+      if (scene_instances_sweep_sphere(start, movement, radius, hit, .65f)) {
+        contacts[contact_count++] = {hit, offset};
+        if (hit.fraction < closest.fraction) {
+          closest = hit;
+          closest_arm = offset;
+        }
       }
     }
-  if (closest.fraction >= 1.f) return;
+  if (closest.fraction >= 1.f) return {};
   const Vec3 normal{closest.normal[0], closest.normal[1], closest.normal[2]};
+  Vec3 arm;
+  size_t simultaneous = 0;
+  for (size_t i = 0; i < contact_count; ++i) {
+    const auto& [hit, offset] = contacts[i];
+    const Vec3 hit_normal{hit.normal[0], hit.normal[1], hit.normal[2]};
+    if (normal.dot(hit_normal) > .95 &&
+        (hit.fraction - closest.fraction) * -delta.dot(normal) < .035) {
+      arm += offset;
+      ++simultaneous;
+    }
+  }
+  arm = simultaneous ? arm / static_cast<double>(simultaneous) : closest_arm;
   body.position = before + delta * closest.fraction + normal * .002;
   const Vec3 point = body.position + arm - normal * radius;
   const double speed = -body.point_velocity(point).dot(normal);
   body.contact(point, normal, .12, .35);
-  if (speed < 2) return;
-  if (!rec.deformation)
-    rec.deformation = std::make_unique<physics::DeformationCage>(
-        body.minimum, body.maximum, body.mass * .08);
-  rec.deformation->impact(body.center + body.orientation.inverse_rotate(point - body.position),
-                          body.orientation.inverse_rotate(normal), speed);
-  rec.state.tear = std::max(0.f, rec.state.tear - float((speed - 2) * .008));
+  return {point, normal, speed};
 }
 
-void publish_deformation(Object* chassis, Record& rec) {
+void publish_deformation(Record& rec) {
   using physics::Vec3;
-  const auto inverse = part_matrix_inverse_rigid(rec.dynamics.body.frame());
-  const auto update = [&](Record& part) {
-    for (auto* render : part.renders) {
-      auto* node = gameref_get(render);
-      if (!node || node->light_flags) continue;
-      auto mesh = scene_instances_geometry(static_cast<uint32_t>(node->type_id));
-      PartMatrix world;
-      if (!mesh || !scene_instances_script_matrix(render, world.data())) continue;
-      const auto m = part_matrix_multiply(inverse, world);
-      const Vec3 x{m[0], m[1], m[2]}, y{m[4], m[5], m[6]}, z{m[8], m[9], m[10]};
-      const Vec3 origin{m[12], m[13], m[14]};
-      auto deformed = std::make_shared<ScxGeometry>(*mesh);
-      const double scale = mesh->position_scale;
-      if (!(scale > 0)) continue;
-      double maximum = 0;
-      for (size_t i = 0; i + 2 < mesh->positions.size(); i += 3) {
-        const Vec3 p = origin + (x * mesh->positions[i] + y * mesh->positions[i + 1] +
-                                 z * mesh->positions[i + 2]) * scale;
-        const Vec3 movement = rec.deformation->displacement(p);
-        maximum = std::max(maximum, movement.dot(movement));
-        const Vec3 delta = movement / scale;
-        deformed->positions[i] += float(delta.dot(x));
-        deformed->positions[i + 1] += float(delta.dot(y));
-        deformed->positions[i + 2] += float(delta.dot(z));
+  for (auto* render : rec.renders) {
+    auto* node = gameref_get(render);
+    if (!node || node->light_flags) continue;
+    auto mesh = scene_instances_geometry(static_cast<uint32_t>(node->type_id));
+    if (!mesh) continue;
+    const auto m = node_local(render);
+    const Vec3 x{m[0], m[1], m[2]}, y{m[4], m[5], m[6]}, z{m[8], m[9], m[10]};
+    const Vec3 origin{m[12], m[13], m[14]};
+    auto deformed = std::make_shared<ScxGeometry>(*mesh);
+    const double scale = mesh->position_scale;
+    if (!(scale > 0)) continue;
+    double maximum = 0;
+    for (size_t i = 0; i + 2 < mesh->positions.size(); i += 3) {
+      const Vec3 p = origin + (x * mesh->positions[i] + y * mesh->positions[i + 1] +
+                               z * mesh->positions[i + 2]) * scale;
+      const Vec3 movement = rec.deformation->displacement(p);
+      maximum = std::max(maximum, movement.dot(movement));
+      const Vec3 delta = movement / scale;
+      deformed->positions[i] += float(delta.dot(x));
+      deformed->positions[i + 1] += float(delta.dot(y));
+      deformed->positions[i + 2] += float(delta.dot(z));
+      if (movement.dot(movement) > 1e-10 && i + 2 < mesh->normals.size()) {
+        const Vec3 n = (x * mesh->normals[i] + y * mesh->normals[i + 1] +
+                        z * mesh->normals[i + 2]).normalized();
+        const Vec3 u = n.cross(std::abs(n.y) < .9 ? Vec3{0, 1, 0}
+                                                 : Vec3{1, 0, 0}).normalized();
+        const Vec3 v = n.cross(u);
+        constexpr double offset = .005;
+        const Vec3 du = u * offset + rec.deformation->displacement(p + u * offset) - movement;
+        const Vec3 dv = v * offset + rec.deformation->displacement(p + v * offset) - movement;
+        const Vec3 normal = du.cross(dv).normalized();
+        if (normal.dot(normal) > .5) {
+          deformed->normals[i] = float(normal.dot(x));
+          deformed->normals[i + 1] = float(normal.dot(y));
+          deformed->normals[i + 2] = float(normal.dot(z));
+        }
       }
-      node->deformed_geometry = maximum > 1e-6 ? std::move(deformed) : nullptr;
-      node->deformed_type = node->type_id;
     }
-  };
-  update(rec);
-  for (const auto& [slot, child] : rec.children)
-    if (auto* part = record(child); part && part->config->category == 2) update(*part);
-  chassis->fields["tear"] = Value::make_float(rec.state.tear);
+    node->deformed_geometry = maximum > 1e-6 ? std::move(deformed) : nullptr;
+    node->deformed_type = node->type_id;
+  }
 }
 
-void restore_deformed_chassis(Record& rec) {
+void restore_deformation(Record& rec) {
   if (!rec.deformation) return;
   rec.deformation.reset();
   rec.deformation_upload_ticks = 0;
-  const auto clear = [](Record& part) {
-    for (auto* render : part.renders)
-      if (auto* node = gameref_get(render)) node->deformed_geometry.reset();
-  };
-  clear(rec);
-  for (const auto& [slot, child] : rec.children)
-    if (auto* part = record(child); part && part->config->category == 2) clear(*part);
+  for (auto* render : rec.renders)
+    if (auto* node = gameref_get(render)) node->deformed_geometry.reset();
+}
+
+struct PanelContact {
+  physics::Vec3 minimum, maximum, point;
+  double distance = 1e9;
+};
+
+PanelContact panel_contact(const Record& rec, physics::Vec3 impact) {
+  using physics::Vec3;
+  PanelContact result;
+  result.minimum = {1e9, 1e9, 1e9};
+  result.maximum = -result.minimum;
+  for (auto* render : rec.renders) {
+    const auto* node = gameref_get(render);
+    if (!node || node->light_flags) continue;
+    const auto mesh = node->deformed_geometry && node->deformed_type == node->type_id
+                          ? node->deformed_geometry
+                          : scene_instances_geometry(static_cast<uint32_t>(node->type_id));
+    if (!mesh) continue;
+    const auto m = node_local(render);
+    const Vec3 x{m[0], m[1], m[2]}, y{m[4], m[5], m[6]}, z{m[8], m[9], m[10]};
+    const Vec3 origin{m[12], m[13], m[14]};
+    for (size_t i = 0; i + 2 < mesh->positions.size(); i += 3) {
+      const Vec3 p = origin + (x * mesh->positions[i] + y * mesh->positions[i + 1] +
+                               z * mesh->positions[i + 2]) * mesh->position_scale;
+      result.minimum = {std::min(result.minimum.x, p.x), std::min(result.minimum.y, p.y),
+                        std::min(result.minimum.z, p.z)};
+      result.maximum = {std::max(result.maximum.x, p.x), std::max(result.maximum.y, p.y),
+                        std::max(result.maximum.z, p.z)};
+      const Vec3 difference = p - impact;
+      const double distance = difference.dot(difference);
+      if (distance < result.distance) {
+        result.distance = distance;
+        result.point = p;
+      }
+    }
+  }
+  result.distance = std::sqrt(result.distance);
+  return result;
+}
+
+void damage_chassis(Object* chassis, Record& rec, const physics::VehicleDynamics::Impact& hit) {
+  using physics::Vec3;
+  if (hit.speed < 2) return;
+  const auto& body = rec.dynamics.body;
+  const Vec3 local_hit = body.center + body.orientation.inverse_rotate(hit.point - body.position);
+  const Vec3 normal = body.orientation.inverse_rotate(hit.normal);
+  if (!rec.deformation)
+    rec.deformation = std::make_unique<physics::DeformationCage>(
+        body.minimum, body.maximum, body.mass * .08);
+  rec.deformation->impact(local_hit, normal, hit.speed, .85);
+  rec.state.tear = std::max(0.f, rec.state.tear - float((hit.speed - 2) * .014));
+  const auto inverse = part_matrix_inverse_rigid(world_matrix(chassis));
+  for (const auto& installed : part_installed_tree(chassis)) {
+    auto* part = record(installed.object);
+    if (part == &rec || part->config->category != 2) continue;
+    std::string file = std::filesystem::path(part->config->source).stem().string();
+    std::transform(file.begin(), file.end(), file.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const bool hood = file.find("hood") != std::string::npos;
+    const bool panel = hood || file.find("bumper") != std::string::npos ||
+                       file.find("door") != std::string::npos ||
+                       file.find("trunk") != std::string::npos ||
+                       file.find("quarterpanel") != std::string::npos ||
+                       file.find("sideskirt") != std::string::npos;
+    if (!panel) continue;
+    const auto m = part_matrix_multiply(inverse, world_matrix(installed.object));
+    const Vec3 x{m[0], m[1], m[2]}, y{m[4], m[5], m[6]}, z{m[8], m[9], m[10]};
+    const Vec3 offset = local_hit - Vec3{m[12], m[13], m[14]};
+    const auto contact = panel_contact(*part, {offset.dot(x), offset.dot(y), offset.dot(z)});
+    const double speed = hit.speed * std::clamp(1 - contact.distance / .65, 0., 1.);
+    if (speed < 2) continue;
+    if (!part->deformation) {
+      Vec3 mount;
+      for (const auto& slot : part->config->slots)
+        if (slot.id == installed.own_slot) {
+          mount = {slot.pose.position[0], slot.pose.position[1], slot.pose.position[2]};
+          break;
+        }
+      part->deformation = std::make_unique<physics::DeformationCage>(
+          contact.minimum, contact.maximum, std::max(2.f, part->config->mass), mount, hood);
+    }
+    part->deformation->impact(contact.point, {normal.dot(x), normal.dot(y), normal.dot(z)},
+                              speed, .65);
+  }
+}
+
+void detach_panel(Object* part, Record& rec, Object* chassis, Record& vehicle) {
+  using physics::Vec3;
+  const auto* chassis_node = gameref_get(chassis);
+  auto* node = gameref_get(part);
+  PartMatrix frame, parent_frame;
+  if (!chassis_node || !node || !chassis_node->parent ||
+      !scene_instances_script_matrix(part, frame.data()) ||
+      !scene_instances_script_matrix(chassis_node->parent, parent_frame.data()))
+    return;
+  const auto bounds = panel_contact(rec, {});
+  if (bounds.distance > 1e4) return;
+  void* const world_parent = chassis_node->parent;
+  auto& loose = loose_panels[part];
+  loose.vehicle = gameref_make_live(chassis);
+  auto& body = loose.body;
+  double mass = 0;
+  for (const auto& item : part_installed_tree(part)) mass += record(item.object)->config->mass;
+  const Vec3 padding{.005, .005, .005};
+  body.configure(std::max(2., mass), bounds.minimum - padding, bounds.maximum + padding,
+                 (bounds.minimum + bounds.maximum) * .5);
+  body.set_frame(frame);
+  const auto& carrier = vehicle.dynamics.body;
+  body.velocity = carrier.point_velocity(body.position);
+  const Vec3 angular_velocity = carrier.omega();
+  const Vec3 size = body.maximum - body.minimum;
+  const Vec3 angular = body.orientation.inverse_rotate(angular_velocity);
+  body.momentum = body.orientation.rotate(Vec3{
+      angular.x * (size.y * size.y + size.z * size.z),
+      angular.y * (size.x * size.x + size.z * size.z),
+      angular.z * (size.x * size.x + size.y * size.y)} * (body.mass / 12));
+  if (runtime)
+    for (const auto& descendant : part_installed_tree(part))
+      runtime->invoke_by_name(chassis->class_name, "rempart",
+          {Value::make_obj(chassis), Value::make_obj(descendant.object)}, false);
+  if (auto* parent = record(rec.state.parent))
+    parent->children.erase(rec.state.parent_slot);
+  rec.state.parent = nullptr;
+  rec.state.parent_slot = rec.state.own_slot = 0;
+  rec.state.tear = 0;
+  part->fields["tear"] = Value::make_float(0);
+  gameref_set_parent(part, world_parent);
+  const auto local = part_matrix_multiply(part_matrix_inverse_rigid(parent_frame), frame);
+  node = gameref_get(part);
+  std::copy(local.begin(), local.end(), node->local_matrix);
+  node->matrix_override = true;
+  relink_assembly(chassis);
+  refresh_chassis(chassis);
+}
+
+void advance_loose_panels() {
+  using physics::Vec3;
+  for (auto it = loose_panels.begin(); it != loose_panels.end();) {
+    auto* part = it->first;
+    auto& loose = it->second;
+    auto* node = gameref_get(part);
+    auto* owner = gameref_find_live(loose.vehicle);
+    PartMatrix parent_frame;
+    if (!node || !owner || !node->parent || owner->parent != node->parent ||
+        !scene_instances_script_matrix(node->parent, parent_frame.data())) {
+      it = loose_panels.erase(it);
+      part_destroy(part);
+      continue;
+    }
+    ++it;
+    if (loose.sleeping) continue;
+    auto& body = loose.body;
+    const Vec3 before = body.position;
+    body.integrate(kPhysicsTick);
+    const Vec3 movement = body.position - before;
+    const Vec3 size = body.maximum - body.minimum;
+    const float radius = static_cast<float>(std::clamp(std::min({size.x, size.y, size.z}) * .5,
+                                                       .03, .2));
+    const float from[] = {float(before.x), float(before.y), float(before.z)};
+    const float delta[] = {float(movement.x), float(movement.y), float(movement.z)};
+    SceneSphereHit wall;
+    if (scene_instances_sweep_sphere(from, delta, radius, wall, .65f)) {
+      const Vec3 normal{wall.normal[0], wall.normal[1], wall.normal[2]};
+      body.position = before + movement * wall.fraction + normal * .002;
+      body.contact(body.position - normal * radius, normal);
+    }
+    double depth = 0;
+    Vec3 correction;
+    for (const auto& point : body.corners()) {
+      SceneFloorHit floor;
+      if (!scene_instances_sample_floor(float(point.x), float(point.z),
+          float(std::max(before.y, body.position.y) + .25), part, floor)) continue;
+      const double overlap = floor.height - point.y;
+      if (overlap <= 0) continue;
+      const Vec3 normal{floor.normal[0], floor.normal[1], floor.normal[2]};
+      body.contact(point, normal, .12, .75);
+      if (overlap > depth) {
+        depth = overlap;
+        correction = normal;
+      }
+    }
+    if (depth > 0) {
+      body.position += correction * (depth + .001);
+      loose.sleeping = body.velocity.length() < .12 && body.omega().length() < .25;
+    }
+    const auto local = part_matrix_multiply(part_matrix_inverse_rigid(parent_frame), body.frame());
+    std::copy(local.begin(), local.end(), node->local_matrix);
+  }
 }
 
 void advance_chassis_tick() {
+  advance_loose_panels();
+  std::vector<Object*> released;
   const auto* target = gameref_find_live(controlled_vehicle);
   Object* controlled = target ? as_part(static_cast<Object*>(target->key)) : nullptr;
   for (auto &entry : records) {
     Object *chassis = entry.first;
     auto &rec = entry.second;
+    if (rec.config->native_kind != "car" && rec.deformation && rec.deformation->active()) {
+      PartMatrix frame;
+      if (!scene_instances_script_matrix(chassis, frame.data())) continue;
+      if (rec.deformation->advance(physics::VehicleDynamics::frequency /
+                                   physics::VehicleDynamics::update_frequency)) {
+        if (++rec.deformation_upload_ticks >= 3 || !rec.deformation->active()) {
+          publish_deformation(rec);
+          rec.deformation_upload_ticks = 0;
+        }
+        rec.state.tear = std::min(rec.state.tear, rec.deformation->condition());
+        chassis->fields["tear"] = Value::make_float(rec.state.tear);
+        if (rec.state.parent && rec.deformation->released()) released.push_back(chassis);
+      }
+    }
     rec.engine_running = false;
     if (rec.config->native_kind != "car" || rec.state.parent ||
         (rec.physics_suspended && !rec.physics_pending_placement))
@@ -2235,7 +2470,9 @@ void advance_chassis_tick() {
     const auto before = rec.dynamics.body.position;
     const auto steps = rec.dynamics.advance(kPhysicsTick, terrain);
     if (rec.physics_released && rec.dynamics.drive.torque) {
-      collide_chassis(rec, before);
+      const auto wall = collide_chassis(rec, before);
+      const auto& ground = rec.dynamics.ground_impact;
+      damage_chassis(chassis, rec, wall.speed >= ground.speed ? wall : ground);
       const auto delta = rec.dynamics.body.position - before;
       rec.mileage += static_cast<float>(std::hypot(delta.x, delta.z) * .1);
     }
@@ -2246,8 +2483,10 @@ void advance_chassis_tick() {
       rec.published_frame = local;
     if (rec.deformation && rec.deformation->advance(steps)) {
       rec.deformation_upload_ticks += steps;
-      if (rec.deformation_upload_ticks >= physics::VehicleDynamics::frequency / 20) {
-        publish_deformation(chassis, rec);
+      if (rec.deformation_upload_ticks >= physics::VehicleDynamics::frequency / 20 ||
+          !rec.deformation->active()) {
+        publish_deformation(rec);
+        chassis->fields["tear"] = Value::make_float(rec.state.tear);
         rec.deformation_upload_ticks = 0;
       }
     }
@@ -2277,6 +2516,11 @@ void advance_chassis_tick() {
       }
     }
   }
+  for (auto* part : released)
+    if (auto* panel = record(part))
+      if (auto* chassis = car(part))
+        if (auto* vehicle = record(chassis))
+          detach_panel(part, *panel, chassis, *vehicle);
 }
 } // namespace
 
@@ -2705,7 +2949,7 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
           if (auto *p = record(s); p && std::isfinite(value)) {
             p->state.*field = value;
             if (field == &InstalledPart::tear && value >= 1)
-              restore_deformed_chassis(*p);
+              restore_deformation(*p);
           }
           return Value::make_float(value);
         });
@@ -2715,7 +2959,7 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
           if (auto *p = record(s)) {
             p->state.*field = std::clamp(scalar(a, 0), 0.f, 1.f);
             if (field == &InstalledPart::tear && p->state.tear >= 1)
-              restore_deformed_chassis(*p);
+              restore_deformation(*p);
           }
           return Value::make_void();
         });

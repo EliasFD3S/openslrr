@@ -775,6 +775,7 @@ void sweep_triangles(const StaticMesh &mesh, const std::vector<uint32_t> &indice
       const double closing = -delta.dot(normal);
       if (closing <= 1e-8) break;
       if (distance <= radius + 1e-5) {
+        if (std::abs(normal.y) > max_vertical_normal) break;
         hit.fraction = static_cast<float>(t);
         hit.normal[0] = static_cast<float>(normal.x);
         hit.normal[1] = static_cast<float>(normal.y);
