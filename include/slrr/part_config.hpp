@@ -96,6 +96,8 @@ struct PartConfig {
   bool has_steering = false;
   std::vector<PartPose> wheels;
   float max_steer = .6f, ackermann_length = 0;
+  float brake_power = 1000.f, handbrake_power = 2000.f;
+  float brake_inertia = 50.f;
   std::vector<float> wheel_steering;
   std::vector<PartSlot> slots;
   std::vector<uint32_t> stock;

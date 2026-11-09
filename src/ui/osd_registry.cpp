@@ -187,6 +187,7 @@ void osd_add_widget(OsdWidget w) {
     w.hidden = true;
   }
   if (w.layer == 0) w.layer = osd_viewport_pri(w.owner);
+  if (owner_suppressed(w)) w.hidden = true;
   g_widgets.push_back(std::move(w));
 }
 
@@ -951,6 +952,22 @@ void osd_sync_button_pictures() {
 
 void osd_on_field_write(Object* recv, const std::string& field) {
   if (!recv || field.empty()) return;
+  if (field == "globalHandler" && is_osd_class(recv)) {
+    Object* dialog = field_o(recv, "globalHandler");
+    if (field_o(dialog, "osd") != recv) return;
+    if (!dialog->fields.contains("controller") || !dialog->fields.contains("flags"))
+      return;
+    const auto shown = dialog->fields.find("shown");
+    if (shown != dialog->fields.end() && shown->second.tag == ValueTag::Int &&
+        shown->second.v.i != 0) return;
+    // Dialog constructors can build and select a group before show().
+    // Keep those widgets hidden until their viewport is activated.
+    recv->fields["_host_hidden"] = Value::make_int(1);
+    for (OsdWidget& w : g_widgets)
+      if (w.owner == recv) w.hidden = true;
+    slrr_text_set_osd_visible(recv, false);
+    return;
+  }
   if(field=="ins" && recv->class_name=="java.render.Rectangle") {
     Object* current=field_o(recv,"ins");
     Object* previous=field_o(recv,"_host_picture_instance");

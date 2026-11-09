@@ -89,16 +89,21 @@ struct WheelState {
   bool contact = false, seeded = false;
   double length = 0, speed = 0, force = 0;
   Vec3 center, normal{0, 1, 0}, hub, patch;
-  double spin = 0, longitudinal_slip = 0, lateral_slip = 0;
+  double spin = 0, rotation = 0, longitudinal_slip = 0, lateral_slip = 0;
 };
 struct DriveWheel {
   double weight = 0, steer = 0, brake = 0, handbrake = 0, bearing = 0;
+  double rolling_resistance = 0;
   std::array<float, 17> tyre{};
 };
 struct DriveInput {
   std::array<DriveWheel, 4> wheels{};
-  double ratio = 0, throttle = 0, brake = 0, handbrake = 0;
-  double inertia = 0, idle = 0, limit = 0;
+  std::array<double, 8> ratios{};
+  int gears = 0, shift = 0;
+  bool engaged = false, reverse = false, automatic_shift = true, auto_clutch = true;
+  double throttle = 0, brake = 0, handbrake = 0;
+  double brake_scale = 0, handbrake_scale = 0, bearing_scale = 0;
+  double inertia = 0, idle = 0, limit = 0, starter = 0;
   double clutch = 1;
   std::function<double(double)> torque;
 };
@@ -116,16 +121,23 @@ public:
   std::array<WheelState, 4> state;
   DriveInput drive;
   double engine_omega = 0;
+  bool engine_running = false;
+  int gear = 0;
   uint64_t ticks = 0;
   unsigned advance(double seconds, const Terrain &terrain);
   void reset_clock();
   void release_wheels();
+  void reset_drive();
   uint64_t backlog() const;
   void sync_wheels();
 
 private:
   double accumulator_ = 0;
+  double previous_rpm_ = 0, shift_time_ = 0;
+  int previous_shift_ = 0;
+  bool ignition_ = false, forced_reverse_ = false;
   void step(const Terrain &terrain);
   void step_drive();
+  void update_gear(double rpm, double shaft, double road_shaft);
 };
 } // namespace slrr::physics

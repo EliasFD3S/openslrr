@@ -56,9 +56,7 @@ struct SfxItem {
 };
 struct Record {
   float steering_input = 0;
-  int drive_gear = 1;
   int transmission = 1;
-  int previous_shift = 0;
   bool horn_down = false;
   bool engine_running = false;
   bool has_steering_transform = false;
@@ -784,6 +782,18 @@ void relink_assembly(Object *part) {
         pending.push_back(child.second);
   }
 }
+double wheel_steering_angle(const Record& rec, size_t corner) {
+  const auto& wheel = rec.wheels[corner];
+  const double factor = wheel.steer_set ? wheel.steer
+      : corner < rec.config->wheel_steering.size() ? rec.config->wheel_steering[corner] : 0;
+  const double angle = rec.steering_input * rec.config->max_steer;
+  const double length = rec.ackermann != 0 ? rec.ackermann : rec.config->ackermann_length;
+  if (std::abs(angle) < 1e-7 || length <= 0) return angle * factor;
+  const double radius = length / std::tan(angle), x = wheel.pos[0];
+  return (radius <= 0 ? -std::atan2(length, -radius - x)
+                      : std::atan2(length, radius + x)) * factor;
+}
+
 void place_child(Object *parent, int slot_id, bool refresh_links = true) {
   auto *p = record(parent);
   if (!p)
@@ -829,29 +839,23 @@ void place_child(Object *parent, int slot_id, bool refresh_links = true) {
   c->has_steering_transform = false;
   if (gear && type < 301) {
     const int corner = type % 100 - 1;
-    const auto &wheel = p->wheels[corner];
-    const float factor =
-        wheel.steer_set
-            ? wheel.steer
-            : (static_cast<size_t>(corner) < p->config->wheel_steering.size()
-                   ? p->config->wheel_steering[corner]
-                   : 0.f);
-    const double angle = p->steering_input * p->config->max_steer;
-    double turn = angle * factor;
-    const double length =
-        p->ackermann != 0 ? p->ackermann : p->config->ackermann_length;
-    if (std::fabs(angle) > 1e-7 && length > 0) {
-      const double radius = length / std::tan(angle), x = wheel.pos[0];
-      turn = (radius <= 0 ? -std::atan2(length, -radius - x)
-                          : std::atan2(length, radius + x)) *
-             factor;
+    PartPose pivot, back;
+    for (int axis = 0; axis < 3; ++axis) {
+      const float center = type < 201 ? parent_frame[12 + axis] : p->wheels[corner].pos[axis];
+      pivot.position[axis] = center;
+      back.position[axis] = -center;
     }
+    const double roll = p->dynamics.state[corner].rotation;
+    if (type < 201 && p->physics_released && std::abs(roll) > 1e-7) {
+      PartPose rotation;
+      rotation.rotation[1] = -static_cast<float>(roll);
+      const auto spin = part_matrix_multiply(part_matrix_multiply(part_pose_matrix(pivot),
+                                             part_pose_matrix(rotation)), part_pose_matrix(back));
+      transform = part_matrix_multiply(spin, transform);
+    }
+    const double turn = wheel_steering_angle(*p, corner);
     if (std::fabs(turn) > 1e-7) {
-      PartPose pivot, back, rotation;
-      for (int axis = 0; axis < 3; ++axis) {
-        pivot.position[axis] = wheel.pos[axis];
-        back.position[axis] = -wheel.pos[axis];
-      }
+      PartPose rotation;
       rotation.rotation[0] = static_cast<float>(turn);
       c->steering_transform =
           part_matrix_multiply(part_matrix_multiply(part_pose_matrix(pivot),
@@ -1297,9 +1301,21 @@ bool part_command(Object *part, const std::string &command) {
       (verb == "controllable" || verb == "leave")) {
     int32_t id = 0;
     if (!(input >> id)) return false;
-    if (verb == "controllable")
+    if (verb == "controllable") {
       controlled_vehicle = id;
-    else if (controlled_vehicle == id)
+      auto* vehicle = gameref_find_live(id);
+      Object* chassis = vehicle ? as_part(static_cast<Object*>(vehicle->key)) : nullptr;
+      auto* car = record(chassis);
+      const auto* node = gameref_get(chassis);
+      const auto* parent = node ? gameref_get(node->parent) : nullptr;
+      // Track.lockCar resets the chassis before attaching the controller.
+      // A map with a ground shell is driveable. The garage engine test
+      // attaches the same controller to a car on the lift.
+      if (car && parent && static_cast<Object*>(parent->key)->fields.contains("_ground_shell")) {
+        car->physics_suspended = false;
+        car->physics_released = true;
+      }
+    } else if (controlled_vehicle == id)
       controlled_vehicle = 0;
     return true;
   }
@@ -1401,7 +1417,7 @@ bool part_command(Object *part, const std::string &command) {
     rec->steering_input = 0.f;
     rec->dynamics.body.velocity = {};
     rec->dynamics.body.momentum = {};
-    rec->dynamics.engine_omega = 0;
+    rec->dynamics.reset_drive();
     rec->engine_running = false;
     part_park_chassis(part, false);
     for (const auto &slot : rec->config->slots)
@@ -1907,12 +1923,10 @@ Object *part_field(Object *part, const char *name) {
              ? value->second.v.o : nullptr;
 }
 
-void configure_drive(Object *chassis, Record &rec) {
+void configure_drive(Object *chassis, Record &rec, bool controlled) {
   auto &drive = rec.dynamics.drive;
   drive.torque = {};
-  auto *target = gameref_find_live(controlled_vehicle);
-  if (!target || as_part(static_cast<Object *>(target->key)) != chassis)
-    return;
+  if (!controlled) return;
   auto *ratios = part_field(chassis, "ratio");
   if (!ratios || ratios->slots.size() < 8 || field_int(chassis, "gears") < 1)
     return;
@@ -1927,27 +1941,25 @@ void configure_drive(Object *chassis, Record &rec) {
   drive.throttle = controls ? in.drive_throttle : 0.f;
   drive.brake = controls ? in.drive_brake : 0.f;
   drive.handbrake = controls && in.drive_handbrake;
-  drive.clutch = controls ? 1.f - std::clamp(in.drive_clutch, 0.f, 1.f) : 1.f;
+  drive.clutch = controls ? 1.f - std::clamp(in.drive_clutch, 0.f, 1.f) : 0.f;
   drive.idle = std::max(400.f, comp(chassis, "engine_rpm_idle"));
   drive.limit = std::max(drive.idle + 100.0, double(comp(chassis, "RPM_limit")));
   drive.inertia = .28 + .01 * std::max(0.f, comp(chassis, "engine_inertia"));
   drive.torque = [dyno](double rpm) { return dyno_sample(dyno, float(rpm), 0, false); };
-  const bool reverse = controls && in.drive_reverse;
-  const int gears = std::clamp(field_int(chassis, "gears"), 1, 6);
-  const int shift = !controls ? 0 : in.drive_shift > .5f ? 1 : in.drive_shift < -.5f ? -1 : 0;
-  const bool shift_pressed = shift && shift != rec.previous_shift;
-  rec.previous_shift = shift;
-  const bool automatic = rec.transmission == 1 || rec.transmission == 5;
-  if (reverse) rec.drive_gear = 7;
-  else if (rec.drive_gear > gears) rec.drive_gear = 1;
-  else if (shift_pressed && rec.transmission != 1)
-    rec.drive_gear = std::clamp(rec.drive_gear + shift, 1, gears);
-  else if (automatic && rec.dynamics.engine_omega * 9.5492965855 > drive.limit * .9 &&
-           rec.drive_gear < gears)
-    ++rec.drive_gear;
-  else if (automatic && rec.drive_gear > 1 &&
-           rec.dynamics.engine_omega * 9.5492965855 < drive.limit * .35)
-    --rec.drive_gear;
+  drive.engaged = rec.physics_released;
+  drive.reverse = controls && in.drive_reverse;
+  drive.shift = !controls ? 0 : in.drive_shift > .5f ? 1 : in.drive_shift < -.5f ? -1 : 0;
+  drive.automatic_shift = rec.transmission == 1;
+  drive.auto_clutch = rec.transmission != 2;
+  drive.starter = std::max(0.f, comp(chassis, "starter_torque"));
+  drive.bearing_scale = .1 / std::max(.01f, rec.config->brake_inertia);
+  drive.brake_scale = drive.bearing_scale * std::max(0.f, rec.config->brake_power);
+  drive.handbrake_scale = drive.bearing_scale * std::max(0.f, rec.config->handbrake_power);
+  drive.gears = std::clamp(field_int(chassis, "gears"), 1, 6);
+  const double final_drive = comp(chassis, "rearend_ratio");
+  drive.ratios[0] = 0;
+  for (int i = 1; i < 8; ++i)
+    drive.ratios[i] = scalar(ratios->slots, i, 0) * final_drive;
   const bool horn = controls && in.drive_horn;
   if (horn && !rec.horn_down && index) {
     auto it = rec.horns.find(1);
@@ -1961,24 +1973,15 @@ void configure_drive(Object *chassis, Record &rec) {
     }
   }
   rec.horn_down = horn;
-  drive.ratio = rec.physics_released
-      ? scalar(ratios->slots, rec.drive_gear, 0) * comp(chassis, "rearend_ratio")
-      : 0;
-  const auto forward = rec.dynamics.body.orientation.rotate({0, 0, -1});
-  if (rec.dynamics.body.velocity.dot(forward) * drive.ratio < -1.0) {
-    drive.ratio = 0;
-    drive.brake = 1;
-  }
   for (size_t i = 0; i < drive.wheels.size(); ++i) {
     auto &out = drive.wheels[i];
     const auto &wheel = rec.wheels[i];
     out.weight = std::max(0.f, wheel.drive);
-    const float steer = wheel.steer_set ? wheel.steer :
-        (i < rec.config->wheel_steering.size() ? rec.config->wheel_steering[i] : 0.f);
-    out.steer = rec.steering_input * rec.config->max_steer * steer;
+    out.steer = wheel_steering_angle(rec, i);
     out.brake = std::max(0.f, wheel.brake);
     out.handbrake = std::max(0.f, wheel.hbrake);
-    out.bearing = std::max(0.f, wheel.bearing) * .002;
+    out.bearing = std::max(0.f, wheel.bearing);
+    out.rolling_resistance = std::max(0.f, wheel.roll_res) * .01;
     std::copy_n(wheel.pacejka, out.tyre.size(), out.tyre.begin());
   }
 }
@@ -2018,6 +2021,8 @@ void update_engine_audio(Record &rec, bool active) {
 }
 
 void advance_chassis_tick() {
+  const auto* target = gameref_find_live(controlled_vehicle);
+  Object* controlled = target ? as_part(static_cast<Object*>(target->key)) : nullptr;
   for (auto &entry : records) {
     Object *chassis = entry.first;
     auto &rec = entry.second;
@@ -2045,7 +2050,7 @@ void advance_chassis_tick() {
       if (!dynamics_configure(chassis, rec, frame))
         continue;
     dynamics_wheels(rec);
-    configure_drive(chassis, rec);
+    configure_drive(chassis, rec, chassis == controlled);
     // An unreleased chassis (catalog, before start) may drop onto a floor.
     // With no floor the step only applies gravity, and the car leaves the shot.
     if (!rec.physics_released && rec.physics_pending_placement) {
@@ -2073,7 +2078,7 @@ void advance_chassis_tick() {
       const auto delta = rec.dynamics.body.position - before;
       rec.mileage += static_cast<float>(std::hypot(delta.x, delta.z) * .1);
     }
-    rec.engine_running = rec.dynamics.drive.torque && rec.dynamics.engine_omega > 0;
+    rec.engine_running = rec.dynamics.drive.torque && rec.dynamics.engine_running;
     if (steps)
       dynamics_sync(chassis, rec, parent);
     else
@@ -2166,7 +2171,7 @@ bool part_vehicle_hud(VehicleHudState &state) {
   if (!rec) return true; // The GPS frame also belongs to the empty HUD.
   state.layout = hud_preview_directory.empty() ? &rec->config->hud : &hud_preview;
   state.preview_directory = hud_preview_directory.empty() ? nullptr : &hud_preview_directory;
-  state.rpm = rec->engine_running ? rec->dynamics.engine_omega * 9.54929658551372 : 0;
+  state.rpm = rec->dynamics.drive.torque ? rec->dynamics.engine_omega * 9.54929658551372 : 0;
   state.speed = rec->dynamics.body.velocity.length() * 3.6;
   state.mileage = rec->mileage * .01;
   state.condition = std::min(rec->state.wear, rec->state.tear);
@@ -2180,7 +2185,7 @@ bool part_vehicle_hud(VehicleHudState &state) {
         state.turbo = dyno_boost_fraction(dyno, static_cast<float>(state.rpm)) *
                       static_cast<float>(rec->dynamics.drive.throttle);
   }
-  state.gear = rec->dynamics.drive.ratio != 0 ? rec->drive_gear : 0;
+  state.gear = rec->physics_released ? rec->dynamics.gear : 0;
   state.handbrake = rec->dynamics.drive.handbrake > 0;
   return true;
 }

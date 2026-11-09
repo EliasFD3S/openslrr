@@ -293,7 +293,8 @@ void host_input_update_controller(Object* controller, float dt) {
   }
   auto& in = g_input;
   auto axis = [&](int id) { return host_input_controller_axis(controller, id); };
-  in.drive_steer = -axis(1);
+  // Stock AXIS_TURN_LEFTRIGHT is positive to the left, like the chassis yaw.
+  in.drive_steer = axis(1);
   in.drive_throttle = axis(28);
   in.drive_brake = axis(29);
   in.drive_handbrake = axis(48) > .5f;

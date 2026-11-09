@@ -501,12 +501,23 @@ int32_t text_osd_layer(void* osd) {
 void slrr_text_set_osd(void* key, void* osd) {
   auto it = g_texts.find(key);
   if (it == g_texts.end()) return;
+  const auto* owner = static_cast<const Object*>(osd);
+  bool suppressed = false;
+  if (owner) {
+    const auto hidden = owner->fields.find("_host_hidden");
+    suppressed = hidden != owner->fields.end() && hidden->second.tag == ValueTag::Int &&
+                 hidden->second.v.i != 0;
+  }
   it->second.osd = osd;
   it->second.layer = text_osd_layer(osd);
+  it->second.osd_suppressed = suppressed;
+  if (suppressed) it->second.visible = false;
   for (auto& ot : g_osd_text) {
     if (ot.text_key == key) {
       ot.osd = osd;
       ot.layer = it->second.layer;
+      ot.osd_suppressed = suppressed;
+      if (suppressed) ot.visible = false;
     }
   }
 }

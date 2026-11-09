@@ -275,6 +275,13 @@ PartConfig parse_part_config(const std::string &source,
         open_wheel = -1;
         out.max_steer = number(t, 1);
         out.ackermann_length = t.size() > 2 ? number(t, 2) : 0.f;
+      } else if (command == "brakepower" && t.size() > 2) {
+        open_wheel = -1;
+        out.brake_power = number(t, 1);
+        out.handbrake_power = number(t, 2);
+      } else if (command == "enginepower" && t.size() > 6) {
+        open_wheel = -1;
+        out.brake_inertia = number(t, 6);
       } else if (command == "steering") {
         open_wheel = -1;
         out.steering = pose(t);

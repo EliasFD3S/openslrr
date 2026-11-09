@@ -325,92 +325,215 @@ double suspension_force(double length, double speed, double rest, double max,
       -velocity * (velocity >= 0 ? (rebound > 0 ? rebound : .7 * bump) : bump) -
           (length - rest) * k);
 }
-void VehicleDynamics::step_drive() {
-  constexpr double rpm_per_rad = 9.54929658551372;
-  constexpr double wheel_inertia = 1.6;
-  const double idle = drive.idle / rpm_per_rad;
-  if (engine_omega <= 0) engine_omega = idle;
-  const double rpm = engine_omega * rpm_per_rad;
-  // Match the SLRR_rev host's SI drag and idle governor. The raw Java
-  // engine_friction_fwd value is not a torque-per-angular-speed coefficient.
-  const double drag = 14.0 + std::max(0.0, rpm - drive.idle) * .012;
-  const double idle_torque = rpm < drive.idle
-      ? std::min(80.0, 25.0 + (drive.idle - rpm) * .25) : 0.0;
-  const double combustion = std::clamp((rpm - 200.0) / 450.0, 0.0, 1.0);
-  const double torque = rpm < drive.limit
-      ? (2.0 * drive.torque(rpm) * drive.throttle + idle_torque) * combustion : 0.0;
-  const double net = torque - drag;
-  engine_omega = std::max(0.0, engine_omega + net * timestep / drive.inertia);
+namespace {
+constexpr double rpm_per_rad = 9.54929658551372;
+constexpr double wheel_inertia = 1.6;
 
-  double weights = 0, shaft = 0, square_weights = 0;
+Vec3 wheel_forward(const RigidBody& body, double steer) {
+  return body.orientation.rotate({-std::sin(steer), 0, -std::cos(steer)});
+}
+
+// SLRR_rev cf4fd30, native-vehicle-physics.ts engineLimiter.
+double limiter_factor(double rpm, double previous, double limit) {
+  const double predicted = 2 * rpm - previous;
+  if (predicted <= limit)
+    return rpm > limit ? (limit - predicted) / (rpm - predicted) : 1;
+  return rpm > limit ? 0 : (limit - rpm) / (predicted - rpm);
+}
+
+double relaxed_slip(double previous, double speed, double length, double damping) {
+  return std::clamp((previous + speed * VehicleDynamics::timestep / length) /
+                    (1 + 500 * damping * VehicleDynamics::timestep), -1.0, 1.0);
+}
+
+double longitudinal_slip(double previous, double rolling, double road, double blend) {
+  const double target = road > .1 ? rolling / road : 0;
+  return std::lerp(relaxed_slip(previous, rolling, .3, .1), target, blend);
+}
+}  // namespace
+
+// SLRR_rev cf4fd30, MechanicalSystem.advance. Host gear 7 denotes reverse.
+void VehicleDynamics::update_gear(double rpm, double shaft, double road_shaft) {
+  const bool shift_pressed = drive.shift && drive.shift != previous_shift_;
+  previous_shift_ = drive.shift;
+  if (!drive.engaged || drive.gears <= 0) {
+    gear = 0;
+    shift_time_ = 0;
+    forced_reverse_ = false;
+    return;
+  }
+
+  shift_time_ = std::max(0.0, shift_time_ - timestep);
+  if (gear != 7 && gear > drive.gears) gear = drive.gears;
+  if (drive.reverse && !forced_reverse_ && drive.ratios[7] < 0) {
+    forced_reverse_ = true;
+    gear = 7;
+    shift_time_ = 0;
+  } else if (!drive.reverse && forced_reverse_) {
+    forced_reverse_ = false;
+    gear = drive.automatic_shift ? 1 : 0;
+  } else if (shift_pressed && shift_time_ == 0 && !forced_reverse_) {
+    const int next = std::clamp((gear == 7 ? -1 : gear) + drive.shift,
+                                drive.ratios[7] < 0 ? -1 : 0, drive.gears);
+    gear = next < 0 ? 7 : next;
+    shift_time_ = .22;
+  }
+
+  if (!drive.automatic_shift || !engine_running || shift_time_ > 0 ||
+      drive.clutch < .5)
+    return;
+  if (gear == 0 && drive.throttle > .1) gear = 1;
+  if (gear <= 0 || gear == 7 || shaft <= 2) return;
+  const double ratio = drive.ratios[gear];
+  const double coupled_rpm = std::abs(road_shaft * ratio) * rpm_per_rad;
+  if (gear < drive.gears && rpm > drive.limit * .88 &&
+      coupled_rpm > drive.limit * .7 && drive.ratios[gear + 1] > 0) {
+    ++gear;
+    shift_time_ = .12;
+  } else if (gear > 1 && rpm < std::max(drive.idle * 1.45, drive.limit * .42) &&
+             shaft * ratio * rpm_per_rad < drive.limit * .65) {
+    --gear;
+    shift_time_ = .22;
+  }
+}
+
+void VehicleDynamics::step_drive() {
+  if (!ignition_) {
+    ignition_ = true;
+    engine_running = true;
+    engine_omega = drive.idle / rpm_per_rad;
+    previous_rpm_ = drive.idle;
+  }
+  const double rpm = engine_omega * rpm_per_rad;
+  double weights = 0, shaft = 0, road_shaft = 0, square_weights = 0;
   for (size_t i = 0; i < wheels.size(); ++i) {
     if (!wheels[i].enabled) continue;
-    const double w = drive.wheels[i].weight;
+    const auto& cfg = drive.wheels[i];
+    const auto& s = state[i];
+    const double w = cfg.weight;
     weights += w;
-    shaft += w * state[i].spin;
+    shaft += w * s.spin;
     square_weights += w * w;
+    if (s.contact && wheels[i].radius > 0) {
+      const Vec3 forward = wheel_forward(body, cfg.steer);
+      const Vec3 tangent = (forward - s.normal * forward.dot(s.normal)).normalized();
+      road_shaft += w * body.point_velocity(s.patch).dot(tangent) / wheels[i].radius;
+    }
   }
-  if (weights > 0 && drive.ratio != 0) {
-    // SLRR_rev native-vehicle-physics.ts, clutchExchange. Reflect the
-    // same wheel inertias that receive the impulse back to the engine.
+  if (weights > 0) {
+    shaft /= weights;
+    road_shaft /= weights;
+  }
+  update_gear(rpm, shaft, road_shaft);
+  const double ratio = drive.ratios[gear];
+  const double forward_speed = body.velocity.dot(wheel_forward(body, 0));
+  const bool direction_brake = (ratio < 0 && forward_speed > 1) ||
+                               (ratio > 0 && forward_speed < -1);
+  const bool automatic_shift = drive.automatic_shift && shift_time_ > 0;
+  const bool starting = !engine_running && drive.throttle > .1 && drive.starter > 0;
+  const double drag = 14 + std::max(0.0, rpm - drive.idle) * .012;
+  const double idle_torque = rpm < drive.idle
+      ? std::min(80.0, 25.0 + (drive.idle - rpm) * .25) : 0;
+  const double combustion = std::clamp((rpm - 200) / 450, 0.0, 1.0);
+  const double gas = direction_brake ? 0 : drive.throttle;
+  const double combustion_torque = engine_running && rpm < drive.limit && !automatic_shift
+      ? (2 * drive.torque(rpm) * gas + idle_torque) * combustion *
+            limiter_factor(rpm, previous_rpm_, drive.limit)
+      : 0;
+  previous_rpm_ = rpm;
+  const double net = combustion_torque + (starting ? drive.starter : 0) - drag;
+  engine_omega = std::max(0.0, engine_omega + net * timestep / drive.inertia);
+
+  if (weights > 0 && ratio != 0 && shift_time_ == 0 && !direction_brake &&
+      (engine_running || !drive.auto_clutch)) {
+    // clutchExchange, with the same wheel inertias reflected to the engine
+    // and receiving the return impulse. ClutchF is not an SI torque ceiling.
     const double transmission = wheel_inertia * weights * weights / square_weights;
-    const double reflected = transmission / (drive.ratio * drive.ratio);
+    const double reflected = transmission / (ratio * ratio);
     const double mix = reflected / (drive.inertia + reflected);
-    const double mismatch = shaft / weights * drive.ratio - engine_omega;
-    double grip = drive.clutch * .9990000128746033;
-    if (mismatch < 0 && mix > 0)
-      grip = std::min(grip, std::max(0.0, (engine_omega - idle * .85) / (-mismatch * mix)));
-    engine_omega += mismatch * mix * grip;
-    const double impulse = -mismatch * (1 - mix) * grip / drive.ratio * transmission;
+    const double mismatch = shaft * ratio - engine_omega;
+    constexpr double exchange_rate = .9990000128746033;
+    const double closed_delta = mismatch * mix * exchange_rate;
+    double grip = drive.clutch;
+    if (drive.auto_clutch && closed_delta < 0) {
+      const double idle_floor = drive.idle * .85 / rpm_per_rad;
+      grip = std::min(grip, std::max(0.0, engine_omega - idle_floor) / -closed_delta);
+    }
+    engine_omega = std::max(0.0, engine_omega + closed_delta * grip);
+    const double impulse = -mismatch * (1 - mix) * grip * exchange_rate /
+                           ratio * transmission;
     for (size_t i = 0; i < wheels.size(); ++i)
       if (wheels[i].enabled)
         state[i].spin += impulse * drive.wheels[i].weight / (weights * wheel_inertia);
+  } else if (automatic_shift && engine_running) {
+    const double target = std::max(drive.idle, std::abs(road_shaft * ratio) * rpm_per_rad);
+    engine_omega = std::lerp(engine_omega, target / rpm_per_rad,
+                            -std::expm1(-timestep / .07));
   }
+
+  const double next_rpm = engine_omega * rpm_per_rad;
+  if (engine_running && next_rpm < std::max(250.0, drive.idle * .35))
+    engine_running = false;
+  else if (!engine_running && next_rpm >= std::max(500.0, drive.idle * .65) &&
+           (starting || (!drive.auto_clutch && gas > 0)))
+    engine_running = true;
 
   for (size_t i = 0; i < wheels.size(); ++i) {
     const auto &wheel = wheels[i];
     const auto &cfg = drive.wheels[i];
     auto &s = state[i];
     if (!wheel.enabled) continue;
-    const double braking = 500 * timestep * (drive.brake * cfg.brake +
-        drive.handbrake * cfg.handbrake + cfg.bearing) / wheel_inertia;
-    s.spin = std::copysign(std::max(0.0, std::abs(s.spin) - braking), s.spin);
     if (!s.contact || s.force <= 0 || cfg.tyre[11] <= 0) {
       s.longitudinal_slip = s.lateral_slip = 0;
-      continue;
+      s.spin *= 1 - .25 * timestep / wheel_inertia;
+    } else {
+      const Vec3 heading = wheel_forward(body, cfg.steer);
+      const Vec3 axle = body.orientation.rotate({std::cos(cfg.steer), 0, -std::sin(cfg.steer)});
+      Vec3 forward = heading;
+      forward = (forward - s.normal * forward.dot(s.normal)).normalized();
+      const Vec3 side = forward.cross(s.normal);
+      const Vec3 speed = body.point_velocity(s.patch);
+      const double road = speed.dot(forward), lateral = speed.dot(side);
+      const double rolling = s.spin * wheel.radius - road;
+      const double abs_road = std::abs(road);
+      const double blend = std::clamp((abs_road - .1) * .1, 0.0, 1.0);
+      const double target_lat = abs_road > .1 ? std::atan(lateral / abs_road) : 0;
+      s.longitudinal_slip = longitudinal_slip(s.longitudinal_slip, rolling, abs_road, blend);
+      s.lateral_slip = std::lerp(relaxed_slip(s.lateral_slip, lateral, .5, .2), target_lat, blend);
+      const double lon = std::cos(s.lateral_slip) * s.longitudinal_slip * cfg.tyre[12];
+      const double lat = std::sin(s.lateral_slip);
+      const double slip = std::hypot(lon, lat);
+      constexpr double half_pi = 1.5707963267948966;
+      const double maximum = cfg.tyre[11];
+      const double lateral_normal = axle.dot(s.normal);
+      const double slope = (std::sqrt(std::max(0.0, 1 - lateral_normal * lateral_normal)) + 1) * .5;
+      const double load = slope * std::lerp(std::min(s.force, maximum),
+          std::atan(s.force * half_pi / maximum) * maximum / half_pi, cfg.tyre[14]);
+      Sl2PacejkaCoef curve;
+      std::copy_n(cfg.tyre.begin(), curve.size(), curve.begin());
+      if (cfg.tyre[16] > 0)
+        curve[4] *= (cfg.tyre[15] + cfg.tyre[16]) / (load + cfg.tyre[16]);
+      const double magnitude = slip >= .0001 ? sl2_pacejka_force(curve, slip, load, false) / slip : 0;
+      double longitudinal = magnitude * lon;
+      // SLRR_rev suspension-3d.ts clamps the reaction if it would drive
+      // longitudinal slip through zero within this step.
+      const double predicted = longitudinal_slip(s.longitudinal_slip,
+          rolling - longitudinal * wheel.radius * wheel.radius * timestep / wheel_inertia,
+          abs_road, blend);
+      if (predicted * s.longitudinal_slip < 0)
+        longitudinal *= std::abs(s.longitudinal_slip / (predicted - s.longitudinal_slip));
+      body.add_force(forward * longitudinal - side * (magnitude * lat), s.patch);
+      const double rolling_torque = s.spin == 0 ? 0 :
+          std::copysign(s.force * wheel.radius * cfg.rolling_resistance, s.spin);
+      s.spin -= (longitudinal * wheel.radius + rolling_torque + s.spin * .15) *
+                timestep / wheel_inertia;
     }
-    Vec3 forward = body.orientation.rotate({-std::sin(cfg.steer), 0, -std::cos(cfg.steer)});
-    forward = (forward - s.normal * forward.dot(s.normal)).normalized();
-    const Vec3 side = forward.cross(s.normal);
-    const Vec3 speed = body.point_velocity(s.patch);
-    const double road = speed.dot(forward), lateral = speed.dot(side);
-    const double rolling = s.spin * wheel.radius - road;
-    const double abs_road = std::abs(road);
-    const double blend = std::clamp((abs_road - .1) * .1, 0.0, 1.0);
-    const auto relax = [&](double previous, double speed, double length, double damping) {
-      return std::clamp((previous + speed * timestep / length) /
-                        (1 + 500 * damping * timestep), -1.0, 1.0);
-    };
-    const double target_long = abs_road > .1 ? rolling / abs_road : 0;
-    const double target_lat = abs_road > .1 ? std::atan(lateral / abs_road) : 0;
-    s.longitudinal_slip = std::lerp(relax(s.longitudinal_slip, rolling, .3, .1), target_long, blend);
-    s.lateral_slip = std::lerp(relax(s.lateral_slip, lateral, .5, .2), target_lat, blend);
-    const double lon = std::cos(s.lateral_slip) * s.longitudinal_slip * cfg.tyre[12];
-    const double lat = std::sin(s.lateral_slip);
-    const double slip = std::hypot(lon, lat);
-    if (slip < .0001) continue;
-    constexpr double half_pi = 1.5707963267948966;
-    const double maximum = cfg.tyre[11];
-    const double load = std::lerp(std::min(s.force, maximum),
-        std::atan(s.force * half_pi / maximum) * maximum / half_pi, cfg.tyre[14]);
-    Sl2PacejkaCoef curve;
-    std::copy_n(cfg.tyre.begin(), curve.size(), curve.begin());
-    if (cfg.tyre[16] > 0)
-      curve[4] *= (cfg.tyre[15] + cfg.tyre[16]) / (load + cfg.tyre[16]);
-    const double magnitude = sl2_pacejka_force(curve, slip, load, true) / slip;
-    const double longitudinal = magnitude * lon;
-    body.add_force(forward * longitudinal - side * (magnitude * lat), s.patch);
-    s.spin -= longitudinal * wheel.radius * timestep / wheel_inertia;
+    const double braking = 500 * timestep * (
+        (direction_brake ? 1 : drive.brake) * cfg.brake * drive.brake_scale +
+        drive.handbrake * cfg.handbrake * drive.handbrake_scale +
+        cfg.bearing * drive.bearing_scale);
+    s.spin = std::copysign(std::max(0.0, std::abs(s.spin) - braking), s.spin);
+    s.rotation = std::remainder(s.rotation + s.spin * timestep, 6.283185307179586);
   }
 }
 
@@ -551,6 +674,12 @@ void VehicleDynamics::reset_clock() {
   accumulator_ = 0;
   ticks = 0;
 }
+void VehicleDynamics::reset_drive() {
+  engine_omega = previous_rpm_ = shift_time_ = 0;
+  gear = previous_shift_ = 0;
+  ignition_ = engine_running = forced_reverse_ = false;
+}
+
 void VehicleDynamics::release_wheels() {
   for (auto &wheel : state)
     wheel = {};
