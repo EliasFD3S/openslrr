@@ -86,6 +86,7 @@ Some native functions are still placeholders. Engine-loop audio and the original
 - Added Project Chrono 10 as the default chassis rigid-body integrator, with a native fallback, automated physics checks, and a reproducible dependency build script.
 - Moved chassis and rigid-wheel contacts to Chrono using world-space scene triangle meshes. Added wall, penetration-recovery, teleport, and rigid-wheel regression checks.
 - Added Chrono unsprung wheel bodies, prismatic/simple-revolute links, and TSDA suspension with SLRR bump/rebound laws, travel stops, and arm motion ratios. Complex hub-struts remain native; mixed native/Chrono corners are supported.
+- Kept legacy-sprung vehicles on the native contact path to avoid duplicate response and 700 Hz narrow-phase stalls. Added a deterministic stock Baiern benchmark and opt-in wheel/frame diagnostics.
 - Implemented cooperative script threads and scoped GC roots for suspended stacks. Java message loops, the mechanic refresher and showroom camera can now run directly.
 - Added GameType notification replacement/removal, event aliases/custom handlers/one-shot delivery, and control/drive/animate registrations.
 
@@ -146,13 +147,15 @@ By default [Project Chrono](https://projectchrono.org) integrates the 6-DOF chas
 
 Eligible wheels with positive unsprung mass and no complex `setHub` constraint become independent Chrono bodies: prismatic slides for vertical struts and revolute links for simple arms. A TSDA callback preserves the SLRR spring/damper law and stops. Arm travel and force use the actual hub geometry and its motion ratio; wheel contact load and spring support are mirrored separately for tyre forces and automatic settling.
 
-Massless rays, rigid wheels, and complex hub-struts retain the existing native solver, so a vehicle can mix native and Chrono corners. SLRR tyre forces and floor sampling remain in `src/physics/vehicle_dynamics.cpp`. When Chrono mesh contacts are active, the old corner impulse/penetration pass is skipped to avoid double response. The native backend retains that original pass.
+Massless rays, rigid wheels, and complex hub-struts retain the existing native solver, so a vehicle can mix native and Chrono corners. SLRR tyre forces and floor sampling remain in `src/physics/vehicle_dynamics.cpp`. Vehicles with legacy sprung wheels use the native contact pass instead of duplicating it with full mesh collision at 700 Hz. Chrono-owned or rigid wheels enable mesh contacts; bare chassis also retain them. When Chrono mesh contacts are active, the old corner impulse/penetration pass is skipped to avoid double response.
 
 - Use another Chrono build or install tree with `-DChrono_DIR=<path to its cmake folder>`.
 - Build without Chrono and keep the original integrator with `-DSLRR_PHYSICS_CHRONO=OFF`.
 - `-DSLRR_PHYSICS_CHECKS=ON` adds `slrr_physics_native` and `slrr_physics_chrono`, headless free-fall and sprung-box settling checks for each backend. The Chrono executable also checks mesh floor drops, initial penetration, teleportation, wall impacts, and rigid-wheel support. Suspension checks cover mixed native/prismatic corners, revolute arms, rotated chassis, non-rest seeds, release/reseed lifecycle, virtual-work force scaling, and separate spring-support/contact-load accounting. A separate `scene_collision_cache` test (`slrr_host --probe-collision-cache`) checks multi-vehicle A/B/A snapshot stability, scale conversion, revision rebuilds, and triangle deduplication. Run them with `ctest --test-dir build-bgfx-x64 -C Release --output-on-failure`.
 
 The current implementation keeps one Chrono system per vehicle and duplicates its static collision body; large worlds and multiple traffic vehicles would benefit from a shared system. Scene render meshes do not yet have separate collision metadata, and discrete mesh contacts still need high-speed and in-game validation. Complex `setHub` struts, opposite-wheel/live-axle constraints, wheel spin, and stock-car corner categories remain unvalidated; no stock-car suspension coverage is claimed without game data. Tyre behavior is still the reduced chassis-only parked-friction model; independent wheel slip velocity, wheel reaction, and moving-vehicle tyre dynamics are not migrated.
+
+For a deterministic stock Baiern/garage benchmark, run `slrr_host --probe-stock-physics --root "C:\path\to\SLRR"`; it reports 700 Hz tick cost, contacts, support, and backend. `SLRR_PHYSICS_DUMP=1` logs effective corner geometry and contact state, `SLRR_PHYSICS_PROFILE=1` enables aggregate frame/physics timings, and `SLRR_START_CAR=1` explicitly releases a spawned car for testing.
 
 The game log prints `backend=chrono` or `backend=native` on the `[phys]` line.
 

@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cctype>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -109,7 +110,7 @@ struct Record {
   std::array<physics::Vec3, 4> base_wheel_center{};
   physics::VehicleDynamics dynamics;
   bool physics_ready = false, physics_dirty = true, physics_suspended = false;
-  bool physics_reported = false;
+  bool physics_reported = false, physics_wheels_reported = false;
   int reported_contacts = -1, physics_status_lines = 0;
   void *physics_parent = nullptr;
   PartMatrix published_frame{};
@@ -1596,6 +1597,35 @@ void dynamics_wheels(Record &rec) {
       cfg.spring = 0;
     }
   }
+  if (!rec.physics_wheels_reported && std::getenv("SLRR_PHYSICS_DUMP")) {
+    for (size_t i = 0; i < 4; ++i) {
+      const auto &cfg = rec.dynamics.wheels[i];
+      const auto &live = rec.wheels[i];
+      std::printf(
+          "[phys] wheel=%zu enabled=%d rigid=%d unsprung=%.3f arm=%.4f "
+          "has_hub=%d hub0=%.0f opp=%d center=(%.4f,%.4f,%.4f) "
+          "down=(%.3f,%.3f,%.3f) rest=%.4f min=%.4f max=%.4f "
+          "anchor=%.4f radius=%.4f spring=%.1f damping=(%.1f,%.1f)\n",
+          i, cfg.enabled, cfg.rigid_contact, cfg.unsprung, cfg.arm_length,
+          cfg.has_hub, cfg.hub[0], live.opp, cfg.center.x, cfg.center.y,
+          cfg.center.z, cfg.down.x, cfg.down.y, cfg.down.z, cfg.rest,
+          cfg.minimum, cfg.maximum, cfg.anchor_length(), cfg.radius,
+          cfg.spring, cfg.bump_damping, cfg.rebound_damping);
+      if (cfg.arm_length > 0) {
+        std::printf(
+            "[phys] wheel=%zu pivot=(%.4f,%.4f,%.4f) axis=(%.3f,%.3f,%.3f) "
+            "hub=(%.0f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f) "
+            "alignment=(%.5f,%.5f,%.5f,%.5f) ypr=(%.4f,%.4f,%.4f)\n",
+            i, cfg.arm_pivot.x, cfg.arm_pivot.y, cfg.arm_pivot.z,
+            cfg.arm_axis.x, cfg.arm_axis.y, cfg.arm_axis.z, cfg.hub[0],
+            cfg.hub[1], cfg.hub[2], cfg.hub[3], cfg.hub[4], cfg.hub[5],
+            cfg.hub[6], cfg.hub[7], cfg.hub[8], cfg.hub[9],
+            cfg.hub_alignment.x, cfg.hub_alignment.y, cfg.hub_alignment.z,
+            cfg.hub_alignment.w, live.ypr[0], live.ypr[1], live.ypr[2]);
+      }
+    }
+    rec.physics_wheels_reported = true;
+  }
 }
 void pose_wheels(Object *chassis, Record &rec);
 void finish_dynamics_sync(Object *chassis, Record &rec);
@@ -1719,6 +1749,19 @@ void finish_dynamics_sync(Object *chassis, Record &rec) {
   if (contacts != rec.reported_contacts && rec.physics_status_lines < 8) {
     std::printf("[phys] contacts=%d/4 y=%.3f vy=%.3f support=%.1fN\n", contacts,
                 node->pos[1], rec.dynamics.body.velocity.y, support);
+    if (std::getenv("SLRR_PHYSICS_DUMP")) {
+      for (size_t i = 0; i < 4; ++i) {
+        const auto &state = rec.dynamics.state[i];
+        std::printf(
+            "[phys] state=%zu constrained=%d contact=%d length=%.5f "
+            "speed=%.4f support=%.1f normal=%.1f center=(%.4f,%.4f,%.4f) "
+            "hub=(%.4f,%.4f,%.4f) normal=(%.3f,%.3f,%.3f)\n",
+            i, state.constrained, state.contact, state.length, state.speed,
+            state.force, state.normal_load, state.center.x, state.center.y,
+            state.center.z, state.hub.x, state.hub.y, state.hub.z,
+            state.normal.x, state.normal.y, state.normal.z);
+      }
+    }
     std::fflush(stdout);
     rec.reported_contacts = contacts;
     ++rec.physics_status_lines;
@@ -1983,10 +2026,35 @@ void part_physics_advance(double seconds) {
   constexpr double tolerance = kPhysicsTick * 1e-10;
   if (physics_elapsed + tolerance < kPhysicsTick) return;
 
+  const bool profile = std::getenv("SLRR_PHYSICS_PROFILE") != nullptr;
+  const auto profile_start = std::chrono::steady_clock::now();
   scene_instances_prepare_physics();
+  const auto prepared = std::chrono::steady_clock::now();
+  unsigned ticks = 0;
   while (physics_elapsed + tolerance >= kPhysicsTick) {
     advance_chassis_tick();
     physics_elapsed = std::max(0.0, physics_elapsed - kPhysicsTick);
+    ++ticks;
+  }
+  if (profile) {
+    const auto end = std::chrono::steady_clock::now();
+    const double prepare_ms =
+        std::chrono::duration<double, std::milli>(prepared - profile_start)
+            .count();
+    const double advance_ms =
+        std::chrono::duration<double, std::milli>(end - prepared).count();
+    static uint64_t previous_revision = 0;
+    static unsigned profile_lines = 0;
+    const uint64_t revision = scene_instances_floor_revision();
+    if ((revision != previous_revision || prepare_ms > 5 || advance_ms > 10) &&
+        profile_lines++ < 64) {
+      std::printf("[profile] physics prepare=%.2fms advance=%.2fms ticks=%u "
+                  "floor_revision=%llu\n",
+                  prepare_ms, advance_ms, ticks,
+                  static_cast<unsigned long long>(revision));
+      std::fflush(stdout);
+    }
+    previous_revision = revision;
   }
 }
 bool part_physics_state(Object *key, PartPhysicsState &state) {

@@ -472,16 +472,18 @@ struct ChronoIntegrator {
     }
   }
 
-  static void integrate(VehicleDynamics &vehicle, double dt) {
+  static void integrate(VehicleDynamics &vehicle, double dt,
+                        bool mesh_contacts) {
     auto colliders = colliders_for(vehicle);
     auto *state = vehicle.body.backend_.get();
+    const auto &mesh = mesh_contacts ? vehicle.collision : nullptr;
     if (!state || state->colliders != colliders ||
-        state->mesh_source.get() != vehicle.collision.get() ||
+        state->mesh_source.get() != mesh.get() ||
         !state->has_suspension_config ||
         state->suspension_generation != vehicle.suspension_generation ||
         state->suspension_config != vehicle.wheels) {
       vehicle.body.backend_.reset(
-          new ChronoBodyState(vehicle, std::move(colliders), vehicle.collision));
+          new ChronoBodyState(vehicle, std::move(colliders), mesh));
     }
     integrate(vehicle.body, dt);
     sync_wheels(vehicle, *vehicle.body.backend_.get());
@@ -496,7 +498,8 @@ struct ChronoIntegrator {
 void chrono_integrate(RigidBody &rb, double dt) {
   ChronoIntegrator::integrate(rb, dt);
 }
-void chrono_integrate_vehicle(VehicleDynamics &vehicle, double dt) {
-  ChronoIntegrator::integrate(vehicle, dt);
+void chrono_integrate_vehicle(VehicleDynamics &vehicle, double dt,
+                              bool mesh_contacts) {
+  ChronoIntegrator::integrate(vehicle, dt, mesh_contacts);
 }
 } // namespace slrr::physics

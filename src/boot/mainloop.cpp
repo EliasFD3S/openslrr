@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #ifdef _WIN32
 #define NOMINMAX
@@ -356,6 +357,8 @@ void dispatch_mechanic_pointer(Jvm& jvm) {
 
 MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
                                    SectionMachine& sections, double dt) {
+  const bool profile = std::getenv("SLRR_PHYSICS_PROFILE") != nullptr;
+  const auto profile_start = std::chrono::steady_clock::now();
   host_music_update();
   host_game_options_update(jvm);
   script_threads_tick(jvm);
@@ -714,6 +717,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   spin_mechanic_inventory(jvm, frame_dt);
   if(!script_thread_alive(jvm,g_mechanic_thread))apply_mechanic_infoline(jvm, g_spinning_mechanic);
   part_physics_advance(dt < 0.0 ? 0.0 : dt);
+  const auto physics_done = std::chrono::steady_clock::now();
 
   // Last write before the view is built. The chase camera must not cover
   // the showroom orbit, and nothing after the earlier spin may put it back.
@@ -724,6 +728,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   // --- Present: AltPresentGate (FMV) else PresentFrame ---
   // Soft: backend flush pumps FMV SampleGrabber + Present (libbgfx path).
   render.flush();
+  const auto flush_done = std::chrono::steady_clock::now();
 
   // --- PollWindowQuit @ 0x5522A0 ---
   out.quit = render.quit_requested();
@@ -731,6 +736,25 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   Value hq = jvm.get_static("java.lang.System", "_hostQuit");
   if (hq.tag == ValueTag::Int && hq.v.i) out.quit = true;
 
+  if (profile) {
+    const auto end = std::chrono::steady_clock::now();
+    const double total_ms =
+        std::chrono::duration<double, std::milli>(end - profile_start).count();
+    const double physics_ms =
+        std::chrono::duration<double, std::milli>(physics_done - profile_start)
+            .count();
+    const double flush_ms =
+        std::chrono::duration<double, std::milli>(flush_done - physics_done)
+            .count();
+    static unsigned profile_lines = 0;
+    if ((total_ms > 50 || physics_ms > 20 || flush_ms > 20) &&
+        profile_lines++ < 128) {
+      std::printf("[profile] frame total=%.2fms before_physics=%.2fms "
+                  "flush=%.2fms dt=%.4f\n",
+                  total_ms, physics_ms, flush_ms, dt);
+      std::fflush(stdout);
+    }
+  }
   // --- EndFrame @ 0x554DC0 — FileAsync Soft no-op on lean host ---
   return out;
 }

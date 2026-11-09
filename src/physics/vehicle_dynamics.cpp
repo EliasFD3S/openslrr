@@ -107,7 +107,8 @@ void RigidBody::impulse(Vec3 j, Vec3 p) {
 #if SLRR_HAS_CHRONO
 // src/physics/chrono_body.cpp
 void chrono_integrate(RigidBody &body, double dt);
-void chrono_integrate_vehicle(VehicleDynamics &vehicle, double dt);
+void chrono_integrate_vehicle(VehicleDynamics &vehicle, double dt,
+                              bool mesh_contacts);
 #else
 struct ChronoBodyState {};
 BackendHandle::BackendHandle() = default;
@@ -390,6 +391,23 @@ double suspension_force(double length, double speed, double rest, double max,
           (length - rest) * k);
 }
 void VehicleDynamics::step(const Terrain &terrain) {
+#if SLRR_HAS_CHRONO
+  bool native_sprung = false, constrained_any = false, rigid_any = false;
+  for (size_t i = 0; i < wheels.size(); ++i) {
+    if (!wheels[i].enabled)
+      continue;
+    rigid_any = rigid_any || wheels[i].rigid_contact;
+    const bool constrained = chrono_suspension_eligible(*this, i);
+    constrained_any = constrained_any || constrained;
+    native_sprung = native_sprung ||
+                    (!wheels[i].rigid_contact && !constrained);
+  }
+  // A legacy sprung solver already owns its wheel contacts. Adding the full
+  // Chrono mesh world both duplicates response and costs narrow-phase time at
+  // 700 Hz. Use mesh contacts only where Chrono or rigid wheels need them.
+  const bool mesh_contacts =
+      collision && (!native_sprung || constrained_any || rigid_any);
+#endif
   // Recover initial overlaps through physical contacts, not a floor teleport.
   double ceiling = body.position.y;
   for (Vec3 p : body.corners())
@@ -463,8 +481,8 @@ void VehicleDynamics::step(const Terrain &terrain) {
     }
   }
 #if SLRR_HAS_CHRONO
-  chrono_integrate_vehicle(*this, timestep);
-  if (collision) {
+  chrono_integrate_vehicle(*this, timestep, mesh_contacts);
+  if (mesh_contacts) {
     // Chrono's contact constraints have already changed the integrated state.
     // Only refresh rigid-wheel diagnostics here; applying the native corner
     // impulses as well would count the same contacts twice.

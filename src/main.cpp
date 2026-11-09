@@ -26,6 +26,7 @@ void usage() {
       "  slrr_host --probe-dyno\n"
       "  slrr_host --probe-gc [--root DIR]\n"
       "  slrr_host --probe-collision-cache\n"
+      "  slrr_host --probe-stock-physics [--root DIR]\n"
       "  slrr_host --game [--root DIR] [--window] [--no-wait] [--auto-new]\n"
       "           [--auto-cmd mainmenu|street|N]\n"
       "           [--spawn-car cars/racers/Baiern.rpk:0x6]\n"
@@ -51,6 +52,7 @@ int main(int argc, char** argv) {
   bool want_game = false;
   bool want_gc = false;
   bool want_collision_cache = false;
+  bool want_stock_physics = false;
   BootOptions opt;
   const char* root_arg = nullptr;
 
@@ -79,6 +81,10 @@ int main(int argc, char** argv) {
     }
     if (std::strcmp(a, "--probe-collision-cache") == 0) {
       want_collision_cache = true;
+      continue;
+    }
+    if (std::strcmp(a, "--probe-stock-physics") == 0) {
+      want_stock_physics = true;
       continue;
     }
     if (std::strcmp(a, "--game") == 0) {
@@ -127,7 +133,7 @@ int main(int argc, char** argv) {
   }
 
   if (!want_probe && !want_game && !want_pacejka && !want_dyno && !want_gc &&
-      !want_collision_cache) {
+      !want_collision_cache && !want_stock_physics) {
     usage();
     return 1;
   }
@@ -257,6 +263,7 @@ int main(int argc, char** argv) {
     return 0;
   }
 
+  if (want_stock_physics) return boot_stock_physics_probe(jvm, opt);
   if (want_probe && !want_game) return boot_probe(jvm, opt);
 
   auto render = create_render_backend(opt.render);

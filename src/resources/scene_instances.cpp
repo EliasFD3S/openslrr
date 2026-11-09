@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -723,6 +724,7 @@ std::shared_ptr<const physics::CollisionMesh> scene_instances_collision_mesh(
       return cached;
   }
 
+  const auto profile_start = std::chrono::steady_clock::now();
   auto result = std::make_shared<physics::CollisionMesh>();
   auto append = [&](const StaticMesh &mesh) {
     const auto base =
@@ -760,6 +762,18 @@ std::shared_ptr<const physics::CollisionMesh> scene_instances_collision_mesh(
   }
   cache.revision = g_floor_revision;
   cache.mesh = result;
+  if (std::getenv("SLRR_PHYSICS_PROFILE")) {
+    const double milliseconds =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - profile_start)
+            .count();
+    std::printf("[profile] collision snapshot %.2fms vertices=%zu "
+                "triangles=%zu revision=%llu ignore=%p\n",
+                milliseconds, result->positions.size() / 3,
+                result->indices.size() / 3,
+                static_cast<unsigned long long>(g_floor_revision), ignore);
+    std::fflush(stdout);
+  }
   return result;
 }
 
