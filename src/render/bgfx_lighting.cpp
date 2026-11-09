@@ -279,8 +279,9 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
       if (pass != int(blend)) return;
       const auto tex = texture(texture_index);
       const bool cut = !blend && !preview && !instance.sky && (part.geo.info.version != 3 || (flags & 1));
-      const float settings[4] = {cut ? 1.f : 0.f, instance.sky || blend ? 1.f : preview ? .5f : 0.f,
-                                 blend ? 1.f : 0.f, !blend && preview && tex.idx != white_tex_.idx ? 1.f : 0.f};
+      const bool vertex_mix = group && group->mix_vertex_color;
+      const float settings[4] = {cut ? 1.f : 0.f, instance.sky || blend || vertex_mix ? 1.f : preview ? .5f : 0.f,
+                                 blend ? 1.f : 0.f, vertex_mix ? -1.f : !blend && preview && tex.idx != white_tex_.idx ? 1.f : 0.f};
       uint32_t color=preview?instance.color:0xffffff;
       const float tint[4]={((color>>16)&255)/255.f,((color>>8)&255)/255.f,(color&255)/255.f,1};
       bgfx::setUniform(u_alpha_test_,settings);bgfx::setUniform(u_color_,tint);bgfx::setTransform(matrix);
@@ -293,6 +294,8 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
       }
       bind_baked_light(group, &part.tex, mix);
       uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_MSAA;
+      if (instance.cull_backfaces && !(flags & 0x02000000u))
+        state |= BGFX_STATE_CULL_CW;
       if (blend) {
         std::string extension = texture_index < part.geo.textures.size()
             ? std::filesystem::path(part.geo.textures[texture_index]).extension().string() : "";

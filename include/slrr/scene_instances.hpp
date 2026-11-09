@@ -15,6 +15,7 @@ namespace physics { struct Vec3; }
 
 struct SceneInstance {
   SceneSun lighting;
+  bool cull_backfaces = false;
   void *key = nullptr;
   std::shared_ptr<const ScxGeometry> geometry;
   // Column-major renderer matrix; script meters, with the SCX Z reflection.
@@ -60,16 +61,25 @@ std::string scene_instances_texture(uint32_t resource);
 void *scene_instances_pick(const float origin[3], const float direction[3], float* point = nullptr);
 bool scene_instances_pointer_ray(int px, int py, int width, int height,
                                  float origin[3], float direction[3]);
-// Ground maps (dealer, car lot, Valo City) keep their triangles in the
-// typeof-1 instance tree. `params` names the material table. On success
-// *render_id is that render; *poly is the mesh in metres, or null when the
-// tree has no POLY sections.
-bool scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id,
-                                uint32_t *render_id,
-                                std::shared_ptr<const ScxGeometry> *poly);
+// A typeof-1 ground tree can include render triangles, collision triangles
+// and links to exterior packages. The meshes use script metres.
+struct GroundMapData {
+  struct Placement {
+    uint32_t type = 0;
+    std::array<float, 3> position{}, rotation{};
+  };
+  uint32_t render_id = 0;
+  std::shared_ptr<const ScxGeometry> poly, collision;
+  std::vector<uint32_t> exterior_maps;
+  std::vector<Placement> placements;
+};
+GroundMapData scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id);
+void scene_instances_add_ground_props(const GroundMapData& map);
 // Drawn instead of the render object's .scx (a ground template is materials).
 void scene_instances_override_mesh(uint32_t id,
                                    std::shared_ptr<const ScxGeometry> geo);
+void scene_instances_override_collision(uint32_t id,
+                                        std::shared_ptr<const ScxGeometry> geo);
 // Boot garage shells are drawn from the renderer preload, not as RenderRefs.
 // Their triangles stay here so a parked car can find the concrete.
 void scene_instances_add_static_mesh(const ScxGeometry &geo);

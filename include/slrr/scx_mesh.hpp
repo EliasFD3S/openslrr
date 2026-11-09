@@ -31,6 +31,7 @@ struct ScxGroup {
   uint16_t mix_index = 0xffff, reflection_index = 0xffff;
   // Baked light (v3 header +0x38, v4 entry 0x06000007). 0xffff = none.
   uint16_t lightmap_index = 0xffff;
+  bool mix_vertex_color = false;
   uint32_t material_type = 0;
   float reflection_strength = .5f;
   ScxTextureMap base_map, mix_map, reflection_map, lightmap_map;
@@ -47,10 +48,12 @@ struct ScxGroup {
 // (CFG world uses ×0.01 → meters — apply at draw).
 struct ScxGeometry {
   ScxMeshInfo info;
+  bool ground_polygons = false;
   std::vector<float> positions;  // xyz * N
   std::vector<float> normals;    // xyz * N
   std::vector<float> uvs;        // uv * N (UV1)
   std::vector<float> uv2, uv3;
+  std::vector<uint32_t> vertex_colors; // RPK POLY A8R8G8B8
   std::vector<uint32_t> indices; // triangles * 3
   std::vector<ScxGroup> groups;
   // RPK `texture` property order (or .tex). Index == ScxGroup::texture_index.

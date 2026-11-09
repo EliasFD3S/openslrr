@@ -2,11 +2,13 @@
 #include "slrr/scene_instances.hpp"
 #include <limits>
 #include "slrr/gameref.hpp"
+#include "slrr/part_config.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/rpk_index.hpp"
 #include "slrr/vehicle_dynamics.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -32,11 +34,13 @@ struct ShadowInfo {
 std::unordered_map<uint32_t, ShadowInfo> g_shadow_info;
 std::unordered_map<uint32_t, std::shared_ptr<const ScxGeometry>> g_meshes;
 std::unordered_map<uint32_t, std::shared_ptr<const ScxGeometry>> g_overrides;
+std::unordered_map<uint32_t, std::shared_ptr<const ScxGeometry>> g_collision_overrides;
 std::unordered_map<uint32_t, std::string> g_texture_paths;
 struct StaticMesh {
   std::vector<float> positions;
   std::vector<uint32_t> indices;
   float scale = 0.01f;
+  float cell_size = 2.f;
   std::unordered_map<uint64_t, std::vector<uint32_t>> cells;
   std::vector<uint32_t> large_triangles;
 };
@@ -45,6 +49,21 @@ bool g_static_enabled = true;
 uint64_t floor_cell(int32_t x, int32_t z) {
   return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) |
          static_cast<uint32_t>(z);
+}
+struct GroundProp {
+  uint32_t render_id;
+  PartMatrix pose;
+};
+using GroundPropCells = std::unordered_map<uint64_t, std::vector<GroundProp>>;
+std::unordered_map<uint32_t, GroundPropCells> g_ground_props;
+constexpr float kPropCellSize = 64.f;
+constexpr float kPropViewRange = 192.f;
+
+int32_t prop_cell(float value) {
+  return static_cast<int32_t>(std::floor(value / kPropCellSize));
+}
+int32_t cell_coordinate(double position, const StaticMesh& mesh) {
+  return static_cast<int32_t>(std::floor(position / mesh.cell_size));
 }
 
 struct FloorMesh {
@@ -88,10 +107,8 @@ void index_floor(StaticMesh &mesh) {
     }
     if (!valid)
       continue;
-    const int32_t x0 = static_cast<int32_t>(std::floor(min_x / 2)),
-                  x1 = static_cast<int32_t>(std::floor(max_x / 2));
-    const int32_t z0 = static_cast<int32_t>(std::floor(min_z / 2)),
-                  z1 = static_cast<int32_t>(std::floor(max_z / 2));
+    const int32_t x0 = cell_coordinate(min_x, mesh), x1 = cell_coordinate(max_x, mesh);
+    const int32_t z0 = cell_coordinate(min_z, mesh), z1 = cell_coordinate(max_z, mesh);
     if ((int64_t(x1) - x0 + 1) * (int64_t(z1) - z0 + 1) > 4096) {
       mesh.large_triangles.insert(mesh.large_triangles.end(),
                                   mesh.indices.begin() + i,
@@ -210,19 +227,75 @@ struct PolySection {
   uint32_t material = 0;
   std::vector<float> pos, nrm, uv0, uv1, uv2;
   std::vector<uint32_t> indices;
+  std::vector<uint32_t> colors;
 };
 
 struct GroundWalk {
   const std::vector<uint8_t> *file = nullptr;
   std::string params;
   std::vector<PolySection> poly;
+  std::vector<uint32_t> exterior_slots;
+  ScxGeometry collision;
+  std::vector<GroundMapData::Placement> placements;
 };
+
+void append_ground_placement(GroundWalk& walk, std::string_view text) {
+  constexpr std::string_view type_prefix = "gametype 0x";
+  if (!text.starts_with(type_prefix)) return;
+  text.remove_prefix(type_prefix.size());
+  GroundMapData::Placement placement;
+  const auto end = text.data() + text.size();
+  const auto type = std::from_chars(text.data(), end, placement.type, 16);
+  if (type.ec != std::errc{}) return;
+  text.remove_prefix(type.ptr - text.data());
+  const auto params = text.find_first_not_of("\r\n");
+  if (params == std::string_view::npos) return;
+  text.remove_prefix(params);
+  constexpr std::string_view params_prefix = "params ";
+  if (!text.starts_with(params_prefix)) return;
+  text.remove_prefix(params_prefix.size());
+  for (size_t i = 0; i < 6; ++i) {
+    const auto start = text.find_first_not_of(" \t");
+    if (start == std::string_view::npos) return;
+    text.remove_prefix(start);
+    float& value = i < 3 ? placement.position[i] : placement.rotation[i - 3];
+    const auto parsed = std::from_chars(text.data(), end, value);
+    if (parsed.ec != std::errc{} || !std::isfinite(value)) return;
+    text.remove_prefix(parsed.ptr - text.data());
+    if (i < 5) {
+      const auto comma = text.find_first_not_of(" \t");
+      if (comma == std::string_view::npos || text[comma] != ',') return;
+      text.remove_prefix(comma + 1);
+    }
+  }
+  if (text.empty() || text.front() == '\r' || text.front() == '\n' || text.front() == '\0')
+    walk.placements.push_back(placement);
+}
+
+void append_ground_collision(ScxGeometry& mesh, const uint8_t* data, size_t size) {
+  if (size < 8) return;
+  const uint32_t faces = rd32(data);
+  if (faces > (size - 8) / 28) return;
+  const size_t vertices_offset = 4 + static_cast<size_t>(faces) * 28;
+  const uint32_t vertices = rd32(data + vertices_offset);
+  if (vertices > (size - vertices_offset - 4) / 12) return;
+  const uint32_t base = static_cast<uint32_t>(mesh.positions.size() / 3);
+  const uint8_t* positions = data + vertices_offset + 4;
+  for (size_t i = 0; i < static_cast<size_t>(vertices) * 3; ++i)
+    mesh.positions.push_back(rdf(positions + i * 4));
+  for (uint32_t i = 0; i < faces; ++i) {
+    const uint8_t* face = data + 4 + static_cast<size_t>(i) * 28;
+    const uint32_t a = rd32(face + 4), b = rd32(face + 8), c = rd32(face + 12);
+    if (a < vertices && b < vertices && c < vertices)
+      mesh.indices.insert(mesh.indices.end(), {base + a, base + b, base + c});
+  }
+}
 
 void take_params(GroundWalk &w, const uint8_t *data, const uint8_t *end) {
   if (!w.params.empty() || !data)
     return;
   const uint8_t *s = data;
-  while (s < end) {
+  while (s < end && *s != 0) {
     const uint8_t *line = s;
     while (s < end && *s != '\n' && *s != '\r' && *s != 0)
       ++s;
@@ -255,7 +328,7 @@ void take_params(GroundWalk &w, const uint8_t *data, const uint8_t *end) {
 }
 
 void walk_ground_node(GroundWalk &w, uint32_t offset, uint32_t size,
-                      int depth) {
+                      int depth, bool placement = false) {
   const std::vector<uint8_t> &file = *w.file;
   if (size < 8 || offset > file.size() || size > file.size() - offset)
     return;
@@ -272,6 +345,7 @@ void walk_ground_node(GroundWalk &w, uint32_t offset, uint32_t size,
   struct Kid {
     uint8_t restype;
     uint32_t off, sz;
+    bool placement;
   };
   std::vector<Kid> kids;
   bool ok = true;
@@ -298,7 +372,7 @@ void walk_ground_node(GroundWalk &w, uint32_t offset, uint32_t size,
       rec += 48;
     }
     p += rec;
-    kids.push_back(Kid{restype, foff, sz});
+    kids.push_back(Kid{restype, foff, sz, (flags & 0x20u) != 0});
   }
   while (ok && p + 8 <= end) {
     const uint32_t tag = rd32(p);
@@ -313,7 +387,15 @@ void walk_ground_node(GroundWalk &w, uint32_t offset, uint32_t size,
     if (csize > static_cast<size_t>(end - data))
       break;
     if (tag == 0x00445352u) {
-      take_params(w, data, data + csize);
+      if (!placement)
+        take_params(w, data, data + csize);
+      else
+        append_ground_placement(w, {reinterpret_cast<const char*>(data), csize});
+    } else if (tag == 0x50545845u && depth == 0) { // EXTP
+      for (size_t i = 0; i + 4 <= csize; i += 4)
+        w.exterior_slots.push_back(rd32(data + i));
+    } else if (tag == 0x53594850u) { // PHYS
+      append_ground_collision(w.collision, data, csize);
     } else if (tag == 0x594C4F50u && csize >= 8) {
       const uint32_t nsec = rd32(data + 4);
       const uint8_t *q = data + 8;
@@ -335,6 +417,7 @@ void walk_ground_node(GroundWalk &w, uint32_t offset, uint32_t size,
         sec.material = mat;
         sec.pos.resize(static_cast<size_t>(nv) * 3u);
         sec.nrm.resize(sec.pos.size());
+        sec.colors.resize(nv);
         sec.uv0.resize(static_cast<size_t>(nv) * 2u);
         sec.uv1.resize(sec.uv0.size());
         sec.uv2.resize(sec.uv0.size());
@@ -346,6 +429,7 @@ void walk_ground_node(GroundWalk &w, uint32_t offset, uint32_t size,
           sec.nrm[vi * 3] = rdf(v + 12);
           sec.nrm[vi * 3 + 1] = rdf(v + 16);
           sec.nrm[vi * 3 + 2] = rdf(v + 20);
+          sec.colors[vi] = rd32(v + 24);
           sec.uv0[vi * 2] = rdf(v + 32);
           sec.uv0[vi * 2 + 1] = rdf(v + 36);
           sec.uv1[vi * 2] = rdf(v + 40);
@@ -372,7 +456,7 @@ void walk_ground_node(GroundWalk &w, uint32_t offset, uint32_t size,
     return;
   for (const Kid &k : kids)
     if (k.restype == 1)
-      walk_ground_node(w, k.off, k.sz, depth + 1);
+      walk_ground_node(w, k.off, k.sz, depth + 1, k.placement);
 }
 
 struct GroundMat {
@@ -435,6 +519,8 @@ void scene_instances_set_resources(const RpkIndex *resources) {
   g_preview_lamps = false;
   g_meshes.clear();
   g_overrides.clear();
+  g_collision_overrides.clear();
+  g_ground_props.clear();
   g_texture_paths.clear();
   g_static.clear();
   g_floor_meshes.clear();
@@ -689,7 +775,9 @@ void scene_instances_prepare_physics() {
       std::array<float, 16> m;
       if (!chain_matrix(n->key, g_world, m.data(), false))
         continue;
-      auto geo = geometry(static_cast<uint32_t>(n->type_id));
+      const auto id = static_cast<uint32_t>(n->type_id);
+      const auto collision = g_collision_overrides.find(id);
+      auto geo = collision != g_collision_overrides.end() ? collision->second : geometry(id);
       if (!geo)
         continue;
       active.insert(n->key);
@@ -700,6 +788,7 @@ void scene_instances_prepare_physics() {
         cached.mesh = StaticMesh{};
         auto &mesh = cached.mesh;
         mesh.scale = 1;
+        if (geo->indices.size() > 100000) mesh.cell_size = 8.f;
         mesh.indices = geo->indices;
         mesh.positions.resize(geo->positions.size());
         for (size_t i = 0; i + 2 < geo->positions.size(); i += 3) {
@@ -855,11 +944,11 @@ bool scene_instances_sweep_sphere(const float start[3], const float delta[3],
   if (!g_floor_prepared) scene_instances_prepare_physics();
   hit = {};
   const Vec3 to = from + movement;
-  const int32_t x0 = static_cast<int32_t>(std::floor((std::min(from.x, to.x) - radius) / 2));
-  const int32_t x1 = static_cast<int32_t>(std::floor((std::max(from.x, to.x) + radius) / 2));
-  const int32_t z0 = static_cast<int32_t>(std::floor((std::min(from.z, to.z) - radius) / 2));
-  const int32_t z1 = static_cast<int32_t>(std::floor((std::max(from.z, to.z) + radius) / 2));
   const auto sweep_mesh = [&](const StaticMesh &mesh) {
+    const int32_t x0 = cell_coordinate(std::min(from.x, to.x) - radius, mesh);
+    const int32_t x1 = cell_coordinate(std::max(from.x, to.x) + radius, mesh);
+    const int32_t z0 = cell_coordinate(std::min(from.z, to.z) - radius, mesh);
+    const int32_t z1 = cell_coordinate(std::max(from.z, to.z) + radius, mesh);
     for (int32_t x = x0; x <= x1; ++x)
       for (int32_t z = z0; z <= z1; ++z) {
         const auto cell = mesh.cells.find(floor_cell(x, z));
@@ -886,8 +975,7 @@ bool scene_instances_sample_floor(float x, float z, float below, void *ignore,
   if (g_static_enabled)
     for (const auto &mesh : g_static) {
       const auto cell =
-          mesh.cells.find(floor_cell(static_cast<int32_t>(std::floor(x / 2)),
-                                     static_cast<int32_t>(std::floor(z / 2))));
+          mesh.cells.find(floor_cell(cell_coordinate(x, mesh), cell_coordinate(z, mesh)));
       if (cell != mesh.cells.end())
         floor_triangles(eye, mesh.positions, cell->second, mesh.scale, x, z,
                         below, best, hit, sample.normal);
@@ -903,8 +991,7 @@ bool scene_instances_sample_floor(float x, float z, float below, void *ignore,
       continue;
     const auto &mesh = cached.mesh;
     auto cell =
-        mesh.cells.find(floor_cell(static_cast<int32_t>(std::floor(x / 2)),
-                                   static_cast<int32_t>(std::floor(z / 2))));
+        mesh.cells.find(floor_cell(cell_coordinate(x, mesh), cell_coordinate(z, mesh)));
     if (cell != mesh.cells.end())
       floor_triangles(eye, mesh.positions, cell->second, mesh.scale, x, z,
                       below, best, hit, sample.normal);
@@ -1004,6 +1091,7 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root) {
     }
     if (!instance.geometry)
       continue;
+    instance.cull_backfaces = instance.geometry->ground_polygons;
     instance.key = n->key;
     instance.type_id = n->type_id;
     instance.sky = n->key == g_sky;
@@ -1051,7 +1139,43 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root) {
   return out;
 }
 std::vector<SceneInstance> scene_instances_collect() {
-  return scene_instances_collect_root(g_world);
+  auto out = scene_instances_collect_root(g_world);
+  if (g_ground_props.empty()) return out;
+  float eye[3], at[3];
+  if (!gameref_world_camera(eye, at, nullptr, nullptr, nullptr)) return out;
+  const size_t base_count = out.size();
+  for (size_t i = 0; i < base_count; ++i) {
+    const auto found = g_ground_props.find(static_cast<uint32_t>(out[i].type_id));
+    if (found == g_ground_props.end()) continue;
+    PartMatrix shell;
+    if (!scene_instances_script_matrix(out[i].key, shell.data())) continue;
+    const auto inverse = part_matrix_inverse_rigid(shell);
+    const float x = inverse[0] * eye[0] + inverse[4] * eye[1] + inverse[8] * eye[2] + inverse[12];
+    const float z = inverse[2] * eye[0] + inverse[6] * eye[1] + inverse[10] * eye[2] + inverse[14];
+    const SceneSun lighting = out[i].lighting;
+    for (int32_t cx = prop_cell(x - kPropViewRange); cx <= prop_cell(x + kPropViewRange); ++cx)
+      for (int32_t cz = prop_cell(z - kPropViewRange); cz <= prop_cell(z + kPropViewRange); ++cz) {
+        const auto cell = found->second.find(floor_cell(cx, cz));
+        if (cell == found->second.end()) continue;
+        for (const auto& prop : cell->second) {
+          const float dx = prop.pose[12] - x, dz = prop.pose[14] - z;
+          if (dx * dx + dz * dz > kPropViewRange * kPropViewRange) continue;
+          auto mesh = geometry(prop.render_id);
+          if (!mesh) continue;
+          SceneInstance instance;
+          instance.cull_backfaces = true;
+          instance.type_id = static_cast<int32_t>(prop.render_id);
+          instance.lighting = lighting;
+          instance.geometry = std::move(mesh);
+          instance.transform = part_matrix_multiply(shell, prop.pose);
+          for (int col = 0; col < 4; ++col)
+            for (int row = 0; row < 4; ++row)
+              if ((col == 2) != (row == 2)) instance.transform[col * 4 + row] *= -1.f;
+          out.push_back(std::move(instance));
+        }
+      }
+  }
+  return out;
 }
 
 void scene_instances_override_mesh(uint32_t id,
@@ -1075,45 +1199,59 @@ void scene_instances_add_static_mesh(const ScxGeometry &geo) {
   g_static.push_back(std::move(mesh));
 }
 
-bool scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id,
-                                uint32_t *render_id,
-                                std::shared_ptr<const ScxGeometry> *poly) {
-  if (!render_id || !poly)
-    return false;
-  *render_id = 0;
-  poly->reset();
+void scene_instances_override_collision(uint32_t id,
+                                        std::shared_ptr<const ScxGeometry> geo) {
+  if (id && geo) g_collision_overrides[id] = std::move(geo);
+}
+
+GroundMapData scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id) {
+  GroundMapData map;
   const RpkEntry *entry = rpk.resolve(ground_id);
   if (!entry || entry->typeof_ != 1 || entry->size < 8)
-    return false;
+    return map;
   const int32_t pack = RpkIndex::pack_from_full(ground_id);
   const std::string disk = rpk.disk_path_for_pack(pack);
   std::ifstream in(disk, std::ios::binary | std::ios::ate);
   if (!in)
-    return false;
+    return map;
   const auto sz = static_cast<std::streamoff>(in.tellg());
   if (sz <= 0)
-    return false;
+    return map;
   in.seekg(0);
   std::vector<uint8_t> file(static_cast<size_t>(sz));
   in.read(reinterpret_cast<char *>(file.data()), sz);
   if (!in)
-    return false;
+    return map;
 
   GroundWalk walk;
   walk.file = &file;
   walk_ground_node(walk, entry->offset, entry->size, 0);
   if (walk.params.size() < 3)
-    return false;
+    return map;
   char *end = nullptr;
   const unsigned long local = std::strtoul(walk.params.c_str(), &end, 0);
   if (!end || end == walk.params.c_str() || local == 0)
-    return false;
-  *render_id = rpk.resolve_embedded_id(pack, static_cast<uint32_t>(local));
+    return map;
+  map.render_id = rpk.resolve_embedded_id(pack, static_cast<uint32_t>(local));
+  for (auto& placement : walk.placements)
+    placement.type = rpk.resolve_embedded_id(pack, placement.type);
+  map.placements = std::move(walk.placements);
+  if (const auto* owner = rpk.pack_by_id(pack)) {
+    for (uint32_t slot : walk.exterior_slots)
+      for (const auto& dep : owner->deps)
+        if ((dep.id >> 16) == slot)
+          if (const auto* exterior = rpk.pack_by_path(dep.path))
+            map.exterior_maps.push_back(RpkIndex::make_full_id(exterior->pack_id, 1));
+  }
+  if (!walk.collision.indices.empty()) {
+    walk.collision.position_scale = 1.f;
+    map.collision = std::make_shared<ScxGeometry>(std::move(walk.collision));
+  }
   if (walk.poly.empty())
-    return true;
+    return map;
 
   const RpkIndex::ModelRef model = rpk.model_for_resource(
-      RpkIndex::pack_from_full(*render_id), *render_id & 0xffffu);
+      RpkIndex::pack_from_full(map.render_id), map.render_id & 0xffffu);
   std::filesystem::path table;
   if (model.ok && !model.source.empty()) {
     std::string source = model.source;
@@ -1123,6 +1261,7 @@ bool scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id,
   const std::vector<GroundMat> mats = read_ground_materials(table);
 
   auto geo = std::make_shared<ScxGeometry>();
+  geo->ground_polygons = true;
   geo->position_scale = 1.f;
   geo->info.ok = true;
   geo->info.version = 3;
@@ -1135,6 +1274,15 @@ bool scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id,
         texture = (std::filesystem::path(rpk.game_root()) / texture).string();
     }
   }
+  // The city SCY tables use this slot for black-backed window emission.
+  // Multiplying the façade by either atlas erases the unlit wall.
+  std::vector<bool> emission_slots(geo->textures.size());
+  for (size_t i = 0; i < geo->textures.size(); ++i) {
+    auto name = std::filesystem::path(geo->textures[i]).stem().string();
+    std::transform(name.begin(), name.end(), name.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    emission_slots[i] = name == "f_light" || name == "n_light";
+  }
   for (const PolySection &sec : walk.poly) {
     const bool known = sec.material < mats.size();
     ScxGroup group;
@@ -1146,19 +1294,25 @@ bool scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id,
       group.mix_index = mats[sec.material].mix;
       group.mix_map.channel = mats[sec.material].mix_channel;
     }
-    if (known && mats[sec.material].lm >= 0) {
-      group.lightmap_index = static_cast<uint16_t>(mats[sec.material].lm);
+    const int illumination = known ? mats[sec.material].lm : -1;
+    const bool has_illumination = illumination >= 0 &&
+        static_cast<size_t>(illumination) < emission_slots.size();
+    group.mix_vertex_color = has_illumination && emission_slots[illumination];
+    if (has_illumination && !group.mix_vertex_color) {
+      group.lightmap_index = static_cast<uint16_t>(illumination);
       group.lightmap_map.channel = 1;
     }
     if (known && ((mats[sec.material].flags & 1u) ||
                   (mats[sec.material].flags & 0x20000000u)))
       group.material_flags = 1;
+    if (known) group.material_flags |= mats[sec.material].flags & 0x02000000u;
     const uint32_t base = static_cast<uint32_t>(geo->positions.size() / 3);
     geo->positions.insert(geo->positions.end(), sec.pos.begin(), sec.pos.end());
     geo->normals.insert(geo->normals.end(), sec.nrm.begin(), sec.nrm.end());
     geo->uvs.insert(geo->uvs.end(), sec.uv0.begin(), sec.uv0.end());
     geo->uv2.insert(geo->uv2.end(), sec.uv1.begin(), sec.uv1.end());
     geo->uv3.insert(geo->uv3.end(), sec.uv2.begin(), sec.uv2.end());
+    geo->vertex_colors.insert(geo->vertex_colors.end(), sec.colors.begin(), sec.colors.end());
     for (uint32_t index : sec.indices)
       geo->indices.push_back(base + index);
     geo->groups.push_back(std::move(group));
@@ -1167,11 +1321,48 @@ bool scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id,
   }
   geo->info.groups = static_cast<int32_t>(geo->groups.size());
   if (geo->indices.empty())
-    return true;
-  std::printf("[scene] ground poly 0x%x tris=%d materials=%zu\n", *render_id,
+    return map;
+  std::printf("[scene] ground poly 0x%x tris=%d materials=%zu\n", map.render_id,
               geo->info.triangles, mats.size());
-  *poly = std::move(geo);
-  return true;
+  map.poly = std::move(geo);
+  return map;
+}
+
+void scene_instances_add_ground_props(const GroundMapData& map) {
+  if (!g_resources || map.placements.empty() || g_ground_props.contains(map.render_id))
+    return;
+  auto& cells = g_ground_props[map.render_id];
+  std::unordered_map<uint32_t, std::vector<PartRender>> render_types;
+  size_t props = 0;
+  for (const auto& placement : map.placements) {
+    auto [type, added] = render_types.try_emplace(placement.type);
+    if (added) {
+      const auto bytes = g_resources->read_payload(placement.type);
+      if (bytes.size() > 15 && std::memcmp(bytes.data(), "ICFG", 4) == 0 &&
+          std::memcmp(bytes.data() + 8, "object\0", 7) == 0) {
+        const std::string cfg(reinterpret_cast<const char*>(bytes.data() + 15), bytes.size() - 15);
+        auto renders = parse_part_config(cfg, g_resources,
+                                        RpkIndex::pack_from_full(placement.type)).renders;
+        int best_lod = -1;
+        for (const auto& render : renders)
+          if (!render.flags) best_lod = std::max(best_lod, render.lod_level);
+        for (auto& render : renders)
+          if (render.resource && !render.flags &&
+              (render.lod_level < 0 || render.lod_level == best_lod))
+            type->second.push_back(std::move(render));
+      }
+    }
+    if (type->second.empty()) continue;
+    const auto pose = part_pose_matrix({placement.position, placement.rotation});
+    for (const auto& render : type->second) {
+      const auto transform = part_matrix_multiply(pose, part_pose_matrix(render.pose));
+      cells[floor_cell(prop_cell(transform[12]), prop_cell(transform[14]))].push_back(
+          {render.resource, transform});
+      ++props;
+    }
+  }
+  std::printf("[scene] ground props 0x%x placements=%zu renders=%zu\n", map.render_id,
+              map.placements.size(), props);
 }
 
 bool invert_columns(const float *m, float inv[9]) {
@@ -1248,7 +1439,7 @@ void *scene_instances_pick(const float origin[3], const float direction[3], floa
     return nullptr;
   float best = 1e9f;
   void *hit = nullptr;
-  for (const SceneInstance &instance : scene_instances_collect()) {
+  for (const SceneInstance &instance : scene_instances_collect_root(g_world)) {
     if (instance.sky || !instance.geometry || !instance.key)
       continue;
     float matrix[16];

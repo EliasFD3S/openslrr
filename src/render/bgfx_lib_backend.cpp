@@ -236,6 +236,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
         .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
         .add(bgfx::Attrib::TexCoord1, 2, bgfx::AttribType::Float)
         .add(bgfx::Attrib::TexCoord2, 2, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
         .end();
 
     // 1x1 white fallback texture.
@@ -821,6 +822,11 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
       }
       if(part.geo.uv2.size()>i*2+1) {verts[i].u2=part.geo.uv2[i*2];verts[i].v2=part.geo.uv2[i*2+1];}
       if(part.geo.uv3.size()>i*2+1) {verts[i].u3=part.geo.uv3[i*2];verts[i].v3=part.geo.uv3[i*2+1];}
+      if (i < part.geo.vertex_colors.size()) {
+        const uint32_t argb = part.geo.vertex_colors[i];
+        verts[i].rgba = (argb & 0xff00ff00u) | ((argb & 0xffu) << 16) |
+                        ((argb >> 16) & 0xffu);
+      }
     }
     const bgfx::Memory* vmem = bgfx::copy(
         verts.data(), static_cast<uint32_t>(verts.size() * sizeof(MeshVertex)));

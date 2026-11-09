@@ -1,4 +1,4 @@
-$input v_normal, v_texcoord0, v_texcoord1, v_texcoord2
+$input v_normal, v_texcoord0, v_texcoord1, v_texcoord2, v_color0
 
 #include <bgfx_shader.sh>
 
@@ -38,7 +38,10 @@ void main()
 	float light = (u_alphaTest.y > 0.75) ? 1.0 : ((u_alphaTest.y > 0.25) ? 0.65 + 0.35 * ndl : ndl);
 	float outA = (u_alphaTest.z > 0.5) ? tex.a : 1.0;
 	vec3 tint = u_color.rgb;
-	if (u_alphaTest.w > 1.5) {
+	if (u_alphaTest.w < -0.5) {
+		// City window textures provide the mix weight for the vertex-coloured wall.
+		tex.rgb = mix(v_color0.rgb, tex.rgb, tex.a);
+	} else if (u_alphaTest.w > 1.5) {
 		// ColorMixTex over white diffuse, in premultiplied alpha space.
 		tex.rgb = mix(vec3(tex.a, tex.a, tex.a), tex.rgb, tex.a);
 	} else if (u_alphaTest.w > 0.5) {

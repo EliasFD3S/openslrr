@@ -37,6 +37,7 @@ struct MeshVertex {
   float nx, ny, nz;
   float u, v;
   float u2 = 0, v2 = 0, u3 = 0, v3 = 0;
+  uint32_t rgba = 0xffffffffu;
 };
 
 class LibBgfxBackend final : public IRenderBackend {

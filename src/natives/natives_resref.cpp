@@ -28,49 +28,59 @@
 namespace slrr {
 
 // A map GroundRef is a native ground: its triangles live in the instance
-// tree (POLY, metres) and `params` only names the material table. The
-// script adds the extra props itself. The garage shell is already the boot
-// scene, so that path is left alone.
+// tree. Stitched outdoor maps also carry static object placements.
+// The garage shell is already the boot scene.
 void spawn_ground_shell(Jvm& jvm, const RpkIndex& rpk, Object* ground) {
   if (!ground || ground->class_name.find("GroundRef") == std::string::npos)
     return;
   GameRefState* st = gameref_get(ground);
   if (!st || st->type_id == 0) return;
-  uint32_t full = 0;
-  std::shared_ptr<const ScxGeometry> poly;
-  if (!scene_instances_ground_map(rpk, static_cast<uint32_t>(st->type_id),
-                                  &full, &poly) ||
-      full == 0)
-    return;
-  const RpkIndex::ModelRef model =
-      rpk.model_for_resource(RpkIndex::pack_from_full(full), full & 0xffffu);
-  if (model.ok) {
-    std::string src = model.source;
-    for (char& c : src)
-      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (src.find("garage") != std::string::npos) return;
-  } else if (!poly) {
-    return;
+  const auto primary = static_cast<uint32_t>(st->type_id);
+  std::vector<uint32_t> pending{primary};
+  std::unordered_set<uint32_t> visited;
+  for (size_t i = 0; i < pending.size(); ++i) {
+    const auto id = pending[i];
+    if (!visited.insert(id).second) continue;
+    auto map = scene_instances_ground_map(rpk, id);
+    const uint32_t full = map.render_id;
+    if (!full) continue;
+    const bool already_attached = std::any_of(st->children.begin(), st->children.end(),
+        [full](void* child) {
+          const auto* state = gameref_get(child);
+          return state && static_cast<uint32_t>(state->type_id) == full;
+        });
+    if (already_attached) continue;
+    const RpkIndex::ModelRef model =
+        rpk.model_for_resource(RpkIndex::pack_from_full(full), full & 0xffffu);
+    if (model.ok) {
+      std::string src = model.source;
+      for (char& c : src)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      if (src.find("garage") != std::string::npos) continue;
+    } else if (!map.poly) {
+      continue;
+    }
+    scene_instances_override_mesh(full, map.poly);
+    scene_instances_override_collision(full, map.collision);
+    if (id != primary || !map.exterior_maps.empty())
+      scene_instances_add_ground_props(map);
+    Object* node = jvm.new_object("java.util.resource.RenderRef");
+    if (!node) return;
+    GameRefState* shell = gameref_upsert(node, GameRefKind::RenderRef);
+    if (!shell) return;
+    shell->script = node;
+    shell->class_name = node->class_name;
+    shell->empty = false;
+    shell->type_id = static_cast<int32_t>(full);
+    node->fields["id"] = Value::make_int(static_cast<int32_t>(full));
+    gameref_set_parent(node, ground);
+    if (id == primary) ground->fields["_ground_shell"] = Value::make_obj(node);
+    pending.insert(pending.end(), map.exterior_maps.begin(), map.exterior_maps.end());
+    std::printf("[scene] ground shell 0x%x '%s' src=%s poly=%d phys=%zu\n", full,
+                model.alias.c_str(), model.source.c_str(),
+                map.poly ? map.poly->info.triangles : 0,
+                map.collision ? map.collision->indices.size() / 3 : 0);
   }
-  if (poly) scene_instances_override_mesh(full, poly);
-  for (void* child : st->children) {
-    if (GameRefState* cs = gameref_get(child))
-      if (static_cast<uint32_t>(cs->type_id) == full) return;
-  }
-  Object* node = jvm.new_object("java.util.resource.RenderRef");
-  if (!node) return;
-  GameRefState* shell = gameref_upsert(node, GameRefKind::RenderRef);
-  if (!shell) return;
-  shell->script = node;
-  shell->class_name = node->class_name;
-  shell->empty = false;
-  shell->type_id = static_cast<int32_t>(full);
-  node->fields["id"] = Value::make_int(static_cast<int32_t>(full));
-  gameref_set_parent(node, ground);
-  ground->fields["_ground_shell"] = Value::make_obj(node);
-  std::printf("[scene] ground shell 0x%x '%s' src=%s poly=%d\n", full,
-              model.alias.c_str(), model.source.c_str(),
-              poly ? poly->info.triangles : 0);
 }
 
 // Catalog categories. The walk is a stack: the last sibling is shown first.
