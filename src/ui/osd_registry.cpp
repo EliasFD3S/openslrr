@@ -4,6 +4,7 @@
 #include "slrr/object.hpp"
 #include "slrr/slrr_font.hpp"
 
+#include <cstdlib>
 #include <cmath>
 #include <cstdio>
 #include <unordered_set>
@@ -187,6 +188,7 @@ void osd_add_widget(OsdWidget w) {
     w.hidden = true;
   }
   if (w.layer == 0) w.layer = osd_viewport_pri(w.owner);
+  if (owner_suppressed(w)) w.hidden = true;
   g_widgets.push_back(std::move(w));
 }
 
@@ -750,8 +752,19 @@ void osd_fire_click_at(float osd_x, float osd_y) {
     if (g_click) g_click(sw);
     if (sw.owner) sw.owner->fields["actGadget"] = Value::make_obj(nullptr);
   }
-  std::printf("[osd] click cmd=%d handler=%s\n", hit.cmd,
-              hit.handler_class.empty() ? "?" : hit.handler_class.c_str());
+  std::printf("[osd] click cmd=%d handler=%s owner=%s layer=%d\n", hit.cmd,
+              hit.handler_class.empty() ? "?" : hit.handler_class.c_str(),
+              hit.owner ? hit.owner->class_name.c_str() : "?", hit.layer);
+  if (std::getenv("SLRR_OSD_DEBUG")) {
+    for (size_t i = 0; i < g_widgets.size(); ++i) {
+      const OsdWidget& w = g_widgets[i];
+      if (w.hidden || w.background || w.no_hit) continue;
+      if (std::fabs(osd_x - w.x) > w.half_w || std::fabs(osd_y - w.y) > w.half_h) continue;
+      std::printf("[osd]   candidate #%zu cmd=%d handler=%s owner=%p layer=%d tip=%s\n", i,
+                  w.cmd, w.handler_class.c_str(), static_cast<void*>(w.owner), w.layer,
+                  w.tip.c_str());
+    }
+  }
   if (g_click) g_click(hit);
   osd_set_hover_at(osd_x, osd_y);
 }
@@ -951,6 +964,22 @@ void osd_sync_button_pictures() {
 
 void osd_on_field_write(Object* recv, const std::string& field) {
   if (!recv || field.empty()) return;
+  if (field == "globalHandler" && is_osd_class(recv)) {
+    Object* dialog = field_o(recv, "globalHandler");
+    if (field_o(dialog, "osd") != recv) return;
+    if (!dialog->fields.contains("controller") || !dialog->fields.contains("flags"))
+      return;
+    const auto shown = dialog->fields.find("shown");
+    if (shown != dialog->fields.end() && shown->second.tag == ValueTag::Int &&
+        shown->second.v.i != 0) return;
+    // Dialog constructors can build and select a group before show().
+    // Keep those widgets hidden until their viewport is activated.
+    recv->fields["_host_hidden"] = Value::make_int(1);
+    for (OsdWidget& w : g_widgets)
+      if (w.owner == recv) w.hidden = true;
+    slrr_text_set_osd_visible(recv, false);
+    return;
+  }
   if(field=="ins" && recv->class_name=="java.render.Rectangle") {
     Object* current=field_o(recv,"ins");
     Object* previous=field_o(recv,"_host_picture_instance");
@@ -972,8 +1001,25 @@ void osd_on_field_write(Object* recv, const std::string& field) {
     // Camera.create also stores vp. That write must not replace the Osd
     // that Viewport.deactivate hides, or cancel hides the menu.
     if (!is_osd_class(recv)) return;
-    if (Object* vp = field_o(recv, "vp"))
+    if (Object* vp = field_o(recv, "vp")) {
       vp->fields["_osd"] = Value::make_obj(recv);
+      // The stock renderer draws and hit-tests an Osd only after its viewport
+      // is activated by Osd.show(). InventoryPanel builds one Osd per slot and
+      // leaves it inactive until Mechanic shows the inventory; treating it as
+      // live let an invisible slot steal clicks (Car Selector "TAKE IT").
+      const auto active = vp->fields.find("active");
+      const bool live = active != vp->fields.end() &&
+                        active->second.tag == ValueTag::Int && active->second.v.i != 0;
+      if (!live) {
+        recv->fields["_host_hidden"] = Value::make_int(1);
+        for (OsdWidget& w : g_widgets)
+          if (w.owner == recv) w.hidden = true;
+        slrr_text_set_osd_visible(recv, false);
+      }
+      if (std::getenv("SLRR_OSD_DEBUG"))
+        std::printf("[osd] bind osd=%p viewport=%p live=%d\n", static_cast<void*>(recv),
+                    static_cast<void*>(vp), live ? 1 : 0);
+    }
     return;
   }
   if (field == "disabled") {

@@ -31,22 +31,19 @@ void part_park_chassis(Object *car, bool shift = true);
 // the static tyre contacts. getPos of a car returns this, so a saved pose
 // placed again does not climb by the ride height.
 bool part_car_script_pos(void *key, float *x, float *y, float *z);
-// City lamps follow the world clock (on outside 6:00–21:00). Brake, reverse
-// and indicators stay off until the car asks for them.
-bool part_lamp_lit(uint32_t flags);
+// City lamps require a running engine at night. The showroom preview can
+// demonstrate the lights with its own time-of-day toggle.
+bool part_lamp_lit(void *part, uint32_t flags, bool preview);
 // Render node or one of its parents, when that node is an installed part.
 Object *part_render_owner(void *key);
 // World height of the tyre contact under a car. The camera's `move` spring
 // hangs on this point; `look` stays on the chassis origin.
 bool part_car_ground(void *key, float *y);
+bool part_camera_pose(void* car, int camera, float* matrix);
 // Chassis owning a render node, with its active-world script frame.
 void *part_shadow_source(void *render, float *frame);
 // Advance only cars belonging to the active world, at a fixed physics step.
 void part_physics_advance(double seconds);
-// Squared chassis speed in script metres/second, or zero for a missing car.
-float part_speed_square(Object *car);
-// True only for the active player/development-controlled chassis.
-bool part_player_controlled(Object *car);
 struct PartPhysicsState {
   bool active = false;
   double mass = 0, height = 0, vertical_speed = 0;
@@ -57,6 +54,17 @@ struct PartPhysicsState {
   std::array<bool, 4> geometry_solved{};
 };
 bool part_physics_state(Object *car, PartPhysicsState &state);
+struct VehicleHudState {
+  const VehicleHudLayout *layout = nullptr;
+  const std::string *preview_directory = nullptr;
+  Object *owner = nullptr;
+  double rpm = 0, speed = 0, mileage = 0;
+  float condition = 1, nitro = 0, turbo = 0;
+  int gear = 0;
+  bool handbrake = false;
+};
+void part_set_hud_preview(const std::string &path);
+bool part_vehicle_hud(VehicleHudState &state);
 std::vector<InstalledPart> part_installed_tree(Object *root);
 Object *vehicle_spawn_stock(Jvm &jvm, RpkIndex &resources, Object *parent,
                             uint32_t chassis, uint32_t texture = 0);

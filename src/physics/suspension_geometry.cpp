@@ -10,18 +10,15 @@ Quaternion axis_angle(Vec3 axis, double angle) {
   return {axis.x * s, axis.y * s, axis.z * s, std::cos(angle * .5)};
 }
 bool between(Vec3 from, Vec3 to, Quaternion &rotation) {
-  const double lengths = from.length() * to.length();
-  if (lengths < 1e-12)
+  if (from.dot(from) < 1e-16 || to.dot(to) < 1e-16)
+    return false;
+  from = from.normalized();
+  to = to.normalized();
+  const double cosine = std::clamp(from.dot(to), -1., 1.);
+  if (cosine < -1 + 1e-10)
     return false;
   const auto axis = from.cross(to);
-  const double cosine = std::clamp(from.dot(to) / lengths, -1., 1.);
-  if (axis.length() < 1e-10) {
-    if (cosine < 0)
-      return false;
-    rotation = {};
-    return true;
-  }
-  rotation = axis_angle(axis, std::acos(cosine));
+  rotation = Quaternion{axis.x, axis.y, axis.z, 1 + cosine}.normalized();
   return true;
 }
 } // namespace
@@ -44,7 +41,13 @@ Matrix corner_matrix(Vec3 origin, Quaternion rotation) {
 }
 bool solve_corner_geometry(const CornerGeometry &g, Vec3 point,
                            CornerFrames &out) {
-  if (g.arm[0] <= 0 || (g.hub[0] != -1 && g.hub[0] != 0) || !point.finite())
+  const auto finite = [](float v) { return std::isfinite(v); };
+  if (!(g.arm[0] > 0) || (g.hub[0] != -1 && g.hub[0] != 0) ||
+      !point.finite() || !g.reference.finite() ||
+      !std::all_of(g.arm.begin(), g.arm.end(), finite) ||
+      !std::all_of(g.hub.begin(), g.hub.end(), finite) ||
+      !std::isfinite(g.alignment.x) || !std::isfinite(g.alignment.y) ||
+      !std::isfinite(g.alignment.z) || !std::isfinite(g.alignment.w))
     return false;
   const Vec3 axis = Vec3{g.arm[4], g.arm[5], g.arm[6]}.normalized();
   if (axis.length() < .9)
@@ -106,6 +109,28 @@ bool solve_corner_geometry(const CornerGeometry &g, Vec3 point,
   return true;
 }
 
+bool hinge_hub(const WheelConfig &w, Vec3 ray, Vec3 &hub) {
+  if (!(w.arm_length > 0)) {
+    hub = ray;
+    return ray.finite();
+  }
+  CornerGeometry geometry;
+  geometry.reference = w.center;
+  const Vec3 pivot = w.arm_pivot - w.center, axis = w.arm_axis;
+  geometry.arm = {float(w.arm_length), float(pivot.x), float(pivot.y),
+                  float(pivot.z),       float(axis.x),  float(axis.y),
+                  float(axis.z)};
+  geometry.hub = w.hub;
+  geometry.alignment = w.hub_alignment;
+  if (!w.has_hub)
+    geometry.hub[0] = -1;
+  CornerFrames frames;
+  if (!solve_corner_geometry(geometry, ray, frames))
+    return false;
+  hub = frames.hub_origin;
+  return hub.finite();
+}
+
 double suspension_hub_length(const WheelConfig &wheel, const Vec3 &hub) {
   const Vec3 down = wheel.down.normalized();
   if (!(wheel.arm_length > 0))
@@ -162,5 +187,33 @@ bool chrono_suspension_geometry(const WheelConfig &wheel, double initial) {
     ratio_sign = ratio;
   }
   return true;
+}
+
+Quaternion wheel_steering(double angle) {
+  return {0, std::sin(angle * .5), 0, std::cos(angle * .5)};
+}
+
+CornerFrames wheel_pose(const WheelConfig& wheel, double length, bool* fitted) {
+  const double travel = length - wheel.anchor_length();
+  const Vec3 ray = wheel.center + wheel.down.normalized() * travel;
+  if (fitted) *fitted = false;
+  if (wheel.arm_length > 0) {
+    CornerGeometry geometry;
+    geometry.reference = wheel.center;
+    const Vec3 pivot = wheel.arm_pivot - wheel.center, axis = wheel.arm_axis;
+    geometry.arm = {float(wheel.arm_length), float(pivot.x), float(pivot.y),
+                    float(pivot.z), float(axis.x), float(axis.y), float(axis.z)};
+    geometry.hub = wheel.hub;
+    geometry.alignment = wheel.hub_alignment;
+    if (!wheel.has_hub) geometry.hub[0] = -1;
+    CornerFrames frames;
+    // The fitted hub is driven by the vertical CFG travel, with alignment
+    // applied by the hub fit. Tilting the input ray applies it twice.
+    if (solve_corner_geometry(geometry, wheel.center + Vec3{0, -travel, 0}, frames)) {
+      if (fitted) *fitted = true;
+      return frames;
+    }
+  }
+  return {ray, ray, {}, wheel.hub_alignment};
 }
 } // namespace slrr::physics

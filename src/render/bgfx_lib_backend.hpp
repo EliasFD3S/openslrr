@@ -29,6 +29,7 @@
 #endif
 
 namespace slrr {
+struct VehicleHudState;
 
 struct MeshVertex {
   float x, y, z;
@@ -128,6 +129,7 @@ class LibBgfxBackend final : public IRenderBackend {
   std::vector<SceneInstance> instances_;
   std::vector<Preview> previews_;
   std::unordered_map<const ScxGeometry*,ScenePart> instance_meshes_;
+  std::unordered_map<void*, const ScxGeometry*> deformed_meshes_;
 
   void sync_instances();
 
@@ -209,6 +211,9 @@ class LibBgfxBackend final : public IRenderBackend {
 
 
   void draw_osd();
+  void draw_vehicle_hud(const VehicleHudState& hud);
+  std::string gps_hud_path_;
+  std::unordered_map<std::string, ScxGeometry> hud_preview_meshes_;
 
 
   HWND hwnd_ = nullptr;

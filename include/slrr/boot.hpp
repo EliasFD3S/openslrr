@@ -11,6 +11,7 @@ struct BootOptions {
   std::string game_root;
   std::string player_name = "Player";
   std::string spawn_car; // development garage: owning RPK path:local type ID
+  std::string vehicle_osd; // optional standalone gauge CFG for preview
   bool window = false;
   bool auto_new = false;
   // After Garage: fire Garage.osdCommand (101 MAINMENU / 109 HITTHESTREET / 0=skip).

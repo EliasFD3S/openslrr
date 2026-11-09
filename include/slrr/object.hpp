@@ -1,7 +1,9 @@
 #pragma once
 
 #include "slrr/types.hpp"
+#include "slrr/host_input.hpp"
 
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -20,6 +22,7 @@ struct Object {
   // java.io.FindFile state.
   std::vector<std::string> find_entries;
   size_t find_index = 0;
+  std::unique_ptr<ControllerInput> input;
   // `new T[n]` (TREE expr 31). `fields["length"]` is the script-visible size.
   bool is_array = false;
   std::vector<Value> slots;

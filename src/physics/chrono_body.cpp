@@ -368,6 +368,8 @@ void BackendHandle::reset(ChronoBodyState *state) { state_.reset(state); }
 const char *backend_name() { return "chrono"; }
 
 struct ChronoIntegrator {
+  static constexpr double kMaxSubstepRate = 720;
+
   static std::vector<Collider> colliders_for(const VehicleDynamics &vehicle) {
     const auto &body = vehicle.body;
     std::vector<Collider> result;
@@ -412,8 +414,14 @@ struct ChronoIntegrator {
                          to_ch(rb.position), false);
     body.AccumulateTorque(state.accumulator, to_ch(rb.torque_), false);
 
-    state.system.ForceUpdate();
-    state.system.DoStepDynamics(dt);
+    // Driving runs at 120 Hz. Suspension springs and wheel contacts need a
+    // finer Chrono step, so substep with the step's external wrench held.
+    const int substeps =
+        std::max(1, static_cast<int>(std::ceil(dt * kMaxSubstepRate - 1e-9)));
+    for (int i = 0; i < substeps; ++i) {
+      state.system.ForceUpdate();
+      state.system.DoStepDynamics(dt / substeps);
+    }
 
     rb.position = from_ch(body.GetPos());
     const auto &r = body.GetRot();

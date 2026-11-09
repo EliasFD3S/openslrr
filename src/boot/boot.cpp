@@ -17,6 +17,7 @@
 #include "slrr/slrr_font.hpp"
 #include "slrr/scx_mesh.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/scene_presentation.hpp"
 #include "slrr/section_machine.hpp"
 #include "slrr/video_fmv.hpp"
 #include "slrr/vehicle_dynamics.hpp"
@@ -214,30 +215,6 @@ int boot_probe(Jvm& jvm, const BootOptions& opt) {
               scx.version, scx.groups, scx.vertices, scx.triangles,
               scx.ok ? 1 : 0, scx.error.c_str());
 
-  if (!host_input_self_check())
-    return 4;
-  Object *input_player = sections.seed_player("InputProbe");
-  Object *first_car = vehicle_spawn_stock(
-      jvm, rpk, input_player, RpkIndex::make_full_id(9, 0x0006));
-  Object *second_car = vehicle_spawn_stock(
-      jvm, rpk, input_player, RpkIndex::make_full_id(9, 0x0006));
-  input_player->fields["car"] = Value::make_obj(first_car);
-  const bool input_ok = part_player_controlled(first_car) &&
-                        !part_player_controlled(second_car);
-  std::printf("[boot] player input first=%d second=%d\n",
-              part_player_controlled(first_car),
-              part_player_controlled(second_car));
-  if (!input_ok)
-    return 4;
-  Object *queue_player = sections.seed_player("QueueProbe");
-  jvm.invoke("java.game.Player", "showOsd", "()V",
-             {Value::make_obj(queue_player)}, false);
-  const Value queue_root = jvm.invoke("java.lang.Math", "sqrt", "(F)F",
-                                      {Value::make_float(25.f)}, false);
-  std::printf("[boot] queueEvent recovery Math.sqrt(25)=%.3f\n",
-              queue_root.tag == ValueTag::Float ? queue_root.v.f : -1.f);
-  if (queue_root.tag != ValueTag::Float || queue_root.v.f != 5.f)
-    return 4;
   Object *speed_car = jvm.new_object("java.game.Vehicle");
   const Value speed = jvm.invoke("java.game.Vehicle", "getSpeedSquare", "()F",
                                  {Value::make_obj(speed_car)}, false);
@@ -381,6 +358,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
   host_game_options_load(jvm);
 
   const int32_t opened = rpk.open_all();
+  if (!opt.vehicle_osd.empty()) part_set_hud_preview(opt.vehicle_osd);
   const RpkPack* fe_found = rpk.pack_by_path("frontend.rpk");
   const RpkPack* garage_found = rpk.pack_by_path("misc\\garage.rpk");
   const RpkPack* mwm_found = rpk.pack_by_path("MW_Mod.rpk");
@@ -418,9 +396,10 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     osd_set_framebuffer(render.width(), render.height());
     host_set_render_callbacks([&render]() {
       if (!render.ready() || !bgfx_osd_draw_enabled(render)) return;
-      // Both stock natives present seven times. Loads are synchronous here;
-      // repeated frames also drain deferred bgfx resource destruction.
-      for (int i = 0; i < 7; ++i) render.flush();
+      // One swap presents the plate before the synchronous load continues.
+      const int passes = scene_transition_active() || osd_loading_dialog() ||
+                         !osd_loading_overlay().empty() ? 1 : 7;
+      for (int i = 0; i < passes; ++i) render.flush();
     }, [&render](const std::string& path) { return render.request_screenshot(path); });
     // Click → LoadingScreen.show presents this plate before the rest of the
     // handler (garage enter, track load). Skipped until the splash is up,

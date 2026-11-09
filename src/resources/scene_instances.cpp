@@ -1,6 +1,7 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/physics_log.hpp"
+#include <limits>
 #include "slrr/gameref.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/rpk_index.hpp"
@@ -24,6 +25,7 @@ namespace {
 const RpkIndex *g_resources = nullptr;
 void *g_world = nullptr;
 void *g_sky = nullptr;
+bool g_preview_lamps = false;
 uint32_t g_environment = 0;
 struct ShadowInfo {
   uint32_t flags = 0;
@@ -427,6 +429,7 @@ read_ground_materials(const std::filesystem::path &path) {
 void scene_instances_set_resources(const RpkIndex *resources) {
   g_resources = resources;
   g_world = g_sky = nullptr;
+  g_preview_lamps = false;
   g_meshes.clear();
   g_overrides.clear();
   g_static.clear();
@@ -439,14 +442,21 @@ void scene_instances_set_resources(const RpkIndex *resources) {
   g_environment = 0;
 }
 void scene_instances_set_envmap(uint32_t resource) { g_environment = resource; }
+std::shared_ptr<const ScxGeometry> scene_instances_geometry(uint32_t resource) {
+  return geometry(resource);
+}
+std::string scene_instances_texture(uint32_t resource) {
+  return g_resources ? g_resources->texture_path_for_id(resource) : std::string{};
+}
 std::string scene_instances_envmap() {
   return g_resources ? g_resources->texture_path_for_id(g_environment)
                      : std::string{};
 }
-void scene_instances_select(void *world, void *skydome) {
+void scene_instances_select(void *world, void *skydome, bool preview_lamps) {
   if (g_world != world) ++g_floor_revision;
   g_world = world;
   g_sky = skydome;
+  g_preview_lamps = preview_lamps;
   g_floor_prepared = false;
   if (auto *sky = gameref_get(skydome))
     sky->sky_render = true;
@@ -824,59 +834,67 @@ Vec3 closest_on_edge(Vec3 p, Vec3 a, Vec3 b) {
              : a;
 }
 
-void sweep_triangles(const StaticMesh &mesh, const std::vector<uint32_t> &indices,
-                     Vec3 start, Vec3 delta, double radius, SceneSphereHit &hit) {
+Vec3 closest_on_triangle(Vec3 point, const Vec3 (&v)[3], Vec3 normal) {
+  const Vec3 projected = point - normal * (point - v[0]).dot(normal);
+  Vec3 closest = projected;
+  double edge_distance2 = std::numeric_limits<double>::infinity();
+  for (int j = 0; j < 3; ++j) {
+    const Vec3 a = v[j], b = v[(j + 1) % 3];
+    if ((b - a).cross(projected - a).dot(normal) >= 0) continue;
+    const Vec3 edge = closest_on_edge(projected, a, b);
+    const Vec3 offset = edge - projected;
+    const double distance2 = offset.dot(offset);
+    if (distance2 < edge_distance2) {
+      closest = edge;
+      edge_distance2 = distance2;
+    }
+  }
+  return closest;
+}
+
+bool triangle_vertices(const std::vector<float>& positions,
+                       const std::vector<uint32_t>& indices, size_t first,
+                       double scale, Vec3 (&v)[3]) {
+  for (int j = 0; j < 3; ++j) {
+    const size_t offset = static_cast<size_t>(indices[first + j]) * 3;
+    if (offset + 2 >= positions.size()) return false;
+    const float* p = positions.data() + offset;
+    v[j] = Vec3{p[0], p[1], p[2]} * scale;
+  }
+  return true;
+}
+
+void sweep_triangles(const std::vector<float>& positions, double scale,
+                     const std::vector<uint32_t> &indices,
+                     Vec3 start, Vec3 delta, double radius, SceneSphereHit &hit,
+                     float max_vertical_normal) {
   const Vec3 end = start + delta;
   for (size_t i = 0; i + 2 < indices.size(); i += 3) {
     Vec3 v[3];
-    bool valid = true;
-    for (int j = 0; j < 3; ++j) {
-      const size_t offset = static_cast<size_t>(indices[i + j]) * 3;
-      if (offset + 2 >= mesh.positions.size()) {
-        valid = false;
-        break;
-      }
-      const float *p = mesh.positions.data() + offset;
-      v[j] = Vec3{p[0], p[1], p[2]} * mesh.scale;
-    }
-    if (!valid || std::min({v[0].y, v[1].y, v[2].y}) > std::max(start.y, end.y) + radius ||
+    if (!triangle_vertices(positions, indices, i, scale, v) ||
+        std::min({v[0].y, v[1].y, v[2].y}) > std::max(start.y, end.y) + radius ||
         std::max({v[0].y, v[1].y, v[2].y}) < std::min(start.y, end.y) - radius)
       continue;
     const Vec3 n = (v[1] - v[0]).cross(v[2] - v[0]).normalized();
-    if (n.dot(n) < 0.5) continue;
+    if (n.dot(n) < 0.5 || std::abs(n.y) > max_vertical_normal) continue;
 
     double t = 0.0;
     // Conservative advancement against the face, edges and vertices.
     for (int step = 0; step < 12 && t < hit.fraction; ++step) {
       const Vec3 p = start + delta * t;
-      const double height = (p - v[0]).dot(n);
-      const Vec3 projected = p - n * height;
-      Vec3 closest = projected;
-      double edge_distance2 = 0.0;
-      bool outside = false;
-      for (int j = 0; j < 3; ++j) {
-        const Vec3 a = v[j], b = v[(j + 1) % 3];
-        if ((b - a).cross(projected - a).dot(n) >= 0.0) continue;
-        const Vec3 on_edge = closest_on_edge(projected, a, b);
-        const Vec3 offset = on_edge - projected;
-        const double distance2 = offset.dot(offset);
-        if (!outside || distance2 < edge_distance2) {
-          closest = on_edge;
-          edge_distance2 = distance2;
-        }
-        outside = true;
-      }
-      const Vec3 offset = p - closest;
+      const Vec3 offset = p - closest_on_triangle(p, v, n);
       const double distance = offset.length();
       const Vec3 normal = distance > 1e-8 ? offset / distance
                                          : (delta.dot(n) > 0.0 ? -n : n);
       const double closing = -delta.dot(normal);
       if (closing <= 1e-8) break;
       if (distance <= radius + 1e-5) {
+        if (std::abs(normal.y) > max_vertical_normal) break;
         hit.fraction = static_cast<float>(t);
         hit.normal[0] = static_cast<float>(normal.x);
         hit.normal[1] = static_cast<float>(normal.y);
         hit.normal[2] = static_cast<float>(normal.z);
+        hit.penetration = static_cast<float>(std::max(0., radius - distance));
         break;
       }
       t += (distance - radius) / closing;
@@ -885,8 +903,41 @@ void sweep_triangles(const StaticMesh &mesh, const std::vector<uint32_t> &indice
 }
 } // namespace
 
+bool scene_mesh_sweep_sphere(const ScxGeometry& mesh, Vec3 start, Vec3 movement,
+                             double radius, SceneSphereHit& hit) {
+  const Vec3 end = start + movement * hit.fraction;
+  const double a[]{start.x, start.y, start.z}, b[]{end.x, end.y, end.z};
+  for (int axis = 0; axis < 3; ++axis)
+    if (std::min(a[axis], b[axis]) > mesh.info.bbox_max[axis] * mesh.position_scale + radius ||
+        std::max(a[axis], b[axis]) < mesh.info.bbox_min[axis] * mesh.position_scale - radius)
+      return false;
+  const auto fraction = hit.fraction;
+  sweep_triangles(mesh.positions, mesh.position_scale, mesh.indices, start, movement,
+                  radius, hit, 1.f);
+  return hit.fraction < fraction;
+}
+
+double scene_mesh_nearest(const ScxGeometry& mesh, Vec3 point, Vec3& closest) {
+  double best = std::numeric_limits<double>::infinity();
+  for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+    Vec3 v[3];
+    if (!triangle_vertices(mesh.positions, mesh.indices, i, mesh.position_scale, v)) continue;
+    const Vec3 normal = (v[1] - v[0]).cross(v[2] - v[0]).normalized();
+    if (normal.dot(normal) < .5) continue;
+    const Vec3 candidate = closest_on_triangle(point, v, normal);
+    const Vec3 offset = point - candidate;
+    const double distance2 = offset.dot(offset);
+    if (distance2 < best) {
+      best = distance2;
+      closest = candidate;
+    }
+  }
+  return std::sqrt(best);
+}
+
 bool scene_instances_sweep_sphere(const float start[3], const float delta[3],
-                                  float radius, SceneSphereHit &hit) {
+                                  float radius, SceneSphereHit &hit,
+                                  float max_vertical_normal) {
   const Vec3 from{start[0], start[1], start[2]};
   const Vec3 movement{delta[0], delta[1], delta[2]};
   if (!from.finite() || !movement.finite() || movement.dot(movement) < 1e-12)
@@ -903,9 +954,11 @@ bool scene_instances_sweep_sphere(const float start[3], const float delta[3],
       for (int32_t z = z0; z <= z1; ++z) {
         const auto cell = mesh.cells.find(floor_cell(x, z));
         if (cell != mesh.cells.end())
-          sweep_triangles(mesh, cell->second, from, movement, radius, hit);
+          sweep_triangles(mesh.positions, mesh.scale, cell->second, from, movement, radius, hit,
+                          max_vertical_normal);
       }
-    sweep_triangles(mesh, mesh.large_triangles, from, movement, radius, hit);
+    sweep_triangles(mesh.positions, mesh.scale, mesh.large_triangles, from, movement, radius, hit,
+                    max_vertical_normal);
   };
   if (g_static_enabled)
     for (const auto &mesh : g_static) sweep_mesh(mesh);
@@ -1025,13 +1078,15 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root) {
     // alive until script cleanup. Never render it as ordinary foreground.
     if (n->sky_render && n->key != g_sky)
       continue;
-    if (n->light_flags && !part_lamp_lit(n->light_flags))
+    if (n->light_flags &&
+        !part_lamp_lit(n->parent, n->light_flags, root == g_world && g_preview_lamps))
       continue;
     SceneInstance instance;
     instance.lighting=lighting;
     if (!scene_instance_transform(n->key, root, instance.transform.data()))
       continue;
-    instance.geometry = geometry(static_cast<uint32_t>(n->type_id));
+    instance.geometry = n->deformed_geometry && n->deformed_type == n->type_id
+        ? n->deformed_geometry : geometry(static_cast<uint32_t>(n->type_id));
     if (!instance.geometry)
       continue;
     instance.key = n->key;

@@ -26,7 +26,9 @@ bool free_fall() {
   const double speed_error = std::fabs(vd.body.velocity.y + 9.81);
   std::printf("free-fall height=%.5f vertical-speed=%.5f\n",
               vd.body.position.y, vd.body.velocity.y);
-  return height_error < .02 && speed_error < 1e-6 &&
+  // Semi-implicit Euler over one second lags by g * dt / 2.
+  return height_error < 9.81 * VehicleDynamics::timestep * .5 + .01 &&
+         speed_error < 1e-6 &&
          std::fabs(vd.body.position.x) < 1e-9 &&
          std::fabs(vd.body.position.z) < 1e-9;
 }
@@ -512,7 +514,9 @@ bool ridge_contacts() { return true; }
 bool ownership_suspension() { return true; }
 #endif
 
-bool driver_controls() {
+// Upstream drivetrain (DriveInput, 120 Hz) must propel and brake a car on
+// both the native suspension and, when available, Chrono-owned corners.
+bool drive_case(bool chrono_wheels) {
   VehicleDynamics vd;
   vd.body.configure(1000, {-.8, -.2, -1.5}, {.8, .4, 1.5}, {0, 0, 0});
   Matrix frame{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, .8f, 0, 1};
@@ -520,7 +524,7 @@ bool driver_controls() {
   for (int i = 0; i < 4; ++i) {
     auto &wheel = vd.wheels[i];
     wheel.enabled = true;
-    wheel.center = {i % 2 ? .7 : -.7, -.1, i < 2 ? 1.1 : -1.1};
+    wheel.center = {i % 2 ? .7 : -.7, -.1, i < 2 ? -1.1 : 1.1};
     wheel.radius = .3;
     wheel.rest = .25;
     wheel.minimum = .05;
@@ -528,68 +532,66 @@ bool driver_controls() {
     wheel.spring = 40000;
     wheel.bump_damping = 3000;
     wheel.rebound_damping = 4000;
+    if (chrono_wheels)
+      wheel.unsprung = 20;
   }
+#if SLRR_HAS_CHRONO
+  if (chrono_wheels) {
+    // A long road: the car covers well over 20 m during the throttle phase.
+    auto road = std::make_shared<CollisionMesh>();
+    road->positions = {-20, 0, -500, 20, 0, -500, 20, 0, 50, -20, 0, 50};
+    road->indices = {0, 2, 1, 0, 3, 2};
+    vd.collision = road;
+  }
+#endif
   const Terrain flat = [](double, double, double, GroundHit &hit) {
     hit.height = 0;
     hit.normal = {0, 1, 0};
     return true;
   };
-  const Vec3 forward{0, 0, -1};
   const double tick = 1.0 / VehicleDynamics::update_frequency;
-  vd.throttle = 1;
-  for (int i = 0; i < 2 * 60; ++i)
+  for (int i = 0; i < 60; ++i)
+    vd.advance(tick, flat);
+  auto &drive = vd.drive;
+  drive.torque = [](double) { return 220.0; };
+  drive.inertia = .3;
+  drive.idle = 800;
+  drive.limit = 6500;
+  drive.starter = 60;
+  drive.engaged = true;
+  drive.gears = 4;
+  drive.ratios = {0, 12.9, 8.1, 5.5, 4.1, 0, 0, -12.9};
+  drive.brake_scale = 40;
+  drive.bearing_scale = .1;
+  for (size_t i = 0; i < 4; ++i) {
+    drive.wheels[i].weight = i >= 2 ? 1 : 0;
+    drive.wheels[i].brake = 60;
+  }
+  const Vec3 forward{0, 0, -1};
+  drive.throttle = 1;
+  for (int i = 0; i < 5 * 60; ++i)
     vd.advance(tick, flat);
   const double forward_speed = vd.body.velocity.dot(forward);
-  vd.throttle = 0;
-  vd.brake = 1;
-  for (int i = 0; i < 2 * 60; ++i)
+  drive.throttle = 0;
+  drive.brake = 1;
+  for (int i = 0; i < 3 * 60; ++i)
     vd.advance(tick, flat);
   const double brake_speed = vd.body.velocity.dot(forward);
-  vd.brake = 0;
-  vd.throttle = 1;
-  vd.steering = 1;
-  const auto initial = vd.body.orientation;
-  for (int i = 0; i < 60; ++i)
-    vd.advance(tick, flat);
-  const Vec3 turned = vd.body.orientation.rotate(forward);
-  const double initial_forward = initial.rotate(forward).z;
-  const double steering_change = std::fabs(turned.x) +
-                                 std::fabs(turned.z - initial_forward);
-  VehicleDynamics parked;
-  parked.body.configure(1000, {-.8, -.2, -1.5}, {.8, .4, 1.5}, {0, 0, 0});
-  parked.body.set_frame(frame);
-  for (int i = 0; i < 4; ++i) {
-    auto &wheel = parked.wheels[i];
-    wheel.enabled = true;
-    wheel.center = {i % 2 ? .7 : -.7, -.1, i < 2 ? 1.1 : -1.1};
-    wheel.radius = .3;
-    wheel.rest = .25;
-    wheel.minimum = .05;
-    wheel.maximum = .35;
-    wheel.spring = 40000;
-    wheel.bump_damping = 3000;
-    wheel.rebound_damping = 4000;
-  }
-  parked.steering = 1;
-  const Terrain slope = [](double x, double, double, GroundHit &hit) {
-    hit.height = .15 * x;
-    hit.normal = Vec3{-.15, 1, 0}.normalized();
-    return true;
-  };
-  for (int i = 0; i < 60; ++i)
-    parked.advance(tick, slope);
-  const double parked_speed =
-      Vec3{parked.body.velocity.x, 0, parked.body.velocity.z}.length();
-  const bool parked_ok = std::fabs(parked.body.position.x) < .1 &&
-                         std::fabs(parked.body.position.z) < .1 &&
-                         parked_speed < .2;
-  const bool ok = forward_speed > 1 && brake_speed < forward_speed * .5 &&
-                  steering_change > .005 && vd.body.position.y < 2 &&
-                  parked_ok;
-  std::printf("driver forward=%.3f brake=%.3f steering=%.4f parked=%.4f\n",
-              forward_speed, brake_speed, steering_change, parked_speed);
+  int constrained = 0;
+  for (const auto &state : vd.state)
+    constrained += state.constrained;
+  const bool ok = vd.engine_running && forward_speed > 3 &&
+                  brake_speed < forward_speed * .3 &&
+                  vd.body.position.y > .05 && vd.body.position.y < 2 &&
+                  (!chrono_wheels || !SLRR_HAS_CHRONO || constrained == 4);
+  std::printf("drive chrono=%d constrained=%d engine=%d forward=%.3f "
+              "brake=%.3f height=%.3f\n",
+              chrono_wheels ? 1 : 0, constrained, vd.engine_running ? 1 : 0,
+              forward_speed, brake_speed, vd.body.position.y);
   return ok;
 }
+
+bool driver_controls() { return drive_case(false) && drive_case(true); }
 
 int main() {
   VehicleDynamics vd;

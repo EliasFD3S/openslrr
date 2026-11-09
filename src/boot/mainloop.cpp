@@ -4,6 +4,8 @@
 #include "slrr/script_threads.hpp"
 #include "slrr/script_events.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/scene_presentation.hpp"
+#include "slrr/natives_boot.hpp"
 #include "slrr/video_fmv.hpp"
 #include "slrr/host_music.hpp"
 #include "slrr/host_game_options.hpp"
@@ -204,12 +206,13 @@ void mainloop_sync_section_render(IRenderBackend& render,
   spin_car_select_camera(actual);
   // Garage and city publish a map. The car selector parents the car to
   // CarScene and has no map, so the mesh was never collected.
+  void* car_preview = object_field("CarScene");
   void* world = object_field("map");
-  if (!world) world = object_field("CarScene");
+  if (!world) world = car_preview;
   if (!world) world = object_field("Scene");
   if (!world)
     if (GameRefState* cam = fullscreen_script_camera()) world = cam->parent;
-  scene_instances_select(world, object_field("skydome"));
+  scene_instances_select(world, object_field("skydome"), world && world == car_preview);
   const bool in_garage =
       actual && actual->class_name.find("Garage") != std::string::npos;
   scene_instances_enable_static_floor(in_garage);
@@ -371,12 +374,27 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   float frame_dt = static_cast<float>(dt);
   if (frame_dt < 0.f) frame_dt = 0.f;
   if (frame_dt > kDtClamp) frame_dt = kDtClamp;
+  Object* controller = host_input_player_controller(jvm);
+  host_input_update_controller(controller, frame_dt);
+  const Value queue = jvm.get_static("java.render.Frontend", "inputQueue");
+  if (!video_fmv_block_osd() && controller) {
+    Object* focus = nullptr;
+    if (queue.tag == ValueTag::Obj && queue.v.o) {
+      Object* entries = field_obj(queue.v.o, "elementData");
+      const int size = field_int(queue.v.o, "elementCount");
+      if (entries && size > 0 && static_cast<size_t>(size) <= entries->slots.size()) {
+        const Value& last = entries->slots[size - 1];
+        if (last.tag == ValueTag::Obj) focus = last.v.o;
+      }
+    }
+    host_input_check_hotkeys(jvm, controller, focus);
+  }
   script_callbacks_tick(jvm,frame_dt);
 
   auto& in = host_input();
-  const float yaw = host_input_get_axis(7, 0);
-  const float pitch = host_input_get_axis(8, 0);
-  const float zoom = host_input_get_axis(10, 0);
+  const float yaw = host_input_camera_axis(7);
+  const float pitch = host_input_camera_axis(8);
+  const float zoom = host_input_camera_axis(10);
   // One camera: the script camera. Orbit, spring and Pori all live on it.
   gameref_orbit_world_camera(yaw * 2.5f, pitch * 1.5f, zoom, frame_dt);
   in.look_yaw = 0.f;
@@ -505,10 +523,6 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
         return static_cast<int32_t>(it->second.v.f);
       return 0;
     };
-    // The script builds the next screen before it pumps, then display()
-    // only waited one frame. Loading.dds never reached the glass.
-    static Object* load_seen = nullptr;
-    static std::chrono::steady_clock::time_point load_until{};
     if (shown("loadingDialog")) {
       osd_set_loading_dialog(true);
       Object* dlg = screen->fields["loadingDialog"].v.o;
@@ -542,10 +556,6 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
         osd_set_loading_overlay(pic);
       }
       const auto now = std::chrono::steady_clock::now();
-      if (dlg != load_seen) {
-        load_seen = dlg;
-        load_until = now + std::chrono::milliseconds(500);
-      }
       auto as_float = [&](const char* name) -> float {
         if (!screen) return 0.f;
         auto it = screen->fields.find(name);
@@ -585,7 +595,13 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
         held = down;
       }
 #endif
-      if (now >= load_until) {
+      // Keep a plain show() up during enter(). A caller waiting on termSig
+      // inside enter() must still be able to finish display()/userWait(0).
+      // A modal dialog shown from enter() (the garage welcome) must not stay
+      // hidden behind the plate while it waits for the player.
+      if (!scene_transition_active() || wait_user != 0 ||
+          host_dialog_wait_active() ||
+          host_wait_pending(field_obj(screen, "termSig"))) {
         const int32_t init = as_int("init");
         if (init > 0) {
           screen->fields["init"] = Value::make_int(init - 1);
@@ -652,7 +668,10 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     // The timed wait can hide the dialog above. Update the presentation
     // state before flushing this frame, including during a section change.
     if (!shown("loadingDialog")) {
-      load_seen = nullptr;
+      // show() only sets init. A completed dealer wait must not carry over
+      // to the next map's plain show().
+      if (as_int("waitForUser"))
+        screen->fields["waitForUser"] = Value::make_int(0);
       osd_set_loading_dialog(false);
       osd_set_loading_overlay({});
     }
@@ -723,6 +742,10 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   // Last write before the view is built. The chase camera must not cover
   // the showroom orbit, and nothing after the earlier spin may put it back.
   spin_car_select_camera(sections.actual());
+  if (auto* camera = fullscreen_script_camera(); camera && camera->follow_vehicle) {
+    const int mode = field_int(sections.actual(), "cameraMode");
+    camera->follow_variant = mode == 3 || mode == 4 ? mode : 0;
+  }
   gameref_advance_world_camera(frame_dt);
   dispatch_mechanic_pointer(jvm);
 

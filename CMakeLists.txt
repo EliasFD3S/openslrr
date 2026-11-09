@@ -60,8 +60,10 @@ add_executable(slrr_host
   src/boot/boot.cpp
   src/physics/sl2_pacejka.cpp
   src/physics/physics_log.cpp
+  src/physics/tire_model.cpp
   src/physics/dyno_model.cpp
   src/physics/vehicle_dynamics.cpp
+  src/physics/deformation_cage.cpp
   src/physics/suspension_geometry.cpp
 )
 
@@ -119,7 +121,7 @@ if(WIN32)
   # strmiids = DirectShow GUIDs for FMV (GfxEngine.openVideo).
   # vfw32 = Cinepak (prime.avi is cvid). The 32-bit codec does not connect
   # through the Sample Grabber graph, so menu playback uses AVIFile.
-  target_link_libraries(slrr_host PRIVATE user32 gdi32 opengl32 winmm ole32
+  target_link_libraries(slrr_host PRIVATE user32 gdi32 opengl32 winmm ole32 xinput
                                           oleaut32 strmiids vfw32 xaudio2 mfplat mfreadwrite mfuuid)
 endif()
 
@@ -191,6 +193,7 @@ if(SLRR_PHYSICS_CHECKS)
   enable_testing()
   set(_slrr_physics_sources src/physics/vehicle_dynamics.cpp
                             src/physics/suspension_geometry.cpp
+                            src/physics/tire_model.cpp
                             tests/physics_settle.cpp)
   add_executable(slrr_physics_native ${_slrr_physics_sources})
   target_include_directories(slrr_physics_native PRIVATE include)

@@ -241,11 +241,24 @@ int32_t host_sfx_play_file(const std::string &path, float pitch, float volume,
 }
 void host_sfx_stop(int32_t id) {
 #ifdef _WIN32
+  if (id <= 0) return;
   audio.voices.erase(
       std::remove_if(audio.voices.begin(), audio.voices.end(),
                      [id](const auto &v) { return v->id == id; }),
       audio.voices.end());
   audio.rebalance();
+#endif
+}
+void host_sfx_update_loop(int32_t id, float pitch, float volume) {
+#ifdef _WIN32
+  for (const auto &voice : audio.voices) {
+    if (voice->id != id || !voice->loop) continue;
+    voice->gain = std::clamp(volume, 0.f, 1.f);
+    voice->source->SetVolume(voice->gain);
+    voice->source->SetFrequencyRatio(
+        std::clamp(pitch, XAUDIO2_MIN_FREQ_RATIO, XAUDIO2_MAX_FREQ_RATIO));
+    break;
+  }
 #endif
 }
 bool host_sfx_is_playing(int32_t id) {

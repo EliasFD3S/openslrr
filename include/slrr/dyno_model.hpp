@@ -27,6 +27,7 @@ struct DynoStats {
 bool dyno_calculate(void* key, const std::unordered_map<std::string, float>& fields,
                     float table_size, DynoStats* stats);
 float dyno_sample(void* key, float rpm, float nitro, bool watts);
+float dyno_boost_fraction(void* key, float rpm);
 void dyno_forget(void* key);
 
 // False when the published low-RPM witness or the turbo/nitro checks diverge.

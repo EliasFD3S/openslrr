@@ -329,67 +329,91 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
       "java.sound.Sound", "enableDebugDump",
       "(Ljava.util.resource.ResourceRef;)I",
       [](Object*, const std::vector<Value>&) { return Value::make_int(0); });
-  // Hotkey ctor → createGlobalHotkey → this. Stores nothing yet; the
-  // object already holds key/command/handler. Must return so Init can
-  // build SplashScreen.
+  auto object = [](const std::vector<Value>& args, size_t i) {
+    return i < args.size() && args[i].tag == ValueTag::Obj ? args[i].v.o : nullptr;
+  };
+  auto integer = [](const std::vector<Value>& args, size_t i) {
+    return i < args.size() && args[i].tag == ValueTag::Int ? args[i].v.i : -1;
+  };
   jvm.natives().register_method(
       "java.io.Input", "createHotkey",
       "(IILjava.io.Hotkey;Ljava.util.resource.GameRef;Ljava.render.Osd;I)V",
-      [](Object*, const std::vector<Value>& args) {
-        const int32_t axis =
-            (!args.empty() && args[0].tag == ValueTag::Int) ? args[0].v.i : 0;
-        std::printf("[native] Input.createHotkey axis=%d\n", axis);
+      [&jvm, object, integer](Object*, const std::vector<Value>& args) {
+        host_input_create_hotkey(jvm, object(args, 2), object(args, 3),
+            object(args, 4), integer(args, 0), integer(args, 1), integer(args, 5));
         return Value::make_void();
       });
   jvm.natives().register_method(
       "java.io.Input", "deleteHotkey", "(Ljava.io.Hotkey;)V",
-      [](Object*, const std::vector<Value>&) { return Value::make_void(); });
+      [object](Object*, const std::vector<Value>& args) {
+        host_input_delete_hotkey(object(args, 0));
+        return Value::make_void();
+      });
   jvm.natives().register_method(
       "java.io.Input", "checkHotkeys",
       "(Ljava.util.resource.GameRef;Ljava.render.Osd;)V",
-      [](Object*, const std::vector<Value>&) { return Value::make_void(); });
+      [&jvm, object](Object*, const std::vector<Value>& args) {
+        host_input_check_hotkeys(jvm, object(args, 0), object(args, 1));
+        return Value::make_void();
+      });
   jvm.natives().register_method(
       "java.io.Input", "flushHotkeys", "()V",
-      [](Object*, const std::vector<Value>&) { return Value::make_void(); });
-  // ControlSet() scans devices until this returns null. Unbound, Init
-  // aborts inside controller.reset() and the loop exits with no section.
+      [&jvm](Object*, const std::vector<Value>&) {
+        host_input_flush_hotkeys(host_input_player_controller(jvm));
+        return Value::make_void();
+      });
   jvm.natives().register_method(
       "java.io.Input", "getDeviceName", "(I)Ljava.lang.String;",
-      [&jvm](Object*, const std::vector<Value>& args) {
-        int32_t i = 0;
-        if (!args.empty() && args[0].tag == ValueTag::Int) i = args[0].v.i;
-        if (i == 0) return Value::make_obj(jvm.new_string("SysKeyboard"));
-        if (i == 1) return Value::make_obj(jvm.new_string("SysMouse"));
-        return Value::make_obj(nullptr);
+      [&jvm, integer](Object*, const std::vector<Value>& args) {
+        const char* name = host_input_device_name(integer(args, 0));
+        return Value::make_obj(name ? jvm.new_string(name) : nullptr);
       });
   jvm.natives().register_method(
       "java.io.Input", "mapAxis",
-      "(Ljava.util.resource.GameRef;IIIFFFF)V", native_noop);
+      "(Ljava.util.resource.GameRef;IIIFFFF)V",
+      [&jvm](Object*, const std::vector<Value>& args) {
+        if (args.size() == 8 && args[0].tag == ValueTag::Obj && args[0].v.o)
+          jvm.natives().invoke("java.io.Controller", "user_Add", "(IIIFFFF)I",
+                               args[0].v.o, {args.begin() + 1, args.end()});
+        return Value::make_void();
+      });
   jvm.natives().register_method(
       "java.io.Input", "setAxisSmooth",
-      "(Ljava.util.resource.GameRef;IFFFF)V", native_noop);
+      "(Ljava.util.resource.GameRef;IFFFF)V",
+      [&jvm](Object*, const std::vector<Value>& args) {
+        if (args.size() == 6 && args[0].tag == ValueTag::Obj && args[0].v.o) {
+          std::vector<Value> settings(args.begin() + 1, args.end());
+          settings.push_back(Value::make_float(1.f));
+          jvm.natives().invoke("java.io.Controller", "user_SetAxisSmooth", "(IFFFFF)I",
+                               args[0].v.o, settings);
+        }
+        return Value::make_void();
+      });
   jvm.natives().register_method(
       "java.io.Input", "activeAxis", "(I)I",
-      [](Object*, const std::vector<Value>&) { return Value::make_int(-1); });
+      [integer](Object*, const std::vector<Value>& args) {
+        return Value::make_int(host_input_active_axis(integer(args, 0)));
+      });
   jvm.natives().register_method(
       "java.io.Input", "axisName", "(II)Ljava.lang.String;",
-      [&jvm](Object*, const std::vector<Value>&) {
-        return Value::make_obj(jvm.new_string(""));
+      [&jvm, integer](Object*, const std::vector<Value>& args) {
+        return Value::make_obj(jvm.new_string(
+            host_input_axis_name(integer(args, 0), integer(args, 1))));
       });
   jvm.natives().register_method(
       "java.io.Input", "lastKey", "()I",
-      [](Object*, const std::vector<Value>&) { return Value::make_int(0); });
+      [](Object*, const std::vector<Value>&) { return Value::make_int(host_input_last_key()); });
   jvm.natives().register_method(
       "java.io.Input", "getAxis", "(II)F",
-      [](Object*, const std::vector<Value>& args) {
-        const int32_t axis =
-            (!args.empty() && args[0].tag == ValueTag::Int) ? args[0].v.i : 0;
-        const int32_t device =
-            (args.size() >= 2 && args[1].tag == ValueTag::Int) ? args[1].v.i
-                                                               : 0;
-        // device == -1 : sensitivity reset request (Garage.enter) — no-op.
-        if (device < 0) return Value::make_float(0.f);
-        return Value::make_float(host_input_get_axis(axis, device));
+      [integer](Object*, const std::vector<Value>& args) {
+        const int device = integer(args, 0), axis = integer(args, 1);
+        if (device == 1 && axis < 0) {
+          auto& input = host_input();
+          input.cursor_x = input.cursor_y = 0.f;
+          input.look_yaw = input.look_pitch = input.look_zoom = 0.f;
+          input.mouse_dx = input.mouse_dy = 0.f;
+        }
+        return Value::make_float(host_input_physical_axis(device, axis));
       });
   // Synthetic input queue: boot --auto-cmd pushes AXIS_CANCEL / MENU pulses.
   jvm.natives().register_method(

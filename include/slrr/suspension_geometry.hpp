@@ -26,4 +26,6 @@ double suspension_hub_length(const WheelConfig &wheel, const Vec3 &hub);
 double suspension_motion_ratio(const WheelConfig &wheel, const Vec3 &hub,
                                const Vec3 &direction);
 bool chrono_suspension_geometry(const WheelConfig &wheel, double initial);
+CornerFrames wheel_pose(const WheelConfig& wheel, double length, bool* fitted = nullptr);
+Quaternion wheel_steering(double angle);
 } // namespace slrr::physics

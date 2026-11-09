@@ -172,7 +172,32 @@ PartConfig parse_part_config(const std::string &source,
     try {
       if (command == "eof")
         break;
-      if (command == "slot") {
+      if (command.starts_with("osd_")) {
+        constexpr const char *names[] = {"osd_gauge", "osd_rpmpin", "osd_spdpin",
+            "osd_rpm", "osd_speed", "osd_gear", "osd_mileage", "osd_hbrake",
+            "osd_damage", "osd_nos", "osd_turbo"};
+        const auto field = std::find(std::begin(names), std::end(names), command);
+        if (field == std::end(names)) continue;
+        const size_t slot = static_cast<size_t>(field - std::begin(names));
+        HudElement item;
+        const auto raw_id = std::stoull(t.at(1), nullptr, 0);
+        if (raw_id > UINT32_MAX) continue;
+        item.resource = raw_id == 0 || raw_id == UINT32_MAX ? 0 : rid(t[1]);
+        for (size_t i = 0; i < item.position.size(); ++i)
+          item.position[i] = std::stof(t.at(i + 2));
+        if (slot == size_t(HudSlot::RpmPin) || slot == size_t(HudSlot::SpeedPin)) {
+          for (size_t i = 0; i < item.needle.size(); ++i)
+            item.needle[i] = std::stof(t.at(i + 5));
+        } else if (slot >= size_t(HudSlot::Rpm) && slot <= size_t(HudSlot::Mileage)) {
+          if (t.size() > 5) item.color = static_cast<uint32_t>(std::stoull(t[5], nullptr, 0));
+          if (t.size() > 6) item.format = t[6];
+        }
+        if (std::all_of(item.position.begin(), item.position.end(), [](float n) { return std::isfinite(n); }) &&
+            std::all_of(item.needle.begin(), item.needle.end(), [](float n) { return std::isfinite(n); })) {
+          item.defined = true;
+          out.hud[slot] = std::move(item);
+        }
+      } else if (command == "slot") {
         open_wheel = -1;
         PartSlot slot;
         slot.pose = pose(t);
@@ -250,6 +275,16 @@ PartConfig parse_part_config(const std::string &source,
         open_wheel = -1;
         out.max_steer = number(t, 1);
         out.ackermann_length = t.size() > 2 ? number(t, 2) : 0.f;
+      } else if (command == "brakepower" && t.size() > 2) {
+        open_wheel = -1;
+        out.brake_power = number(t, 1);
+        out.handbrake_power = number(t, 2);
+      } else if (command == "enginepower" && t.size() > 6) {
+        open_wheel = -1;
+        out.brake_inertia = number(t, 6);
+      } else if (command == "camera" && t.size() >= 7) {
+        open_wheel = -1;
+        out.cameras.push_back(pose(t));
       } else if (command == "steering") {
         open_wheel = -1;
         out.steering = pose(t);
@@ -306,8 +341,16 @@ PartConfig parse_part_config(const std::string &source,
         body.mass = number(t, 7);
         if (body.mass < 0.f)
           throw std::runtime_error("body mass must be non-negative");
+        if (t.size() > 8) {
+          auto extension = std::filesystem::path(t[8]).extension().string();
+          std::transform(extension.begin(), extension.end(), extension.begin(),
+                         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+          if (extension == ".scx") body.collision_mesh = t[8];
+        }
         out.bodies.push_back(body);
         out.mass += body.mass;
+      } else if (command == "nocollision" && !out.bodies.empty()) {
+        out.bodies.back().collision_mesh.clear();
       } else if (command == "name") {
         open_wheel = -1;
         for (size_t i = 1; i < t.size(); i++) {
@@ -318,6 +361,7 @@ PartConfig parse_part_config(const std::string &source,
       } else
         out.unknown.push_back(raw);
     } catch (const std::exception &e) {
+      if (command.starts_with("osd_")) continue;
       out.errors.push_back("line " + std::to_string(line) + " (" + command +
                            "): " + e.what());
     }

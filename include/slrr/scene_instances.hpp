@@ -13,6 +13,7 @@ struct CollisionMesh;
 }
 class RpkIndex;
 struct GameRefState;
+namespace physics { struct Vec3; }
 
 struct SceneInstance {
   SceneSun lighting;
@@ -44,7 +45,7 @@ struct SceneShadowDecal {
 void scene_instances_set_resources(const RpkIndex *resources);
 void scene_instances_set_envmap(uint32_t resource);
 std::string scene_instances_envmap();
-void scene_instances_select(void *world, void *skydome);
+void scene_instances_select(void *world, void *skydome, bool preview_lamps);
 std::vector<SceneInstance> scene_instances_collect();
 std::vector<SceneInstance> scene_instances_collect_root(void *root);
 SceneSun scene_instances_light(void* root=nullptr);
@@ -52,6 +53,8 @@ SceneSun scene_instances_light(void* root=nullptr);
 bool scene_instance_transform(void *key, void *root, float *matrix);
 // Active world, unreflected script metres. False for inventory/other worlds.
 bool scene_instances_script_matrix(void *key, float *matrix);
+std::shared_ptr<const ScxGeometry> scene_instances_geometry(uint32_t resource);
+std::string scene_instances_texture(uint32_t resource);
 // Nearest mesh the ray enters, in unreflected script metres. Sky and
 // instances outside the active world are ignored. Null when the ray only
 // starts inside a volume (the garage shell around the camera).
@@ -82,10 +85,17 @@ void scene_instances_prepare_physics();
 struct SceneSphereHit {
   float fraction = 1.f;
   float normal[3] = {};
+  float penetration = 0.f;
 };
 // Sweep through the indexed static scene in script metres.
 bool scene_instances_sweep_sphere(const float start[3], const float delta[3],
-                                  float radius, SceneSphereHit &hit);
+                                  float radius, SceneSphereHit &hit,
+                                  float max_vertical_normal = 1.f);
+// Part-local triangle queries. The sweep retains an earlier hit if supplied.
+bool scene_mesh_sweep_sphere(const ScxGeometry& mesh, physics::Vec3 start,
+                             physics::Vec3 movement, double radius, SceneSphereHit& hit);
+double scene_mesh_nearest(const ScxGeometry& mesh, physics::Vec3 point,
+                          physics::Vec3& closest);
 uint64_t scene_instances_floor_builds();
 // Changes whenever the world-space floor used by projected shadows changes.
 uint64_t scene_instances_floor_revision();

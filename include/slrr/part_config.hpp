@@ -16,6 +16,7 @@ struct PartPose {
 struct PartBody {
   PartPose pose;
   float mass = 0;
+  std::string collision_mesh;
 };
 // `spring base travel damping` consumed by the next `wheel`. Missing lines
 // keep the stock fallback (0.29, 0.10, 0.05). Radius comes from `type sphere`.
@@ -68,6 +69,19 @@ struct PartRender {
   std::vector<uint32_t> colors;
   std::vector<PartLink> links;
 };
+enum class HudSlot : size_t {
+  Gauge, RpmPin, SpeedPin, Rpm, Speed, Gear, Mileage, Handbrake,
+  Damage, Nitro, Turbo, Count
+};
+struct HudElement {
+  bool defined = false;
+  uint32_t resource = 0;
+  std::array<float, 3> position{};
+  std::array<float, 4> needle{}; // offset, radians per unit, lower/upper bounds
+  uint32_t color = 0xffffffffu;
+  std::string format;
+};
+using VehicleHudLayout = std::array<HudElement, static_cast<size_t>(HudSlot::Count)>;
 struct PartConfig {
   uint32_t resource = 0;
   std::string source;
@@ -83,10 +97,14 @@ struct PartConfig {
   bool has_steering = false;
   std::vector<PartPose> wheels;
   float max_steer = .6f, ackermann_length = 0;
+  std::vector<PartPose> cameras;
+  float brake_power = 1000.f, handbrake_power = 2000.f;
+  float brake_inertia = 50.f;
   std::vector<float> wheel_steering;
   std::vector<PartSlot> slots;
   std::vector<uint32_t> stock;
   std::vector<PartRender> renders;
+  VehicleHudLayout hud{};
   std::vector<std::string> unknown;
   std::vector<std::string> errors;
   bool valid = false;

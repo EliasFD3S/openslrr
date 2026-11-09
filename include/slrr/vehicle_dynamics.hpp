@@ -1,4 +1,5 @@
 #pragma once
+#include "slrr/tire_model.hpp"
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -84,7 +85,7 @@ public:
   void impulse(Vec3 impulse, Vec3 point);
   void integrate(double dt);
   void contact(Vec3 point, Vec3 normal, double restitution = .12,
-               double friction = .6);
+               double friction = .6, RigidBody* other = nullptr);
   std::array<Vec3, 8> corners() const;
 
 private:
@@ -130,37 +131,72 @@ struct WheelState {
   // Raw wheel-ground normal load, separate from chassis spring support `force`.
   double normal_load = 0;
   Vec3 center, normal{0, 1, 0}, hub, patch;
+  Quaternion hub_rotation;
+  double spin = 0, rotation = 0;
+};
+struct DriveWheel {
+  double weight = 0, steer = 0, brake = 0, handbrake = 0, bearing = 0;
+  double rolling_resistance = 0;
+  TireParameters tyre;
+};
+struct DriveInput {
+  std::array<DriveWheel, 4> wheels{};
+  std::array<double, 8> ratios{};
+  int gears = 0, shift = 0;
+  bool engaged = false, reverse = false, automatic_shift = true, auto_clutch = true;
+  double throttle = 0, brake = 0, handbrake = 0;
+  double brake_scale = 0, handbrake_scale = 0, bearing_scale = 0;
+  double abs_strength = 0;
+  double launch_help = 0;
+  double differential_lock = 0;
+  double inertia = 0, idle = 0, limit = 0, starter = 0;
+  double clutch = 1;
+  std::function<double(double)> torque;
 };
 double suspension_force(double length, double velocity, double rest,
                         double maximum, double spring, double bump,
                         double rebound);
 
-// First dynamic vertical/contact stage of Vehicle3D/Suspension3D. No engine
-// thrust or tyre slip is invented here: drivetrain is a separate port stage.
 class VehicleDynamics {
 public:
-  static constexpr unsigned frequency = 700;
+  // SLRR_rev physics-timing.ts driving frequency.
+  static constexpr unsigned frequency = 120;
   static constexpr unsigned update_frequency = 60;
   static constexpr double timestep = 1.0 / frequency;
   RigidBody body;
   // Shared immutable scene snapshot. The native backend ignores this and the
   // Chrono backend rebuilds its static collision body when the pointer changes.
   std::shared_ptr<const CollisionMesh> collision;
+  struct Impact {
+    Vec3 point, normal;
+    double speed = 0;
+  } ground_impact;
   std::array<WheelConfig, 4> wheels;
   std::array<WheelState, 4> state;
+  DriveInput drive;
+  double engine_omega = 0;
+  bool engine_running = false;
+  int gear = 0;
   uint64_t ticks = 0;
-  // Basic native driver controls, normalized to 0..1 and -1..1 for steering.
-  float throttle = 0, brake = 0, steering = 0;
   // Incremented by external wheel reseeding so Chrono recreates body states.
   uint64_t suspension_generation = 0;
   unsigned advance(double seconds, const Terrain &terrain);
   void reset_clock();
   void release_wheels();
+  void reset_drive();
   uint64_t backlog() const;
   void sync_wheels();
 
 private:
   double accumulator_ = 0;
+  double previous_rpm_ = 0, shift_time_ = 0;
+  double starter_remaining_ = 0, service_brake_ = 0;
+  double launch_factor_ = 1;
+  int previous_shift_ = 0;
+  bool accelerator_down_ = false, forced_reverse_ = false;
+  bool launch_active_ = false;
   void step(const Terrain &terrain);
+  void step_drive();
+  void update_gear(double rpm, double shaft, double road_shaft);
 };
 } // namespace slrr::physics

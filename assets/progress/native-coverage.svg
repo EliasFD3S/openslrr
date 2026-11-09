@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="430" viewBox="0 0 1120 430" role="img" aria-labelledby="title desc">
 <title id="title">Open SLRR native binding coverage</title>
-<desc id="desc">290 with a body, 12 no-op, 74 missing, out of 376. Bars show counts, not percentages of game completion.</desc>
+<desc id="desc">293 with a body, 9 no-op, 74 missing, out of 376. Bars show counts, not percentages of game completion.</desc>
 <rect width="1120" height="430" rx="12" fill="#0d1117"/>
 <g font-family="Segoe UI,Arial,sans-serif">
 <text x="28" y="34" font-size="21" fill="#f0f6fc" text-anchor="start">Native binding coverage</text>
-<text x="28" y="58" font-size="13" fill="#c9d1d9" text-anchor="start">289 with a body  /  12 no-op  /  75 missing  ·  376 stock natives</text>
+<text x="28" y="58" font-size="13" fill="#c9d1d9" text-anchor="start">293 with a body  /  9 no-op  /  74 missing  ·  376 stock natives</text>
 <line x1="170.0" x2="170.0" y1="80" y2="326" stroke="#21262d"/>
 <text x="170.0" y="346" font-size="12" fill="#8b949e" text-anchor="middle">0</text>
 <line x1="387.5" x2="387.5" y1="80" y2="326" stroke="#21262d"/>
@@ -28,9 +28,9 @@
 <text x="770.3" y="137" font-size="12" fill="#ffffff" text-anchor="middle">10</text>
 <text x="823.8" y="137" font-size="12" fill="#8b949e" text-anchor="start">74</text>
 <text x="156" y="172" font-size="13" fill="#c9d1d9" text-anchor="end">Sound &amp; scripts</text>
-<rect x="170" y="155" width="104.4" height="25" fill="#49a58d"><title>Sound &amp; scripts: 12 with a body</title></rect>
+<rect x="170" y="155" width="104.39999999999999" height="25" fill="#49a58d"><title>Sound &amp; scripts: 12 with a body</title></rect>
 <text x="222.2" y="172" font-size="12" fill="#ffffff" text-anchor="middle">12</text>
-<rect x="274.4" y="155" width="52.2" height="25" fill="#ab474b"><title>Sound &amp; scripts: 6 missing</title></rect>
+<rect x="274.4" y="155" width="52.199999999999996" height="25" fill="#ab474b"><title>Sound &amp; scripts: 6 missing</title></rect>
 <text x="300.5" y="172" font-size="12" fill="#ffffff" text-anchor="middle">6</text>
 <text x="336.59999999999997" y="172" font-size="12" fill="#8b949e" text-anchor="start">18</text>
 <text x="156" y="207" font-size="13" fill="#c9d1d9" text-anchor="end">Resources</text>
@@ -47,10 +47,9 @@
 <rect x="474.5" y="225" width="8.7" height="25" fill="#ab474b"><title>Rendering: 1 missing</title></rect>
 <text x="493.2" y="242" font-size="12" fill="#8b949e" text-anchor="start">36</text>
 <text x="156" y="277" font-size="13" fill="#c9d1d9" text-anchor="end">Files &amp; input</text>
-<rect x="170" y="260" width="278.4" height="25" fill="#49a58d"><title>Files &amp; input: 32 with a body</title></rect>
-<text x="309.2" y="277" font-size="12" fill="#ffffff" text-anchor="middle">32</text>
-<rect x="448.4" y="260" width="43.5" height="25" fill="#d39338"><title>Files &amp; input: 5 no-op</title></rect>
-<text x="470.15" y="277" font-size="12" fill="#ffffff" text-anchor="middle">5</text>
+<rect x="170" y="260" width="304.5" height="25" fill="#49a58d"><title>Files &amp; input: 35 with a body</title></rect>
+<text x="322.25" y="277" font-size="12" fill="#ffffff" text-anchor="middle">35</text>
+<rect x="474.5" y="260" width="17.4" height="25" fill="#d39338"><title>Files &amp; input: 2 no-op</title></rect>
 <text x="501.9" y="277" font-size="12" fill="#8b949e" text-anchor="start">37</text>
 <text x="156" y="312" font-size="13" fill="#c9d1d9" text-anchor="end">Parts</text>
 <rect x="170" y="295" width="843.9" height="25" fill="#49a58d"><title>Parts: 97 with a body</title></rect>
@@ -63,6 +62,6 @@
 <text x="380" y="391" font-size="13" fill="#c9d1d9" text-anchor="start">No-op</text>
 <rect x="493" y="380" width="12" height="12" rx="2" fill="#ab474b"/>
 <text x="513" y="391" font-size="13" fill="#c9d1d9" text-anchor="start">Missing</text>
-<text x="1090" y="411" font-size="11" fill="#8b949e" text-anchor="end">Audited 2026-11-08 · Bodies may be partial implementations</text>
+<text x="1090" y="411" font-size="11" fill="#8b949e" text-anchor="end">Audited 2026-11-09 · Bodies may be partial implementations</text>
 </g>
 </svg>

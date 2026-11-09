@@ -35,7 +35,7 @@ These milestones describe existing functionality, rather than a percentage of th
 
 ![Native bindings by family: with a body, no-op, or missing](assets/progress/native-coverage.svg)
 
-**290 with a body · 12 no-op · 74 missing**, out of **376 stock natives** (8 November 2026).
+**293 with a body · 9 explicit no-ops · 74 missing**, out of **376 stock natives** (9 November 2026).
 The bars show **numbers of functions**, not percentages. A body can still be partial or return a fixed value; these counts do not establish full behavior or validation in game. The separately counted no-op functions are explicitly registered as `native_noop`.
 
 | Family | With a body | No-op | Missing |
@@ -45,13 +45,13 @@ The bars show **numbers of functions**, not percentages. A body can still be par
 | Sound & scripts | 12 | 0 | 6 |
 | Resources | 49 | 5 | 6 |
 | Rendering | 35 | 0 | 1 |
-| Files & input | 32 | 5 | 0 |
+| Files & input | 35 | 2 | 0 |
 | Parts | 97 | 0 | 0 |
-| **Total** | **290** | **12** | **74** |
+| **Total** | **293** | **9** | **74** |
 
 World covers GroundRef, particles, animation and PhysicsRef; language covers `java.lang`. Resources covers GameRef, ResourceRef, RenderRef and SfxRef; rendering covers GfxEngine, Text, Camera and Viewport. Files & input includes File, FindFile, Input, Controller and MouseCursor; parts includes Part, Chassis, WheelRef, DynoData and SfxTable. Sound & scripts covers Sound, Vehicle, Painter, Navigator and GameLogic.
 
-The snapshot matches the stock native table against registered class, method and parameter signatures, with explicit no-op bindings reviewed separately. Counts and definitions are stored in [native-coverage.json](assets/progress/native-coverage.json). After auditing a new snapshot, regenerate the graphic with `python tools/render-native-coverage.py` (standard library only).
+The snapshot matches the stock native table against registered class, method and parameter signatures. See the [native audit and roadmap](NATIVE_AUDIT.md) for the explicit no-ops, known mocks and missing signatures. Counts are stored in [native-coverage.json](assets/progress/native-coverage.json). After auditing a new snapshot, regenerate the graphic with `python tools/render-native-coverage.py` (standard library only).
 
 ### Features
 
@@ -68,26 +68,20 @@ The snapshot matches the stock native table against registered class, method and
 | Physics | ✅ [Project Chrono](https://projectchrono.org) integrates the chassis, resolves mesh contacts, and simulates supported unsprung prismatic/revolute suspension corners with TSDA springs. Complex hub-struts, massless rays, rigid wheels, and SLRR tyre forces retain native paths. Native and Chrono headless checks pass; stock-car in-game validation is still needed. See [Physics backend](#physics-backend) |
 | Audio and video | ✅ Effects, loops, FMV audio and four music playlists streamed with Media Foundation/XAudio2. Repeated effects and menu sounds have separate overlap limits |
 | Options | ✅ Mouse-operated sliders and all three audio volume values saved/reloaded through the stock `save/game/options` format |
-| Driving | ⚠️ Basic arcade throttle, brake/reverse, and steering work with the arrow keys. Full tyre slip, engine, clutch, and transmission simulation remain to be built |
+| Driving | ⏳ Engine, tyre slip, clutch and gear logic connected. Keyboard and XInput bindings use the stock control profile. Track validation and remaining driver actions are pending |
 | World and career | ⏳ City, traffic and complete career flow; vehicle purchase/save/load still need end-to-end validation |
 
-**Next major milestones**
-
-- [ ] Complete the simulation and controls needed to drive.
-- [ ] Validate stock-car suspension and wall contacts in game; cover complex hub-struts and deformation.
-- [ ] Finish buying a part and saving the car.
-- [ ] Complete transparency rendering.
-- [ ] Bring the city and traffic to life.
-
-Some native functions are still placeholders. Engine-loop audio and the original music-mode shuffle/repeat policies are not implemented; track progression is currently sequential. The engine-volume setting is stored for future engine audio. You can browse the catalog and work on the car in the garage. Buying a part and saving the car have not been validated yet. Multiplayer is outside the current scope.
+Engine loops use the scripts' SFX tables. Music playlists currently play in sequential order. The [roadmap](NATIVE_AUDIT.md#roadmap) tracks the next steps for driving, collision and damage, navigation, garage actions and platform support.
 
 ### Recent changes
 
 - Added Project Chrono 10 as the default chassis rigid-body integrator, with a native fallback, automated physics checks, and a reproducible dependency build script.
 - Moved chassis and rigid-wheel contacts to Chrono using world-space scene triangle meshes. Added wall, penetration-recovery, teleport, and rigid-wheel regression checks.
 - Added Chrono unsprung wheel bodies, prismatic/simple-revolute links, and TSDA suspension with SLRR bump/rebound laws, travel stops, and arm motion ratios. Complex hub-struts remain native; mixed native/Chrono corners are supported.
-- Kept legacy-sprung vehicles on the native contact path to avoid duplicate response and 700 Hz narrow-phase stalls. Added a deterministic stock Baiern benchmark and opt-in wheel/frame diagnostics.
-- Fixed development-car activation and Vehicle-to-chassis command routing. Added basic keyboard driving, `Vehicle.getSpeedSquare`, and the matching `Math.sqrt` script path.
+- Kept legacy-sprung vehicles on the native contact path to avoid duplicate response and narrow-phase stalls. Added a deterministic stock Baiern benchmark and opt-in wheel/frame diagnostics.
+- Merged the upstream drivetrain (engine, clutch, gears, tyre slip, controller bindings) on top of the Chrono backend. Chrono-owned suspension corners feed their contact load and patch to the same tyre model, so the player car accelerates, brakes, reverses and steers on Chrono wheels.
+- Removed the temporary arcade driving force and the `queueEvent` underflow shortcut that silently ended script methods.
+- Fixed hidden OSDs stealing clicks (an inactive inventory slot covered the Car Selector `TAKE IT` button) and the loading plate covering the garage welcome dialog.
 - Implemented cooperative script threads and scoped GC roots for suspended stacks. Java message loops, the mechanic refresher and showroom camera can now run directly.
 - Added GameType notification replacement/removal, event aliases/custom handlers/one-shot delivery, and control/drive/animate registrations.
 
@@ -144,19 +138,19 @@ The executable is generated at `build-bgfx-x64/Release/slrr_host.exe`, with `Chr
 
 ### Physics backend
 
-By default [Project Chrono](https://projectchrono.org) integrates the 6-DOF chassis (`ChSystemNSC`, implicit Euler, 700 Hz) and resolves chassis/world contacts. The scene exports immutable world-space triangle snapshots; Chrono collides the COM-offset chassis box and rigid-wheel spheres against them. Contact-corrected state is copied back to the SLRR mirror every substep, and external placement clears old contact history.
+By default [Project Chrono](https://projectchrono.org) integrates the 6-DOF chassis (`ChSystemNSC`, implicit Euler) and resolves chassis/world contacts. The vehicle model steps at 120 Hz; each step is split into Chrono substeps of at most 1/720 s, with the drivetrain and tyre forces held for that step. The scene exports immutable world-space triangle snapshots; Chrono collides the COM-offset chassis box and rigid-wheel spheres against them. Contact-corrected state is copied back to the SLRR mirror every substep, and external placement clears old contact history.
 
 Eligible wheels with positive unsprung mass and no complex `setHub` constraint become independent Chrono bodies: prismatic slides for vertical struts and revolute links for simple arms. A TSDA callback preserves the SLRR spring/damper law and stops. Arm travel and force use the actual hub geometry and its motion ratio; wheel contact load and spring support are mirrored separately for tyre forces and automatic settling.
 
-Massless rays, rigid wheels, and complex hub-struts retain the existing native solver, so a vehicle can mix native and Chrono corners. SLRR tyre forces and floor sampling remain in `src/physics/vehicle_dynamics.cpp`. Vehicles with legacy sprung wheels use the native contact pass instead of duplicating it with full mesh collision at 700 Hz. Chrono-owned or rigid wheels enable mesh contacts; bare chassis also retain them. When Chrono mesh contacts are active, the old corner impulse/penetration pass is skipped to avoid double response.
+Massless rays, rigid wheels, and complex hub-struts retain the existing native solver, so a vehicle can mix native and Chrono corners. SLRR tyre forces and floor sampling remain in `src/physics/vehicle_dynamics.cpp`. Vehicles with legacy sprung wheels use the native contact pass instead of duplicating it with full mesh collision. Chrono-owned or rigid wheels enable mesh contacts; bare chassis also retain them. When Chrono mesh contacts are active, the old corner impulse/penetration pass is skipped to avoid double response.
 
 - Use another Chrono build or install tree with `-DChrono_DIR=<path to its cmake folder>`.
 - Build without Chrono and keep the original integrator with `-DSLRR_PHYSICS_CHRONO=OFF`.
-- `-DSLRR_PHYSICS_CHECKS=ON` adds `slrr_physics_native` and `slrr_physics_chrono`, headless free-fall and sprung-box settling checks for each backend. The Chrono executable also checks mesh floor drops, initial penetration, teleportation, wall impacts, and rigid-wheel support. Suspension checks cover mixed native/prismatic corners, revolute arms, rotated chassis, non-rest seeds, release/reseed lifecycle, virtual-work force scaling, and separate spring-support/contact-load accounting. Driver checks cover acceleration, braking, steering, and launch-height limits. A separate `scene_collision_cache` test (`slrr_host --probe-collision-cache`) checks multi-vehicle A/B/A snapshot stability, scale conversion, revision rebuilds, and triangle deduplication. Run them with `ctest --test-dir build-bgfx-x64 -C Release --output-on-failure`.
+- `-DSLRR_PHYSICS_CHECKS=ON` adds `slrr_physics_native` and `slrr_physics_chrono`, headless free-fall and sprung-box settling checks for each backend. The Chrono executable also checks mesh floor drops, initial penetration, teleportation, wall impacts, and rigid-wheel support. Suspension checks cover mixed native/prismatic corners, revolute arms, rotated chassis, non-rest seeds, release/reseed lifecycle, virtual-work force scaling, and separate spring-support/contact-load accounting. Driver checks run the upstream drivetrain on native and Chrono-owned corners and cover engine start, acceleration, braking, and launch-height limits. A separate `scene_collision_cache` test (`slrr_host --probe-collision-cache`) checks multi-vehicle A/B/A snapshot stability, scale conversion, revision rebuilds, and triangle deduplication. Run them with `ctest --test-dir build-bgfx-x64 -C Release --output-on-failure`.
 
-The current implementation keeps one Chrono system per vehicle and duplicates its static collision body; large worlds and multiple traffic vehicles would benefit from a shared system. Scene render meshes do not yet have separate collision metadata, and discrete mesh contacts still need high-speed and in-game validation. Complex `setHub` struts, opposite-wheel/live-axle constraints, wheel spin, and stock-car corner categories remain unvalidated; no stock-car suspension coverage is claimed without game data. Tyre behavior is still the reduced chassis-only parked-friction model; independent wheel slip velocity, wheel reaction, and moving-vehicle tyre dynamics are not migrated.
+The current implementation keeps one Chrono system per vehicle and duplicates its static collision body; large worlds and multiple traffic vehicles would benefit from a shared system. Scene render meshes do not yet have separate collision metadata, and discrete mesh contacts still need high-speed and in-game validation. Complex `setHub` struts, opposite-wheel/live-axle constraints, wheel spin, and stock-car corner categories remain unvalidated; no stock-car suspension coverage is claimed without game data. Tyre forces come from the native slip model and act on the chassis at each contact patch; Chrono wheel bodies carry only the normal contact load.
 
-For a deterministic stock Baiern/garage benchmark, run `slrr_host --probe-stock-physics --root "C:\path\to\SLRR"`; it reports 700 Hz tick cost, contacts, support, and backend. `SLRR_PHYSICS_DUMP=1` logs effective corner geometry and contact state, `SLRR_PHYSICS_PROFILE=1` enables aggregate frame/physics timings, and `SLRR_START_CAR=1` explicitly releases a spawned car for testing. Diagnostics are also written and flushed after every message to `slrr-physics.log` in the current directory; set `SLRR_PHYSICS_LOG` to override that path.
+For a deterministic stock Baiern/garage benchmark, run `slrr_host --probe-stock-physics --root "C:\path\to\SLRR"`; it reports per-tick cost, contacts, support, and backend. `SLRR_PHYSICS_DUMP=1` logs effective corner geometry and contact state, `SLRR_PHYSICS_PROFILE=1` enables aggregate frame/physics timings, and `SLRR_START_CAR=1` explicitly releases a spawned car for testing. Diagnostics are also written and flushed after every message to `slrr-physics.log` in the current directory; set `SLRR_PHYSICS_LOG` to override that path.
 
 The game log prints `backend=chrono` or `backend=native` on the `[phys]` line.
 
