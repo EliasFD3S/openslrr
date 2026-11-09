@@ -4,6 +4,8 @@
 #include "slrr/osd_registry.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstdio>
 #include <array>
 #include <cmath>
 #include <deque>
@@ -354,6 +356,11 @@ void host_input_check_hotkeys(Jvm& jvm, Object* controller, Object* focus) {
     const bool down = hotkey_down(hk, controller);
     if (hk.down == down) continue;
     hk.down = down;
+    if (std::getenv("SLRR_OSD_DEBUG"))
+      std::printf("[input] hotkey axis=%d flags=%d down=%d owner=%p focus=%p handler=%s events=%d\n",
+                  hk.axis, hk.flags, down ? 1 : 0, static_cast<void*>(hk.owner),
+                  static_cast<void*>(focus), hk.handler ? hk.handler->class_name.c_str() : "-",
+                  hk.events);
     if (!capturing && (!hk.owner || hk.owner == focus) &&
         (hk.events & (down ? 1 : 2))) changed.push_back(hk.id);
   }

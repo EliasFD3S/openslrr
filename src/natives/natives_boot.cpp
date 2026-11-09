@@ -303,6 +303,8 @@ std::function<bool(const std::string&)> g_screen_capture;
 // 1 = inside wait, 2 = notify arrived for this object.
 struct ObjectWaiter { int state=1; };
 std::unordered_map<Object*, std::vector<ObjectWaiter*>> g_object_wait;
+// Modal dialogs currently blocked in Object.wait (display() of a DF_MODAL).
+int g_dialog_waits = 0;
 
 void object_notify(Object* self,bool all) {
   auto it=g_object_wait.find(self);if(it==g_object_wait.end())return;
@@ -394,6 +396,14 @@ void object_wait(Object* self, Jvm* vm) {
       auto& list=i->second;list.erase(std::remove(list.begin(),list.end(),waiter),list.end());
       if(list.empty())g_object_wait.erase(i);}
   } wait_guard{self,&waiter};
+  // Garage.enter shows its welcome warning before enter() returns. The stock
+  // LoadingScreen thread drops the plate meanwhile; count the modal wait so
+  // the host does the same instead of covering the dialog indefinitely.
+  struct DialogWaitGuard {
+    bool active;
+    ~DialogWaitGuard(){if(active)--g_dialog_waits;}
+  } dialog_guard{vm && vm->tree_instance_of(self,"java.render.osd.dialog.Dialog")};
+  if(dialog_guard.active)++g_dialog_waits;
   if(!cooperative)std::printf("[native] Object.wait %s pump=%d\n", self->class_name.c_str(),
               g_script_pump ? 1 : 0);
   std::fflush(stdout);
@@ -441,6 +451,7 @@ void object_wait(Object* self, Jvm* vm) {
 void host_set_script_pump(std::function<bool()> fn) {
   g_script_pump = std::move(fn);
 }
+bool host_dialog_wait_active() { return g_dialog_waits > 0; }
 bool host_wait_pending(Object* signal) {
   const auto it = g_object_wait.find(signal);
   return it != g_object_wait.end() && std::any_of(

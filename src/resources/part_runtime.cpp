@@ -1,5 +1,6 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/part_runtime.hpp"
+#include "slrr/physics_log.hpp"
 #include "slrr/dyno_model.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/host_input.hpp"
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <cctype>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -120,7 +122,9 @@ struct Record {
   std::array<float, 4> wheel_spin_sign{};
   physics::VehicleDynamics dynamics;
   bool physics_ready = false, physics_dirty = true, physics_suspended = false;
-  bool physics_reported = false;
+  // Explicit development spawn may use its root world matrix directly.
+  bool world_root = false;
+  bool physics_reported = false, physics_wheels_reported = false;
   int reported_contacts = -1, physics_status_lines = 0;
   void *physics_parent = nullptr;
   PartMatrix published_frame{};
@@ -1132,7 +1136,7 @@ Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
   render_part(jvm, part, records.at(part));
   if (script.empty() && cfg->native_kind == "car")
     install_cfg_stock(jvm, part);
-  std::printf(
+  physics_log(
       "[part] create id=0x%x type=0x%x class=%s slots=%zu renders=%zu\n", id,
       resource, class_name.c_str(), cfg->slots.size(),
       records.at(part).renders.size());
@@ -1233,6 +1237,12 @@ void paint_tree(Object *root, uint32_t texture) {
 }
 bool part_command(Object *part, const std::string &command) {
   part = canonical(part);
+  if (!record(part) && part) {
+    auto chassis = part->fields.find("chassis");
+    if (chassis != part->fields.end() &&
+        chassis->second.tag == ValueTag::Obj)
+      part = canonical(chassis->second.v.o);
+  }
   std::istringstream input(command);
   std::string verb;
   input >> verb;
@@ -1514,7 +1524,7 @@ namespace {
 bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
   auto unavailable = [&](const char *reason) {
     if (!rec.physics_reported) {
-      std::printf("[phys] unavailable type=0x%x: %s\n", rec.state.resource,
+      physics_log("[phys] unavailable type=0x%x: %s\n", rec.state.resource,
                   reason);
       std::fflush(stdout);
       rec.physics_reported = true;
@@ -1567,8 +1577,9 @@ bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
   rec.physics_dirty = false;
   rec.physics_parent = gameref_get(chassis)->parent;
   if (!rec.physics_reported) {
-    std::printf("[phys] dynamic type=0x%x mass=%.2f fixed=%uHz\n",
-                rec.state.resource, mass, physics::VehicleDynamics::frequency);
+    physics_log("[phys] dynamic type=0x%x mass=%.2f fixed=%uHz backend=%s\n",
+                rec.state.resource, mass, physics::VehicleDynamics::frequency,
+                physics::backend_name());
     std::fflush(stdout);
     rec.physics_reported = true;
   }
@@ -1652,6 +1663,35 @@ void dynamics_wheels(Record &rec) {
       cfg.spring = 0;
     }
   }
+  if (!rec.physics_wheels_reported && std::getenv("SLRR_PHYSICS_DUMP")) {
+    for (size_t i = 0; i < 4; ++i) {
+      const auto &cfg = rec.dynamics.wheels[i];
+      const auto &live = rec.wheels[i];
+      physics_log(
+          "[phys] wheel=%zu enabled=%d rigid=%d unsprung=%.3f arm=%.4f "
+          "has_hub=%d hub0=%.0f opp=%d center=(%.4f,%.4f,%.4f) "
+          "down=(%.3f,%.3f,%.3f) rest=%.4f min=%.4f max=%.4f "
+          "anchor=%.4f radius=%.4f spring=%.1f damping=(%.1f,%.1f)\n",
+          i, cfg.enabled, cfg.rigid_contact, cfg.unsprung, cfg.arm_length,
+          cfg.has_hub, cfg.hub[0], live.opp, cfg.center.x, cfg.center.y,
+          cfg.center.z, cfg.down.x, cfg.down.y, cfg.down.z, cfg.rest,
+          cfg.minimum, cfg.maximum, cfg.anchor_length(), cfg.radius,
+          cfg.spring, cfg.bump_damping, cfg.rebound_damping);
+      if (cfg.arm_length > 0) {
+        physics_log(
+            "[phys] wheel=%zu pivot=(%.4f,%.4f,%.4f) axis=(%.3f,%.3f,%.3f) "
+            "hub=(%.0f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f) "
+            "alignment=(%.5f,%.5f,%.5f,%.5f) ypr=(%.4f,%.4f,%.4f)\n",
+            i, cfg.arm_pivot.x, cfg.arm_pivot.y, cfg.arm_pivot.z,
+            cfg.arm_axis.x, cfg.arm_axis.y, cfg.arm_axis.z, cfg.hub[0],
+            cfg.hub[1], cfg.hub[2], cfg.hub[3], cfg.hub[4], cfg.hub[5],
+            cfg.hub[6], cfg.hub[7], cfg.hub[8], cfg.hub[9],
+            cfg.hub_alignment.x, cfg.hub_alignment.y, cfg.hub_alignment.z,
+            cfg.hub_alignment.w, live.ypr[0], live.ypr[1], live.ypr[2]);
+      }
+    }
+    rec.physics_wheels_reported = true;
+  }
 }
 void pose_wheels(Object *chassis, Record &rec);
 void finish_dynamics_sync(Object *chassis, Record &rec);
@@ -1726,8 +1766,22 @@ void finish_dynamics_sync(Object *chassis, Record &rec) {
     support += state.force;
   }
   if (contacts != rec.reported_contacts && rec.physics_status_lines < 8) {
-    std::printf("[phys] contacts=%d/4 y=%.3f vy=%.3f support=%.1fN\n", contacts,
-                node->pos[1], rec.dynamics.body.velocity.y, support);
+    physics_log("[phys] contacts=%d/4 y=%.3f vy=%.3f support=%.1fN speed2=%.3f\n",
+                contacts, node->pos[1], rec.dynamics.body.velocity.y, support,
+                rec.dynamics.body.velocity.dot(rec.dynamics.body.velocity));
+    if (std::getenv("SLRR_PHYSICS_DUMP")) {
+      for (size_t i = 0; i < 4; ++i) {
+        const auto &state = rec.dynamics.state[i];
+        physics_log(
+            "[phys] state=%zu constrained=%d contact=%d length=%.5f "
+            "speed=%.4f support=%.1f normal=%.1f center=(%.4f,%.4f,%.4f) "
+            "hub=(%.4f,%.4f,%.4f) normal=(%.3f,%.3f,%.3f)\n",
+            i, state.constrained, state.contact, state.length, state.speed,
+            state.force, state.normal_load, state.center.x, state.center.y,
+            state.center.z, state.hub.x, state.hub.y, state.hub.z,
+            state.normal.x, state.normal.y, state.normal.z);
+      }
+    }
     std::fflush(stdout);
     rec.reported_contacts = contacts;
     ++rec.physics_status_lines;
@@ -1779,6 +1833,9 @@ void park_chassis(Object *chassis, bool shift) {
     if (!chassis_rest_contact(*rec, contact)) return;
     used = 1;
   }
+  // The parked lengths are external seeds. Recreate constrained bodies on the
+  // next start instead of resuming stale dynamic transforms.
+  rec->dynamics.release_wheels();
   for (size_t i = 0; i < 4; ++i) {
     auto &cfg = rec->dynamics.wheels[i];
     auto &state = rec->dynamics.state[i];
@@ -1797,6 +1854,7 @@ void park_chassis(Object *chassis, bool shift) {
     state.seeded = true;
     state.contact = false;
     state.force = 0;
+    state.normal_load = 0;
     contact += physics::wheel_pose(cfg, state.length).hub_origin -
                physics::Vec3{0, cfg.radius, 0};
     ++used;
@@ -2405,7 +2463,16 @@ void advance_loose_panels() {
     auto& body = loose.body;
     const Vec3 before = body.position;
     const auto previous = body.corners();
-    if (!sleeping) body.integrate(kPhysicsTick);
+    if (!sleeping) {
+      try {
+        body.integrate(kPhysicsTick);
+      } catch (const std::exception &error) {
+        physics_log("[phys] loose panel dropped after solver failure: %s\n", error.what());
+        loose_panels.erase(part);
+        part_destroy(part);
+        continue;
+      }
+    }
     const bool carrier_contact = collide_loose_with_car(
         body, previous, before, chassis, *vehicle, previous_carrier);
     if (sleeping && !carrier_contact) continue;
@@ -2497,7 +2564,14 @@ void advance_chassis_tick() {
     if (!node)
       continue;
     PartMatrix frame, parent = eye_matrix();
-    if (!scene_instances_script_matrix(chassis, frame.data()))
+    bool has_frame = scene_instances_script_matrix(chassis, frame.data());
+    if (!has_frame && rec.world_root && !rec.state.parent) {
+      // Development/root cars are already in world coordinates and do not
+      // have a scene-parent chain. Inventory roots remain isolated.
+      frame = node_local(chassis);
+      has_frame = true;
+    }
+    if (!has_frame)
       continue;
     if (node->parent &&
         !scene_instances_script_matrix(node->parent, parent.data()))
@@ -2533,9 +2607,28 @@ void advance_chassis_tick() {
       ground.normal = {hit.normal[0], hit.normal[1], hit.normal[2]};
       return true;
     };
+#if SLRR_HAS_CHRONO
+    // Suspension keeps the vertical Terrain query above. Chrono additionally
+    // receives full world triangles for chassis, walls, and rigid-wheel contacts.
+    rec.dynamics.collision = scene_instances_collision_mesh(chassis);
+#endif
     // Two fixed 120 Hz substeps per host vehicle update.
     const auto before = rec.dynamics.body.position;
-    const auto steps = rec.dynamics.advance(kPhysicsTick, terrain);
+    unsigned steps = 0;
+    try {
+      steps = rec.dynamics.advance(kPhysicsTick, terrain);
+    } catch (const std::exception &error) {
+      // A diverged solve must not take the whole game down. Report it and
+      // rebuild the vehicle from its script frame on the next tick.
+      physics_log("[phys] vehicle type=0x%x reset after solver failure: %s "
+                  "pos=(%.3f,%.3f,%.3f) vel=(%.3f,%.3f,%.3f)\n",
+                  rec.state.resource, error.what(), before.x, before.y, before.z,
+                  rec.dynamics.body.velocity.x, rec.dynamics.body.velocity.y,
+                  rec.dynamics.body.velocity.z);
+      rec.physics_ready = false;
+      rec.dynamics.body.velocity = rec.dynamics.body.momentum = {};
+      continue;
+    }
     if (rec.physics_released && rec.dynamics.drive.torque) {
       const auto wall = collide_chassis(rec, before);
       const auto& ground = rec.dynamics.ground_impact;
@@ -2614,10 +2707,35 @@ void part_physics_advance(double seconds) {
   constexpr double tolerance = kPhysicsTick * 1e-10;
   if (physics_elapsed + tolerance < kPhysicsTick) return;
 
+  const bool profile = std::getenv("SLRR_PHYSICS_PROFILE") != nullptr;
+  const auto profile_start = std::chrono::steady_clock::now();
   scene_instances_prepare_physics();
+  const auto prepared = std::chrono::steady_clock::now();
+  unsigned ticks = 0;
   while (physics_elapsed + tolerance >= kPhysicsTick) {
     advance_chassis_tick();
     physics_elapsed = std::max(0.0, physics_elapsed - kPhysicsTick);
+    ++ticks;
+  }
+  if (profile) {
+    const auto end = std::chrono::steady_clock::now();
+    const double prepare_ms =
+        std::chrono::duration<double, std::milli>(prepared - profile_start)
+            .count();
+    const double advance_ms =
+        std::chrono::duration<double, std::milli>(end - prepared).count();
+    static uint64_t previous_revision = 0;
+    static unsigned profile_lines = 0;
+    const uint64_t revision = scene_instances_floor_revision();
+    if ((revision != previous_revision || prepare_ms > 5 || advance_ms > 10) &&
+        profile_lines++ < 64) {
+      physics_log("[profile] physics prepare=%.2fms advance=%.2fms ticks=%u "
+                  "floor_revision=%llu\n",
+                  prepare_ms, advance_ms, ticks,
+                  static_cast<unsigned long long>(revision));
+      std::fflush(stdout);
+    }
+    previous_revision = revision;
   }
   for (auto &[key, rec] : records) {
     if (rec.config->native_kind == "car")
@@ -2764,6 +2882,8 @@ Object *vehicle_spawn_stock(Jvm &jvm, RpkIndex &resources, Object *parent,
   auto *part = part_create(jvm, resources, parent, chassis, "Vehicle chassis");
   if (!part)
     return nullptr;
+  if (auto *rec = record(part))
+    rec->world_root = true;
   auto *descriptor = jvm.new_object("java.game.parts.Descriptor");
   for (const char *name : {"optical", "power", "wear", "tear"})
     descriptor->fields[name] = Value::make_float(1);

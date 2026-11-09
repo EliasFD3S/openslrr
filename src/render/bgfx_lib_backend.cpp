@@ -1,3 +1,4 @@
+#include "slrr/natives_boot.hpp"
 #include "slrr/render_backend.hpp"
 #include "slrr/scene_presentation.hpp"
 #include "slrr/scene_instances.hpp"
@@ -358,7 +359,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     const bool covered = !osd_loading_overlay().empty() && !video_fmv_block_osd();
     // A yielded section change must not expose its half-destroyed world or
     // the fallback camera. Both script and host loading plates may present.
-    if (scene_transition_active() && !loading) return;
+    if (scene_transition_active() && !loading && !host_dialog_wait_active()) return;
 
 #ifdef _WIN32
     RECT rc{};

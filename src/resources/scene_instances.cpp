@@ -1,5 +1,6 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/physics_log.hpp"
 #include <limits>
 #include "slrr/gameref.hpp"
 #include "slrr/part_runtime.hpp"
@@ -8,6 +9,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -56,6 +58,13 @@ std::unordered_map<void *, FloorMesh> g_floor_meshes;
 bool g_floor_prepared = false;
 uint64_t g_floor_builds = 0;
 uint64_t g_floor_revision = 1;
+struct CollisionCache {
+  uint64_t revision = 0;
+  std::weak_ptr<const physics::CollisionMesh> mesh;
+};
+// Each active chassis can exclude a different subtree. Keep one entry per
+// ignore key so A/B/A vehicle iteration does not rebuild every snapshot.
+std::unordered_map<void *, CollisionCache> g_collision_caches;
 void index_floor(StaticMesh &mesh) {
   // Static garage triangles are indexed once in script space. Physics asks
   // for several support samples per 240 Hz tick; rescanning the whole shell
@@ -425,6 +434,7 @@ void scene_instances_set_resources(const RpkIndex *resources) {
   g_overrides.clear();
   g_static.clear();
   g_floor_meshes.clear();
+  g_collision_caches.clear();
   g_floor_prepared = false;
   g_floor_builds = 0;
   ++g_floor_revision;
@@ -714,6 +724,104 @@ void scene_instances_prepare_physics() {
 }
 uint64_t scene_instances_floor_builds() { return g_floor_builds; }
 uint64_t scene_instances_floor_revision() { return g_floor_revision; }
+
+std::shared_ptr<const physics::CollisionMesh> scene_instances_collision_mesh(
+    void *ignore) {
+  if (!g_floor_prepared)
+    scene_instances_prepare_physics();
+  auto &cache = g_collision_caches[ignore];
+  if (cache.revision == g_floor_revision) {
+    if (auto cached = cache.mesh.lock())
+      return cached;
+  }
+
+  const auto profile_start = std::chrono::steady_clock::now();
+  auto result = std::make_shared<physics::CollisionMesh>();
+  auto append = [&](const StaticMesh &mesh) {
+    const auto base =
+        static_cast<uint32_t>(result->positions.size() / 3);
+    result->positions.insert(result->positions.end(), mesh.positions.begin(),
+                             mesh.positions.end());
+    if (mesh.scale != 1) {
+      const size_t first = result->positions.size() - mesh.positions.size();
+      for (size_t i = first; i < result->positions.size(); ++i)
+        result->positions[i] *= mesh.scale;
+    }
+    // Append each source triangle once, not once per spatial-index cell.
+    for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+      bool valid = true;
+      for (unsigned corner = 0; corner < 3; ++corner) {
+        const auto index = mesh.indices[i + corner];
+        valid = valid && static_cast<size_t>(index) * 3 + 2 <
+                             mesh.positions.size();
+      }
+      if (!valid)
+        continue;
+      for (unsigned corner = 0; corner < 3; ++corner)
+        result->indices.push_back(base + mesh.indices[i + corner]);
+    }
+  };
+  if (g_static_enabled)
+    for (const auto &mesh : g_static)
+      append(mesh);
+  for (const auto &entry : g_floor_meshes) {
+    const auto &cached = entry.second;
+    if (ignore && std::find(cached.ancestors.begin(), cached.ancestors.end(),
+                            ignore) != cached.ancestors.end())
+      continue;
+    append(cached.mesh);
+  }
+  cache.revision = g_floor_revision;
+  cache.mesh = result;
+  if (std::getenv("SLRR_PHYSICS_PROFILE")) {
+    const double milliseconds =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - profile_start)
+            .count();
+    physics_log("[profile] collision snapshot %.2fms vertices=%zu "
+                "triangles=%zu revision=%llu ignore=%p\n",
+                milliseconds, result->positions.size() / 3,
+                result->indices.size() / 3,
+                static_cast<unsigned long long>(g_floor_revision), ignore);
+    std::fflush(stdout);
+  }
+  return result;
+}
+
+bool scene_instances_collision_cache_self_check() {
+  scene_instances_set_resources(nullptr);
+  ScxGeometry geometry;
+  geometry.info.ok = true;
+  geometry.position_scale = .01f;
+  geometry.positions = {0, 0, 0, 400, 0, 0, 400, 0, 400, 0, 0, 400};
+  geometry.indices = {0, 1, 2, 0, 2, 3};
+  scene_instances_add_static_mesh(geometry);
+
+  int vehicle_a = 0, vehicle_b = 0;
+  const auto first_a = scene_instances_collision_mesh(&vehicle_a);
+  const auto first_b = scene_instances_collision_mesh(&vehicle_b);
+  const auto second_a = scene_instances_collision_mesh(&vehicle_a);
+  const bool stable = first_a == second_a && first_a != first_b;
+  const bool deduplicated = first_a->indices.size() == 6 &&
+                            first_a->positions.size() == 12;
+  const bool scaled = std::fabs(first_a->positions[3] - 4.f) < 1e-6f &&
+                      std::fabs(first_a->positions[8] - 4.f) < 1e-6f;
+
+  scene_instances_add_static_mesh(geometry);
+  const auto revised_a = scene_instances_collision_mesh(&vehicle_a);
+  const bool rebuilt = revised_a != first_a;
+  scene_instances_enable_static_floor(false);
+  const auto disabled = scene_instances_collision_mesh(&vehicle_a);
+  const bool toggled = disabled->indices.empty();
+  const bool ok = stable && deduplicated && scaled && rebuilt && toggled;
+  std::printf("[phys] collision cache: A/B/A=%s dedup=%s scale=%s "
+              "revision=%s toggle=%s\n",
+              stable ? "OK" : "FAIL", deduplicated ? "OK" : "FAIL",
+              scaled ? "OK" : "FAIL", rebuilt ? "OK" : "FAIL",
+              toggled ? "OK" : "FAIL");
+  scene_instances_set_resources(nullptr);
+  return ok;
+}
 
 namespace {
 using physics::Vec3;

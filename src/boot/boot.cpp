@@ -1,4 +1,5 @@
 #include "slrr/boot.hpp"
+#include "slrr/physics_log.hpp"
 
 #include "slrr/gameref.hpp"
 #include "slrr/host_cursor.hpp"
@@ -19,6 +20,7 @@
 #include "slrr/scene_presentation.hpp"
 #include "slrr/section_machine.hpp"
 #include "slrr/video_fmv.hpp"
+#include "slrr/vehicle_dynamics.hpp"
 #include "slrr_version.h"
 
 #include <chrono>
@@ -213,7 +215,129 @@ int boot_probe(Jvm& jvm, const BootOptions& opt) {
               scx.version, scx.groups, scx.vertices, scx.triangles,
               scx.ok ? 1 : 0, scx.error.c_str());
 
+  Object *speed_car = jvm.new_object("java.game.Vehicle");
+  const Value speed = jvm.invoke("java.game.Vehicle", "getSpeedSquare", "()F",
+                                 {Value::make_obj(speed_car)}, false);
+  const Value root = jvm.invoke("java.lang.Math", "sqrt", "(F)F",
+                                {Value::make_float(25.f)}, false);
+  std::printf("[boot] Vehicle.getSpeedSquare=%.3f Math.sqrt(25)=%.3f\n",
+              speed.tag == ValueTag::Float ? speed.v.f : -1.f,
+              root.tag == ValueTag::Float ? root.v.f : -1.f);
+  if (speed.tag != ValueTag::Float || root.tag != ValueTag::Float ||
+      root.v.f != 5.f)
+    return 4;
   return run_tree_smokes(jvm, sections);
+}
+
+int boot_stock_physics_probe(Jvm& jvm, const BootOptions& opt) {
+  jvm.set_game_root(opt.game_root);
+  if (!jvm.bootstrap_classpath()) return 2;
+  RpkIndex rpk;
+  rpk.set_root(opt.game_root);
+  SectionMachine sections(&jvm);
+  register_boot_natives(jvm, rpk, sections);
+  rpk.open_all();
+  scene_instances_set_resources(nullptr);
+  scene_instances_enable_static_floor(true);
+  const int garage_pack = 65;
+  for (uint32_t rid : rpk.garage_render_ids(garage_pack, 0)) {
+    auto model = rpk.model_for_resource(garage_pack, rid);
+    if (!model.ok || model.source.empty()) continue;
+    std::string path = model.source;
+    if (path.size() > 4 && path.substr(path.size() - 4) == ".scy")
+      path = path.substr(0, path.size() - 4) + ".scx";
+    auto geometry = load_scx_geometry(opt.game_root + "\\" + path);
+    if (geometry.info.ok) scene_instances_add_static_mesh(geometry);
+  }
+
+  const auto garage_shell = load_scx_geometry(
+      opt.game_root + "\\misc\\garage\\g1\\garazs_01.scx");
+  if (garage_shell.info.ok) scene_instances_add_static_mesh(garage_shell);
+
+  physics::VehicleDynamics vd;
+  const auto chassis = load_scx_geometry(
+      opt.game_root + "\\cars\\racers\\Baiern_data\\meshes\\chassis.scx");
+  if (!chassis.info.ok) return 3;
+  const double scale = chassis.position_scale;
+  vd.body.configure(1489.64,
+                    {chassis.info.bbox_min[0] * scale,
+                     chassis.info.bbox_min[1] * scale,
+                     chassis.info.bbox_min[2] * scale},
+                    {chassis.info.bbox_max[0] * scale,
+                     chassis.info.bbox_max[1] * scale,
+                     chassis.info.bbox_max[2] * scale},
+                    {0, 0, 0});
+  constexpr float spawn_x = 0, spawn_z = 0, spawn_y = .51f;
+  physics_log("[profile] stock spawn=(%.2f,%.2f,%.2f)\n", spawn_x,
+              spawn_y, spawn_z);
+  physics::Matrix frame{1, 0, 0, 0, 0, 1, 0, 0,
+                        0, 0, 1, 0, spawn_x, spawn_y, spawn_z, 1};
+  vd.body.set_frame(frame);
+  for (int i = 0; i < 4; ++i) {
+    auto &wheel = vd.wheels[i];
+    wheel.enabled = true;
+    wheel.unsprung = 10;
+    wheel.has_hub = true;
+    wheel.hub[0] = i < 2 ? 0 : -1;
+    wheel.rest = i < 2 ? .2646 : .2677;
+    wheel.minimum = .1778;
+    wheel.maximum = wheel.rest;
+    wheel.anchor = .390;
+    wheel.radius = .3286;
+    wheel.spring = i < 2 ? 71613 : 73575;
+    wheel.bump_damping = wheel.rebound_damping = i < 2 ? 3300 : 3000;
+    if (i < 2) {
+      wheel.center = {i ? .709 : -.709, -.590, -1.480};
+      wheel.arm_length = .296;
+      wheel.arm_pivot = {i ? .415 : -.415, -.560, -1.480};
+      wheel.arm_axis = {0, 0, 1};
+      wheel.hub = i == 0
+                      ? std::array<float, 10>{0, -.077f, -.043f, -.004f,
+                                              .071f, .407f, 0, .071f, .407f, 0}
+                      : std::array<float, 10>{0, .077f, -.043f, -.004f,
+                                              -.071f, .407f, 0, -.071f, .407f, 0};
+    } else {
+      wheel.center = {i == 2 ? -.727 : .727, -.590, 1.256};
+      wheel.down = {i == 2 ? -.026 : .026, -1, 0};
+      wheel.arm_length = .420;
+      wheel.arm_pivot = {i == 2 ? -.375 : .375, -.408, 1.080};
+      wheel.arm_axis = {i == 2 ? .904 : -.904, 0, 1.077};
+      wheel.hub[1] = i == 2 ? .121f : -.121f;
+      wheel.hub_alignment =
+          i == 2 ? physics::Quaternion{.00011, -.00873, -.01309, .99988}
+                 : physics::Quaternion{.00011, .00873, .01309, .99988};
+    }
+  }
+  const auto terrain = [spawn_y](double, double, double,
+                                 physics::GroundHit &ground) {
+    ground.height = spawn_y - .743;
+    ground.normal = {0, 1, 0};
+    return true;
+  };
+#if SLRR_HAS_CHRONO
+  vd.collision = scene_instances_collision_mesh(nullptr);
+  if (std::getenv("SLRR_NO_MESH")) vd.collision.reset();
+#endif
+  const auto start = std::chrono::steady_clock::now();
+  for (int i = 0; i < 5 * 60; ++i)
+    vd.advance(1.0 / physics::VehicleDynamics::update_frequency, terrain);
+  const double milliseconds =
+      std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - start)
+          .count();
+  double support = 0;
+  int contacts = 0;
+  for (const auto &state : vd.state) {
+    support += state.force;
+    contacts += state.contact;
+  }
+  physics_log("[profile] stock physics ticks=%llu total=%.2fms per-tick=%.3fms "
+              "height=%.5f contacts=%d support=%.1f backend=%s\n",
+              static_cast<unsigned long long>(vd.ticks), milliseconds,
+              milliseconds / vd.ticks, vd.body.position.y, contacts, support,
+              physics::backend_name());
+  std::fflush(stdout);
+  return 0;
 }
 
 int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
@@ -356,6 +480,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     // A development session enters the garage directly; it never submits
     // the NEW CAREER dialog or writes a save as a side effect of spawning.
     sections.change_active_section(sections.garage());
+    if (std::getenv("SLRR_START_CAR")) part_command(car, "start");
     std::printf("[boot] spawned %s parts=%zu\n",opt.spawn_car.c_str(),part_installed_tree(car).size());
   } else if (opt.auto_new) {
     std::fprintf(stderr,

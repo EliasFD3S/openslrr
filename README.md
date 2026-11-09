@@ -65,7 +65,7 @@ The snapshot matches the stock native table against registered class, method and
 | Interface | ✅ Menus, career dialogs, catalog, car showroom, track selection, and paint inventory |
 | Cars | ✅ Assembly from scripts and CFG files; reference Baiern with 76 parts. Showroom camera orbit, vehicle information, powertrain layout, gear ratios and dyno calculations |
 | Workshop | ✅ Point at a part to read its name, hide the body or the engine, open panels with interpolated motion and adjust tunable parts. Remove or fit attached assemblies, and drag inventory parts onto Repair/Sell. Detached suspension parts regain their rest pose in the inventory |
-| Physics | ✅ Chassis, springs, dampers, and wheel contacts, verified with Baiern and Duhen. A released car settles on the garage floor. A parked car holds its standing height |
+| Physics | ✅ [Project Chrono](https://projectchrono.org) integrates the chassis, resolves mesh contacts, and simulates supported unsprung prismatic/revolute suspension corners with TSDA springs. Complex hub-struts, massless rays, rigid wheels, and SLRR tyre forces retain native paths. Native and Chrono headless checks pass; stock-car in-game validation is still needed. See [Physics backend](#physics-backend) |
 | Audio and video | ✅ Effects, loops, FMV audio and four music playlists streamed with Media Foundation/XAudio2. Repeated effects and menu sounds have separate overlap limits |
 | Options | ✅ Mouse-operated sliders and all three audio volume values saved/reloaded through the stock `save/game/options` format |
 | Driving | ⏳ Engine, tyre slip, clutch and gear logic connected. Keyboard and XInput bindings use the stock control profile. Track validation and remaining driver actions are pending |
@@ -75,6 +75,13 @@ Engine loops use the scripts' SFX tables. Music playlists currently play in sequ
 
 ### Recent changes
 
+- Added Project Chrono 10 as the default chassis rigid-body integrator, with a native fallback, automated physics checks, and a reproducible dependency build script.
+- Moved chassis and rigid-wheel contacts to Chrono using world-space scene triangle meshes. Added wall, penetration-recovery, teleport, and rigid-wheel regression checks.
+- Added Chrono unsprung wheel bodies, prismatic/simple-revolute links, and TSDA suspension with SLRR bump/rebound laws, travel stops, and arm motion ratios. Complex hub-struts remain native; mixed native/Chrono corners are supported.
+- Kept legacy-sprung vehicles on the native contact path to avoid duplicate response and narrow-phase stalls. Added a deterministic stock Baiern benchmark and opt-in wheel/frame diagnostics.
+- Merged the upstream drivetrain (engine, clutch, gears, tyre slip, controller bindings) on top of the Chrono backend. Chrono-owned suspension corners feed their contact load and patch to the same tyre model, so the player car accelerates, brakes, reverses and steers on Chrono wheels.
+- Removed the temporary arcade driving force and the `queueEvent` underflow shortcut that silently ended script methods.
+- Fixed hidden OSDs stealing clicks (an inactive inventory slot covered the Car Selector `TAKE IT` button) and the loading plate covering the garage welcome dialog.
 - Implemented cooperative script threads and scoped GC roots for suspended stacks. Java message loops, the mechanic refresher and showroom camera can now run directly.
 - Added GameType notification replacement/removal, event aliases/custom handlers/one-shot delivery, and control/drive/animate registrations.
 
@@ -104,11 +111,17 @@ Install **VLC 3.x for Windows x64** for the original Cinepak AVI intros, the men
 In PowerShell:
 
 ```powershell
-git clone https://github.com/EliasFD3S/openslrr.git
+git clone https://github.com/antomys/openslrr.git
 cd openslrr
 
 git clone https://github.com/bkaradzic/bgfx.cmake.git third_party/bgfx.cmake
 git -C third_party/bgfx.cmake checkout 5ea74ee66662daef4089695846d6322da0dde94e
+```
+
+Build the Project Chrono core module once (about 20–40 minutes; it installs Eigen and Chrono 10.0.0 into `third_party/chrono-install`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File cmake\build_chrono.ps1
 ```
 
 Run the following commands from this folder, which contains `CMakeLists.txt`. In the local development workspace, it is named `host/`.
@@ -121,7 +134,25 @@ cmake -S . -B build-bgfx-x64 -G "Visual Studio 17 2022" -A x64 -DSLRR_STAGE_BUIL
 cmake --build build-bgfx-x64 --config Release --target slrr_host --parallel
 ```
 
-The executable is generated at `build-bgfx-x64/Release/slrr_host.exe`. The first build includes bgfx and its shader tools, so it may take a while.
+The executable is generated at `build-bgfx-x64/Release/slrr_host.exe`, with `Chrono_core.dll` copied next to it. The first build includes bgfx and its shader tools, so it may take a while.
+
+### Physics backend
+
+By default [Project Chrono](https://projectchrono.org) integrates the 6-DOF chassis (`ChSystemNSC`, implicit Euler) and resolves chassis/world contacts. The vehicle model steps at 120 Hz; each step is split into Chrono substeps of at most 1/720 s, with the drivetrain and tyre forces held for that step. The scene exports immutable world-space triangle snapshots; Chrono collides the COM-offset chassis box and rigid-wheel spheres against them. Contact-corrected state is copied back to the SLRR mirror every substep, and external placement clears old contact history.
+
+Eligible wheels with positive unsprung mass and no complex `setHub` constraint become independent Chrono bodies: prismatic slides for vertical struts and revolute links for simple arms. A TSDA callback preserves the SLRR spring/damper law and stops. Arm travel and force use the actual hub geometry and its motion ratio; wheel contact load and spring support are mirrored separately for tyre forces and automatic settling.
+
+Massless rays, rigid wheels, and complex hub-struts retain the existing native solver, so a vehicle can mix native and Chrono corners. SLRR tyre forces and floor sampling remain in `src/physics/vehicle_dynamics.cpp`. Vehicles with legacy sprung wheels use the native contact pass instead of duplicating it with full mesh collision. Chrono-owned or rigid wheels enable mesh contacts; bare chassis also retain them. When Chrono mesh contacts are active, the old corner impulse/penetration pass is skipped to avoid double response.
+
+- Use another Chrono build or install tree with `-DChrono_DIR=<path to its cmake folder>`.
+- Build without Chrono and keep the original integrator with `-DSLRR_PHYSICS_CHRONO=OFF`.
+- `-DSLRR_PHYSICS_CHECKS=ON` adds `slrr_physics_native` and `slrr_physics_chrono`, headless free-fall and sprung-box settling checks for each backend. The Chrono executable also checks mesh floor drops, initial penetration, teleportation, wall impacts, and rigid-wheel support. Suspension checks cover mixed native/prismatic corners, revolute arms, rotated chassis, non-rest seeds, release/reseed lifecycle, virtual-work force scaling, and separate spring-support/contact-load accounting. Driver checks run the upstream drivetrain on native and Chrono-owned corners and cover engine start, acceleration, braking, and launch-height limits. A separate `scene_collision_cache` test (`slrr_host --probe-collision-cache`) checks multi-vehicle A/B/A snapshot stability, scale conversion, revision rebuilds, and triangle deduplication. Run them with `ctest --test-dir build-bgfx-x64 -C Release --output-on-failure`.
+
+The current implementation keeps one Chrono system per vehicle and duplicates its static collision body; large worlds and multiple traffic vehicles would benefit from a shared system. Scene render meshes do not yet have separate collision metadata, and discrete mesh contacts still need high-speed and in-game validation. Complex `setHub` struts, opposite-wheel/live-axle constraints, wheel spin, and stock-car corner categories remain unvalidated; no stock-car suspension coverage is claimed without game data. Tyre forces come from the native slip model and act on the chassis at each contact patch; Chrono wheel bodies carry only the normal contact load.
+
+For a deterministic stock Baiern/garage benchmark, run `slrr_host --probe-stock-physics --root "C:\path\to\SLRR"`; it reports per-tick cost, contacts, support, and backend. `SLRR_PHYSICS_DUMP=1` logs effective corner geometry and contact state, `SLRR_PHYSICS_PROFILE=1` enables aggregate frame/physics timings, and `SLRR_START_CAR=1` explicitly releases a spawned car for testing. Diagnostics are also written and flushed after every message to `slrr-physics.log` in the current directory; set `SLRR_PHYSICS_LOG` to override that path.
+
+The game log prints `backend=chrono` or `backend=native` on the `[phys]` line.
 
 ## Run
 
@@ -135,7 +166,7 @@ The executable is generated at `build-bgfx-x64/Release/slrr_host.exe`. The first
 
 In Sound Options, drag the volume sliders; changes are saved automatically to the game installation’s `save/game/options` file and restored on startup. A saved music volume of zero keeps music muted.
 
-In the garage, **right-click and drag**, the **arrow keys**, and the **scroll wheel** control the camera. **Escape** skips the intros. Close the window to quit. The car rests on its wheels, but driving controls are not connected yet. In the showroom the view turns around the car on its own.
+In the garage, **right-click and drag**, the **arrow keys**, and the **scroll wheel** control the camera. **Escape** skips the intros. Close the window to quit. After the car is released with `start`, **Up** applies throttle, **Down** brakes/reverses, and **Left/Right** steer. These are basic arcade controls, not a complete engine or transmission model. In the showroom the view turns around the car on its own. Set `SLRR_START_CAR=1` to release a development-spawned car after garage entry.
 
 You can also set the game path with `$env:SLRR_GAME_ROOT`. The `--root` option takes priority; without either setting, the default folder is `../game`. Run `slrr_host.exe --help` for all options.
 

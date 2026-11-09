@@ -1,6 +1,7 @@
 #include "slrr/suspension_geometry.hpp"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 namespace slrr::physics {
 namespace {
 Quaternion axis_angle(Vec3 axis, double angle) {
@@ -105,6 +106,86 @@ bool solve_corner_geometry(const CornerGeometry &g, Vec3 point,
   if (!solved.arm_origin.finite() || !solved.hub_origin.finite())
     return false;
   out = solved;
+  return true;
+}
+
+bool hinge_hub(const WheelConfig &w, Vec3 ray, Vec3 &hub) {
+  if (!(w.arm_length > 0)) {
+    hub = ray;
+    return ray.finite();
+  }
+  CornerGeometry geometry;
+  geometry.reference = w.center;
+  const Vec3 pivot = w.arm_pivot - w.center, axis = w.arm_axis;
+  geometry.arm = {float(w.arm_length), float(pivot.x), float(pivot.y),
+                  float(pivot.z),       float(axis.x),  float(axis.y),
+                  float(axis.z)};
+  geometry.hub = w.hub;
+  geometry.alignment = w.hub_alignment;
+  if (!w.has_hub)
+    geometry.hub[0] = -1;
+  CornerFrames frames;
+  if (!solve_corner_geometry(geometry, ray, frames))
+    return false;
+  hub = frames.hub_origin;
+  return hub.finite();
+}
+
+double suspension_hub_length(const WheelConfig &wheel, const Vec3 &hub) {
+  const Vec3 down = wheel.down.normalized();
+  if (!(wheel.arm_length > 0))
+    return wheel.anchor_length() + (hub - wheel.center).dot(down);
+  const Vec3 axis = wheel.arm_axis.normalized();
+  const Vec3 relative = hub - wheel.arm_pivot;
+  const Vec3 radial = relative - axis * relative.dot(axis);
+  const Vec3 normal = axis.cross(radial);
+  const double denominator = normal.dot(down);
+  if (normal.length() > 1e-12 && std::fabs(denominator) > 1e-9)
+    return wheel.anchor_length() +
+           normal.dot(wheel.arm_pivot - wheel.center) / denominator;
+  return std::numeric_limits<double>::quiet_NaN();
+}
+
+double suspension_motion_ratio(const WheelConfig &wheel, const Vec3 &hub,
+                               const Vec3 &direction) {
+  constexpr double delta = 1e-5;
+  return (suspension_hub_length(wheel, hub + direction * delta) -
+          suspension_hub_length(wheel, hub - direction * delta)) /
+         (2 * delta);
+}
+
+bool chrono_suspension_geometry(const WheelConfig &wheel, double initial) {
+  const Vec3 down = wheel.down.normalized();
+  if (down.length() < .9)
+    return false;
+  const auto ray = wheel.center + down * (initial - wheel.anchor_length());
+  Vec3 physical;
+  if (!hinge_hub(wheel, ray, physical))
+    return false;
+  const double top_mount = std::max(.1, wheel.maximum);
+  const Vec3 anchor =
+      wheel.center - down * (wheel.anchor_length() + top_mount);
+  const double reference =
+      (physical - anchor).length() + wheel.rest - initial;
+  if (!(reference > 1e-6) || !std::isfinite(reference))
+    return false;
+
+  double ratio_sign = 0;
+  for (double sample : {wheel.minimum,
+                        std::clamp(wheel.rest, wheel.minimum, wheel.maximum),
+                        wheel.maximum}) {
+    const auto sample_ray =
+        wheel.center + down * (sample - wheel.anchor_length());
+    Vec3 sample_hub;
+    if (!hinge_hub(wheel, sample_ray, sample_hub))
+      return false;
+    const Vec3 direction = (sample_hub - anchor).normalized();
+    const double ratio = suspension_motion_ratio(wheel, sample_hub, direction);
+    if (!std::isfinite(ratio) || std::fabs(ratio) < 1e-4 ||
+        (ratio_sign && ratio_sign * ratio < 0))
+      return false;
+    ratio_sign = ratio;
+  }
   return true;
 }
 

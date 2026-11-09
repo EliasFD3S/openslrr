@@ -22,6 +22,8 @@ struct BootOptions {
 
 // Probe only: validate game root + classpath bootstrap, no window loop.
 int boot_probe(Jvm& jvm, const BootOptions& opt);
+// Deterministic stock Baiern/garage physics benchmark, no window loop.
+int boot_stock_physics_probe(Jvm& jvm, const BootOptions& opt);
 
 // Interactive / smoke path (Splash → MainMenu → CMD_NEW → Garage).
 // Returns 0 on success. Full section machine lands incrementally.

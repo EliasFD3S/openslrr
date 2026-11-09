@@ -74,6 +74,9 @@ void RigidBody::set_frame(const Matrix &m) {
               m[1] * center.x + m[5] * center.y + m[9] * center.z + m[13],
               m[2] * center.x + m[6] * center.y + m[10] * center.z + m[14]};
   velocity = momentum = force_ = torque_ = {};
+  // A frame assignment is an external placement/teleport. Drop warm contacts
+  // and collision state instead of blending them into the new frame.
+  backend_.reset(nullptr);
 }
 Matrix RigidBody::frame() const {
   Vec3 x = orientation.rotate({1, 0, 0}), y = orientation.rotate({0, 1, 0}),
@@ -101,9 +104,31 @@ void RigidBody::impulse(Vec3 j, Vec3 p) {
   velocity += j / mass;
   momentum += (p - position).cross(j);
 }
+#if SLRR_HAS_CHRONO
+// src/physics/chrono_body.cpp
+void chrono_integrate(RigidBody &body, double dt);
+void chrono_integrate_vehicle(VehicleDynamics &vehicle, double dt,
+                              bool mesh_contacts);
+#else
+struct ChronoBodyState {};
+BackendHandle::BackendHandle() = default;
+BackendHandle::~BackendHandle() = default;
+BackendHandle::BackendHandle(const BackendHandle &) {}
+BackendHandle &BackendHandle::operator=(const BackendHandle &) {
+  state_.reset();
+  return *this;
+}
+BackendHandle::BackendHandle(BackendHandle &&) noexcept = default;
+BackendHandle &BackendHandle::operator=(BackendHandle &&) noexcept = default;
+void BackendHandle::reset(ChronoBodyState *state) { state_.reset(state); }
+const char *backend_name() { return "native"; }
+#endif
 void RigidBody::integrate(double dt) {
   if (!std::isfinite(dt) || dt <= 0)
     throw std::invalid_argument("invalid physics dt");
+#if SLRR_HAS_CHRONO
+  chrono_integrate(*this, dt);
+#else
   velocity += force_ * (dt / mass);
   velocity.y -= 9.81 * dt;
   momentum = (momentum + torque_ * dt) * std::exp(-.08 * dt);
@@ -116,6 +141,7 @@ void RigidBody::integrate(double dt) {
         (Quaternion{axis.x, axis.y, axis.z, std::cos(angle * .5)} * orientation)
             .normalized();
   }
+#endif
   force_ = torque_ = {};
   if (!position.finite() || !velocity.finite() || !momentum.finite())
     throw std::runtime_error("non-finite rigid state");
@@ -166,6 +192,46 @@ Vec3 body_point(const RigidBody &body, Vec3 local) {
 }
 double suspension_force(double length, double speed, double rest, double max,
                         double k, double bump, double rebound);
+bool chrono_suspension_eligible(const VehicleDynamics &vehicle, size_t index) {
+#if SLRR_HAS_CHRONO
+  if (!vehicle.collision || index >= vehicle.wheels.size())
+    return false;
+  const auto &wheel = vehicle.wheels[index];
+  if (!wheel.enabled || wheel.rigid_contact || !(wheel.unsprung > 0) ||
+      wheel.has_hub || !(wheel.spring > 0) || !(wheel.radius > 0) ||
+      wheel.maximum < wheel.minimum || wheel.down.normalized().length() < .9)
+    return false;
+  // Ownership is configuration-stable. Mutable travel/seed values must not
+  // switch a live corner between native and Chrono ownership mid-step.
+  const double reference =
+      std::clamp(wheel.rest, wheel.minimum, wheel.maximum);
+  return chrono_suspension_geometry(wheel, reference);
+#else
+  return false;
+#endif
+}
+// Reduced legacy parked-friction model, deliberately chassis-only. Independent
+// wheel slip velocity, wheel reaction, and spin belong to the future driving
+// tyre stage; this is not a complete moving-vehicle tyre model.
+void constrained_parked_friction(RigidBody &body, const WheelState &state,
+                                 double dt) {
+  if (!state.contact || !(state.normal_load > 0))
+    return;
+  const Vec3 normal = state.normal.normalized();
+  Vec3 velocity = body.point_velocity(state.patch);
+  Vec3 tangent = velocity - normal * velocity.dot(normal);
+  const double slip = tangent.length();
+  if (slip <= 1e-9)
+    return;
+  tangent = tangent / slip;
+  const Vec3 arm = state.patch - body.position;
+  const double inverse =
+      1 / body.mass +
+      tangent.dot(body.inverse_world_inertia(arm.cross(tangent)).cross(arm));
+  const double amount =
+      std::min(state.normal_load * .8, slip / (inverse * dt * 4));
+  body.add_force(tangent * (-amount), state.patch);
+}
 // Integrate travel along the strut and transmit ground support at its mount.
 void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
                   const Terrain &terrain, double ceiling, double dt,
@@ -235,13 +301,14 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
   s.speed = speed;
   s.contact = contact;
   s.force = s.contact ? force : 0;
+  s.normal_load = s.contact ? s.force + w.unsprung * 9.81 : 0.0;
   if (s.contact) body.add_force(normal * s.force, hard);
   s.normal = normal;
   s.hub = pose.hub_origin;
   s.hub_rotation = pose.hub_rotation;
   s.center = hub_w;
   s.patch = s.center - normal * w.radius;
-  if (!s.contact)
+  if (!s.contact || !parked_friction)
     return;
   if (!parked_friction) return;
   Vec3 velocity = body.point_velocity(s.patch);
@@ -522,6 +589,23 @@ void VehicleDynamics::step_drive() {
 }
 
 void VehicleDynamics::step(const Terrain &terrain) {
+#if SLRR_HAS_CHRONO
+  bool native_sprung = false, constrained_any = false, rigid_any = false;
+  for (size_t i = 0; i < wheels.size(); ++i) {
+    if (!wheels[i].enabled)
+      continue;
+    rigid_any = rigid_any || wheels[i].rigid_contact;
+    const bool constrained = chrono_suspension_eligible(*this, i);
+    constrained_any = constrained_any || constrained;
+    native_sprung = native_sprung ||
+                    (!wheels[i].rigid_contact && !constrained);
+  }
+  // A legacy sprung solver already owns its wheel contacts. Adding the full
+  // Chrono mesh world both duplicates response and costs narrow-phase time on
+  // every step. Use mesh contacts only where Chrono or rigid wheels need them.
+  const bool mesh_contacts =
+      collision && (!native_sprung || constrained_any || rigid_any);
+#endif
   // Recover initial overlaps through physical contacts, not a floor teleport.
   double ceiling = body.position.y;
   for (Vec3 p : body.corners())
@@ -529,12 +613,24 @@ void VehicleDynamics::step(const Terrain &terrain) {
   for (size_t i = 0; i < wheels.size(); ++i) {
     const auto &w = wheels[i];
     auto &s = state[i];
-    s.contact = false;
-    s.force = 0;
+    const bool constrained = chrono_suspension_eligible(*this, i);
+    s.constrained = constrained;
+    if (!constrained) {
+      s.contact = false;
+      s.force = 0;
+      s.normal_load = 0;
+    }
     if (!s.seeded)
       s.length = w.maximum;
     if (!w.enabled)
       continue;
+    if (constrained) {
+      // Chrono owns the spring, body, and ground contact. Keep only the legacy
+      // chassis-only parked-friction stage, driven by per-contact normal load.
+      if (!drive.torque)
+        constrained_parked_friction(body, s, timestep);
+      continue;
+    }
     if (w.rigid_contact) {
       s.length = w.minimum;
       s.speed = 0;
@@ -567,6 +663,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
         w.spring, w.bump_damping, w.rebound_damping);
     force += std::max(0.0, w.minimum - length) * w.spring * 8;
     s.force = std::clamp(force, 0.0, body.mass * 9.81 * 3);
+    s.normal_load = s.force;
     body.add_force(s.normal * s.force, hard);
     // Parked tyre friction consumes kinetic motion, bounded by normal load.
     const Vec3 point = body_point(body, wheel_pose(w, s.length).hub_origin) -
@@ -587,7 +684,32 @@ void VehicleDynamics::step(const Terrain &terrain) {
     }
   }
   if (drive.torque && drive.inertia > 0) step_drive();
+#if SLRR_HAS_CHRONO
+  chrono_integrate_vehicle(*this, timestep, mesh_contacts);
+  if (mesh_contacts) {
+    // Chrono's contact constraints have already changed the integrated state.
+    // Only refresh rigid-wheel diagnostics here; applying the native corner
+    // impulses as well would count the same contacts twice.
+    for (size_t i = 0; i < wheels.size(); ++i) {
+      const auto &wheel = wheels[i];
+      if (!wheel.enabled || !wheel.rigid_contact)
+        continue;
+      const auto center =
+          body_point(body, wheel_pose(wheel, wheel.minimum).hub_origin);
+      GroundHit ground;
+      if (terrain(center.x, center.z,
+                  std::max(ceiling, center.y + wheel.radius + .1), ground)) {
+        state[i].contact =
+            center.y - wheel.radius <= ground.height + .01;
+        state[i].normal = ground.normal.normalized();
+      }
+    }
+    sync_wheels();
+    return;
+  }
+#else
   body.integrate(timestep);
+#endif
   for (int iteration = 0; iteration < 4; ++iteration) {
     double depth = 0;
     Vec3 correction;
@@ -646,8 +768,11 @@ void VehicleDynamics::sync_wheels() {
     const auto &w = wheels[i];
     auto &s = state[i];
     const auto pose = wheel_pose(w, s.length);
-    s.hub = pose.hub_origin;
     s.hub_rotation = pose.hub_rotation;
+    // Chrono-owned corners keep the hub and centre reported by their bodies.
+    if (s.constrained)
+      continue;
+    s.hub = pose.hub_origin;
     s.center = body_point(body, s.hub);
   }
 }
@@ -683,6 +808,7 @@ void VehicleDynamics::reset_drive() {
 void VehicleDynamics::release_wheels() {
   for (auto &wheel : state)
     wheel = {};
+  ++suspension_generation;
 }
 uint64_t VehicleDynamics::backlog() const {
   return static_cast<uint64_t>((accumulator_ + timestep * 1e-10) / timestep);

@@ -92,6 +92,11 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         self->fields["vp_ready"] = Value::make_int(0);
         gameref_remove(self);
         self->fields["active"] = Value::make_int(0);
+        if (std::getenv("SLRR_OSD_DEBUG")) {
+          auto dbg = self->fields.find("_osd");
+          std::printf("[osd] viewport %p deactivate osd=%p\n", static_cast<void*>(self),
+                      dbg != self->fields.end() && dbg->second.tag == ValueTag::Obj ? static_cast<void*>(dbg->second.v.o) : nullptr);
+        }
         auto it = self->fields.find("_osd");
         if (it != self->fields.end() && it->second.tag == ValueTag::Obj)
           osd_set_owner_visible(it->second.v.o, false);
@@ -106,6 +111,11 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         self->fields["active"] = Value::make_int(1);
         self->fields["vp_renderflags"] = Value::make_int(flags);
         if(auto* state=gameref_get(self)){state->vp_active=true;state->vp_flags=flags;}
+        if (std::getenv("SLRR_OSD_DEBUG")) {
+          auto dbg = self->fields.find("_osd");
+          std::printf("[osd] viewport %p activate osd=%p\n", static_cast<void*>(self),
+                      dbg != self->fields.end() && dbg->second.tag == ValueTag::Obj ? static_cast<void*>(dbg->second.v.o) : nullptr);
+        }
         auto it = self->fields.find("_osd");
         if (it != self->fields.end() && it->second.tag == ValueTag::Obj)
           osd_set_owner_visible(it->second.v.o, true);
@@ -118,6 +128,11 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         self->fields["active"] = Value::make_int(0);
         self->fields["vp_renderflags"] = Value::make_int(0);
         if(auto* state=gameref_get(self))state->vp_active=false;
+        if (std::getenv("SLRR_OSD_DEBUG")) {
+          auto dbg = self->fields.find("_osd");
+          std::printf("[osd] viewport %p deactivate osd=%p\n", static_cast<void*>(self),
+                      dbg != self->fields.end() && dbg->second.tag == ValueTag::Obj ? static_cast<void*>(dbg->second.v.o) : nullptr);
+        }
         auto it = self->fields.find("_osd");
         if (it != self->fields.end() && it->second.tag == ValueTag::Obj)
           osd_set_owner_visible(it->second.v.o, false);

@@ -3,6 +3,8 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <memory>
+#include <vector>
 
 namespace slrr::physics {
 // Script-space metres, kilograms and seconds. Renderer handedness stays
@@ -12,6 +14,7 @@ struct Vec3 {
   Vec3 operator+(Vec3 b) const { return {x + b.x, y + b.y, z + b.z}; }
   Vec3 operator-(Vec3 b) const { return {x - b.x, y - b.y, z - b.z}; }
   Vec3 operator-() const { return {-x, -y, -z}; }
+  bool operator==(const Vec3 &) const = default;
   Vec3 operator*(double s) const { return {x * s, y * s, z * s}; }
   Vec3 operator/(double s) const { return *this * (1 / s); }
   Vec3 &operator+=(Vec3 b) {
@@ -28,12 +31,42 @@ struct Vec3 {
 };
 struct Quaternion {
   double x = 0, y = 0, z = 0, w = 1;
+  bool operator==(const Quaternion &) const = default;
   Quaternion operator*(Quaternion b) const;
   Quaternion normalized() const;
   Vec3 rotate(Vec3 v) const;
   Vec3 inverse_rotate(Vec3 v) const;
 };
 using Matrix = std::array<float, 16>;
+
+// World-space static collision triangles, in script metres. A null mesh keeps
+// the native corner-contact fallback; a non-null mesh enables Chrono contacts.
+struct CollisionMesh {
+  std::vector<float> positions; // xyz
+  std::vector<uint32_t> indices;
+};
+
+// Integration backend state (Project Chrono when SLRR_HAS_CHRONO). The
+// RigidBody fields stay the authoritative mirror: callers may overwrite
+// velocity/momentum at any time and the backend is resynchronized from them
+// on every step. Copies start with a fresh backend instead of sharing one.
+struct ChronoBodyState;
+class BackendHandle {
+public:
+  BackendHandle();
+  ~BackendHandle();
+  BackendHandle(const BackendHandle &);
+  BackendHandle &operator=(const BackendHandle &);
+  BackendHandle(BackendHandle &&) noexcept;
+  BackendHandle &operator=(BackendHandle &&) noexcept;
+  ChronoBodyState *get() const { return state_.get(); }
+  void reset(ChronoBodyState *state);
+
+private:
+  std::unique_ptr<ChronoBodyState> state_;
+};
+// "chrono" or "native": the integrator RigidBody::integrate uses.
+const char *backend_name();
 
 // Adapted contracts: SLRR_rev a2ee10de, rigid-body-3d.ts. Box inertia is the
 // upstream approximation; it is not the original game's compound inertia.
@@ -56,7 +89,9 @@ public:
   std::array<Vec3, 8> corners() const;
 
 private:
+  friend struct ChronoIntegrator;
   Vec3 inverse_inertia_, force_, torque_;
+  BackendHandle backend_;
 };
 
 struct GroundHit {
@@ -85,10 +120,16 @@ struct WheelConfig {
   std::array<float, 10> hub{};
   Quaternion hub_alignment;
   bool linked() const { return unsprung > 0 || arm_length > 0; }
+  bool operator==(const WheelConfig &) const = default;
 };
 struct WheelState {
+  // True when a Chrono body/constraint owns this wheel's suspension dynamics.
+  // Native code still consumes the mirrored pose, contact, load, and travel.
+  bool constrained = false;
   bool contact = false, seeded = false;
   double length = 0, speed = 0, force = 0;
+  // Raw wheel-ground normal load, separate from chassis spring support `force`.
+  double normal_load = 0;
   Vec3 center, normal{0, 1, 0}, hub, patch;
   Quaternion hub_rotation;
   double spin = 0, rotation = 0;
@@ -123,6 +164,9 @@ public:
   static constexpr unsigned update_frequency = 60;
   static constexpr double timestep = 1.0 / frequency;
   RigidBody body;
+  // Shared immutable scene snapshot. The native backend ignores this and the
+  // Chrono backend rebuilds its static collision body when the pointer changes.
+  std::shared_ptr<const CollisionMesh> collision;
   struct Impact {
     Vec3 point, normal;
     double speed = 0;
@@ -134,6 +178,8 @@ public:
   bool engine_running = false;
   int gear = 0;
   uint64_t ticks = 0;
+  // Incremented by external wheel reseeding so Chrono recreates body states.
+  uint64_t suspension_generation = 0;
   unsigned advance(double seconds, const Terrain &terrain);
   void reset_clock();
   void release_wheels();
