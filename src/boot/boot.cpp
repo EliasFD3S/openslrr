@@ -265,7 +265,8 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
   const bool want_window =
       opt.window || opt.render == RenderBackendKind::Bgfx || opt.auto_new;
   if (want_window) {
-    if (!render.open(800, 600, "OpenSLRR - " SLRR_VERSION)) {
+    const auto mode = host_game_options().video.mode;
+    if (!render.open(mode.width, mode.height, "OpenSLRR - " SLRR_VERSION)) {
       std::fprintf(stderr, "[boot] render.open failed (%s)\n", render.name());
       return 3;
     }
@@ -392,6 +393,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     bgfx_try_scx_smoke(render, abs);
     ScxGeometry geo = load_scx_geometry(abs);
     geo.textures = std::move(model.textures);
+    scx_resolve_baked_lightmaps(geo);
     std::printf(
         "[boot] RPK garage render 0x%x '%s' v=%u groups=%d verts=%d "
         "tris=%d tex=%zu ok=%d\n",
@@ -416,6 +418,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
         opt.game_root + "/misc/garage/g1/garazs_01.scx";
     ScxGeometry scx_geo = load_scx_geometry(garage_scx);
     scx_geo.textures = rpk.textures_for_scx(garage_scx);
+    scx_resolve_baked_lightmaps(scx_geo);
     scx_verts = scx_geo.info.vertices;
     scx_tris = scx_geo.info.triangles;
     if (scx_geo.info.ok) {

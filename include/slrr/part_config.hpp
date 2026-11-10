@@ -57,11 +57,13 @@ struct PartLink {
 };
 struct PartRender {
   uint32_t resource = 0;
+  std::vector<uint32_t> variants;
   PartPose pose;
   uint32_t flags = 0;
   // -1: always drawn. 0 lo-res, 1 hi-res, 2 extr-hi-res. Alternatives, not
   // layers.
   int lod_level = -1;
+  int lod_last = -1;
   // A `render` line after `wheel` is that wheel's mesh. -1 is the body.
   int wheel = -1;
   // `colors N rgb...` on this render. The create string's seventh field

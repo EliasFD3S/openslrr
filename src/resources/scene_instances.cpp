@@ -8,6 +8,7 @@
 #include "slrr/vehicle_dynamics.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <charconv>
 #include <cctype>
 #include <cmath>
@@ -17,6 +18,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -53,11 +55,21 @@ uint64_t floor_cell(int32_t x, int32_t z) {
 struct GroundProp {
   uint32_t render_id;
   PartMatrix pose;
+  uint32_t color;
+  std::array<float, 3> center{};
+  float radius = 0.f;
 };
-using GroundPropCells = std::unordered_map<uint64_t, std::vector<GroundProp>>;
-std::unordered_map<uint32_t, GroundPropCells> g_ground_props;
+struct GroundPropCell {
+  std::vector<GroundProp> props;
+  std::array<float, 3> center{};
+  float radius = 0.f;
+};
+struct GroundPropMap {
+  std::unordered_map<uint64_t, GroundPropCell> cells;
+  std::vector<uint32_t> resources;
+};
+std::unordered_map<uint32_t, GroundPropMap> g_ground_props;
 constexpr float kPropCellSize = 64.f;
-constexpr float kPropViewRange = 192.f;
 
 int32_t prop_cell(float value) {
   return static_cast<int32_t>(std::floor(value / kPropCellSize));
@@ -163,28 +175,23 @@ void local_matrix(const GameRefState &n, float *m) {
   m[14] = n.pos[2];
 }
 
-std::shared_ptr<const ScxGeometry> geometry(uint32_t id) {
-  auto over = g_overrides.find(id);
-  if (over != g_overrides.end())
-    return over->second;
-  auto found = g_meshes.find(id);
-  if (found != g_meshes.end())
-    return found->second;
+std::shared_ptr<const ScxGeometry> load_geometry(const RpkIndex& resources, uint32_t id) {
   std::shared_ptr<const ScxGeometry> result;
   const int pack = RpkIndex::pack_from_full(id);
-  auto model = g_resources->model_for_resource(pack, id & 0xffffu);
+  auto model = resources.model_for_resource(pack, id & 0xffffu);
   if (model.ok) {
     std::string source = model.source;
     std::replace(source.begin(), source.end(), '\\', '/');
     std::filesystem::path path =
-        std::filesystem::path(g_resources->game_root()) / source;
+        std::filesystem::path(resources.game_root()) / source;
     std::string ext = path.extension().string();
     for (char &c : ext)
       c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     if (ext == ".scy") {
       auto scx = path;
       scx.replace_extension(".scx");
-      if (std::filesystem::exists(scx))
+      std::error_code error;
+      if (std::filesystem::exists(scx, error))
         path = scx;
     }
     ext = path.extension().string();
@@ -198,18 +205,61 @@ std::shared_ptr<const ScxGeometry> geometry(uint32_t id) {
           std::replace(texture.begin(), texture.end(), '\\', '/');
           if (!texture.empty() && std::filesystem::path(texture).is_relative())
             texture =
-                (std::filesystem::path(g_resources->game_root()) / texture)
+                (std::filesystem::path(resources.game_root()) / texture)
                     .string();
         }
         mesh->textures = std::move(model.textures);
+        scx_resolve_baked_lightmaps(*mesh);
         result = std::move(mesh);
         std::printf("[scene] resource=0x%x source=%s vertices=%d\n", id,
                     path.string().c_str(), result->info.vertices);
       }
     }
   }
-  g_meshes.emplace(id, result);
   return result;
+}
+
+std::shared_ptr<const ScxGeometry> geometry(uint32_t id) {
+  if (auto over = g_overrides.find(id); over != g_overrides.end()) return over->second;
+  if (auto found = g_meshes.find(id); found != g_meshes.end()) return found->second;
+  auto mesh = load_geometry(*g_resources, id);
+  g_meshes.emplace(id, mesh);
+  return mesh;
+}
+
+void preload_ground_meshes(const std::vector<uint32_t>& resources) {
+  std::vector<uint32_t> missing;
+  for (const auto id : resources)
+    if (!g_meshes.contains(id) && !g_overrides.contains(id)) missing.push_back(id);
+  if (missing.empty()) return;
+  std::vector<std::shared_ptr<const ScxGeometry>> decoded(missing.size());
+  std::atomic_size_t next{0};
+  const auto& index = *g_resources;
+  const auto parse = [&] {
+    for (size_t job = next.fetch_add(1); job < missing.size(); job = next.fetch_add(1))
+      decoded[job] = load_geometry(index, missing[job]);
+  };
+  // Workers only read assets. Publish the completed cache on the host thread,
+  // while the loading screen is still up.
+  {
+    std::vector<std::jthread> workers;
+    const auto count = std::min<size_t>({missing.size(), 4u,
+        std::max(1u, std::thread::hardware_concurrency())});
+    try {
+      for (size_t i = 1; i < count; ++i) workers.emplace_back(parse);
+    } catch (const std::system_error&) {
+      // The calling thread can finish the queue if a worker cannot start.
+    }
+    parse();
+  }
+  for (size_t i = 0; i < missing.size(); ++i)
+    g_meshes.emplace(missing[i], std::move(decoded[i]));
+}
+
+std::array<float, 3> transform_point(const PartMatrix& matrix, const std::array<float, 3>& p) {
+  return {matrix[0] * p[0] + matrix[4] * p[1] + matrix[8] * p[2] + matrix[12],
+          matrix[1] * p[0] + matrix[5] * p[1] + matrix[9] * p[2] + matrix[13],
+          matrix[2] * p[0] + matrix[6] * p[1] + matrix[10] * p[2] + matrix[14]};
 }
 
 uint32_t rd32(const uint8_t *p) {
@@ -267,6 +317,17 @@ void append_ground_placement(GroundWalk& walk, std::string_view text) {
       if (comma == std::string_view::npos || text[comma] != ',') return;
       text.remove_prefix(comma + 1);
     }
+  }
+  const auto tail = text.find_first_not_of(" \t");
+  text.remove_prefix(tail == std::string_view::npos ? text.size() : tail);
+  if (text.starts_with(',')) {
+    text.remove_prefix(1);
+    const auto start = text.find_first_not_of(" \t");
+    if (start == std::string_view::npos) return;
+    text.remove_prefix(start);
+    const auto parsed = std::from_chars(text.data(), end, placement.seed);
+    if (parsed.ec != std::errc{}) return;
+    text.remove_prefix(parsed.ptr - text.data());
   }
   if (text.empty() || text.front() == '\r' || text.front() == '\n' || text.front() == '\0')
     walk.placements.push_back(placement);
@@ -1138,33 +1199,49 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root) {
   }
   return out;
 }
-std::vector<SceneInstance> scene_instances_collect() {
+bool scene_instances_has_ground_props() {
+  const auto* world = gameref_get(g_world);
+  if (!world || g_ground_props.empty()) return false;
+  for (auto* child : world->children)
+    if (const auto* shell = gameref_get(child);
+        shell && g_ground_props.contains(static_cast<uint32_t>(shell->type_id)))
+      return true;
+  return false;
+}
+
+std::vector<SceneInstance> scene_instances_collect(
+    const SceneFrustum* frustum,
+    std::vector<std::shared_ptr<const ScxGeometry>>* resident_props) {
   auto out = scene_instances_collect_root(g_world);
   if (g_ground_props.empty()) return out;
-  float eye[3], at[3];
-  if (!gameref_world_camera(eye, at, nullptr, nullptr, nullptr)) return out;
   const size_t base_count = out.size();
   for (size_t i = 0; i < base_count; ++i) {
     const auto found = g_ground_props.find(static_cast<uint32_t>(out[i].type_id));
     if (found == g_ground_props.end()) continue;
     PartMatrix shell;
     if (!scene_instances_script_matrix(out[i].key, shell.data())) continue;
-    const auto inverse = part_matrix_inverse_rigid(shell);
-    const float x = inverse[0] * eye[0] + inverse[4] * eye[1] + inverse[8] * eye[2] + inverse[12];
-    const float z = inverse[2] * eye[0] + inverse[6] * eye[1] + inverse[10] * eye[2] + inverse[14];
+    if (resident_props)
+      for (const auto id : found->second.resources)
+        if (auto mesh = geometry(id)) resident_props->push_back(std::move(mesh));
+    const auto visible = [&](const std::array<float, 3>& center, float radius) {
+      if (!frustum) return true;
+      const auto world = transform_point(shell, center);
+      for (const auto& plane : *frustum)
+        if (plane[0] * world[0] + plane[1] * world[1] - plane[2] * world[2] + plane[3] < -radius)
+          return false;
+      return true;
+    };
     const SceneSun lighting = out[i].lighting;
-    for (int32_t cx = prop_cell(x - kPropViewRange); cx <= prop_cell(x + kPropViewRange); ++cx)
-      for (int32_t cz = prop_cell(z - kPropViewRange); cz <= prop_cell(z + kPropViewRange); ++cz) {
-        const auto cell = found->second.find(floor_cell(cx, cz));
-        if (cell == found->second.end()) continue;
-        for (const auto& prop : cell->second) {
-          const float dx = prop.pose[12] - x, dz = prop.pose[14] - z;
-          if (dx * dx + dz * dz > kPropViewRange * kPropViewRange) continue;
+    for (const auto& [key, cell] : found->second.cells) {
+        if (!visible(cell.center, cell.radius)) continue;
+        for (const auto& prop : cell.props) {
+          if (!visible(prop.center, prop.radius)) continue;
           auto mesh = geometry(prop.render_id);
           if (!mesh) continue;
           SceneInstance instance;
           instance.cull_backfaces = true;
           instance.type_id = static_cast<int32_t>(prop.render_id);
+          instance.color = prop.color;
           instance.lighting = lighting;
           instance.geometry = std::move(mesh);
           instance.transform = part_matrix_multiply(shell, prop.pose);
@@ -1328,39 +1405,121 @@ GroundMapData scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id
   return map;
 }
 
+namespace {
+std::vector<PartRender> ground_prop_renders(const RpkIndex& rpk, uint32_t type) {
+  const auto bytes = rpk.read_payload(type);
+  if (bytes.size() < 10 || std::memcmp(bytes.data(), "ICFG", 4) != 0) return {};
+  const auto separator = std::find(bytes.begin() + 8, bytes.end(), 0);
+  if (separator == bytes.end()) return {};
+  const auto offset = static_cast<size_t>(separator - bytes.begin());
+  const std::string_view subtype(reinterpret_cast<const char*>(bytes.data() + 8), offset - 8);
+  if (subtype != "object" && subtype != "trlight" && subtype != "building") return {};
+  std::string cfg(reinterpret_cast<const char*>(bytes.data() + offset + 1), bytes.size() - offset - 1);
+  // Several stock lane supports have a malformed yaw token on their second render.
+  constexpr std::string_view joined_yaw = "-1.570.000000";
+  for (size_t pos = cfg.find(joined_yaw); pos != std::string::npos;
+       pos = cfg.find(joined_yaw, pos + 6))
+    cfg.replace(pos, joined_yaw.size(), "-1.570");
+  return parse_part_config(cfg, &rpk, RpkIndex::pack_from_full(type)).renders;
+}
+
+bool ground_prop_is_mesh(const RpkIndex& rpk, uint32_t resource) {
+  const auto* entry = rpk.resolve(resource);
+  if (!entry || (entry->typeof_ != 14 && entry->typeof_ != 5)) return false;
+  std::string alias = entry->alias;
+  for (char& c : alias)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  const auto word = alias.find("night");
+  constexpr std::string_view separators = "/\\ _-.";
+  return word == std::string::npos ||
+      (word > 0 && separators.find(alias[word - 1]) == std::string_view::npos) ||
+      (word + 5 < alias.size() && separators.find(alias[word + 5]) == std::string_view::npos);
+}
+}
+
 void scene_instances_add_ground_props(const GroundMapData& map) {
   if (!g_resources || map.placements.empty() || g_ground_props.contains(map.render_id))
     return;
-  auto& cells = g_ground_props[map.render_id];
+  auto& props_map = g_ground_props[map.render_id];
+  auto& cells = props_map.cells;
   std::unordered_map<uint32_t, std::vector<PartRender>> render_types;
+  std::unordered_map<uint32_t, bool> visible_resources;
+  const auto is_visible = [&](uint32_t resource) {
+    if (!resource) return false;
+    auto [visible, unseen] = visible_resources.try_emplace(resource, false);
+    if (unseen) visible->second = ground_prop_is_mesh(*g_resources, resource);
+    return visible->second;
+  };
   size_t props = 0;
+  std::unordered_set<uint32_t> used_resources;
   for (const auto& placement : map.placements) {
     auto [type, added] = render_types.try_emplace(placement.type);
     if (added) {
-      const auto bytes = g_resources->read_payload(placement.type);
-      if (bytes.size() > 15 && std::memcmp(bytes.data(), "ICFG", 4) == 0 &&
-          std::memcmp(bytes.data() + 8, "object\0", 7) == 0) {
-        const std::string cfg(reinterpret_cast<const char*>(bytes.data() + 15), bytes.size() - 15);
-        auto renders = parse_part_config(cfg, g_resources,
-                                        RpkIndex::pack_from_full(placement.type)).renders;
-        int best_lod = -1;
-        for (const auto& render : renders)
-          if (!render.flags) best_lod = std::max(best_lod, render.lod_level);
-        for (auto& render : renders)
-          if (render.resource && !render.flags &&
-              (render.lod_level < 0 || render.lod_level == best_lod))
-            type->second.push_back(std::move(render));
+      type->second = ground_prop_renders(*g_resources, placement.type);
+      auto& renders = type->second;
+      std::erase_if(renders, [&](const PartRender& render) {
+        return render.variants.empty() ? !is_visible(render.resource)
+            : std::none_of(render.variants.begin(), render.variants.end(), is_visible);
+      });
+      const auto score = [](const PartRender& render) {
+        return std::pair{render.lod_level + render.lod_last, render.lod_last};
+      };
+      const auto best = std::max_element(renders.begin(), renders.end(),
+          [&](const PartRender& a, const PartRender& b) { return score(a) < score(b); });
+      if (best != renders.end() && best->lod_level >= 0) {
+        const auto best_index = static_cast<size_t>(best - renders.begin());
+        for (size_t i = renders.size(); i-- > 0;)
+          if (i != best_index && renders[i].lod_level >= 0)
+            renders.erase(renders.begin() + i);
       }
     }
     if (type->second.empty()) continue;
     const auto pose = part_pose_matrix({placement.position, placement.rotation});
+    const auto& p = placement.position;
+    // The native object uses one seed for all render slots and palettes.
+    const float sum = (p[0] + p[1]) + p[2];
+    const auto fallback = std::isfinite(sum)
+        ? static_cast<int32_t>(std::fmod(static_cast<double>(sum), 2147483648.)) : 0;
+    const uint32_t seed = static_cast<uint32_t>(placement.seed >= 0 ? placement.seed : fallback)
+                          & 0x7fffffffu;
     for (const auto& render : type->second) {
+      const auto resource = render.variants.empty() ? render.resource
+          : render.variants[seed % render.variants.size()];
+      if (!is_visible(resource)) continue;
+      const auto color = render.colors.empty() ? 0xffffffu : render.colors[seed % render.colors.size()];
       const auto transform = part_matrix_multiply(pose, part_pose_matrix(render.pose));
-      cells[floor_cell(prop_cell(transform[12]), prop_cell(transform[14]))].push_back(
-          {render.resource, transform});
+      cells[floor_cell(prop_cell(transform[12]), prop_cell(transform[14]))].props.push_back(
+          {resource, transform, color});
+      used_resources.insert(resource);
       ++props;
     }
   }
+  props_map.resources.assign(used_resources.begin(), used_resources.end());
+  preload_ground_meshes(props_map.resources);
+  for (auto& [key, cell] : cells) {
+    std::array<float, 3> lower, upper;
+    lower.fill(std::numeric_limits<float>::infinity());
+    upper.fill(-std::numeric_limits<float>::infinity());
+    std::erase_if(cell.props, [](const GroundProp& prop) { return !geometry(prop.render_id); });
+    for (auto& prop : cell.props) {
+      const auto mesh = geometry(prop.render_id);
+      std::array<float, 3> center{}, half{};
+      for (int axis = 0; axis < 3; ++axis) {
+        center[axis] = (mesh->info.bbox_min[axis] + mesh->info.bbox_max[axis]) * mesh->position_scale * .5f;
+        half[axis] = (mesh->info.bbox_max[axis] - mesh->info.bbox_min[axis]) * mesh->position_scale * .5f;
+      }
+      prop.center = transform_point(prop.pose, center);
+      prop.radius = std::hypot(half[0], half[1], half[2]);
+      for (int axis = 0; axis < 3; ++axis) {
+        lower[axis] = std::min(lower[axis], prop.center[axis] - prop.radius);
+        upper[axis] = std::max(upper[axis], prop.center[axis] + prop.radius);
+      }
+    }
+    if (cell.props.empty()) continue;
+    for (int axis = 0; axis < 3; ++axis) cell.center[axis] = (lower[axis] + upper[axis]) * .5f;
+    cell.radius = .5f * std::hypot(upper[0] - lower[0], upper[1] - lower[1], upper[2] - lower[2]);
+  }
+  std::erase_if(cells, [](const auto& entry) { return entry.second.props.empty(); });
   std::printf("[scene] ground props 0x%x placements=%zu renders=%zu\n", map.render_id,
               map.placements.size(), props);
 }

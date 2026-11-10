@@ -1,11 +1,15 @@
-$input v_normal, v_texcoord0, v_texcoord1, v_texcoord2, v_color0
+$input v_normal, v_texcoord0, v_texcoord1, v_texcoord2, v_color0, v_staticShadow, v_worldPos
 
 #include <bgfx_shader.sh>
 
 SAMPLER2D(s_texColor, 0);
 SAMPLER2D(s_lightmap, 1);
 SAMPLER2D(s_meshMix, 2);
-// x: cutout (discard a<0.5)
+SAMPLER2D(s_staticShadow, 3);
+// x: strength, y: texel size, z: depth bias.
+uniform vec4 u_staticShadowParams;
+uniform vec4 u_staticShadowEye;
+// x: legacy cutout when positive, or -(reference + 1) / 255 for SCX4
 // y: unlit (skip ndl — OSD icons)
 // z: write texture alpha (blend) instead of opaque 1
 uniform vec4 u_alphaTest;
@@ -33,12 +37,16 @@ void main()
 		vec4 layer = texture2D(s_meshMix, uvSet(u_lightmap.w - 1.0, v_texcoord0, v_texcoord1, v_texcoord2));
 		tex.rgb = mix(tex.rgb, layer.rgb, layer.a);
 	}
-	if (u_alphaTest.x > 0.5 && tex.a < 0.5)
+	if ((u_alphaTest.x > 0.5 && tex.a < 0.5)
+		|| (u_alphaTest.x < 0.0 && tex.a * 255.0 <= -u_alphaTest.x * 255.0 - 1.0))
 		discard;
 	float light = (u_alphaTest.y > 0.75) ? 1.0 : ((u_alphaTest.y > 0.25) ? 0.65 + 0.35 * ndl : ndl);
 	float outA = (u_alphaTest.z > 0.5) ? tex.a : 1.0;
 	vec3 tint = u_color.rgb;
-	if (u_alphaTest.w < -0.5) {
+	if (u_alphaTest.w < -1.5) {
+		tex.rgb = mix(tint, tex.rgb, tex.a);
+		tint = vec3(1.0, 1.0, 1.0);
+	} else if (u_alphaTest.w < -0.5) {
 		// City window textures provide the mix weight for the vertex-coloured wall.
 		tex.rgb = mix(v_color0.rgb, tex.rgb, tex.a);
 	} else if (u_alphaTest.w > 1.5) {
@@ -56,5 +64,23 @@ void main()
 	float use = step(0.5, u_lightmap.x);
 	light = mix(light, 1.0, use);
 	bake = mix(vec3(1.0, 1.0, 1.0), bake, use);
-	gl_FragColor = vec4(tex.rgb * bake * light * tint, outA * u_color.a);
+	float visibility = 1.0;
+	if (u_staticShadowParams.x > 0.0 && use < 0.5) {
+		vec3 p = v_staticShadow;
+		float edge = min(min(p.x, 1.0 - p.x), min(p.y, 1.0 - p.y));
+		float range = u_staticShadowEye.w;
+		float distanceToEye = length(v_worldPos - u_staticShadowEye.xyz);
+		if (distanceToEye < range && edge > u_staticShadowParams.y && p.z > 0.0 && p.z < 1.0) {
+			vec2 t = vec2(u_staticShadowParams.y, 0.0);
+			float depth = p.z - u_staticShadowParams.z;
+			float visible = step(depth, texture2D(s_staticShadow, p.xy + t.xy).r)
+			              + step(depth, texture2D(s_staticShadow, p.xy - t.xy).r)
+			              + step(depth, texture2D(s_staticShadow, p.xy + t.yx).r)
+			              + step(depth, texture2D(s_staticShadow, p.xy - t.yx).r);
+			visibility -= (1.0 - visible * 0.25) * u_staticShadowParams.x *
+			              (1.0 - smoothstep(range * 0.65, range, distanceToEye)) *
+			              smoothstep(0.01, 0.10, edge);
+		}
+	}
+	gl_FragColor = vec4(tex.rgb * bake * light * tint * visibility, outA * u_color.a);
 }

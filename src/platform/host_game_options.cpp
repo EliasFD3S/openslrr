@@ -24,6 +24,16 @@ GameOptions read_options(Jvm& jvm) {
     return value.tag == ValueTag::Int ? value.v.i : fallback;
   };
   GameOptions options;
+  auto& video = options.video;
+  video.mode = {std::clamp(integer("video_x", 800), 320, 8192),
+                std::clamp(integer("video_y", 600), 240, 8192),
+                integer("video_depth", 32), integer("video_windowed", 1) != 0};
+  video.view_distance = std::clamp(read("camera_ext_viewrange", 400.f), 50.f, 2050.f);
+  const float shadow_detail = std::max(read("shadow_detail", .25f), .001f);
+  video.shadow_distance = std::clamp(10.f / shadow_detail, 10.f, 210.f);
+  video.shadow_size = std::clamp(integer("shadow_size", 256), 32, 1024);
+  video.shadows = std::clamp(integer("shadows", 1), 0, 2);
+  video.flares = integer("flares", 1) != 0;
   const int mode = integer("player_transmission", 1);
   options.driving.transmission = mode == 0 || mode == 2 || mode == 5 ? mode : 1;
   options.driving.steering_help = std::clamp(read("player_steeringhelp", .666f), 0.f, 1.f);
@@ -71,6 +81,56 @@ void host_game_options_apply(Jvm& jvm) {
   if (updated.driving != current.driving) ++driving_revision;
   current = updated;
   host_game_options_dirty();
+}
+
+void host_set_video_mode(Jvm& jvm, VideoMode mode) {
+  if (mode.width < 320 || mode.width > 8192 || mode.height < 240 || mode.height > 8192)
+    return;
+  for (const auto* config : {"java.util.Config", "java.game.Config"}) {
+    jvm.set_static(config, "video_x", Value::make_int(mode.width));
+    jvm.set_static(config, "video_y", Value::make_int(mode.height));
+    jvm.set_static(config, "video_depth", Value::make_int(mode.depth == 16 ? 16 : 32));
+    jvm.set_static(config, "video_windowed", Value::make_int(mode.windowed ? 1 : 0));
+  }
+  host_game_options_apply(jvm);
+}
+
+bool host_commit_video_dialog(Jvm& jvm, Object* handler, int command) {
+  if (!handler || handler->class_name != "java.game.OptionsDialog") return false;
+  const auto done = jvm.get_static(handler->class_name, "CMD_VIDEO_OPTIONS_DONE");
+  if (done.tag != ValueTag::Int || done.v.i != command) return false;
+  // MWM's Back handler treats a new mode as a restart request. Keep the
+  // original Java navigation and apply the pending mode in the host.
+  const auto width = jvm.get_static(handler->class_name, "aspectX");
+  const auto height = jvm.get_static(handler->class_name, "aspectY");
+  const auto depth = handler->fields.find("color_depth");
+  const auto windowed = handler->fields.find("windowed");
+  const auto dimension = [](Value value) {
+    const float n = value.tag == ValueTag::Int ? float(value.v.i) :
+                    value.tag == ValueTag::Float ? value.v.f : 0.f;
+    return n >= 240.f && n <= 8192.f ? static_cast<int>(n) : 0;
+  };
+  const auto group = handler->fields.find("optionsGroup");
+  const auto active = handler->fields.find("actGroup");
+  const auto video = handler->fields.find("videoGroup");
+  if (depth == handler->fields.end() || windowed == handler->fields.end() ||
+      group == handler->fields.end() || active == handler->fields.end() ||
+      video == handler->fields.end() || active->second.v.i != video->second.v.i ||
+      depth->second.tag != ValueTag::Int || windowed->second.tag != ValueTag::Int)
+    return false;
+  const VideoMode mode{dimension(width), dimension(height), depth->second.v.i,
+                       windowed->second.v.i != 0};
+  if (mode.width < 320 || mode.height < 240) return false;
+  const auto pending_loading = handler->fields.find("loading_primary");
+  const auto original_loading = handler->fields.find("tmp_lp");
+  if (mode == current.video.mode && pending_loading != handler->fields.end() &&
+      original_loading != handler->fields.end() &&
+      pending_loading->second.v.i != original_loading->second.v.i)
+    return false;
+  host_set_video_mode(jvm, mode);
+  jvm.invoke(handler->class_name, "changeMode", "(I)V",
+             {Value::make_obj(handler), group->second}, false);
+  return true;
 }
 
 void host_game_options_set_steering_help(Jvm& jvm, float strength) {

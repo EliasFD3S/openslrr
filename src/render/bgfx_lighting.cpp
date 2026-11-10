@@ -108,7 +108,8 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
 }
 
   void LibBgfxBackend::bind_baked_light(const ScxGroup* group,
-                        const std::vector<bgfx::TextureHandle>* tex, bgfx::TextureHandle mix)
+                        const std::vector<bgfx::TextureHandle>* tex, bgfx::TextureHandle mix,
+                        bool receive_static_shadow)
 {
     float u[4] = {0.f, 0.f, 1.f, 0.f};
     float xf[4] = {1.f, 1.f, 0.f, 0.f};
@@ -131,6 +132,18 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
     bgfx::setUniform(u_lightmap_uv_, xf);
     bgfx::setTexture(1, s_lightmap_, lm);
     bgfx::setTexture(2, s_mesh_mix_, bgfx::isValid(mix) ? mix : white_tex_);
+    const bool receive = receive_static_shadow && static_shadow_active_ &&
+                         debug_overlay_.render_options().map_shadows;
+    const float params[4] = {receive ? 0.42f : 0.f,
+                             receive ? 1.f / static_shadow_size_ : 0.f, 0.00045f, 0.f};
+    bgfx::setUniform(u_static_shadow_params_, params);
+    if (receive) {
+      const float eye[4] = {static_shadow_eye_[0], static_shadow_eye_[1],
+                            static_shadow_eye_[2], static_shadow_distance_};
+      bgfx::setUniform(u_static_shadow_eye_, eye);
+      bgfx::setUniform(u_static_shadow_mtx_, static_shadow_matrix_.data());
+    }
+    bgfx::setTexture(3, s_static_shadow_, receive ? static_shadow_tex_ : white_tex_);
   }
   void LibBgfxBackend::draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass)
 {
@@ -278,12 +291,25 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
       const bool blend = !instance.sky && part.geo.info.version == 3 && (flags & 0x101u) == 0x101u;
       if (pass != int(blend)) return;
       const auto tex = texture(texture_index);
-      const bool cut = !blend && !preview && !instance.sky && (part.geo.info.version != 3 || (flags & 1));
+      // SCX4 storefronts use texture alpha to mix their paint colour with
+      // the detail texture. Low-alpha texels are solid wall, not holes.
+      const bool material_mix = group && instance.cull_backfaces &&
+          part.geo.info.version == 4 && group->material_type == 0x03u;
+      const bool authored_alpha = instance.cull_backfaces && part.geo.info.version == 4;
+      const bool cut = !material_mix && !blend && !preview && !instance.sky &&
+          (authored_alpha ? (flags & 0x20000000u) != 0
+                          : part.geo.info.version != 3 || (flags & 1));
+      // V4 map foliage specifies GREATER with an 8-bit reference (default 0x38).
+      const float alpha_test = !cut ? 0.f : authored_alpha && group
+          ? -(1.f + group->alpha_reference) / 255.f : 1.f;
       const bool vertex_mix = group && group->mix_vertex_color;
-      const float settings[4] = {cut ? 1.f : 0.f, instance.sky || blend || vertex_mix ? 1.f : preview ? .5f : 0.f,
-                                 blend ? 1.f : 0.f, vertex_mix ? -1.f : !blend && preview && tex.idx != white_tex_.idx ? 1.f : 0.f};
-      uint32_t color=preview?instance.color:0xffffff;
-      const float tint[4]={((color>>16)&255)/255.f,((color>>8)&255)/255.f,(color&255)/255.f,1};
+      const float settings[4] = {alpha_test, instance.sky || blend || vertex_mix ? 1.f : preview ? .5f : 0.f,
+                                 blend ? 1.f : 0.f, material_mix ? -2.f : vertex_mix ? -1.f :
+                                 !blend && preview && tex.idx != white_tex_.idx ? 1.f : 0.f};
+      const uint32_t color = preview || instance.cull_backfaces ? instance.color : 0xffffffu;
+      float tint[4]={((color>>16)&255)/255.f,((color>>8)&255)/255.f,(color&255)/255.f,1};
+      if (material_mix)
+        for (int i = 0; i < 3; ++i) tint[i] *= group->diffuse[i];
       bgfx::setUniform(u_alpha_test_,settings);bgfx::setUniform(u_color_,tint);bgfx::setTransform(matrix);
       bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,first,count);
       bgfx::setTexture(0, s_tex_, tex, BGFX_SAMPLER_NONE);
@@ -292,7 +318,7 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
         const auto candidate = texture(group->mix_index);
         if (candidate.idx != white_tex_.idx) mix = candidate;
       }
-      bind_baked_light(group, &part.tex, mix);
+      bind_baked_light(group, &part.tex, mix, !preview && !instance.sky);
       uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_MSAA;
       if (instance.cull_backfaces && !(flags & 0x02000000u))
         state |= BGFX_STATE_CULL_CW;

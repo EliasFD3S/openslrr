@@ -25,7 +25,36 @@
 #include <fstream>
 #include <string>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace slrr {
+namespace {
+std::vector<VideoMode> display_modes() {
+  std::vector<VideoMode> modes;
+#ifdef _WIN32
+  for (DWORD i = 0;; ++i) {
+    DEVMODEW mode{};
+    mode.dmSize = sizeof(mode);
+    if (!EnumDisplaySettingsW(nullptr, i, &mode)) break;
+    if (mode.dmPelsWidth < 640 || mode.dmPelsHeight < 480 || mode.dmBitsPerPel != 32)
+      continue;
+    modes.push_back({int(mode.dmPelsWidth), int(mode.dmPelsHeight), 32, false});
+  }
+#endif
+  modes.push_back({800, 600, 32, false});
+  const auto key = [](const VideoMode& mode) {
+    return std::pair(mode.width, mode.height);
+  };
+  std::sort(modes.begin(), modes.end(), [&](const auto& a, const auto& b) {
+    return key(a) < key(b);
+  });
+  modes.erase(std::unique(modes.begin(), modes.end()), modes.end());
+  return modes;
+}
+}
+
 
 void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   jvm.natives().register_method("java.lang.System", "getConfigOptions", "()V",
@@ -190,27 +219,41 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
         return Value::make_int(n);
       });
 
-  // Soft OptionsDialog.show enumerates modes before building menus.
+  // Stock OptionsDialog enumerates modes before building menus.
+  const auto modes = display_modes();
   jvm.natives().register_method(
       "java.render.GfxEngine", "numDisplayModes", "()I",
-      [](Object*, const std::vector<Value>&) {
-        return Value::make_int(1);
+      [modes](Object*, const std::vector<Value>&) {
+        return Value::make_int(static_cast<int>(modes.size()));
       });
   jvm.natives().register_method(
       "java.render.GfxEngine", "currDisplayMode", "()I",
-      [](Object*, const std::vector<Value>&) {
-        return Value::make_int(0);
+      [modes](Object*, const std::vector<Value>&) {
+        const auto current = host_game_options().video.mode;
+        const auto it = std::find_if(modes.begin(), modes.end(), [&](const auto& mode) {
+          return mode.width == current.width && mode.height == current.height;
+        });
+        return Value::make_int(it == modes.end() ? 0 : static_cast<int>(it - modes.begin()));
       });
   jvm.natives().register_method(
       "java.render.GfxEngine", "displayModeName", "(I)Ljava.lang.String;",
-      [&jvm](Object*, const std::vector<Value>&) {
-        // w h d tokens for Soft OptionsDialog.show filter.
-        return Value::make_obj(jvm.new_string("800 600 32"));
+      [&jvm, modes](Object*, const std::vector<Value>& args) {
+        const int i = args.empty() ? -1 : args[0].v.i;
+        if (i < 0 || static_cast<size_t>(i) >= modes.size()) return Value::make_obj(nullptr);
+        const auto& mode = modes[i];
+        return Value::make_obj(jvm.new_string(std::to_string(mode.width) + " " +
+            std::to_string(mode.height) + " " + std::to_string(mode.depth)));
       });
-  // Stock applies a new mode on the next launch, not by resizing now.
   jvm.natives().register_method(
       "java.render.GfxEngine", "changeVideoMode", "(III)V",
-      [](Object*, const std::vector<Value>&) { return Value::make_void(); });
+      [&jvm](Object*, const std::vector<Value>& args) {
+        if (args.size() == 3) {
+          const auto windowed = jvm.get_static("java.util.Config", "video_windowed");
+          host_set_video_mode(jvm, {args[0].v.i, args[1].v.i, args[2].v.i,
+                                   windowed.tag != ValueTag::Int || windowed.v.i != 0});
+        }
+        return Value::make_void();
+      });
   jvm.natives().register_method(
       "java.render.GfxEngine", "openVideo", "(Ljava.lang.String;II)I",
       [](Object*, const std::vector<Value>& args) {

@@ -1,4 +1,5 @@
 #include "slrr/host_input.hpp"
+#include "slrr/host_game_options.hpp"
 
 #include "slrr/jvm.hpp"
 #include "slrr/osd_registry.hpp"
@@ -367,6 +368,11 @@ void host_input_check_hotkeys(Jvm& jvm, Object* controller, Object* focus) {
     if (it == hotkeys.end()) continue;
     const Hotkey hk = *it;
     hk.key->fields["state"] = Value::make_int(hk.down ? 1 : 0);
+    const auto video_command = hk.key->fields.find("command");
+    if (hk.down && video_command != hk.key->fields.end() &&
+        video_command->second.tag == ValueTag::Int &&
+        host_commit_video_dialog(jvm, hk.handler, video_command->second.v.i))
+      continue;
     if (hk.owner) {
       jvm.invoke("java.render.Osd", "handleEvent", "(Ljava.io.Hotkey;)V",
                  {Value::make_obj(hk.owner), Value::make_obj(hk.key)}, false);

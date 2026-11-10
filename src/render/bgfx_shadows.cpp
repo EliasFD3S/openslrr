@@ -1,4 +1,4 @@
-// Car shadow maps and the traffic kocsiarnyek decal.
+// Cached map shadows, car shadow maps and the traffic kocsiarnyek decal.
 #include "bgfx_lib_backend.hpp"
 
 #include "slrr/part_runtime.hpp"
@@ -22,8 +22,151 @@
 
 namespace slrr {
 
-  void LibBgfxBackend::draw_vehicle_shadows(uint16_t view_id)
+void LibBgfxBackend::update_static_shadow(const float* eye, const VideoOptions& video) {
+  static_shadow_active_ = false;
+  if (!eye || video.shadows == 0 || !scene_instances_has_ground_props()) {
+    static_shadow_world_ = nullptr;
+    if (bgfx::isValid(static_shadow_fb_)) bgfx::destroy(static_shadow_fb_);
+    static_shadow_fb_ = BGFX_INVALID_HANDLE;
+    static_shadow_tex_ = BGFX_INVALID_HANDLE;
+    return;
+  }
+  if (!debug_overlay_.render_options().map_shadows || !bgfx::isValid(static_shadow_program_))
+    return;
+  const auto ground = std::find_if(instances_.begin(), instances_.end(),
+      [](const SceneInstance& instance) { return instance.geometry->ground_polygons; });
+  if (ground == instances_.end()) return;
+  const auto sun = ground->lighting;
+  if (!sun.has_direction || sun.direction[1] >= -.08f) return;
+  const uint16_t size = static_cast<uint16_t>(std::clamp(video.shadow_size * 4, 512, 2048));
+  const float range = std::min(video.shadow_distance, video.view_distance);
+  const float half_width = range * 1.5f + 24.f;
+  const float step = std::max(12.f, range * .35f);
+  static_shadow_eye_ = {eye[0], eye[1], -eye[2]};
+  const std::array<float, 3> focus{eye[0], eye[1], eye[2]};
+  const float moved = std::hypot(eye[0] - static_shadow_focus_[0],
+                                 eye[1] - static_shadow_focus_[1],
+                                 eye[2] - static_shadow_focus_[2]);
+  const std::array<float, 3> direction{sun.direction[0], sun.direction[1], -sun.direction[2]};
+  const float sun_change = std::hypot(direction[0] - static_shadow_sun_[0],
+                                      direction[1] - static_shadow_sun_[1],
+                                      direction[2] - static_shadow_sun_[2]);
+  if (size != static_shadow_size_ && bgfx::isValid(static_shadow_fb_)) {
+    bgfx::destroy(static_shadow_fb_);
+    static_shadow_fb_ = BGFX_INVALID_HANDLE;
+    static_shadow_tex_ = BGFX_INVALID_HANDLE;
+  }
+  if (range == static_shadow_distance_ && static_shadow_world_ == ground->key && moved < step &&
+      sun_change < .003f && bgfx::isValid(static_shadow_fb_)) {
+    static_shadow_active_ = true;
+    return;
+  }
+  if (!bgfx::isValid(static_shadow_fb_)) {
+    constexpr uint64_t flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
+        BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT;
+    const auto depth = bgfx::createTexture2D(size, size, false, 1,
+                                            bgfx::TextureFormat::D32F, flags);
+    if (!bgfx::isValid(depth)) return;
+    static_shadow_fb_ = bgfx::createFrameBuffer(1, &depth, true);
+    if (!bgfx::isValid(static_shadow_fb_)) {
+      bgfx::destroy(depth);
+      return;
+    }
+    static_shadow_tex_ = depth;
+    static_shadow_size_ = size;
+  }
+  const auto* caps = bgfx::getCaps();
+  const bx::Vec3 target{focus[0], focus[1], -focus[2]};
+  const bx::Vec3 travel = bx::normalize(bx::Vec3{direction[0], direction[1], direction[2]});
+  const bx::Vec3 up = std::abs(travel.y) > .98f ? bx::Vec3{0.f, 0.f, 1.f}
+                                              : bx::Vec3{0.f, 1.f, 0.f};
+  float view[16], proj[16], clip[16];
+  bx::mtxLookAt(view, bx::sub(target, bx::mul(travel, 256.f)), target, up);
+  bx::mtxOrtho(proj, -half_width, half_width, -half_width, half_width, 0.f, 512.f,
+              0.f, caps->homogeneousDepth);
+  const auto frustum = view_frustum(view, proj);
+  bx::mtxMul(clip, view, proj);
+  const float crop[16] = {
+      .5f, 0.f, 0.f, 0.f, 0.f, caps->originBottomLeft ? .5f : -.5f, 0.f, 0.f,
+      0.f, 0.f, caps->homogeneousDepth ? .5f : 1.f, 0.f, .5f, .5f,
+      caps->homogeneousDepth ? .5f : 0.f, 1.f};
+  bx::mtxMul(static_shadow_matrix_.data(), clip, crop);
+
+  bgfx::setViewFrameBuffer(kStaticShadowView, static_shadow_fb_);
+  bgfx::setViewRect(kStaticShadowView, 0, 0, size, size);
+  bgfx::setViewClear(kStaticShadowView, BGFX_CLEAR_DEPTH, 0, 1.f, 0);
+  bgfx::setViewTransform(kStaticShadowView, view, proj);
+  bgfx::touch(kStaticShadowView);
+  for (const auto& instance : scene_instances_collect(&frustum)) {
+    if (instance.key && !instance.geometry->ground_polygons) continue;
+    const auto found = instance_meshes_.find(instance.geometry.get());
+    if (found == instance_meshes_.end()) continue;
+    const auto& part = found->second;
+    if (!bgfx::isValid(part.vbh) || !bgfx::isValid(part.ibh)) continue;
+    for (const auto& group : part.geo.groups) {
+      const auto flags = group.material_flags;
+      const bool v4 = part.geo.info.version == 4;
+      if ((v4 && (flags & 0x40000000u)) ||
+          (part.geo.info.version == 3 && (flags & 0x101u) == 0x101u))
+        continue;
+      // Storefront mix uses the texture's alpha as a colour weight.
+      const bool cutout = v4 ? group.material_type != 0x03u && (flags & 0x20000000u)
+                             : (flags & 1u) != 0;
+      const auto slot = group.texture_index;
+      const auto tex = slot < part.tex.size() && bgfx::isValid(part.tex[slot])
+          ? part.tex[slot] : white_tex_;
+      const float threshold = !cutout ? -1.f : v4
+          ? group.alpha_reference / 255.f : .5f;
+      const float params[4] = {0.f, threshold, static_cast<float>(group.base_map.channel), 0.f};
+      bgfx::setUniform(u_static_shadow_params_, params);
+      bgfx::setTexture(0, s_tex_, tex);
+      bgfx::setTransform(instance.transform.data());
+      bgfx::setVertexBuffer(0, part.vbh);
+      bgfx::setIndexBuffer(part.ibh, group.index_start, group.index_count);
+      bgfx::setState(BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS);
+      bgfx::submit(kStaticShadowView, static_shadow_program_);
+    }
+  }
+  static_shadow_distance_ = range;
+  static_shadow_world_ = ground->key;
+  static_shadow_focus_ = focus;
+  static_shadow_sun_ = direction;
+  static_shadow_active_ = true;
+}
+
+bool LibBgfxBackend::ensure_vehicle_shadow_target(int slot, uint16_t size) {
+  if (bgfx::isValid(shadow_fb_[slot])) return true;
+  constexpr uint64_t color_flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
+                                   BGFX_SAMPLER_V_CLAMP;
+  const bgfx::TextureHandle color = bgfx::createTexture2D(
+      size, size, false, 1, bgfx::TextureFormat::RGBA8, color_flags);
+  const bgfx::TextureHandle depth = bgfx::createTexture2D(
+      size, size, false, 1, bgfx::TextureFormat::D16, BGFX_TEXTURE_RT_WRITE_ONLY);
+  if (bgfx::isValid(color) && bgfx::isValid(depth)) {
+    const bgfx::TextureHandle attachments[] = {color, depth};
+    shadow_fb_[slot] = bgfx::createFrameBuffer(2, attachments, true);
+    if (bgfx::isValid(shadow_fb_[slot])) {
+      shadow_tex_[slot] = color;
+      return true;
+    }
+  }
+  if (bgfx::isValid(color)) bgfx::destroy(color);
+  if (bgfx::isValid(depth)) bgfx::destroy(depth);
+  return false;
+}
+
+void LibBgfxBackend::draw_vehicle_shadows(uint16_t view_id, const float* eye,
+                                         const VideoOptions& video)
 {
+    const auto size = static_cast<uint16_t>(std::max(64, video.shadow_size));
+    if (size != vehicle_shadow_size_) {
+      for (int i = 0; i < kShadowSlots; ++i) {
+        if (bgfx::isValid(shadow_fb_[i])) bgfx::destroy(shadow_fb_[i]);
+        shadow_fb_[i] = BGFX_INVALID_HANDLE;
+        shadow_tex_[i] = BGFX_INVALID_HANDLE;
+      }
+      vehicle_shadow_size_ = size;
+    }
     // One owner is one car. Traffic carries a kocsiarnyek quad and does not
     // cast. A body with render flags (flags & 9) == 8 is drawn white into
     // that car's shadow map, then the ground is multiplied by it.
@@ -38,7 +181,7 @@ namespace slrr {
     std::vector<CarShadow> cars;
     std::unordered_map<void*, size_t> car_index;
     for (const auto& instance : instances_) {
-      if (instance.sky || !instance.geometry) continue;
+      if (!instance.key || instance.sky || !instance.geometry) continue;
       uint32_t flags = 0;
       SceneShadowDecal decal;
       scene_shadow_info(static_cast<uint32_t>(instance.type_id), &flags, &decal);
@@ -54,6 +197,9 @@ namespace slrr {
         frame[13] = instance.transform[13];
         frame[14] = -instance.transform[14];
       }
+      if (eye && std::hypot(frame[12] - eye[0], frame[13] - eye[1], frame[14] - eye[2]) >
+                     video.shadow_distance)
+        continue;
       auto found = car_index.find(owner);
       if (found == car_index.end()) {
         found = car_index.emplace(owner, cars.size()).first;
@@ -512,7 +658,7 @@ namespace slrr {
       const uint64_t caster_state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
       for (const CarShadow& car : cars) {
         if (car.decal || car.casters.empty() || slot_n >= kShadowSlots) continue;
-        if (!bgfx::isValid(shadow_fb_[slot_n])) break;
+        if (!ensure_vehicle_shadow_target(slot_n, size)) break;
         float mn[3] = {1e30f, 1e30f, 1e30f};
         float mx[3] = {-1e30f, -1e30f, -1e30f};
         bool any = false;
@@ -562,7 +708,13 @@ namespace slrr {
         light_view(travel, centre, view);
         bx::mtxOrtho(proj, -radius, radius, -radius, radius, -30.f, 30.f, 0.f,
                      caps->homogeneousDepth);
-        const auto shadow_view = static_cast<uint16_t>(slot_n);
+        const auto shadow_view = static_cast<uint16_t>(kVehicleShadowFirst + slot_n);
+        bgfx::setViewFrameBuffer(shadow_view, shadow_fb_[slot_n]);
+        bgfx::setViewRect(shadow_view, 0, 0, size, size);
+        bgfx::setViewClear(shadow_view, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
+                           0x000000ff, 1.f, 0);
+        bgfx::setViewMode(shadow_view, bgfx::ViewMode::Sequential);
+        bgfx::touch(shadow_view);
         bgfx::setViewTransform(shadow_view, view, proj);
         for (const SceneInstance* inst : car.casters) {
           auto mesh = instance_meshes_.find(inst->geometry.get());
@@ -608,7 +760,7 @@ namespace slrr {
         for (const Slot& slot : slots) {
           if (!slot.used || !bgfx::isValid(slot.tex)) continue;
           bgfx::setUniform(u_shadow_mtx_, slot.mtx);
-          const float ramp[4] = {1.f / kShadowSize, slot.centre_y, 0.f, slot.ramp};
+          const float ramp[4] = {1.f / size, slot.centre_y, 0.f, slot.ramp};
           bgfx::setUniform(u_shadow_ramp_, ramp);
           bgfx::setTransform(matrix);
           bgfx::setVertexBuffer(0, vb);

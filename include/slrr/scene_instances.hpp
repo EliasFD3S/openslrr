@@ -46,7 +46,11 @@ void scene_instances_set_resources(const RpkIndex *resources);
 void scene_instances_set_envmap(uint32_t resource);
 std::string scene_instances_envmap();
 void scene_instances_select(void *world, void *skydome, bool preview_lamps);
-std::vector<SceneInstance> scene_instances_collect();
+using SceneFrustum = std::array<std::array<float, 4>, 6>;
+bool scene_instances_has_ground_props();
+std::vector<SceneInstance> scene_instances_collect(
+    const SceneFrustum* frustum = nullptr,
+    std::vector<std::shared_ptr<const ScxGeometry>>* resident_props = nullptr);
 std::vector<SceneInstance> scene_instances_collect_root(void *root);
 SceneSun scene_instances_light(void* root=nullptr);
 // Rejects missing parents, hidden subtrees and cycles.
@@ -66,6 +70,7 @@ bool scene_instances_pointer_ray(int px, int py, int width, int height,
 struct GroundMapData {
   struct Placement {
     uint32_t type = 0;
+    int32_t seed = -1;
     std::array<float, 3> position{}, rotation{};
   };
   uint32_t render_id = 0;

@@ -6,6 +6,7 @@
 #include "slrr/render_backend.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/gameref.hpp"
+#include "slrr/host_game_options.hpp"
 #include "slrr/scene_sun.hpp"
 #include "slrr/osd_registry.hpp"
 #include "debug_overlay.hpp"
@@ -42,14 +43,15 @@ struct MeshVertex {
 
 class LibBgfxBackend final : public IRenderBackend {
 
-  // Views 0..3 are shadow maps (their own framebuffers). The world is view 4,
-  // or view 5 when an FMV backdrop occupies 4. Previews start at 8. The
+  // View 0 is the cached map shadow, followed by the vehicle shadow maps.
+  // The world is view 5 or 6, depending on the FMV backdrop. Previews start at 8. The
   // interface stays on kOsdView, above those rects.
   static constexpr int kShadowSlots = 4;
-  static constexpr uint16_t kShadowSize = 1024;
-  static constexpr uint16_t kWorldView = 4;
-  static constexpr uint16_t kFmvLayer = 5;
-  static constexpr uint16_t kOsdUnder = 6;
+  static constexpr uint16_t kStaticShadowView = 0;
+  static constexpr uint16_t kVehicleShadowFirst = 1;
+  static constexpr uint16_t kWorldView = 5;
+  static constexpr uint16_t kFmvLayer = 6;
+  static constexpr uint16_t kOsdUnder = 7;
   static constexpr uint16_t kPreview0 = 8;
   static constexpr uint16_t kOsdView = 70;
 
@@ -114,7 +116,13 @@ class LibBgfxBackend final : public IRenderBackend {
     bgfx::VertexBufferHandle vbh = BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle ibh = BGFX_INVALID_HANDLE;
     std::vector<bgfx::TextureHandle> tex;
+    std::vector<std::string> shared_texture_paths;
   };
+  struct SharedMapTexture {
+    bgfx::TextureHandle handle;
+    size_t users;
+  };
+  std::unordered_map<std::string, SharedMapTexture> map_textures_;
   struct Preview { GameRefState camera; GameRefState viewport; std::vector<SceneInstance> instances; };
   // Projection depends on scene geometry, never on the viewing camera.
   // Keep parked cars out of the per-vertex floor queries on subsequent frames.
@@ -138,21 +146,27 @@ class LibBgfxBackend final : public IRenderBackend {
   std::unordered_map<const ScxGeometry*,ScenePart> instance_meshes_;
   std::unordered_map<void*, const ScxGeometry*> deformed_meshes_;
 
-  void sync_instances();
+  void sync_instances(const float* view, const float* projection);
+  static SceneFrustum view_frustum(const float* view, const float* projection);
+  void apply_video_mode(const VideoMode& mode);
+  void update_static_shadow(const float* eye, const VideoOptions& video);
 
   // Diffuse * baked lightmap, the way the exe draws a map. No lightmap
   // (OSD, FMV, a mesh without the slot) keeps the existing shading.
   void bind_baked_light(const ScxGroup* group,
                         const std::vector<bgfx::TextureHandle>* tex,
-                        bgfx::TextureHandle mix = BGFX_INVALID_HANDLE);
+                        bgfx::TextureHandle mix = BGFX_INVALID_HANDLE,
+                        bool receive_static_shadow = false);
 
 
   void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass);
 
-  void draw_dynamic_world(const float* view, uint16_t view_id);
+  void draw_dynamic_world(const float* view, uint16_t view_id, float far_plane);
   void draw_sun_flare(const float* view, const float* projection, uint16_t view_id);
 
-  void draw_vehicle_shadows(uint16_t view_id);
+  bool ensure_vehicle_shadow_target(int slot, uint16_t size);
+  void draw_vehicle_shadows(uint16_t view_id, const float* eye, const VideoOptions& video);
+  uint16_t vehicle_shadow_size_ = 0;
 
   void draw_previews();
 
@@ -181,7 +195,7 @@ class LibBgfxBackend final : public IRenderBackend {
   void draw_scene(uint16_t view_id);
 
 
-  void load_part_textures(ScenePart& part);
+  void load_part_textures(ScenePart& part, bool share_map_textures = false);
 
 
 #ifdef _WIN32
@@ -285,6 +299,22 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::ProgramHandle shadow_recv_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_shadow_mtx_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_shadow_ramp_ = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle static_shadow_program_ = BGFX_INVALID_HANDLE;
+  bgfx::FrameBufferHandle static_shadow_fb_ = BGFX_INVALID_HANDLE;
+  bgfx::TextureHandle static_shadow_tex_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle s_static_shadow_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_static_shadow_mtx_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_static_shadow_params_ = BGFX_INVALID_HANDLE;
+  std::array<float, 16> static_shadow_matrix_{};
+  std::array<float, 3> static_shadow_focus_{}, static_shadow_sun_{};
+  void* static_shadow_world_ = nullptr;
+  bool static_shadow_active_ = false;
+  uint16_t static_shadow_size_ = 0;
+  float static_shadow_distance_ = 0.f;
+  bgfx::UniformHandle u_static_shadow_eye_ = BGFX_INVALID_HANDLE;
+  std::array<float, 3> static_shadow_eye_{};
+  VideoMode applied_video_mode_{};
+  uint32_t reset_flags_ = BGFX_RESET_VSYNC;
   bgfx::TextureHandle shadow_tex_[4] = {
       BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE,
       BGFX_INVALID_HANDLE};

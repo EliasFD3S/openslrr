@@ -29,13 +29,14 @@ struct ScxGroup {
   uint32_t index_count = 0;
   uint16_t texture_index = 0xffff;
   uint16_t mix_index = 0xffff, reflection_index = 0xffff;
-  // Baked light (v3 header +0x38, v4 entry 0x06000007). 0xffff = none.
-  uint16_t lightmap_index = 0xffff;
+  // Baked light (v4 property 0x06000007) and legacy illumination.
+  uint16_t lightmap_index = 0xffff, illumination_index = 0xffff;
   bool mix_vertex_color = false;
   uint32_t material_type = 0;
   float reflection_strength = .5f;
-  ScxTextureMap base_map, mix_map, reflection_map, lightmap_map;
+  ScxTextureMap base_map, mix_map, reflection_map, lightmap_map, illumination_map;
   uint32_t material_flags = 0;  // bit0 = alphaOpacity (scx.md)
+  uint8_t alpha_reference = 0x38;
   float diffuse[4] = {0.6f, 0.65f, 0.7f, 1.f};
   // v4 color 1 and 0x01000000. Paint and chrome use a tight power (~21),
   // rubber a wide one (~2.7). Zero specular adds nothing.
@@ -64,5 +65,6 @@ struct ScxGeometry {
 
 ScxMeshInfo parse_scx_file(const std::string& path);
 ScxGeometry load_scx_geometry(const std::string& path);
+void scx_resolve_baked_lightmaps(ScxGeometry& geometry);
 
 }  // namespace slrr

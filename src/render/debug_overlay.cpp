@@ -42,6 +42,7 @@ void draw_render(uint16_t width, uint16_t height, DebugOverlay::RenderOptions& o
   ImGui::Separator();
   ImGui::Checkbox("VSync", &options.vsync);
   ImGui::Checkbox("Vehicle shadows", &options.shadows);
+  ImGui::Checkbox("Map shadows", &options.map_shadows);
   ImGui::Checkbox("Sun flare", &options.sun_flare);
   ImGui::Checkbox("Game OSD", &options.game_osd);
   if (ImGui::Button("Reset render options")) options = {};

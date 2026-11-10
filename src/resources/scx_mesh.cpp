@@ -1,6 +1,8 @@
 #include "slrr/scx_mesh.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <string_view>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -69,12 +71,12 @@ bool parse_v3(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
     if (size > 56) {
       group.base_map.channel = static_cast<uint16_t>(buf[mat_start+70] | (buf[mat_start+71]<<8));
       group.mix_map.channel = static_cast<uint16_t>(buf[mat_start+72] | (buf[mat_start+73]<<8));
-      // +0x38 is the lightmap slot. The exe always samples it on uv channel 1.
+      // Extended v3 self-illumination. Stock baked atlases also use this slot.
       const int16_t lm = static_cast<int16_t>(
           buf[mat_start + 0x38] | (buf[mat_start + 0x39] << 8));
       if (lm >= 0) {
-        group.lightmap_index = static_cast<uint16_t>(lm);
-        group.lightmap_map.channel = 1;
+        group.illumination_index = static_cast<uint16_t>(lm);
+        group.illumination_map.channel = 1;
       }
     }
     group.texture_index = static_cast<uint16_t>(
@@ -266,6 +268,8 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
             p += 4;
           } else if (prop == 0x05000000u || prop == 0x07000000u) {
             if (p + 4 > chunk_end) break;
+            if (prop == 0x05000000u)
+              mat.alpha_reference = static_cast<uint8_t>(rd_u32(buf.data() + p));
             p += 4;
           } else if (prop >= 0x06000000u && prop <= 0x06000007u) {
             // tex index, channel, tiling, scaleUV, offsetUV
@@ -286,7 +290,11 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
             }
             if (prop == 0x06000001u) { mat.mix_index=static_cast<uint16_t>(tex_i); mat.mix_map=map; }
             if (prop == 0x06000003u) { mat.reflection_index=static_cast<uint16_t>(tex_i); mat.reflection_map=map; }
-            if (prop == 0x06000007u && tex_i != 0xffffffffu) {
+            if (prop == 0x06000004u && tex_i < 0xffffu) {
+              mat.illumination_index = static_cast<uint16_t>(tex_i);
+              mat.illumination_map = map;
+            }
+            if (prop == 0x06000007u && tex_i < 0xffffu) {
               mat.lightmap_index = static_cast<uint16_t>(tex_i);
               mat.lightmap_map = map;
             }
@@ -458,6 +466,38 @@ ScxGeometry load_scx_geometry(const std::string& path) {
     }
   }
   return geo;
+}
+
+void scx_resolve_baked_lightmaps(ScxGeometry& geometry) {
+  constexpr std::string_view legacy_atlases[] = {
+      "/misc/garage/g1/g1shadow.dds", "/misc/garage/g1/g1objectshadow.dds",
+      "/misc/garage/g2/g2shadow.dds", "/misc/garage/g2/g2objectshadow.dds",
+      "/misc/garage/g3/g3shadow.dds", "/misc/garage/g3/g3objectshadow.dds",
+      "/misc/garage/g4/t_garazs_shadow.dds", "/misc/garage/g4/t_01_shadow.dds",
+      "/misc/garage/g4/t_object_shadow.dds",
+      "/misc/dealer/textures/marketkulsoshadow.dds",
+      "/misc/dealer/textures/marketbelsoshadow.dds",
+      "/misc/dealer/textures/marketbutorshadow.dds",
+      "/misc/dealer2/textures/market_shadow.dds",
+      "/misc/dealer2/textures/market_talaj_shadow.dds",
+      "/misc/dealer2/textures/market_raktar_shadow.dds"};
+  for (auto& group : geometry.groups) {
+    if (group.lightmap_index != 0xffff || group.illumination_index >= geometry.textures.size())
+      continue;
+    const auto channel = group.illumination_map.channel;
+    if (channel != 1 && channel != 2) continue;
+    const auto& uv = channel == 1 ? geometry.uv2 : geometry.uv3;
+    if (uv.empty()) continue;
+    std::string path = "/" + geometry.textures[group.illumination_index];
+    std::transform(path.begin(), path.end(), path.begin(), [](unsigned char c) {
+      return c == '\\' ? '/' : static_cast<char>(std::tolower(c));
+    });
+    if (!std::any_of(std::begin(legacy_atlases), std::end(legacy_atlases),
+                     [&](std::string_view atlas) { return path.ends_with(atlas); }))
+      continue;
+    group.lightmap_index = group.illumination_index;
+    group.lightmap_map = group.illumination_map;
+  }
 }
 
 }  // namespace slrr

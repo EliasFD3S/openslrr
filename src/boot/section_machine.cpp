@@ -1,4 +1,5 @@
 #include "slrr/section_machine.hpp"
+#include "slrr/host_game_options.hpp"
 
 #include <cstdio>
 
@@ -147,6 +148,7 @@ void SectionMachine::dispatch_osd_command(Object* handler, int32_t command) {
         !finish_selector_preview(*jvm_, handler, true))
       return;
   }
+  if (host_commit_video_dialog(*jvm_, handler, command)) return;
   jvm_->invoke(handler->class_name, "osdCommand", "(I)V",
                {Value::make_obj(handler), Value::make_int(command)}, false);
 }

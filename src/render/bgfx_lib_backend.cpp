@@ -68,6 +68,8 @@
 #include "glsl/vs_shadow_cast.sc.bin.h"
 #include "glsl/vs_shadow_recv.sc.bin.h"
 #include "glsl/fs_shadow_recv.sc.bin.h"
+#include "dxbc/fs_static_shadow.sc.bin.h"
+#include "glsl/fs_static_shadow.sc.bin.h"
 
 #include "bgfx_lib_backend.hpp"
 
@@ -79,6 +81,7 @@ static const bgfx::EmbeddedShader k_vs[] = {
     BGFX_EMBEDDED_SHADER_END()};
 static const bgfx::EmbeddedShader k_fs[] = {
     BGFX_EMBEDDED_SHADER(fs_mesh),
+    BGFX_EMBEDDED_SHADER(fs_static_shadow),
     BGFX_EMBEDDED_SHADER_END()};
 static const bgfx::EmbeddedShader k_vehicle[] = {
     BGFX_EMBEDDED_SHADER(vs_vehicle), BGFX_EMBEDDED_SHADER(fs_vehicle),
@@ -94,6 +97,8 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
 
   bool LibBgfxBackend::open(int32_t width, int32_t height, const char* title)
 {
+    applied_video_mode_ = {};
+    reset_flags_ = BGFX_RESET_VSYNC;
     width_ = width > 0 ? width : 800;
     height_ = height > 0 ? height : 600;
 
@@ -161,6 +166,13 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
       return false;
     }
     program_ = bgfx::createProgram(vsh, fsh, true);
+    static_shadow_program_ = bgfx::createProgram(
+        bgfx::createEmbeddedShader(k_vs, rt, "vs_mesh"),
+        bgfx::createEmbeddedShader(k_fs, rt, "fs_static_shadow"), true);
+    s_static_shadow_ = bgfx::createUniform("s_staticShadow", bgfx::UniformType::Sampler);
+    u_static_shadow_mtx_ = bgfx::createUniform("u_staticShadowMtx", bgfx::UniformType::Mat4);
+    u_static_shadow_params_ = bgfx::createUniform("u_staticShadowParams", bgfx::UniformType::Vec4);
+    u_static_shadow_eye_ = bgfx::createUniform("u_staticShadowEye", bgfx::UniformType::Vec4);
     vehicle_program_ = bgfx::createProgram(
         bgfx::createEmbeddedShader(k_vehicle, rt, "vs_vehicle"),
         bgfx::createEmbeddedShader(k_vehicle, rt, "fs_vehicle"), true);
@@ -203,33 +215,6 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
       std::fprintf(stderr, "[shadow] shader program creation failed: caster=%d receiver=%d\n",
                    bgfx::isValid(shadow_program_), bgfx::isValid(shadow_recv_));
     u_shadow_ramp_ = bgfx::createUniform("u_shadowRamp", bgfx::UniformType::Vec4);
-    // A colour target alone is dropped by D3D11. The depth target is only
-    // there so the pass is a real framebuffer; casters do not test it.
-    const uint64_t shadow_color_flags =
-        BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
-    for (int i = 0; i < kShadowSlots; ++i) {
-      bgfx::TextureHandle color = bgfx::createTexture2D(
-          kShadowSize, kShadowSize, false, 1, bgfx::TextureFormat::RGBA8,
-          shadow_color_flags);
-      bgfx::TextureHandle depth = bgfx::createTexture2D(
-          kShadowSize, kShadowSize, false, 1, bgfx::TextureFormat::D16,
-          BGFX_TEXTURE_RT_WRITE_ONLY);
-      if (!bgfx::isValid(color) || !bgfx::isValid(depth)) {
-        if (bgfx::isValid(color)) bgfx::destroy(color);
-        if (bgfx::isValid(depth)) bgfx::destroy(depth);
-        std::fprintf(stderr, "[shadow] framebuffer %d rejected\n", i);
-        continue;
-      }
-      bgfx::TextureHandle attachments[2] = {color, depth};
-      shadow_fb_[i] = bgfx::createFrameBuffer(2, attachments, true);
-      if (!bgfx::isValid(shadow_fb_[i])) {
-        bgfx::destroy(color);
-        bgfx::destroy(depth);
-        std::fprintf(stderr, "[shadow] framebuffer %d rejected\n", i);
-        continue;
-      }
-      shadow_tex_[i] = color;
-    }
     layout_.begin()
         .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
         .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
@@ -326,6 +311,17 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     u_shadow_mtx_ = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(u_shadow_ramp_)) bgfx::destroy(u_shadow_ramp_);
     u_shadow_ramp_ = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(static_shadow_program_)) bgfx::destroy(static_shadow_program_);
+    if (bgfx::isValid(static_shadow_fb_)) bgfx::destroy(static_shadow_fb_);
+    static_shadow_program_ = BGFX_INVALID_HANDLE;
+    static_shadow_fb_ = BGFX_INVALID_HANDLE;
+    static_shadow_tex_ = BGFX_INVALID_HANDLE;
+    static_shadow_world_ = nullptr;
+    static_shadow_active_ = false;
+    for (auto* handle : {&s_static_shadow_, &u_static_shadow_mtx_, &u_static_shadow_params_, &u_static_shadow_eye_}) {
+      if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
+      *handle = BGFX_INVALID_HANDLE;
+    }
     for (int i = 0; i < kShadowSlots; ++i) {
       if (bgfx::isValid(shadow_fb_[i])) bgfx::destroy(shadow_fb_[i]);
       shadow_fb_[i] = BGFX_INVALID_HANDLE;
@@ -359,10 +355,49 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     host_input_poll_keys();
 #endif
   }
+void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
+  if (mode == applied_video_mode_) return;
+#ifdef _WIN32
+  if (hwnd_) {
+    MONITORINFO monitor{};
+    monitor.cbSize = sizeof(monitor);
+    if (!GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &monitor))
+      return;
+    const RECT screen = monitor.rcMonitor;
+    // A legacy fullscreen flag can accompany a small saved resolution. Keep
+    // that mode resizable; a borderless window only makes sense at monitor size.
+    const bool fullscreen = !mode.windowed &&
+        mode.width == screen.right - screen.left &&
+        mode.height == screen.bottom - screen.top;
+    const DWORD style = fullscreen ? WS_POPUP : WS_OVERLAPPEDWINDOW;
+    const auto previous = GetWindowLongPtrW(hwnd_, GWL_STYLE);
+    const bool style_changed = (previous & (WS_OVERLAPPEDWINDOW | WS_POPUP)) != style;
+    RECT client{};
+    GetClientRect(hwnd_, &client);
+    if (style_changed || client.right != mode.width || client.bottom != mode.height) {
+      if (IsZoomed(hwnd_)) ShowWindow(hwnd_, SW_RESTORE);
+      SetWindowLongPtrW(hwnd_, GWL_STYLE,
+          (previous & ~(WS_OVERLAPPEDWINDOW | WS_POPUP)) | style);
+      RECT frame{0, 0, mode.width, mode.height};
+      AdjustWindowRectEx(&frame, style, FALSE, GetWindowLongW(hwnd_, GWL_EXSTYLE));
+      const RECT area = fullscreen ? screen : monitor.rcWork;
+      const int w = frame.right - frame.left, h = frame.bottom - frame.top;
+      const int x = area.left + std::max(0, int(area.right - area.left - w) / 2);
+      const int y = area.top + std::max(0, int(area.bottom - area.top - h) / 2);
+      SetWindowPos(hwnd_, nullptr, x, y, w, h,
+                   SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    }
+  }
+#endif
+  applied_video_mode_ = mode;
+}
+
   void LibBgfxBackend::flush()
 {
     ++frames_;
     if (!ready_) return;
+    const auto video = host_game_options().video;
+    apply_video_mode(video.mode);
     const bool loading = osd_loading_dialog() || !osd_loading_overlay().empty();
     const bool covered = !osd_loading_overlay().empty() && !video_fmv_block_osd();
     // A yielded section change must not expose its half-destroyed world.
@@ -370,6 +405,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     // loading finishes, such as the welcome dialog in a new career.
     if (scene_transition_blocks_presentation() && !loading && !osd_has_modal()) return;
 
+    const auto old_width = width_, old_height = height_;
 #ifdef _WIN32
     RECT rc{};
     if (hwnd_) {
@@ -386,17 +422,24 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     sc.width = static_cast<uint32_t>(width_);
     sc.height = static_cast<uint32_t>(height_);
     const auto& debug_render = debug_overlay_.render_options();
-    bgfx::reset(debug_render.vsync ? BGFX_RESET_VSYNC : BGFX_RESET_NONE, &sc);
+    const uint32_t flags = debug_render.vsync ? BGFX_RESET_VSYNC : BGFX_RESET_NONE;
+    if (width_ != old_width || height_ != old_height || flags != reset_flags_) {
+      bgfx::reset(flags, &sc);
+      reset_flags_ = flags;
+    }
     float world_eye[3], world_at[3], world_up[3], world_fov = 60.f, world_zn = 0.05f,
                                      world_zf = 500.f;
     // Garage, dealer and car lot all use the script camera, which looks
     // at the car (or the empty bay). The free orbit is only a fallback.
+    const auto* script_camera = fullscreen_script_camera();
     const bool world_cam = gameref_world_camera(world_eye, world_at, &world_fov,
                                                  &world_zn, &world_zf, world_up);
 
     float view[16];
     float proj[16];
     if (world_cam) {
+      if (scene_instances_has_ground_props() || (script_camera && script_camera->follow_vehicle))
+        world_zf = video.view_distance;
       const float aspect =
           height_ > 0 ? static_cast<float>(width_) / static_cast<float>(height_)
                       : 1.333f;
@@ -417,7 +460,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     // Back to the menu closes that movie before the next one is ready.
     // A retired splash still counts as a widget but is not drawn, so the
     // frame was only the clear color. Keep the previous image instead.
-    if (!covered) sync_instances();
+    if (!covered) sync_instances(view, proj);
     auto is_opening = [](const std::string& path) {
       std::string low = path;
       for (char& c : low)
@@ -455,6 +498,10 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
         fz /= fl;
       }
       for (const auto& i : instances_) {
+        if (i.geometry->ground_polygons) {
+          show = true;
+          break;
+        }
         const float x = i.transform[12] - world_eye[0];
         const float y = i.transform[13] - world_eye[1];
         const float z = -i.transform[14] - world_eye[2];
@@ -473,21 +520,10 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
         }
     const bool show_debug = debug_overlay_.visible();
     if (shown_ && !show && !show_debug && !debug_was_visible_) return;
-    // Shadow maps render first (views 0..3, off the backbuffer). The world
-    // follows on 4, or on 5 when the movie occupies 4.
+    // Offscreen shadow views run before either world view.
     const uint16_t world_view = fmv_bg ? kFmvLayer : kWorldView;
     const auto ww = static_cast<uint16_t>(width_);
     const auto hh = static_cast<uint16_t>(height_);
-    for (int i = 0; !covered && debug_render.shadows && i < kShadowSlots; ++i) {
-      if (!bgfx::isValid(shadow_fb_[i])) continue;
-      const auto shadow_view = static_cast<uint16_t>(i);
-      bgfx::setViewFrameBuffer(shadow_view, shadow_fb_[i]);
-      bgfx::setViewRect(shadow_view, 0, 0, kShadowSize, kShadowSize);
-      bgfx::setViewClear(shadow_view, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
-                         0x000000ff, 1.f, 0);
-      bgfx::setViewMode(shadow_view, bgfx::ViewMode::Sequential);
-      bgfx::touch(shadow_view);
-    }
     bgfx::setViewFrameBuffer(kWorldView, BGFX_INVALID_HANDLE);
     bgfx::setViewFrameBuffer(kFmvLayer, BGFX_INVALID_HANDLE);
     if (fmv_bg) {
@@ -511,12 +547,14 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
 
     // Menu/Splash: no garage SCX — stock MainMenu uses FMV or Dummy scene.
     if (!covered) {
-      draw_dynamic_world(view, world_view);
+      update_static_shadow(world_cam ? world_eye : nullptr, video);
+      draw_dynamic_world(view, world_view, world_zf);
       if (garage_ && !parts_.empty()) draw_scene(world_view);
-      if (debug_render.shadows) draw_vehicle_shadows(world_view);
-      if (debug_render.sun_flare) draw_sun_flare(view, proj, world_view);
+      if (debug_render.shadows && video.shadows > 0)
+        draw_vehicle_shadows(world_view, world_cam ? world_eye : nullptr, video);
+      if (debug_render.sun_flare && video.flares) draw_sun_flare(view, proj, world_view);
     }
-    // Previews start at view 8. OSD plates under the cars are view 6; the
+    // Previews start at view 8. OSD plates under the cars are view 7; the
     // rest of the interface is view 70.
     if (!covered && !fmv_bg) draw_fmv(kFmvLayer);
     // Boot intros own the frame. Menu OSD from the probe must not cover them.
@@ -631,9 +669,32 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     }
     set_scx_mesh(3, sum_groups, sum_verts, sum_tris, mesh_min_, mesh_max_);
   }
-  void LibBgfxBackend::sync_instances()
+SceneFrustum LibBgfxBackend::view_frustum(const float* view, const float* projection) {
+    float clip[16];
+    bx::mtxMul(clip, view, projection);
+    SceneFrustum frustum;
+    for (size_t i = 0; i < frustum.size(); ++i) {
+      const size_t axis = i / 2;
+      const float sign = i % 2 ? -1.f : 1.f;
+      auto& plane = frustum[i];
+      for (size_t component = 0; component < 4; ++component) {
+        const size_t offset = component * 4;
+        plane[component] = i == 4 && !bgfx::getCaps()->homogeneousDepth
+            ? clip[offset + 2] : clip[offset + 3] + sign * clip[offset + axis];
+      }
+      const float normal = std::hypot(plane[0], plane[1], plane[2]);
+      if (normal > 0.f)
+        for (auto& component : plane) component /= normal;
+    }
+    return frustum;
+}
+
+  void LibBgfxBackend::sync_instances(const float* view, const float* projection)
 {
-    instances_=scene_instances_collect();previews_.clear();
+    const auto frustum = view_frustum(view, projection);
+    std::vector<std::shared_ptr<const ScxGeometry>> resident_props;
+    instances_ = scene_instances_collect(&frustum, &resident_props);
+    previews_.clear();
     for(const auto* camera:gameref_active_cameras()) {
       const auto* vp=gameref_get(camera->viewport);
       if(!vp||!vp->vp_active||vp->vp_w<=0||vp->vp_h<=0||(vp->vp_w>=.99f&&vp->vp_h>=.99f))continue;
@@ -648,42 +709,49 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     std::sort(previews_.begin(),previews_.end(),[](const Preview&a,const Preview&b){return a.viewport.vp_pri!=b.viewport.vp_pri?a.viewport.vp_pri<b.viewport.vp_pri:a.viewport.vp_x<b.viewport.vp_x;});
     std::unordered_map<const ScxGeometry*,bool> used;
     std::unordered_map<void*, const ScxGeometry*> current_deformed;
-    auto cache = [&](const SceneInstance& instance) {
-      const auto* key = instance.geometry.get();
+    auto cache = [&](const std::shared_ptr<const ScxGeometry>& source, void* owner,
+                     bool map_prop = false) {
+      const auto* key = source.get();
       used[key] = true;
-      const auto* node = gameref_get(instance.key);
+      const auto* node = owner ? gameref_get(owner) : nullptr;
       const bool deformed = node && node->deformed_geometry.get() == key;
-      if (deformed) current_deformed[instance.key] = key;
+      if (deformed) current_deformed[owner] = key;
       if (instance_meshes_.contains(key)) return;
       ScenePart part;
-      part.source = instance.geometry;
-      part.geo = *instance.geometry;
+      part.source = source;
+      part.geo = *source;
       upload_part(part);
       if (deformed) {
-        const auto previous = deformed_meshes_.find(instance.key);
+        const auto previous = deformed_meshes_.find(owner);
         if (previous != deformed_meshes_.end()) {
           auto old = instance_meshes_.find(previous->second);
           if (old != instance_meshes_.end() && old->second.geo.textures == part.geo.textures &&
               old->second.geo.info.path == part.geo.info.path)
             part.tex = std::move(old->second.tex);
+            part.shared_texture_paths = std::move(old->second.shared_texture_paths);
         }
       }
-      if (part.tex.empty()) load_part_textures(part);
+      if (part.tex.empty()) load_part_textures(part, map_prop);
       instance_meshes_.emplace(key, std::move(part));
     };
-    for(const auto&i:instances_)cache(i);for(const auto&p:previews_)for(const auto&i:p.instances)cache(i);
+    // Resident map models are shared by their placements. Camera culling only
+    // affects draw submission; leaving the map releases the GPU resources.
+    for (const auto& mesh : resident_props) cache(mesh, nullptr, true);
+    for (const auto& instance : instances_) cache(instance.geometry, instance.key);
+    for (const auto& preview : previews_)
+      for (const auto& instance : preview.instances) cache(instance.geometry, instance.key);
     for(auto it=instance_meshes_.begin();it!=instance_meshes_.end();) {
       if(used.count(it->first)){++it;continue;}destroy_part(it->second);it=instance_meshes_.erase(it);
     }
     deformed_meshes_ = std::move(current_deformed);
   }
-  void LibBgfxBackend::draw_dynamic_world(const float* view, uint16_t view_id)
+  void LibBgfxBackend::draw_dynamic_world(const float* view, uint16_t view_id, float far_plane)
 {
     float camera[16];bx::mtxInverse(camera,view);
     for(const auto&i:instances_)if(i.sky) {
       auto matrix=i.transform;float radius=0;
       for(int k=0;k<3;k++)radius=std::max(radius,std::max(std::fabs(i.geometry->info.bbox_min[k]),std::fabs(i.geometry->info.bbox_max[k]))*.01f);
-      float scale=radius>.001f?50.f/radius:1.f;
+      float scale=radius>.001f?std::min(50.f, far_plane * .55f)/radius:1.f;
       for(int c=0;c<3;c++)for(int r=0;r<3;r++)matrix[c*4+r]*=scale;
       matrix[12]=camera[12];matrix[13]=camera[13];matrix[14]=camera[14];draw_instance(view_id,i,matrix.data(),false,0);
     }
@@ -752,13 +820,20 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
 {
     if (bgfx::isValid(p.ibh)) bgfx::destroy(p.ibh);
     if (bgfx::isValid(p.vbh)) bgfx::destroy(p.vbh);
-    for (bgfx::TextureHandle& t : p.tex) {
+    for (size_t i = 0; i < p.tex.size(); ++i) {
+      const auto t = p.tex[i];
+      if (i < p.shared_texture_paths.size() && !p.shared_texture_paths[i].empty()) {
+        auto shared = map_textures_.find(p.shared_texture_paths[i]);
+        if (--shared->second.users != 0) continue;
+        map_textures_.erase(shared);
+      }
       // Paint stubs alias white_tex_ — never destroy the shared fallback.
       if (bgfx::isValid(t) && t.idx != white_tex_.idx) bgfx::destroy(t);
     }
     p.ibh = BGFX_INVALID_HANDLE;
     p.vbh = BGFX_INVALID_HANDLE;
     p.tex.clear();
+    p.shared_texture_paths.clear();
   }
   void LibBgfxBackend::build_camera(float* view, float* proj)
 {
@@ -931,7 +1006,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
       }
     }
   }
-  void LibBgfxBackend::load_part_textures(ScenePart& part)
+  void LibBgfxBackend::load_part_textures(ScenePart& part, bool share_map_textures)
 {
     std::vector<std::string> paths = part.geo.textures;
     if (paths.empty() && !part.geo.info.path.empty()) {
@@ -955,6 +1030,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     }
 
     part.tex.assign(paths.size(), BGFX_INVALID_HANDLE);
+    if (share_map_textures) part.shared_texture_paths.resize(paths.size());
     int loaded = 0;
     for (size_t i = 0; i < paths.size(); ++i) {
       std::string path = paths[i];
@@ -971,6 +1047,22 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
           const auto misc = base.find("\\misc\\");
           if (misc != std::string::npos)
             path = base.substr(0, misc + 1) + path;
+        }
+      }
+      if (path.empty()) continue;
+      std::string shared_key;
+      if (share_map_textures) {
+        shared_key = path;
+#ifdef _WIN32
+        for (char& c : shared_key)
+          c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+#endif
+        if (auto shared = map_textures_.find(shared_key); shared != map_textures_.end()) {
+          part.tex[i] = shared->second.handle;
+          part.shared_texture_paths[i] = std::move(shared_key);
+          ++shared->second.users;
+          ++loaded;
+          continue;
         }
       }
       // Paintable body slots (g1Auto.dds etc.) are solid lime placeholders;
@@ -1023,7 +1115,13 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
       part.tex[i] = bgfx::createTexture2D(
           static_cast<uint16_t>(img.width), static_cast<uint16_t>(img.height),
           has_mips, 1, fmt, 0, mem);
-      if (bgfx::isValid(part.tex[i])) ++loaded;
+      if (bgfx::isValid(part.tex[i])) {
+        if (!shared_key.empty()) {
+          map_textures_.emplace(shared_key, SharedMapTexture{part.tex[i], 1});
+          part.shared_texture_paths[i] = std::move(shared_key);
+        }
+        ++loaded;
+      }
     }
     std::printf("[bgfx] DDS GPU uploaded %d / %zu\n", loaded, paths.size());
   }

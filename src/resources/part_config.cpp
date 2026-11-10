@@ -302,6 +302,16 @@ PartConfig parse_part_config(const std::string &source,
         else if (t.size() > 2)
           render.pose = pose(t, 2);
         out.renders.push_back(render);
+      } else if (command == "rendertypes" && !out.renders.empty()) {
+        const auto count = static_cast<size_t>(integer(t, 1));
+        if (count <= t.size() - 2) {
+          std::vector<uint32_t> variants;
+          for (size_t i = 0; i < count; ++i) {
+            const auto id = rid(t[i + 2]);
+            variants.push_back((id & 0xffffu) != 0 ? id : 0);
+          }
+          out.renders.back().variants = std::move(variants);
+        }
       } else if (command == "colors" && !out.renders.empty()) {
         for (size_t i = 2; i < t.size(); ++i)
           out.renders.back().colors.push_back(
@@ -313,9 +323,10 @@ PartConfig parse_part_config(const std::string &source,
           deformable_pose = pose(t, 2);
       } else if (command == "flags" && !out.renders.empty())
         out.renders.back().flags |= static_cast<uint32_t>(integer(t, 1));
-      else if (command == "lod" && !out.renders.empty())
+      else if (command == "lod" && !out.renders.empty()) {
         out.renders.back().lod_level = integer(t, 1);
-      else if (command == "linked" && !out.renders.empty()) {
+        out.renders.back().lod_last = t.size() > 2 ? integer(t, 2) : out.renders.back().lod_level;
+      } else if (command == "linked" && !out.renders.empty()) {
         PartLink link;
         link.first = integer(t, 1);
         if (t.size() > 2)

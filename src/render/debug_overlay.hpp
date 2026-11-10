@@ -18,6 +18,7 @@ class SectionMachine;
 class DebugOverlay {
  public:
   struct RenderOptions {
+    bool map_shadows = true;
     bool vsync = true;
     bool shadows = true;
     bool sun_flare = true;
