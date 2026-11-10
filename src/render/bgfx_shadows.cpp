@@ -38,8 +38,9 @@ void LibBgfxBackend::update_static_shadow(const float* eye, const VideoOptions& 
   if (ground == instances_.end()) return;
   const auto sun = ground->lighting;
   if (!sun.has_direction || sun.direction[1] >= -.08f) return;
-  const uint16_t size = static_cast<uint16_t>(std::clamp(video.shadow_size * 4, 512, 2048));
-  const float range = std::min(video.shadow_distance, video.view_distance);
+  const uint16_t size = static_cast<uint16_t>(std::clamp(video.shadow_size * 8, 512, 2048));
+  // Static buildings shade streets well beyond the range of vehicle shadows.
+  const float range = std::min(160.f, video.view_distance);
   const float half_width = range * 1.5f + 24.f;
   const float step = std::max(12.f, range * .35f);
   static_shadow_eye_ = {eye[0], eye[1], -eye[2]};
@@ -106,7 +107,7 @@ void LibBgfxBackend::update_static_shadow(const float* eye, const VideoOptions& 
     for (const auto& group : part.geo.groups) {
       const auto flags = group.material_flags;
       const bool v4 = part.geo.info.version == 4;
-      if ((v4 && (flags & 0x40000000u)) ||
+      if ((v4 && (flags & 0x40000000u) && (group.material_type & 0x04u)) ||
           (part.geo.info.version == 3 && (flags & 0x101u) == 0x101u))
         continue;
       // Storefront mix uses the texture's alpha as a colour weight.

@@ -156,7 +156,7 @@ class LibBgfxBackend final : public IRenderBackend {
   void bind_baked_light(const ScxGroup* group,
                         const std::vector<bgfx::TextureHandle>* tex,
                         bgfx::TextureHandle mix = BGFX_INVALID_HANDLE,
-                        bool receive_static_shadow = false);
+                        bool receive_static_shadow = false, const SceneSun* sun = nullptr);
 
 
   void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass);
@@ -308,6 +308,7 @@ class LibBgfxBackend final : public IRenderBackend {
   std::array<float, 16> static_shadow_matrix_{};
   std::array<float, 3> static_shadow_focus_{}, static_shadow_sun_{};
   void* static_shadow_world_ = nullptr;
+  bool outdoor_lighting_ = false;
   bool static_shadow_active_ = false;
   uint16_t static_shadow_size_ = 0;
   float static_shadow_distance_ = 0.f;

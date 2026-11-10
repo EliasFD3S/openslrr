@@ -508,8 +508,8 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
     int32_t n = 0;
     if (v.tag == ValueTag::Int) n = v.v.i;
     else if (v.tag == ValueTag::Float) n = static_cast<int32_t>(v.v.f);
-    if (n > 2) return static_cast<float>(n);
     if (fb > 2) return static_cast<float>(fb);
+    if (n > 2) return static_cast<float>(n);
     return static_cast<float>(fallback);
   };
   jvm.natives().register_method(

@@ -13,6 +13,15 @@ Clock::time_point changed, next_sample;
 GameOptions current;
 uint64_t driving_revision = 0;
 
+void write_video_mode(Jvm& jvm, const VideoMode& mode) {
+  for (const auto* config : {"java.util.Config", "java.game.Config"}) {
+    jvm.set_static(config, "video_x", Value::make_int(mode.width));
+    jvm.set_static(config, "video_y", Value::make_int(mode.height));
+    jvm.set_static(config, "video_depth", Value::make_int(mode.depth));
+    jvm.set_static(config, "video_windowed", Value::make_int(mode.windowed ? 1 : 0));
+  }
+}
+
 GameOptions read_options(Jvm& jvm) {
   const auto read = [&jvm](const char* field, float fallback) {
     const auto value = jvm.get_static("java.util.Config", field);
@@ -76,7 +85,13 @@ void host_game_options_dirty() {
 void host_game_options_apply(Jvm& jvm) {
   if (!loaded) return;
   next_sample = Clock::now() + std::chrono::milliseconds(100);
-  const auto updated = read_options(jvm);
+  auto updated = read_options(jvm);
+  // Only an explicit mode change may resize the window. Restore the
+  // selected values if a script reinitializes Config while opening a screen.
+  if (updated.video.mode != current.video.mode) {
+    write_video_mode(jvm, current.video.mode);
+    updated.video.mode = current.video.mode;
+  }
   if (updated == current) return;
   if (updated.driving != current.driving) ++driving_revision;
   current = updated;
@@ -86,17 +101,18 @@ void host_game_options_apply(Jvm& jvm) {
 void host_set_video_mode(Jvm& jvm, VideoMode mode) {
   if (mode.width < 320 || mode.width > 8192 || mode.height < 240 || mode.height > 8192)
     return;
-  for (const auto* config : {"java.util.Config", "java.game.Config"}) {
-    jvm.set_static(config, "video_x", Value::make_int(mode.width));
-    jvm.set_static(config, "video_y", Value::make_int(mode.height));
-    jvm.set_static(config, "video_depth", Value::make_int(mode.depth == 16 ? 16 : 32));
-    jvm.set_static(config, "video_windowed", Value::make_int(mode.windowed ? 1 : 0));
-  }
+  mode.depth = mode.depth == 16 ? 16 : 32;
+  const bool changed_mode = mode != current.video.mode;
+  current.video.mode = mode;
+  write_video_mode(jvm, mode);
+  if (changed_mode) host_game_options_dirty();
   host_game_options_apply(jvm);
 }
 
 bool host_commit_video_dialog(Jvm& jvm, Object* handler, int command) {
   if (!handler || handler->class_name != "java.game.OptionsDialog") return false;
+  const auto live_video = jvm.get_static(handler->class_name, "OPENSLRR_LIVE_VIDEO");
+  if (live_video.tag == ValueTag::Int && live_video.v.i == 1) return false;
   const auto done = jvm.get_static(handler->class_name, "CMD_VIDEO_OPTIONS_DONE");
   if (done.tag != ValueTag::Int || done.v.i != command) return false;
   // MWM's Back handler treats a new mode as a restart request. Keep the

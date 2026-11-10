@@ -437,8 +437,9 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
 
     float view[16];
     float proj[16];
+    outdoor_lighting_ = world_cam && scene_instances_has_ground_props();
     if (world_cam) {
-      if (scene_instances_has_ground_props() || (script_camera && script_camera->follow_vehicle))
+      if (outdoor_lighting_ || (script_camera && script_camera->follow_vehicle))
         world_zf = video.view_distance;
       const float aspect =
           height_ > 0 ? static_cast<float>(width_) / static_cast<float>(height_)

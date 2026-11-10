@@ -109,8 +109,20 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
 
   void LibBgfxBackend::bind_baked_light(const ScxGroup* group,
                         const std::vector<bgfx::TextureHandle>* tex, bgfx::TextureHandle mix,
-                        bool receive_static_shadow)
+                        bool receive_static_shadow, const SceneSun* sun)
 {
+    float direction[4]{};
+    if (sun && sun->set && sun->has_direction) {
+      direction[0] = -sun->direction[0];
+      direction[1] = -sun->direction[1];
+      direction[2] = sun->direction[2];
+      direction[3] = 1.f;
+      const float ambient[4] = {sun->ambient[0], sun->ambient[1], sun->ambient[2], 0.f};
+      const float diffuse[4] = {sun->diffuse[0], sun->diffuse[1], sun->diffuse[2], 0.f};
+      bgfx::setUniform(u_sun_amb_, ambient);
+      bgfx::setUniform(u_sun_diff_, diffuse);
+    }
+    bgfx::setUniform(u_sun_dir_, direction);
     float u[4] = {0.f, 0.f, 1.f, 0.f};
     float xf[4] = {1.f, 1.f, 0.f, 0.f};
     bgfx::TextureHandle lm = white_tex_;
@@ -134,7 +146,7 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
     bgfx::setTexture(2, s_mesh_mix_, bgfx::isValid(mix) ? mix : white_tex_);
     const bool receive = receive_static_shadow && static_shadow_active_ &&
                          debug_overlay_.render_options().map_shadows;
-    const float params[4] = {receive ? 0.42f : 0.f,
+    const float params[4] = {receive ? 1.f : 0.f,
                              receive ? 1.f / static_shadow_size_ : 0.f, 0.00045f, 0.f};
     bgfx::setUniform(u_static_shadow_params_, params);
     if (receive) {
@@ -288,7 +300,12 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
     auto draw=[&](uint32_t first,uint32_t count,uint16_t texture_index,uint32_t flags,const ScxGroup* group){
       // SCX3 alpha-blended sprites, including map markers, belong above
       // the opaque tiles. Their JPEG/PNG alpha is already premultiplied.
-      const bool blend = !instance.sky && part.geo.info.version == 3 && (flags & 0x101u) == 0x101u;
+      // SCX4 glass requests texture alpha in the material word. The
+      // transparent function bit alone also appears on opaque rail frames.
+      const bool glass = group && !preview && part.geo.info.version == 4 &&
+          (flags & 0x40000000u) && (group->material_type & 0x04u);
+      const bool blend = !instance.sky && (glass ||
+          (part.geo.info.version == 3 && (flags & 0x101u) == 0x101u));
       if (pass != int(blend)) return;
       const auto tex = texture(texture_index);
       // SCX4 storefronts use texture alpha to mix their paint colour with
@@ -305,6 +322,7 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
       const bool vertex_mix = group && group->mix_vertex_color;
       const float settings[4] = {alpha_test, instance.sky || blend || vertex_mix ? 1.f : preview ? .5f : 0.f,
                                  blend ? 1.f : 0.f, material_mix ? -2.f : vertex_mix ? -1.f :
+                                 outdoor_lighting_ && !preview && part.geo.ground_polygons ? -3.f :
                                  !blend && preview && tex.idx != white_tex_.idx ? 1.f : 0.f};
       const uint32_t color = preview || instance.cull_backfaces ? instance.color : 0xffffffu;
       float tint[4]={((color>>16)&255)/255.f,((color>>8)&255)/255.f,(color&255)/255.f,1};
@@ -318,7 +336,9 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
         const auto candidate = texture(group->mix_index);
         if (candidate.idx != white_tex_.idx) mix = candidate;
       }
-      bind_baked_light(group, &part.tex, mix, !preview && !instance.sky);
+      const bool world_mesh = !preview && !instance.sky && !blend;
+      bind_baked_light(group, &part.tex, mix, world_mesh,
+                       world_mesh && outdoor_lighting_ ? &instance.lighting : nullptr);
       uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_MSAA;
       if (instance.cull_backfaces && !(flags & 0x02000000u))
         state |= BGFX_STATE_CULL_CW;

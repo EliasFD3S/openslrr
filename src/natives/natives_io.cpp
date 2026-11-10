@@ -271,27 +271,7 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   jvm.natives().register_method(
       "java.render.Frontend", "setFonts", "()V",
       [&jvm](Object*, const std::vector<Value>&) {
-        // Stock does not rescale live: a new mode is stored and applied on
-        // the next launch. Rebanding for Config.video_* while the window is
-        // still the old size breaks the menus.
-        const int32_t fb_w = osd_framebuffer_width();
-        const int32_t fb_h = osd_framebuffer_height();
-        Value vx = jvm.get_static("java.game.Config", "video_x");
-        Value vy = jvm.get_static("java.game.Config", "video_y");
-        const int32_t cfg_x = vx.tag == ValueTag::Int ? vx.v.i : 0;
-        const int32_t cfg_y = vy.tag == ValueTag::Int ? vy.v.i : 0;
-        if (fb_w > 2 && fb_h > 2 && (cfg_x != fb_w || cfg_y != fb_h) &&
-            cfg_x > 0 && cfg_y > 0) {
-          frontend_set_fonts(jvm, fb_w, fb_h);
-          jvm.set_static("java.game.Config", "video_x", Value::make_int(cfg_x));
-          jvm.set_static("java.game.Config", "video_y", Value::make_int(cfg_y));
-          jvm.set_static("java.util.Config", "video_x", Value::make_int(cfg_x));
-          jvm.set_static("java.util.Config", "video_y", Value::make_int(cfg_y));
-          return Value::make_void();
-        }
-        const int32_t x = fb_w > 2 ? fb_w : (cfg_x > 0 ? cfg_x : 800);
-        const int32_t y = fb_h > 2 ? fb_h : (cfg_y > 0 ? cfg_y : 600);
-        frontend_set_fonts(jvm, x, y);
+        frontend_set_fonts(jvm, osd_framebuffer_width(), osd_framebuffer_height());
         return Value::make_void();
       });
   jvm.natives().register_method(
