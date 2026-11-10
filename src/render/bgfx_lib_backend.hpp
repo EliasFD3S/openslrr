@@ -162,7 +162,8 @@ class LibBgfxBackend final : public IRenderBackend {
 
   void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass);
 
-  void draw_dynamic_world(const float* view, uint16_t view_id, float far_plane);
+  void draw_sky(uint16_t view_id, const float* view, const float* projection);
+  void draw_dynamic_world(uint16_t view_id);
   void draw_sun_flare(const float* view, const float* projection, uint16_t view_id);
 
   bool ensure_vehicle_shadow_target(int slot, uint16_t size);
@@ -309,6 +310,7 @@ class LibBgfxBackend final : public IRenderBackend {
   std::array<float, 16> static_shadow_matrix_{};
   std::array<float, 3> static_shadow_focus_{}, static_shadow_sun_{};
   void* static_shadow_world_ = nullptr;
+  bgfx::UniformHandle u_cloud_wind_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_cloud_sky_ = BGFX_INVALID_HANDLE;
   bool outdoor_lighting_ = false;
   bgfx::UniformHandle u_local_light_ = BGFX_INVALID_HANDLE;
@@ -316,17 +318,19 @@ class LibBgfxBackend final : public IRenderBackend {
   void update_local_light();
   void update_reflections(const float* eye);
   void destroy_reflections();
-  bgfx::TextureHandle reflection_cube_ = BGFX_INVALID_HANDLE;
+  std::array<bgfx::TextureHandle, 2> reflection_cubes_{{
+      BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE}};
+  size_t reflection_write_ = 0;
   bgfx::TextureHandle reflection_depth_ = BGFX_INVALID_HANDLE;
-  std::array<bgfx::FrameBufferHandle, 6> reflection_faces_{{
-      BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE,
-      BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE}};
+  bgfx::TextureHandle reflection_color_ = BGFX_INVALID_HANDLE;
+  bgfx::FrameBufferHandle reflection_capture_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle s_reflection_cube_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_dynamic_reflection_ = BGFX_INVALID_HANDLE;
   std::array<float, 3> reflection_origin_{};
   void* reflection_world_ = nullptr;
   size_t reflection_face_ = 0;
   bool reflection_ready_ = false;
+  bool reflection_scene_ = false;
   bool static_shadow_active_ = false;
   bgfx::FrameBufferHandle car_depth_fb_ = BGFX_INVALID_HANDLE;
   bgfx::TextureHandle car_depth_tex_ = BGFX_INVALID_HANDLE;

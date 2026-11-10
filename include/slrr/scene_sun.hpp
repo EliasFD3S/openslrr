@@ -32,6 +32,7 @@ void scene_sun_set_resource(const float diffuse[3], const float ambient[3],
                             const float specular[3], const float direction[3]);
 SceneSun scene_sun();
 void scene_sun_set_time(float seconds);
+float scene_sun_time();
 void scene_sun_apply_day_cycle(SceneSun& light);
 
 }  // namespace slrr

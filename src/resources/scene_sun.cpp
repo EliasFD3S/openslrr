@@ -51,6 +51,8 @@ void scene_sun_set_time(float seconds) {
   if (std::isfinite(seconds)) g_sun_time = seconds;
 }
 
+float scene_sun_time() { return g_sun_time; }
+
 void scene_sun_apply_day_cycle(SceneSun& light) {
   constexpr float tau = 6.28318530718f;
   const float phase = std::fmod(g_sun_time, 86400.f) * (tau / 86400.f) - tau * .25f;

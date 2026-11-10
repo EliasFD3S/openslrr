@@ -28,7 +28,7 @@ class DebugOverlay {
   void set_context(Jvm& jvm, const SectionMachine& sections);
   bool visible() const { return open_; }
   const RenderOptions& render_options() const { return render_options_; }
-  void draw(HWND hwnd, uint16_t width, uint16_t height,
+  void draw(HWND hwnd, uint16_t width, uint16_t height, const char* reflection_status,
             std::span<Object* const> vehicles);
   void shutdown();
   bool captures_mouse() const;

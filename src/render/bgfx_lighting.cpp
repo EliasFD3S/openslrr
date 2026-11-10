@@ -114,6 +114,10 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
     const float no_sky[4]{};
     bgfx::setUniform(u_local_light_, no_sky);
     bgfx::setUniform(u_cloud_sky_, sky ? sky : no_sky);
+    if (sky) {
+      const float wind[4] = {scene_sun_time() * 2.3f, scene_sun_time() * .85f, 0.f, 0.f};
+      bgfx::setUniform(u_cloud_wind_, wind);
+    }
     float direction[4]{};
     if (sun && sun->set && sun->has_direction) {
       direction[0] = -sun->direction[0];
@@ -212,12 +216,12 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
         const bool lens = glass && env.idx == white_tex_.idx && !generated;
         // A missing reflection slot is the global envmap, and the exe
         // builds its UVs from the reflection vector, not the mesh.
-        const bool enhanced_env = !preview && (outdoor_lighting_ || garage_) &&
+        const bool enhanced_env = !preview && reflection_scene_ &&
             host_enhanced_graphics().dynamic_reflections && !lens &&
             (generated || painted || chrome || bare_cap || glass || color_mix_env ||
              group.reflection_index != 0xffff);
         const bool live_env = enhanced_env && reflection_ready_;
-        if (!live_env && env.idx == white_tex_.idx &&
+        if (!enhanced_env && env.idx == white_tex_.idx &&
             (painted || generated || chrome || bare_cap || glass)) {
           auto path = scene_instances_envmap();
           if(!path.empty()) env = tex_for_osd_icon(path);
@@ -225,7 +229,7 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
         }
         const float kind = glass ? 3.f : color_mix_env ? 5.f : color_mix ? 4.f
                                 : (chrome || bare_cap) ? 2.f : painted ? 1.f : 0.f;
-        const bool has_reflection = live_env || env.idx != white_tex_.idx;
+        const bool has_reflection = enhanced_env || env.idx != white_tex_.idx;
         const float reflection_strength = live_env && painted ? std::max(strength, .35f) : strength;
         const float layers[4] = {mixed?1.f:0.f, has_reflection?reflection_strength:0.f, group.material_type==0x15&&mixed?1.f:0.f, kind};
         const float channels[4] = {static_cast<float>(group.base_map.channel),static_cast<float>(group.mix_map.channel),static_cast<float>(group.reflection_map.channel),lens?2.f:generated?1.f:0.f};
@@ -302,9 +306,9 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
         // material UV transforms need the scene's wrapping sampler here.
         bgfx::setTexture(2, s_env_, env, BGFX_SAMPLER_NONE);
         bgfx::setTexture(3,s_bake_,bake);
-        const float reflection[4] = {live_env ? 1.f : 0.f, 0.f, 0.f, 0.f};
+        const float reflection[4] = {live_env ? 1.f : enhanced_env ? 2.f : 0.f, 0.f, 0.f, 0.f};
         bgfx::setUniform(u_dynamic_reflection_, reflection);
-        if (live_env) bgfx::setTexture(4, s_reflection_cube_, reflection_cube_);
+        if (live_env) bgfx::setTexture(4, s_reflection_cube_, reflection_cubes_[reflection_write_ ^ 1]);
         bgfx::setTransform(matrix);bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,group.index_start,group.index_count);
         uint64_t state=BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_MSAA|BGFX_STATE_DEPTH_TEST_LESS;
         if (glass)

@@ -18,6 +18,7 @@ uniform vec4 u_localLight; // world position, radius
 uniform vec4 u_sunDir;
 // xyz: camera position, w: 0 textured, 1 clear, 2 volumetric.
 uniform vec4 u_cloudSky;
+uniform vec4 u_cloudWind;
 // x: legacy cutout when positive, or -(reference + 1) / 255 for SCX4
 // y: unlit (skip ndl — OSD icons)
 // z: write texture alpha (blend) instead of opaque 1
@@ -54,9 +55,23 @@ float cloudNoise(vec3 p)
 	return mix(mix(a, b, f.y), mix(c, d, f.y), f.z);
 }
 
+// Perez luminance distribution, as used by bgfx example 36-sky.
+float daylightDistribution(float cosZenith, float cosSun)
+{
+	const float turbidity = 2.4;
+	float a = 0.1787 * turbidity - 1.4630;
+	float b = -0.3554 * turbidity + 0.4275;
+	float c = -0.0227 * turbidity + 5.3251;
+	float d = 0.1206 * turbidity - 2.5771;
+	float e = -0.0670 * turbidity + 0.3703;
+	float angle = acos(clamp(cosSun, -1.0, 1.0));
+	return (1.0 + a * exp(b / max(cosZenith, 0.04))) *
+	       (1.0 + c * exp(d * angle) + e * cosSun * cosSun);
+}
+
 float cloudDensity(vec3 p)
 {
-	vec3 samplePos = p * vec3(0.0014, 0.0025, 0.0014);
+	vec3 samplePos = (p - vec3(u_cloudWind.x, 0.0, u_cloudWind.y)) * vec3(0.0014, 0.0025, 0.0014);
 	float shape = cloudNoise(samplePos) * 0.72 + cloudNoise(samplePos * 2.7) * 0.28;
 	return smoothstep(0.47, 0.68, shape) * sin(3.14159 * saturate((p.y - 650.0) / 480.0));
 }
@@ -68,6 +83,20 @@ vec3 renderSky(vec3 ray, vec2 pixel)
 	vec3 horizon = mix(vec3(0.07, 0.09, 0.14), vec3(0.57, 0.73, 0.86), daylight);
 	vec3 zenith = mix(vec3(0.01, 0.02, 0.05), vec3(0.12, 0.33, 0.65), daylight);
 	vec3 sky = mix(horizon, zenith, sqrt(saturate(ray.y)));
+	float luminance = daylightDistribution(ray.y, dot(ray, sun)) /
+	                  max(daylightDistribution(1.0, sun.y), 0.05);
+	sky *= mix(1.0, clamp(sqrt(luminance), 0.65, 1.75), daylight);
+	// Star positions live in angular cells, so they stay fixed as the camera moves.
+	vec2 sphere = vec2(atan2(ray.z, ray.x) * 0.15915494 + 0.5, ray.y);
+	vec2 starGrid = sphere * vec2(960.0, 360.0);
+	vec2 starCell = floor(starGrid);
+	float starId = cloudHash(vec3(starCell, 61.0));
+	vec2 starPosition = vec2(cloudHash(vec3(starCell, 7.0)),
+	                         cloudHash(vec3(starCell, 19.0))) * 0.6 + 0.2;
+	float star = 1.0 - smoothstep(0.05, 0.22, length(fract(starGrid) - starPosition));
+	float stars = star * smoothstep(0.975, 1.0, starId) *
+	              (1.0 - daylight) * smoothstep(0.03, 0.18, ray.y);
+	sky += vec3(0.73, 0.82, 1.0) * stars;
 	float alignment = dot(ray, sun);
 	float disc = smoothstep(0.99990, 0.99996, alignment);
 	float glow = pow(saturate(alignment), 256.0);

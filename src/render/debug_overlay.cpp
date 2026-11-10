@@ -20,7 +20,8 @@ namespace {
 constexpr bgfx::ViewId kDebugView = 71;
 constexpr double kDegrees = 57.29577951308232;
 
-void draw_render(uint16_t width, uint16_t height, DebugOverlay::RenderOptions& options) {
+void draw_render(uint16_t width, uint16_t height, DebugOverlay::RenderOptions& options,
+                 Jvm* vm, const char* reflection_status) {
   ImGui::Text("%s | %u x %u", bgfx::getRendererName(bgfx::getRendererType()), width, height);
   if (const auto* stats = bgfx::getStats()) {
     const auto ms = [](int64_t ticks, int64_t frequency) {
@@ -47,6 +48,21 @@ void draw_render(uint16_t width, uint16_t height, DebugOverlay::RenderOptions& o
   ImGui::Checkbox("Map sunlight", &enhanced.dynamic_lighting);
   ImGui::Checkbox("Local lights", &enhanced.local_lights);
   ImGui::Checkbox("Dynamic reflections", &enhanced.dynamic_reflections);
+  ImGui::Text("Reflection capture: %s", reflection_status);
+  if (vm) {
+    float hour = std::fmod(scene_sun_time(), 86400.f) / 3600.f;
+    const int minutes = static_cast<int>(hour * 60.f);
+    ImGui::Text("Game time %02d:%02d", minutes / 60, minutes % 60);
+    if (ImGui::SliderFloat("Time of day", &hour, 0.f, 23.999f, "%.2f h")) {
+      vm->invoke("java.game.GameLogic", "setTime", "(F)V",
+                 {Value::make_float(hour * 3600.f)}, true);
+      scene_sun_set_time(hour * 3600.f);
+    }
+    const auto time_factor = vm->get_static("java.game.GameLogic", "timeFactor");
+    float rate = time_factor.tag == ValueTag::Float ? time_factor.v.f : 4.f;
+    if (ImGui::SliderFloat("Clock speed", &rate, 0.f, 240.f, "%.1fx"))
+      vm->set_static("java.game.GameLogic", "timeFactor", Value::make_float(rate));
+  }
   ImGui::SliderInt("Reflection faces per frame", &options.reflection_faces, 1, 6);
   ImGui::Checkbox("Volumetric clouds", &enhanced.volumetric_clouds);
   ImGui::Combo("Anti-aliasing", &enhanced.msaa, "Off\0MSAA 2x\0MSAA 4x\0MSAA 8x\0");
@@ -279,7 +295,7 @@ void DebugOverlay::draw_vehicle_tab(std::span<Object* const> vehicles) {
   else ImGui::TextUnformatted("No vehicle in this section.");
 }
 
-void DebugOverlay::draw(HWND hwnd, uint16_t width, uint16_t height,
+void DebugOverlay::draw(HWND hwnd, uint16_t width, uint16_t height, const char* reflection_status,
                         std::span<Object* const> vehicles) {
   if (!open_) return;
   if (!initialized_) {
@@ -317,7 +333,7 @@ void DebugOverlay::draw(HWND hwnd, uint16_t width, uint16_t height,
         ImGui::EndTabItem();
       }
       if (ImGui::BeginTabItem("Renderer")) {
-        draw_render(width, height, render_options_);
+        draw_render(width, height, render_options_, jvm_, reflection_status);
         ImGui::EndTabItem();
       }
       if (ImGui::BeginTabItem("Input")) {

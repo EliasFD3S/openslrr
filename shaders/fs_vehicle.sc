@@ -75,7 +75,9 @@ void main()
     if (u_dynamicReflection.x > 0.5) {
         vec3 ray = reflect(normalize(v_viewPos), n);
         vec3 worldRay = mul(u_invView, vec4(ray, 0.0)).xyz;
-        vec3 capture = textureCube(s_sceneReflection, worldRay).rgb;
+        vec3 capture = u_sunAmb.rgb + u_sunDiff.rgb * (0.06 + 0.28 * saturate(worldRay.y));
+        if (u_dynamicReflection.x < 1.5)
+            capture = textureCube(s_sceneReflection, worldRay).rgb;
         // Keep dark parts of the scene visible in the reflection without
         // flattening the brighter shapes captured by the cubemap.
         environment = capture + u_sunAmb.rgb * 0.15;
@@ -121,7 +123,12 @@ void main()
         color += u_vehicleSpec.rgb*pow(ndh, max(u_vehicleSpec.a, 1.0))*sp*step(0.001, ndl);
     } else if (u_vehicleLayers.w > 0.5) {
         // Painted panels keep their color and gain the room on top.
-        color += environment*weight*(0.9+fres);
+        if (u_dynamicReflection.x > 0.5) {
+            float reflectance = clamp(weight * (0.55 + 0.55 * fres), 0.0, 0.72);
+            color = mix(color, environment, reflectance);
+        } else {
+            color += environment*weight*(0.9+fres);
+        }
     } else {
         // Half the authored strength, added on the metal color. The full
         // weight paints an exhaust pipe with the room and it reads white.
