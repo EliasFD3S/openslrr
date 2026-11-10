@@ -31,6 +31,11 @@ Original game data is required and is not included. The reference version is **S
 
 These milestones describe existing functionality, rather than a percentage of the game completed.
 
+### Development videos
+
+- [OpenSLRR DX11 x64 — Video 1](https://www.youtube.com/watch?v=g7GCU0DrdKI)
+- [OpenSLRR DX11 x64 — Video 2](https://www.youtube.com/watch?v=4pkLV2srGMs)
+
 ### Native bindings
 
 ![Native bindings by family: with a body, no-op, or missing](assets/progress/native-coverage.svg)
