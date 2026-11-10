@@ -19,6 +19,7 @@ class DebugOverlay {
  public:
   struct RenderOptions {
     bool map_shadows = true;
+    int reflection_faces = 2;
     bool vsync = true;
     bool shadows = true;
     bool sun_flare = true;

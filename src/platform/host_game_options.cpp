@@ -63,6 +63,10 @@ GameOptions read_options(Jvm& jvm) {
   return options;
 }
 }
+EnhancedGraphics& host_enhanced_graphics() {
+  static EnhancedGraphics graphics;
+  return graphics;
+}
 const GameOptions& host_game_options() { return current; }
 uint64_t host_driving_options_revision() { return driving_revision; }
 

@@ -4,6 +4,8 @@ SAMPLER2D(s_texColor, 0);
 SAMPLER2D(s_vehicleMix, 1);
 SAMPLER2D(s_vehicleEnv, 2);
 SAMPLER2D(s_vehicleBake, 3);
+SAMPLERCUBE(s_sceneReflection, 4);
+uniform vec4 u_dynamicReflection;
 uniform vec4 u_lightmap;
 uniform vec4 u_lightmapUv;
 uniform vec4 u_vehicleLayers; // mix enabled, reflection weight, complemented alpha, painted
@@ -16,6 +18,7 @@ uniform vec4 u_vehicleSpec; // rgb, shininess
 uniform vec4 u_sunDiff; // rgb, set
 uniform vec4 u_sunAmb;
 uniform vec4 u_sunSpec;
+uniform vec4 u_localLight; // world position, radius
 uniform vec4 u_sunDir; // render-space toward the light, w = present
 vec2 channelUv(float channel, vec2 uv0, vec2 uv1, vec2 uv2)
 {
@@ -46,6 +49,13 @@ void main()
     float use = step(0.5, u_lightmap.x);
     illum = mix(illum, vec3(1.0, 1.0, 1.0), use);
     bake = mix(vec3(1.0, 1.0, 1.0), bake, use);
+	if (u_localLight.w > 0.0) {
+		vec3 delta = mul(u_view, vec4(u_localLight.xyz, 1.0)).xyz - v_viewPos;
+		float d2 = dot(delta, delta);
+		float fade = saturate(1.0 - d2 / (u_localLight.w * u_localLight.w));
+		float facing = max(dot(n, delta * inversesqrt(max(d2, 0.001))), 0.0);
+		illum += vec3(1.0, 0.94, 0.80) * (fade * fade * facing * 3.0 / (1.0 + d2));
+	}
     vec3 color = albedo*illum*bake;
     vec3 viewDir = normalize(-v_viewPos);
     vec3 halfDir = normalize(lightDir + viewDir);
@@ -62,6 +72,14 @@ void main()
         envUv = vec2(ray.x*0.5-yaw/3.1415927, -ray.y*0.5+0.5);
     }
     vec3 environment = texture2D(s_vehicleEnv, envUv*u_vehicleEnvUv.xy+u_vehicleEnvUv.zw).rgb;
+    if (u_dynamicReflection.x > 0.5) {
+        vec3 ray = reflect(normalize(v_viewPos), n);
+        vec3 worldRay = mul(u_invView, vec4(ray, 0.0)).xyz;
+        vec3 capture = textureCube(s_sceneReflection, worldRay).rgb;
+        // Keep dark parts of the scene visible in the reflection without
+        // flattening the brighter shapes captured by the cubemap.
+        environment = capture + u_sunAmb.rgb * 0.15;
+    }
     float weight = u_vehicleLayers.y;
     if (u_vehicleLayers.z > 0.5) weight *= 1.0-detail.a;
     float fres = pow(1.0-max(dot(n, viewDir), 0.0), 3.0);

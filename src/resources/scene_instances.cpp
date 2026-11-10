@@ -1124,6 +1124,8 @@ SceneSun scene_instances_light(void* root) {
     const auto& d=node->directional_light.direction;
     for(int i=0;i<3;++i)selected.direction[i]=frame[i]*d[0]+frame[4+i]*d[1]+frame[8+i]*d[2];
   }
+  if (root == g_world && scene_instances_has_ground_props())
+    scene_sun_apply_day_cycle(selected);
   return selected;
 }
 std::vector<SceneInstance> scene_instances_collect_root(void *root) {

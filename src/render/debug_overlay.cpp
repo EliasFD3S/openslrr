@@ -40,12 +40,22 @@ void draw_render(uint16_t width, uint16_t height, DebugOverlay::RenderOptions& o
   ImGui::Text("SFX voices: %u | Coalesced: %llu", audio.active,
               static_cast<unsigned long long>(audio.coalesced));
   ImGui::Separator();
+  auto& enhanced = host_enhanced_graphics();
   ImGui::Checkbox("VSync", &options.vsync);
   ImGui::Checkbox("Vehicle shadows", &options.shadows);
   ImGui::Checkbox("Map shadows", &options.map_shadows);
+  ImGui::Checkbox("Map sunlight", &enhanced.dynamic_lighting);
+  ImGui::Checkbox("Local lights", &enhanced.local_lights);
+  ImGui::Checkbox("Dynamic reflections", &enhanced.dynamic_reflections);
+  ImGui::SliderInt("Reflection faces per frame", &options.reflection_faces, 1, 6);
+  ImGui::Checkbox("Volumetric clouds", &enhanced.volumetric_clouds);
+  ImGui::Combo("Anti-aliasing", &enhanced.msaa, "Off\0MSAA 2x\0MSAA 4x\0MSAA 8x\0");
   ImGui::Checkbox("Sun flare", &options.sun_flare);
   ImGui::Checkbox("Game OSD", &options.game_osd);
-  if (ImGui::Button("Reset render options")) options = {};
+  if (ImGui::Button("Reset render options")) {
+    options = {};
+    enhanced = {};
+  }
 }
 
 void draw_tuning(Jvm* vm) {

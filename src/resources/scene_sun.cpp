@@ -1,10 +1,12 @@
 #include "slrr/scene_sun.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace slrr {
 namespace {
 SceneSun g_sun;
+float g_sun_time = 12.f * 3600.f;
 
 float channel(int32_t packed, int shift) {
   return static_cast<float>((packed >> shift) & 255) / 256.f;
@@ -44,4 +46,28 @@ void scene_sun_set_resource(const float diffuse[3], const float ambient[3],
 }
 
 SceneSun scene_sun() { return g_sun; }
+
+void scene_sun_set_time(float seconds) {
+  if (std::isfinite(seconds)) g_sun_time = seconds;
+}
+
+void scene_sun_apply_day_cycle(SceneSun& light) {
+  constexpr float tau = 6.28318530718f;
+  const float phase = std::fmod(g_sun_time, 86400.f) * (tau / 86400.f) - tau * .25f;
+  const float elevation = std::sin(phase);
+  light.direction[0] = -std::cos(phase);
+  light.direction[1] = -.85f * elevation;
+  light.direction[2] = .5268f * elevation;
+  light.has_direction = true;
+  light.set = true;
+  const float daylight = std::clamp(elevation * 5.f, 0.f, 1.f);
+  const float twilight = std::clamp((elevation + .16f) / .4f, 0.f, 1.f);
+  constexpr float night[] = {.10f, .13f, .20f};
+  constexpr float warm[] = {1.f, .66f, .44f};
+  for (int i = 0; i < 3; ++i) {
+    light.diffuse[i] *= daylight * (warm[i] + (1.f - warm[i]) * twilight);
+    light.specular[i] *= daylight;
+    light.ambient[i] = night[i] + (std::max(light.ambient[i], night[i]) - night[i]) * twilight;
+  }
+}
 }  // namespace slrr

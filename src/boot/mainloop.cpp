@@ -361,6 +361,9 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
                                    SectionMachine& sections, double dt) {
   host_music_update();
   host_game_options_update(jvm);
+  const auto game_time = jvm.get_static("java.game.GameLogic", "time");
+  if (game_time.tag == ValueTag::Float) scene_sun_set_time(game_time.v.f);
+  else if (game_time.tag == ValueTag::Int) scene_sun_set_time(static_cast<float>(game_time.v.i));
   script_threads_tick(jvm);
   MainLoopFrameResult out;
   mainloop_adopt_section(jvm, sections);

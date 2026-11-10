@@ -57,6 +57,31 @@ std::vector<VideoMode> display_modes() {
 
 
 void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
+  jvm.natives().register_method("java.game.OptionsDialog", "getRendererOption", "(I)I",
+      [](Object*, const std::vector<Value>& args) {
+        const auto& graphics = host_enhanced_graphics();
+        switch (args[0].v.i) {
+          case 0: return Value::make_int(graphics.msaa);
+          case 1: return Value::make_int(graphics.dynamic_reflections);
+          case 2: return Value::make_int(graphics.volumetric_clouds);
+          case 3: return Value::make_int(graphics.dynamic_lighting);
+          case 4: return Value::make_int(graphics.local_lights);
+          default: return Value::make_int(0);
+        }
+      });
+  jvm.natives().register_method("java.game.OptionsDialog", "setRendererOption", "(II)V",
+      [](Object*, const std::vector<Value>& args) {
+        auto& graphics = host_enhanced_graphics();
+        const int value = args[1].v.i;
+        switch (args[0].v.i) {
+          case 0: graphics.msaa = std::clamp(value, 0, 3); break;
+          case 1: graphics.dynamic_reflections = value != 0; break;
+          case 2: graphics.volumetric_clouds = value != 0; break;
+          case 3: graphics.dynamic_lighting = value != 0; break;
+          case 4: graphics.local_lights = value != 0; break;
+        }
+        return Value::make_void();
+      });
   jvm.natives().register_method("java.lang.System", "getConfigOptions", "()V",
     [&jvm](Object*, const std::vector<Value>&) {
       host_game_options_apply(jvm);

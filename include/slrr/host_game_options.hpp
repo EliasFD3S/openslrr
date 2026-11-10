@@ -4,6 +4,14 @@
 namespace slrr {
 class Jvm;
 struct Object;
+struct EnhancedGraphics {
+  int msaa = 1;
+  bool dynamic_reflections = true;
+  bool volumetric_clouds = true;
+  bool dynamic_lighting = true;
+  bool local_lights = true;
+};
+EnhancedGraphics& host_enhanced_graphics();
 struct VideoMode {
   int width = 800, height = 600, depth = 32;
   bool windowed = true;
