@@ -1,6 +1,7 @@
 #include "slrr/natives_boot.hpp"
 #include "natives_internal.hpp"
 
+#include "slrr/file_faults.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
@@ -492,6 +493,8 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
           g_unflushed_saves.erase(save_key(p));
           return Value::make_int(1);
         }
+        const auto fault = file_faults::before(file_faults::Operation::Delete, 0, p);
+        if (fault.injected) return Value::make_int(0);
         fs::remove_all(p, ec);
         if (!ec) g_unflushed_saves.erase(save_key(p));
         std::printf("[native] File.delete %s ok=%d\n", rel.c_str(), ec ? 0 : 1);
@@ -529,6 +532,9 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         if (!two_paths(args, &src, &dst)) return Value::make_int(-1);
         std::error_code ec;
         fs::create_directories(dst.parent_path(), ec);
+        const auto fault =
+            file_faults::before(file_faults::Operation::Copy, 0, src, dst);
+        if (fault.injected) return Value::make_int(-1);
         fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
         return Value::make_int(ec ? -1 : 0);
       });
@@ -540,6 +546,9 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         if (!two_paths(args, &src, &dst)) return Value::make_int(-1);
         std::error_code ec;
         fs::create_directories(dst.parent_path(), ec);
+        const auto fault =
+            file_faults::before(file_faults::Operation::Rename, 0, src, dst);
+        if (fault.injected) return Value::make_int(-1);
         fs::rename(src, dst, ec);
         return Value::make_int(ec ? -1 : 0);
       });
@@ -558,17 +567,28 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
           // Payload only. close() writes the SDAT type 2 envelope.
           hf.sdat = true;
         } else {
+          const auto open_fault =
+              file_faults::before(file_faults::Operation::Open, 0, p);
+          if (open_fault.injected) return Value::make_int(0);
           // Specifying a mode replaces the ifstream default. Without in,
           // MSVC does not open the file.
           std::ifstream in(p, std::ios::in | std::ios::binary);
           const auto kept = g_unflushed_saves.find(save_key(p));
-          if (kept != g_unflushed_saves.end())
+          if (kept != g_unflushed_saves.end()) {
             hf.bytes = kept->second;
-          else if (in)
+          } else if (in) {
             hf.bytes.assign(std::istreambuf_iterator<char>(in),
                             std::istreambuf_iterator<char>());
-          else
+            const auto read_fault = file_faults::before(
+                file_faults::Operation::Read, hf.bytes.size(), p);
+            if (read_fault.failure) return Value::make_int(0);
+            if (read_fault.injected) {
+              hf.bytes.resize(static_cast<size_t>(std::min<std::uint64_t>(
+                  read_fault.allowed_bytes, hf.bytes.size())));
+            }
+          } else {
             return Value::make_int(0);
+          }
           const int shaped =
               sdat_take_payload(rpk, hf.bytes, hf.sdat_packs, hf.sdat_blobs);
           if (shaped < 0) return Value::make_int(0);
@@ -589,16 +609,33 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
           fs::create_directories(it->second.path.parent_path(), ec);
           // Mode replaces the ofstream default. Without out, MSVC does not
           // open the file and the career buffer never reaches disk.
-          std::ofstream out(it->second.path, std::ios::out | std::ios::binary |
-                                                 std::ios::trunc);
+          const auto open_fault = file_faults::before(
+              file_faults::Operation::Open, 0, it->second.path);
+          std::ofstream out;
+          if (!open_fault.injected) {
+            out.open(it->second.path, std::ios::out | std::ios::binary |
+                                          std::ios::trunc);
+          }
           const std::vector<uint8_t> framed =
               it->second.sdat ? sdat_frame(it->second.bytes, it->second.sdat_packs,
                                            it->second.sdat_blobs)
                               : it->second.bytes;
-          const bool wrote = static_cast<bool>(out);
-          if (wrote && !framed.empty())
-            out.write(reinterpret_cast<const char*>(framed.data()),
-                      static_cast<std::streamsize>(framed.size()));
+          const bool wrote = !open_fault.injected && static_cast<bool>(out);
+          if (wrote && !framed.empty()) {
+            const auto write_fault = file_faults::before(
+                file_faults::Operation::Write, framed.size(), it->second.path);
+            if (!write_fault.failure && write_fault.allowed_bytes != 0) {
+              out.write(reinterpret_cast<const char*>(framed.data()),
+                        static_cast<std::streamsize>(write_fault.allowed_bytes));
+            }
+            if (write_fault.injected) out.setstate(std::ios::badbit);
+          }
+          const auto flush_fault = file_faults::before(
+              file_faults::Operation::Flush, 0, it->second.path);
+          if (flush_fault.injected) out.setstate(std::ios::badbit);
+          const auto close_fault = file_faults::before(
+              file_faults::Operation::Close, 0, it->second.path);
+          if (close_fault.injected) out.setstate(std::ios::badbit);
           const std::string key = save_key(it->second.path);
           if (wrote && out)
             g_unflushed_saves.erase(key);
@@ -610,6 +647,12 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
               wrote && static_cast<bool>(out) ? 1 : 0,
               g_unflushed_saves.count(key) ? 1 : 0, it->second.sdat ? 1 : 0,
               it->second.sdat_packs.size());
+        } else if (it != g_host_files.end()) {
+          // Read-side HostFile instances have no physical stream left by this
+          // point; preserve close()'s void semantics while still counting the
+          // logical persistence operation for focused fault probes.
+          (void)file_faults::before(file_faults::Operation::Close, 0,
+                                    it->second.path);
         }
         g_host_files.erase(self);
         return Value::make_void();

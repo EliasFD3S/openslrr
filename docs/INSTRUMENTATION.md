@@ -7,9 +7,9 @@ For complete per-run stdout/stderr capture, manifests, and crash dumps, use
 Stage 1 provides opt-in structured runtime tracing. Stage 2 adds bounded
 lifetime/resource metrics and final JSON snapshots. Stage 3 adds opt-in MSVC
 AddressSanitizer and deterministic bounded parser mutation lanes. Stage 4 adds
-bounded fixed-step physics telemetry and tick-state replay comparison. Later
-filesystem-fault-injection, native-reachability, renderer-media, and
-native-coverage stages are not implemented here.
+bounded fixed-step physics telemetry and tick-state replay comparison. Stage 5
+adds test-controlled filesystem/persistence fault injection. Native-reachability,
+renderer-media, and native-coverage stages are not implemented here.
 
 ## CLI
 
@@ -68,6 +68,8 @@ Current trace producers are:
 - `gc.start`, `gc.finalization`, and `gc.end`: collection counts and duration.
 - `fiber.start`, `fiber.stop`, `fiber.exit`, and `fiber.checkpoint`:
   lifecycle and actual timeslice yields, not every VM instruction/checkpoint call.
+- `file.fault.injected`: operation/fault kind, requested and admitted byte counts,
+  and failure versus partial outcome. Paths and file payloads are never included.
 
 Tracing is runtime-disabled and allocation-free at the API entry check until
 `--trace` or `diagnostics::start` is used. Defining
@@ -115,6 +117,7 @@ Current production values are:
 | `fibers.live` | gauge | Scheduler records whose cooperative fiber is alive |
 | `osd.records_live`, `osd.records_dead`, `osd.records_total` | gauges | Existing OSD widget records |
 | `host.files_open`, `host.pending_writes` | gauges | Open `java.io.File` records and retained failed writes |
+| `host.file_faults_injected` | counter | Stage 5 injected persistence faults; zero when no rule has triggered |
 | `sfx.voices_active` | gauge | Existing SFX voice statistics |
 | `sfx.voices_coalesced` | counter | Existing SFX coalescing statistic |
 | `gameref.records` | gauge | GameRef registry, including binding aliases |
@@ -436,3 +439,155 @@ validation. ASan coverage excludes uninstrumented third-party code and does not
 replace the normal Release test lane. The Windows CI workflow contains an ASan
 job and uploads generated reproducers/CTest logs on failure; local validation
 does not itself establish GitHub-hosted execution.
+
+## Stage 5: filesystem/persistence fault injection
+
+Include `slrr/file_faults.hpp`. The API is intended for focused C++ tests and
+headless probes; there is currently no command-line option that arms a rule.
+With no installed rule, every interception returns the requested byte allowance,
+emits no event, and leaves the existing operation and its result unchanged.
+Instrumentation-internal failures also fail open. The registered
+`host.file_faults_injected` counter remains zero until an injection occurs.
+
+### Rules, thresholds, and scopes
+
+```cpp
+using namespace slrr::file_faults;
+
+// The first open/read/write/flush/close/delete/copy/rename attempt matching this
+// exact normalized path fails with permission_denied. Other paths are unaffected.
+Rule open_rule;
+open_rule.operation = Operation::Open;
+open_rule.fault = Fault::PermissionDenied;
+open_rule.path = temporary_path / "case.sdat";
+open_rule.fail_after_operations = 0;  // zero means inject on the first attempt
+open_rule.fail_after_bytes = kUnlimited;
+ScopedRule open_scope(open_rule);
+
+// Admit four bytes across matching writes, partially write at the crossing,
+// then apply disk_full. Operation counting is disabled for this byte rule.
+Rule write_rule;
+write_rule.operation = Operation::Write;
+write_rule.fault = Fault::DiskFull;
+write_rule.path = temporary_path / "case.sdat";
+write_rule.fail_after_operations = kUnlimited;
+write_rule.fail_after_bytes = 4;
+ScopedRule write_scope(write_rule);
+```
+
+`Operation` covers `Open`, `Read`, `Write`, `Flush`, `Close`,
+`Delete`, `Copy`, and `Rename`. `File.move` uses `Rename`; its existing
+overwrite behavior is not replaced with a new atomic/replace policy. `File.copy`
+continues to use its existing `overwrite_existing` operation under `Copy`.
+There is no separate production replace operation in this lane.
+
+`Fault` covers `PermissionDenied`, `DiskFull`, `IoError`, `ShortRead`,
+`EndOfFile`, and `PartialWrite`. The first three produce a hard
+`Decision::failure` and a `std::error_code` (`permission_denied`,
+`no_space_on_device`, or `io_error`). Short read, EOF, and partial write are
+valid only for their corresponding read/write operations and return a reduced
+`allowed_bytes`. Invalid combinations are rejected without installing a rule.
+
+For `fail_after_operations=N`, the first N matching attempts are untouched;
+attempt N+1 and later attempts inject. For `fail_after_bytes=N`, the first N
+admitted bytes are untouched. A request crossing that boundary is shortened to
+the remaining byte count, and later requests apply the configured fault. Byte
+thresholds are meaningful for read/write calls; the other operations carry no
+payload byte count. Set the unused threshold to `kUnlimited`. On an
+operation-threshold short read/partial write, or after the byte budget is
+exhausted, `short_bytes` selects the allowance. At a byte-boundary crossing the
+remaining budget takes precedence. Operation and byte counters saturate rather
+than wrapping.
+
+Rules persist until `reset()`. They are process-global, mutex-protected, and
+bounded to 32 entries. Installing another rule for the same operation and path
+replaces it and resets that rule's counters. An empty path matches all paths; a
+nonempty rule path is weakly canonicalized/lexically normalized and must match
+the supplied operation path, or either source/destination for copy/rename.
+Path matching does not put the path in diagnostics.
+
+`ScopedRule` installs one rule and restores the complete previous rule set and
+all threshold counters on destruction, including for nested scopes. An explicit
+`reset()` inside a scope still takes effect immediately; scope destruction then
+restores the snapshot captured at scope entry. Tests should also call `reset()`
+at lane boundaries. Reset does not rewind the diagnostic event ring or the
+process-lifetime metric counter.
+
+### Host hooks and preserved behavior
+
+The hooks are confined to the existing `java.io.File` host persistence paths:
+
+| Operation | Existing intercepted boundary and injected result |
+| --- | --- |
+| Open | Read-mode `File.open` returns 0 before opening. Write-mode files are physically opened by `File.close`, so an injected open failure follows the existing failed-close path. |
+| Read | The whole-file buffer fill in read-mode `File.open` fails or is shortened before SDAT parsing. An in-memory retained failed save does not perform a physical read and is not shortened. |
+| Write | The physical framed write in `File.close` is failed or partially issued, then the existing stream failure state is set. Script `File.write` only appends to memory and is not a second physical-write hook. |
+| Flush | The flush phase of write-mode `File.close` can set the existing stream failure state. No new explicit production flush is introduced. |
+| Close | Write-mode close participates in the existing success/retained-write decision; read-side logical close can emit/count a fault but remains void. The host file record is still erased as before. |
+| Delete | An existing path returns the existing 0 failure result before `remove_all`. The pre-existing nonexistent-path success behavior is unchanged. |
+| Copy | `File.copy` returns -1 before `copy_file`; source and prior destination bytes are not modified by the injected operation. |
+| Rename | `File.move` returns -1 before `rename`; source and destination are left in place. |
+
+No-injection behavior retains the existing return values, stream/destructor
+lifetime, SDAT framing, and `g_unflushed_saves` policy. In particular, this lane
+does not make `File.close` return a new status, add a stronger close/flush check,
+introduce atomic career saves, or change career-save retry/recovery policy.
+Partial/failing writes use the same retained-failed-write path that an ordinary
+stream failure already used.
+
+Each injection emits `file.fault.injected` with `category=file`, the operation
+in `method`, the fault in `error`, `result=failure` or `partial`, and numeric
+`operation`, `requested_bytes`, and `allowed_bytes` values. It also increments
+`host.file_faults_injected`. The event has no path, resource name, file bytes,
+script string, or secret. Enable the existing `--trace PATH` or
+`--log-all DIR` sink to capture events after a C++ probe installs a rule. A
+normal `--probe-gc --root DIR --log-all DIR` run installs no rule and therefore
+checks the zero-injection baseline rather than manufacturing a fault.
+
+### Limitations
+
+This is deterministic host-operation interception, not an OS disk driver,
+filesystem filter, fault-injection framework, or proof of power-loss consistency.
+Read shortening is applied to the existing whole-file buffer after the stream
+fill; it does not reduce kernel I/O. Write/flush/close faults model the existing
+buffered persistence boundary, not every possible native filesystem error.
+Atomic rename exchange, fsync durability, disk quotas, actual ACL enforcement,
+renderer/media I/O, and native reachability are outside this stage. Rule state is
+process-global, so independently running threads must coordinate their scopes;
+VM/fiber execution remains on the host thread and no concurrent Java execution
+is introduced.
+
+### Exact automated coverage
+
+`tests/files-faults-tests.cmake` registers `slrr_files_faults_tests` from the
+lane-owned `tests/test_file_faults.cpp`. Its test-only stream adapter drives
+real files under unique temporary directories; it is not production persistence
+code or an atomic-write helper. The 12 tests cover:
+
+1. no-injection open/read/write/flush/close/delete/copy/rename baseline;
+2. open permission failure after one operation and exact path isolation;
+3. repeated short reads, EOF, and read permission failure;
+4. read byte-budget crossing, exhausted-budget allowance, and hard failure;
+5. partial write after one operation and immediate disk-full failure;
+6. write byte-budget crossing, partial bytes on disk, and exhausted-budget disk full;
+7. flush permission failure after one operation;
+8. close I/O failure after one operation without changing actual close cleanup;
+9. delete/copy/rename failure thresholds and source/destination preservation;
+10. reset, invalid-rule rejection, nested scope restoration, and counter restoration;
+11. structured `file` diagnostics, one metric increment, and path/content exclusion;
+12. byte-for-byte content and last-write-time preservation of a pre-existing
+    reference-save fixture while faults target another file.
+
+Build and run the lane directly with:
+
+```powershell
+& $cmake --build build-bgfx-x64 --config Release --target slrr_files_faults_tests --parallel
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& ./build-bgfx-x64/tests/Release/slrr_files_faults_tests.exe
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+```
+
+The full configure/build/CTest workflow remains the required integration gate.
+No test reads or writes a game/reference tree. The reference-save preservation
+case creates its own pre-existing fixture in a temporary directory and compares
+exact bytes and timestamp after the injected attempts.

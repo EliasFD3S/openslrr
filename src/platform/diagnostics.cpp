@@ -39,6 +39,7 @@ const char* category_name(Category category) {
     case Category::Section: return "section";
     case Category::Gc: return "gc";
     case Category::Fiber: return "fiber";
+    case Category::File: return "file";
     case Category::Runtime: return "runtime";
   }
   return "runtime";

@@ -19,6 +19,7 @@ enum class Category {
   Section,
   Gc,
   Fiber,
+  File,
 };
 
 // Context is thread-local. In particular, a media/worker callback never

@@ -46,6 +46,7 @@ add_executable(slrr_host
   src/platform/video_fmv.cpp
   src/platform/video_fmv_vlc.cpp
   src/natives/native_registry.cpp
+  src/natives/file_faults.cpp
   src/natives/natives_boot.cpp
   src/natives/natives_io.cpp
   src/natives/natives_lang.cpp
