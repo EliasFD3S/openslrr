@@ -451,6 +451,12 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
         return Value::make_int(0);
       });
   jvm.natives().register_method(
+      "java.util.resource.RenderRef", "getDetail", "()F",
+      [](Object* self, const std::vector<Value>&) {
+        const auto* state = gameref_get(self);
+        return Value::make_float(state && !state->empty ? state->detail : 0.f);
+      });
+  jvm.natives().register_method(
       "java.util.resource.RenderRef", "changeResource",
       "(Ljava.util.resource.ResourceRef;Ljava.util.resource.ResourceRef;)V",
       [&rpk](Object* self, const std::vector<Value>& args) {

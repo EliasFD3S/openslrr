@@ -47,6 +47,7 @@ public:
   Matrix frame() const;
   Vec3 inverse_world_inertia(Vec3 v) const;
   Vec3 omega() const;
+  void set_omega(Vec3 angular_velocity);
   Vec3 point_velocity(Vec3 point) const;
   void add_force(Vec3 force, Vec3 point);
   void impulse(Vec3 impulse, Vec3 point);

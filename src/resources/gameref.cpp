@@ -153,6 +153,8 @@ void gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
   n->ypr[0] = yaw;
   n->ypr[1] = pitch;
   n->ypr[2] = roll;
+  std::fill(std::begin(n->vel), std::end(n->vel), 0.f);
+  std::fill(std::begin(n->angular_vel), std::end(n->angular_vel), 0.f);
 }
 
 void gameref_set_event_mask(void* key, int32_t mask) {

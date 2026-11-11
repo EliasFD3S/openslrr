@@ -27,6 +27,8 @@ bool part_command(Object *part, const std::string &command);
 // Car setMatrix: loaded springs, contacts on the given point, body asleep.
 // shift is false for reset, which tucks the springs and does not move the body.
 void part_park_chassis(Object *car, bool shift = true);
+// setState supplies world-space linear/angular velocity after setting the pose.
+void part_apply_state(Object *car, const float* velocity, const float* angular_velocity);
 // The point setMatrix consumed to produce the current pose: the midpoint of
 // the static tyre contacts. getPos of a car returns this, so a saved pose
 // placed again does not climb by the ride height.

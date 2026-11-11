@@ -55,6 +55,7 @@ struct GameRefState {
   std::shared_ptr<ScxGeometry> line_geometry;
   std::optional<RenderLinePoint> line_end;
   float line_length = 0.f;
+  float detail = 0.f;
   int32_t deformed_type = 0;
   SceneSun directional_light;
   void* key = nullptr;  // java.util.resource.GameRef* / GameType*
@@ -70,6 +71,7 @@ struct GameRefState {
   float pos[3] = {0, 0, 0};
   float ypr[3] = {0, 0, 0};
   float vel[3] = {0, 0, 0};
+  float angular_vel[3] = {0, 0, 0};
   std::string alias;
   std::string sound_file;
   std::string class_name;

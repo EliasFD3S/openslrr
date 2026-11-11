@@ -1,20 +1,20 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="430" viewBox="0 0 1120 430" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="465" viewBox="0 0 1120 465" role="img" aria-labelledby="title desc">
 <title id="title">Open SLRR native binding coverage</title>
-<desc id="desc">307 with a body, 6 no-op, 63 missing, out of 376. Bars show counts, not percentages of game completion.</desc>
-<rect width="1120" height="430" rx="12" fill="#0d1117"/>
+<desc id="desc">312 with a body, 6 no-op, 58 missing, out of 376. Bars show counts, not percentages of game completion.</desc>
+<rect width="1120" height="465" rx="12" fill="#0d1117"/>
 <g font-family="Segoe UI,Arial,sans-serif">
 <text x="28" y="34" font-size="21" fill="#f0f6fc" text-anchor="start">Native binding coverage</text>
-<text x="28" y="58" font-size="13" fill="#c9d1d9" text-anchor="start">307 with a body  /  6 no-op  /  63 missing  ·  376 stock natives</text>
-<line x1="170.0" x2="170.0" y1="80" y2="326" stroke="#21262d"/>
-<text x="170.0" y="346" font-size="12" fill="#8b949e" text-anchor="middle">0</text>
-<line x1="387.5" x2="387.5" y1="80" y2="326" stroke="#21262d"/>
-<text x="387.5" y="346" font-size="12" fill="#8b949e" text-anchor="middle">25</text>
-<line x1="605.0" x2="605.0" y1="80" y2="326" stroke="#21262d"/>
-<text x="605.0" y="346" font-size="12" fill="#8b949e" text-anchor="middle">50</text>
-<line x1="822.5" x2="822.5" y1="80" y2="326" stroke="#21262d"/>
-<text x="822.5" y="346" font-size="12" fill="#8b949e" text-anchor="middle">75</text>
-<line x1="1040.0" x2="1040.0" y1="80" y2="326" stroke="#21262d"/>
-<text x="1040.0" y="346" font-size="12" fill="#8b949e" text-anchor="middle">100</text>
+<text x="28" y="58" font-size="13" fill="#c9d1d9" text-anchor="start">312 with a body  /  6 no-op  /  58 missing  ·  376 stock natives</text>
+<line x1="170.0" x2="170.0" y1="80" y2="361" stroke="#21262d"/>
+<text x="170.0" y="381" font-size="12" fill="#8b949e" text-anchor="middle">0</text>
+<line x1="387.5" x2="387.5" y1="80" y2="361" stroke="#21262d"/>
+<text x="387.5" y="381" font-size="12" fill="#8b949e" text-anchor="middle">25</text>
+<line x1="605.0" x2="605.0" y1="80" y2="361" stroke="#21262d"/>
+<text x="605.0" y="381" font-size="12" fill="#8b949e" text-anchor="middle">50</text>
+<line x1="822.5" x2="822.5" y1="80" y2="361" stroke="#21262d"/>
+<text x="822.5" y="381" font-size="12" fill="#8b949e" text-anchor="middle">75</text>
+<line x1="1040.0" x2="1040.0" y1="80" y2="361" stroke="#21262d"/>
+<text x="1040.0" y="381" font-size="12" fill="#8b949e" text-anchor="middle">100</text>
 <text x="156" y="102" font-size="13" fill="#c9d1d9" text-anchor="end">World</text>
 <rect x="170" y="85" width="34.8" height="25" fill="#49a58d"><title>World: 4 with a body</title></rect>
 <text x="187.4" y="102" font-size="12" fill="#ffffff" text-anchor="middle">4</text>
@@ -22,25 +22,22 @@
 <text x="422.29999999999995" y="102" font-size="12" fill="#ffffff" text-anchor="middle">50</text>
 <text x="649.8" y="102" font-size="12" fill="#8b949e" text-anchor="start">54</text>
 <text x="156" y="137" font-size="13" fill="#c9d1d9" text-anchor="end">Language</text>
-<rect x="170" y="120" width="600.3" height="25" fill="#49a58d"><title>Language: 69 with a body</title></rect>
-<text x="470.15" y="137" font-size="12" fill="#ffffff" text-anchor="middle">69</text>
-<rect x="770.3" y="120" width="34.8" height="25" fill="#d39338"><title>Language: 4 no-op</title></rect>
-<text x="787.6999999999999" y="137" font-size="12" fill="#ffffff" text-anchor="middle">4</text>
-<rect x="805.0999999999999" y="120" width="8.7" height="25" fill="#ab474b"><title>Language: 1 missing</title></rect>
-<text x="823.8" y="137" font-size="12" fill="#8b949e" text-anchor="start">74</text>
+<rect x="170" y="120" width="574.1999999999999" height="25" fill="#49a58d"><title>Language: 66 with a body</title></rect>
+<text x="457.09999999999997" y="137" font-size="12" fill="#ffffff" text-anchor="middle">66</text>
+<rect x="744.1999999999999" y="120" width="34.8" height="25" fill="#d39338"><title>Language: 4 no-op</title></rect>
+<text x="761.5999999999999" y="137" font-size="12" fill="#ffffff" text-anchor="middle">4</text>
+<rect x="778.9999999999999" y="120" width="8.7" height="25" fill="#ab474b"><title>Language: 1 missing</title></rect>
+<text x="797.6999999999999" y="137" font-size="12" fill="#8b949e" text-anchor="start">71</text>
 <text x="156" y="172" font-size="13" fill="#c9d1d9" text-anchor="end">Sound &amp; scripts</text>
-<rect x="170" y="155" width="113.1" height="25" fill="#49a58d"><title>Sound &amp; scripts: 13 with a body</title></rect>
-<text x="226.55" y="172" font-size="12" fill="#ffffff" text-anchor="middle">13</text>
-<rect x="283.1" y="155" width="43.5" height="25" fill="#ab474b"><title>Sound &amp; scripts: 5 missing</title></rect>
-<text x="304.85" y="172" font-size="12" fill="#ffffff" text-anchor="middle">5</text>
+<rect x="170" y="155" width="130.5" height="25" fill="#49a58d"><title>Sound &amp; scripts: 15 with a body</title></rect>
+<text x="235.25" y="172" font-size="12" fill="#ffffff" text-anchor="middle">15</text>
+<rect x="300.5" y="155" width="26.099999999999998" height="25" fill="#ab474b"><title>Sound &amp; scripts: 3 missing</title></rect>
 <text x="336.6" y="172" font-size="12" fill="#8b949e" text-anchor="start">18</text>
 <text x="156" y="207" font-size="13" fill="#c9d1d9" text-anchor="end">Resources</text>
-<rect x="170" y="190" width="452.4" height="25" fill="#49a58d"><title>Resources: 52 with a body</title></rect>
-<text x="396.2" y="207" font-size="12" fill="#ffffff" text-anchor="middle">52</text>
-<rect x="622.4" y="190" width="17.4" height="25" fill="#d39338"><title>Resources: 2 no-op</title></rect>
-<rect x="639.8" y="190" width="52.199999999999996" height="25" fill="#ab474b"><title>Resources: 6 missing</title></rect>
-<text x="665.9" y="207" font-size="12" fill="#ffffff" text-anchor="middle">6</text>
-<text x="702.0" y="207" font-size="12" fill="#8b949e" text-anchor="start">60</text>
+<rect x="170" y="190" width="478.49999999999994" height="25" fill="#49a58d"><title>Resources: 55 with a body</title></rect>
+<text x="409.25" y="207" font-size="12" fill="#ffffff" text-anchor="middle">55</text>
+<rect x="648.5" y="190" width="17.4" height="25" fill="#d39338"><title>Resources: 2 no-op</title></rect>
+<text x="675.9" y="207" font-size="12" fill="#8b949e" text-anchor="start">57</text>
 <text x="156" y="242" font-size="13" fill="#c9d1d9" text-anchor="end">Rendering</text>
 <rect x="170" y="225" width="304.5" height="25" fill="#49a58d"><title>Rendering: 35 with a body</title></rect>
 <text x="322.25" y="242" font-size="12" fill="#ffffff" text-anchor="middle">35</text>
@@ -54,13 +51,17 @@
 <rect x="170" y="295" width="843.9" height="25" fill="#49a58d"><title>Parts: 97 with a body</title></rect>
 <text x="591.95" y="312" font-size="12" fill="#ffffff" text-anchor="middle">97</text>
 <text x="1023.9" y="312" font-size="12" fill="#8b949e" text-anchor="start">97</text>
-<text x="1040" y="369" font-size="12" fill="#8b949e" text-anchor="end">Number of natives</text>
-<rect x="170" y="380" width="12" height="12" rx="2" fill="#49a58d"/>
-<text x="190" y="391" font-size="13" fill="#c9d1d9" text-anchor="start">With a body</text>
-<rect x="360" y="380" width="12" height="12" rx="2" fill="#d39338"/>
-<text x="380" y="391" font-size="13" fill="#c9d1d9" text-anchor="start">No-op</text>
-<rect x="493" y="380" width="12" height="12" rx="2" fill="#ab474b"/>
-<text x="513" y="391" font-size="13" fill="#c9d1d9" text-anchor="start">Missing</text>
-<text x="1090" y="411" font-size="11" fill="#8b949e" text-anchor="end">Audited 2026-11-09 · Bodies may be partial implementations</text>
+<text x="156" y="347" font-size="13" fill="#c9d1d9" text-anchor="end">Leftovers</text>
+<rect x="170" y="330" width="26.099999999999998" height="25" fill="#49a58d"><title>Leftovers: 3 with a body</title></rect>
+<rect x="196.1" y="330" width="26.099999999999998" height="25" fill="#ab474b"><title>Leftovers: 3 missing</title></rect>
+<text x="232.2" y="347" font-size="12" fill="#8b949e" text-anchor="start">6</text>
+<text x="1040" y="404" font-size="12" fill="#8b949e" text-anchor="end">Number of natives</text>
+<rect x="170" y="415" width="12" height="12" rx="2" fill="#49a58d"/>
+<text x="190" y="426" font-size="13" fill="#c9d1d9" text-anchor="start">With a body</text>
+<rect x="360" y="415" width="12" height="12" rx="2" fill="#d39338"/>
+<text x="380" y="426" font-size="13" fill="#c9d1d9" text-anchor="start">No-op</text>
+<rect x="493" y="415" width="12" height="12" rx="2" fill="#ab474b"/>
+<text x="513" y="426" font-size="13" fill="#c9d1d9" text-anchor="start">Missing</text>
+<text x="1090" y="446" font-size="11" fill="#8b949e" text-anchor="end">Audited 2026-11-11 · Bodies may be partial implementations</text>
 </g>
 </svg>

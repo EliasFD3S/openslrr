@@ -349,6 +349,41 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
         return Value::make_void();
       });
   jvm.natives().register_method(
+      "java.util.resource.GameRef", "setState",
+      "(Ljava.lang.Vector3;Ljava.lang.Ypr;Ljava.lang.Vector3;Ljava.lang.Vector3;)V",
+      [](Object* self, const std::vector<Value>& args) {
+        if (!self || args.size() != 4) return Value::make_void();
+        float values[12]{};
+        for (size_t i = 0; i < 4; ++i) {
+          if (args[i].tag != ValueTag::Obj) return Value::make_void();
+          const auto* obj = args[i].v.o;
+          if (!obj) continue;
+          const char* names[3] = {i == 1 ? "y" : "x", i == 1 ? "p" : "y", i == 1 ? "r" : "z"};
+          for (size_t j = 0; j < 3; ++j) {
+            const auto found = obj->fields.find(names[j]);
+            if (found == obj->fields.end()) continue;
+            const auto value = found->second;
+            values[i * 3 + j] = value.tag == ValueTag::Float ? value.v.f :
+                value.tag == ValueTag::Int ? float(value.v.i) : 0.f;
+            if (!std::isfinite(values[i * 3 + j])) return Value::make_void();
+          }
+        }
+        gameref_set_matrix(self, values[0], values[1], values[2],
+                           values[3], values[4], values[5]);
+        if (auto* state = gameref_get(self)) {
+          std::copy(values + 6, values + 9, state->vel);
+          std::copy(values + 9, values + 12, state->angular_vel);
+        }
+        part_apply_state(self, values + 6, values + 9);
+        return Value::make_void();
+      });
+  jvm.natives().register_method(
+      "java.util.resource.GameRef", "getDetail", "()F",
+      [](Object* self, const std::vector<Value>&) {
+        const auto* state = gameref_get(self);
+        return Value::make_float(state && !state->empty ? state->detail : 0.f);
+      });
+  jvm.natives().register_method(
       "java.util.resource.GameRef", "setParent",
       "(Ljava.util.resource.ResourceRef;)V",
       [](Object* self, const std::vector<Value>& args) {

@@ -1,6 +1,8 @@
 # Native audit and roadmap
 
-Snapshot from 9 November 2026. The Release x64 registry was compared with the
+Baseline snapshot from 9 November 2026, incrementally updated 11 November for
+the five resource/vehicle bindings below and the Leftovers classification.
+The Release x64 registry was compared with the
 376 entries in the stock table at `docs/stubs.txt` in the research workspace.
 Matching uses owner, method and parameter types, including overloads. This
 measures bindings. Behavioral status below comes from reviewing the C++
@@ -8,9 +10,9 @@ implementations and following selected calls to their consumers.
 
 | Status | Stock signatures |
 | --- | ---: |
-| Registered with a body | 307 |
+| Registered with a body | 312 |
 | Registered with the explicit `native_noop` handler | 6 |
-| Absent from the registry | 63 |
+| Absent from the registry | 58 |
 | **Total** | **376** |
 
 The first category includes constant responses, inline empty bodies and
@@ -30,9 +32,12 @@ that category. It is not a compatibility score or a complete runtime trace.
 
 | Native or group | Current behavior |
 | --- | --- |
+| `GameRef.setState` | Sets pose and linear/angular velocities. Cars receive the state in the live solver. Generic GameRefs retain the state but have no general dynamic-body solver yet. |
+| `GameRef.getDetail`, `RenderRef.getDetail` | Read the canonical instance's detail bias; the default is zero. No distance-dependent LOD bias producer is implemented yet. |
+| `Vehicle.getHorn` | Checks the selected horn SFX row on the canonical chassis, using live player horn input or the `sethorn` command. |
+| `Vehicle.hasCrime` | Returns the stored zone speed limit in m/s, or -1 without a zone. Automatic zone enter/leave producers are still missing. |
 | `System.isLoading`, `setLdPriority` | Report in-progress RPK scans and choose their cooperative work cadence. Mesh and texture streaming have no corresponding queue. |
 | `System.info` | Selector 5 returns the live host VM heap count. Other selectors return an empty string. |
-| `System.netHost`, `netJoin`, `netLeave` | Compatibility calls return zero. |
 | `Thread.setDaemon` | Sets and clears the per-thread flag. Shutdown still cancels every fiber. |
 | `System.simTime`, `timeWarp` | The simulation clock follows the warp factor, and setting it returns the previous factor. Physics uses the scaled elapsed time. UI clocks, sleeps and host timer dispatch use real time. |
 | `System.setMeasure`, `getConfigOptions` | The measure setting controls digital vehicle instruments. The options refresh reads gameplay settings and schedules a save when they change. |
@@ -54,7 +59,22 @@ that category. It is not a compatibility score or a complete runtime trace.
 the cooperative thread scheduler have working paths in the host. Their
 presence in the registry does not imply that every use in a race is covered.
 
-## Missing signatures by system
+## Leftovers
+
+This category is excluded from the active implementation priorities but stays
+in the 376-signature total. It describes current usefulness, not a proven
+historical origin.
+
+| Owner | Signatures | Binding status | Reason |
+| --- | --- | --- | --- |
+| `System` | `netHost`, `netJoin`, `netLeave` | 3 compatibility bodies returning zero | Retained networking API; no networking implementation planned here. |
+| `Welder` (listed under RenderRef in the research native table) | `addPoints`, `weld`, `progress` | 3 missing | Specialized welding API declared by `Welder extends RenderRef`; no callers found in the local stock Java source trees. A Monster Garage origin is plausible but unverified. The slrr-reverse implementation explicitly describes these as soft stand-ins, not recovered PE behavior. |
+
+The chart moves the network bodies out of Language and the three Welder
+signatures out of Resources. Missing leftovers remain missing, rather than
+being replaced by success-returning mocks.
+
+## Missing signatures by system (active priorities)
 
 | System | Count | Methods |
 | --- | ---: | --- |
@@ -63,9 +83,10 @@ presence in the registry does not imply that every use in a race is covered.
 | `Animation` | 9 | Constructor, `finalize`, `setSpeed`, `setFade`, `play`, `loopPlay`, `pause`, `seek`, `getPos` |
 | `ParticleSystem` | 9 | `init`, `stop`, `setFreq`, `setDirectSource`, `setSource`, `setCounter`, `getCounter`, `delAction`, `modePermanent` |
 | `System` | 1 | `compileAll` |
-| `GameRef`, `RenderRef` | 6 | `GameRef.setState`, `getDetail`, `RenderRef.getDetail`, `addPoints`, `weld`, `progress` |
 | `Camera` | 1 | `setFog` |
-| `Painter`, `Vehicle` | 5 | `Painter.doPaint`, `paintPart`, `xPaint`, `Vehicle.getHorn`, `hasCrime` |
+| `Painter` | 3 | `doPaint`, `paintPart`, `xPaint` |
+
+There are 55 missing active signatures and 3 missing leftovers, for 58 total.
 
 ## Roadmap
 

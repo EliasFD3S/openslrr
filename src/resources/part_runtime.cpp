@@ -68,6 +68,7 @@ struct Record {
   float damage_multiplier = -1.f;
   physics::Vec3 cockpit_offset;
   bool horn_down = false;
+  int horn_slot = 0;
   bool engine_running = false;
   InstalledPart state;
   std::shared_ptr<const PartConfig> config;
@@ -1255,6 +1256,25 @@ bool part_command(Object *part, const std::string &command) {
   std::istringstream input(command);
   std::string verb;
   input >> verb;
+  if (verb == "sethorn") {
+    auto* rec = record(as_part(part));
+    int slot = 0;
+    if (!rec || !(input >> slot)) return false;
+    slot = (slot % 4 + 4) % 4;
+    if (slot != rec->horn_slot && slot && index) {
+      const auto horn = rec->horns.find(slot);
+      if (horn != rec->horns.end() && horn->second.sfx) {
+        auto path = index->payload_prop(horn->second.sfx, "sourcefile");
+        if (!path.empty()) {
+          std::replace(path.begin(), path.end(), '\\', '/');
+          host_sfx_play_file((std::filesystem::path(index->game_root()) / path).string(),
+                              horn->second.pitch);
+        }
+      }
+    }
+    rec->horn_slot = slot;
+    return true;
+  }
   if (part && part->class_name == "java.io.Controller" &&
       (verb == "controllable" || verb == "leave")) {
     int32_t id = 0;
@@ -1916,6 +1936,28 @@ bool script_pos(void *key, float *x, float *y, float *z) {
 }
 } // namespace
 void part_park_chassis(Object *car, bool shift) { park_chassis(car, shift); }
+void part_apply_state(Object *object, const float* velocity, const float* angular) {
+  Object* chassis = as_part(object);
+  auto* rec = record(chassis);
+  auto* node = gameref_get(chassis);
+  if (!rec || !node || rec->config->native_kind != "car") return;
+  // Preserve the setMatrix tyre-contact placement convention, then release
+  // the actual body with the supplied world velocities (SLRR_rev setState).
+  park_chassis(chassis, true);
+  PartMatrix frame;
+  if (!scene_instances_script_matrix(chassis, frame.data()) ||
+      !dynamics_configure(chassis, *rec, frame)) return;
+  rec->dynamics.body.set_frame(frame);
+  rec->dynamics.body.velocity = {velocity[0], velocity[1], velocity[2]};
+  rec->dynamics.body.set_omega({angular[0], angular[1], angular[2]});
+  rec->dynamics.reset_clock();
+  rec->physics_suspended = false;
+  rec->physics_pending_placement = false;
+  rec->physics_released = true;
+  rec->published_frame = node_local(chassis);
+  std::copy(velocity, velocity + 3, node->vel);
+  std::copy(angular, angular + 3, node->angular_vel);
+}
 bool part_car_script_pos(void *key, float *x, float *y, float *z) {
   return script_pos(key, x, y, z);
 }
@@ -2948,6 +2990,27 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
       return Value::make_float(rec && rec->physics_ready
           ? static_cast<float>(rec->dynamics.body.velocity.dot(rec->dynamics.body.velocity))
           : 0.f);
+    });
+  jvm.natives().register_method("java.game.Vehicle", "getHorn", "()I",
+    [](Object* self, const std::vector<Value>&) {
+      const auto* rec = record(as_part(self));
+      if (!rec) return Value::make_int(0);
+      const int slot = rec->horn_down ? 1 : rec->horn_slot;
+      const auto horn = rec->horns.find(slot);
+      return Value::make_int(horn != rec->horns.end() && horn->second.sfx != 0);
+    });
+  jvm.natives().register_method("java.game.Vehicle", "hasCrime", "()F",
+    [](Object* self, const std::vector<Value>&) {
+      // PE 0x440BF0 returns the active zone speed limit in m/s, or -1.
+      // Zone-event producers are not implemented yet; never invent a limit.
+      Object* chassis = as_part(self);
+      const auto* node = gameref_get(chassis);
+      if (!node || node->empty) return Value::make_float(-1.f);
+      const auto found = chassis->fields.find("crime_speed");
+      if (found == chassis->fields.end()) return Value::make_float(-1.f);
+      const float limit = found->second.tag == ValueTag::Float ? found->second.v.f :
+          found->second.tag == ValueTag::Int ? float(found->second.v.i) : -1.f;
+      return Value::make_float(std::isfinite(limit) && limit >= 0.f ? limit : -1.f);
     });
   const std::string owner = "java.game.parts.Part";
   auto bind = [&](const char *name, const char *signature, NativeFn fn) {

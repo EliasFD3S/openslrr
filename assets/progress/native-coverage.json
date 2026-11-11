@@ -1,7 +1,7 @@
 {
-  "updated": "2026-11-09",
+  "updated": "2026-11-11",
   "total": 376,
-  "scope": "Stock native table (docs/stubs.txt in the research workspace), matched against registered class/method/parameter signatures. Explicit native_noop bindings are counted separately. Bodies can be partial implementations or return constants; these are binding counts, not gameplay-completion or validation scores.",
+  "scope": "Stock native table (docs/stubs.txt in the research workspace), matched against registered class/method/parameter signatures. Explicit native_noop bindings are counted separately. Bodies can be partial implementations or return constants; these are binding counts, not gameplay-completion or validation scores. Incremental update 2026-11-11: setState/getDetail and Vehicle getters registered; Welder and networking classified as leftovers. Welder provenance is unconfirmed; network entries remain compatibility bodies.",
   "categories": [
     {
       "name": "World",
@@ -11,21 +11,21 @@
     },
     {
       "name": "Language",
-      "body": 69,
+      "body": 66,
       "noop": 4,
       "missing": 1
     },
     {
       "name": "Sound & scripts",
-      "body": 13,
+      "body": 15,
       "noop": 0,
-      "missing": 5
+      "missing": 3
     },
     {
       "name": "Resources",
-      "body": 52,
+      "body": 55,
       "noop": 2,
-      "missing": 6
+      "missing": 0
     },
     {
       "name": "Rendering",
@@ -44,6 +44,12 @@
       "body": 97,
       "noop": 0,
       "missing": 0
+    },
+    {
+      "name": "Leftovers",
+      "body": 3,
+      "noop": 0,
+      "missing": 3
     }
   ]
 }
