@@ -37,3 +37,56 @@ jobs:
           $ctest = Join-Path $env:GITHUB_WORKSPACE 'tools/cmake-3.31.8-windows-x86_64/bin/ctest.exe'
           & $ctest --test-dir build-bgfx-x64 -C Release --output-on-failure --no-tests=error
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload normal-lane failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-failure-diagnostics
+          if-no-files-found: ignore
+          path: |
+            build-bgfx-x64/**/fuzz-repro*/**
+            build-bgfx-x64/Testing/Temporary/**
+
+
+  windows-asan:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Configure workspace
+        run: |
+          & ./scripts/Initialize-SlrrWorkspace.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Configure ASan build
+        run: |
+          $cmake = Join-Path $env:GITHUB_WORKSPACE 'tools/cmake-3.31.8-windows-x86_64/bin/cmake.exe'
+          & $cmake -S . -B build-asan -G 'Visual Studio 17 2022' -A x64 -DSLRR_ENABLE_ASAN=ON -DSLRR_STAGE_BUILD=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build ASan tests
+        run: |
+          $cmake = Join-Path $env:GITHUB_WORKSPACE 'tools/cmake-3.31.8-windows-x86_64/bin/cmake.exe'
+          & $cmake --build build-asan --config Release --target slrr_tests --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run ASan tests
+        run: |
+          $env:ASAN_OPTIONS = 'abort_on_error=1:symbolize=0'
+          $ctest = Join-Path $env:GITHUB_WORKSPACE 'tools/cmake-3.31.8-windows-x86_64/bin/ctest.exe'
+          & $ctest --test-dir build-asan -C Release --output-on-failure --no-tests=error
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload ASan failure reproducers and logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-asan-failure-diagnostics
+          if-no-files-found: ignore
+          path: |
+            build-asan/**/fuzz-repro*/**
+            build-asan/Testing/Temporary/**

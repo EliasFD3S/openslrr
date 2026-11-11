@@ -6,6 +6,23 @@ include(CTest)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(SLRR_ENABLE_ASAN "Instrument slrr_host and test targets with MSVC AddressSanitizer" OFF)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/ASan.cmake")
+if(SLRR_ENABLE_ASAN AND NOT MSVC)
+  message(FATAL_ERROR "SLRR_ENABLE_ASAN currently supports MSVC only")
+endif()
+if(SLRR_ENABLE_ASAN)
+  include(CheckCXXSourceCompiles)
+  set(CMAKE_REQUIRED_FLAGS "/fsanitize=address")
+  check_cxx_source_compiles("int main() { return 0; }" SLRR_MSVC_ASAN_LINKS)
+  unset(CMAKE_REQUIRED_FLAGS)
+  if(NOT SLRR_MSVC_ASAN_LINKS)
+    message(FATAL_ERROR
+      "MSVC x64 AddressSanitizer compile/link probe failed. Install the Visual "
+      "Studio C++ AddressSanitizer component for the active x64 toolset.")
+  endif()
+endif()
+
 if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR
    (MSVC AND NOT CMAKE_CXX_COMPILER_ARCHITECTURE_ID STREQUAL "x64"))
   message(FATAL_ERROR "Open SLRR requires Windows x64. Use -A x64 with Visual Studio.")
@@ -88,6 +105,7 @@ execute_process(
           -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/write_version.cmake)
 
 target_include_directories(slrr_host PRIVATE include "${CMAKE_BINARY_DIR}/generated")
+slrr_enable_asan(slrr_host)
 
 if(MSVC)
   target_compile_options(slrr_host PRIVATE /W3 /utf-8)

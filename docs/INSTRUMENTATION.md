@@ -1,9 +1,10 @@
 # Runtime instrumentation
 
 Stage 1 provides opt-in structured runtime tracing. Stage 2 adds bounded
-lifetime/resource metrics and final JSON snapshots. Later native-reachability,
-fuzzing, replay, fault-injection, renderer-media, and native-coverage stages are
-not implemented here.
+lifetime/resource metrics and final JSON snapshots. Stage 3 adds opt-in MSVC
+AddressSanitizer and deterministic bounded parser mutation lanes. Later
+native-reachability, replay, fault-injection, renderer-media, and native-coverage
+stages are not implemented here.
 
 ## CLI
 
@@ -165,3 +166,134 @@ as `slrr_instrumentation_diagnostics_tests` and
 `slrr_instrumentation_metrics_tests`. The shared instrumentation fragment adds
 `metrics.cpp` to test support because `diagnostics.cpp` now publishes section
 snapshots through it; no shared test harness code is changed.
+
+## Stage 3: MSVC AddressSanitizer
+
+`SLRR_ENABLE_ASAN` is OFF by default. The normal `build-bgfx-x64` Release
+configuration and the pinned bgfx configuration are unchanged. ASan uses a
+separate build directory and target-scoped `/fsanitize=address` compile/link
+options for `slrr_host`, `slrr_test_support`, and every test executable. Third-party
+bgfx libraries are not rebuilt with ASan by this option. No global package or
+CMake installation is needed.
+
+Prerequisites are Visual Studio 2022 with the MSVC x64 compiler, the **C++
+AddressSanitizer** individual component, and a Windows SDK. Run executables from
+an x64 Native Tools developer environment (or otherwise make the matching MSVC
+ASan runtime DLLs available on `PATH`). Initialize the repository-local CMake
+and pinned bgfx checkout first:
+
+```powershell
+& ./scripts/Initialize-SlrrWorkspace.ps1
+$cmake = './tools/cmake-3.31.8-windows-x86_64/bin/cmake.exe'
+```
+
+In a worktree without `tools/`, use the main checkout's local CMake path printed
+by the initialization script. Do not reuse `build-bgfx-x64` for ASan.
+
+Normal configure, host/test build, and full CTest:
+
+```powershell
+& $cmake --preset windows-x64-release
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $cmake --build build-bgfx-x64 --config Release --target slrr_host slrr_tests --parallel
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$ctest = Join-Path (Split-Path $cmake) 'ctest.exe'
+& $ctest --test-dir build-bgfx-x64 -C Release --output-on-failure --no-tests=error
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+```
+
+Separate ASan configure, complete test build, and full CTest with explicit
+nonzero-status enforcement:
+
+```powershell
+& $cmake -S . -B build-asan -G 'Visual Studio 17 2022' -A x64 -DSLRR_ENABLE_ASAN=ON -DSLRR_STAGE_BUILD=OFF
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $cmake --build build-asan --config Release --target slrr_tests --parallel
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$env:ASAN_OPTIONS = 'abort_on_error=1:symbolize=0'
+& $ctest --test-dir build-asan -C Release --output-on-failure --no-tests=error
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+```
+
+To build the instrumented host as well, use
+`& $cmake --build build-asan --config Release --target slrr_host --parallel`.
+It remains an opt-in diagnostic binary; do not stage or promote it as the normal
+Release host.
+
+## Stage 3: bounded mutation lanes
+
+`tests/fuzz-tests.cmake` registers four CTest executables in both normal and ASan
+builds:
+
+- `slrr_fuzz_arraycopy` checks native arraycopy against a small model, including
+  overlap, self-copy, invalid ranges, gap filling, and integer extremes.
+- `slrr_fuzz_ptx` exercises PTX headers, mip payloads, JPEG markers, wrapping
+  sizes, and truncation. This test target intentionally does not enable stb/JPEG
+  decoding.
+- `slrr_fuzz_rpk` exercises RPAK dependency counts, TOC entries, table bounds,
+  and payload reads using only generated files in the reproducer directory.
+- `slrr_fuzz_tufa` exercises TUFA chunks, constant/member/tree/interface counts,
+  UTF8 lengths, truncation, and concatenated parser input.
+
+The runner in `tests/test_fuzz_support.*` uses only the C++ standard library;
+libFuzzer, coverage runtimes, downloads, and reference game data are not needed.
+Each run executes its directed regression corpus and then 384 mutations by
+default. `--iterations` is capped at 2048 (zero selects directed cases only),
+`--seed` accepts a decimal or `0x` hexadecimal uint32, and generated inputs are
+capped at 512 bytes. Mutations start from the valid seed independently rather
+than running an unbounded evolutionary loop. Arraycopy destinations are capped
+at 64 slots: valid copies that would grow beyond that test-only ceiling are
+skipped, so this lane does not authorize or test multi-gigabyte auto-grow.
+
+Run the executables directly after building `slrr_tests`:
+
+```powershell
+$repro = './build-asan/manual-fuzz-repro'
+& ./build-asan/tests/Release/slrr_fuzz_arraycopy.exe --repro-dir "$repro/arraycopy"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& ./build-asan/tests/Release/slrr_fuzz_ptx.exe --repro-dir "$repro/ptx"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& ./build-asan/tests/Release/slrr_fuzz_rpk.exe --repro-dir "$repro/rpk"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& ./build-asan/tests/Release/slrr_fuzz_tufa.exe --repro-dir "$repro/tufa"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+```
+
+For normal binaries, replace `build-asan` with `build-bgfx-x64`. A different
+bounded run can be requested, for example with `--iterations 32 --seed 0x1234`.
+CTest uses the build test directory's `fuzz-repro` directory by default. Always
+choose a test-output reproducer directory, never a reference or game directory.
+
+Before every target call, the runner writes `slrr-LANE-current.bin`. Successful
+cases remove it. A detected failure saves `slrr-LANE-case-NNNNN-seed-XXXXXXXX.bin`
+plus a `.txt` metadata sidecar and exits nonzero. If ASan aborts the process, the
+current-case file remains as the reproducer even though no sidecar can be
+written. File-based PTX/RPK targets read this same generated file; no reference
+data is modified. Reproducer output is diagnostic data and may be overwritten by
+a later failing run with the same lane/case/seed name.
+
+## Stage 3 hardening and limitations
+
+Directed cases isolate RPK/TUFA attacker-declared `0xffffffff` counts. RPK now
+uses overflow-safe dependency totals, rejects dependency/entry counts that
+cannot fit their remaining input before `reserve`, checks table-offset addition,
+and validates payload offset/size against the actual file before allocation.
+Malformed impossible counts therefore produce no TOC entries instead of an
+allocation exception. Out-of-file payload reads return an empty vector instead
+of attempting the declared allocation. Valid in-file payload behavior is
+unchanged.
+
+TUFA now validates constant, member, tree, node, and interface counts against
+minimum encoded record sizes and remaining bytes before every corresponding
+`reserve`. These malformed inputs return `false` with a chunk-specific error
+instead of `bad_alloc`/`length_error`. Existing chunk length checks cover UTF8
+and other variable-size payloads. No valid TUFA schema or runtime semantics are
+changed.
+
+This stage is deterministic regression fuzzing, not coverage-guided fuzzing or a
+proof of parser correctness. It does not implement replay, persistence fault
+injection, native reachability, renderer/media instrumentation, or interactive
+validation. ASan coverage excludes uninstrumented third-party code and does not
+replace the normal Release test lane. The Windows CI workflow contains an ASan
+job and uploads generated reproducers/CTest logs on failure; local validation
+does not itself establish GitHub-hosted execution.
