@@ -26,6 +26,9 @@ jobs:
           & ./scripts/Initialize-SlrrWorkspace.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Check native coverage drift
+        run: node scripts/render-native-coverage.js --check
+
       - name: Build tests
         run: |
           $cmake = Join-Path $env:GITHUB_WORKSPACE 'tools/cmake-3.31.8-windows-x86_64/bin/cmake.exe'

@@ -45,6 +45,7 @@ All names are fixed directly under the caller-selected run directory:
 | `session.log` | Raw bytes drained from CRT stdout and stderr pipes. |
 | `events.jsonl` | Existing structured diagnostics sink for this run. |
 | `metrics.json` | Existing metrics snapshot at clean shutdown, or best-effort crash snapshot. |
+| `native-report.json` | Optional native registration/invocation report, present only when `--native-report` is requested; `--log-all` owns this path. |
 | `crash.txt` | Crash kind, code/address, message, identity, and recent diagnostic context/events. Created only for a handled crash. |
 | `crash.dmp` | Windows `MiniDumpNormal` written through dbghelp, with SEH exception information when available. |
 | `manifest.json` | Process/build identity, redacted command line, file names, UTC start/end, and `running`, `normal`, or `abnormal` disposition. |

@@ -1,6 +1,6 @@
 # Rendering, sound and cursor native utilities
 
-Implemented against `docs/stubs.txt`, the original script callers, and the
+Implemented against `assets/progress/stock-natives.json`, the original script callers, and the
 contracts documented in `repos/slrr-reverse/engine/Runtime/Render/RenderNatives.cpp`,
 `Audio/Sound.cpp` and `Cars/Cars.cpp`.
 

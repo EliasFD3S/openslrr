@@ -60,7 +60,7 @@ The bars show **numbers of functions**, not percentages. A body can still be par
 
 World covers GroundRef, particles, animation and PhysicsRef; language covers `java.lang`. Resources covers GameRef, ResourceRef, RenderRef and SfxRef; rendering covers GfxEngine, Text, Camera and Viewport. Files & input includes File, FindFile, Input, Controller and MouseCursor; parts includes Part, Chassis, WheelRef, DynoData and SfxTable. Sound & scripts covers Sound, Vehicle, Painter, Navigator and GameLogic.
 
-The snapshot matches the stock native table against registered class, method and parameter signatures. See the [native audit and roadmap](docs/NATIVE_AUDIT.md) for the explicit no-ops, known mocks and missing signatures. Counts are stored in [native-coverage.json](assets/progress/native-coverage.json). After auditing a new snapshot, regenerate the graphic with `python tools/render-native-coverage.py` (standard library only).
+The snapshot matches the stock native table against registered class, method and parameter signatures. See the [native audit and roadmap](docs/NATIVE_AUDIT.md) for the explicit no-ops, known mocks and missing signatures. Counts are stored in [native-coverage.json](assets/progress/native-coverage.json). After auditing a new snapshot, regenerate the graphic with `node scripts/render-native-coverage.js` (Node.js only, no packages). The pinned 376-signature source is [stock-natives.json](assets/progress/stock-natives.json); `node scripts/render-native-coverage.js --check` verifies generated output without rewriting it.
 
 ### Features
 

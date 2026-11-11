@@ -27,6 +27,7 @@
 <rect x="770.3" y="120" width="34.8" height="25" fill="#d39338"><title>Language: 4 no-op</title></rect>
 <text x="787.6999999999999" y="137" font-size="12" fill="#ffffff" text-anchor="middle">4</text>
 <rect x="805.0999999999999" y="120" width="8.7" height="25" fill="#ab474b"><title>Language: 1 missing</title></rect>
+<text x="823.8" y="137" font-size="12" fill="#8b949e" text-anchor="start">1</text>
 <text x="823.8" y="137" font-size="12" fill="#8b949e" text-anchor="start">74</text>
 <text x="156" y="172" font-size="13" fill="#c9d1d9" text-anchor="end">Sound &amp; scripts</text>
 <rect x="170" y="155" width="113.1" height="25" fill="#49a58d"><title>Sound &amp; scripts: 13 with a body</title></rect>
@@ -38,13 +39,15 @@
 <rect x="170" y="190" width="452.4" height="25" fill="#49a58d"><title>Resources: 52 with a body</title></rect>
 <text x="396.2" y="207" font-size="12" fill="#ffffff" text-anchor="middle">52</text>
 <rect x="622.4" y="190" width="17.4" height="25" fill="#d39338"><title>Resources: 2 no-op</title></rect>
+<text x="631.1" y="207" font-size="12" fill="#ffffff" text-anchor="middle">2</text>
 <rect x="639.8" y="190" width="52.199999999999996" height="25" fill="#ab474b"><title>Resources: 6 missing</title></rect>
 <text x="665.9" y="207" font-size="12" fill="#ffffff" text-anchor="middle">6</text>
-<text x="702.0" y="207" font-size="12" fill="#8b949e" text-anchor="start">60</text>
+<text x="702" y="207" font-size="12" fill="#8b949e" text-anchor="start">60</text>
 <text x="156" y="242" font-size="13" fill="#c9d1d9" text-anchor="end">Rendering</text>
 <rect x="170" y="225" width="304.5" height="25" fill="#49a58d"><title>Rendering: 35 with a body</title></rect>
 <text x="322.25" y="242" font-size="12" fill="#ffffff" text-anchor="middle">35</text>
 <rect x="474.5" y="225" width="8.7" height="25" fill="#ab474b"><title>Rendering: 1 missing</title></rect>
+<text x="493.2" y="242" font-size="12" fill="#8b949e" text-anchor="start">1</text>
 <text x="493.2" y="242" font-size="12" fill="#8b949e" text-anchor="start">36</text>
 <text x="156" y="277" font-size="13" fill="#c9d1d9" text-anchor="end">Files &amp; input</text>
 <rect x="170" y="260" width="321.9" height="25" fill="#49a58d"><title>Files &amp; input: 37 with a body</title></rect>
@@ -61,6 +64,6 @@
 <text x="380" y="391" font-size="13" fill="#c9d1d9" text-anchor="start">No-op</text>
 <rect x="493" y="380" width="12" height="12" rx="2" fill="#ab474b"/>
 <text x="513" y="391" font-size="13" fill="#c9d1d9" text-anchor="start">Missing</text>
-<text x="1090" y="411" font-size="11" fill="#8b949e" text-anchor="end">Audited 2026-11-09 · Bodies may be partial implementations</text>
+<text x="1090" y="411" font-size="11" fill="#8b949e" text-anchor="end">Audited 2026-11-11 · Bodies may be partial implementations</text>
 </g>
 </svg>

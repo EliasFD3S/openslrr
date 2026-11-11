@@ -8,8 +8,9 @@ Stage 1 provides opt-in structured runtime tracing. Stage 2 adds bounded
 lifetime/resource metrics and final JSON snapshots. Stage 3 adds opt-in MSVC
 AddressSanitizer and deterministic bounded parser mutation lanes. Stage 4 adds
 bounded fixed-step physics telemetry and tick-state replay comparison. Stage 5
-adds test-controlled filesystem/persistence fault injection. Native-reachability,
-renderer-media, and native-coverage stages are not implemented here.
+adds test-controlled filesystem/persistence fault injection. Stage 6 adds native
+coverage/reachability reports and a reproducible static binding audit. Renderer/media
+instrumentation remains outside this document.
 
 ## CLI
 
@@ -41,6 +42,21 @@ VM provider is destroyed; earlier returns use the outer session guard. Metrics
 open/write failures are reported on stderr without replacing the probe's return
 status. As with other buffered files, an abrupt process termination is not a
 clean-flush guarantee.
+
+`--native-report PATH` independently writes native coverage/reachability JSON;
+neither `--trace` nor `--metrics` is required:
+
+```powershell
+slrr_host.exe --probe-gc --root C:\path\to\game --native-report C:\temp\slrr-gc-natives.json
+slrr_host.exe --probe-dyno --native-report C:\temp\slrr-dyno-natives.json
+```
+
+The native report guard has the same normal/early-return and error-reporting
+policy as metrics. An early return before registry construction writes a valid
+empty report. With `--log-all DIR`, the run directory takes precedence over the
+report PATH argument: the report is `DIR/native-report.json`, listed as
+`native_report` in the manifest. No separate report is written at the overridden
+PATH. Existing `--trace`/`--metrics` exclusions with `--log-all` are unchanged.
 
 ## Trace events and bounds
 
@@ -118,6 +134,8 @@ Current production values are:
 | `osd.records_live`, `osd.records_dead`, `osd.records_total` | gauges | Existing OSD widget records |
 | `host.files_open`, `host.pending_writes` | gauges | Open `java.io.File` records and retained failed writes |
 | `host.file_faults_injected` | counter | Stage 5 injected persistence faults; zero when no rule has triggered |
+| `natives.registered`, `natives.called`, `natives.noop` | gauges | Live registry bindings, distinct tracked attempted signatures, and explicit no-op bindings |
+| `natives.missing` | counter | Failed native lookup invocations, including calls whose missing record exceeded the cap |
 | `sfx.voices_active` | gauge | Existing SFX voice statistics |
 | `sfx.voices_coalesced` | counter | Existing SFX coalescing statistic |
 | `gameref.records` | gauge | GameRef registry, including binding aliases |
@@ -167,7 +185,9 @@ values/history without unregistering providers, for isolated probes and tests.
 
 The existing Ctrl+F12 debug overlay has a **Metrics** tab showing current names,
 kinds, values, available context, and the retained section-history count/recent
-sections. This is a view of the same registry, not a second counter source.
+sections. A compact native line summarizes registered/called/explicit-noop/missing
+counts and warns that body registration is not behavioral verification. This is
+a view of the same registry, not a second counter source.
 
 Tests live in `tests/test_diagnostics.cpp` and `tests/test_metrics.cpp`, registered
 as `slrr_instrumentation_diagnostics_tests` and
@@ -591,3 +611,78 @@ The full configure/build/CTest workflow remains the required integration gate.
 No test reads or writes a game/reference tree. The reference-save preservation
 case creates its own pre-existing fixture in a temporary directory and compares
 exact bytes and timestamp after the injected attempts.
+
+## Stage 6: native coverage and reachability
+
+### Runtime JSON schema and semantics
+
+The version-1 native report contains a `summary` and a `signatures` array sorted
+by class, method, signature, and registration state. Summary fields are:
+
+| Field | Meaning |
+| --- | --- |
+| `registered` | Unique class/method/descriptor bindings currently in this registry. |
+| `called` | Distinct tracked signatures attempted at least once, including tracked missing signatures. Calls with omitted-void aliases are attributed to the canonical registered descriptor. |
+| `success` | Total registered handler invocations that returned normally. Explicit no-op calls are included. |
+| `error` | Total registered handler invocations that threw standard or non-standard exceptions. Missing lookups are not also counted as errors. |
+| `missing` | Total failed lookup invocations, including those whose per-signature record could not be retained. |
+| `noop` | Registrations explicitly marked `NativeImplementation::ExplicitNoop` at the six `native_noop` registration sites. |
+| `untracked_missing_invocations` | Missing calls omitted from per-signature records because of the record/component bounds. These still contribute to `missing`, but cannot contribute new entries to `called`. |
+
+Each signature record has `class`, `method`, `signature`, `registered`,
+`implementation` (`body`, `explicit_noop`, or `missing`), `invocation_count`,
+`success_count`, `error_count`, `missing_count`, `total_duration_ns`, and nullable
+`last_section`. Duration accumulates across outcomes, saturating at uint64
+limits, and does not require tracing. The last nonempty diagnostics section is
+retained when available and capped at 256 bytes. Registered metadata covers the
+host's fixed registration set. At most 128 missing signatures are retained;
+each missing class/method/descriptor component is capped at 512 bytes before a
+record is admitted. Counts saturate instead of overflowing.
+
+**Registered**, **called**, **no-op**, **missing**, and **behaviorally verified**
+are deliberately different claims. `body` means only that a C++ callable was
+registered; it includes fixed, empty, and partial implementations and is never a
+behavioral-verification label. `explicit_noop` comes from registration metadata,
+not from inspecting a body or counting a return value. Runtime invocation and
+success counts measure the exercised path only. They do not establish stock
+coverage, behavioral fidelity, or validation of arbitrary implementations.
+Reports contain no native argument values, script locals, object addresses, or
+error payloads.
+
+The Metrics tab and `natives.*` metrics use the same registry state. Registry
+construction/destruction registers/unregisters a metrics provider; native
+statistics and report output otherwise require no diagnostics sink.
+
+### Static stock audit
+
+`assets/progress/stock-natives.json` is the versioned 376-signature source. It is
+derived from `engine/Core/natives_stubs.cpp` in
+[slrr-reverse](https://github.com/EliasFD3S/slrr-reverse) at commit
+`5c42f3b139aef4c7b9e0b6420c5704e22c0e6cd7`, with source SHA-256
+`7a09d8f3dd63079dbf50632efd7400aeecebdaa05a786e4958cfc12ad4c6b9f3`.
+The standalone Node.js generator uses no packages, game data, Python, network,
+or ignored `tools/` files:
+
+```powershell
+# Rebuild JSON and SVG from the versioned manifest and current registration sites.
+node scripts/render-native-coverage.js
+
+# Hermetic repeat-output checks and read-only drift check.
+node scripts/render-native-coverage.js --self-test
+node scripts/render-native-coverage.js --check
+```
+
+The generator matches owner, method, and parameter descriptor types (not return
+types), expands the current registration loops/helper forwarding functions, and
+fails on unresolved registration expressions or incomplete/conflicting sources.
+It does not infer behavioral status. To reimport, supply the exact pinned
+`natives_stubs.cpp` to `--import-stock FILE`; the command refuses any other
+SHA-256 or a row count other than 376. CI and CTest run the drift check because a
+complete pinned source is now available.
+
+`tests/native-report-tests.cmake` registers `slrr_native_report_tests`,
+`slrr_native_coverage_generator_tests`, and `slrr_native_coverage_drift` when
+Node.js is available. The C++ lane covers metadata, explicit no-op
+classification, success/error/missing outcomes, aliases, durations/counts,
+section capture, metrics lifecycle, JSON escaping/file output, and bounds. The
+JavaScript lane checks deterministic generation and tracked-output drift.

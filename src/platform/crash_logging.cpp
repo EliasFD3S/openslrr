@@ -296,7 +296,9 @@ std::string make_manifest_prefix(const Options& options,
   out += ",\"files\":{\"session_log\":\"session.log\",";
   out += "\"events_jsonl\":\"events.jsonl\",\"metrics_json\":\"metrics.json\",";
   out += "\"crash_text\":\"crash.txt\",\"crash_dump\":\"crash.dmp\",";
-  out += "\"manifest_json\":\"manifest.json\"},\"disposition\":";
+  out += "\"manifest_json\":\"manifest.json\"";
+  if (options.native_report) out += ",\"native_report\":\"native-report.json\"";
+  out += "},\"disposition\":";
   return out;
 }
 
@@ -688,12 +690,18 @@ bool start(const Options& options, std::string& error) noexcept {
     paths.session_log = options.directory / "session.log";
     paths.events_jsonl = options.directory / "events.jsonl";
     paths.metrics_json = options.directory / "metrics.json";
+    if (options.native_report)
+      paths.native_report = options.directory / "native-report.json";
     paths.crash_text = options.directory / "crash.txt";
     paths.crash_dump = options.directory / "crash.dmp";
     paths.manifest_json = options.directory / "manifest.json";
     for (const auto* path : {&paths.crash_text, &paths.crash_dump, &paths.metrics_json}) {
       std::error_code ignored;
       std::filesystem::remove(*path, ignored);
+    }
+    if (!paths.native_report.empty()) {
+      std::error_code ignored;
+      std::filesystem::remove(paths.native_report, ignored);
     }
 
     candidate->preserve_console = options.preserve_console_output;

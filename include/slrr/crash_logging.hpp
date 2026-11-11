@@ -19,6 +19,10 @@ struct Options {
   // Empty selects GetCommandLineW on Windows. Common credential-bearing options
   // are redacted before storage; callers must still avoid secrets in arguments.
   std::string command_line;
+
+  // Reserve native-report.json and list it in the manifest. The coordinator
+  // owns report contents because this platform layer does not know the VM.
+  bool native_report = false;
 };
 
 struct RunPaths {
@@ -26,6 +30,7 @@ struct RunPaths {
   std::filesystem::path session_log;
   std::filesystem::path events_jsonl;
   std::filesystem::path metrics_json;
+  std::filesystem::path native_report;
   std::filesystem::path crash_text;
   std::filesystem::path crash_dump;
   std::filesystem::path manifest_json;

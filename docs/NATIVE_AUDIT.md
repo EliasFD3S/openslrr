@@ -1,10 +1,13 @@
 # Native audit and roadmap
 
-Snapshot from 9 November 2026. The Release x64 registry was compared with the
-376 entries in the stock table at `docs/stubs.txt` in the research workspace.
-Matching uses owner, method and parameter types, including overloads. This
-measures bindings. Behavioral status below comes from reviewing the C++
-implementations and following selected calls to their consumers.
+Snapshot from 11 November 2026. The registry was compared with the 376 entries
+in `assets/progress/stock-natives.json`, derived from
+[slrr-reverse](https://github.com/EliasFD3S/slrr-reverse) commit
+`5c42f3b139aef4c7b9e0b6420c5704e22c0e6cd7`. The exact upstream file and its
+SHA-256 are recorded in the manifest. Matching uses owner, method and parameter
+types, including overloads but not return types. This measures bindings.
+Behavioral status below comes from reviewing the C++ implementations and
+following selected calls to their consumers.
 
 | Status | Stock signatures |
 | --- | ---: |
@@ -16,6 +19,51 @@ implementations and following selected calls to their consumers.
 The first category includes constant responses, inline empty bodies and
 partial implementations. The mock table calls out known behavioral gaps in
 that category. It is not a compatibility score or a complete runtime trace.
+
+## Reproducible static audit
+
+Regenerate the JSON and SVG without game/reference data or an ignored research
+workspace:
+
+```powershell
+node scripts/render-native-coverage.js
+node scripts/render-native-coverage.js --self-test
+node scripts/render-native-coverage.js --check
+```
+
+The standalone Node.js generator fails on incomplete stock data, source-hash
+mismatch, unresolved registration expressions, or conflicting registrations.
+The versioned manifest has exactly 376 unique signatures. CI and CTest enforce
+the drift check; there is no remaining static-audit source blocker. Reimport is
+restricted to the exact pinned upstream `natives_stubs.cpp` through
+`--import-stock FILE`. See [INSTRUMENTATION.md](INSTRUMENTATION.md) for the
+source SHA-256 and generator semantics.
+
+## Runtime reachability versus static coverage
+
+`--native-report PATH` writes bounded runtime metadata and invocation statistics
+on normal and early-return paths without requiring `--trace` or `--metrics`.
+With `--log-all DIR`, the run directory takes precedence and the file is
+`DIR/native-report.json`. The version-1 schema distinguishes registered
+bindings, distinct called signatures, successful/error/missing invocation
+totals, and explicit no-op registrations. Per-signature counts, total duration,
+and last available section are included; argument values, script locals and
+object addresses are not.
+
+The six stock explicit no-ops below are classified by explicit registration
+metadata. The two additional host-only `native_noop` registrations,
+`java.game.Player.<init>` and `java.render.LoadingScreen.<init>`, also count as
+runtime no-ops but are outside the 376-stock-signature denominator. A
+`body` classification means only that a callable exists. It never means
+`behaviorally verified`, even for fixed, partial, or fully reviewed
+implementations. Behavioral claims require separate evidence and targeted
+validation.
+
+Missing runtime records are capped at 128 signatures and 512 bytes per
+class/method/descriptor component. `missing` still counts every failed lookup;
+`untracked_missing_invocations` reports calls omitted from those records.
+`called` counts distinct retained records only. These bounds prevent arbitrary
+script signatures from growing the report without limit.
 
 ## Explicit no-ops
 

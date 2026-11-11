@@ -23,6 +23,7 @@ namespace {
 
 struct DiagnosticsSession {
   ~DiagnosticsSession() {
+    write_native_report();
     write_metrics();
     std::string telemetry_error;
     if (!slrr::physics_telemetry::shutdown(telemetry_error) && !telemetry_error.empty())
@@ -42,8 +43,25 @@ struct DiagnosticsSession {
     }
   }
 
+  void write_native_report() noexcept {
+    try {
+      if (native_report_written || native_report_path.empty()) return;
+      native_report_written = true;
+      std::string error;
+      const bool written = natives
+          ? natives->write_report(native_report_path, error)
+          : slrr::NativeRegistry().write_report(native_report_path, error);
+      if (!written) std::fprintf(stderr, "FAIL: %s\n", error.c_str());
+    } catch (...) {
+      // Report finalization must not replace the host's return behavior.
+    }
+  }
+
   std::string metrics_path;
   bool metrics_written = false;
+  std::string native_report_path;
+  const slrr::NativeRegistry* natives = nullptr;
+  bool native_report_written = false;
 };
 
 // The outer session also covers argument/probe early returns. This nested
@@ -66,6 +84,12 @@ struct CrashLogFinalizer {
     if (slrr::crash_logging::active())
       slrr::crash_logging::shutdown(slrr::crash_logging::Disposition::Normal);
   }
+};
+
+struct NativeReportFinalizer {
+  explicit NativeReportFinalizer(DiagnosticsSession& session) : session_(session) {}
+  ~NativeReportFinalizer() { session_.write_native_report(); }
+  DiagnosticsSession& session_;
 };
 
 #ifndef SLRR_BUILD_CONFIGURATION
@@ -93,8 +117,15 @@ void usage() {
       "Diagnostics: --trace PATH writes structured JSONL (opt-in).\n"
       "             --metrics PATH writes a final JSON metrics snapshot;\n"
       "             includes bounded section history, even without --trace.\n"
+      "             --native-report PATH writes bounded native coverage JSON;\n"
+      "             no --trace or --metrics is required.\n"
+      "             registered=bindings; called=unique attempted signatures;\n"
+      "             no-op=explicit native_noop bindings; missing=failed lookups.\n"
+      "             Registered bodies are not behaviorally verified.\n"
       "             --physics-telemetry PATH writes bounded physics JSONL.\n"
       "             --log-all DIR captures stdout/stderr, events, metrics, and crashes.\n"
+      "             With --native-report, log-all owns DIR/native-report.json\n"
+      "             and the PATH argument is not used.\n"
       "Replay compare: exit 0 = match, 4 = state mismatch, 2 = input/error.\n"
       "\n"
       "Default --game: FMV intros → Init(int) (Soft splash / menu).\n"
@@ -260,6 +291,14 @@ int main(int argc, char** argv) {
       diagnostics_session.metrics_path = argv[++i];
       continue;
     }
+    if (std::strcmp(a, "--native-report") == 0) {
+      if (i + 1 >= argc || !argv[i + 1][0]) {
+        std::fprintf(stderr, "missing path for --native-report\n");
+        return 2;
+      }
+      diagnostics_session.native_report_path = argv[++i];
+      continue;
+    }
     if (a[0] != '-') {
       opt.player_name = a;
       continue;
@@ -283,10 +322,15 @@ int main(int argc, char** argv) {
     options.preserve_console_output = true;
     options.build_id = SLRR_VERSION;
     options.build_configuration = SLRR_BUILD_CONFIGURATION;
+    options.native_report = !diagnostics_session.native_report_path.empty();
     std::string error;
     if (!crash_logging::start(options, error)) {
       std::fprintf(stderr, "FAIL: %s\n", error.c_str());
       return 2;
+    }
+    if (options.native_report) {
+      diagnostics_session.native_report_path =
+          crash_logging::paths()->native_report.string();
     }
   }
 
@@ -386,9 +430,11 @@ int main(int argc, char** argv) {
         opt.game_root + "/system/Scripts/lang/System.class"));
 
   NativeRegistry natives;
+  diagnostics_session.natives = &natives;
   Jvm jvm(&natives);
   MetricsFinalizer metrics_finalizer(diagnostics_session);
   CrashLogFinalizer crash_log_finalizer;
+  NativeReportFinalizer native_report_finalizer(diagnostics_session);
   if (want_gc) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     jvm.set_game_root(opt.game_root);

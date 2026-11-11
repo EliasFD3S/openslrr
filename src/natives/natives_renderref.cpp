@@ -555,7 +555,7 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
   jvm.natives().register_method(
       "java.util.resource.RenderRef", "setMatrix",
       "(ILjava.util.resource.ResourceRef;Ljava.lang.Vector3;Ljava.lang.Ypr;)V",
-      native_noop);
+      native_noop, NativeImplementation::ExplicitNoop);
   jvm.natives().register_method(
       "java.util.resource.RenderRef", "lineCreate",
       "(Ljava.util.resource.ResourceRef;Ljava.util.resource.ResourceRef;)I",

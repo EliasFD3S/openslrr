@@ -342,7 +342,8 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   }
   for (const char* signature : {"(Ljava.lang.Object;)V", "(F)V", "(I)V"})
     jvm.natives().register_method("java.lang.System", "analyze", signature,
-                                  native_noop);
+                                  native_noop,
+                                  NativeImplementation::ExplicitNoop);
   jvm.natives().register_method(
       "java.lang.System", "info", "(I)Ljava.lang.String;",
       [&jvm](Object*, const std::vector<Value>& args) {
@@ -404,7 +405,8 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         return Value::make_void();
       });
   jvm.natives().register_method(
-      "java.lang.System", "isLoadingReset", "()V", native_noop);
+      "java.lang.System", "isLoadingReset", "()V", native_noop,
+      NativeImplementation::ExplicitNoop);
   // PE System.arraycopy: copy `length` slots. Same array uses a temp so
   // overlapping ranges (Vector.removeElementAt) stay intact.
   jvm.natives().register_method(
@@ -828,7 +830,8 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
 
   // Player.<init> during start_init is a long TREE. A miss there aborts boot.
   // Career creation fills the existing player from the menu script.
-  jvm.natives().register_method("java.game.Player", "<init>", "()V", native_noop);
+  jvm.natives().register_method("java.game.Player", "<init>", "()V", native_noop,
+                                NativeImplementation::ExplicitNoop);
   for (const bool visible : {true, false}) {
     jvm.natives().register_method("java.game.Player", visible ? "showOsd" : "hideOsd", "()V",
       [&jvm, visible](Object* player, const std::vector<Value>&) {

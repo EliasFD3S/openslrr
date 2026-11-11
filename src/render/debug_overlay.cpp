@@ -80,6 +80,17 @@ void draw_metrics() {
   if (current.frame) ImGui::Text("Frame: %llu", static_cast<unsigned long long>(*current.frame));
   if (current.tick) ImGui::Text("Tick: %llu", static_cast<unsigned long long>(*current.tick));
   ImGui::Text("Section: %s", current.section.empty() ? "(unavailable)" : current.section.c_str());
+  std::int64_t registered = 0, called = 0, noop = 0, missing = 0;
+  for (const auto& value : current.values) {
+    if (value.name == "natives.registered") registered = value.value;
+    if (value.name == "natives.called") called = value.value;
+    if (value.name == "natives.noop") noop = value.value;
+    if (value.name == "natives.missing") missing = value.value;
+  }
+  ImGui::Text("Natives: %lld registered | %lld called | %lld explicit no-op | %lld missing calls",
+              static_cast<long long>(registered), static_cast<long long>(called),
+              static_cast<long long>(noop), static_cast<long long>(missing));
+  ImGui::TextUnformatted("Body registration does not imply behavioral verification.");
   if (ImGui::BeginTable("metric-values", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
     ImGui::TableSetupColumn("Name");
     ImGui::TableSetupColumn("Kind");
