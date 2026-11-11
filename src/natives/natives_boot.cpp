@@ -482,13 +482,6 @@ bool host_print_screen(const std::string& path) {
 void frontend_set_fonts(Jvm& jvm, int32_t video_x, int32_t video_y) {
   if (video_x <= 0) video_x = 800;
   if (video_y <= 0) video_y = 600;
-  jvm.set_static("java.game.Config", "video_x", Value::make_int(video_x));
-  jvm.set_static("java.game.Config", "video_y", Value::make_int(video_y));
-  // Viewport reads java.util.Config. Left at 800x600, a 16:9 window builds
-  // a dialog plate that is the full window aspect — stretched sideways.
-  jvm.set_static("java.util.Config", "video_x", Value::make_int(video_x));
-  jvm.set_static("java.util.Config", "video_y", Value::make_int(video_y));
-
   const int band = font_band(video_x, video_y);
   // Same band → keep existing ResourceRefs so live Text charset pointers stay valid.
   if (band == g_font_band && g_font_band >= 0) return;

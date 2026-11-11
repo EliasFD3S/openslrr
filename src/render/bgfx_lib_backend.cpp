@@ -11,6 +11,7 @@
 #include "slrr/host_sfx.hpp"
 #include "slrr/osd_registry.hpp"
 #include "slrr/ptx_image.hpp"
+#include "slrr/platform_telemetry.hpp"
 #include "slrr/slrr_font.hpp"
 #include "slrr/video_fmv.hpp"
 
@@ -189,6 +190,17 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     u_sun_diff_ = bgfx::createUniform("u_sunDiff", bgfx::UniformType::Vec4);
     u_sun_amb_ = bgfx::createUniform("u_sunAmb", bgfx::UniformType::Vec4);
     u_sun_spec_ = bgfx::createUniform("u_sunSpec", bgfx::UniformType::Vec4);
+    s_reflection_cube_ = bgfx::createUniform("s_sceneReflection", bgfx::UniformType::Sampler);
+    u_reflection_probe_ = bgfx::createUniform("u_reflectionProbe", bgfx::UniformType::Vec4);
+    u_reflection_box_min_ = bgfx::createUniform("u_reflectionBoxMin", bgfx::UniformType::Vec4);
+    u_reflection_box_max_ = bgfx::createUniform("u_reflectionBoxMax", bgfx::UniformType::Vec4);
+    u_dynamic_reflection_ = bgfx::createUniform("u_dynamicReflection", bgfx::UniformType::Vec4);
+    u_local_light_ = bgfx::createUniform("u_localLight", bgfx::UniformType::Vec4);
+    s_car_depth_ = bgfx::createUniform("s_carDepth", bgfx::UniformType::Sampler);
+    u_car_depth_mtx_ = bgfx::createUniform("u_carDepthMtx", bgfx::UniformType::Mat4);
+    u_car_depth_params_ = bgfx::createUniform("u_carDepthParams", bgfx::UniformType::Vec4);
+    u_cloud_wind_ = bgfx::createUniform("u_cloudWind", bgfx::UniformType::Vec4);
+    u_cloud_sky_ = bgfx::createUniform("u_cloudSky", bgfx::UniformType::Vec4);
     u_sun_dir_ = bgfx::createUniform("u_sunDir", bgfx::UniformType::Vec4);
     bgfx::ShaderHandle white_vs =
         bgfx::createEmbeddedShader(k_shadow_white, rt, "vs_shadow_cast");
@@ -241,6 +253,8 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     bgfx::setViewClear(kWorldView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL,
                        0x1c1814ff, 1.0f, 0);
     ready_ = true;
+    renderer_generation_ = platform_telemetry::next_renderer_generation();
+    platform_telemetry::renderer_open(renderer_generation_);
     quit_ = false;
     video_fmv_set_hwnd(hwnd_);
     std::printf("[bgfx] open %dx%d GPU=libbgfx renderer=%s\n", width_, height_,
@@ -311,6 +325,11 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     u_shadow_mtx_ = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(u_shadow_ramp_)) bgfx::destroy(u_shadow_ramp_);
     u_shadow_ramp_ = BGFX_INVALID_HANDLE;
+    destroy_reflections();
+    if (bgfx::isValid(car_depth_fb_)) bgfx::destroy(car_depth_fb_);
+    car_depth_fb_ = BGFX_INVALID_HANDLE;
+    car_depth_tex_ = BGFX_INVALID_HANDLE;
+    car_depth_active_ = false;
     if (bgfx::isValid(static_shadow_program_)) bgfx::destroy(static_shadow_program_);
     if (bgfx::isValid(static_shadow_fb_)) bgfx::destroy(static_shadow_fb_);
     static_shadow_program_ = BGFX_INVALID_HANDLE;
@@ -327,7 +346,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
       shadow_fb_[i] = BGFX_INVALID_HANDLE;
       shadow_tex_[i] = BGFX_INVALID_HANDLE;
     }
-    for (auto* handle : {&s_mix_, &s_env_, &s_bake_, &u_layers_, &u_channels_, &u_base_uv_, &u_mix_uv_, &u_env_uv_, &u_diffuse_, &u_spec_, &u_sun_diff_, &u_sun_amb_, &u_sun_spec_, &u_sun_dir_}) {
+    for (auto* handle : {&s_mix_, &s_env_, &s_bake_, &u_layers_, &u_channels_, &u_base_uv_, &u_mix_uv_, &u_env_uv_, &u_diffuse_, &u_spec_, &u_sun_diff_, &u_sun_amb_, &u_sun_spec_, &u_sun_dir_, &u_cloud_sky_, &u_cloud_wind_, &s_reflection_cube_, &u_dynamic_reflection_, &u_reflection_probe_, &u_reflection_box_min_, &u_reflection_box_max_, &u_local_light_, &s_car_depth_, &u_car_depth_mtx_, &u_car_depth_params_}) {
       if(bgfx::isValid(*handle)) bgfx::destroy(*handle);
       *handle = BGFX_INVALID_HANDLE;
     }
@@ -339,6 +358,8 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     }
 #endif
     ready_ = false;
+    platform_telemetry::renderer_close(renderer_generation_);
+    renderer_generation_ = 0;
   }
   void LibBgfxBackend::pump(int32_t /*ms*/)
 {
@@ -396,7 +417,9 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
 {
     ++frames_;
     if (!ready_) return;
-    const auto video = host_game_options().video;
+    auto video = host_game_options().video;
+    const auto& debug_render = debug_overlay_.render_options();
+    video.view_distance = 5000.f;
     apply_video_mode(video.mode);
     const bool loading = osd_loading_dialog() || !osd_loading_overlay().empty();
     const bool covered = !osd_loading_overlay().empty() && !video_fmv_block_osd();
@@ -421,8 +444,10 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
     sc.nwh = hwnd_;
     sc.width = static_cast<uint32_t>(width_);
     sc.height = static_cast<uint32_t>(height_);
-    const auto& debug_render = debug_overlay_.render_options();
-    const uint32_t flags = debug_render.vsync ? BGFX_RESET_VSYNC : BGFX_RESET_NONE;
+    const uint32_t msaa[] = {BGFX_RESET_NONE, BGFX_RESET_MSAA_X2,
+                             BGFX_RESET_MSAA_X4, BGFX_RESET_MSAA_X8};
+    const uint32_t flags = (debug_render.vsync ? BGFX_RESET_VSYNC : BGFX_RESET_NONE)
+                           | msaa[host_enhanced_graphics().msaa];
     if (width_ != old_width || height_ != old_height || flags != reset_flags_) {
       bgfx::reset(flags, &sc);
       reset_flags_ = flags;
@@ -437,8 +462,9 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
 
     float view[16];
     float proj[16];
+    outdoor_lighting_ = world_cam && scene_instances_has_ground_props();
     if (world_cam) {
-      if (scene_instances_has_ground_props() || (script_camera && script_camera->follow_vehicle))
+      if (outdoor_lighting_ || (script_camera && script_camera->follow_vehicle))
         world_zf = video.view_distance;
       const float aspect =
           height_ > 0 ? static_cast<float>(width_) / static_cast<float>(height_)
@@ -547,11 +573,40 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
 
     // Menu/Splash: no garage SCX — stock MainMenu uses FMV or Dummy scene.
     if (!covered) {
+      update_local_light();
       update_static_shadow(world_cam ? world_eye : nullptr, video);
-      draw_dynamic_world(view, world_view, world_zf);
+      const auto* car = script_camera && script_camera->follow_vehicle
+          ? gameref_find_live(script_camera->follow_vehicle) : nullptr;
+      float car_matrix[16];
+      const auto* position = car && scene_instances_script_matrix(car->key, car_matrix)
+          ? car_matrix + 12 : world_cam ? world_eye : nullptr;
+      update_car_depth(position, video);
+      reflection_scene_ = garage_ || outdoor_lighting_ || (script_camera && script_camera->follow_vehicle);
+      float reflection_position[3];
+      const float* capture_position = position;
+      if (garage_) {
+        const auto body = std::find_if(instances_.begin(), instances_.end(),
+            [](const SceneInstance& object) { return object.vehicle_material; });
+        if (body != instances_.end()) {
+          const auto& geometry = *body->geometry;
+          const auto& m = body->transform;
+          const float x = (geometry.info.bbox_min[0] + geometry.info.bbox_max[0]) * .5f * geometry.position_scale;
+          const float y = (geometry.info.bbox_min[1] + geometry.info.bbox_max[1]) * .5f * geometry.position_scale;
+          const float z = -(geometry.info.bbox_min[2] + geometry.info.bbox_max[2]) * .5f * geometry.position_scale;
+          reflection_position[0] = m[0]*x + m[4]*y + m[8]*z + m[12];
+          reflection_position[1] = m[1]*x + m[5]*y + m[9]*z + m[13] - .8f;
+          reflection_position[2] = -(m[2]*x + m[6]*y + m[10]*z + m[14]);
+          capture_position = reflection_position;
+        }
+      }
+      update_reflections(capture_position);
+      if (world_cam && (outdoor_lighting_ ||
+          std::any_of(instances_.begin(), instances_.end(),
+                      [](const SceneInstance& instance) { return instance.sky; })))
+        draw_sky(world_view, view, proj);
+      draw_dynamic_world(world_view);
       if (garage_ && !parts_.empty()) draw_scene(world_view);
-      if (debug_render.shadows && video.shadows > 0)
-        draw_vehicle_shadows(world_view, world_cam ? world_eye : nullptr, video);
+
       if (debug_render.sun_flare && video.flares) draw_sun_flare(view, proj, world_view);
     }
     // Previews start at view 8. OSD plates under the cars are view 7; the
@@ -578,7 +633,11 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       collect(instances_);
       for (const auto& preview : previews_) collect(preview.instances);
       add(part_controlled_chassis());
-      debug_overlay_.draw(hwnd_, ww, hh, vehicles);
+      const char* capture = !host_enhanced_graphics().dynamic_reflections ? "disabled"
+          : !reflection_scene_ ? "no world camera"
+          : reflection_ready_ ? "live cubemap"
+          : bgfx::isValid(reflection_cubes_[0]) ? "capturing" : "waiting for render target";
+      debug_overlay_.draw(hwnd_, ww, hh, capture, vehicles);
     }
     debug_was_visible_ = show_debug;
     auto& input = host_input();
@@ -589,6 +648,7 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
     }
     input.debug_mouse_capture = capture;
     bgfx::frame();
+    capture_frame_stats();
     // The swap chain is filled while the window is hidden. Showing it first
     // presented one clear (0x1a2230) before the movie or the splash plate.
     const bool reveal = video_fmv_frame_ready() || garage_ || osd_overlay_ || show_debug;
@@ -596,6 +656,48 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       ShowWindow(hwnd_, SW_SHOW);
       shown_ = true;
     }
+  }
+
+  void LibBgfxBackend::capture_frame_stats()
+{
+    const bgfx::Stats* stats = bgfx::getStats();
+    if (!stats || !renderer_generation_) return;
+    platform_telemetry::RendererFrameStats out;
+    out.gpu_frame = stats->gpuFrameNum;
+    out.cpu_frame = stats->cpuTimeFrame;
+    out.cpu_begin = stats->cpuTimeBegin;
+    out.cpu_end = stats->cpuTimeEnd;
+    out.cpu_frequency = stats->cpuTimerFreq;
+    out.gpu_begin = stats->gpuTimeBegin;
+    out.gpu_end = stats->gpuTimeEnd;
+    out.gpu_frequency = stats->gpuTimerFreq;
+    out.draw_calls = stats->numDraw;
+    out.compute_calls = stats->numCompute;
+    out.blit_calls = stats->numBlit;
+    out.vertex_buffers = stats->numVertexBuffers;
+    out.index_buffers = stats->numIndexBuffers;
+    out.textures = stats->numTextures;
+    out.dynamic_vertex_buffers = stats->numDynamicVertexBuffers;
+    out.dynamic_index_buffers = stats->numDynamicIndexBuffers;
+    out.frame_buffers = stats->numFrameBuffers;
+    out.programs = stats->numPrograms;
+    out.shaders = stats->numShaders;
+    out.view_count = stats->numViews;
+    out.copied_views = stats->viewStats
+        ? std::min<std::size_t>(out.views.size(), stats->numViews) : 0;
+    for (std::size_t i = 0; i < out.copied_views; ++i) {
+      const auto& source = stats->viewStats[i];
+      auto& target = out.views[i];
+      target.view = source.view;
+      target.cpu_begin = source.cpuTimeBegin;
+      target.cpu_end = source.cpuTimeEnd;
+      target.gpu_begin = source.gpuTimeBegin;
+      target.gpu_end = source.gpuTimeEnd;
+      target.gpu_frame = source.gpuFrameNum;
+    }
+    platform_telemetry::renderer_frame(
+        renderer_generation_, out,
+        bgfx::isValid(fmv_tex_) && fmv_tex_serial_ != 0 && video_fmv_frame_ready());
   }
   void LibBgfxBackend::set_scx_smoke(const std::string& path)
 {
@@ -737,7 +839,8 @@ SceneFrustum LibBgfxBackend::view_frustum(const float* view, const float* projec
     // Resident map models are shared by their placements. Camera culling only
     // affects draw submission; leaving the map releases the GPU resources.
     for (const auto& mesh : resident_props) cache(mesh, nullptr, true);
-    for (const auto& instance : instances_) cache(instance.geometry, instance.key);
+    for (const auto& instance : instances_)
+      if (!instance.sky) cache(instance.geometry, instance.key);
     for (const auto& preview : previews_)
       for (const auto& instance : preview.instances) cache(instance.geometry, instance.key);
     for(auto it=instance_meshes_.begin();it!=instance_meshes_.end();) {
@@ -745,16 +848,184 @@ SceneFrustum LibBgfxBackend::view_frustum(const float* view, const float* projec
     }
     deformed_meshes_ = std::move(current_deformed);
   }
-  void LibBgfxBackend::draw_dynamic_world(const float* view, uint16_t view_id, float far_plane)
-{
-    float camera[16];bx::mtxInverse(camera,view);
-    for(const auto&i:instances_)if(i.sky) {
-      auto matrix=i.transform;float radius=0;
-      for(int k=0;k<3;k++)radius=std::max(radius,std::max(std::fabs(i.geometry->info.bbox_min[k]),std::fabs(i.geometry->info.bbox_max[k]))*.01f);
-      float scale=radius>.001f?std::min(50.f, far_plane * .55f)/radius:1.f;
-      for(int c=0;c<3;c++)for(int r=0;r<3;r++)matrix[c*4+r]*=scale;
-      matrix[12]=camera[12];matrix[13]=camera[13];matrix[14]=camera[14];draw_instance(view_id,i,matrix.data(),false,0);
+void LibBgfxBackend::update_local_light() {
+    local_light_ = {};
+    if (!garage_ || !host_enhanced_graphics().local_lights) return;
+    for (const auto* node : gameref_directional_lights()) {
+      float matrix[16];
+      if ((node->type_id & 0xffff) != 0x001d ||
+          !scene_instances_script_matrix(node->key, matrix)) continue;
+      // Stock garage scripts put the neon light at the map origin.
+      // Position the emitter above the bay, at approximate fixture height.
+      local_light_ = {matrix[12], matrix[13] + 3.3f, -matrix[14], 8.f};
+      break;
     }
+}
+
+void LibBgfxBackend::destroy_reflections() {
+    if (bgfx::isValid(reflection_capture_)) bgfx::destroy(reflection_capture_);
+    if (bgfx::isValid(reflection_color_)) bgfx::destroy(reflection_color_);
+    reflection_capture_ = BGFX_INVALID_HANDLE;
+    reflection_color_ = BGFX_INVALID_HANDLE;
+    for (auto& cube : reflection_cubes_) {
+      if (bgfx::isValid(cube)) bgfx::destroy(cube);
+      cube = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(reflection_depth_)) bgfx::destroy(reflection_depth_);
+    reflection_write_ = 0;
+    reflection_depth_ = BGFX_INVALID_HANDLE;
+    reflection_world_ = nullptr;
+    reflection_face_ = 0;
+    reflection_ready_ = false;
+}
+
+void LibBgfxBackend::update_reflections(const float* eye) {
+    if (!eye || !reflection_scene_ || !host_enhanced_graphics().dynamic_reflections) {
+      reflection_world_ = nullptr;
+      reflection_face_ = 0;
+      reflection_ready_ = false;
+      return;
+    }
+    const auto ground = std::find_if(instances_.begin(), instances_.end(),
+        [](const SceneInstance& instance) { return instance.geometry->ground_polygons || instance.sky; });
+    if (ground == instances_.end()) {
+      reflection_world_ = nullptr;
+      reflection_face_ = 0;
+      reflection_ready_ = false;
+      return;
+    }
+    reflection_box_valid_ = false;
+    if (garage_) {
+      reflection_box_min_ = {1e20f, 1e20f, 1e20f};
+      reflection_box_max_ = {-1e20f, -1e20f, -1e20f};
+      const auto& geometry = *ground->geometry;
+      for (int corner = 0; corner < 8; ++corner) {
+        float local[3];
+        for (int axis = 0; axis < 3; ++axis)
+          local[axis] = ((corner & (1 << axis)) ? geometry.info.bbox_max[axis]
+                         : geometry.info.bbox_min[axis]) * geometry.position_scale;
+        local[2] = -local[2];
+        for (int axis = 0; axis < 3; ++axis) {
+          const auto& m = ground->transform;
+          const float coordinate = m[axis]*local[0] + m[4+axis]*local[1] +
+                                   m[8+axis]*local[2] + m[12+axis];
+          reflection_box_min_[axis] = std::min(reflection_box_min_[axis], coordinate);
+          reflection_box_max_[axis] = std::max(reflection_box_max_[axis], coordinate);
+        }
+      }
+      reflection_box_valid_ = reflection_box_max_[1] - reflection_box_min_[1] > 2.f;
+    }
+    constexpr uint16_t size = 256;
+    constexpr size_t face_count = 6;
+    if (!bgfx::isValid(reflection_capture_)) {
+      reflection_color_ = bgfx::createTexture2D(size, size, false, 1,
+          bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
+      reflection_depth_ = bgfx::createTexture2D(size, size, false, 1,
+          bgfx::TextureFormat::D16, BGFX_TEXTURE_RT_WRITE_ONLY);
+      if (!bgfx::isValid(reflection_color_) || !bgfx::isValid(reflection_depth_)) {
+        destroy_reflections();
+        return;
+      }
+      const bgfx::TextureHandle attachments[] = {reflection_color_, reflection_depth_};
+      reflection_capture_ = bgfx::createFrameBuffer(2, attachments, false);
+      if (!bgfx::isValid(reflection_capture_)) {
+        destroy_reflections();
+        return;
+      }
+      for (auto& cube : reflection_cubes_) {
+        cube = bgfx::createTextureCube(size, false, 1, bgfx::TextureFormat::RGBA8,
+            BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
+            BGFX_SAMPLER_W_CLAMP);
+        if (!bgfx::isValid(cube)) {
+          destroy_reflections();
+          return;
+        }
+      }
+    }
+    if (reflection_world_ != ground->key) {
+      reflection_world_ = ground->key;
+      reflection_face_ = 0;
+      reflection_ready_ = false;
+    }
+    // Publish only a complete cubemap from the preceding frame. Keeping the
+    // capture target separate also avoids SRV/render-target binding hazards.
+    if (reflection_face_ == face_count) {
+      reflection_write_ ^= 1;
+      reflection_face_ = 0;
+      reflection_ready_ = true;
+      reflection_sample_origin_ = reflection_origin_;
+    }
+    const int budget = debug_overlay_.render_options().reflection_faces;
+    for (int capture = 0; capture < budget && reflection_face_ < face_count; ++capture) {
+      const auto face = reflection_face_;
+      if (face == 0)
+        reflection_origin_ = {eye[0], eye[1] + .8f, -eye[2]};
+      constexpr bx::Vec3 axes[] = {{1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}};
+      const bx::Vec3 centre{reflection_origin_[0], reflection_origin_[1], reflection_origin_[2]};
+      const bx::Vec3 up = face == 2 ? bx::Vec3{0,0,-1}
+                          : face == 3 ? bx::Vec3{0,0,1} : bx::Vec3{0,1,0};
+      constexpr float far_plane = 150.f;
+      float view[16], proj[16];
+      bx::mtxLookAt(view, centre, bx::add(centre, axes[face]), up);
+      bx::mtxProj(proj, 90.f, 1.f, .15f, far_plane, bgfx::getCaps()->homogeneousDepth);
+      const auto frustum = view_frustum(view, proj);
+      const auto objects = scene_instances_collect(&frustum);
+      // This view runs after the main camera. Its results are sampled next frame.
+      const auto reflection_view = static_cast<uint16_t>(72 + 2 * capture);
+      bgfx::setViewFrameBuffer(reflection_view, reflection_capture_);
+      bgfx::setViewRect(reflection_view, 0, 0, size, size);
+      bgfx::setViewClear(reflection_view, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x577493ff);
+      bgfx::setViewTransform(reflection_view, view, proj);
+      bgfx::setViewMode(reflection_view, bgfx::ViewMode::Sequential);
+      bgfx::touch(reflection_view);
+      if (outdoor_lighting_ || std::any_of(objects.begin(), objects.end(),
+          [](const SceneInstance& object) { return object.sky; }))
+        draw_sky(reflection_view, view, proj);
+      for (const auto& object : objects)
+        if (!object.sky && !object.vehicle_material &&
+            instance_meshes_.contains(object.geometry.get()))
+          draw_instance(reflection_view, object, object.transform.data(), false, 0);
+      // Blits run before draws within a view, so copy in the following view
+      // before the next face clears the shared 2D target.
+      bgfx::TextureRegion source, destination;
+      source.init(reflection_color_, 0, 0, size, size);
+      destination.init(reflection_cubes_[reflection_write_], 0, 0, size, size);
+      destination.z = static_cast<uint16_t>(face);
+      destination.depth = 1;
+      bgfx::blit(static_cast<uint16_t>(reflection_view + 1), destination, source);
+      ++reflection_face_;
+    }
+}
+
+void LibBgfxBackend::draw_sky(uint16_t view_id, const float* view, const float* projection) {
+    if (bgfx::getAvailTransientVertexBuffer(6, layout_) < 6) return;
+    bgfx::TransientVertexBuffer vertices;
+    bgfx::allocTransientVertexBuffer(&vertices, 6, layout_);
+    auto* output = reinterpret_cast<MeshVertex*>(vertices.data);
+    float view_projection[16], inverse[16], camera[16], identity[16];
+    bx::mtxMul(view_projection, view, projection);
+    bx::mtxInverse(inverse, view_projection);
+    bx::mtxInverse(camera, view);
+    bx::mtxIdentity(identity);
+    constexpr bx::Vec3 corners[] = {
+        {-1,-1,.5f}, {1,-1,.5f}, {1,1,.5f},
+        {-1,-1,.5f}, {1,1,.5f}, {-1,1,.5f}};
+    for (size_t i = 0; i < std::size(corners); ++i) {
+      const auto point = bx::mulH(corners[i], inverse);
+      output[i] = {point.x, point.y, point.z, 0.f, 1.f, 0.f, 0.f, 0.f};
+    }
+    auto sun = scene_instances_light();
+    if (!outdoor_lighting_) scene_sun_apply_day_cycle(sun);
+    const float sky[4] = {camera[12], camera[13], camera[14],
+                          host_enhanced_graphics().volumetric_clouds ? 2.f : 1.f};
+    bind_baked_light(nullptr, nullptr, BGFX_INVALID_HANDLE, false, &sun, sky);
+    bgfx::setTransform(identity);
+    bgfx::setVertexBuffer(0, &vertices);
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_MSAA);
+    bgfx::submit(view_id, program_);
+}
+
+void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
     for (int pass = 0; pass < 2; ++pass)
       for(const auto&i:instances_)if(!i.sky)draw_instance(view_id,i,i.transform.data(),false,pass);
   }
@@ -977,7 +1248,8 @@ SceneFrustum LibBgfxBackend::view_frustum(const float* view, const float* projec
         bgfx::setIndexBuffer(part.ibh, start, count);
         bgfx::setTexture(0, s_tex_,
                          bgfx::isValid(tex) ? tex : white_tex_);
-        bind_baked_light(group, &part.tex);
+        bind_baked_light(group, &part.tex, BGFX_INVALID_HANDLE, true);
+        bgfx::setUniform(u_local_light_, local_light_.data());
         bgfx::setState(alpha_cutout ? state_cutout : state_opaque);
         bgfx::submit(view_id, program_);
       };

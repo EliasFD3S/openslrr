@@ -26,8 +26,11 @@ are deferred. Allocation pressure also requests collection (initial threshold:
 
 Roots include class statics and pinned objects, plus explicit providers for
 scene handles, installed/inventory part records, UI widgets/text/fonts, open
-files, monitors, active sections, mechanic state, hover callbacks, dyno
-sessions, notifications, callback registrations and live script threads.
+files, monitors, active sections, mechanic state, hover callbacks,
+notifications, callback registrations and live script threads. Dyno sessions
+are weak native payloads: only an in-flight calculation temporarily roots its
+receiver. Finalization removes the session; world reinitialization clears the
+registry. See `src/physics/dyno_model.cpp` and the focused dyno tests.
 Suspended cooperative stacks retain scoped roots for TREE locals/operands,
 pending receivers and arrays, invocation arguments, and constructed objects.
 The scheduler saves/restores VM call-depth state when switching contexts; a

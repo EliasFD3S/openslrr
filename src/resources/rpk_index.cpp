@@ -133,14 +133,15 @@ bool RpkIndex::parse_rpak(const std::string& disk, RpkPack& pack) const {
   pack.version = version;
   const uint32_t dep_a = rd_u32(buf.data() + 8);
   const uint32_t dep_b = rd_u32(buf.data() + 12);
-  const uint32_t dep_n = dep_a + dep_b;
+  const size_t dep_n = static_cast<size_t>(dep_a) + dep_b;
   size_t off = 16;
-  const size_t dep_bytes = static_cast<size_t>(dep_n) * 64;
-  if (off + dep_bytes + 16 > sz) return false;
+  // Each dependency occupies 64 bytes and the table header still needs 16.
+  // Validate before reserve(), including overflow in dep_a + dep_b.
+  if (sz - off < 16 || dep_n > (sz - off - 16) / 64) return false;
 
   pack.deps.clear();
   pack.deps.reserve(dep_n);
-  for (uint32_t i = 0; i < dep_n; ++i) {
+  for (size_t i = 0; i < dep_n; ++i) {
     const uint8_t* d = buf.data() + off;
     RpkDep dep;
     dep.id = rd_u32(d);
@@ -155,11 +156,14 @@ bool RpkIndex::parse_rpak(const std::string& disk, RpkPack& pack) const {
   const uint32_t table_size = rd_u32(buf.data() + off);
   const uint32_t count = rd_u32(buf.data() + off + 4);
   off += 16;  // tableSize, count, skip(8)
+  if (off > sz || table_size > sz - off) return false;
   const size_t table_end = off + table_size;
-  if (table_end > sz) return false;
 
   pack.entries.clear();
   pack.by_type_id.clear();
+  // Every entry has a 23-byte fixed portion. Reject impossible counts before
+  // allowing an untrusted count to drive a large allocation.
+  if (count > (table_end - off) / 23) return false;
   pack.entries.reserve(count);
   for (uint32_t i = 0; i < count; ++i) {
     if (off + 23 > table_end) {
@@ -358,8 +362,12 @@ std::vector<uint8_t> RpkIndex::read_payload(uint32_t full_id) const {
   }
   const std::string path = disk_path_for_pack(pid);
   if (path.empty()) return {};
-  std::ifstream in(path, std::ios::binary);
+  std::ifstream in(path, std::ios::binary | std::ios::ate);
   if (!in) return {};
+  const std::streamoff end = in.tellg();
+  if (end < 0) return {};
+  const uint64_t file_size = static_cast<uint64_t>(end);
+  if (e->offset > file_size || e->size > file_size - e->offset) return {};
   in.seekg(static_cast<std::streamoff>(e->offset));
   std::vector<uint8_t> out(e->size);
   in.read(reinterpret_cast<char*>(out.data()),

@@ -2,6 +2,7 @@
 #include "slrr/gameref.hpp"
 #include "slrr/script_events.hpp"
 #include "slrr/host_input.hpp"
+#include "slrr/metrics.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/vehicle_dynamics.hpp"
@@ -19,6 +20,12 @@ namespace slrr {
 namespace {
 
 std::unordered_map<void*, GameRefState> g_refs;
+const bool g_metrics_registered = [] {
+  return metrics::register_provider([](void*, std::vector<metrics::Value>& values) {
+    values.push_back({"gameref.records", static_cast<std::int64_t>(g_refs.size()),
+                      metrics::Kind::Gauge});
+  }) != 0;
+}();
 std::unordered_set<void*> g_lights;
 int32_t g_next_live = 0x70000000;
 int32_t g_fog_color = 0;
@@ -49,6 +56,8 @@ void gameref_clear() {
   g_next_live = 0x70000000;
   g_fog = false;
 }
+
+std::size_t gameref_count() { return g_refs.size(); }
 
 GameRefState* gameref_upsert(void* key, GameRefKind kind) {
   if (!key) return nullptr;

@@ -15,6 +15,8 @@
 
 namespace slrr {
 
+namespace metrics { struct Value; }
+
 class Jvm : public TreeHost {
  public:
   explicit Jvm(NativeRegistry* natives);
@@ -67,6 +69,7 @@ class Jvm : public TreeHost {
   double advance_sim_time(double seconds);
   double sim_time() const { return sim_time_; }
   float time_warp(float scale);
+  float time_warp() const { return time_warp_; }
 
   // While set, the first native method with no host binding aborts that call
   // chain (nested TREE invokes propagate the stop to the outermost invoke).
@@ -137,6 +140,9 @@ class Jvm : public TreeHost {
   static int count_args(const std::string& jni_sig);
   void halt_unbound(const std::string& owner, const std::string& method,
                     const std::string& jni);
+
+  static void provide_metrics(void* context, std::vector<metrics::Value>& values);
+  std::uint64_t metrics_provider_id_ = 0;
 
   NativeRegistry* natives_ = nullptr;
   std::string game_root_;

@@ -1,10 +1,23 @@
 #include "slrr/jvm.hpp"
+#include "slrr/diagnostics.hpp"
+#include "slrr/metrics.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <limits>
 #include <unordered_set>
 
 namespace slrr {
+void Jvm::provide_metrics(void* context, std::vector<metrics::Value>& values) {
+  const auto& vm = *static_cast<const Jvm*>(context);
+  values.push_back({"vm.heap_objects", static_cast<std::int64_t>(vm.heap_size()),
+                    metrics::Kind::Gauge});
+  values.push_back({"vm.classes_loaded", static_cast<std::int64_t>(vm.classes_loaded()),
+                    metrics::Kind::Gauge});
+  values.push_back({"vm.gc_last_freed", static_cast<std::int64_t>(vm.gc_last_freed()),
+                    metrics::Kind::Gauge});
+}
+
 Jvm::RootScope::RootScope(Jvm& vm,GcRootProvider provider):vm_(vm),id_(++vm.gc_frame_id_) {
   vm_.gc_frames_.emplace(id_,std::move(provider));
 }
@@ -40,6 +53,18 @@ int Jvm::collect_garbage() {
   const bool requested = gc_pending_;
   gc_pending_ = false;
   const size_t before = heap_.size();
+  const bool tracing = diagnostics::enabled();
+  const auto started = tracing ? std::chrono::steady_clock::now()
+                               : std::chrono::steady_clock::time_point{};
+  if (tracing) {
+    diagnostics::Event event;
+    event.category = diagnostics::Category::Gc;
+    event.name = "gc.start";
+    event.result = "started";
+    event.values = {{"objects", static_cast<std::int64_t>(before)},
+                    {"requested", requested ? 1 : 0}};
+    diagnostics::trace(std::move(event));
+  }
   std::unordered_set<const void*> managed;
   std::unordered_set<const void*> marked;
   std::vector<Object*> work;
@@ -91,6 +116,14 @@ int Jvm::collect_garbage() {
     o->gc_finalized = true;
     invoke(o->class_name, "finalize", "()V", {Value::make_obj(o)}, false);
   }
+  if (tracing) {
+    diagnostics::Event event;
+    event.category = diagnostics::Category::Gc;
+    event.name = "gc.finalization";
+    event.result = "ok";
+    event.values = {{"finalized", static_cast<std::int64_t>(finalizers.size())}};
+    diagnostics::trace(std::move(event));
+  }
   // A finalizer may resurrect an object, change native roots or allocate.
   // Trace again and keep this cycle's new allocations alive until next time.
   if (!finalizers.empty() || heap_.size() != before) {
@@ -111,6 +144,20 @@ int Jvm::collect_garbage() {
   }
   gc_allocated_ = 0;
   gc_threshold_ = std::max<size_t>(8192, heap_.size() / 2);
+  if (tracing) {
+    diagnostics::Event event;
+    event.category = diagnostics::Category::Gc;
+    event.name = "gc.end";
+    event.duration_ns = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - started).count());
+    event.result = "ok";
+    event.values = {{"before", static_cast<std::int64_t>(before)},
+                    {"alive", static_cast<std::int64_t>(heap_.size())},
+                    {"freed", static_cast<std::int64_t>(gc_last_freed_)},
+                    {"finalized", static_cast<std::int64_t>(finalizers.size())}};
+    diagnostics::trace(std::move(event));
+  }
   std::printf("[gc] before=%zu alive=%zu freed=%zu finalized=%zu\n",
               before, heap_.size(), gc_last_freed_, finalizers.size());
   return static_cast<int>(std::min(gc_last_freed_, static_cast<size_t>(std::numeric_limits<int>::max())));

@@ -26,6 +26,10 @@ Open SLRR brings the game's scripts, cars, and resources into a new engine. The 
 
 Original game data is required and is not included. The reference version is **SLRR 2.2.1 MWM**; compatibility with other versions and mods is not guaranteed. This is an independent project, unaffiliated with the original game's developers or publishers.
 
+For contributors and coding agents, [Engine contract and architecture](docs/ENGINE_CONTRACT.md)
+documents the script/native compatibility contract, subsystem ownership, resource
+IDs, coordinate systems, lifetime rules, Enhanced rendering and validation workflow.
+
 
 ## Progress
 
@@ -56,15 +60,15 @@ The bars show **numbers of functions**, not percentages. A body can still be par
 
 World covers GroundRef, particles, animation and PhysicsRef; language covers `java.lang`. Resources covers GameRef, ResourceRef, RenderRef and SfxRef; rendering covers GfxEngine, Text, Camera and Viewport. Files & input includes File, FindFile, Input, Controller and MouseCursor; parts includes Part, Chassis, WheelRef, DynoData and SfxTable. Sound & scripts covers Sound, Vehicle, Painter, Navigator and GameLogic.
 
-The snapshot matches the stock native table against registered class, method and parameter signatures. See the [native audit and roadmap](NATIVE_AUDIT.md) for the explicit no-ops, known mocks and missing signatures. Counts are stored in [native-coverage.json](assets/progress/native-coverage.json). After auditing a new snapshot, regenerate the graphic with `python tools/render-native-coverage.py` (standard library only).
+The snapshot matches the stock native table against registered class, method and parameter signatures. See the [native audit and roadmap](docs/NATIVE_AUDIT.md) for the explicit no-ops, known mocks and missing signatures. Counts are stored in [native-coverage.json](assets/progress/native-coverage.json). After auditing a new snapshot, regenerate the graphic with `node scripts/render-native-coverage.js` (Node.js only, no packages). The pinned 376-signature source is [stock-natives.json](assets/progress/stock-natives.json); `node scripts/render-native-coverage.js --check` verifies generated output without rewriting it.
 
 ### Features
 
 | Area | Current state |
 | --- | --- |
 | Scripts | ✅ TUFA classes and TREE programs, inheritance, Java and native calls |
-| Script scheduling | ✅ Cooperative Windows fiber stacks; real run/sleep/wait, isAlive, stop, suspend/resume, and frame budgets. GameType callback lists and notification routing. See [SCRIPT_RUNTIME.md](SCRIPT_RUNTIME.md) |
-| VM memory | ✅ Mark/sweep garbage collection, pin/unpin and finalizers; conservative native roots. See [VM_GC.md](VM_GC.md) |
+| Script scheduling | ✅ Cooperative Windows fiber stacks; real run/sleep/wait, isAlive, stop, suspend/resume, and frame budgets. GameType callback lists and notification routing. See [SCRIPT_RUNTIME.md](docs/SCRIPT_RUNTIME.md) |
+| VM memory | ✅ Mark/sweep garbage collection, pin/unpin and finalizers; conservative native roots. See [VM_GC.md](docs/VM_GC.md) |
 | Resources | ✅ RPK packs, SCX models, DDS mipmaps, PTX textures and CFG configurations |
 | Rendering | ✅ bgfx/D3D11, skydomes, sun flares, environment reflections, projected car shadows and multilayer track materials |
 | Interface | ✅ Menus, career dialogs, catalog, car showroom, track selection, and paint inventory |
@@ -76,7 +80,7 @@ The snapshot matches the stock native table against registered class, method and
 | Driving | ⏳ Test Track driving with engine SFX tables, keyboard and XInput, stock and CFG-defined instruments, and GPS. Acceleration has been compared with stock Nonus and Einvagen telemetry, with differences remaining |
 | World and career | ⏳ City, traffic and complete career flow; vehicle purchase/save/load still need end-to-end validation |
 
-Engine loops use the scripts' SFX tables. Music playlists currently play in sequential order. The [roadmap](NATIVE_AUDIT.md#roadmap) tracks the next steps for driving, collision and damage, navigation, garage actions and platform support.
+Engine loops use the scripts' SFX tables. Music playlists currently play in sequential order. The [roadmap](docs/NATIVE_AUDIT.md#roadmap) tracks the next steps for driving, collision and damage, navigation, garage actions and platform support.
 
 ### Recent changes
 
@@ -92,7 +96,7 @@ Engine loops use the scripts' SFX tables. Music playlists currently play in sequ
 - Fixed `Input.createHotkey` being misrouted to Osd, slider track hit-testing, and tuning events carrying the actual slider to the part. Modal dialogs block clicks into the car behind them.
 - Fixed reference casts used by tuning scripts, so mixture-ratio and similar assignments update the part instance.
 
-Headless diagnostics cover all four music sets (muted), audio-volume save/reload and fuel-rail slider interaction through hit-testing and a modal wait. The latest tuning changes still need confirmation in normal gameplay. See [HOST_NATIVE_UTILITIES.md](HOST_NATIVE_UTILITIES.md) for implementation details and limits.
+Headless diagnostics cover all four music sets (muted), audio-volume save/reload and fuel-rail slider interaction through hit-testing and a modal wait. The latest tuning changes still need confirmation in normal gameplay. See [HOST_NATIVE_UTILITIES.md](docs/HOST_NATIVE_UTILITIES.md) for implementation details and limits.
 
 ## Build
 

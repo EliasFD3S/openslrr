@@ -9,6 +9,7 @@ Baseline reviewed: `60d7d71` on `main`, 10 November 2026. This plan prioritizes 
 - Do not call a milestone complete after compilation alone. Each milestone lists behavioral evidence.
 - Native audit counts are inventory, not compatibility scores. Update the audit only from a reproducible registry comparison.
 - Interactive checks use copied/isolated save directories. Never test malformed saves against a real career.
+- Community RPK, suspension, camera, and dealer notes are collected in [COMMUNITY_REFERENCES.md](COMMUNITY_REFERENCES.md); treat them as fixture hypotheses until validated against stock behavior.
 
 ## Milestone 0 — Safe, reproducible foundation
 

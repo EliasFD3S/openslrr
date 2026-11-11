@@ -38,10 +38,13 @@ void LibBgfxBackend::update_static_shadow(const float* eye, const VideoOptions& 
   if (ground == instances_.end()) return;
   const auto sun = ground->lighting;
   if (!sun.has_direction || sun.direction[1] >= -.08f) return;
-  const uint16_t size = static_cast<uint16_t>(std::clamp(video.shadow_size * 4, 512, 2048));
-  const float range = std::min(video.shadow_distance, video.view_distance);
-  const float half_width = range * 1.5f + 24.f;
-  const float step = std::max(12.f, range * .35f);
+  constexpr uint16_t size = kShadowResolution;
+  // Static buildings shade streets well beyond the range of vehicle shadows.
+  const bool conservative =
+      (bgfx::getCaps()->supported & BGFX_CAPS_CONSERVATIVE_RASTER) != 0;
+  const float range = std::min(conservative ? 100.f : 65.f, video.view_distance);
+  const float step = std::max(10.f, range * .15f);
+  const float half_width = range + step + 24.f;
   static_shadow_eye_ = {eye[0], eye[1], -eye[2]};
   const std::array<float, 3> focus{eye[0], eye[1], eye[2]};
   const float moved = std::hypot(eye[0] - static_shadow_focus_[0],
@@ -81,8 +84,8 @@ void LibBgfxBackend::update_static_shadow(const float* eye, const VideoOptions& 
   const bx::Vec3 up = std::abs(travel.y) > .98f ? bx::Vec3{0.f, 0.f, 1.f}
                                               : bx::Vec3{0.f, 1.f, 0.f};
   float view[16], proj[16], clip[16];
-  bx::mtxLookAt(view, bx::sub(target, bx::mul(travel, 256.f)), target, up);
-  bx::mtxOrtho(proj, -half_width, half_width, -half_width, half_width, 0.f, 512.f,
+  bx::mtxLookAt(view, bx::sub(target, bx::mul(travel, 768.f)), target, up);
+  bx::mtxOrtho(proj, -half_width, half_width, -half_width, half_width, 0.f, 1024.f,
               0.f, caps->homogeneousDepth);
   const auto frustum = view_frustum(view, proj);
   bx::mtxMul(clip, view, proj);
@@ -106,7 +109,7 @@ void LibBgfxBackend::update_static_shadow(const float* eye, const VideoOptions& 
     for (const auto& group : part.geo.groups) {
       const auto flags = group.material_flags;
       const bool v4 = part.geo.info.version == 4;
-      if ((v4 && (flags & 0x40000000u)) ||
+      if ((v4 && (flags & 0x40000000u) && (group.material_type & 0x04u)) ||
           (part.geo.info.version == 3 && (flags & 0x101u) == 0x101u))
         continue;
       // Storefront mix uses the texture's alpha as a colour weight.
@@ -123,7 +126,9 @@ void LibBgfxBackend::update_static_shadow(const float* eye, const VideoOptions& 
       bgfx::setTransform(instance.transform.data());
       bgfx::setVertexBuffer(0, part.vbh);
       bgfx::setIndexBuffer(part.ibh, group.index_start, group.index_count);
-      bgfx::setState(BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS);
+      // Preserve narrow casters that overlap a texel without covering its centre.
+      const uint64_t coverage = conservative ? BGFX_STATE_CONSERVATIVE_RASTER : 0;
+      bgfx::setState(BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | coverage);
       bgfx::submit(kStaticShadowView, static_shadow_program_);
     }
   }
@@ -132,6 +137,71 @@ void LibBgfxBackend::update_static_shadow(const float* eye, const VideoOptions& 
   static_shadow_focus_ = focus;
   static_shadow_sun_ = direction;
   static_shadow_active_ = true;
+}
+
+void LibBgfxBackend::update_car_depth(const float* position, const VideoOptions& video) {
+  car_depth_active_ = false;
+  if (!position || video.shadows == 0 || !debug_overlay_.render_options().shadows ||
+      !bgfx::isValid(static_shadow_program_)) return;
+
+  constexpr uint16_t size = kShadowResolution;
+  if (!bgfx::isValid(car_depth_fb_)) {
+    const auto texture = bgfx::createTexture2D(size, size, false, 1, bgfx::TextureFormat::D32F,
+        BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
+        BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT);
+    if (!bgfx::isValid(texture)) return;
+    car_depth_fb_ = bgfx::createFrameBuffer(1, &texture, true);
+    if (!bgfx::isValid(car_depth_fb_)) {
+      bgfx::destroy(texture);
+      return;
+    }
+    car_depth_tex_ = texture;
+  }
+
+  const auto sun = scene_instances_light();
+  const bx::Vec3 direction = sun.has_direction
+      ? bx::Vec3{sun.direction[0], sun.direction[1], -sun.direction[2]}
+      : bx::Vec3{0.f, -1.f, 0.f};
+  const auto travel = bx::normalize(direction);
+  if (travel.y >= -.08f) return;
+  const bx::Vec3 centre{position[0], position[1], -position[2]};
+  const bx::Vec3 up = std::abs(travel.y) > .98f ? bx::Vec3{0,0,1} : bx::Vec3{0,1,0};
+  const auto* caps = bgfx::getCaps();
+  float view[16], proj[16], clip[16];
+  bx::mtxLookAt(view, bx::sub(centre, bx::mul(travel, 20.f)), centre, up);
+  bx::mtxOrtho(proj, -14.f, 14.f, -14.f, 14.f, 0.f, 48.f, 0.f, caps->homogeneousDepth);
+  bx::mtxMul(clip, view, proj);
+  const float crop[16] = {
+      .5f, 0.f, 0.f, 0.f, 0.f, caps->originBottomLeft ? .5f : -.5f, 0.f, 0.f,
+      0.f, 0.f, caps->homogeneousDepth ? .5f : 1.f, 0.f, .5f, .5f,
+      caps->homogeneousDepth ? .5f : 0.f, 1.f};
+  bx::mtxMul(car_depth_matrix_.data(), clip, crop);
+  constexpr uint16_t id = kVehicleShadowFirst;
+  bgfx::setViewFrameBuffer(id, car_depth_fb_);
+  bgfx::setViewRect(id, 0, 0, size, size);
+  bgfx::setViewClear(id, BGFX_CLEAR_DEPTH, 0, 1.f, 0);
+  bgfx::setViewTransform(id, view, proj);
+  bgfx::touch(id);
+
+  for (const auto& instance : instances_) {
+    if (!instance.vehicle_material || instance.light_flags) continue;
+    const auto found = instance_meshes_.find(instance.geometry.get());
+    if (found == instance_meshes_.end()) continue;
+    const auto& part = found->second;
+    if (!bgfx::isValid(part.vbh) || !bgfx::isValid(part.ibh)) continue;
+    for (const auto& group : part.geo.groups) {
+      if ((group.material_flags & 0x40000000u) || group.diffuse[3] < .99f) continue;
+      const float opaque[4] = {0.f, -1.f, 0.f, 0.f};
+      bgfx::setUniform(u_static_shadow_params_, opaque);
+      bgfx::setTexture(0, s_tex_, white_tex_);
+      bgfx::setTransform(instance.transform.data());
+      bgfx::setVertexBuffer(0, part.vbh);
+      bgfx::setIndexBuffer(part.ibh, group.index_start, group.index_count);
+      bgfx::setState(BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS);
+      bgfx::submit(id, static_shadow_program_);
+    }
+  }
+  car_depth_active_ = true;
 }
 
 bool LibBgfxBackend::ensure_vehicle_shadow_target(int slot, uint16_t size) {
@@ -760,7 +830,11 @@ void LibBgfxBackend::draw_vehicle_shadows(uint16_t view_id, const float* eye,
         for (const Slot& slot : slots) {
           if (!slot.used || !bgfx::isValid(slot.tex)) continue;
           bgfx::setUniform(u_shadow_mtx_, slot.mtx);
-          const float ramp[4] = {1.f / size, slot.centre_y, 0.f, slot.ramp};
+          const float diffuse = (sun.diffuse[0] + sun.diffuse[1] + sun.diffuse[2]) / 3.f;
+          const float ambient = (sun.ambient[0] + sun.ambient[1] + sun.ambient[2]) / 3.f;
+          const float strength = outdoor_lighting_
+              ? std::clamp(diffuse / std::max(diffuse + ambient, .01f), 0.f, .85f) : 1.f;
+          const float ramp[4] = {1.f / size, slot.centre_y, strength, slot.ramp};
           bgfx::setUniform(u_shadow_ramp_, ramp);
           bgfx::setTransform(matrix);
           bgfx::setVertexBuffer(0, vb);

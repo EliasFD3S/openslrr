@@ -1,5 +1,7 @@
 #include "video_fmv_vlc.hpp"
 
+#include "slrr/platform_telemetry.hpp"
+
 #ifdef _WIN64
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -30,6 +32,20 @@ using Format = unsigned (*)(void**, char*, unsigned*, unsigned*, unsigned*,
 using Cleanup = void (*)(void*);
 enum class PlayerState {
   Idle, Opening, Buffering, Playing, Paused, Stopped, Ended, Error
+};
+
+struct CallbackScope {
+  CallbackScope(std::uint64_t generation, platform_telemetry::VlcCallback callback)
+      : generation(generation), callback(callback) {
+    platform_telemetry::vlc_callback(generation, callback,
+                                     platform_telemetry::CallbackPhase::Begin);
+  }
+  ~CallbackScope() {
+    platform_telemetry::vlc_callback(generation, callback,
+                                     platform_telemetry::CallbackPhase::End);
+  }
+  std::uint64_t generation;
+  platform_telemetry::VlcCallback callback;
 };
 
 std::wstring environment(const wchar_t* name) {
@@ -131,10 +147,11 @@ struct VlcPlayback {
   int width = 0;
   int height = 0;
   bool pending = false;
+  std::uint64_t generation = 0;
 
   ~VlcPlayback() { close(); }
 
-  void close() {
+  void close(std::int32_t reason = 0) {
     if (player) {
       // Stop joins the video output before clearing shared frame state.
       api.stop(player);
@@ -143,11 +160,14 @@ struct VlcPlayback {
     }
     frame.clear();
     pending = false;
+    if (generation) platform_telemetry::vlc_decoder_close(generation, reason);
+    generation = 0;
   }
 
   static unsigned format(void** opaque, char* chroma, unsigned* width,
                          unsigned* height, unsigned* pitches, unsigned* lines) {
     auto& self = *static_cast<VlcPlayback*>(*opaque);
+    CallbackScope observation(self.generation, platform_telemetry::VlcCallback::Format);
     unsigned visible_width = 0;
     unsigned visible_height = 0;
     // The callback can report padded decoder dimensions. Use the visible
@@ -180,10 +200,19 @@ struct VlcPlayback {
     return 1;
   }
 
-  static void cleanup(void* opaque) { delete static_cast<Picture*>(opaque); }
+  static void cleanup(void* opaque) {
+    auto* picture = static_cast<Picture*>(opaque);
+    if (picture) {
+      CallbackScope observation(picture->owner.generation,
+                                platform_telemetry::VlcCallback::Cleanup);
+      delete picture;
+    }
+  }
 
   static void* lock(void* opaque, void** planes) {
     auto& picture = *static_cast<Picture*>(opaque);
+    CallbackScope observation(picture.owner.generation,
+                              platform_telemetry::VlcCallback::Lock);
     planes[0] = picture.pixels;
     return nullptr;
   }
@@ -191,11 +220,18 @@ struct VlcPlayback {
   static void display(void* opaque, void*) {
     const auto& picture = *static_cast<Picture*>(opaque);
     auto& self = picture.owner;
+    CallbackScope observation(self.generation, platform_telemetry::VlcCallback::Display);
+    const platform_telemetry::MediaSample sample{
+        picture.width, picture.height, picture.pitch,
+        static_cast<std::int64_t>(picture.pitch) * picture.height,
+        platform_telemetry::MediaOrientation::TopDown};
     std::lock_guard guard(self.frame_mutex);
     const size_t row_size = static_cast<size_t>(picture.width) * 4;
     try {
       self.frame.resize(row_size * picture.height);
     } catch (const std::bad_alloc&) {
+      platform_telemetry::media_sample(platform_telemetry::MediaBackend::LibVlc,
+                                       self.generation, sample, false);
       return;
     }
     for (unsigned y = 0; y < picture.height; ++y)
@@ -204,6 +240,8 @@ struct VlcPlayback {
     self.width = static_cast<int>(picture.width);
     self.height = static_cast<int>(picture.height);
     self.pending = true;
+    platform_telemetry::media_sample(platform_telemetry::MediaBackend::LibVlc,
+                                     self.generation, sample, true);
   }
 };
 
@@ -230,11 +268,13 @@ bool vlc_fmv_open(const std::wstring& path, bool loop) {
   p.api.video_callbacks(p.player, VlcPlayback::lock, nullptr,
                         VlcPlayback::display, &p);
   p.api.format_callbacks(p.player, VlcPlayback::format, VlcPlayback::cleanup);
+  p.generation = platform_telemetry::next_vlc_generation();
+  platform_telemetry::vlc_decoder_open(p.generation);
   p.loop = loop;
   p.has_frame = false;
   p.started = GetTickCount64();
   if (p.api.play(p.player) == 0) return true;
-  p.close();
+  p.close(1);
   return false;
 }
 

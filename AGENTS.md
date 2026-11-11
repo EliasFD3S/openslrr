@@ -2,27 +2,30 @@
 
 ## Purpose and source of truth
 
-Open SLRR is a Windows x64, C++20 reimplementation of the SLRR 2.2.1 engine. It executes the original recovered scripts and loads original game data. The implementation must be judged by observed behavior and source evidence, not by native-registration counts alone.
+Open SLRR is a Windows x64, C++20 reimplementation of the SLRR 2.2.1 engine. It executes original recovered scripts and loads original game data. Judge implementation by observed behavior and source evidence, not native-registration counts alone.
 
-- Editable engine source: `src/`, `include/`, `shaders/`, `cmake/`, `scripts/`, `CMakeLists.txt`.
-- Reference MWM Java: `../open-SL/sources/`.
-- Reference vanilla Java: `../open-SL/sources2/`.
-- Reference game data: `../open-SL/game/` (MWM) and `../open-SL/game2/` (vanilla).
-- Reference trees and game data are read-only during ordinary engine development.
-- Current design and known behavioral gaps: `README.md`, `NATIVE_AUDIT.md`, `SCRIPT_RUNTIME.md`, `VM_GC.md`, and `HOST_NATIVE_UTILITIES.md`.
+Before engine changes, read [ENGINE_CONTRACT.md](docs/ENGINE_CONTRACT.md) for the upstream script/native compatibility contract, subsystem responsibilities, resource IDs, coordinate systems, lifetime rules, and validation workflow. Then read the relevant specialized documents:
+
+- Current design and known behavioral gaps: `README.md`, `docs/NATIVE_AUDIT.md`, `docs/SCRIPT_RUNTIME.md`, `docs/VM_GC.md`, and `docs/HOST_NATIVE_UTILITIES.md`.
 - Architecture, review findings, and execution plan: `docs/ARCHITECTURE.md`, `docs/SOURCE_REVIEW.md`, and `docs/ROADMAP.md`.
+- Editable engine source: `src/`, `include/`, `shaders/`, `cmake/`, `scripts/`, `CMakeLists.txt`.
+- Reference MWM Java: `../open-SL/sources/`; vanilla Java: `../open-SL/sources2/`.
+- Reference game data: `../open-SL/game/` (MWM) and `../open-SL/game2/` (vanilla). Reference trees are read-only during ordinary engine development.
+
+Some audits and comments describe older states. Verify active code, preserve existing working-tree changes, and update affected documentation when a contract or responsibility changes.
 
 ## Engineering rules
 
-1. Preserve stock script/data compatibility. Do not patch recovered Java, compiled classes, saves, or game assets to hide a host defect.
+1. Preserve stock script/data compatibility. Do not patch recovered Java, compiled classes, saves, or game assets to hide a host defect. Any explicitly authorized Java compatibility patch must be separately scoped and delivered.
 2. Validate every size/offset calculation before pointer arithmetic or allocation, including integer overflow and truncated inputs. Resource files and script values are untrusted inputs.
 3. Every native pointer retained across a cooperative yield must be protected by `Jvm::RootScope` or a registered root provider. GC runs only at host safe points; do not invoke it reentrantly.
 4. VM execution and fibers remain on the host OS thread. Do not introduce concurrent Java execution. Preserve scheduler cancellation, stack unwinding, and modal-pump behavior.
 5. Keep ownership explicit. Resource destruction must release associated native handles, notifications, callbacks, and GC roots.
 6. Physics remains fixed-step and numerically stable across render rates. Avoid new frame-rate-dependent integration.
-7. Do not silently turn an unsupported native into a no-op. Document partial behavior and update `NATIVE_AUDIT.md` and generated coverage when native registrations change.
-8. Keep changes scoped. Do not reformat entire files, rename broad APIs, change dependencies, promote executables, or commit unless the task explicitly authorizes it.
+7. Do not silently turn an unsupported native into a no-op. Document partial behavior and update `docs/NATIVE_AUDIT.md` and generated coverage when native registrations change.
+8. Keep changes scoped. Do not reformat entire files, rename broad APIs, change dependencies, promote executables, or commit unless the task explicitly authorizes it. Fix general primitives rather than adding vehicle- or screen-specific VM exceptions.
 9. Never run `validate-and-promote.ps1` in a shared development worktree; it archives and replaces a Release executable. Ordinary validation uses configure/build and non-mutating probes only.
+10. Report compilation, automated tests, and interactive validation separately. None proves complete stock compatibility by itself.
 
 ## Build and validation
 
@@ -60,11 +63,11 @@ Cross-boundary edits must be listed in the task packet and assigned to only one 
 
 ## Harness workflow
 
-1. Start from a clean `main`, record the base commit, and write a task packet: objective, owned files, allowed dependencies, acceptance checks, and expected report.
+1. Start from a clean integration branch, record the base commit, and write a task packet: objective, owned files, allowed dependencies, acceptance checks, and expected report.
 2. Use `scripts/New-SlrrAgentWorktree.ps1 -Name <role-task>` for each concurrent coding task. Start the Harness subagent with that worktree as `cwd`.
 3. Research/review agents can share the main checkout read-only. Coding agents use separate worktrees and build directories.
-4. Agents must not switch branches in another agent's worktree, alter reference data, or integrate their own changes into `main`.
-5. The coordinator reviews diffs, resolves cross-subsystem changes, runs the combined build/tests, and updates documentation. Integration order is normally parser/VM fixes, resources/natives, physics, then rendering/UI.
+4. Agents must not switch branches in another agent's worktree, alter reference data, or integrate their own changes into the coordinator branch.
+5. The coordinator reviews diffs, resolves cross-subsystem changes, runs combined build/tests, and updates documentation. Integration order is normally parser/VM fixes, resources/natives, physics, then rendering/UI.
 6. Stop obsolete agents and collect background jobs before reporting completion.
 
 See `docs/MULTIAGENT.md` for task packets, report format, and integration gates.

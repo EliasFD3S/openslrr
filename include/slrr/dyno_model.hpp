@@ -34,6 +34,7 @@ float dyno_boost_fraction(void* key, float rpm);
 void dyno_forget(void* key);
 void dyno_clear_sessions();
 std::size_t dyno_session_count();
+std::size_t dyno_calculations_in_flight();
 
 // False when the published low-RPM witness or the turbo/nitro checks diverge.
 bool dyno_self_check(char* msg, std::size_t msg_cap);

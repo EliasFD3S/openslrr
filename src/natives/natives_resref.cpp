@@ -557,7 +557,8 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
         return Value::make_void();
       });
   jvm.natives().register_method(
-      "java.render.LoadingScreen", "<init>", "()V", native_noop);
+      "java.render.LoadingScreen", "<init>", "()V", native_noop,
+      NativeImplementation::ExplicitNoop);
 }
 
 }  // namespace slrr

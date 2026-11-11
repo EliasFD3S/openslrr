@@ -8,6 +8,8 @@
 #include "slrr/video_fmv.hpp"
 #include "slrr/host_music.hpp"
 #include "slrr/host_game_options.hpp"
+#include "slrr/diagnostics.hpp"
+#include "slrr/physics_telemetry.hpp"
 
 #include "slrr/gameref.hpp"
 #include "slrr/part_runtime.hpp"
@@ -64,6 +66,7 @@ static Object* g_mechanic_thread = nullptr;
 static Object* g_mechanic_hover = nullptr;
 static int g_mechanic_pointer_depth = 0;
 static float g_inventory_spin = 0.f;
+static std::uint64_t g_host_frame = 0;
 
 static Object* field_obj(Object* o, const char* name) {
   if (!o) return nullptr;
@@ -359,8 +362,26 @@ void dispatch_mechanic_pointer(Jvm& jvm) {
 
 MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
                                    SectionMachine& sections, double dt) {
+  const std::uint64_t host_frame = g_host_frame++;
+  diagnostics::set_frame(host_frame);
+  physics_telemetry::begin_frame(host_frame, dt, jvm.time_warp());
   host_music_update();
   host_game_options_update(jvm);
+  const auto game_time = jvm.get_static("java.game.GameLogic", "time");
+  const auto factor = jvm.get_static("java.game.GameLogic", "timeFactor");
+  static float last_clock = -1.f;
+  static float clock_elapsed = 0.f;
+  if (game_time.tag == ValueTag::Float || game_time.tag == ValueTag::Int) {
+    const float seconds = game_time.tag == ValueTag::Float ? game_time.v.f : float(game_time.v.i);
+    if (last_clock != seconds) {
+      last_clock = seconds;
+      clock_elapsed = 0.f;
+    } else {
+      clock_elapsed = std::min(10.f, clock_elapsed + static_cast<float>(dt));
+    }
+    const float rate = factor.tag == ValueTag::Float ? factor.v.f : 4.f;
+    scene_sun_set_time(seconds + clock_elapsed * rate);
+  }
   script_threads_tick(jvm);
   MainLoopFrameResult out;
   mainloop_adopt_section(jvm, sections);
@@ -735,7 +756,13 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
 
   spin_mechanic_inventory(jvm, frame_dt);
   if(!script_thread_alive(jvm,g_mechanic_thread))apply_mechanic_infoline(jvm, g_spinning_mechanic);
-  part_physics_advance(jvm.advance_sim_time(dt));
+  const double warp = jvm.time_warp();
+  const double requested_sim = std::isfinite(dt) && dt > 0 ? dt * warp : 0;
+  const double admitted_sim = jvm.advance_sim_time(dt);
+  physics_telemetry::set_simulation_time(
+      admitted_sim, std::max(0.0, requested_sim - admitted_sim));
+  part_physics_advance(admitted_sim);
+  physics_telemetry::end_frame();
 
   // Last write before the view is built. The chase camera must not cover
   // the showroom orbit, and nothing after the earlier spin may put it back.

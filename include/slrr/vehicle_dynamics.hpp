@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <optional>
 
 namespace slrr::physics {
 // Script-space metres, kilograms and seconds. Renderer handedness stays
@@ -59,9 +60,14 @@ private:
   Vec3 inverse_inertia_, force_, torque_;
 };
 
+struct ContactIdentity {
+  std::optional<std::uint32_t> resource, mesh, triangle, material;
+};
+
 struct GroundHit {
   double height = 0;
   Vec3 normal{0, 1, 0};
+  ContactIdentity identity;
 };
 // from_y is a ray origin/ceiling, not a default ground height. False = air.
 using Terrain =
@@ -100,6 +106,45 @@ struct DriveWheel {
   double rolling_resistance = 0;
   TireParameters tyre;
 };
+// Read-only telemetry views. Impulses are the normal contact impulses from
+// the most recent 120 Hz substep; they are not accumulated force estimates.
+struct WheelTelemetry {
+  bool enabled = false, contact = false;
+  double length = 0, speed = 0, force = 0;
+  double spin = 0, rotation = 0, slip_speed = 0, lateral_speed = 0;
+  double tire_longitudinal = 0, tire_lateral = 0;
+  double contact_impulse = 0;
+  Vec3 center, normal, patch;
+};
+struct ContactTelemetry {
+  // 0 = chassis/terrain, 1 = wheel/terrain, 2 = chassis/static sweep.
+  std::uint32_t kind = 0;
+  std::int32_t wheel = -1;
+  ContactIdentity identity;
+  Vec3 point, normal;
+  double penetration = 0, impulse = 0;
+};
+
+struct VehicleTelemetry {
+  static constexpr std::size_t max_contacts = 16;
+  double mass = 0;
+  Vec3 position, velocity, momentum, omega;
+  Quaternion orientation;
+  uint64_t dynamics_ticks = 0;
+  double engine_omega = 0;
+  bool engine_running = false;
+  int gear = 0;
+  double throttle = 0, brake = 0, handbrake = 0, clutch = 0;
+  std::array<WheelTelemetry, 4> wheels{};
+  struct ImpactTelemetry {
+    Vec3 point, normal;
+    double speed = 0;
+  } ground_impact;
+  double chassis_contact_impulse = 0;
+  std::array<ContactTelemetry, max_contacts> contacts{};
+  std::uint32_t contact_count = 0, dropped_contacts = 0;
+};
+
 struct DriveInput {
   std::array<DriveWheel, 4> wheels{};
   std::array<double, 8> ratios{};
@@ -143,8 +188,16 @@ public:
   void reset_drive();
   uint64_t backlog() const;
   void sync_wheels();
+  VehicleTelemetry telemetry_snapshot() const;
+  // Observation-only ingress for the part-runtime static sweep, which runs
+  // immediately after the fixed-step solver. It cannot alter contact response.
+  void observe_contact(const ContactTelemetry& contact) noexcept;
 
 private:
+  std::array<double, 4> last_rigid_impulses_{};
+  double last_chassis_impulse_ = 0;
+  std::array<ContactTelemetry, VehicleTelemetry::max_contacts> last_contacts_{};
+  std::uint32_t last_contact_count_ = 0, last_dropped_contacts_ = 0;
   double accumulator_ = 0;
   double previous_rpm_ = 0, shift_time_ = 0;
   double starter_remaining_ = 0, service_brake_ = 0;

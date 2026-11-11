@@ -1,7 +1,7 @@
 {
-  "updated": "2026-11-09",
+  "updated": "2026-11-11",
   "total": 376,
-  "scope": "Stock native table (docs/stubs.txt in the research workspace), matched against registered class/method/parameter signatures. Explicit native_noop bindings are counted separately. Bodies can be partial implementations or return constants; these are binding counts, not gameplay-completion or validation scores.",
+  "scope": "Stock native table (assets/progress/stock-natives.json, pinned slrr-reverse 5c42f3b139aef4c7b9e0b6420c5704e22c0e6cd7), matched against registered class/method/parameter signatures. Explicit native_noop bindings are counted separately. Bodies can be partial implementations or return constants; these are binding counts, not gameplay-completion or validation scores.",
   "categories": [
     {
       "name": "World",

@@ -3,8 +3,10 @@
 #include "slrr/host_game_options.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/host_sfx.hpp"
+#include "slrr/metrics.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/osd_registry.hpp"
+#include "slrr/platform_telemetry.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/scene_presentation.hpp"
 #include "slrr/section_machine.hpp"
@@ -20,19 +22,50 @@ namespace {
 constexpr bgfx::ViewId kDebugView = 71;
 constexpr double kDegrees = 57.29577951308232;
 
-void draw_render(uint16_t width, uint16_t height, DebugOverlay::RenderOptions& options) {
+void draw_render(uint16_t width, uint16_t height, DebugOverlay::RenderOptions& options,
+                 Jvm* vm, const char* reflection_status) {
   ImGui::Text("%s | %u x %u", bgfx::getRendererName(bgfx::getRendererType()), width, height);
-  if (const auto* stats = bgfx::getStats()) {
+  const auto telemetry = platform_telemetry::renderer_snapshot();
+  ImGui::SeparatorText("Platform / Renderer diagnostics");
+  ImGui::Text("Generation %llu | %s | %llu submitted frames",
+              static_cast<unsigned long long>(telemetry.generation),
+              telemetry.open ? "open" : "closed",
+              static_cast<unsigned long long>(telemetry.submitted_frames));
+  if (telemetry.stats_valid) {
+    const auto& stats = telemetry.frame;
     const auto ms = [](int64_t ticks, int64_t frequency) {
       return frequency > 0 ? ticks * 1000. / frequency : 0.;
     };
-    const auto frame = ms(stats->cpuTimeFrame, stats->cpuTimerFreq);
+    const auto frame = ms(stats.cpu_frame, stats.cpu_frequency);
     ImGui::Text("%.1f FPS | %.2f ms/frame", frame > 0 ? 1000. / frame : 0., frame);
-    ImGui::Text("CPU render %.2f ms | GPU %.2f ms",
-                ms(stats->cpuTimeEnd - stats->cpuTimeBegin, stats->cpuTimerFreq),
-                ms(stats->gpuTimeEnd - stats->gpuTimeBegin, stats->gpuTimerFreq));
-    ImGui::Text("%u draws | %u textures | %u views", stats->numDraw,
-                stats->numTextures, stats->numViews);
+    ImGui::Text("CPU render %.2f ms | GPU %.2f ms (GPU frame %u)",
+                ms(stats.cpu_end - stats.cpu_begin, stats.cpu_frequency),
+                ms(stats.gpu_end - stats.gpu_begin, stats.gpu_frequency), stats.gpu_frame);
+    ImGui::Text("%u draws | %u compute | %u blits | %u views%s",
+                stats.draw_calls, stats.compute_calls, stats.blit_calls, stats.view_count,
+                telemetry.views_truncated ? " (16 retained)" : "");
+    ImGui::Text("GPU handles: %u VB | %u IB | %u dynamic VB/IB | %u textures",
+                stats.vertex_buffers, stats.index_buffers,
+                stats.dynamic_vertex_buffers, stats.dynamic_index_buffers, stats.textures);
+    ImGui::Text("GPU framebuffers %u | active FMV texture handles %u",
+                stats.frame_buffers, telemetry.fmv_texture_handles);
+    if (ImGui::CollapsingHeader("Per-view statistics") &&
+        ImGui::BeginTable("renderer-view-stats", 4, ImGuiTableFlags_RowBg)) {
+      ImGui::TableSetupColumn("View"); ImGui::TableSetupColumn("Submit ms");
+      ImGui::TableSetupColumn("GPU ms"); ImGui::TableSetupColumn("GPU frame");
+      ImGui::TableHeadersRow();
+      for (std::size_t i = 0; i < stats.copied_views; ++i) {
+        const auto& view = stats.views[i];
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn(); ImGui::Text("%u", view.view);
+        ImGui::TableNextColumn(); ImGui::Text("%.3f", ms(view.cpu_end - view.cpu_begin, stats.cpu_frequency));
+        ImGui::TableNextColumn(); ImGui::Text("%.3f", ms(view.gpu_end - view.gpu_begin, stats.gpu_frequency));
+        ImGui::TableNextColumn(); ImGui::Text("%u", view.gpu_frame);
+      }
+      ImGui::EndTable();
+    }
+  } else {
+    ImGui::TextUnformatted("Frame statistics unavailable until a frame is submitted.");
   }
   ImGui::Text("Collision mesh rebuilds: %llu",
               static_cast<unsigned long long>(scene_instances_floor_builds()));
@@ -40,12 +73,77 @@ void draw_render(uint16_t width, uint16_t height, DebugOverlay::RenderOptions& o
   ImGui::Text("SFX voices: %u | Coalesced: %llu", audio.active,
               static_cast<unsigned long long>(audio.coalesced));
   ImGui::Separator();
+  auto& enhanced = host_enhanced_graphics();
   ImGui::Checkbox("VSync", &options.vsync);
   ImGui::Checkbox("Vehicle shadows", &options.shadows);
   ImGui::Checkbox("Map shadows", &options.map_shadows);
+  ImGui::Checkbox("Map sunlight", &enhanced.dynamic_lighting);
+  ImGui::Checkbox("Local lights", &enhanced.local_lights);
+  ImGui::Checkbox("Dynamic reflections", &enhanced.dynamic_reflections);
+  ImGui::Text("Reflection capture: %s", reflection_status);
+  if (vm) {
+    float hour = std::fmod(scene_sun_time(), 86400.f) / 3600.f;
+    const int minutes = static_cast<int>(hour * 60.f);
+    ImGui::Text("Game time %02d:%02d", minutes / 60, minutes % 60);
+    if (ImGui::SliderFloat("Time of day", &hour, 0.f, 23.999f, "%.2f h")) {
+      vm->invoke("java.game.GameLogic", "setTime", "(F)V",
+                 {Value::make_float(hour * 3600.f)}, true);
+      scene_sun_set_time(hour * 3600.f);
+    }
+    const auto time_factor = vm->get_static("java.game.GameLogic", "timeFactor");
+    float rate = time_factor.tag == ValueTag::Float ? time_factor.v.f : 4.f;
+    if (ImGui::SliderFloat("Clock speed", &rate, 0.f, 240.f, "%.1fx"))
+      vm->set_static("java.game.GameLogic", "timeFactor", Value::make_float(rate));
+  }
+  ImGui::SliderInt("Reflection faces per frame", &options.reflection_faces, 1, 6);
+  ImGui::Checkbox("Volumetric clouds", &enhanced.volumetric_clouds);
+  ImGui::Combo("Anti-aliasing", &enhanced.msaa, "Off\0MSAA 2x\0MSAA 4x\0MSAA 8x\0");
   ImGui::Checkbox("Sun flare", &options.sun_flare);
   ImGui::Checkbox("Game OSD", &options.game_osd);
-  if (ImGui::Button("Reset render options")) options = {};
+  if (ImGui::Button("Reset render options")) {
+    options = {};
+    enhanced = {};
+  }
+}
+
+void draw_metrics() {
+  const auto current = metrics::snapshot();
+  if (current.frame) ImGui::Text("Frame: %llu", static_cast<unsigned long long>(*current.frame));
+  if (current.tick) ImGui::Text("Tick: %llu", static_cast<unsigned long long>(*current.tick));
+  ImGui::Text("Section: %s", current.section.empty() ? "(unavailable)" : current.section.c_str());
+  std::int64_t registered = 0, called = 0, noop = 0, missing = 0;
+  for (const auto& value : current.values) {
+    if (value.name == "natives.registered") registered = value.value;
+    if (value.name == "natives.called") called = value.value;
+    if (value.name == "natives.noop") noop = value.value;
+    if (value.name == "natives.missing") missing = value.value;
+  }
+  ImGui::Text("Natives: %lld registered | %lld called | %lld explicit no-op | %lld missing calls",
+              static_cast<long long>(registered), static_cast<long long>(called),
+              static_cast<long long>(noop), static_cast<long long>(missing));
+  ImGui::TextUnformatted("Body registration does not imply behavioral verification.");
+  if (ImGui::BeginTable("metric-values", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+    ImGui::TableSetupColumn("Name");
+    ImGui::TableSetupColumn("Kind");
+    ImGui::TableSetupColumn("Value");
+    ImGui::TableHeadersRow();
+    for (const auto& value : current.values) {
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(value.name.c_str());
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(value.kind == metrics::Kind::Counter ? "counter" : "gauge");
+      ImGui::TableNextColumn();
+      ImGui::Text("%lld", static_cast<long long>(value.value));
+    }
+    ImGui::EndTable();
+  }
+  const auto sections = metrics::section_snapshots();
+  ImGui::Text("Section snapshots: %zu (compare repeated cycles, not one sample)", sections.size());
+  const std::size_t first = sections.size() > 4 ? sections.size() - 4 : 0;
+  for (std::size_t i = first; i < sections.size(); ++i) {
+    ImGui::Text("%zu: %s", i + 1, sections[i].section.c_str());
+  }
 }
 
 void draw_tuning(Jvm* vm) {
@@ -216,7 +314,7 @@ void draw_vehicle(const PartPhysicsState& state) {
   ImGui::EndTable();
 }
 
-void draw_input() {
+void draw_input(Jvm* vm) {
   const auto& input = host_input();
   ImGui::Text("Steering %+.3f (%s)", input.drive_steer,
               input.drive_steer_analog ? "analog" : "digital");
@@ -225,6 +323,26 @@ void draw_input() {
   ImGui::Text("Handbrake %s | Reverse %s | Shift %+.2f",
               input.drive_handbrake ? "on" : "off",
               input.drive_reverse ? "on" : "off", input.drive_shift);
+  if (!vm) return;
+  const auto* controller = host_input_player_controller(*vm);
+  ImGui::SeparatorText("Axis binding diagnostics (no key text)");
+  if (ImGui::BeginTable("input-axis-bindings", 5, ImGuiTableFlags_RowBg)) {
+    ImGui::TableSetupColumn("Axis"); ImGui::TableSetupColumn("Source");
+    ImGui::TableSetupColumn("Fallback"); ImGui::TableSetupColumn("Bindings");
+    ImGui::TableSetupColumn("Smoothing"); ImGui::TableHeadersRow();
+    static constexpr int axes[] = {1, 4, 5, 6, 28, 29, 48, 49, 50, 54};
+    for (const int axis : axes) {
+      const auto diagnostic = host_input_controller_axis_diagnostics(controller, axis);
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn(); ImGui::Text("%d", axis);
+      ImGui::TableNextColumn(); ImGui::TextUnformatted(input_binding_source_name(diagnostic.source));
+      ImGui::TableNextColumn(); ImGui::TextUnformatted(input_fallback_status_name(diagnostic.fallback));
+      ImGui::TableNextColumn(); ImGui::Text("%d total / %d XInput",
+          diagnostic.profile_bindings, diagnostic.xinput_bindings);
+      ImGui::TableNextColumn(); ImGui::TextUnformatted(diagnostic.smoothed ? "yes" : "no");
+    }
+    ImGui::EndTable();
+  }
 }
 }  // namespace
 
@@ -269,7 +387,7 @@ void DebugOverlay::draw_vehicle_tab(std::span<Object* const> vehicles) {
   else ImGui::TextUnformatted("No vehicle in this section.");
 }
 
-void DebugOverlay::draw(HWND hwnd, uint16_t width, uint16_t height,
+void DebugOverlay::draw(HWND hwnd, uint16_t width, uint16_t height, const char* reflection_status,
                         std::span<Object* const> vehicles) {
   if (!open_) return;
   if (!initialized_) {
@@ -306,12 +424,16 @@ void DebugOverlay::draw(HWND hwnd, uint16_t width, uint16_t height,
         draw_osd_inspector();
         ImGui::EndTabItem();
       }
+      if (ImGui::BeginTabItem("Metrics")) {
+        draw_metrics();
+        ImGui::EndTabItem();
+      }
       if (ImGui::BeginTabItem("Renderer")) {
-        draw_render(width, height, render_options_);
+        draw_render(width, height, render_options_, jvm_, reflection_status);
         ImGui::EndTabItem();
       }
       if (ImGui::BeginTabItem("Input")) {
-        draw_input();
+        draw_input(jvm_);
         ImGui::EndTabItem();
       }
       ImGui::EndTabBar();

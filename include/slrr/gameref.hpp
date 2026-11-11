@@ -163,6 +163,7 @@ struct GameRefState {
 float gameref_now();  // steady seconds since first call (timers / animate)
 
 void gameref_clear();
+std::size_t gameref_count();
 GameRefState* gameref_upsert(void* key, GameRefKind kind = GameRefKind::Generic);
 GameRefState* gameref_get(void* key);
 GameRefState* gameref_find_live(int32_t id);

@@ -1,9 +1,11 @@
 #include "slrr/natives_boot.hpp"
 #include "natives_internal.hpp"
 
+#include "slrr/file_faults.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
+#include "slrr/metrics.hpp"
 #include "slrr/osd_registry.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/render_backend.hpp"
@@ -31,6 +33,16 @@ namespace {
 // page saves, destroys, then loads that path; a failed disk write must still
 // be what the following read sees.
 std::unordered_map<std::string, std::vector<uint8_t>> g_unflushed_saves;
+
+const bool g_metrics_registered = [] {
+  return metrics::register_provider([](void*, std::vector<metrics::Value>& values) {
+    values.push_back({"host.files_open", static_cast<std::int64_t>(g_host_files.size()),
+                      metrics::Kind::Gauge});
+    values.push_back({"host.pending_writes",
+                      static_cast<std::int64_t>(g_unflushed_saves.size()),
+                      metrics::Kind::Gauge});
+  }) != 0;
+}();
 
 std::string save_key(const std::filesystem::path& path) {
   std::error_code ec;
@@ -271,27 +283,7 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   jvm.natives().register_method(
       "java.render.Frontend", "setFonts", "()V",
       [&jvm](Object*, const std::vector<Value>&) {
-        // Stock does not rescale live: a new mode is stored and applied on
-        // the next launch. Rebanding for Config.video_* while the window is
-        // still the old size breaks the menus.
-        const int32_t fb_w = osd_framebuffer_width();
-        const int32_t fb_h = osd_framebuffer_height();
-        Value vx = jvm.get_static("java.game.Config", "video_x");
-        Value vy = jvm.get_static("java.game.Config", "video_y");
-        const int32_t cfg_x = vx.tag == ValueTag::Int ? vx.v.i : 0;
-        const int32_t cfg_y = vy.tag == ValueTag::Int ? vy.v.i : 0;
-        if (fb_w > 2 && fb_h > 2 && (cfg_x != fb_w || cfg_y != fb_h) &&
-            cfg_x > 0 && cfg_y > 0) {
-          frontend_set_fonts(jvm, fb_w, fb_h);
-          jvm.set_static("java.game.Config", "video_x", Value::make_int(cfg_x));
-          jvm.set_static("java.game.Config", "video_y", Value::make_int(cfg_y));
-          jvm.set_static("java.util.Config", "video_x", Value::make_int(cfg_x));
-          jvm.set_static("java.util.Config", "video_y", Value::make_int(cfg_y));
-          return Value::make_void();
-        }
-        const int32_t x = fb_w > 2 ? fb_w : (cfg_x > 0 ? cfg_x : 800);
-        const int32_t y = fb_h > 2 ? fb_h : (cfg_y > 0 ? cfg_y : 600);
-        frontend_set_fonts(jvm, x, y);
+        frontend_set_fonts(jvm, osd_framebuffer_width(), osd_framebuffer_height());
         return Value::make_void();
       });
   jvm.natives().register_method(
@@ -350,7 +342,8 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   }
   for (const char* signature : {"(Ljava.lang.Object;)V", "(F)V", "(I)V"})
     jvm.natives().register_method("java.lang.System", "analyze", signature,
-                                  native_noop);
+                                  native_noop,
+                                  NativeImplementation::ExplicitNoop);
   jvm.natives().register_method(
       "java.lang.System", "info", "(I)Ljava.lang.String;",
       [&jvm](Object*, const std::vector<Value>& args) {
@@ -412,7 +405,8 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         return Value::make_void();
       });
   jvm.natives().register_method(
-      "java.lang.System", "isLoadingReset", "()V", native_noop);
+      "java.lang.System", "isLoadingReset", "()V", native_noop,
+      NativeImplementation::ExplicitNoop);
   // PE System.arraycopy: copy `length` slots. Same array uses a temp so
   // overlapping ranges (Vector.removeElementAt) stay intact.
   jvm.natives().register_method(
@@ -501,6 +495,8 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
           g_unflushed_saves.erase(save_key(p));
           return Value::make_int(1);
         }
+        const auto fault = file_faults::before(file_faults::Operation::Delete, 0, p);
+        if (fault.injected) return Value::make_int(0);
         fs::remove_all(p, ec);
         if (!ec) g_unflushed_saves.erase(save_key(p));
         std::printf("[native] File.delete %s ok=%d\n", rel.c_str(), ec ? 0 : 1);
@@ -538,6 +534,9 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         if (!two_paths(args, &src, &dst)) return Value::make_int(-1);
         std::error_code ec;
         fs::create_directories(dst.parent_path(), ec);
+        const auto fault =
+            file_faults::before(file_faults::Operation::Copy, 0, src, dst);
+        if (fault.injected) return Value::make_int(-1);
         fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
         return Value::make_int(ec ? -1 : 0);
       });
@@ -549,6 +548,9 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         if (!two_paths(args, &src, &dst)) return Value::make_int(-1);
         std::error_code ec;
         fs::create_directories(dst.parent_path(), ec);
+        const auto fault =
+            file_faults::before(file_faults::Operation::Rename, 0, src, dst);
+        if (fault.injected) return Value::make_int(-1);
         fs::rename(src, dst, ec);
         return Value::make_int(ec ? -1 : 0);
       });
@@ -567,17 +569,28 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
           // Payload only. close() writes the SDAT type 2 envelope.
           hf.sdat = true;
         } else {
+          const auto open_fault =
+              file_faults::before(file_faults::Operation::Open, 0, p);
+          if (open_fault.injected) return Value::make_int(0);
           // Specifying a mode replaces the ifstream default. Without in,
           // MSVC does not open the file.
           std::ifstream in(p, std::ios::in | std::ios::binary);
           const auto kept = g_unflushed_saves.find(save_key(p));
-          if (kept != g_unflushed_saves.end())
+          if (kept != g_unflushed_saves.end()) {
             hf.bytes = kept->second;
-          else if (in)
+          } else if (in) {
             hf.bytes.assign(std::istreambuf_iterator<char>(in),
                             std::istreambuf_iterator<char>());
-          else
+            const auto read_fault = file_faults::before(
+                file_faults::Operation::Read, hf.bytes.size(), p);
+            if (read_fault.failure) return Value::make_int(0);
+            if (read_fault.injected) {
+              hf.bytes.resize(static_cast<size_t>(std::min<std::uint64_t>(
+                  read_fault.allowed_bytes, hf.bytes.size())));
+            }
+          } else {
             return Value::make_int(0);
+          }
           const int shaped =
               sdat_take_payload(rpk, hf.bytes, hf.sdat_packs, hf.sdat_blobs);
           if (shaped < 0) return Value::make_int(0);
@@ -598,16 +611,33 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
           fs::create_directories(it->second.path.parent_path(), ec);
           // Mode replaces the ofstream default. Without out, MSVC does not
           // open the file and the career buffer never reaches disk.
-          std::ofstream out(it->second.path, std::ios::out | std::ios::binary |
-                                                 std::ios::trunc);
+          const auto open_fault = file_faults::before(
+              file_faults::Operation::Open, 0, it->second.path);
+          std::ofstream out;
+          if (!open_fault.injected) {
+            out.open(it->second.path, std::ios::out | std::ios::binary |
+                                          std::ios::trunc);
+          }
           const std::vector<uint8_t> framed =
               it->second.sdat ? sdat_frame(it->second.bytes, it->second.sdat_packs,
                                            it->second.sdat_blobs)
                               : it->second.bytes;
-          const bool wrote = static_cast<bool>(out);
-          if (wrote && !framed.empty())
-            out.write(reinterpret_cast<const char*>(framed.data()),
-                      static_cast<std::streamsize>(framed.size()));
+          const bool wrote = !open_fault.injected && static_cast<bool>(out);
+          if (wrote && !framed.empty()) {
+            const auto write_fault = file_faults::before(
+                file_faults::Operation::Write, framed.size(), it->second.path);
+            if (!write_fault.failure && write_fault.allowed_bytes != 0) {
+              out.write(reinterpret_cast<const char*>(framed.data()),
+                        static_cast<std::streamsize>(write_fault.allowed_bytes));
+            }
+            if (write_fault.injected) out.setstate(std::ios::badbit);
+          }
+          const auto flush_fault = file_faults::before(
+              file_faults::Operation::Flush, 0, it->second.path);
+          if (flush_fault.injected) out.setstate(std::ios::badbit);
+          const auto close_fault = file_faults::before(
+              file_faults::Operation::Close, 0, it->second.path);
+          if (close_fault.injected) out.setstate(std::ios::badbit);
           const std::string key = save_key(it->second.path);
           if (wrote && out)
             g_unflushed_saves.erase(key);
@@ -619,6 +649,12 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
               wrote && static_cast<bool>(out) ? 1 : 0,
               g_unflushed_saves.count(key) ? 1 : 0, it->second.sdat ? 1 : 0,
               it->second.sdat_packs.size());
+        } else if (it != g_host_files.end()) {
+          // Read-side HostFile instances have no physical stream left by this
+          // point; preserve close()'s void semantics while still counting the
+          // logical persistence operation for focused fault probes.
+          (void)file_faults::before(file_faults::Operation::Close, 0,
+                                    it->second.path);
         }
         g_host_files.erase(self);
         return Value::make_void();
@@ -794,7 +830,8 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
 
   // Player.<init> during start_init is a long TREE. A miss there aborts boot.
   // Career creation fills the existing player from the menu script.
-  jvm.natives().register_method("java.game.Player", "<init>", "()V", native_noop);
+  jvm.natives().register_method("java.game.Player", "<init>", "()V", native_noop,
+                                NativeImplementation::ExplicitNoop);
   for (const bool visible : {true, false}) {
     jvm.natives().register_method("java.game.Player", visible ? "showOsd" : "hideOsd", "()V",
       [&jvm, visible](Object* player, const std::vector<Value>&) {

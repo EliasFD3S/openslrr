@@ -1,5 +1,6 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/dyno_model.hpp"
+#include "slrr/metrics.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -514,6 +515,17 @@ struct Session {
 std::unordered_map<void*, Session> g_sessions;
 std::unordered_map<void*, std::size_t> g_calculations_in_flight;
 
+const bool g_metrics_registered = [] {
+  return slrr::metrics::register_provider([](void*, std::vector<slrr::metrics::Value>& values) {
+    values.push_back({"dyno.sessions", static_cast<std::int64_t>(g_sessions.size()),
+                      slrr::metrics::Kind::Gauge});
+    std::size_t in_flight = 0;
+    for (const auto& [key, count] : g_calculations_in_flight) in_flight += count;
+    values.push_back({"dyno.calculations_in_flight",
+                      static_cast<std::int64_t>(in_flight), slrr::metrics::Kind::Gauge});
+  }) != 0;
+}();
+
 class CalculationRoot {
  public:
   explicit CalculationRoot(void* key) : key_(key) { ++g_calculations_in_flight[key_]; }
@@ -709,6 +721,12 @@ void dyno_forget(void* key) { g_sessions.erase(key); }
 void dyno_clear_sessions() { g_sessions.clear(); }
 
 std::size_t dyno_session_count() { return g_sessions.size(); }
+
+std::size_t dyno_calculations_in_flight() {
+  std::size_t total = 0;
+  for (const auto& [key, count] : g_calculations_in_flight) total += count;
+  return total;
+}
 
 bool dyno_self_check(char* msg, std::size_t msg_cap) {
   auto fail = [&](const char* text) {

@@ -1,4 +1,5 @@
 #include "slrr/gc_roots.hpp"
+#include "slrr/metrics.hpp"
 #include "slrr/osd_registry.hpp"
 
 #include "slrr/object.hpp"
@@ -12,6 +13,17 @@ namespace slrr {
 namespace {
 
 std::vector<OsdWidget> g_widgets;
+const bool g_metrics_registered = [] {
+  return metrics::register_provider([](void*, std::vector<metrics::Value>& values) {
+    const auto stats = osd_registry_stats();
+    values.push_back({"osd.records_live", static_cast<std::int64_t>(stats.live),
+                      metrics::Kind::Gauge});
+    values.push_back({"osd.records_dead", static_cast<std::int64_t>(stats.dead),
+                      metrics::Kind::Gauge});
+    values.push_back({"osd.records_total", static_cast<std::int64_t>(stats.total),
+                      metrics::Kind::Gauge});
+  }) != 0;
+}();
 OsdClickFn g_click;
 OsdSliderFn g_slider;
 OsdHoverFn g_hover;
@@ -100,6 +112,18 @@ void sync_string_value(const OsdWidget& w) {
 }
 
 }  // namespace
+
+OsdRegistryStats osd_registry_stats() {
+  OsdRegistryStats stats;
+  stats.total = g_widgets.size();
+  for (const auto& widget : g_widgets) {
+    if (widget.dead)
+      ++stats.dead;
+    else
+      ++stats.live;
+  }
+  return stats;
+}
 
 void osd_set_framebuffer(int32_t width, int32_t height) {
   const int32_t old_w = g_fb_w;
