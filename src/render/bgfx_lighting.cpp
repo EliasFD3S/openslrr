@@ -308,7 +308,16 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
         bgfx::setTexture(3,s_bake_,bake);
         const float reflection[4] = {live_env ? 1.f : enhanced_env ? 2.f : 0.f, 0.f, 0.f, 0.f};
         bgfx::setUniform(u_dynamic_reflection_, reflection);
-        if (live_env) bgfx::setTexture(4, s_reflection_cube_, reflection_cubes_[reflection_write_ ^ 1]);
+        if (live_env) {
+          bgfx::setTexture(4, s_reflection_cube_, reflection_cubes_[reflection_write_ ^ 1]);
+          const float probe[4] = {reflection_sample_origin_[0], reflection_sample_origin_[1],
+              reflection_sample_origin_[2], reflection_box_valid_ ? 1.f : 0.f};
+          const float low[4] = {reflection_box_min_[0], reflection_box_min_[1], reflection_box_min_[2], 0.f};
+          const float high[4] = {reflection_box_max_[0], reflection_box_max_[1], reflection_box_max_[2], 0.f};
+          bgfx::setUniform(u_reflection_probe_, probe);
+          bgfx::setUniform(u_reflection_box_min_, low);
+          bgfx::setUniform(u_reflection_box_max_, high);
+        }
         bgfx::setTransform(matrix);bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,group.index_start,group.index_count);
         uint64_t state=BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_MSAA|BGFX_STATE_DEPTH_TEST_LESS;
         if (glass)

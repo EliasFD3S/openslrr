@@ -190,6 +190,9 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     u_sun_amb_ = bgfx::createUniform("u_sunAmb", bgfx::UniformType::Vec4);
     u_sun_spec_ = bgfx::createUniform("u_sunSpec", bgfx::UniformType::Vec4);
     s_reflection_cube_ = bgfx::createUniform("s_sceneReflection", bgfx::UniformType::Sampler);
+    u_reflection_probe_ = bgfx::createUniform("u_reflectionProbe", bgfx::UniformType::Vec4);
+    u_reflection_box_min_ = bgfx::createUniform("u_reflectionBoxMin", bgfx::UniformType::Vec4);
+    u_reflection_box_max_ = bgfx::createUniform("u_reflectionBoxMax", bgfx::UniformType::Vec4);
     u_dynamic_reflection_ = bgfx::createUniform("u_dynamicReflection", bgfx::UniformType::Vec4);
     u_local_light_ = bgfx::createUniform("u_localLight", bgfx::UniformType::Vec4);
     s_car_depth_ = bgfx::createUniform("s_carDepth", bgfx::UniformType::Sampler);
@@ -340,7 +343,7 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
       shadow_fb_[i] = BGFX_INVALID_HANDLE;
       shadow_tex_[i] = BGFX_INVALID_HANDLE;
     }
-    for (auto* handle : {&s_mix_, &s_env_, &s_bake_, &u_layers_, &u_channels_, &u_base_uv_, &u_mix_uv_, &u_env_uv_, &u_diffuse_, &u_spec_, &u_sun_diff_, &u_sun_amb_, &u_sun_spec_, &u_sun_dir_, &u_cloud_sky_, &u_cloud_wind_, &s_reflection_cube_, &u_dynamic_reflection_, &u_local_light_, &s_car_depth_, &u_car_depth_mtx_, &u_car_depth_params_}) {
+    for (auto* handle : {&s_mix_, &s_env_, &s_bake_, &u_layers_, &u_channels_, &u_base_uv_, &u_mix_uv_, &u_env_uv_, &u_diffuse_, &u_spec_, &u_sun_diff_, &u_sun_amb_, &u_sun_spec_, &u_sun_dir_, &u_cloud_sky_, &u_cloud_wind_, &s_reflection_cube_, &u_dynamic_reflection_, &u_reflection_probe_, &u_reflection_box_min_, &u_reflection_box_max_, &u_local_light_, &s_car_depth_, &u_car_depth_mtx_, &u_car_depth_params_}) {
       if(bgfx::isValid(*handle)) bgfx::destroy(*handle);
       *handle = BGFX_INVALID_HANDLE;
     }
@@ -574,7 +577,24 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
           ? car_matrix + 12 : world_cam ? world_eye : nullptr;
       update_car_depth(position, video);
       reflection_scene_ = garage_ || outdoor_lighting_ || (script_camera && script_camera->follow_vehicle);
-      update_reflections(position);
+      float reflection_position[3];
+      const float* capture_position = position;
+      if (garage_) {
+        const auto body = std::find_if(instances_.begin(), instances_.end(),
+            [](const SceneInstance& object) { return object.vehicle_material; });
+        if (body != instances_.end()) {
+          const auto& geometry = *body->geometry;
+          const auto& m = body->transform;
+          const float x = (geometry.info.bbox_min[0] + geometry.info.bbox_max[0]) * .5f * geometry.position_scale;
+          const float y = (geometry.info.bbox_min[1] + geometry.info.bbox_max[1]) * .5f * geometry.position_scale;
+          const float z = -(geometry.info.bbox_min[2] + geometry.info.bbox_max[2]) * .5f * geometry.position_scale;
+          reflection_position[0] = m[0]*x + m[4]*y + m[8]*z + m[12];
+          reflection_position[1] = m[1]*x + m[5]*y + m[9]*z + m[13] - .8f;
+          reflection_position[2] = -(m[2]*x + m[6]*y + m[10]*z + m[14]);
+          capture_position = reflection_position;
+        }
+      }
+      update_reflections(capture_position);
       if (world_cam && (outdoor_lighting_ ||
           std::any_of(instances_.begin(), instances_.end(),
                       [](const SceneInstance& instance) { return instance.sky; })))
@@ -826,6 +846,27 @@ void LibBgfxBackend::update_reflections(const float* eye) {
       reflection_ready_ = false;
       return;
     }
+    reflection_box_valid_ = false;
+    if (garage_) {
+      reflection_box_min_ = {1e20f, 1e20f, 1e20f};
+      reflection_box_max_ = {-1e20f, -1e20f, -1e20f};
+      const auto& geometry = *ground->geometry;
+      for (int corner = 0; corner < 8; ++corner) {
+        float local[3];
+        for (int axis = 0; axis < 3; ++axis)
+          local[axis] = ((corner & (1 << axis)) ? geometry.info.bbox_max[axis]
+                         : geometry.info.bbox_min[axis]) * geometry.position_scale;
+        local[2] = -local[2];
+        for (int axis = 0; axis < 3; ++axis) {
+          const auto& m = ground->transform;
+          const float coordinate = m[axis]*local[0] + m[4+axis]*local[1] +
+                                   m[8+axis]*local[2] + m[12+axis];
+          reflection_box_min_[axis] = std::min(reflection_box_min_[axis], coordinate);
+          reflection_box_max_[axis] = std::max(reflection_box_max_[axis], coordinate);
+        }
+      }
+      reflection_box_valid_ = reflection_box_max_[1] - reflection_box_min_[1] > 2.f;
+    }
     constexpr uint16_t size = 256;
     constexpr size_t face_count = 6;
     if (!bgfx::isValid(reflection_capture_)) {
@@ -864,6 +905,7 @@ void LibBgfxBackend::update_reflections(const float* eye) {
       reflection_write_ ^= 1;
       reflection_face_ = 0;
       reflection_ready_ = true;
+      reflection_sample_origin_ = reflection_origin_;
     }
     const int budget = debug_overlay_.render_options().reflection_faces;
     for (int capture = 0; capture < budget && reflection_face_ < face_count; ++capture) {

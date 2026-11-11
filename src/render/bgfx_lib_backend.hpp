@@ -326,7 +326,12 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::FrameBufferHandle reflection_capture_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle s_reflection_cube_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_dynamic_reflection_ = BGFX_INVALID_HANDLE;
-  std::array<float, 3> reflection_origin_{};
+  std::array<float, 3> reflection_origin_{}, reflection_sample_origin_{};
+  std::array<float, 3> reflection_box_min_{}, reflection_box_max_{};
+  bool reflection_box_valid_ = false;
+  bgfx::UniformHandle u_reflection_probe_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_reflection_box_min_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_reflection_box_max_ = BGFX_INVALID_HANDLE;
   void* reflection_world_ = nullptr;
   size_t reflection_face_ = 0;
   bool reflection_ready_ = false;

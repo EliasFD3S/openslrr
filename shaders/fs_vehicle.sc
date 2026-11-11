@@ -6,6 +6,9 @@ SAMPLER2D(s_vehicleEnv, 2);
 SAMPLER2D(s_vehicleBake, 3);
 SAMPLERCUBE(s_sceneReflection, 4);
 uniform vec4 u_dynamicReflection;
+uniform vec4 u_reflectionProbe;
+uniform vec4 u_reflectionBoxMin;
+uniform vec4 u_reflectionBoxMax;
 uniform vec4 u_lightmap;
 uniform vec4 u_lightmapUv;
 uniform vec4 u_vehicleLayers; // mix enabled, reflection weight, complemented alpha, painted
@@ -75,6 +78,18 @@ void main()
     if (u_dynamicReflection.x > 0.5) {
         vec3 ray = reflect(normalize(v_viewPos), n);
         vec3 worldRay = mul(u_invView, vec4(ray, 0.0)).xyz;
+        if (u_reflectionProbe.w > 0.5) {
+            vec3 position = mul(u_invView, vec4(v_viewPos, 1.0)).xyz;
+            if (all(greaterThanEqual(position, u_reflectionBoxMin.xyz)) &&
+                all(lessThanEqual(position, u_reflectionBoxMax.xyz))) {
+                vec3 direction = sign(worldRay) * max(abs(worldRay), vec3(0.0001, 0.0001, 0.0001));
+                vec3 nearHit = (u_reflectionBoxMin.xyz - position) / direction;
+                vec3 farHit = (u_reflectionBoxMax.xyz - position) / direction;
+                vec3 exitHit = max(nearHit, farHit);
+                float distance = min(exitHit.x, min(exitHit.y, exitHit.z));
+                worldRay = position + worldRay * distance - u_reflectionProbe.xyz;
+            }
+        }
         vec3 capture = u_sunAmb.rgb + u_sunDiff.rgb * (0.06 + 0.28 * saturate(worldRay.y));
         if (u_dynamicReflection.x < 1.5)
             capture = textureCube(s_sceneReflection, worldRay).rgb;
