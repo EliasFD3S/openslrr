@@ -507,7 +507,27 @@ struct Session {
   DynoStats stats;
 };
 
+// Weak native payloads: reachability is owned by the DynoData Java object.
+// Only synchronous native calculations temporarily promote their receiver to
+// a GC root. This preserves the receiver if host code reaches a safe point
+// without recreating the permanent registry -> key -> registry cycle.
 std::unordered_map<void*, Session> g_sessions;
+std::unordered_map<void*, std::size_t> g_calculations_in_flight;
+
+class CalculationRoot {
+ public:
+  explicit CalculationRoot(void* key) : key_(key) { ++g_calculations_in_flight[key_]; }
+  ~CalculationRoot() {
+    const auto it = g_calculations_in_flight.find(key_);
+    if (it == g_calculations_in_flight.end()) return;
+    if (--it->second == 0) g_calculations_in_flight.erase(it);
+  }
+  CalculationRoot(const CalculationRoot&) = delete;
+  CalculationRoot& operator=(const CalculationRoot&) = delete;
+
+ private:
+  void* key_;
+};
 
 bool calculate_into(Session* session, const std::unordered_map<std::string, float>& fields,
                     float table_size, std::string* error) {
@@ -584,7 +604,9 @@ bool calculate_into(Session* session, const std::unordered_map<std::string, floa
     return false;
   }
   const int rpm_step = static_cast<int>(std::trunc(requested));
-  Curve next = session->curve;
+  // A recalculation is a new configuration snapshot. Never combine its
+  // primary bank with nitrous data captured at another resolution/geometry.
+  Curve next;
   next.rpm_step = static_cast<float>(rpm_step);
   if (!table(s, rpm_step, &next.torque, &next.watts)) {
     if (error) *error = "non-finite primary combustion cycle";
@@ -611,8 +633,7 @@ bool calculate_into(Session* session, const std::unordered_map<std::string, floa
     mixture(s);
     geometry(s);
     s.set(kMaximumRpm, maximum);
-    const int step = static_cast<int>(std::trunc(maximum / table_size));
-    if (step < 1 || !table(s, step, &next.nitro_torque, &next.nitro_watts)) {
+    if (!table(s, rpm_step, &next.nitro_torque, &next.nitro_watts)) {
       if (error) *error = "invalid nitrous combustion table";
       return false;
     }
@@ -628,12 +649,16 @@ float sample_curve(const Curve& curve, float rpm, float nitro, bool watts) {
       !(curve.rpm_step > 0.f))
     return 0.f;
   const auto sample = [&](const std::vector<float>& table) {
-    const float index_f = std::floor(rpm / curve.rpm_step);
-    const int index = static_cast<int>(index_f);
-    const float fraction = rpm / curve.rpm_step - index_f;
-    if (index < 0 || index + 1 >= static_cast<int>(table.size())) return 0.f;
-    return table[static_cast<size_t>(index)] * (1.f - fraction) +
-           table[static_cast<size_t>(index + 1)] * fraction;
+    if (table.empty()) return 0.f;
+    const double position = static_cast<double>(rpm) / curve.rpm_step;
+    const double last = static_cast<double>(table.size() - 1);
+    // Bound before converting to int, and distinguish the exact final sample
+    // from values beyond it (which have no right-hand interpolation point).
+    if (!std::isfinite(position) || position < 0 || position > last) return 0.f;
+    const auto index = static_cast<std::size_t>(std::floor(position));
+    if (index == table.size() - 1) return table.back();
+    const float fraction = static_cast<float>(position - std::floor(position));
+    return table[index] * (1.f - fraction) + table[index + 1] * fraction;
   };
   const float primary = sample(watts ? curve.watts : curve.torque);
   const std::vector<float>& secondary = watts ? curve.nitro_watts : curve.nitro_torque;
@@ -650,9 +675,12 @@ bool near(double got, double want, double tolerance) {
 bool dyno_calculate(void* key, const std::unordered_map<std::string, float>& fields,
                     float table_size, DynoStats* stats) {
   if (!key) return false;
-  Session& session = g_sessions[key];
+  const CalculationRoot in_flight(key);
+  auto [it, inserted] = g_sessions.try_emplace(key);
+  Session& session = it->second;
   std::string error;
   if (!calculate_into(&session, fields, table_size, &error)) {
+    if (inserted) g_sessions.erase(it);
     std::fprintf(stderr, "[dyno] calc failed: %s\n", error.c_str());
     if (stats) *stats = {};
     return false;
@@ -677,6 +705,10 @@ float dyno_boost_fraction(void* key, float rpm) {
 }
 
 void dyno_forget(void* key) { g_sessions.erase(key); }
+
+void dyno_clear_sessions() { g_sessions.clear(); }
+
+std::size_t dyno_session_count() { return g_sessions.size(); }
 
 bool dyno_self_check(char* msg, std::size_t msg_cap) {
   auto fail = [&](const char* text) {
@@ -719,9 +751,9 @@ bool dyno_self_check(char* msg, std::size_t msg_cap) {
   if (tuned.curve.nitro_torque.size() <= 14 ||
       !(tuned.curve.nitro_torque[14] > tuned.curve.torque[14]))
     return fail("dyno nitrous bank");
-  const std::vector<float> kept = tuned.curve.nitro_torque;
   if (!calculate_into(&tuned, {{"maxRPM", 7000.f}}, 28.f, &error)) return fail(error.c_str());
-  if (tuned.curve.nitro_torque != kept) return fail("dyno nitrous bank was dropped");
+  if (!tuned.curve.nitro_torque.empty() || !tuned.curve.nitro_watts.empty())
+    return fail("dyno stale nitrous bank was retained");
   Session bad;
   if (calculate_into(&bad, {{"stroke", 1.f}}, 28.f, &error)) return fail("dyno geometry accepted");
   if (calculate_into(&bad, {}, 0.f, &error)) return fail("dyno empty table accepted");
@@ -733,6 +765,6 @@ bool dyno_self_check(char* msg, std::size_t msg_cap) {
 
 
 void dyno_visit_gc_roots(const GcRootVisitor& visit) {
-  for (const auto& entry : g_sessions) visit(entry.first);
+  for (const auto& entry : g_calculations_in_flight) visit(entry.first);
 }
 }  // namespace slrr

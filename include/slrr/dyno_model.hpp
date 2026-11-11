@@ -22,13 +22,18 @@ struct DynoStats {
   float hp_rpm = 0.f;
 };
 
-// One session per DynoData instance. A failed calculate leaves the
-// previous curve in place. Missing numeric fields use the Java defaults.
+// Sessions are weak native payloads keyed by their DynoData instance; the
+// registry does not keep that Java object alive. deleteNative/finalize releases
+// one session, while world reinitialization releases the whole registry.
+// A failed recalculation leaves the previous curve in place. A failed first
+// calculation publishes no session. Missing numeric fields use Java defaults.
 bool dyno_calculate(void* key, const std::unordered_map<std::string, float>& fields,
                     float table_size, DynoStats* stats);
 float dyno_sample(void* key, float rpm, float nitro, bool watts);
 float dyno_boost_fraction(void* key, float rpm);
 void dyno_forget(void* key);
+void dyno_clear_sessions();
+std::size_t dyno_session_count();
 
 // False when the published low-RPM witness or the turbo/nitro checks diverge.
 bool dyno_self_check(char* msg, std::size_t msg_cap);

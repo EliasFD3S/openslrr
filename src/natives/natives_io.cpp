@@ -413,22 +413,7 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         Object* dst = as_obj(args[2]);
         const int32_t dst_pos = as_i(args[3]);
         const int32_t length = as_i(args[4]);
-        if (!src || !dst || !src->is_array || !dst->is_array || length <= 0)
-          return Value::make_void();
-        if (src_pos < 0 || dst_pos < 0) return Value::make_void();
-        if (src_pos > static_cast<int32_t>(src->slots.size()) ||
-            length > static_cast<int32_t>(src->slots.size()) - src_pos)
-          return Value::make_void();
-        const int32_t need = dst_pos + length;
-        if (static_cast<int32_t>(dst->slots.size()) < need) {
-          dst->slots.resize(static_cast<size_t>(need), Value::make_obj(nullptr));
-          dst->fields["length"] = Value::make_int(need);
-        }
-        std::vector<Value> tmp(
-            src->slots.begin() + src_pos,
-            src->slots.begin() + src_pos + length);
-        for (int32_t i = 0; i < length; ++i)
-          dst->slots[static_cast<size_t>(dst_pos + i)] = tmp[static_cast<size_t>(i)];
+        native_arraycopy(src, src_pos, dst, dst_pos, length);
         return Value::make_void();
       });
 

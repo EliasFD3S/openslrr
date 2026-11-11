@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.21)
 project(slrr_host LANGUAGES CXX)
 
+option(BUILD_TESTING "Build focused native regression tests" OFF)
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -176,6 +179,10 @@ target_compile_definitions(slrr_host PRIVATE SLRR_HAS_LIBBGFX=1)
 message(STATUS "slrr_host: libbgfx + mesh shaders enabled")
 
 install(TARGETS slrr_host RUNTIME DESTINATION bin)
+
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
 
 option(SLRR_STAGE_BUILD "Build the host into candidate/ before backup and promotion" OFF)
 if(SLRR_STAGE_BUILD)
