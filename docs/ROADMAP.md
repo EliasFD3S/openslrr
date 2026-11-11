@@ -22,6 +22,8 @@ Create a committed `tests/` target with fast Windows x64 tests and CTest integra
 
 ### 0.2 Fix confirmed memory-safety defects
 
+**Integrated:** System.arraycopy and PTX parsing are hardened with 15 focused regressions; the combined CTest suite passes. The DirectShow item below remains open.
+
 - **Array copy:** `src/natives/natives_io.cpp:442-451` computes `dst_pos + length` in signed 32-bit arithmetic. Overflow can bypass resizing and index outside `dst->slots`. Use checked subtraction/size arithmetic, reject unrepresentable sizes, and preserve the intended stock copy/auto-grow semantics.
 - **PTX levels:** `src/resources/ptx_image.cpp:63-80` validates a wrapped `rgb_size + alpha_size` and then derives an unchecked alpha pointer. Validate by subtraction in `size_t`, require enough bytes for both JPEG signatures, and bounds-check every payload window before pointer formation.
 - **DirectShow frames:** `src/platform/video_fmv.cpp:459-481` sizes scratch from the sample length but copies `g_w * g_h * 4` without proving `need <= sz`, checking stride/orientation, or preventing multiplication overflow. Validate connected dimensions and every row against the actual sample before any read; add short-sample, top-down, huge-dimension, and codec-mismatch mocks.

@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -18,6 +19,44 @@ namespace slrr {
 
 inline Value native_noop(Object*, const std::vector<Value>&) {
   return Value::make_void();
+}
+
+// Copy array slots with System.arraycopy's host-side auto-grow behavior.
+// Invalid ranges leave both arrays unchanged. The temporary preserves
+// overlapping copies, including when the destination grows first.
+inline void native_arraycopy(Object* src, int32_t src_pos, Object* dst,
+                             int32_t dst_pos, int32_t length) {
+  if (!src || !dst || !src->is_array || !dst->is_array || length <= 0 ||
+      src_pos < 0 || dst_pos < 0)
+    return;
+
+  const size_t source_pos = static_cast<size_t>(src_pos);
+  const size_t destination_pos = static_cast<size_t>(dst_pos);
+  const size_t count = static_cast<size_t>(length);
+  const size_t source_size = src->slots.size();
+  if (source_pos > source_size || count > source_size - source_pos) return;
+
+  // The script-visible array length is an int32_t. Check the subtraction
+  // before forming `need`, and never resize to an unrepresentable length.
+  constexpr size_t max_script_size =
+      static_cast<size_t>(std::numeric_limits<int32_t>::max());
+  const size_t max_destination_size =
+      dst->slots.max_size() < max_script_size ? dst->slots.max_size()
+                                              : max_script_size;
+  if (destination_pos > max_destination_size ||
+      count > max_destination_size - destination_pos)
+    return;
+  const size_t need = destination_pos + count;
+  if (need > dst->slots.size()) {
+    dst->slots.resize(need, Value::make_obj(nullptr));
+    dst->fields["length"] = Value::make_int(static_cast<int32_t>(need));
+  }
+
+  const auto first = src->slots.begin() +
+                     static_cast<std::vector<Value>::difference_type>(source_pos);
+  const auto last = first + static_cast<std::vector<Value>::difference_type>(count);
+  const std::vector<Value> tmp(first, last);
+  for (size_t i = 0; i < count; ++i) dst->slots[destination_pos + i] = tmp[i];
 }
 
 // One row of an SDAT trailer. ordinal is the file-local pack slot;

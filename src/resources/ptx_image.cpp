@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <vector>
 
 #if defined(SLRR_HAS_LIBBGFX)
@@ -60,27 +61,35 @@ bool parse_ptx_levels(const uint8_t* data, size_t size, uint32_t* w_out,
   levels->clear();
   levels->reserve(hdr.mip_count);
   for (uint32_t i = 0; i < hdr.mip_count; ++i) {
-    if (off + sizeof(PtxMipHdr) > size) return false;
+    if (off > size || sizeof(PtxMipHdr) > size - off) return false;
     PtxMipHdr mip{};
     std::memcpy(&mip, data + off, sizeof(mip));
     off += sizeof(mip);
-    if (mip.pad != 0 || mip.rgb_size == 0 ||
-        mip.total != mip.rgb_size + mip.alpha_size)
+
+    const size_t rgb_size = static_cast<size_t>(mip.rgb_size);
+    const size_t alpha_size = static_cast<size_t>(mip.alpha_size);
+    if (mip.pad != 0 || rgb_size < 2 || alpha_size == 1 ||
+        alpha_size > std::numeric_limits<size_t>::max() - rgb_size)
       return false;
-    if (off + static_cast<size_t>(mip.total) > size) return false;
+    const size_t total = rgb_size + alpha_size;
+    if (total > std::numeric_limits<uint32_t>::max() || mip.total != total ||
+        off > size || total > size - off)
+      return false;
+
+    // Both JPEG markers and the alpha offset are inside the checked payload.
     const uint8_t* payload = data + off;
     if (payload[0] != 0xff || payload[1] != 0xd8) return false;
     PtxJpegLevel lv;
     lv.rgb = payload;
-    lv.rgb_size = mip.rgb_size;
-    if (mip.alpha_size > 0) {
-      lv.alpha = payload + mip.rgb_size;
-      lv.alpha_size = mip.alpha_size;
-      if (lv.alpha_size < 2 || lv.alpha[0] != 0xff || lv.alpha[1] != 0xd8)
-        return false;
+    lv.rgb_size = rgb_size;
+    if (alpha_size > 0) {
+      const uint8_t* alpha = payload + rgb_size;
+      if (alpha[0] != 0xff || alpha[1] != 0xd8) return false;
+      lv.alpha = alpha;
+      lv.alpha_size = alpha_size;
     }
     levels->push_back(lv);
-    off += mip.total;
+    off += total;
   }
   return !levels->empty();
 }
