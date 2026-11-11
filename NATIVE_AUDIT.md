@@ -37,7 +37,7 @@ that category. It is not a compatibility score or a complete runtime trace.
 | `System.simTime`, `timeWarp` | The simulation clock follows the warp factor, and setting it returns the previous factor. Physics uses the scaled elapsed time. UI clocks, sleeps and host timer dispatch use real time. |
 | `System.setMeasure`, `getConfigOptions` | The measure setting controls digital vehicle instruments. The options refresh reads gameplay settings and schedules a save when they change. |
 | `RenderRef.setFlare`, `Navigator.updateNavigator`, `GroundRef.getNearestCross` | Directional flares use the scene's texture and an approximate sprite layout. The GPS camera and markers follow scene objects. The crossing query returns null until the road index is available. |
-| `GfxEngine.numDisplayModes`, `currDisplayMode`, `displayModeName`, `changeVideoMode` | One fixed mode is exposed, 800×600×32 at index zero. The change call is empty. Startup window settings are a separate path. |
+| `GfxEngine.numDisplayModes`, `currDisplayMode`, `displayModeName`, `changeVideoMode` | Enumerates host display modes and calls the live video-mode path. Mode switching, resize behavior and persistence still need interactive validation. |
 | `RenderRef.getBoneId`, `plotRoute` | Always return zero. Bone lookup and route line construction are missing. |
 | `RenderRef.lineCreate`, `lineAdd` | Build renderable ribbons from positions, normals and widths. Color is applied per segment. |
 | `Chassis.setCooling`, `setSteerWheelRadius`, `setSteerWheel`, `setBuck`, `setNitroSFX` | Store configuration. No temperature simulation, cockpit steering animation, bucking effect or nitro audio consumes these values yet. |
@@ -82,8 +82,8 @@ presence in the registry does not imply that every use in a race is covered.
    implement the `GroundRef` route queries, `Navigator.updateNavigator`
    and route rendering. Verify map, rear view and cruise control in a race.
    Add traffic and pedestrians after routes and collision are stable.
-4. **Complete garage actions and effects.** Implement the `Painter` natives
-   and resource-created sound, then animation, particles, flares and fog.
+4. **Complete garage actions and effects.** Implement the `Painter` natives,
+   validate resource-created sound end to end, then animation, particles, flares and fog.
    Verify paint and installed-part state through a career save and reload.
 5. **Complete platform and optional systems.** Enumerate display modes,
    complete controller options and loader state, then assess networking and

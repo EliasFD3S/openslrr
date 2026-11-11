@@ -45,7 +45,7 @@ static. Audio edits queue a save after 500 ms of inactivity and flush on normal
 shutdown. Persistence uses the original Java `Config.saveConfig/loadConfig`
 and `save/game/options` SDAT format, including all three channel volumes and
 the other Config fields. No original Java files are patched. The engine volume
-value is saved/restored; engine-loop audio itself is not yet implemented.
+value is saved/restored. Engine-loop audio is updated for vehicle records through `update_engine_audio`; audible quality and complete stock behavior still require interactive validation.
 
 A temporary headless diagnostic exercised the actual OptionsDialog sliders,
 verified 20/40/60% through save/reload in an isolated directory, and started all

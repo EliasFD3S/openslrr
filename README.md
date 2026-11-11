@@ -124,6 +124,14 @@ Run the following commands from this folder, which contains `CMakeLists.txt`. In
 
 ### Configure and build
 
+For an idempotent, project-local setup, use the workspace bootstrap. It verifies a pinned CMake download, checks out the required bgfx revision, configures the provided preset, and optionally builds. It does not install global software:
+
+```powershell
+.\scripts\Initialize-SlrrWorkspace.ps1 -Build
+```
+
+Or, with CMake already available and the pinned bgfx checkout prepared:
+
 ```powershell
 cmake -S . -B build-bgfx-x64 -G "Visual Studio 17 2022" -A x64 -DSLRR_STAGE_BUILD=OFF
 
@@ -184,4 +192,4 @@ Physics research is being integrated gradually: listing a reference does not mea
 
 When reporting a problem, include your game version, launch command, expected behavior, and actual result. Attach console output and, if useful, a screenshot. If you use a mod, name it and check whether the issue also occurs with the reference game data.
 
-To explore the code: `src/jvm/` runs scripts, `src/resources/` loads data, `src/natives/` connects scripts to the engine, and `src/render/`, `src/ui/`, `src/platform/`, and `src/physics/` contain the main systems.
+To explore the code: `src/jvm/` runs scripts, `src/resources/` loads data, `src/natives/` connects scripts to the engine, and `src/render/`, `src/ui/`, `src/platform/`, and `src/physics/` contain the main systems. See [the architecture map](docs/ARCHITECTURE.md), [prioritized roadmap](docs/ROADMAP.md), and [multi-agent Harness workflow](docs/MULTIAGENT.md). Agent-specific repository rules are in [AGENTS.md](AGENTS.md).
