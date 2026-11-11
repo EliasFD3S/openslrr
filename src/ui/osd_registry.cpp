@@ -1,4 +1,5 @@
 #include "slrr/gc_roots.hpp"
+#include "slrr/host_input.hpp"
 #include "slrr/osd_registry.hpp"
 
 #include "slrr/object.hpp"
@@ -660,7 +661,7 @@ void osd_on_char(int ascii) {
     refresh_string_text(w, false);
     OsdWidget copy = w;
     g_string_focus = -1;
-    if (g_click) g_click(copy);
+    if (g_click && host_input_allow_ui(copy.cmd, true)) g_click(copy);
     return;
   }
   if (ascii == 8) {

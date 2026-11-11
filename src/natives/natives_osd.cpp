@@ -288,6 +288,24 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         self->fields["pos"] = args[0];
         return Value::make_void();
       });
+  jvm.natives().register_method(
+      "java.util.resource.PhysicsRef", "getPos", "()Ljava.lang.Vector3;",
+      [&jvm](Object* self, const std::vector<Value>&) {
+        if (self) {
+          const auto stored = self->fields.find("pos");
+          if (stored != self->fields.end() && stored->second.tag == ValueTag::Obj &&
+              stored->second.v.o)
+            return stored->second;
+        }
+        Object* v = jvm.new_object("java.lang.Vector3");
+        if (v) {
+          const GameRefState* st = gameref_get(self);
+          v->fields["x"] = Value::make_float(st ? st->pos[0] : 0.f);
+          v->fields["y"] = Value::make_float(st ? st->pos[1] : 0.f);
+          v->fields["z"] = Value::make_float(st ? st->pos[2] : 0.f);
+        }
+        return Value::make_obj(v);
+      });
   // java.render.Text natives — legacy RenderNatives path (SCX+atlas).
   jvm.natives().register_method(
       "java.render.Text", "setDefaultColor", "(I)V",

@@ -1449,7 +1449,8 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
                           self->height_, &ox, &oy);
         const int32_t hit = osd_hit_index(ox, oy);
         const OsdWidget* clicked = hit >= 0 ? osd_widget_at(hit) : nullptr;
-        if (!video_fmv_block_osd() && clicked && !clicked->disabled) {
+        if (!video_fmv_block_osd() && clicked && !clicked->disabled &&
+            host_input_allow_ui(clicked->cmd, true)) {
           host_sfx_play(HostSfx::MenuSelect);
           osd_fire_click_at(ox, oy);
         } else if (!video_fmv_block_osd() && !clicked && !osd_has_modal()) {

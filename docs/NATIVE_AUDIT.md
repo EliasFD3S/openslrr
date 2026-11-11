@@ -11,9 +11,9 @@ implementations and following selected calls to their consumers.
 
 | Status | Stock signatures |
 | --- | ---: |
-| Registered with a body | 327 |
+| Registered with a body | 328 |
 | Registered with the explicit `native_noop` handler | 4 |
-| Absent from the registry | 45 |
+| Absent from the registry | 44 |
 | **Total** | **376** |
 
 The first category includes constant responses, inline empty bodies and
@@ -50,6 +50,7 @@ that category. It is not a compatibility score or a complete runtime trace.
 | `RenderRef.lineCreate`, `lineAdd` | Build renderable ribbons from positions, normals and widths. Color is applied per segment. |
 | `Chassis.setCooling`, `setSteerWheelRadius`, `setSteerWheel`, `setBuck`, `setNitroSFX` | Store configuration. No temperature simulation, bucking effect or nitro audio consumes these values yet. The installed wheel on slot type 11 turns about the cfg `steering` locator. |
 | `GroundRef.setPedestrianDensityN`, `addPedestrianType`, `remPedestrianType` | Density, after the script's Config factor, scales a walking crowd around the driven car, capped at 12. Each type's `native ped` cfg supplies the render and the looped walk clip. They do not follow a road graph. `pedestrianDistance` is still missing. |
+| `PhysicsRef.getPos` | Returns the Vector3 stored by `setMatrix`. Without one, it returns a new Vector3 from the object's pose. |
 | `Part.setSfxLoopParams` | Stores the two parameters without applying them to a voice. |
 | `Chassis.setHornSFX` | Stores all indexed sounds. The current player input plays the index 1 sample once per press. |
 | `GameRef.getInfo`, `queueEvent` | Implement selected queries and commands. Unhandled queries return zero. Unhandled command paths still need coverage as new sections are exercised. |
@@ -83,12 +84,12 @@ being replaced by success-returning mocks.
 | System | Count | Methods |
 | --- | ---: | --- |
 | `GroundRef` | 21 | `setWater` (2 overloads), `addWaterLimit`, `addTrafficCar`, `remTrafficCar`, `notifyTrafficCar`, `addTrafficN`, `addTrafficP`, `delTraffic`, `setTrafficCarBehaviour`, `haltTrafficCross`, `haltTrafficPath`, `getStartDirection`, `findRoute`, `getRouteLength` (2 overloads), `getRoutePos`, `getRouteDist`, `alignToRoad`, `removePedestrianType`, `pedestrianDistance` |
-| `PhysicsRef` | 8 | `create`, `createSphere`, `setStatic`, `getPos`, `getVel` (2 overloads), `getAngVel`, `getOri` |
+| `PhysicsRef` | 7 | `create`, `createSphere`, `setStatic`, `getVel` (2 overloads), `getAngVel`, `getOri` |
 | `ParticleSystem` | 9 | `init`, `stop`, `setFreq`, `setDirectSource`, `setSource`, `setCounter`, `getCounter`, `delAction`, `modePermanent` |
 | `Camera` | 1 | `setFog` |
 | `Painter` | 3 | `doPaint`, `paintPart`, `xPaint` |
 
-There are 42 missing active signatures and 3 missing leftovers, for 45 total.
+There are 41 missing active signatures and 3 missing leftovers, for 44 total.
 
 ## Roadmap
 

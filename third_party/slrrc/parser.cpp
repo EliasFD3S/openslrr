@@ -611,9 +611,19 @@ public:
 
 private:
     // Import = "import" [ Identifier ":" ] QualifiedName "." "*" ";"
+    //        | "import" Identifier ":" "*" ";"
     uint32_t import_decl() {
         const uint32_t n = node(IMPORT, i);
         i += 1;
+        if (at(T_ID) && peek_kind(1) == P_COLON && peek_kind(2) == P_MUL) {
+            // import system:*;  (Math.java). The prefix itself names nothing,
+            // the same as the other "word:" imports.
+            N(n).flags |= F_COLON | F_STAR;
+            N(n).op_tok = i + 1;
+            i += 3;
+            expect(P_SEMI, "an import");
+            return done(n);
+        }
         if (at(T_ID) && peek_kind(1) == P_COLON && peek_kind(2) == T_ID) {
             // import parts:part.root.BodyPart.*;   (2 sources; it names nothing)
             N(n).flags |= F_COLON;

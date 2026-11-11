@@ -28,6 +28,12 @@ set_target_properties(slrr_script_compiler PROPERTIES CXX_STANDARD 17)
 target_include_directories(slrr_script_compiler PUBLIC third_party/slrrc)
 target_compile_options(slrr_script_compiler PRIVATE /utf-8 /fp:precise)
 
+add_executable(compile_game_sources tools/compile_game_sources.cpp
+  src/jvm/script_compiler.cpp src/jvm/tufa.cpp)
+target_link_libraries(compile_game_sources PRIVATE slrr_script_compiler)
+target_include_directories(compile_game_sources PRIVATE include)
+target_compile_options(compile_game_sources PRIVATE /utf-8)
+
 add_executable(slrr_host
   src/main.cpp
   src/jvm/script_compiler.cpp

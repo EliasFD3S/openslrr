@@ -68,6 +68,46 @@ SLRR_TEST(compiler_system_multiclass_source_uses_engine_namespace) {
   SLRR_REQUIRE(classes[0].name() == "java.util.resource.Bundle");
   SLRR_REQUIRE(classes[1].name() == "java.util.resource.Helper");
 }
+SLRR_TEST(compiler_system_star_import_compiles_math) {
+  slrr::test::TemporaryDirectory temp("compile-math");
+  write(temp.path()/"system/Scripts/lang/src/Math.java",
+      "import system:*;\n"
+      "public class Math {\n"
+      "\tpublic native static float random();\n"
+      "\tpublic native static float sqrt(float a);\n"
+      "\tpublic native static void randomize();\n"
+      "\tpublic native static void setrandseed( int seed );\n"
+      "}\n");
+  const auto report = slrr::script_compile_all(temp.path().string(), ".");
+  SLRR_REQUIRE(report.attempted == 1 && report.succeeded == 1 && report.failed == 0);
+  SLRR_REQUIRE(report.classes == 1);
+  std::vector<slrr::TufaClass> classes; std::string error;
+  SLRR_REQUIRE(slrr::tufa_load_file((temp.path()/"system/Scripts/lang/Math.class").string(),
+                                   &classes, &error));
+  SLRR_REQUIRE(classes.size() == 1 && classes[0].name() == "java.lang.Math");
+}
+SLRR_TEST(compiler_system_import_keeps_resource_descriptor) {
+  slrr::test::TemporaryDirectory temp("compile-system-import");
+  write(temp.path()/"system/Scripts/util/resource/src/ResourceRef.java",
+      "public class ResourceRef { public int id; }\n");
+  SLRR_REQUIRE(slrr::script_compile_all(temp.path().string(),
+      "system/Scripts/util/resource").succeeded == 1);
+  write(temp.path()/"system/Scripts/io/src/File.java",
+      "import system:io.*;\n"
+      "public class File { public native int write(ResourceRef value); }\n");
+  SLRR_REQUIRE(slrr::script_compile_all(temp.path().string(),
+      "system/Scripts/io").succeeded == 1);
+  std::vector<slrr::TufaClass> classes; std::string error;
+  SLRR_REQUIRE(slrr::tufa_load_file((temp.path()/"system/Scripts/io/File.class").string(),
+                                   &classes, &error));
+  SLRR_REQUIRE(classes.size() == 1);
+  bool found = false;
+  for (const auto& method : classes[0].instance_methods) {
+    if (classes[0].utf8(method.name) != "write") continue;
+    found = classes[0].utf8(method.descriptor) == "(Ljava.util.resource.ResourceRef;)I";
+  }
+  SLRR_REQUIRE(found);
+}
 SLRR_TEST(loading_history_reset_preserves_work_and_drains_without_fake_delay) {
   slrr::ResourceLoadingHistory history;
   history.reset();

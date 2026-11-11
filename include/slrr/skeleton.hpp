@@ -81,11 +81,18 @@ int character_find_bone(void* key, int32_t type_id, const RpkIndex& packs,
 // centimetres). The joint stays put. `max_radians` caps this step.
 bool character_aim_bone(void* key, int32_t type_id, const RpkIndex& packs,
                         int bone, int end, const float target_cm[3], float max_radians);
+// Rotate `bone` so its local axis (0 = X, 1 = Y, 2 = Z) points along
+// `direction`. Twist around that axis stays. Character-local centimetres.
+bool character_align_axis(void* key, int32_t type_id, const RpkIndex& packs,
+                          int bone, int axis, const float direction[3]);
 // Analytic two-bone reach. `pole` is a direction in character space, used so
 // the elbow or knee bends to a stable side. Lengths are not stretched.
 bool character_solve_limb(void* key, int32_t type_id, const RpkIndex& packs,
                           int upper, int lower, int end, const float target_cm[3],
                           const float pole[3]);
+// Drop bone overrides so the next aim starts from the bind pose. A limb solved
+// from last frame's result shrinks, because the measured bone length drifts.
+void character_reset_pose(void* key);
 
 // Script metres are stored as centimetres on the bone local matrix.
 void character_set_bone_local(void* key, int32_t type_id, const RpkIndex& packs,

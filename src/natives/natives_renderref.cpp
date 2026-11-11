@@ -680,7 +680,7 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
       });
   jvm.natives().register_method(
       "java.util.resource.GroundRef", "addPedestrianType",
-      "(Ljava/util/resource/GameRef;)V",
+      "(Ljava.util.resource.GameRef;)V",
       [](Object* self, const std::vector<Value>& args) {
         Object* type = !args.empty() && args[0].tag == ValueTag::Obj ? args[0].v.o : nullptr;
         part_add_pedestrian_type(self, type);
@@ -688,7 +688,7 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
       });
   jvm.natives().register_method(
       "java.util.resource.GroundRef", "remPedestrianType",
-      "(Ljava/util/resource/GameRef;)V",
+      "(Ljava.util.resource.GameRef;)V",
       [](Object* self, const std::vector<Value>& args) {
         Object* type = !args.empty() && args[0].tag == ValueTag::Obj ? args[0].v.o : nullptr;
         part_remove_pedestrian_type(self, type);

@@ -290,6 +290,26 @@ bool lookup(UnitScope& scope, std::string_view name, std::string& full) {
     if (scope.find(full) != nullptr) {
         return true;
     }
+    // A simple name used without an import, such as ResourceRef in File.java.
+    // One indexed class of that name is the one the shipped descriptor uses.
+    // Two answers stay unresolved, so the descriptor stays "L;".
+    static constexpr const char* kPackages[] = {
+        "java.util.resource", "java.util", "java.io", "java.render.osd",
+        "java.render", "java.sound", "java.game", "java.game.parts"};
+    std::string only;
+    int hits = 0;
+    for (const char* package_name : kPackages) {
+        std::string candidate(package_name);
+        candidate += '.';
+        candidate += name;
+        if (scope.find(candidate) == nullptr) continue;
+        only = std::move(candidate);
+        if (++hits > 1) return false;
+    }
+    if (hits == 1) {
+        full = std::move(only);
+        return true;
+    }
     return false;
 }
 
@@ -398,8 +418,16 @@ std::unique_ptr<UnitScope> declare_unit(const ps::Ast& ast, ClassProvider& provi
     for (uint32_t index : ast.items(unit)) {
         const ps::Node& n = ast.nodes[index];
         if (n.kind == ps::IMPORT) {
-            // "import parts:part.root.BodyPart.*;" (2 sources) names nothing
-            if (!(n.flags & ps::F_COLON)) {
+            // "import parts:part.root.BodyPart.*;" names a pack, not a class.
+            // "import system:io.*" is java.io, the same rewrite SLRR-JVM-compiler
+            // applies before it looks a simple name up.
+            if ((n.flags & ps::F_COLON) && n.a != ps::NONE &&
+                ast.text(n.tok0 + 1) == "system") {
+                const ps::Node& q = ast.nodes[n.a];
+                scope.imports.push_back(Import{
+                    std::string("java.") + ast.dotted(q.tok0, q.tok1),
+                    (n.flags & ps::F_STAR) != 0});
+            } else if (!(n.flags & ps::F_COLON) && n.a != ps::NONE) {
                 const ps::Node& q = ast.nodes[n.a];
                 scope.imports.push_back(Import{ast.dotted(q.tok0, q.tok1), (n.flags & ps::F_STAR) != 0});
             }

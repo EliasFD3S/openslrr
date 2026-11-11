@@ -87,6 +87,10 @@ void host_input_create_hotkey(Jvm& jvm, Object* key, Object* handler,
 void host_input_delete_hotkey(Object* key);
 void host_input_forget(Object* object);
 void host_input_check_hotkeys(Jvm& jvm, Object* controller, Object* focus);
+// One press in a menu or dialog. The same id is ignored for a short while so
+// it cannot run twice back to back. A key release still passes. Driving axes
+// never come through here.
+bool host_input_allow_ui(int id, bool pressed);
 void host_input_flush_hotkeys(Object* controller);
 
 }  // namespace slrr

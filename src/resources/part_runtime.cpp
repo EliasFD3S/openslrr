@@ -146,7 +146,12 @@ int32_t controlled_vehicle = 0;
 
 struct DriverSeat {
   Object* render = nullptr;
-  bool leaned = false;
+  // False when the render is the script's player.render. That object stays
+  // alive after the car is released; only a render this host created is removed.
+  bool owned = false;
+  // Other copies of the same driver (the bind-pose Mitch parented to the map)
+  // are hidden while this seat is active, then shown again on release.
+  std::vector<void*> hidden;
 };
 std::unordered_map<Object*, DriverSeat> drivers;
 
@@ -2836,11 +2841,52 @@ float wheel_rim_radius(Object* wheel) {
   return radius >= 0.05f && radius <= 0.5f ? radius : 0.15f;
 }
 
+void* chassis_root(Object* chassis);
+
+void release_driver(DriverSeat& seat) {
+  for (void* hidden : seat.hidden)
+    if (auto* node = gameref_get(hidden)) node->empty = false;
+  seat.hidden.clear();
+  if (seat.owned && seat.render && gameref_get(seat.render))
+    gameref_remove(seat.render);
+  seat.render = nullptr;
+  seat.owned = false;
+}
+
+Object* player_render() {
+  if (!runtime) return nullptr;
+  const Value player = runtime->get_static("java.game.GameLogic", "player");
+  if (player.tag != ValueTag::Obj || !player.v.o) return nullptr;
+  Object* render = part_field(player.v.o, "render");
+  const auto* node = gameref_get(render);
+  if (!node || node->kind != GameRefKind::RenderRef || !node->type_id) return nullptr;
+  return render;
+}
+
+void hide_duplicate_drivers(Object* chassis, Object* keep, int32_t type, DriverSeat& seat) {
+  for (void* hidden : seat.hidden)
+    if (auto* node = gameref_get(hidden)) node->empty = false;
+  seat.hidden.clear();
+  std::vector<void*> pending{chassis_root(chassis)};
+  for (size_t i = 0; i < pending.size() && i < 4096; ++i) {
+    auto* node = gameref_get(pending[i]);
+    if (!node) continue;
+    const bool kept = node->key == keep || node->script == keep;
+    if (!kept && node->kind == GameRefKind::RenderRef && node->type_id == type && node->key) {
+      node->empty = true;
+      seat.hidden.push_back(node->key);
+    } else if (kept && node->empty) {
+      node->empty = false;
+    }
+    for (void* child : node->children) pending.push_back(child);
+  }
+}
+
 void pose_driver() {
   Object* chassis = part_controlled_chassis();
   for (auto it = drivers.begin(); it != drivers.end();) {
     if (it->first != chassis) {
-      if (it->second.render) gameref_remove(it->second.render);
+      release_driver(it->second);
       it = drivers.erase(it);
     } else {
       ++it;
@@ -2850,7 +2896,16 @@ void pose_driver() {
   auto* rec = record(chassis);
   if (!rec || !rec->config || !rec->config->has_seat) return;
   DriverSeat& seat = drivers[chassis];
-  if (!seat.render) {
+  Object* scripted = player_render();
+  if (scripted) {
+    if (seat.render != scripted) {
+      if (seat.owned && seat.render && gameref_get(seat.render))
+        gameref_remove(seat.render);
+      seat.render = scripted;
+      seat.owned = false;
+      std::fprintf(stderr, "[driver] vin seated\n");
+    }
+  } else if (!seat.render) {
     const RpkPack* pack = index->pack_by_name("humans.rpk");
     if (!pack || !index->model_for_resource(pack->pack_id, 0x000C).ok) return;
     Object* render = runtime->new_object("java.util.resource.RenderRef");
@@ -2862,17 +2917,24 @@ void pose_driver() {
     gameref_set_parent(render, chassis);
     node->matrix_override = true;
     seat.render = render;
-    seat.leaned = false;
+    seat.owned = true;
     std::fprintf(stderr, "[driver] vin seated\n");
   }
   auto* node = gameref_get(seat.render);
   if (!node) {
     seat.render = nullptr;
+    seat.owned = false;
     return;
   }
+  if (node->parent != chassis) gameref_set_parent(seat.render, chassis);
+  node->empty = false;
   const PartMatrix seat_m = part_pose_matrix(rec->config->seat);
   std::copy(seat_m.begin(), seat_m.end(), node->local_matrix);
   node->matrix_override = true;
+  hide_duplicate_drivers(chassis, seat.render, node->type_id, seat);
+  // Solve from the bind pose every frame. Carrying last frame's joints makes
+  // the measured limb length shrink until the body collapses onto the wheel.
+  character_reset_pose(seat.render);
   const PartMatrix inv_seat = part_matrix_inverse_rigid(seat_m);
   const auto to_cm = [&](float x, float y, float z, float out[3]) {
     float metres[3];
@@ -2883,18 +2945,20 @@ void pose_driver() {
   const auto bone = [&](const char* name) {
     return character_find_bone(seat.render, type, *index, name);
   };
-  if (!seat.leaned && !rec->config->cameras.empty()) {
+  if (!rec->config->cameras.empty()) {
     const auto& camera = rec->config->cameras[0].position;
     float target[3];
     to_cm(camera[0], camera[1], camera[2], target);
+    // The head joint sits ~7 cm above the neck. The neck is what the chain reaches.
+    target[1] -= 7.2f;
     const int spine = bone("Bip01 Spine");
     const int spine1 = bone("Bip01 Spine1");
-    const int head = bone("Bip01 Head");
-    if (spine >= 0 && head >= 0) {
-      character_aim_bone(seat.render, type, *index, spine, head, target, 0.8f);
-      if (spine1 >= 0)
-        character_aim_bone(seat.render, type, *index, spine1, head, target, 0.5f);
-      seat.leaned = true;
+    const int neck = bone("Bip01 Neck");
+    if (spine >= 0 && spine1 >= 0 && neck >= 0) {
+      // A straight spine cannot shorten by aiming along itself. Bend the
+      // middle of the back toward the seat (+Z), not the chest up into the chin.
+      const float pole[3] = {0.f, 0.f, 1.f};
+      character_solve_limb(seat.render, type, *index, spine, spine1, neck, target, pole);
     }
   }
   const PartSlot* mount = nullptr;
@@ -2920,6 +2984,9 @@ void pose_driver() {
                         0.f, chassis_point);
         float target[3];
         to_cm(chassis_point[0], chassis_point[1], chassis_point[2], target);
+        // Closed fist: the wrist joint is ~8 cm behind the palm on the rim,
+        // toward the driver (+Z in the seat frame).
+        target[2] += 7.8f;
         const std::string prefix = std::string("Bip01 ") + sides[side] + " ";
         const int upper = bone((prefix + "UpperArm").c_str());
         const int lower = bone((prefix + "Forearm").c_str());
@@ -2947,6 +3014,10 @@ void pose_driver() {
       if (thigh < 0 || calf < 0 || foot < 0) continue;
       const float pole[3] = {0.f, 0.5f, -1.f};
       character_solve_limb(seat.render, type, *index, thigh, calf, foot, target, pole);
+      // The foot bone's X is the toe. Left on the shin it points along the
+      // leg, out through the pedal. Hang it down in the seat frame.
+      const float down[3] = {0.f, -1.f, 0.f};
+      character_align_axis(seat.render, type, *index, foot, 0, down);
     }
   }
 }
@@ -3242,9 +3313,7 @@ void part_remove_pedestrian_type(void* ground, void* type) {
 }
 
 void part_drop_actors() {
-  for (auto& entry : drivers)
-    if (entry.second.render && gameref_get(entry.second.render))
-      gameref_remove(entry.second.render);
+  for (auto& entry : drivers) release_driver(entry.second);
   drivers.clear();
   for (auto& entry : crowds) clear_ped_agents(entry.second);
   crowds.clear();

@@ -582,6 +582,46 @@ bool character_aim_bone(void* key, int32_t type_id, const RpkIndex& packs,
   return true;
 }
 
+bool character_align_axis(void* key, int32_t type_id, const RpkIndex& packs,
+                          int bone, int axis, const float direction[3]) {
+  Character* character = ensure_character(key, type_id, &packs);
+  if (!character || !character->bind || !direction || axis < 0 || axis > 2) return false;
+  const int count = static_cast<int>(character->bind->bones.size());
+  if (bone < 0 || bone >= count) return false;
+  rebuild(*character, gameref_now());
+  if (character->worlds.size() < static_cast<size_t>(count) * 16) return false;
+  const float* origin = character->worlds.data() + bone * 16;
+  float from[3] = {origin[axis * 4], origin[axis * 4 + 1], origin[axis * 4 + 2]};
+  float to[3] = {direction[0], direction[1], direction[2]};
+  const float from_len = std::sqrt(from[0] * from[0] + from[1] * from[1] + from[2] * from[2]);
+  const float to_len = std::sqrt(to[0] * to[0] + to[1] * to[1] + to[2] * to[2]);
+  if (from_len < 1e-6f || to_len < 1e-6f) return false;
+  for (int i = 0; i < 3; ++i) {
+    from[i] /= from_len;
+    to[i] /= to_len;
+  }
+  float correction[4];
+  quat_from_to(correction, from, to);
+  float world_q[4];
+  quat_from_matrix(origin, world_q);
+  float turned[4];
+  quat_mul(turned, correction, world_q);
+  const float translation[3] = {origin[12], origin[13], origin[14]};
+  float world[16];
+  quat_to_matrix(world, turned, translation);
+  const int parent = character->bind->bones[static_cast<size_t>(bone)].parent;
+  float local[16];
+  if (parent < 0) {
+    std::memcpy(local, world, sizeof(local));
+  } else {
+    float inverse[16];
+    rigid_inverse(character->worlds.data() + parent * 16, inverse);
+    multiply(local, inverse, world);
+  }
+  store_local(*character, bone, local);
+  return true;
+}
+
 bool character_solve_limb(void* key, int32_t type_id, const RpkIndex& packs,
                           int upper, int lower, int end, const float target_cm[3],
                           const float pole[3]) {
@@ -636,6 +676,15 @@ bool character_solve_limb(void* key, int32_t type_id, const RpkIndex& packs,
   character_aim_bone(key, type_id, packs, upper, lower, elbow, 3.14159265f);
   character_aim_bone(key, type_id, packs, lower, end, hand, 3.14159265f);
   return true;
+}
+
+void character_reset_pose(void* key) {
+  if (!key) return;
+  const auto found = g_characters.find(key);
+  if (found == g_characters.end()) return;
+  for (BoneOverride& bone : found->second.overrides) bone.set = false;
+  found->second.fresh = false;
+  found->second.want_skin = false;
 }
 
 void character_link_bone(void* child, void* parent, int bone) {
