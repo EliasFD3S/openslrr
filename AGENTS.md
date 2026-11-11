@@ -1,12 +1,12 @@
 # Guide de travail des agents
 
-Avant une modification moteur, lire [ENGINE_CONTRACT.md](ENGINE_CONTRACT.md).
+Avant une modification moteur, lire [ENGINE_CONTRACT.md](docs/ENGINE_CONTRACT.md).
 Ce guide décrit le contrat SLRR, les responsabilités des couches et les pièges
 de compatibilité. Lire ensuite les sections spécialisées correspondant au sujet :
 
-- VM, threads, événements et dialogues : [SCRIPT_RUNTIME.md](SCRIPT_RUNTIME.md).
-- Durée de vie des objets : [VM_GC.md](VM_GC.md).
-- Bindings, no-ops et limites : [NATIVE_AUDIT.md](NATIVE_AUDIT.md).
+- VM, threads, événements et dialogues : [SCRIPT_RUNTIME.md](docs/SCRIPT_RUNTIME.md).
+- Durée de vie des objets : [VM_GC.md](docs/VM_GC.md).
+- Bindings, no-ops et limites : [NATIVE_AUDIT.md](docs/NATIVE_AUDIT.md).
 - Build et lancement : [README.md](README.md).
 
 Vérifier le code actif : certains audits et commentaires décrivent des états

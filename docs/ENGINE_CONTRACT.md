@@ -647,7 +647,7 @@ Enhanced ; le code actif et les tests récents font foi pour l’implémentation
 
 Documentation locale complémentaire :
 
-- [README](README.md) : présentation, build et fonctionnalités.
+- [README](../README.md) : présentation, build et fonctionnalités.
 - [SCRIPT_RUNTIME](SCRIPT_RUNTIME.md) : scheduler, notifications et modales.
 - [VM_GC](VM_GC.md) : racines, safe points et finalisation.
 - [NATIVE_AUDIT](NATIVE_AUDIT.md) : couverture et limites des bindings.
