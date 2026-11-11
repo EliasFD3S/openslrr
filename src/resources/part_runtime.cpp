@@ -2930,6 +2930,9 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   runtime = &jvm;
   for (auto &[key, rec] : records) release_side(rec);
   records.clear();
+  // Dyno sessions belong to the old world's Java objects. The registry is
+  // deliberately weak during GC, so world teardown must release it explicitly.
+  dyno_clear_sessions();
   loose_panels.clear();
   controlled_vehicle = 0;
   hud_preview = {};

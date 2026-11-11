@@ -102,6 +102,6 @@ The corrected project-local bootstrap configured successfully with CMake 3.31.8 
 
 Non-interactive results: --help exit 0; --probe-gc --root ..\open-SL\game exit 0 (roots, cycles, arrays, pinning, resurrection, deferred collection and pressure); --probe-dyno exit 0; --probe-pacejka exit 0. These narrow smokes do not cover the newly identified edge cases and are not a substitute for the proposed regression suite.
 
-Integration update: shared CTest infrastructure and the arraycopy/PTX fixes are on antomys/main. The combined suite passes 3/3 targets, including 15 focused safety regressions, and slrr_host builds successfully. DirectShow and the other baseline findings remain tracked in the roadmap.
+Integration update: shared CTest infrastructure, arraycopy/PTX fixes, and dyno lifecycle/sampling fixes are on antomys/main. The combined suite passes 4/4 targets, including 15 safety regressions and 7 dyno regressions. slrr_host, --probe-dyno, and --probe-gc all pass on the integrated branch. DirectShow and the other baseline findings remain tracked in the roadmap.
 
 No interactive rendering, audio, physical gamepad, original-engine telemetry, or gameplay parity is claimed by this review.
