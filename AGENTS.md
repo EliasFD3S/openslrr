@@ -1,20 +1,20 @@
-# Guide de travail des agents
+# Agent working guide
 
-Avant une modification moteur, lire [ENGINE_CONTRACT.md](docs/ENGINE_CONTRACT.md).
-Ce guide décrit le contrat SLRR, les responsabilités des couches et les pièges
-de compatibilité. Lire ensuite les sections spécialisées correspondant au sujet :
+Before changing the engine, read [ENGINE_CONTRACT.md](docs/ENGINE_CONTRACT.md).
+This guide describes the SLRR contract, subsystem responsibilities, and
+compatibility pitfalls. Then read the specialized documentation for your task:
 
-- VM, threads, événements et dialogues : [SCRIPT_RUNTIME.md](docs/SCRIPT_RUNTIME.md).
-- Durée de vie des objets : [VM_GC.md](docs/VM_GC.md).
-- Bindings, no-ops et limites : [NATIVE_AUDIT.md](docs/NATIVE_AUDIT.md).
-- Build et lancement : [README.md](README.md).
+- VM, threads, events, and dialogs: [SCRIPT_RUNTIME.md](docs/SCRIPT_RUNTIME.md).
+- Object lifetime: [VM_GC.md](docs/VM_GC.md).
+- Bindings, no-ops, and limitations: [NATIVE_AUDIT.md](docs/NATIVE_AUDIT.md).
+- Building and running: [README.md](README.md).
 
-Vérifier le code actif : certains audits et commentaires décrivent des états
-plus anciens. Préserver les modifications déjà présentes dans le working tree.
-Corriger les primitives générales plutôt qu’ajouter des exceptions de VM pour
-une voiture ou un écran. Une modification Java doit respecter le périmètre
-autorisé par l’utilisateur et être incluse dans le patch livré si nécessaire.
+Check the active code: some audits and comments describe earlier implementations.
+Preserve changes already present in the working tree. Fix general primitives
+rather than adding VM exceptions for a specific car or screen. Java changes
+must remain within the scope authorized by the user and must be included in
+the distributed patch when needed.
 
-Mettre à jour la documentation concernée lorsqu’un contrat ou une responsabilité
-change. Rapporter distinctement compilation, tests automatisés et validation
-en jeu ; aucun de ces résultats ne prouve à lui seul la compatibilité complète.
+Update the relevant documentation whenever a contract or responsibility changes.
+Report compilation, automated tests, and in-game validation separately; none
+of these results alone establishes complete compatibility.
