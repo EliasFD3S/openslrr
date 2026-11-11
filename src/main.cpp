@@ -6,10 +6,12 @@
 #include "slrr/dyno_model.hpp"
 #include "slrr/diagnostics.hpp"
 #include "slrr/metrics.hpp"
+#include "slrr/physics_telemetry.hpp"
 #include "slrr/sl2_pacejka.hpp"
 #include "slrr/natives_boot.hpp"
 #include "slrr/gameref.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -20,6 +22,9 @@ namespace {
 struct DiagnosticsSession {
   ~DiagnosticsSession() {
     write_metrics();
+    std::string telemetry_error;
+    if (!slrr::physics_telemetry::shutdown(telemetry_error) && !telemetry_error.empty())
+      std::fprintf(stderr, "FAIL: %s\n", telemetry_error.c_str());
     slrr::diagnostics::shutdown();
   }
 
@@ -56,6 +61,9 @@ void usage() {
       "  slrr_host --probe-pacejka\n"
       "  slrr_host --probe-dyno\n"
       "  slrr_host --probe-gc [--root DIR]\n"
+      "  slrr_host --probe-physics [--physics-telemetry PATH]\n"
+      "  slrr_host --compare-physics-replay LEFT RIGHT\n"
+      "           [--physics-tolerance ABS] [--physics-compare-report PATH]\n"
       "  slrr_host --game [--root DIR] [--window] [--no-wait] [--auto-new]\n"
       "           [--auto-cmd mainmenu|street|N]\n"
       "           [--spawn-car cars/racers/Baiern.rpk:0x6]\n"
@@ -65,6 +73,8 @@ void usage() {
       "Diagnostics: --trace PATH writes structured JSONL (opt-in).\n"
       "             --metrics PATH writes a final JSON metrics snapshot;\n"
       "             includes bounded section history, even without --trace.\n"
+      "             --physics-telemetry PATH writes bounded physics JSONL.\n"
+      "Replay compare: exit 0 = match, 4 = state mismatch, 2 = input/error.\n"
       "\n"
       "Default --game: FMV intros → Init(int) (Soft splash / menu).\n"
       "--auto-new skips to Garage (smoke). ESC skips boot intros.\n"
@@ -86,9 +96,15 @@ int main(int argc, char** argv) {
   bool want_dyno = false;
   bool want_game = false;
   bool want_gc = false;
+  bool want_physics = false;
   BootOptions opt;
   const char* root_arg = nullptr;
   const char* trace_path = nullptr;
+  const char* physics_telemetry_path = nullptr;
+  const char* compare_left = nullptr;
+  const char* compare_right = nullptr;
+  const char* compare_report = nullptr;
+  double physics_tolerance = 1e-9;
 
   for (int i = 1; i < argc; ++i) {
     const char* a = argv[i];
@@ -111,6 +127,42 @@ int main(int argc, char** argv) {
     }
     if (std::strcmp(a, "--probe-gc") == 0) {
       want_gc = true;
+      continue;
+    }
+    if (std::strcmp(a, "--probe-physics") == 0) {
+      want_physics = true;
+      continue;
+    }
+    if (std::strcmp(a, "--compare-physics-replay") == 0) {
+      if (i + 2 >= argc) {
+        std::fprintf(stderr, "missing LEFT RIGHT for --compare-physics-replay\n");
+        return 2;
+      }
+      compare_left = argv[++i];
+      compare_right = argv[++i];
+      continue;
+    }
+    if (std::strcmp(a, "--physics-tolerance") == 0) {
+      if (i + 1 >= argc) {
+        std::fprintf(stderr, "missing value for --physics-tolerance\n");
+        return 2;
+      }
+      const char* value = argv[++i];
+      char* end = nullptr;
+      physics_tolerance = std::strtod(value, &end);
+      if (!end || *end || !std::isfinite(physics_tolerance) ||
+          physics_tolerance < 0 || physics_tolerance > 1) {
+        std::fprintf(stderr, "invalid --physics-tolerance (expected 0..1)\n");
+        return 2;
+      }
+      continue;
+    }
+    if (std::strcmp(a, "--physics-compare-report") == 0) {
+      if (i + 1 >= argc) {
+        std::fprintf(stderr, "missing path for --physics-compare-report\n");
+        return 2;
+      }
+      compare_report = argv[++i];
       continue;
     }
     if (std::strcmp(a, "--game") == 0) {
@@ -161,6 +213,14 @@ int main(int argc, char** argv) {
       trace_path = argv[++i];
       continue;
     }
+    if (std::strcmp(a, "--physics-telemetry") == 0) {
+      if (i + 1 >= argc) {
+        std::fprintf(stderr, "missing path for --physics-telemetry\n");
+        return 2;
+      }
+      physics_telemetry_path = argv[++i];
+      continue;
+    }
     if (std::strcmp(a, "--metrics") == 0) {
       if (i + 1 >= argc) {
         std::fprintf(stderr, "missing path for --metrics\n");
@@ -178,9 +238,59 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  if (compare_left) {
+    auto comparison = physics_telemetry::compare_replay_files(
+        compare_left, compare_right, physics_tolerance);
+    if (!comparison.error.empty()) {
+      std::fprintf(stderr, "FAIL: %s\n", comparison.error.c_str());
+      return 2;
+    }
+    if (compare_report) {
+      std::string error;
+      if (!physics_telemetry::write_comparison_report(
+              compare_report, comparison.report_json, error)) {
+        std::fprintf(stderr, "FAIL: %s\n", error.c_str());
+        return 2;
+      }
+    }
+    if (!comparison.equal) {
+      std::fprintf(stderr, "MISMATCH: %s\n", comparison.report_json.c_str());
+      return 4;
+    }
+    std::printf("[physics] replay match %s\n", comparison.report_json.c_str());
+    return 0;
+  }
+
+  if (want_physics) {
+    physics_telemetry::ProbeResult result;
+    std::string error;
+    if (!physics_telemetry::run_deterministic_probe(
+            physics_telemetry_path ? physics_telemetry_path : "",
+            result, error, physics_tolerance)) {
+      std::fprintf(stderr, "FAIL: %s\n", error.c_str());
+      return 3;
+    }
+    std::printf("[physics] render partitions match: ticks=%llu; "
+                "stall diverges under current lag policy: %s\n",
+                static_cast<unsigned long long>(result.partition_ticks),
+                result.first_lag_mismatch.c_str());
+    return 0;
+  }
+
   if (!want_probe && !want_game && !want_pacejka && !want_dyno && !want_gc) {
     usage();
     return 1;
+  }
+
+  if (physics_telemetry_path) {
+    physics_telemetry::Identity identity;
+    identity.scenario = want_game ? "game" : want_probe ? "boot-probe"
+        : want_gc ? "gc-probe" : want_dyno ? "dyno-probe" : "pacejka-probe";
+    std::string error;
+    if (!physics_telemetry::start(physics_telemetry_path, identity, error)) {
+      std::fprintf(stderr, "FAIL: %s\n", error.c_str());
+      return 2;
+    }
   }
 
   if (trace_path) {
@@ -219,6 +329,9 @@ int main(int argc, char** argv) {
     return 1;
   }
   std::printf("[host] game_root=%s\n", opt.game_root.c_str());
+  if (physics_telemetry::enabled())
+    physics_telemetry::note_content_hash(physics_telemetry::hash_file(
+        opt.game_root + "/system/Scripts/lang/System.class"));
 
   NativeRegistry natives;
   Jvm jvm(&natives);

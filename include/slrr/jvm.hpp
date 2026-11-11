@@ -69,6 +69,7 @@ class Jvm : public TreeHost {
   double advance_sim_time(double seconds);
   double sim_time() const { return sim_time_; }
   float time_warp(float scale);
+  float time_warp() const { return time_warp_; }
 
   // While set, the first native method with no host binding aborts that call
   // chain (nested TREE invokes propagate the stop to the outermost invoke).

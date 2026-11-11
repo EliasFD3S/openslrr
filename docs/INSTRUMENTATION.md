@@ -2,9 +2,10 @@
 
 Stage 1 provides opt-in structured runtime tracing. Stage 2 adds bounded
 lifetime/resource metrics and final JSON snapshots. Stage 3 adds opt-in MSVC
-AddressSanitizer and deterministic bounded parser mutation lanes. Later
-native-reachability, replay, fault-injection, renderer-media, and native-coverage
-stages are not implemented here.
+AddressSanitizer and deterministic bounded parser mutation lanes. Stage 4 adds
+bounded fixed-step physics telemetry and tick-state replay comparison. Later
+filesystem-fault-injection, native-reachability, renderer-media, and
+native-coverage stages are not implemented here.
 
 ## CLI
 
@@ -167,6 +168,140 @@ as `slrr_instrumentation_diagnostics_tests` and
 `metrics.cpp` to test support because `diagnostics.cpp` now publishes section
 snapshots through it; no shared test harness code is changed.
 
+## Stage 4: physics telemetry
+
+`--physics-telemetry PATH` enables a separate JSONL sink. There is no default
+path and no per-tick stdout. The explicit file is created or truncated; the host
+does not select an output in game or reference data. Normal-sink startup open
+failures are fatal with exit status 2 (a failed physics probe returns 3).
+Delayed write/flush/close failures are reported on
+stderr. The process-lifetime guard flushes and closes on normal and early
+returns, but abrupt process termination is not a clean-flush guarantee.
+
+```powershell
+# Headless deterministic scenario; writes its baseline fixed-partition run.
+slrr_host.exe --probe-physics --physics-telemetry C:\temp\slrr-physics.jsonl
+
+# Normal game/probe modes use the same option.
+slrr_host.exe --game --root C:\path\to\game --physics-telemetry C:\temp\game-physics.jsonl
+```
+
+The deterministic probe does not need a game root. It runs one second of scripted
+throttle and fixed 60 Hz vehicle updates using the same 0.1 s simulation clamp
+and four-update physics admission cap as production. A uniform 120 Hz render
+partition and a bursty partition with the same total time must produce identical
+60-tick state. A 0.2 s initial stall intentionally loses time and produces fewer
+ticks. The probe checks both the positive comparison and that negative control;
+it does not render or start interactive gameplay.
+
+### JSONL schema, version 1
+
+The first line is a `run` record and the last is `summary`. A closing `frame`
+record follows the ticks admitted for that frame. Every line is one bounded JSON
+object. Strings are limited to 160 input bytes; controls and non-ASCII bytes are
+escaped, so output is valid JSON without trusting source text.
+
+* `run`: `schema` (`slrr-physics-telemetry`), `version`, `type`,
+  `scenario`, nullable `vehicle`, `content_hash`, and `config_hash`, plus
+  the active `limits`. The headless probe has fixed synthetic identities. Game
+  mode hashes `system/Scripts/lang/System.class` when available; the first car
+  supplies its numeric resource identity and raw CFG hash when available. Hashes
+  are `fnv1a64:` followed by 16 hex digits. They are change-detection
+  fingerprints, not cryptographic authenticity checks. Missing identity/hash
+  data is `null`, never fabricated.
+* `frame`: numeric `frame`, `render_dt`, `admitted_sim_dt`,
+  `discarded_sim_dt`, `admitted_physics_dt`, `discarded_physics_dt`, and
+  `time_warp`, all in seconds except the dimensionless frame and warp. The sim
+  pair measures the JVM 0.1 s clamp; the physics pair measures admission to the
+  four-update accumulator. Residual accumulator time is not discarded.
+* `input`: monotonic `timestamp_us`, nullable `frame` and `tick`, strictly
+  increasing `sequence`, numeric `device`, `control`, and `value`.
+  Production records keyboard transitions and polled XInput transitions.
+  Timestamps and render-frame associations are observations, not deterministic
+  replay keys. No typed text, key names, controller strings, or user data is
+  recorded.
+* `tick`: numeric `frame` (or `null` for a synthetic unframed capture),
+  fixed `tick` index, `tick_dt`, and `entities`. Entities have a stable
+  creation-ordered numeric `entity` ID and numeric `resource`; they are
+  serialized in increasing entity order. No pointer or GameRef address is used.
+  `active` distinguishes released, ready, non-suspended vehicles. If reliable
+  dynamics is unavailable, `available` is false and state objects are omitted.
+* Available entity state contains `chassis` (mass, position, velocity,
+  momentum, angular velocity, quaternion), `drivetrain` (120 Hz substep count,
+  engine angular velocity/running state, gear, throttle/brake/handbrake/clutch),
+  four `wheels`, `ground_impact`, and `chassis_contact_impulse`. Wheel state
+  includes enabled/contact, suspension length/speed/load, spin/rotation, slip,
+  tire forces, rigid-contact impulse, center/normal/patch. Contact impulses are
+  normal impulses observed in the final 120 Hz substep of that 60 Hz update;
+  non-rigid contacts without an impulse measurement retain the actual zero.
+  Non-finite observed floating values serialize as `null` rather than as
+  invented finite values.
+* `summary`: accepted `frames`, `ticks`, and `inputs`, dropped
+  frame/tick/input/entity counts, `truncated`, and accumulated admitted and
+  discarded timing. An output-byte stop can drop an otherwise accepted record
+  and is reflected by `truncated` and its dropped counter.
+
+Default bounds are 100,000 frames, 250,000 ticks, 100,000 input transitions, 64
+entities per tick, 1 MiB per JSON record, and 256 MiB per file. Excess work is
+dropped and counted; it is not queued without limit. The C++ `Limits` API can
+lower these caps. No script locals, arbitrary resource paths, pointer values,
+or secrets are serialized.
+
+### Replay comparison and its scope
+
+```powershell
+slrr_host.exe --compare-physics-replay A.jsonl B.jsonl
+slrr_host.exe --compare-physics-replay A.jsonl B.jsonl --physics-tolerance 1e-8 --physics-compare-report C:\temp\mismatch.json
+```
+
+The comparison uses an absolute floating tolerance (default `1e-9`, accepted
+range 0 through 1) for physical state. Integer identity, entity order, contact
+flags, gear, and substep counts are exact. It aligns fixed ticks and scripted
+input sequence, while deliberately ignoring render-frame ownership, wall/monotonic
+timestamps, frame timing records, and summary totals. Run scenario and available
+vehicle/content/config identities must match. This lets equivalent fixed-tick
+work compare across render partitions without hiding tick loss: a tick-count
+difference is a mismatch.
+
+Malformed, oversized, duplicate, non-monotonic, or structurally incomplete input
+returns exit status 2 with a useful error (JSON syntax errors include the line).
+A state mismatch returns exit
+status 4 and a bounded JSON mismatch record (up to 32 entries) on stderr; a match
+returns 0. `--physics-compare-report PATH` explicitly writes the same JSON
+report for either outcome. Report paths are never inferred from game data.
+
+This is **not full stock-game input replay**. The current mechanism records and
+compares host transitions and deterministic fixed-tick snapshots; it does not
+reinject OS/controller events, reconstruct script-forced axes, seed every source
+of game randomness, or guarantee that a stock script scenario reaches the same
+state. The probe's scripted throttle is synthetic. Render timing, dropped-time
+policy, and other intentionally non-compared metadata must be inspected
+separately when diagnosing a mismatch. The checks cover this host's current
+fixed-step kernel only; they do not prove whole-game determinism or bit-identical
+results across different CPUs, compilers, or future solver builds.
+
+### Production context and C++ API
+
+`mainloop_frame` now publishes its real host frame to Stage 1/2 diagnostics.
+The fixed vehicle update publishes its real 60 Hz tick immediately before the
+existing update, so traces/metrics around native work inherit useful context.
+Recording occurs after that update and does not reorder solver work, change
+accumulator arithmetic, move VM/fibers off the host thread, or add per-tick
+logging. Snapshots are only collected when telemetry is enabled.
+
+Include `slrr/physics_telemetry.hpp`. `Session` provides bounded file or
+in-memory capture, explicit identity/frame/input/tick methods, and checked
+`flush`/`shutdown`. Free functions manage the production process-wide sink.
+`VehicleDynamics::telemetry_snapshot` is a read-only state copy.
+`validate_replay`, `compare_replay`, and `compare_replay_files` implement
+strict bounded input and tolerant tick comparison. `deterministic_scenario`
+and `run_deterministic_probe` expose the hermetic headless check.
+
+Tests are registered by `tests/physics-telemetry-tests.cmake` as
+`slrr_physics_telemetry_tests`. They cover serialization/nulls/bounds,
+render-partition equality, lag and direct mismatch detection, tolerance,
+malformed input, and actual file/report output.
+
 ## Stage 3: MSVC AddressSanitizer
 
 `SLRR_ENABLE_ASAN` is OFF by default. The normal `build-bgfx-x64` Release
@@ -291,8 +426,8 @@ and other variable-size payloads. No valid TUFA schema or runtime semantics are
 changed.
 
 This stage is deterministic regression fuzzing, not coverage-guided fuzzing or a
-proof of parser correctness. It does not implement replay, persistence fault
-injection, native reachability, renderer/media instrumentation, or interactive
+proof of parser correctness. It does not implement full stock-game input replay,
+persistence fault injection, native reachability, renderer/media instrumentation, or interactive
 validation. ASan coverage excludes uninstrumented third-party code and does not
 replace the normal Release test lane. The Windows CI workflow contains an ASan
 job and uploads generated reproducers/CTest logs on failure; local validation

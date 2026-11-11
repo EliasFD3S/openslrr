@@ -13,6 +13,8 @@
 #include "slrr/scx_mesh.hpp"
 #include "slrr/suspension_geometry.hpp"
 #include "slrr/vehicle_dynamics.hpp"
+#include "slrr/diagnostics.hpp"
+#include "slrr/physics_telemetry.hpp"
 #include <algorithm>
 #include <cctype>
 #include <array>
@@ -123,6 +125,7 @@ struct Record {
   std::array<PartMatrix, 4> travel_frame{}, steered_frame{}, rolling_frame{};
   std::array<bool, 4> geometry_solved{};
   physics::VehicleDynamics dynamics;
+  std::uint64_t telemetry_entity = 0;
   bool physics_ready = false, physics_dirty = true, physics_suspended = false;
   bool physics_reported = false;
   int reported_contacts = -1, physics_status_lines = 0;
@@ -145,6 +148,8 @@ std::string hud_preview_directory;
 constexpr double kPhysicsTick = 1.0 / physics::VehicleDynamics::update_frequency;
 constexpr unsigned kMaxPhysicsTicksPerFrame = 4;
 double physics_elapsed = 0;
+std::uint64_t physics_ticks = 0;
+std::uint64_t next_telemetry_entity = 1;
 std::unordered_map<uint32_t, std::shared_ptr<const PartConfig>> configurations;
 RpkIndex *index = nullptr;
 Jvm *runtime = nullptr;
@@ -1100,6 +1105,7 @@ Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
   if (!part)
     return nullptr;
   Record rec;
+  rec.telemetry_entity = next_telemetry_entity++;
   rec.state.object = part;
   rec.state.resource = resource;
   rec.config = cfg;
@@ -1118,6 +1124,11 @@ Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
     }
   }
   records.emplace(part, std::move(rec));
+  if (cfg->native_kind == "car" && physics_telemetry::enabled()) {
+    const auto config_path = std::filesystem::path(resources.game_root()) / cfg->source;
+    physics_telemetry::note_vehicle(resource,
+        physics_telemetry::hash_file(config_path.string()));
+  }
   auto *node = gameref_upsert(part, GameRefKind::GameType);
   node->type_id = resource;
   node->script = part;
@@ -2696,6 +2707,26 @@ void advance_chassis_tick() {
         if (auto* vehicle = record(chassis))
           detach_panel(part, *panel, chassis, *vehicle);
 }
+
+std::vector<physics_telemetry::EntityState> telemetry_entities() {
+  std::vector<physics_telemetry::EntityState> entities;
+  entities.reserve(records.size());
+  for (const auto &[key, rec] : records) {
+    (void)key;
+    if (rec.config->native_kind != "car") continue;
+    physics_telemetry::EntityState entity;
+    entity.entity = rec.telemetry_entity;
+    entity.resource = rec.state.resource;
+    entity.active = rec.physics_ready && rec.physics_released && !rec.physics_suspended;
+    entity.available = rec.physics_ready;
+    if (entity.available) entity.vehicle = rec.dynamics.telemetry_snapshot();
+    entities.push_back(std::move(entity));
+  }
+  std::sort(entities.begin(), entities.end(), [](const auto &left, const auto &right) {
+    return left.entity < right.entity;
+  });
+  return entities;
+}
 } // namespace
 
 void part_pause_engine_audio(bool paused) {
@@ -2709,6 +2740,8 @@ void part_pause_engine_audio(bool paused) {
 void part_physics_advance(double seconds) {
   if (!std::isfinite(seconds) || seconds < 0)
     throw std::invalid_argument("invalid vehicle elapsed time");
+  const double admitted = std::min(seconds, kPhysicsTick * kMaxPhysicsTicksPerFrame);
+  physics_telemetry::note_physics_time(admitted, seconds - admitted);
   // Hinges also animate while the chassis physics is suspended in the garage.
   // Advance a normalized phase so reversing mid-motion preserves the pose.
   const float hinge_step = static_cast<float>(seconds / 0.5);
@@ -2725,13 +2758,17 @@ void part_physics_advance(double seconds) {
   }
 
   // Ignore excess time after a long stall so the next frame can still render.
-  physics_elapsed += std::min(seconds, kPhysicsTick * kMaxPhysicsTicksPerFrame);
+  physics_elapsed += admitted;
   constexpr double tolerance = kPhysicsTick * 1e-10;
   if (physics_elapsed + tolerance < kPhysicsTick) return;
 
   scene_instances_prepare_physics();
   while (physics_elapsed + tolerance >= kPhysicsTick) {
+    diagnostics::set_tick(physics_ticks);
     advance_chassis_tick();
+    if (physics_telemetry::enabled())
+      physics_telemetry::record_tick(physics_ticks, kPhysicsTick, telemetry_entities());
+    ++physics_ticks;
     physics_elapsed = std::max(0.0, physics_elapsed - kPhysicsTick);
   }
   for (auto &[key, rec] : records) {
@@ -2938,6 +2975,8 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   hud_preview = {};
   hud_preview_directory.clear();
   physics_elapsed = 0;
+  physics_ticks = 0;
+  next_telemetry_entity = 1;
   sfx_items.clear();
   configurations.clear();
   slot_aliases.clear();

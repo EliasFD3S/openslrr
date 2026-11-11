@@ -81,6 +81,7 @@ add_executable(slrr_host
   src/physics/tire_model.cpp
   src/physics/dyno_model.cpp
   src/physics/vehicle_dynamics.cpp
+  src/physics/physics_telemetry.cpp
   src/physics/deformation_cage.cpp
   src/physics/suspension_geometry.cpp
 )

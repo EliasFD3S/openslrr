@@ -1,5 +1,6 @@
 #include "slrr/host_input.hpp"
 #include "slrr/host_game_options.hpp"
+#include "slrr/physics_telemetry.hpp"
 
 #include "slrr/jvm.hpp"
 #include "slrr/osd_registry.hpp"
@@ -136,15 +137,21 @@ void host_input_clear_history() { history.clear(); }
 
 void host_input_key(int scan, bool down) {
   if (scan <= 0 || scan >= static_cast<int>(keys.size())) return;
+  const bool changed = keys[scan] != down;
   if (down && !keys[scan]) {
     pressed[scan] = true;
     if (key_presses.size() == 64) key_presses.pop_front();
     key_presses.push_back(scan);
   }
   keys[scan] = down;
+  if (changed && physics_telemetry::enabled())
+    physics_telemetry::record_input(0, scan, down ? 1.0 : 0.0);
 }
 
 void host_input_clear_keys() {
+  if (physics_telemetry::enabled())
+    for (std::size_t i = 0; i < keys.size(); ++i)
+      if (keys[i]) physics_telemetry::record_input(0, static_cast<int>(i), 0.0);
   keys.fill(false);
   pressed.fill(false);
   frame_pressed.fill(false);
@@ -195,6 +202,7 @@ void host_input_poll_keys() {
   };
   constexpr int left = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
   constexpr int right = XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE;
+  const auto previous_pad = pad;
   pad = {stick(-lx, left), stick(lx, left), stick(ly, left), stick(-ly, left),
          stick(-rx, right), stick(rx, right), stick(ry, right), stick(-ry, right),
          trigger(state.bLeftTrigger), trigger(state.bRightTrigger)};
@@ -207,6 +215,10 @@ void host_input_poll_keys() {
       XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_X, XINPUT_GAMEPAD_Y};
   for (size_t i = 0; i < std::size(buttons); ++i)
     pad[10 + i] = (state.wButtons & buttons[i]) ? 1.f : 0.f;
+  if (physics_telemetry::enabled())
+    for (size_t i = 0; i < pad.size(); ++i)
+      if (pad[i] != previous_pad[i])
+        physics_telemetry::record_input(kPad, static_cast<int>(i), pad[i]);
 #endif
 }
 
