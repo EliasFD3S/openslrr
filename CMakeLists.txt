@@ -37,6 +37,7 @@ add_executable(slrr_host
   src/platform/game_root.cpp
   src/platform/diagnostics.cpp
   src/platform/metrics.cpp
+  src/platform/crash_logging.cpp
   src/platform/host_input.cpp
   src/platform/host_sfx.cpp
   src/platform/host_music.cpp
@@ -193,9 +194,9 @@ target_include_directories(slrr_host PRIVATE
   "${SLRR_SHADER_OUT}"
   "${BIMG_DIR}/3rdparty"
 )
-target_link_libraries(slrr_host PRIVATE bgfx bx bimg)
+target_link_libraries(slrr_host PRIVATE bgfx bx bimg dbghelp)
 target_compile_features(slrr_host PRIVATE cxx_std_20)
-target_compile_definitions(slrr_host PRIVATE SLRR_HAS_LIBBGFX=1)
+target_compile_definitions(slrr_host PRIVATE SLRR_HAS_LIBBGFX=1 SLRR_BUILD_CONFIGURATION="$<CONFIG>")
 message(STATUS "slrr_host: libbgfx + mesh shaders enabled")
 
 install(TARGETS slrr_host RUNTIME DESTINATION bin)

@@ -10,6 +10,8 @@
 #include "slrr/sl2_pacejka.hpp"
 #include "slrr/natives_boot.hpp"
 #include "slrr/gameref.hpp"
+#include "slrr/crash_logging.hpp"
+#include "slrr_version.h"
 
 #include <cmath>
 #include <cstdio>
@@ -52,6 +54,24 @@ struct MetricsFinalizer {
   DiagnosticsSession& session_;
 };
 
+struct CrashLogSession {
+  ~CrashLogSession() {
+    if (slrr::crash_logging::active())
+      slrr::crash_logging::shutdown(slrr::crash_logging::Disposition::Normal);
+  }
+};
+
+struct CrashLogFinalizer {
+  ~CrashLogFinalizer() {
+    if (slrr::crash_logging::active())
+      slrr::crash_logging::shutdown(slrr::crash_logging::Disposition::Normal);
+  }
+};
+
+#ifndef SLRR_BUILD_CONFIGURATION
+#define SLRR_BUILD_CONFIGURATION "Unknown"
+#endif
+
 void usage() {
   std::printf(
       "slrr_host — clean C++ host for Street Legal Racing Redline\n"
@@ -74,6 +94,7 @@ void usage() {
       "             --metrics PATH writes a final JSON metrics snapshot;\n"
       "             includes bounded section history, even without --trace.\n"
       "             --physics-telemetry PATH writes bounded physics JSONL.\n"
+      "             --log-all DIR captures stdout/stderr, events, metrics, and crashes.\n"
       "Replay compare: exit 0 = match, 4 = state mismatch, 2 = input/error.\n"
       "\n"
       "Default --game: FMV intros → Init(int) (Soft splash / menu).\n"
@@ -87,6 +108,7 @@ void usage() {
 int main(int argc, char** argv) {
   using namespace slrr;
   DiagnosticsSession diagnostics_session;
+  CrashLogSession crash_log_session;
   // Line-buffered stdout stalls a dialog on every log line. Keep a block
   // buffer; real failures still go to stderr.
   std::setvbuf(stdout, nullptr, _IOFBF, 1 << 16);
@@ -100,6 +122,7 @@ int main(int argc, char** argv) {
   BootOptions opt;
   const char* root_arg = nullptr;
   const char* trace_path = nullptr;
+  const char* log_all_path = nullptr;
   const char* physics_telemetry_path = nullptr;
   const char* compare_left = nullptr;
   const char* compare_right = nullptr;
@@ -213,6 +236,14 @@ int main(int argc, char** argv) {
       trace_path = argv[++i];
       continue;
     }
+    if (std::strcmp(a, "--log-all") == 0) {
+      if (i + 1 >= argc || !argv[i + 1][0]) {
+        std::fprintf(stderr, "missing directory for --log-all\n");
+        return 2;
+      }
+      log_all_path = argv[++i];
+      continue;
+    }
     if (std::strcmp(a, "--physics-telemetry") == 0) {
       if (i + 1 >= argc) {
         std::fprintf(stderr, "missing path for --physics-telemetry\n");
@@ -236,6 +267,27 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "unknown arg: %s\n", a);
     usage();
     return 1;
+  }
+
+  if (log_all_path && trace_path) {
+    std::fprintf(stderr, "--trace and --log-all are mutually exclusive; log-all owns events.jsonl\n");
+    return 2;
+  }
+  if (log_all_path && !diagnostics_session.metrics_path.empty()) {
+    std::fprintf(stderr, "--metrics and --log-all are mutually exclusive; log-all owns metrics.json\n");
+    return 2;
+  }
+  if (log_all_path) {
+    crash_logging::Options options;
+    options.directory = log_all_path;
+    options.preserve_console_output = true;
+    options.build_id = SLRR_VERSION;
+    options.build_configuration = SLRR_BUILD_CONFIGURATION;
+    std::string error;
+    if (!crash_logging::start(options, error)) {
+      std::fprintf(stderr, "FAIL: %s\n", error.c_str());
+      return 2;
+    }
   }
 
   if (compare_left) {
@@ -336,6 +388,7 @@ int main(int argc, char** argv) {
   NativeRegistry natives;
   Jvm jvm(&natives);
   MetricsFinalizer metrics_finalizer(diagnostics_session);
+  CrashLogFinalizer crash_log_finalizer;
   if (want_gc) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     jvm.set_game_root(opt.game_root);

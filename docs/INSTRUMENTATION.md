@@ -1,5 +1,9 @@
 # Runtime instrumentation
 
+For complete per-run stdout/stderr capture, manifests, and crash dumps, use
+`--log-all DIR`. It is mutually exclusive with `--trace` and `--metrics`; see
+[CRASH_LOGGING.md](CRASH_LOGGING.md) for files, guarantees, and privacy limits.
+
 Stage 1 provides opt-in structured runtime tracing. Stage 2 adds bounded
 lifetime/resource metrics and final JSON snapshots. Stage 3 adds opt-in MSVC
 AddressSanitizer and deterministic bounded parser mutation lanes. Stage 4 adds
