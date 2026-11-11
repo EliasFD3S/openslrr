@@ -5,6 +5,7 @@
 #include "slrr/render_backend.hpp"
 #include "slrr/dyno_model.hpp"
 #include "slrr/diagnostics.hpp"
+#include "slrr/metrics.hpp"
 #include "slrr/sl2_pacejka.hpp"
 #include "slrr/natives_boot.hpp"
 #include "slrr/gameref.hpp"
@@ -17,7 +18,33 @@
 namespace {
 
 struct DiagnosticsSession {
-  ~DiagnosticsSession() { slrr::diagnostics::shutdown(); }
+  ~DiagnosticsSession() {
+    write_metrics();
+    slrr::diagnostics::shutdown();
+  }
+
+  void write_metrics() noexcept {
+    try {
+      if (metrics_written || metrics_path.empty()) return;
+      metrics_written = true;
+      std::string error;
+      if (!slrr::metrics::write_snapshot(metrics_path, error))
+        std::fprintf(stderr, "FAIL: %s\n", error.c_str());
+    } catch (...) {
+      // Metrics finalization must not replace the host's return behavior.
+    }
+  }
+
+  std::string metrics_path;
+  bool metrics_written = false;
+};
+
+// The outer session also covers argument/probe early returns. This nested
+// finalizer takes the normal VM-era snapshot before Jvm unregisters its provider.
+struct MetricsFinalizer {
+  explicit MetricsFinalizer(DiagnosticsSession& session) : session_(session) {}
+  ~MetricsFinalizer() { session_.write_metrics(); }
+  DiagnosticsSession& session_;
 };
 
 void usage() {
@@ -36,6 +63,8 @@ void usage() {
       "           [PlayerName]\n"
       "\n"
       "Diagnostics: --trace PATH writes structured JSONL (opt-in).\n"
+      "             --metrics PATH writes a final JSON metrics snapshot;\n"
+      "             includes bounded section history, even without --trace.\n"
       "\n"
       "Default --game: FMV intros → Init(int) (Soft splash / menu).\n"
       "--auto-new skips to Garage (smoke). ESC skips boot intros.\n"
@@ -132,6 +161,14 @@ int main(int argc, char** argv) {
       trace_path = argv[++i];
       continue;
     }
+    if (std::strcmp(a, "--metrics") == 0) {
+      if (i + 1 >= argc) {
+        std::fprintf(stderr, "missing path for --metrics\n");
+        return 2;
+      }
+      diagnostics_session.metrics_path = argv[++i];
+      continue;
+    }
     if (a[0] != '-') {
       opt.player_name = a;
       continue;
@@ -185,6 +222,7 @@ int main(int argc, char** argv) {
 
   NativeRegistry natives;
   Jvm jvm(&natives);
+  MetricsFinalizer metrics_finalizer(diagnostics_session);
   if (want_gc) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     jvm.set_game_root(opt.game_root);

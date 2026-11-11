@@ -15,6 +15,8 @@
 
 namespace slrr {
 
+namespace metrics { struct Value; }
+
 class Jvm : public TreeHost {
  public:
   explicit Jvm(NativeRegistry* natives);
@@ -137,6 +139,9 @@ class Jvm : public TreeHost {
   static int count_args(const std::string& jni_sig);
   void halt_unbound(const std::string& owner, const std::string& method,
                     const std::string& jni);
+
+  static void provide_metrics(void* context, std::vector<metrics::Value>& values);
+  std::uint64_t metrics_provider_id_ = 0;
 
   NativeRegistry* natives_ = nullptr;
   std::string game_root_;

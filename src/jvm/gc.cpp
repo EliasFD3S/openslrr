@@ -1,5 +1,6 @@
 #include "slrr/jvm.hpp"
 #include "slrr/diagnostics.hpp"
+#include "slrr/metrics.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -7,6 +8,16 @@
 #include <unordered_set>
 
 namespace slrr {
+void Jvm::provide_metrics(void* context, std::vector<metrics::Value>& values) {
+  const auto& vm = *static_cast<const Jvm*>(context);
+  values.push_back({"vm.heap_objects", static_cast<std::int64_t>(vm.heap_size()),
+                    metrics::Kind::Gauge});
+  values.push_back({"vm.classes_loaded", static_cast<std::int64_t>(vm.classes_loaded()),
+                    metrics::Kind::Gauge});
+  values.push_back({"vm.gc_last_freed", static_cast<std::int64_t>(vm.gc_last_freed()),
+                    metrics::Kind::Gauge});
+}
+
 Jvm::RootScope::RootScope(Jvm& vm,GcRootProvider provider):vm_(vm),id_(++vm.gc_frame_id_) {
   vm_.gc_frames_.emplace(id_,std::move(provider));
 }

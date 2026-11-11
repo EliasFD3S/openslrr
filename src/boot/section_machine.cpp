@@ -133,8 +133,8 @@ void SectionMachine::adopt_actual(Object* next) {
   auto* old = actual_;
   actual_ = next;
   actual_name_ = next ? next->class_name : "(null)";
+  diagnostics::set_section(actual_name_);
   if (diagnostics::enabled()) {
-    diagnostics::set_section(actual_name_);
     diagnostics::Event event;
     event.category = diagnostics::Category::Section;
     event.name = "section.transition";
@@ -177,8 +177,8 @@ void SectionMachine::change_active_section(Object* next) {
   }
   actual_ = next;
   actual_name_ = next ? next->class_name : "(null)";
+  diagnostics::set_section(actual_name_);
   if (diagnostics::enabled()) {
-    diagnostics::set_section(actual_name_);
     diagnostics::Event event;
     event.category = diagnostics::Category::Section;
     event.name = "section.transition";

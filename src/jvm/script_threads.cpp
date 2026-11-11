@@ -1,5 +1,6 @@
 #include "slrr/script_threads.hpp"
 #include "slrr/diagnostics.hpp"
+#include "slrr/metrics.hpp"
 #include "slrr/jvm.hpp"
 #include "slrr/natives_boot.hpp"
 #include <algorithm>
@@ -35,6 +36,12 @@ struct Scheduler {
   std::unordered_map<Object*,std::unique_ptr<Thread>> threads;
 };
 std::unordered_map<Jvm*,std::unique_ptr<Scheduler>> schedulers;
+const bool g_metrics_registered=[] {
+  return metrics::register_provider([](void*,std::vector<metrics::Value>& values) {
+    values.push_back({"fibers.live",static_cast<std::int64_t>(script_threads_live_count()),
+                      metrics::Kind::Gauge});
+  })!=0;
+}();
 Scheduler& state(Jvm& vm){auto& p=schedulers[&vm];if(!p){p=std::make_unique<Scheduler>();p->vm=&vm;}return *p;}
 Thread* find(Jvm& vm,Object* o){auto s=schedulers.find(&vm);if(s==schedulers.end())return nullptr;auto i=s->second->threads.find(o);return i==s->second->threads.end()?nullptr:i->second.get();}
 #ifdef _WIN32
@@ -152,6 +159,12 @@ void script_thread_suspend(Jvm& vm,Object* o,bool suspended){
 #endif
 }
 bool script_thread_active(Jvm& vm){auto i=schedulers.find(&vm);return i!=schedulers.end()&&i->second->current;}
+std::size_t script_threads_live_count(){
+  std::size_t count=0;
+  for(const auto& scheduler:schedulers)
+    for(const auto& thread:scheduler.second->threads)count+=thread.second->alive?1:0;
+  return count;
+}
 void script_thread_sleep(Jvm& vm,float ms){
   if(!std::isfinite(ms)||ms<0)ms=0;
   auto& s=state(vm);

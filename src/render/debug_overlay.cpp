@@ -3,6 +3,7 @@
 #include "slrr/host_game_options.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/host_sfx.hpp"
+#include "slrr/metrics.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/osd_registry.hpp"
 #include "slrr/scene_instances.hpp"
@@ -46,6 +47,35 @@ void draw_render(uint16_t width, uint16_t height, DebugOverlay::RenderOptions& o
   ImGui::Checkbox("Sun flare", &options.sun_flare);
   ImGui::Checkbox("Game OSD", &options.game_osd);
   if (ImGui::Button("Reset render options")) options = {};
+}
+
+void draw_metrics() {
+  const auto current = metrics::snapshot();
+  if (current.frame) ImGui::Text("Frame: %llu", static_cast<unsigned long long>(*current.frame));
+  if (current.tick) ImGui::Text("Tick: %llu", static_cast<unsigned long long>(*current.tick));
+  ImGui::Text("Section: %s", current.section.empty() ? "(unavailable)" : current.section.c_str());
+  if (ImGui::BeginTable("metric-values", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+    ImGui::TableSetupColumn("Name");
+    ImGui::TableSetupColumn("Kind");
+    ImGui::TableSetupColumn("Value");
+    ImGui::TableHeadersRow();
+    for (const auto& value : current.values) {
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(value.name.c_str());
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(value.kind == metrics::Kind::Counter ? "counter" : "gauge");
+      ImGui::TableNextColumn();
+      ImGui::Text("%lld", static_cast<long long>(value.value));
+    }
+    ImGui::EndTable();
+  }
+  const auto sections = metrics::section_snapshots();
+  ImGui::Text("Section snapshots: %zu (compare repeated cycles, not one sample)", sections.size());
+  const std::size_t first = sections.size() > 4 ? sections.size() - 4 : 0;
+  for (std::size_t i = first; i < sections.size(); ++i) {
+    ImGui::Text("%zu: %s", i + 1, sections[i].section.c_str());
+  }
 }
 
 void draw_tuning(Jvm* vm) {
@@ -304,6 +334,10 @@ void DebugOverlay::draw(HWND hwnd, uint16_t width, uint16_t height,
       }
       if (ImGui::BeginTabItem("OSD")) {
         draw_osd_inspector();
+        ImGui::EndTabItem();
+      }
+      if (ImGui::BeginTabItem("Metrics")) {
+        draw_metrics();
         ImGui::EndTabItem();
       }
       if (ImGui::BeginTabItem("Renderer")) {

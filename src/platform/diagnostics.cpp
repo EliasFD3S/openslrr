@@ -1,5 +1,7 @@
 #include "slrr/diagnostics.hpp"
 
+#include "slrr/metrics.hpp"
+
 #if SLRR_ENABLE_DIAGNOSTICS
 
 #include <algorithm>
@@ -309,7 +311,10 @@ std::size_t dropped_events() noexcept {
 }
 
 void set_context(Context context) {
-  if (enabled()) g_context = std::move(context);
+  if (enabled()) {
+    g_context = std::move(context);
+    metrics::capture_section_transition();
+  }
 }
 
 Context current_context() {
@@ -325,7 +330,9 @@ void set_tick(std::uint64_t tick) {
 }
 
 void set_section(std::string section) {
-  if (enabled()) g_context.section = std::move(section);
+  // Section metrics are useful without an active JSONL trace sink.
+  g_context.section = std::move(section);
+  metrics::capture_section_transition();
 }
 
 void set_fiber(std::uint64_t fiber_id) {

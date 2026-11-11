@@ -1,4 +1,5 @@
 #include "slrr/jvm.hpp"
+#include "slrr/metrics.hpp"
 #include "slrr/scene_presentation.hpp"
 #include "slrr/script_threads.hpp"
 #include "slrr/script_events.hpp"
@@ -74,8 +75,14 @@ float bits_to_float_u32(uint32_t bits) {
 
 }  // namespace
 
-Jvm::Jvm(NativeRegistry* natives) : natives_(natives) {}
-Jvm::~Jvm() { script_threads_shutdown(*this); script_events_shutdown(*this); }
+Jvm::Jvm(NativeRegistry* natives) : natives_(natives) {
+  metrics_provider_id_ = metrics::register_provider(&Jvm::provide_metrics, this);
+}
+Jvm::~Jvm() {
+  metrics::unregister_provider(metrics_provider_id_);
+  script_threads_shutdown(*this);
+  script_events_shutdown(*this);
+}
 
 double Jvm::advance_sim_time(double seconds) {
   constexpr double max_step = 0.1;

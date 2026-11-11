@@ -3,6 +3,7 @@
 #include "slrr/scx_mesh.hpp"
 #include "slrr/scene_sun.hpp"
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -41,6 +42,16 @@ struct SceneShadowDecal {
   float uv[4] = {0.f, 0.f, 1.f, 1.f};
   std::string texture;
 };
+
+struct SceneInstanceCacheStats {
+  std::size_t meshes = 0;
+  std::size_t mesh_overrides = 0;
+  std::size_t collision_overrides = 0;
+  std::size_t texture_paths = 0;
+  std::size_t ground_prop_maps = 0;
+  std::size_t static_meshes = 0;
+};
+SceneInstanceCacheStats scene_instances_cache_stats();
 
 void scene_instances_set_resources(const RpkIndex *resources);
 void scene_instances_set_envmap(uint32_t resource);

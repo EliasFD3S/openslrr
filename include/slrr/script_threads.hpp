@@ -1,5 +1,6 @@
 #pragma once
 #include "slrr/gc_roots.hpp"
+#include <cstddef>
 #include <string>
 namespace slrr {
 class Jvm; struct Object;
@@ -14,6 +15,7 @@ void script_thread_suspend(Jvm&,Object*,bool);
 void script_thread_sleep(Jvm&,float milliseconds);
 bool script_thread_checkpoint(Jvm&);
 bool script_thread_active(Jvm&);
+std::size_t script_threads_live_count();
 void script_threads_tick(Jvm&);
 void script_threads_shutdown(Jvm&);
 void script_threads_roots(Jvm&,const GcRootVisitor&);

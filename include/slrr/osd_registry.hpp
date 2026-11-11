@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -8,6 +9,13 @@
 namespace slrr {
 
 struct Object;
+
+struct OsdRegistryStats {
+  std::size_t live = 0;
+  std::size_t dead = 0;
+  std::size_t total = 0;
+};
+OsdRegistryStats osd_registry_stats();
 
 // OSD widgets registered by Osd.createButton / createRectangle (TREE → native).
 // Coordinates are stock OSD text-space ≈ fullscreen NDC (y+ down, y=-1 top).

@@ -4,6 +4,7 @@
 #include "slrr/gameref.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
+#include "slrr/metrics.hpp"
 #include "slrr/osd_registry.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/render_backend.hpp"
@@ -31,6 +32,16 @@ namespace {
 // page saves, destroys, then loads that path; a failed disk write must still
 // be what the following read sees.
 std::unordered_map<std::string, std::vector<uint8_t>> g_unflushed_saves;
+
+const bool g_metrics_registered = [] {
+  return metrics::register_provider([](void*, std::vector<metrics::Value>& values) {
+    values.push_back({"host.files_open", static_cast<std::int64_t>(g_host_files.size()),
+                      metrics::Kind::Gauge});
+    values.push_back({"host.pending_writes",
+                      static_cast<std::int64_t>(g_unflushed_saves.size()),
+                      metrics::Kind::Gauge});
+  }) != 0;
+}();
 
 std::string save_key(const std::filesystem::path& path) {
   std::error_code ec;

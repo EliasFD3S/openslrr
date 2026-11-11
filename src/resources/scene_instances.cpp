@@ -2,6 +2,7 @@
 #include "slrr/scene_instances.hpp"
 #include <limits>
 #include "slrr/gameref.hpp"
+#include "slrr/metrics.hpp"
 #include "slrr/part_config.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/rpk_index.hpp"
@@ -48,6 +49,17 @@ struct StaticMesh {
 };
 std::vector<StaticMesh> g_static;
 bool g_static_enabled = true;
+const bool g_metrics_registered = [] {
+  return metrics::register_provider([](void*, std::vector<metrics::Value>& values) {
+    const auto stats = scene_instances_cache_stats();
+    values.push_back({"scene.meshes_cached", static_cast<std::int64_t>(stats.meshes), metrics::Kind::Gauge});
+    values.push_back({"scene.mesh_overrides", static_cast<std::int64_t>(stats.mesh_overrides), metrics::Kind::Gauge});
+    values.push_back({"scene.collision_overrides", static_cast<std::int64_t>(stats.collision_overrides), metrics::Kind::Gauge});
+    values.push_back({"scene.texture_paths_cached", static_cast<std::int64_t>(stats.texture_paths), metrics::Kind::Gauge});
+    values.push_back({"scene.ground_prop_maps", static_cast<std::int64_t>(stats.ground_prop_maps), metrics::Kind::Gauge});
+    values.push_back({"scene.static_meshes", static_cast<std::int64_t>(stats.static_meshes), metrics::Kind::Gauge});
+  }) != 0;
+}();
 uint64_t floor_cell(int32_t x, int32_t z) {
   return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) |
          static_cast<uint32_t>(z);
@@ -1676,5 +1688,9 @@ void *scene_instances_pick(const float origin[3], const float direction[3], floa
 
 void scene_visit_gc_roots(const GcRootVisitor& visit) {
   visit(g_world); visit(g_sky);
+}
+SceneInstanceCacheStats scene_instances_cache_stats() {
+  return {g_meshes.size(), g_overrides.size(), g_collision_overrides.size(),
+          g_texture_paths.size(), g_ground_props.size(), g_static.size()};
 }
 } // namespace slrr
