@@ -2,6 +2,7 @@
 #include "slrr/vehicle_dynamics.hpp"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 
 namespace slrr::physics {
@@ -529,6 +530,8 @@ void VehicleDynamics::step_drive() {
 void VehicleDynamics::step(const Terrain &terrain) {
   last_rigid_impulses_.fill(0);
   last_chassis_impulse_ = 0;
+  last_contact_count_ = 0;
+  last_dropped_contacts_ = 0;
   // Recover initial overlaps through physical contacts, not a floor teleport.
   double ceiling = body.position.y;
   for (Vec3 p : body.corners())
@@ -616,7 +619,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
     double depth = 0;
     Vec3 correction;
     auto solve = [&](Vec3 point, double restitution, bool chassis = false,
-                     double* tyre_impulse = nullptr) {
+                     double* tyre_impulse = nullptr, int wheel = -1) {
       GroundHit ground;
       if (!terrain(point.x, point.z, ceiling, ground))
         return false;
@@ -632,6 +635,8 @@ void VehicleDynamics::step(const Terrain &terrain) {
       const double impulse = body.contact(point, ground.normal, restitution, friction);
       if (chassis) last_chassis_impulse_ += impulse;
       if (tyre_impulse) *tyre_impulse += impulse;
+      observe_contact({chassis ? 0u : 1u, wheel, ground.identity, point,
+                       ground.normal, overlap, impulse});
       if (overlap > depth) {
         depth = overlap;
         correction = ground.normal.normalized();
@@ -657,7 +662,8 @@ void VehicleDynamics::step(const Terrain &terrain) {
       const auto point = body.position +
                          body.orientation.rotate(local - body.center) -
                          Vec3{0, wheel.radius, 0};
-      if (solve(point, 0, false, wheel.rigid_contact ? &rigid_impulses[i] : nullptr) &&
+      if (solve(point, 0, false, wheel.rigid_contact ? &rigid_impulses[i] : nullptr,
+                static_cast<int>(i)) &&
           wheel.rigid_contact)
         state[i].contact = true;
     }
@@ -720,6 +726,14 @@ void VehicleDynamics::release_wheels() {
 uint64_t VehicleDynamics::backlog() const {
   return static_cast<uint64_t>((accumulator_ + timestep * 1e-10) / timestep);
 }
+void VehicleDynamics::observe_contact(const ContactTelemetry& contact) noexcept {
+  if (last_contact_count_ == last_contacts_.size()) {
+    if (last_dropped_contacts_ != std::numeric_limits<std::uint32_t>::max())
+      ++last_dropped_contacts_;
+    return;
+  }
+  last_contacts_[last_contact_count_++] = contact;
+}
 VehicleTelemetry VehicleDynamics::telemetry_snapshot() const {
   VehicleTelemetry out;
   out.mass = body.mass;
@@ -739,6 +753,9 @@ VehicleTelemetry VehicleDynamics::telemetry_snapshot() const {
   out.ground_impact = {ground_impact.point, ground_impact.normal,
                        ground_impact.speed};
   out.chassis_contact_impulse = last_chassis_impulse_;
+  out.contacts = last_contacts_;
+  out.contact_count = last_contact_count_;
+  out.dropped_contacts = last_dropped_contacts_;
   for (size_t i = 0; i < out.wheels.size(); ++i) {
     const auto &source = state[i];
     auto &target = out.wheels[i];

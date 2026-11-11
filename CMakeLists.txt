@@ -37,6 +37,7 @@ add_executable(slrr_host
   src/platform/game_root.cpp
   src/platform/diagnostics.cpp
   src/platform/metrics.cpp
+  src/platform/platform_telemetry.cpp
   src/platform/crash_logging.cpp
   src/platform/host_input.cpp
   src/platform/host_sfx.cpp

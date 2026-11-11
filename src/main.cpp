@@ -17,7 +17,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -92,6 +95,135 @@ struct NativeReportFinalizer {
   DiagnosticsSession& session_;
 };
 
+
+using Bytes = std::vector<std::uint8_t>;
+
+void append_u32(Bytes& out, std::uint32_t value) {
+  for (unsigned shift = 0; shift < 32; shift += 8)
+    out.push_back(static_cast<std::uint8_t>(value >> shift));
+}
+void append_chunk(Bytes& out, const char (&tag)[5], const Bytes& payload) {
+  out.insert(out.end(), tag, tag + 4);
+  append_u32(out, static_cast<std::uint32_t>(payload.size()));
+  out.insert(out.end(), payload.begin(), payload.end());
+}
+void append_utf8(Bytes& out, const std::string& text) {
+  append_u32(out, 0);
+  append_u32(out, static_cast<std::uint32_t>(text.size()));
+  out.insert(out.end(), text.begin(), text.end());
+  out.push_back(0);
+}
+struct NativeMethod {
+  const char* name;
+  const char* descriptor;
+  bool is_static;
+};
+
+Bytes hermetic_native_class(const std::string& name, const std::string& super,
+                            const std::vector<NativeMethod>& methods) {
+  Bytes cons;
+  append_u32(cons, static_cast<std::uint32_t>(2 + (super.empty() ? 0 : 2) + methods.size() * 2));
+  append_utf8(cons, name);
+  append_u32(cons, 4);
+  append_u32(cons, 0);
+  if (!super.empty()) {
+    append_utf8(cons, super);
+    append_u32(cons, 4);
+    append_u32(cons, 2);
+  }
+  const std::uint32_t first_method = super.empty() ? 2 : 4;
+  for (const auto& method : methods) {
+    append_utf8(cons, method.name);
+    append_utf8(cons, method.descriptor);
+  }
+  Bytes method_data;
+  const auto append_methods = [&](bool is_static) {
+    std::uint32_t count = 0;
+    for (const auto& method : methods) count += method.is_static == is_static;
+    append_u32(method_data, count);
+    for (std::size_t i = 0; i < methods.size(); ++i) {
+      if (methods[i].is_static != is_static) continue;
+      append_u32(method_data, 0x40);
+      append_u32(method_data, first_method + static_cast<std::uint32_t>(i * 2));
+      append_u32(method_data, first_method + static_cast<std::uint32_t>(i * 2 + 1));
+      append_u32(method_data, slrr::kTufaNone);
+      append_u32(method_data, 0);
+    }
+  };
+  append_methods(true);
+  append_methods(false);
+  Bytes clss;
+  append_u32(clss, slrr::kTufaNone);
+  append_u32(clss, 0);
+  append_u32(clss, 1);
+  append_u32(clss, super.empty() ? slrr::kTufaNone : 3);
+  append_u32(clss, 0);
+  Bytes trees;
+  append_u32(trees, 0);
+  Bytes bytes;
+  bytes.insert(bytes.end(), {'T','U','F','A'});
+  append_u32(bytes, 4);
+  append_u32(bytes, 940);
+  append_chunk(bytes, "CONS", cons);
+  append_chunk(bytes, "MTHD", method_data);
+  append_chunk(bytes, "CLSS", clss);
+  append_chunk(bytes, "TREE", trees);
+  return bytes;
+}
+
+bool write_class(const std::filesystem::path& directory, const std::string& name,
+                 const std::string& super, const std::vector<NativeMethod>& methods,
+                 std::string& error) {
+  const auto simple = name.substr(name.find_last_of('.') + 1);
+  const auto path = directory / (simple + ".class");
+  const auto bytes = hermetic_native_class(name, super, methods);
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  output.write(reinterpret_cast<const char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+  if (!output) {
+    error = "cannot write hermetic GC class: " + path.string();
+    return false;
+  }
+  return true;
+}
+
+bool prepare_hermetic_gc_classes(slrr::Jvm& jvm, std::string& error) {
+  namespace fs = std::filesystem;
+  fs::path directory;
+  if (const auto* paths = slrr::crash_logging::paths())
+    directory = paths->directory / "hermetic-classes";
+  else {
+    std::error_code ec;
+    directory = fs::temp_directory_path(ec) / "slrr-hermetic-gc-classes";
+    if (ec) {
+      error = "cannot select hermetic GC class directory";
+      return false;
+    }
+  }
+  std::error_code ec;
+  fs::create_directories(directory, ec);
+  if (ec) {
+    error = "cannot create hermetic GC class directory: " + directory.string();
+    return false;
+  }
+  const std::vector<NativeMethod> object_methods = {
+      {"finalize", "()V", false}, {"disableGC", "()V", false},
+      {"enableGC", "()V", false}, {"hashCode", "()I", false}};
+  const std::vector<NativeMethod> string_methods = {{"finalize", "()V", false}};
+  const std::vector<NativeMethod> system_methods = {{"gc", "()I", true}};
+  if (!write_class(directory, "java.lang.Object", "", object_methods, error) ||
+      !write_class(directory, "java.lang.String", "java.lang.Object", string_methods, error) ||
+      !write_class(directory, "java.lang.System", "java.lang.Object", system_methods, error))
+    return false;
+  for (const char* name : {"Object", "String", "System"}) {
+    if (!jvm.load_class_file((directory / (std::string(name) + ".class")).string())) {
+      error = std::string("cannot load hermetic GC class: ") + name;
+      return false;
+    }
+  }
+  return true;
+}
+
 #ifndef SLRR_BUILD_CONFIGURATION
 #define SLRR_BUILD_CONFIGURATION "Unknown"
 #endif
@@ -104,7 +236,7 @@ void usage() {
       "  slrr_host --probe [--root DIR]\n"
       "  slrr_host --probe-pacejka\n"
       "  slrr_host --probe-dyno\n"
-      "  slrr_host --probe-gc [--root DIR]\n"
+      "  slrr_host --probe-gc [--root DIR] (hermetic without game data)\n"
       "  slrr_host --probe-physics [--physics-telemetry PATH]\n"
       "  slrr_host --compare-physics-replay LEFT RIGHT\n"
       "           [--physics-tolerance ABS] [--physics-compare-report PATH]\n"
@@ -419,12 +551,18 @@ int main(int argc, char** argv) {
 
   opt.game_root = find_game_root(root_arg);
   if (opt.game_root.empty()) {
-    std::fprintf(stderr,
-                 "FAIL: game root not found (need system/Scripts/lang/System.class)\n"
-                 "  try: --root ..\\game   or set SLRR_GAME_ROOT\n");
-    return 1;
+    const bool hermetic_gc = want_gc && !want_probe && !want_game &&
+                             !want_pacejka && !want_dyno && !root_arg;
+    if (!hermetic_gc) {
+      std::fprintf(stderr,
+                   "FAIL: game root not found (need system/Scripts/lang/System.class)\n"
+                   "  try: --root ..\\game   or set SLRR_GAME_ROOT\n");
+      return 1;
+    }
+    std::printf("[gc] no game data; using hermetic object-graph probe\n");
+  } else {
+    std::printf("[host] game_root=%s\n", opt.game_root.c_str());
   }
-  std::printf("[host] game_root=%s\n", opt.game_root.c_str());
   if (physics_telemetry::enabled())
     physics_telemetry::note_content_hash(physics_telemetry::hash_file(
         opt.game_root + "/system/Scripts/lang/System.class"));
@@ -437,8 +575,17 @@ int main(int argc, char** argv) {
   NativeReportFinalizer native_report_finalizer(diagnostics_session);
   if (want_gc) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
-    jvm.set_game_root(opt.game_root);
+    // An empty diagnostic root still initializes class loading. The probe uses
+    // native Object finalization; no game classes or game-data outputs are needed.
+    jvm.set_game_root(opt.game_root.empty() ? "." : opt.game_root);
     if (!jvm.bootstrap_classpath()) return 3;
+    if (opt.game_root.empty()) {
+      std::string error;
+      if (!prepare_hermetic_gc_classes(jvm, error)) {
+        std::fprintf(stderr, "FAIL: %s\n", error.c_str());
+        return 3;
+      }
+    }
     // Isolated, headless diagnostic. Never starts Init, a game or a renderer.
     Object* host_root = nullptr;
     jvm.add_gc_roots([&](const GcRootVisitor& visit) { visit(host_root); });

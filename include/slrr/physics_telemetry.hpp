@@ -11,7 +11,7 @@
 
 namespace slrr::physics_telemetry {
 
-inline constexpr std::uint32_t schema_version = 1;
+inline constexpr std::uint32_t schema_version = 2;
 inline constexpr std::size_t max_entities_per_tick = 64;
 inline constexpr std::size_t max_record_bytes = 1024 * 1024;
 
@@ -30,11 +30,18 @@ struct Identity {
   std::optional<std::string> config_hash;
 };
 
+struct SpawnPose {
+  physics::Vec3 position;
+  physics::Quaternion orientation;
+};
+
 struct EntityState {
   std::uint64_t entity = 0; // Creation order, never an address.
   std::uint32_t resource = 0;
   bool active = false;
   bool available = false;
+  // Captured once from the first successfully configured rigid-body frame.
+  std::optional<SpawnPose> spawn_pose;
   physics::VehicleTelemetry vehicle;
 };
 

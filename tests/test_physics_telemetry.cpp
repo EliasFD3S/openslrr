@@ -2,6 +2,7 @@
 #include "support/test_fixtures.hpp"
 
 #include "slrr/physics_telemetry.hpp"
+#include "slrr/scene_instances.hpp"
 
 #include <cmath>
 #include <limits>
@@ -132,6 +133,75 @@ SLRR_TEST(physics_telemetry_render_partition_and_lag_comparison) {
   SLRR_REQUIRE(probe.partition_equal);
   SLRR_REQUIRE(!probe.lag_equal);
   SLRR_REQUIRE(probe.partition_ticks == 60);
+}
+
+
+SLRR_TEST(physics_contact_identity_spawn_serialization_and_missing_data) {
+  using namespace slrr::physics_telemetry;
+  std::string error;
+  Session session(identity(), Limits{}, error);
+  SLRR_REQUIRE(session.good());
+  auto value = entity();
+  value.spawn_pose = SpawnPose{{4, 5, 6}, {0.1, 0.2, 0.3, 0.9}};
+  value.vehicle.contact_count = 2;
+  auto& contact = value.vehicle.contacts[0];
+  contact.kind = 2;
+  contact.wheel = -1;
+  contact.identity.resource = 0x1020304;
+  contact.identity.mesh = 0x5060708;
+  contact.identity.triangle = 91;
+  contact.identity.material = 17;
+  contact.point = {1, 2, 3};
+  contact.normal = {0, 1, 0};
+  contact.penetration = 0.025;
+  contact.impulse = 42.5;
+  value.vehicle.contacts[1].kind = 1;
+  value.vehicle.contacts[1].wheel = 3;
+  value.vehicle.dropped_contacts = 4;
+  session.record_tick(1, 1.0 / 60.0, {value});
+  SLRR_REQUIRE(session.shutdown(error));
+  const auto json = session.output();
+  SLRR_REQUIRE(json.find("\"version\":2") != std::string::npos);
+  SLRR_REQUIRE(json.find("\"spawn_pose\":{\"position\":[4,5,6]") != std::string::npos);
+  SLRR_REQUIRE(json.find("\"resource\":16909060") != std::string::npos);
+  SLRR_REQUIRE(json.find("\"mesh\":84281096") != std::string::npos);
+  SLRR_REQUIRE(json.find("\"triangle\":91") != std::string::npos);
+  SLRR_REQUIRE(json.find("\"material\":17") != std::string::npos);
+  SLRR_REQUIRE(json.find("\"penetration\":0.025") != std::string::npos);
+  SLRR_REQUIRE(json.find("\"impulse\":42.5") != std::string::npos);
+  SLRR_REQUIRE(json.find("\"resource\":null,\"mesh\":null,\"triangle\":null,\"material\":null") != std::string::npos);
+  SLRR_REQUIRE(json.find("\"dropped_contacts\":4") != std::string::npos);
+  ReplayInfo info;
+  SLRR_REQUIRE(validate_replay(json, &info, error));
+  const auto same = compare_replay(json, json);
+  SLRR_REQUIRE(same.equal);
+}
+
+SLRR_TEST(physics_contact_observation_is_bounded_and_materials_are_authoritative) {
+  slrr::physics::VehicleDynamics dynamics;
+  for (std::uint32_t i = 0; i < 18; ++i) {
+    slrr::physics::ContactTelemetry contact;
+    contact.kind = 2;
+    contact.identity.resource = i;
+    dynamics.observe_contact(contact);
+  }
+  const auto snapshot = dynamics.telemetry_snapshot();
+  SLRR_REQUIRE(snapshot.contact_count == slrr::physics::VehicleTelemetry::max_contacts);
+  SLRR_REQUIRE(snapshot.dropped_contacts == 2);
+  SLRR_REQUIRE(snapshot.contacts[0].identity.resource == 0u);
+  SLRR_REQUIRE(snapshot.contacts[15].identity.resource == 15u);
+
+  slrr::ScxGeometry geometry;
+  slrr::ScxGroup group;
+  group.index_start = 3;
+  group.index_count = 6;
+  group.material_type = 77;
+  geometry.groups.push_back(group);
+  SLRR_REQUIRE(slrr::scene_mesh_material(geometry, 1) == 77u);
+  SLRR_REQUIRE(slrr::scene_mesh_material(geometry, 2) == 77u);
+  SLRR_REQUIRE(!slrr::scene_mesh_material(geometry, 0));
+  SLRR_REQUIRE(!slrr::scene_mesh_material(geometry, 3));
+  SLRR_REQUIRE(!slrr::scene_mesh_material(geometry, std::nullopt));
 }
 
 SLRR_TEST(physics_telemetry_mismatch_and_tolerance_report) {

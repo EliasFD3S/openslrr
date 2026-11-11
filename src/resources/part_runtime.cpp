@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -126,6 +127,7 @@ struct Record {
   std::array<bool, 4> geometry_solved{};
   physics::VehicleDynamics dynamics;
   std::uint64_t telemetry_entity = 0;
+  std::optional<physics_telemetry::SpawnPose> spawn_pose;
   bool physics_ready = false, physics_dirty = true, physics_suspended = false;
   bool physics_reported = false;
   int reported_contacts = -1, physics_status_lines = 0;
@@ -1600,6 +1602,10 @@ bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
   rec.dynamics.body.configure(mass, lo, hi, {com[0], com[1], com[2]});
   const bool held = rec.physics_ready;
   rec.dynamics.body.set_frame(frame);
+  if (!held && !rec.spawn_pose) {
+    rec.spawn_pose = physics_telemetry::SpawnPose{
+        rec.dynamics.body.position, rec.dynamics.body.orientation};
+  }
   if (held) {
     rec.dynamics.body.velocity = velocity;
     rec.dynamics.body.momentum = momentum;
@@ -2151,7 +2157,9 @@ physics::VehicleDynamics::Impact collide_chassis(Record& rec, physics::Vec3 befo
   body.position = before + delta * closest.fraction + normal * .002;
   const Vec3 point = body.position + arm - normal * radius;
   const double speed = -body.point_velocity(point).dot(normal);
-  body.contact(point, normal, .12, .35);
+  const double impulse = body.contact(point, normal, .12, .35);
+  rec.dynamics.observe_contact({2u, -1, closest.identity, point, normal,
+                                closest.penetration, impulse});
   return {point, normal, speed};
 }
 
@@ -2634,6 +2642,7 @@ void advance_chassis_tick() {
         return false;
       ground.height = hit.height;
       ground.normal = {hit.normal[0], hit.normal[1], hit.normal[2]};
+      ground.identity = hit.identity;
       return true;
     };
     // Two fixed 120 Hz substeps per host vehicle update.
@@ -2719,6 +2728,7 @@ std::vector<physics_telemetry::EntityState> telemetry_entities() {
     entity.resource = rec.state.resource;
     entity.active = rec.physics_ready && rec.physics_released && !rec.physics_suspended;
     entity.available = rec.physics_ready;
+    entity.spawn_pose = rec.spawn_pose;
     if (entity.available) entity.vehicle = rec.dynamics.telemetry_snapshot();
     entities.push_back(std::move(entity));
   }

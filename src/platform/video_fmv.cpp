@@ -4,6 +4,8 @@
 #include "video_fmv_vlc.hpp"
 #endif
 
+#include "slrr/platform_telemetry.hpp"
+
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -76,6 +78,9 @@ uint64_t g_vlc_frame_serial = 0;
 #endif
 int g_w = 0;
 int g_h = 0;
+std::uint64_t g_ds_generation = 0;
+platform_telemetry::MediaOrientation g_ds_orientation =
+    platform_telemetry::MediaOrientation::Unknown;
 char g_path[MAX_PATH] = {};
 std::vector<uint8_t> g_scratch;
 std::vector<uint8_t> g_bgra;
@@ -373,6 +378,11 @@ HRESULT build_graph_texture(const wchar_t *wpath) {
     if (connected.formattype == FORMAT_VideoInfo && connected.pbFormat) {
       auto *vih = reinterpret_cast<VIDEOINFOHEADER *>(connected.pbFormat);
       g_w = vih->bmiHeader.biWidth;
+      g_ds_orientation = vih->bmiHeader.biHeight > 0
+          ? platform_telemetry::MediaOrientation::BottomUp
+          : vih->bmiHeader.biHeight < 0
+              ? platform_telemetry::MediaOrientation::TopDown
+              : platform_telemetry::MediaOrientation::Unknown;
       g_h = vih->bmiHeader.biHeight;
       if (g_h < 0)
         g_h = -g_h;
@@ -461,13 +471,21 @@ void grab_frame() {
   if (!g_grabber || g_w <= 0 || g_h <= 0)
     return;
   long sz = 0;
-  if (FAILED(g_grabber->GetCurrentBuffer(&sz, nullptr)) || sz <= 0)
+  if (FAILED(g_grabber->GetCurrentBuffer(&sz, nullptr)) || sz <= 0) {
+    platform_telemetry::media_sample(
+        platform_telemetry::MediaBackend::DirectShow, g_ds_generation,
+        {g_w, g_h, static_cast<std::int64_t>(g_w) * 4, 0, g_ds_orientation}, false);
     return;
+  }
   if (static_cast<long>(g_scratch.size()) < sz)
     g_scratch.resize(static_cast<size_t>(sz));
   if (FAILED(g_grabber->GetCurrentBuffer(
-          &sz, reinterpret_cast<long *>(g_scratch.data()))))
+          &sz, reinterpret_cast<long *>(g_scratch.data())))) {
+    platform_telemetry::media_sample(
+        platform_telemetry::MediaBackend::DirectShow, g_ds_generation,
+        {g_w, g_h, static_cast<std::int64_t>(g_w) * 4, sz, g_ds_orientation}, false);
     return;
+  }
   const size_t need = static_cast<size_t>(g_w) * static_cast<size_t>(g_h) * 4u;
   if (g_bgra.size() < need)
     g_bgra.resize(need);
@@ -480,6 +498,9 @@ void grab_frame() {
     std::memcpy(dst, src, static_cast<size_t>(pitch));
   }
   g_frame_ready = true;
+  platform_telemetry::media_sample(
+      platform_telemetry::MediaBackend::DirectShow, g_ds_generation,
+      {g_w, g_h, static_cast<std::int64_t>(g_w) * 4, sz, g_ds_orientation}, true);
 }
 #endif
 
@@ -731,6 +752,8 @@ int32_t video_fmv_open(const char *path, int32_t non_exclusive, int32_t loop) {
     std::printf("[fmv] avi fail %s — trying DirectShow\n", resolved.c_str());
   }
 
+  g_ds_generation = platform_telemetry::next_vlc_generation();
+  g_ds_orientation = platform_telemetry::MediaOrientation::Unknown;
   hr = g_non_exclusive ? build_graph_texture(wpath.c_str())
                        : build_graph_exclusive(wpath.c_str());
   if (FAILED(hr) || !qi_open_interfaces(!g_non_exclusive)) {
@@ -793,6 +816,8 @@ void video_fmv_close() {
 #endif
   avi_release();
   release_graph();
+  g_ds_generation = 0;
+  g_ds_orientation = platform_telemetry::MediaOrientation::Unknown;
 #endif
 }
 

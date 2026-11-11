@@ -9,8 +9,7 @@ lifetime/resource metrics and final JSON snapshots. Stage 3 adds opt-in MSVC
 AddressSanitizer and deterministic bounded parser mutation lanes. Stage 4 adds
 bounded fixed-step physics telemetry and tick-state replay comparison. Stage 5
 adds test-controlled filesystem/persistence fault injection. Stage 6 adds native
-coverage/reachability reports and a reproducible static binding audit. Renderer/media
-instrumentation remains outside this document.
+coverage/reachability reports and a reproducible static binding audit. Stage 7 renderer, media, input, and contact instrumentation is documented below.
 
 ## CLI
 
@@ -142,8 +141,8 @@ Current production values are:
 | `scene.meshes_cached`, `scene.mesh_overrides`, `scene.collision_overrides` | gauges | Existing scene mesh registries |
 | `scene.texture_paths_cached`, `scene.ground_prop_maps`, `scene.static_meshes` | gauges | Existing scene resource registries |
 
-These are counts, not byte-size estimates. Renderer/GPU/FMV internals are
-intentionally absent. SFX active-voice sampling uses the existing reap behavior
+These are counts, not byte-size estimates. Stage 7 adds the renderer, GPU, FMV, media,
+and input values documented below. SFX active-voice sampling uses the existing reap behavior
 of `host_sfx_stats`.
 
 ## Comparing section cycles
@@ -221,7 +220,7 @@ partition and a bursty partition with the same total time must produce identical
 ticks. The probe checks both the positive comparison and that negative control;
 it does not render or start interactive gameplay.
 
-### JSONL schema, version 1
+### JSONL schema, version 1 and Stage 7 version 2
 
 The first line is a `run` record and the last is `summary`. A closing `frame`
 record follows the ticks admitted for that frame. Every line is one bounded JSON
@@ -262,7 +261,8 @@ escaped, so output is valid JSON without trusting source text.
   normal impulses observed in the final 120 Hz substep of that 60 Hz update;
   non-rigid contacts without an impulse measurement retain the actual zero.
   Non-finite observed floating values serialize as `null` rather than as
-  invented finite values.
+  invented finite values. Schema version 2 adds the spawn pose and bounded
+  contact-identity records specified in Stage 7 below.
 * `summary`: accepted `frames`, `ticks`, and `inputs`, dropped
   frame/tick/input/entity counts, `truncated`, and accumulated admitted and
   discarded timing. An output-byte stop can drop an otherwise accepted record
@@ -686,3 +686,123 @@ Node.js is available. The C++ lane covers metadata, explicit no-op
 classification, success/error/missing outcomes, aliases, durations/counts,
 section capture, metrics lifecycle, JSON escaping/file output, and bounds. The
 JavaScript lane checks deterministic generation and tracked-output drift.
+
+
+# Stage 7 instrumentation
+
+Stage 7 adds observation only. It does not change rendering, backend destruction,
+media conversion/playback, input mapping, or the contact solver. Structured events
+are emitted only when the existing diagnostics sink is active; numeric metrics are
+available through the existing metrics provider.
+
+## Renderer and backend
+
+A successful libbgfx open allocates a process-monotonic renderer generation. Close
+keeps that generation in the final snapshot but marks the renderer closed and
+clears live handle/view statistics. A stale frame submitted for an old generation
+is ignored. Reopening receives a new generation and starts with no valid frame
+sample.
+
+Immediately after each actual `bgfx::frame()`, the backend copies bgfx statistics
+into an owned snapshot. The overlay never retains `Stats*` or `ViewStats*`.
+The **Renderer → Platform / Renderer diagnostics** section shows generation,
+open/closed state, submitted frames, sample validity, CPU/GPU times, bgfx GPU frame,
+draw/compute/blit counts, up to 16 per-view timing records, bgfx global used
+vertex/index/dynamic-buffer, texture and framebuffer counts, and active uploaded
+FMV texture handles. View truncation is explicit; early returns that do not submit
+a frame do not increment `renderer.frames_submitted`.
+
+Metrics: `renderer.open`, `renderer.generation`,
+`renderer.frames_submitted` (counter), `renderer.stats_valid`,
+`renderer.views_truncated`, `renderer.views`, `renderer.draw_calls`,
+`renderer.compute_calls`, `renderer.blit_calls`,
+`renderer.gpu_vertex_buffers`, `renderer.gpu_index_buffers`,
+`renderer.gpu_dynamic_vertex_buffers`, `renderer.gpu_dynamic_index_buffers`,
+`renderer.gpu_textures`, `renderer.gpu_frame_buffers`, and
+`renderer.fmv_texture_handles`. Events are `renderer.open` and
+`renderer.close` with numeric `generation`. No raw bgfx handle is logged. The
+FMV gauge is active uploaded state, not a historical allocation count.
+
+## Media samples and LibVLC callbacks
+
+`media.directshow.sample` and `media.libvlc.sample` contain only
+`generation`, `width`, `height`, `pitch`, `byte_length`,
+`orientation`, and `accepted`. Orientation is 0 unknown, 1 top-down, 2
+bottom-up. DirectShow metadata comes from the connected RGB32 type and Sample
+Grabber byte count; pitch is the existing `width * 4` conversion pitch. LibVLC
+uses decoded RV32 pitch and visible-plane byte extent. No pixel payload, path,
+credential, native pointer, or plane address is recorded. Orientation reporting
+does not alter conversion or flip behavior.
+
+Counters are `media.directshow.samples`, `media.directshow.rejected`,
+`media.libvlc.samples`, and `media.libvlc.rejected`. DirectShow rejection is a
+buffer query/read failure; LibVLC rejection is frame allocation failure. The
+AVIFile compatibility path does not produce Sample Grabber events.
+
+Each LibVLC player receives a process-monotonic decoder generation.
+`media.libvlc.open` and `media.libvlc.close` carry it; close also carries
+numeric `reason` (0 orderly, 1 play-start failure). `media.libvlc.callback`
+carries `generation`, `callback`, and `phase`. Callback IDs: 1 format, 2 lock,
+3 display, 4 cleanup. Phase IDs: 1 begin, 2 end. Matching counters are
+`media.libvlc.format.begin/end`, `media.libvlc.lock.begin/end`,
+`media.libvlc.display.begin/end`, and `media.libvlc.cleanup.begin/end`.
+`media.libvlc.closes` counts decoder close events.
+
+## Input binding diagnostics
+
+`input_axis_binding_diagnostics` inspects declarations, not typed text, key
+names, or physical values. The Input tab and
+`input.axis.<axis>.source`/`input.axis.<axis>.fallback` gauges cover axes
+1, 4, 5, 6, 28, 29, 48, 49, 50, and 54.
+
+Source IDs: 0 missing controller, 1 unbound, 2 forced, 3 profile, 4 XInput
+fallback, 5 profile plus XInput fallback. Fallback IDs: 0 not eligible, 1
+available, 2 suppressed by an XInput binding elsewhere in the profile, 3
+overridden by a forced axis. This exposes partial XInput profiles because stock
+fallback is suppressed globally by any pad binding. `input.axis.binding` is
+emitted only on status changes with numeric axis/source/fallback and binding
+counts.
+
+## Physics telemetry schema version 2
+
+Each available entity includes `spawn_pose` (or null), `contacts`, and
+`dropped_contacts`. `spawn_pose.position` is script-space metres and
+`spawn_pose.orientation` is quaternion `[x,y,z,w]`, captured from the first
+successfully configured rigid-body frame before later movement.
+
+At most 16 contacts per entity per recorded solver update are retained; excess
+contacts increment `dropped_contacts`. Each contact has `kind` (0
+chassis/terrain, 1 wheel/terrain, 2 chassis/static sweep), `wheel`
+(zero-based wheel index or -1), nullable `resource`, `mesh`, `triangle`,
+and `material` numeric IDs, script-space `point`/`normal`, metre
+`penetration`, and the existing normal `impulse` magnitude.
+
+`resource` is the scene render/type resource when known. `mesh` is its
+geometry resource only for non-override collision meshes. Static preload and
+override meshes report null instead of an invented identity. `triangle` is the
+original mesh triangle ordinal; duplicate vertex triples are ambiguous and null.
+`material` is the authored SCX group `material_type` when group coverage
+exists. Ground PHYS data and meshes without groups report null. Points are solver
+contact points for kinds 0/1 and sweep surface points for kind 2. Penetration is
+ground overlap for kinds 0/1 and sphere radius-minus-distance for kind 2.
+Friction impulse is not included. Non-finite values serialize as null. Missing
+identity does not mean no contact occurred. Identity integers compare exactly in
+replay comparison; validation enforces bounds and uint32/null identities.
+
+## CI and local diagnostic outputs
+
+Both normal and ASan workflows build `slrr_host` and `slrr_tests`, run CTest,
+then run physics, replay self-compare, dyno, and GC probes. Outputs are rooted at
+`artifacts/normal/` or `artifacts/asan/` in the CI workspace, never in game or
+reference data. Physics uses `physics.jsonl`; comparison uses
+`physics-compare.json`. Each `--log-all` directory contains the normal session,
+event, metrics, and manifest outputs. GC also writes `native-report.json` and,
+without game data, three deterministic fixture classes under `hermetic-classes/`.
+Failure uploads include these directories, CTest temporary logs, and fuzz
+reproducers. Successful lanes upload the compact diagnostics directory and
+`LastTest.log`. These definitions are not evidence of a GitHub-hosted run.
+
+The GC probe uses a valid game root when supplied. Without game data,
+`--probe-gc` alone runs the same hermetic object-graph/finalizer/native checks
+with three deterministic native-method TUFA fixture classes in the log directory
+(or system temp) and without starting a game.

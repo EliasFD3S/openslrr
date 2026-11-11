@@ -6,6 +6,7 @@
 #include "slrr/metrics.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/osd_registry.hpp"
+#include "slrr/platform_telemetry.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/scene_presentation.hpp"
 #include "slrr/section_machine.hpp"
@@ -24,17 +25,47 @@ constexpr double kDegrees = 57.29577951308232;
 void draw_render(uint16_t width, uint16_t height, DebugOverlay::RenderOptions& options,
                  Jvm* vm, const char* reflection_status) {
   ImGui::Text("%s | %u x %u", bgfx::getRendererName(bgfx::getRendererType()), width, height);
-  if (const auto* stats = bgfx::getStats()) {
+  const auto telemetry = platform_telemetry::renderer_snapshot();
+  ImGui::SeparatorText("Platform / Renderer diagnostics");
+  ImGui::Text("Generation %llu | %s | %llu submitted frames",
+              static_cast<unsigned long long>(telemetry.generation),
+              telemetry.open ? "open" : "closed",
+              static_cast<unsigned long long>(telemetry.submitted_frames));
+  if (telemetry.stats_valid) {
+    const auto& stats = telemetry.frame;
     const auto ms = [](int64_t ticks, int64_t frequency) {
       return frequency > 0 ? ticks * 1000. / frequency : 0.;
     };
-    const auto frame = ms(stats->cpuTimeFrame, stats->cpuTimerFreq);
+    const auto frame = ms(stats.cpu_frame, stats.cpu_frequency);
     ImGui::Text("%.1f FPS | %.2f ms/frame", frame > 0 ? 1000. / frame : 0., frame);
-    ImGui::Text("CPU render %.2f ms | GPU %.2f ms",
-                ms(stats->cpuTimeEnd - stats->cpuTimeBegin, stats->cpuTimerFreq),
-                ms(stats->gpuTimeEnd - stats->gpuTimeBegin, stats->gpuTimerFreq));
-    ImGui::Text("%u draws | %u textures | %u views", stats->numDraw,
-                stats->numTextures, stats->numViews);
+    ImGui::Text("CPU render %.2f ms | GPU %.2f ms (GPU frame %u)",
+                ms(stats.cpu_end - stats.cpu_begin, stats.cpu_frequency),
+                ms(stats.gpu_end - stats.gpu_begin, stats.gpu_frequency), stats.gpu_frame);
+    ImGui::Text("%u draws | %u compute | %u blits | %u views%s",
+                stats.draw_calls, stats.compute_calls, stats.blit_calls, stats.view_count,
+                telemetry.views_truncated ? " (16 retained)" : "");
+    ImGui::Text("GPU handles: %u VB | %u IB | %u dynamic VB/IB | %u textures",
+                stats.vertex_buffers, stats.index_buffers,
+                stats.dynamic_vertex_buffers, stats.dynamic_index_buffers, stats.textures);
+    ImGui::Text("GPU framebuffers %u | active FMV texture handles %u",
+                stats.frame_buffers, telemetry.fmv_texture_handles);
+    if (ImGui::CollapsingHeader("Per-view statistics") &&
+        ImGui::BeginTable("renderer-view-stats", 4, ImGuiTableFlags_RowBg)) {
+      ImGui::TableSetupColumn("View"); ImGui::TableSetupColumn("Submit ms");
+      ImGui::TableSetupColumn("GPU ms"); ImGui::TableSetupColumn("GPU frame");
+      ImGui::TableHeadersRow();
+      for (std::size_t i = 0; i < stats.copied_views; ++i) {
+        const auto& view = stats.views[i];
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn(); ImGui::Text("%u", view.view);
+        ImGui::TableNextColumn(); ImGui::Text("%.3f", ms(view.cpu_end - view.cpu_begin, stats.cpu_frequency));
+        ImGui::TableNextColumn(); ImGui::Text("%.3f", ms(view.gpu_end - view.gpu_begin, stats.gpu_frequency));
+        ImGui::TableNextColumn(); ImGui::Text("%u", view.gpu_frame);
+      }
+      ImGui::EndTable();
+    }
+  } else {
+    ImGui::TextUnformatted("Frame statistics unavailable until a frame is submitted.");
   }
   ImGui::Text("Collision mesh rebuilds: %llu",
               static_cast<unsigned long long>(scene_instances_floor_builds()));
@@ -283,7 +314,7 @@ void draw_vehicle(const PartPhysicsState& state) {
   ImGui::EndTable();
 }
 
-void draw_input() {
+void draw_input(Jvm* vm) {
   const auto& input = host_input();
   ImGui::Text("Steering %+.3f (%s)", input.drive_steer,
               input.drive_steer_analog ? "analog" : "digital");
@@ -292,6 +323,26 @@ void draw_input() {
   ImGui::Text("Handbrake %s | Reverse %s | Shift %+.2f",
               input.drive_handbrake ? "on" : "off",
               input.drive_reverse ? "on" : "off", input.drive_shift);
+  if (!vm) return;
+  const auto* controller = host_input_player_controller(*vm);
+  ImGui::SeparatorText("Axis binding diagnostics (no key text)");
+  if (ImGui::BeginTable("input-axis-bindings", 5, ImGuiTableFlags_RowBg)) {
+    ImGui::TableSetupColumn("Axis"); ImGui::TableSetupColumn("Source");
+    ImGui::TableSetupColumn("Fallback"); ImGui::TableSetupColumn("Bindings");
+    ImGui::TableSetupColumn("Smoothing"); ImGui::TableHeadersRow();
+    static constexpr int axes[] = {1, 4, 5, 6, 28, 29, 48, 49, 50, 54};
+    for (const int axis : axes) {
+      const auto diagnostic = host_input_controller_axis_diagnostics(controller, axis);
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn(); ImGui::Text("%d", axis);
+      ImGui::TableNextColumn(); ImGui::TextUnformatted(input_binding_source_name(diagnostic.source));
+      ImGui::TableNextColumn(); ImGui::TextUnformatted(input_fallback_status_name(diagnostic.fallback));
+      ImGui::TableNextColumn(); ImGui::Text("%d total / %d XInput",
+          diagnostic.profile_bindings, diagnostic.xinput_bindings);
+      ImGui::TableNextColumn(); ImGui::TextUnformatted(diagnostic.smoothed ? "yes" : "no");
+    }
+    ImGui::EndTable();
+  }
 }
 }  // namespace
 
@@ -382,7 +433,7 @@ void DebugOverlay::draw(HWND hwnd, uint16_t width, uint16_t height, const char* 
         ImGui::EndTabItem();
       }
       if (ImGui::BeginTabItem("Input")) {
-        draw_input();
+        draw_input(jvm_);
         ImGui::EndTabItem();
       }
       ImGui::EndTabBar();

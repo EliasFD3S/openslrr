@@ -182,6 +182,7 @@ class LibBgfxBackend final : public IRenderBackend {
 
 
   void upload_part(ScenePart& part);
+  void capture_frame_stats();
 
 
   static bool is_logo_texture_slot(const ScxGeometry& geo, uint16_t tex_i);
@@ -274,6 +275,7 @@ class LibBgfxBackend final : public IRenderBackend {
   int32_t width_ = 0;
   int32_t height_ = 0;
   int32_t frames_ = 0;
+  std::uint64_t renderer_generation_ = 0;
   float mesh_min_[3] = {0, 0, 0};
   float mesh_max_[3] = {0, 0, 0};
   std::vector<ScenePart> parts_;

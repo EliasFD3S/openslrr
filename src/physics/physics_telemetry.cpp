@@ -81,6 +81,11 @@ void json_optional_u64(std::string& out, const std::optional<std::uint64_t>& val
   else out += "null";
 }
 
+void json_optional_u32(std::string& out, const std::optional<std::uint32_t>& value) {
+  if (value) out += std::to_string(*value);
+  else out += "null";
+}
+
 void json_vec3(std::string& out, const physics::Vec3& v) {
   out.push_back('[');
   json_number(out, v.x);
@@ -92,7 +97,8 @@ void json_vec3(std::string& out, const physics::Vec3& v) {
 }
 
 std::string header_json(const Identity& id, const Limits& limits) {
-  std::string out = "{\"schema\":\"slrr-physics-telemetry\",\"version\":1,\"type\":\"run\",\"scenario\":";
+  std::string out = "{\"schema\":\"slrr-physics-telemetry\",\"version\":" +
+      std::to_string(schema_version) + ",\"type\":\"run\",\"scenario\":";
   json_string(out, id.scenario);
   out += ",\"vehicle\":";
   json_optional_string(out, id.vehicle);
@@ -126,6 +132,22 @@ std::string entity_json(const EntityState& entity) {
     return out;
   }
   const auto& v = entity.vehicle;
+  out += ",\"spawn_pose\":";
+  if (!entity.spawn_pose) {
+    out += "null";
+  } else {
+    out += "{\"position\":";
+    json_vec3(out, entity.spawn_pose->position);
+    out += ",\"orientation\":[";
+    json_number(out, entity.spawn_pose->orientation.x);
+    out.push_back(',');
+    json_number(out, entity.spawn_pose->orientation.y);
+    out.push_back(',');
+    json_number(out, entity.spawn_pose->orientation.z);
+    out.push_back(',');
+    json_number(out, entity.spawn_pose->orientation.w);
+    out += "]}";
+  }
   out += ",\"chassis\":{\"mass\":";
   json_number(out, v.mass);
   out += ",\"position\":";
@@ -206,6 +228,33 @@ std::string entity_json(const EntityState& entity) {
   json_number(out, v.ground_impact.speed);
   out += "},\"chassis_contact_impulse\":";
   json_number(out, v.chassis_contact_impulse);
+  out += ",\"contacts\":[";
+  const std::size_t contact_count = std::min<std::size_t>(
+      v.contact_count, physics::VehicleTelemetry::max_contacts);
+  for (std::size_t i = 0; i < contact_count; ++i) {
+    if (i) out.push_back(',');
+    const auto& contact = v.contacts[i];
+    out += "{\"kind\":" + std::to_string(contact.kind);
+    out += ",\"wheel\":" + std::to_string(contact.wheel);
+    out += ",\"resource\":";
+    json_optional_u32(out, contact.identity.resource);
+    out += ",\"mesh\":";
+    json_optional_u32(out, contact.identity.mesh);
+    out += ",\"triangle\":";
+    json_optional_u32(out, contact.identity.triangle);
+    out += ",\"material\":";
+    json_optional_u32(out, contact.identity.material);
+    out += ",\"point\":";
+    json_vec3(out, contact.point);
+    out += ",\"normal\":";
+    json_vec3(out, contact.normal);
+    out += ",\"penetration\":";
+    json_number(out, contact.penetration);
+    out += ",\"impulse\":";
+    json_number(out, contact.impulse);
+    out.push_back('}');
+  }
+  out += "],\"dropped_contacts\":" + std::to_string(v.dropped_contacts);
   out.push_back('}');
   return out;
 }
@@ -1033,6 +1082,37 @@ bool validate_entity(const Json& entity, std::string& error) {
   if (!vec(*impact, "point", 3, error) || !vec(*impact, "normal", 3, error) ||
       !number_or_null(*impact, "speed", error) ||
       !number_or_null(entity, "chassis_contact_impulse", error)) return false;
+  const Json* spawn = member(entity, "spawn_pose");
+  if (!spawn || (spawn->kind != Json::Kind::Null && spawn->kind != Json::Kind::Object)) {
+    error = "replay entity has an invalid spawn pose";
+    return false;
+  }
+  if (spawn->kind == Json::Kind::Object &&
+      (!vec(*spawn, "position", 3, error) || !vec(*spawn, "orientation", 4, error)))
+    return false;
+  const Json* contacts = member(entity, "contacts");
+  if (!contacts || contacts->kind != Json::Kind::Array ||
+      contacts->items.size() > physics::VehicleTelemetry::max_contacts ||
+      !uint_value(entity, "dropped_contacts", ignored, error)) {
+    error = "replay entity has invalid bounded contact telemetry";
+    return false;
+  }
+  for (const auto& contact : contacts->items) {
+    if (contact.kind != Json::Kind::Object ||
+        !uint_value(contact, "kind", ignored, error) || ignored > 2 ||
+        !int_value(contact, "wheel", error)) return false;
+    for (const char* name : {"resource", "mesh", "triangle", "material"}) {
+      if (!optional_uint(contact, name, error)) return false;
+      const Json* id = member(contact, name);
+      if (id->kind == Json::Kind::Number && id->number > UINT32_MAX) {
+        error = "replay contact identity exceeds uint32";
+        return false;
+      }
+    }
+    if (!vec(contact, "point", 3, error) || !vec(contact, "normal", 3, error) ||
+        !number_or_null(contact, "penetration", error) ||
+        !number_or_null(contact, "impulse", error)) return false;
+  }
   return true;
 }
 
@@ -1190,7 +1270,8 @@ std::string scalar_json(const Json& value) {
 
 bool exact_path(const std::string& path) {
   static constexpr const char* suffixes[] = {
-      ".tick", ".entity", ".resource", ".available", ".active", ".dynamics_ticks",
+      ".tick", ".entity", ".resource", ".mesh", ".triangle", ".material",
+      ".kind", ".wheel", ".available", ".active", ".dynamics_ticks",
       ".engine_running", ".gear", ".enabled", ".contact", ".sequence", ".device", ".control"};
   for (const char* suffix : suffixes)
     if (path.size() >= std::strlen(suffix) &&
@@ -1503,6 +1584,7 @@ std::string deterministic_scenario(int partition) noexcept {
         entity.entity = 1;
         entity.resource = 0x10001;
         entity.active = entity.available = true;
+        entity.spawn_pose = SpawnPose{{0, 0.55, 0}, {}};
         entity.vehicle = vehicle.telemetry_snapshot();
         session.record_tick(tick, host_tick, {entity});
         ++tick;

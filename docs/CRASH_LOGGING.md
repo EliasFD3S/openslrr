@@ -166,3 +166,23 @@ The host now exposes `--log-all DIR`. It uses the following integration contract
 example: it adds the implementation to `slrr_test_support`, links dbghelp,
 builds `slrr_crash_logging_fixture`, and runs out-of-process assertions in
 `slrr_crash_logging_tests`.
+
+## Stage 7 CI diagnostic artifacts
+
+The normal and ASan test workflows write probe diagnostics only below
+`artifacts/normal/` or `artifacts/asan/` in the CI workspace. They do not select
+output names in game data or reference trees. Physics telemetry and replay
+comparison files sit directly in those directories; each `--log-all` probe uses
+its own child directory with the files listed above. GC uses
+`gc-log/native-report.json`; no-game-data GC probes also create three small
+native-method fixtures under `gc-log/hermetic-classes/`. Failure artifact uploads also include CTest
+`Testing/Temporary` output and fuzz reproducers; success uploads include the
+probe directories and `LastTest.log`. Workflow YAML alone does not demonstrate
+that a hosted run or artifact upload occurred.
+
+Stage 7 renderer/media/input events add numeric generation, frame, sample,
+orientation, binding-source, and fallback metadata only. They intentionally do
+not add frame payloads, media paths, typed input text, credentials, or native
+pointer values. The privacy warning for the whole run directory still applies
+because session logs and memory dumps can contain information outside those
+structured fields.
