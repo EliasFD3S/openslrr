@@ -47,6 +47,7 @@ class LibBgfxBackend final : public IRenderBackend {
   // The world is view 5 or 6, depending on the FMV backdrop. Previews start at 8. The
   // interface stays on kOsdView, above those rects.
   static constexpr int kShadowSlots = 4;
+  static constexpr uint16_t kShadowResolution = 2048;
   static constexpr uint16_t kStaticShadowView = 0;
   static constexpr uint16_t kVehicleShadowFirst = 1;
   static constexpr uint16_t kWorldView = 5;
@@ -156,12 +157,13 @@ class LibBgfxBackend final : public IRenderBackend {
   void bind_baked_light(const ScxGroup* group,
                         const std::vector<bgfx::TextureHandle>* tex,
                         bgfx::TextureHandle mix = BGFX_INVALID_HANDLE,
-                        bool receive_static_shadow = false);
+                        bool receive_static_shadow = false, const SceneSun* sun = nullptr, const float* sky = nullptr);
 
 
   void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass);
 
-  void draw_dynamic_world(const float* view, uint16_t view_id, float far_plane);
+  void draw_sky(uint16_t view_id, const float* view, const float* projection);
+  void draw_dynamic_world(uint16_t view_id);
   void draw_sun_flare(const float* view, const float* projection, uint16_t view_id);
 
   bool ensure_vehicle_shadow_target(int slot, uint16_t size);
@@ -308,7 +310,41 @@ class LibBgfxBackend final : public IRenderBackend {
   std::array<float, 16> static_shadow_matrix_{};
   std::array<float, 3> static_shadow_focus_{}, static_shadow_sun_{};
   void* static_shadow_world_ = nullptr;
+  bgfx::UniformHandle u_cloud_wind_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_cloud_sky_ = BGFX_INVALID_HANDLE;
+  bool outdoor_lighting_ = false;
+  bgfx::UniformHandle u_local_light_ = BGFX_INVALID_HANDLE;
+  std::array<float, 4> local_light_{};
+  void update_local_light();
+  void update_reflections(const float* eye);
+  void destroy_reflections();
+  std::array<bgfx::TextureHandle, 2> reflection_cubes_{{
+      BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE}};
+  size_t reflection_write_ = 0;
+  bgfx::TextureHandle reflection_depth_ = BGFX_INVALID_HANDLE;
+  bgfx::TextureHandle reflection_color_ = BGFX_INVALID_HANDLE;
+  bgfx::FrameBufferHandle reflection_capture_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle s_reflection_cube_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_dynamic_reflection_ = BGFX_INVALID_HANDLE;
+  std::array<float, 3> reflection_origin_{}, reflection_sample_origin_{};
+  std::array<float, 3> reflection_box_min_{}, reflection_box_max_{};
+  bool reflection_box_valid_ = false;
+  bgfx::UniformHandle u_reflection_probe_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_reflection_box_min_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_reflection_box_max_ = BGFX_INVALID_HANDLE;
+  void* reflection_world_ = nullptr;
+  size_t reflection_face_ = 0;
+  bool reflection_ready_ = false;
+  bool reflection_scene_ = false;
   bool static_shadow_active_ = false;
+  bgfx::FrameBufferHandle car_depth_fb_ = BGFX_INVALID_HANDLE;
+  bgfx::TextureHandle car_depth_tex_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle s_car_depth_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_car_depth_mtx_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_car_depth_params_ = BGFX_INVALID_HANDLE;
+  std::array<float, 16> car_depth_matrix_{};
+  bool car_depth_active_ = false;
+  void update_car_depth(const float* position, const VideoOptions& video);
   uint16_t static_shadow_size_ = 0;
   float static_shadow_distance_ = 0.f;
   bgfx::UniformHandle u_static_shadow_eye_ = BGFX_INVALID_HANDLE;

@@ -361,6 +361,21 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
                                    SectionMachine& sections, double dt) {
   host_music_update();
   host_game_options_update(jvm);
+  const auto game_time = jvm.get_static("java.game.GameLogic", "time");
+  const auto factor = jvm.get_static("java.game.GameLogic", "timeFactor");
+  static float last_clock = -1.f;
+  static float clock_elapsed = 0.f;
+  if (game_time.tag == ValueTag::Float || game_time.tag == ValueTag::Int) {
+    const float seconds = game_time.tag == ValueTag::Float ? game_time.v.f : float(game_time.v.i);
+    if (last_clock != seconds) {
+      last_clock = seconds;
+      clock_elapsed = 0.f;
+    } else {
+      clock_elapsed = std::min(10.f, clock_elapsed + static_cast<float>(dt));
+    }
+    const float rate = factor.tag == ValueTag::Float ? factor.v.f : 4.f;
+    scene_sun_set_time(seconds + clock_elapsed * rate);
+  }
   script_threads_tick(jvm);
   MainLoopFrameResult out;
   mainloop_adopt_section(jvm, sections);

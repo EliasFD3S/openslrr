@@ -199,12 +199,12 @@ message(STATUS "slrr_host: libbgfx + mesh shaders enabled")
 
 install(TARGETS slrr_host RUNTIME DESTINATION bin)
 
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
+
 option(SLRR_STAGE_BUILD "Build the host into candidate/ before backup and promotion" OFF)
 if(SLRR_STAGE_BUILD)
   set_target_properties(slrr_host PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_BINARY_DIR}/candidate")
-endif()
-
-if(BUILD_TESTING)
-  add_subdirectory(tests)
 endif()

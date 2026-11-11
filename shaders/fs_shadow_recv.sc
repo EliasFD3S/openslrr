@@ -45,6 +45,6 @@ void main()
 	float s = shadow_coverage(uv);
 	float ramp = height_ramp((v_texcoord1.x - u_shadowRamp.y) * u_shadowRamp.w + 0.5);
 	// Stock multiplies the ground by the map. White in the map is black ink.
-	s *= ramp;
+	s *= ramp * u_shadowRamp.z;
 	gl_FragColor = vec4(s, s, s, 1.0);
 }
