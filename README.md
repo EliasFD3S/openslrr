@@ -190,3 +190,10 @@ Physics research is being integrated gradually: listing a reference does not mea
 When reporting a problem, include your game version, launch command, expected behavior, and actual result. Attach console output and, if useful, a screenshot. If you use a mod, name it and check whether the issue also occurs with the reference game data.
 
 To explore the code: `src/jvm/` runs scripts, `src/resources/` loads data, `src/natives/` connects scripts to the engine, and `src/render/`, `src/ui/`, `src/platform/`, and `src/physics/` contain the main systems.
+
+## License
+
+OpenSLRR's original code is licensed under the [MIT License](LICENSE).
+Third-party components retain their respective licenses and copyright notices,
+including the vendored [SLRR script compiler](third_party/slrrc/LICENSE).
+Original SLRR game assets and scripts are not covered by this license.
