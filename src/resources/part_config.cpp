@@ -289,6 +289,14 @@ PartConfig parse_part_config(const std::string &source,
         open_wheel = -1;
         out.steering = pose(t);
         out.has_steering = true;
+      } else if (command == "seat") {
+        open_wheel = -1;
+        out.seat = pose(t);
+        out.has_seat = true;
+      } else if (command == "pedals" && t.size() >= 4) {
+        open_wheel = -1;
+        for (int i = 0; i < 3; ++i) out.pedals[i] = number(t, 1 + i);
+        out.has_pedals = true;
       } else if (command == "stockpart") {
         open_wheel = -1;
         out.stock.push_back(rid(t.at(1)));

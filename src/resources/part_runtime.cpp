@@ -11,6 +11,7 @@
 #include "slrr/rpk_index.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/scx_mesh.hpp"
+#include "slrr/skeleton.hpp"
 #include "slrr/suspension_geometry.hpp"
 #include "slrr/vehicle_dynamics.hpp"
 #include <algorithm>
@@ -18,6 +19,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -141,6 +143,35 @@ struct LoosePanel {
 };
 std::unordered_map<Object *, LoosePanel> loose_panels;
 int32_t controlled_vehicle = 0;
+
+struct DriverSeat {
+  Object* render = nullptr;
+  bool leaned = false;
+};
+std::unordered_map<Object*, DriverSeat> drivers;
+
+struct PedKind {
+  uint32_t render = 0;
+  uint32_t anim = 0;
+  PartPose pose{};
+  float sole = 0.f;
+  bool ready = false;
+};
+struct PedAgent {
+  Object* render = nullptr;
+  int kind = 0;
+  float x = 0.f, z = 0.f, yaw = 0.f;
+  bool placed = false;
+};
+struct PedCrowd {
+  float density = 0.f;
+  std::vector<void*> types;
+  std::vector<PedKind> kinds;
+  std::vector<PedAgent> agents;
+  bool announced = false;
+};
+std::unordered_map<void*, PedCrowd> crowds;
+uint32_t ped_rng = 0x51ee5u;
 VehicleHudLayout hud_preview;
 std::string hud_preview_directory;
 constexpr double kPhysicsTick = 1.0 / physics::VehicleDynamics::update_frequency;
@@ -2738,6 +2769,403 @@ void advance_chassis_tick() {
         if (auto* vehicle = record(chassis))
           detach_panel(part, *panel, chassis, *vehicle);
 }
+
+void transform_point(const PartMatrix& m, float x, float y, float z, float out[3]) {
+  out[0] = m[0] * x + m[4] * y + m[8] * z + m[12];
+  out[1] = m[1] * x + m[5] * y + m[9] * z + m[13];
+  out[2] = m[2] * x + m[6] * y + m[10] * z + m[14];
+}
+
+float ped_unit() {
+  ped_rng = ped_rng * 1664525u + 1013904223u;
+  return (ped_rng >> 8) * (1.f / 16777216.f);
+}
+
+void pose_steering_wheels() {
+  for (auto& entry : records) {
+    auto& rec = entry.second;
+    if (!rec.config || rec.config->native_kind != "car" || !rec.config->has_steering)
+      continue;
+    const PartSlot* mount = nullptr;
+    for (const auto& slot : rec.config->slots)
+      if (slot.type == 11) mount = &slot;
+    if (!mount) continue;
+    const auto child = rec.children.find(mount->id);
+    if (child == rec.children.end()) continue;
+    auto* node = gameref_get(child->second);
+    auto* wheel = record(child->second);
+    if (!node || !wheel) continue;
+    PartMatrix mount_frame;
+    if (!part_slot_matrix(*rec.config, *mount, mount_frame)) continue;
+    PartMatrix own = eye_matrix();
+    for (const auto& slot : wheel->config->slots)
+      if (slot.id == wheel->state.own_slot) {
+        part_slot_matrix(*wheel->config, slot, own);
+        break;
+      }
+    PartMatrix spin = eye_matrix();
+    const float angle = static_cast<float>(chassis_steering_angle(rec));
+    const float c = std::cos(angle), s = std::sin(angle);
+    spin[0] = c;
+    spin[1] = s;
+    spin[4] = -s;
+    spin[5] = c;
+    const PartMatrix posed = part_matrix_multiply(
+        mount_frame, part_matrix_multiply(spin, part_matrix_inverse_rigid(own)));
+    std::copy(posed.begin(), posed.end(), node->local_matrix);
+    node->matrix_override = true;
+  }
+}
+
+float wheel_rim_radius(Object* wheel) {
+  const auto* rec = record(wheel);
+  if (!rec) return 0.15f;
+  float radius = 0.f;
+  for (auto* render : rec->renders) {
+    const auto* node = gameref_get(render);
+    if (!node) continue;
+    const auto mesh = scene_instances_geometry(static_cast<uint32_t>(node->type_id));
+    if (!mesh) continue;
+    const float scale = mesh->position_scale > 0.f ? mesh->position_scale : 0.01f;
+    for (size_t i = 0; i + 1 < mesh->positions.size(); i += 3) {
+      const float x = mesh->positions[i] * scale;
+      const float y = mesh->positions[i + 1] * scale;
+      radius = std::max(radius, std::sqrt(x * x + y * y));
+    }
+  }
+  return radius >= 0.05f && radius <= 0.5f ? radius : 0.15f;
+}
+
+void pose_driver() {
+  Object* chassis = part_controlled_chassis();
+  for (auto it = drivers.begin(); it != drivers.end();) {
+    if (it->first != chassis) {
+      if (it->second.render) gameref_remove(it->second.render);
+      it = drivers.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  if (!chassis || !runtime || !index) return;
+  auto* rec = record(chassis);
+  if (!rec || !rec->config || !rec->config->has_seat) return;
+  DriverSeat& seat = drivers[chassis];
+  if (!seat.render) {
+    const RpkPack* pack = index->pack_by_name("humans.rpk");
+    if (!pack || !index->model_for_resource(pack->pack_id, 0x000C).ok) return;
+    Object* render = runtime->new_object("java.util.resource.RenderRef");
+    auto* node = gameref_upsert(render, GameRefKind::RenderRef);
+    node->type_id = static_cast<int32_t>(RpkIndex::make_full_id(pack->pack_id, 0x000C));
+    node->script = render;
+    node->alias = "driver";
+    node->empty = false;
+    gameref_set_parent(render, chassis);
+    node->matrix_override = true;
+    seat.render = render;
+    seat.leaned = false;
+    std::fprintf(stderr, "[driver] vin seated\n");
+  }
+  auto* node = gameref_get(seat.render);
+  if (!node) {
+    seat.render = nullptr;
+    return;
+  }
+  const PartMatrix seat_m = part_pose_matrix(rec->config->seat);
+  std::copy(seat_m.begin(), seat_m.end(), node->local_matrix);
+  node->matrix_override = true;
+  const PartMatrix inv_seat = part_matrix_inverse_rigid(seat_m);
+  const auto to_cm = [&](float x, float y, float z, float out[3]) {
+    float metres[3];
+    transform_point(inv_seat, x, y, z, metres);
+    for (int i = 0; i < 3; ++i) out[i] = metres[i] * 100.f;
+  };
+  const int32_t type = node->type_id;
+  const auto bone = [&](const char* name) {
+    return character_find_bone(seat.render, type, *index, name);
+  };
+  if (!seat.leaned && !rec->config->cameras.empty()) {
+    const auto& camera = rec->config->cameras[0].position;
+    float target[3];
+    to_cm(camera[0], camera[1], camera[2], target);
+    const int spine = bone("Bip01 Spine");
+    const int spine1 = bone("Bip01 Spine1");
+    const int head = bone("Bip01 Head");
+    if (spine >= 0 && head >= 0) {
+      character_aim_bone(seat.render, type, *index, spine, head, target, 0.8f);
+      if (spine1 >= 0)
+        character_aim_bone(seat.render, type, *index, spine1, head, target, 0.5f);
+      seat.leaned = true;
+    }
+  }
+  const PartSlot* mount = nullptr;
+  for (const auto& slot : rec->config->slots)
+    if (slot.type == 11) mount = &slot;
+  Object* wheel = nullptr;
+  if (mount) {
+    const auto child = rec->children.find(mount->id);
+    if (child != rec->children.end()) wheel = child->second;
+  }
+  if (wheel) {
+    const auto* wheel_node = gameref_get(wheel);
+    if (wheel_node) {
+      PartMatrix wheel_m;
+      std::copy(wheel_node->local_matrix, wheel_node->local_matrix + 16, wheel_m.begin());
+      const float grip_r = std::max(0.04f, wheel_rim_radius(wheel) - 0.015f);
+      const char* sides[2] = {"L", "R"};
+      for (int side = 0; side < 2; ++side) {
+        const float sign = side == 0 ? -1.f : 1.f;
+        const float grip_angle = sign;
+        float chassis_point[3];
+        transform_point(wheel_m, std::sin(grip_angle) * grip_r, std::cos(grip_angle) * grip_r,
+                        0.f, chassis_point);
+        float target[3];
+        to_cm(chassis_point[0], chassis_point[1], chassis_point[2], target);
+        const std::string prefix = std::string("Bip01 ") + sides[side] + " ";
+        const int upper = bone((prefix + "UpperArm").c_str());
+        const int lower = bone((prefix + "Forearm").c_str());
+        const int hand = bone((prefix + "Hand").c_str());
+        const int clavicle = bone((prefix + "Clavicle").c_str());
+        if (upper < 0 || lower < 0 || hand < 0) continue;
+        if (clavicle >= 0)
+          character_aim_bone(seat.render, type, *index, clavicle, upper, target, 0.8f);
+        const float pole[3] = {sign * 0.5f, -1.f, 0.f};
+        character_solve_limb(seat.render, type, *index, upper, lower, hand, target, pole);
+      }
+    }
+  }
+  if (rec->config->has_pedals) {
+    const char* sides[2] = {"L", "R"};
+    for (int side = 0; side < 2; ++side) {
+      const float sign = side == 0 ? -1.f : 1.f;
+      float target[3];
+      to_cm(rec->config->pedals[0] + sign * 0.1f, rec->config->pedals[1],
+            rec->config->pedals[2], target);
+      const std::string prefix = std::string("Bip01 ") + sides[side] + " ";
+      const int thigh = bone((prefix + "Thigh").c_str());
+      const int calf = bone((prefix + "Calf").c_str());
+      const int foot = bone((prefix + "Foot").c_str());
+      if (thigh < 0 || calf < 0 || foot < 0) continue;
+      const float pole[3] = {0.f, 0.5f, -1.f};
+      character_solve_limb(seat.render, type, *index, thigh, calf, foot, target, pole);
+    }
+  }
+}
+
+std::vector<std::string> cfg_words(std::string line) {
+  const auto cut = line.find_first_of(";#");
+  if (cut != std::string::npos) line.resize(cut);
+  if (!line.empty() && line.back() == '\r') line.pop_back();
+  std::istringstream input(line);
+  std::vector<std::string> words;
+  for (std::string word; input >> word;) words.push_back(std::move(word));
+  return words;
+}
+
+bool parse_ped_kind(uint32_t type_id, PedKind* out) {
+  if (!index || !out) return false;
+  auto bytes = index->read_payload(type_id);
+  std::string text(bytes.begin(), bytes.end());
+  if (text.find("eof") == std::string::npos) {
+    std::string relative = index->payload_prop(type_id, "native");
+    if (relative.rfind("ped ", 0) == 0 || relative.rfind("ped\t", 0) == 0)
+      relative.erase(0, 4);
+    else
+      relative = index->payload_prop(type_id, "sourcefile");
+    while (!relative.empty() && (relative.front() == ' ' || relative.front() == '\t'))
+      relative.erase(relative.begin());
+    if (relative.empty()) return false;
+    std::ifstream file(std::filesystem::path(index->game_root()) / relative, std::ios::binary);
+    if (!file) return false;
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    text = buffer.str();
+  }
+  uint32_t render = 0, anim = 0;
+  PartPose pose{};
+  bool have_pose = false;
+  std::istringstream lines(text);
+  for (std::string line; std::getline(lines, line);) {
+    const auto words = cfg_words(line);
+    if (words.empty()) continue;
+    if (words[0] == "render" && words.size() >= 2 && render == 0) {
+      render = static_cast<uint32_t>(std::strtoul(words[1].c_str(), nullptr, 0));
+      if (words.size() >= 8) {
+        bool ok = true;
+        for (int i = 0; i < 3 && ok; ++i) {
+          char* end = nullptr;
+          pose.position[i] = std::strtof(words[2 + i].c_str(), &end);
+          ok = end && *end == '\0' && std::isfinite(pose.position[i]);
+          pose.rotation[i] = std::strtof(words[5 + i].c_str(), &end);
+          ok = ok && end && *end == '\0' && std::isfinite(pose.rotation[i]);
+        }
+        have_pose = ok;
+      }
+    } else if (words[0] == "anim" && words.size() >= 2 && anim == 0) {
+      anim = static_cast<uint32_t>(std::strtoul(words[1].c_str(), nullptr, 0));
+    }
+  }
+  if (!render) return false;
+  const int pack = RpkIndex::pack_from_full(type_id);
+  auto full = [&](uint32_t local) {
+    const uint32_t resolved = index->resolve_embedded_id(pack, local);
+    return resolved ? resolved : RpkIndex::make_full_id(pack, local);
+  };
+  out->render = full(render);
+  out->anim = anim ? full(anim) : 0;
+  if (!have_pose) pose = {};
+  out->pose = pose;
+  if (const auto mesh = scene_instances_geometry(out->render)) {
+    const float scale = mesh->position_scale > 0.f ? mesh->position_scale : 0.01f;
+    out->sole = mesh->info.bbox_min[1] * scale;
+  }
+  out->ready = index->model_for_resource(RpkIndex::pack_from_full(out->render),
+                                         out->render & 0xffffu)
+                   .ok;
+  return out->ready;
+}
+
+void clear_ped_agents(PedCrowd& crowd) {
+  for (auto& agent : crowd.agents)
+    if (agent.render) gameref_remove(agent.render);
+  crowd.agents.clear();
+  crowd.announced = false;
+}
+
+void* chassis_root(Object* chassis) {
+  void* key = chassis;
+  for (int guard = 0; guard < 64; ++guard) {
+    const auto* node = gameref_get(key);
+    if (!node || !node->parent) return key;
+    key = node->parent;
+  }
+  return key;
+}
+
+void tick_pedestrians(double seconds) {
+  const float dt = static_cast<float>(std::min(seconds, 0.1));
+  for (auto it = crowds.begin(); it != crowds.end();) {
+    if (!gameref_get(it->first)) {
+      clear_ped_agents(it->second);
+      it = crowds.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  Object* chassis = part_controlled_chassis();
+  if (!chassis || !runtime || !index) return;
+  PartMatrix car;
+  if (!scene_instances_script_matrix(chassis, car.data())) return;
+  const float car_x = car[12], car_y = car[13], car_z = car[14];
+  void* root = chassis_root(chassis);
+  PartMatrix parent_m;
+  const bool rooted = root && root != chassis &&
+                      scene_instances_script_matrix(root, parent_m.data());
+  const PartMatrix parent_inv = rooted ? part_matrix_inverse_rigid(parent_m) : eye_matrix();
+  for (auto& entry : crowds) {
+    PedCrowd& crowd = entry.second;
+    if (crowd.kinds.size() != crowd.types.size()) crowd.kinds.resize(crowd.types.size());
+    int usable = 0;
+    for (size_t i = 0; i < crowd.types.size(); ++i) {
+      if (crowd.kinds[i].ready) {
+        if (crowd.kinds[i].render) ++usable;
+        continue;
+      }
+      const auto* type = gameref_get(crowd.types[i]);
+      const uint32_t id = type ? static_cast<uint32_t>(type->type_id) : 0;
+      if (!id || !parse_ped_kind(id, &crowd.kinds[i])) {
+        crowd.kinds[i].ready = true;
+        crowd.kinds[i].render = 0;
+        if (id) std::fprintf(stderr, "[ped] type 0x%x has no walk render\n", id);
+        continue;
+      }
+      ++usable;
+    }
+    int want = 0;
+    if (crowd.density > 0.f && usable > 0) {
+      constexpr float kArea = 150.f * 150.f * 3.14159265f;
+      want = static_cast<int>(std::lround(crowd.density * kArea));
+      want = std::clamp(want, 1, 12);
+    }
+    while (static_cast<int>(crowd.agents.size()) > want) {
+      if (crowd.agents.back().render) gameref_remove(crowd.agents.back().render);
+      crowd.agents.pop_back();
+    }
+    while (static_cast<int>(crowd.agents.size()) < want) {
+      PedAgent agent;
+      agent.kind = static_cast<int>(crowd.agents.size() % crowd.kinds.size());
+      while (agent.kind < static_cast<int>(crowd.kinds.size()) && !crowd.kinds[agent.kind].render)
+        ++agent.kind;
+      if (agent.kind >= static_cast<int>(crowd.kinds.size())) break;
+      const PedKind& kind = crowd.kinds[agent.kind];
+      Object* render = runtime->new_object("java.util.resource.RenderRef");
+      auto* node = gameref_upsert(render, GameRefKind::RenderRef);
+      node->type_id = static_cast<int32_t>(kind.render);
+      node->script = render;
+      node->alias = "pedestrian";
+      node->empty = false;
+      node->matrix_override = true;
+      if (rooted) gameref_set_parent(render, root);
+      if (kind.anim) {
+        character_bind_animation(render, render, static_cast<int32_t>(kind.anim), *index);
+        character_set_speed(render, 1.f);
+        character_play(render, true);
+      }
+      agent.render = render;
+      crowd.agents.push_back(agent);
+    }
+    if (!crowd.announced && !crowd.agents.empty()) {
+      std::fprintf(stderr, "[ped] %zu walkers\n", crowd.agents.size());
+      crowd.announced = true;
+    }
+    for (auto& agent : crowd.agents) {
+      if (!agent.render || !gameref_get(agent.render)) continue;
+      if (!agent.placed ||
+          std::hypot(agent.x - car_x, agent.z - car_z) > 70.f) {
+        const float radius = 8.f + ped_unit() * 24.f;
+        const float ang = ped_unit() * 6.2831853f;
+        agent.x = car_x + std::sin(ang) * radius;
+        agent.z = car_z + std::cos(ang) * radius;
+        agent.yaw = ped_unit() * 6.2831853f;
+        agent.placed = true;
+      } else if (dt > 0.f) {
+        const float dx = car_x - agent.x, dz = car_z - agent.z;
+        const float dist = std::hypot(dx, dz);
+        if (dist > 40.f && dist > 1.f) {
+          float delta = std::atan2(dx, dz) - agent.yaw;
+          if (delta > 3.14159265f) delta -= 6.2831853f;
+          if (delta < -3.14159265f) delta += 6.2831853f;
+          agent.yaw += std::clamp(delta, -1.5f * dt, 1.5f * dt);
+        } else {
+          agent.yaw += (ped_unit() - 0.5f) * 0.6f * dt;
+        }
+        agent.x += std::sin(agent.yaw) * 1.25f * dt;
+        agent.z += std::cos(agent.yaw) * 1.25f * dt;
+      }
+      const PedKind& kind = crowd.kinds[static_cast<size_t>(agent.kind)];
+      float ground = car_y;
+      float sampled = 0.f;
+      if (scene_instances_floor(agent.x, agent.z, car_y + 4.f, chassis, &sampled))
+        ground = sampled;
+      const float anchor = ground - kind.pose.position[1] - kind.sole;
+      PartMatrix yaw = eye_matrix();
+      const float cy = std::cos(agent.yaw), sy = std::sin(agent.yaw);
+      yaw[0] = cy;
+      yaw[2] = -sy;
+      yaw[8] = sy;
+      yaw[10] = cy;
+      yaw[12] = agent.x;
+      yaw[13] = anchor;
+      yaw[14] = agent.z;
+      const PartMatrix world = part_matrix_multiply(yaw, part_pose_matrix(kind.pose));
+      const PartMatrix local = rooted ? part_matrix_multiply(parent_inv, world) : world;
+      auto* node = gameref_get(agent.render);
+      if (!node) continue;
+      std::copy(local.begin(), local.end(), node->local_matrix);
+      node->matrix_override = true;
+    }
+  }
+}
+
 } // namespace
 
 void part_pause_engine_audio(bool paused) {
@@ -2769,17 +3197,57 @@ void part_physics_advance(double seconds) {
   // Ignore excess time after a long stall so the next frame can still render.
   physics_elapsed += std::min(seconds, kPhysicsTick * kMaxPhysicsTicksPerFrame);
   constexpr double tolerance = kPhysicsTick * 1e-10;
-  if (physics_elapsed + tolerance < kPhysicsTick) return;
+  if (physics_elapsed + tolerance >= kPhysicsTick) {
+    scene_instances_prepare_physics();
+    while (physics_elapsed + tolerance >= kPhysicsTick) {
+      advance_chassis_tick();
+      physics_elapsed = std::max(0.0, physics_elapsed - kPhysicsTick);
+    }
+    for (auto &[key, rec] : records) {
+      if (rec.config->native_kind == "car")
+        update_engine_audio(rec, rec.engine_running);
+    }
+  }
+  // After the solver, so a flap or a wheel placement cannot put the column back.
+  pose_steering_wheels();
+  pose_driver();
+  tick_pedestrians(seconds);
+}
 
-  scene_instances_prepare_physics();
-  while (physics_elapsed + tolerance >= kPhysicsTick) {
-    advance_chassis_tick();
-    physics_elapsed = std::max(0.0, physics_elapsed - kPhysicsTick);
-  }
-  for (auto &[key, rec] : records) {
-    if (rec.config->native_kind == "car")
-      update_engine_audio(rec, rec.engine_running);
-  }
+void part_set_pedestrian_density(void* ground, float density) {
+  if (!ground || !std::isfinite(density)) return;
+  crowds[ground].density = std::max(0.f, density);
+}
+
+void part_add_pedestrian_type(void* ground, void* type) {
+  if (!ground || !type) return;
+  PedCrowd& crowd = crowds[ground];
+  if (std::find(crowd.types.begin(), crowd.types.end(), type) != crowd.types.end())
+    return;
+  crowd.types.push_back(type);
+  crowd.kinds.emplace_back();
+}
+
+void part_remove_pedestrian_type(void* ground, void* type) {
+  if (!ground) return;
+  const auto crowd = crowds.find(ground);
+  if (crowd == crowds.end()) return;
+  const auto found = std::find(crowd->second.types.begin(), crowd->second.types.end(), type);
+  if (found == crowd->second.types.end()) return;
+  const auto index = static_cast<size_t>(found - crowd->second.types.begin());
+  crowd->second.types.erase(found);
+  if (index < crowd->second.kinds.size())
+    crowd->second.kinds.erase(crowd->second.kinds.begin() + static_cast<std::ptrdiff_t>(index));
+  clear_ped_agents(crowd->second);
+}
+
+void part_drop_actors() {
+  for (auto& entry : drivers)
+    if (entry.second.render && gameref_get(entry.second.render))
+      gameref_remove(entry.second.render);
+  drivers.clear();
+  for (auto& entry : crowds) clear_ped_agents(entry.second);
+  crowds.clear();
 }
 void part_set_hud_preview(const std::string &path) {
   std::ifstream input(path, std::ios::binary);
@@ -4076,5 +4544,11 @@ void part_visit_gc_roots(const GcRootVisitor& visit) {
     for (auto* sfx : r.sfx) visit(sfx);
   }
   for (const auto& entry : sfx_items) visit(entry.first);
+  for (const auto& entry : drivers) visit(entry.second.render);
+  for (const auto& entry : crowds) {
+    visit(static_cast<Object*>(entry.first));
+    for (void* type : entry.second.types) visit(static_cast<Object*>(type));
+    for (const auto& agent : entry.second.agents) visit(agent.render);
+  }
 }
 } // namespace slrr

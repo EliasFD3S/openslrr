@@ -2,12 +2,14 @@
 #include "natives_internal.hpp"
 
 #include "slrr/gameref.hpp"
+#include "slrr/part_runtime.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/osd_registry.hpp"
 #include "slrr/render_backend.hpp"
 #include "slrr/script_cfg.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/skeleton.hpp"
 #include "slrr/scene_sun.hpp"
 #include "slrr/slrr_font.hpp"
 #include "slrr/video_fmv.hpp"
@@ -447,8 +449,13 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
       });
   jvm.natives().register_method(
       "java.util.resource.RenderRef", "getBoneId", "(Ljava.lang.String;)I",
-      [](Object*, const std::vector<Value>&) {
-        return Value::make_int(0);
+      [&rpk](Object* self, const std::vector<Value>& args) {
+        if (!self) return Value::make_int(0);
+        const GameRefState* state = gameref_get(self);
+        const int32_t type_id = state ? state->type_id : 0;
+        const std::string name =
+            !args.empty() && args[0].tag == ValueTag::Obj ? obj_str(args[0].v.o) : std::string{};
+        return Value::make_int(character_bone_id(self, type_id, rpk, name));
       });
   jvm.natives().register_method(
       "java.util.resource.RenderRef", "getDetail", "()F",
@@ -561,7 +568,39 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
   jvm.natives().register_method(
       "java.util.resource.RenderRef", "setMatrix",
       "(ILjava.util.resource.ResourceRef;Ljava.lang.Vector3;Ljava.lang.Ypr;)V",
-      native_noop);
+      [&rpk](Object* self, const std::vector<Value>& args) {
+        if (!self) return Value::make_void();
+        const int bone = !args.empty() && args[0].tag == ValueTag::Int ? args[0].v.i : 0;
+        if (bone < 0) return Value::make_void();
+        auto component = [](Object* object, const char* field) {
+          if (!object) return 0.f;
+          const auto found = object->fields.find(field);
+          if (found == object->fields.end()) return 0.f;
+          if (found->second.tag == ValueTag::Float && std::isfinite(found->second.v.f))
+            return found->second.v.f;
+          if (found->second.tag == ValueTag::Int) return static_cast<float>(found->second.v.i);
+          return 0.f;
+        };
+        Object* bone_ref = args.size() > 1 && args[1].tag == ValueTag::Obj ? args[1].v.o : nullptr;
+        Object* position = args.size() > 2 && args[2].tag == ValueTag::Obj ? args[2].v.o : nullptr;
+        Object* orientation = args.size() > 3 && args[3].tag == ValueTag::Obj ? args[3].v.o : nullptr;
+        const float x = component(position, "x");
+        const float y = component(position, "y");
+        const float z = component(position, "z");
+        const float yaw = component(orientation, "y");
+        const float pitch = component(orientation, "p");
+        const float roll = component(orientation, "r");
+        const GameRefState* state = gameref_get(self);
+        const int32_t type_id = state ? state->type_id : 0;
+        if (!bone_ref || bone_ref == self) {
+          character_set_bone_local(self, type_id, rpk, bone, x, y, z, yaw, pitch, roll);
+          return Value::make_void();
+        }
+        character_link_bone(self, bone_ref, bone);
+        gameref_set_parent(self, bone_ref);
+        gameref_set_matrix(self, x, y, z, yaw, pitch, roll);
+        return Value::make_void();
+      });
   jvm.natives().register_method(
       "java.util.resource.RenderRef", "lineCreate",
       "(Ljava.util.resource.ResourceRef;Ljava.util.resource.ResourceRef;)I",
@@ -629,6 +668,33 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
         return Value::make_obj(nullptr);
       });
   jvm.natives().register_method(
+      "java.util.resource.GroundRef", "setPedestrianDensityN", "(F)V",
+      [](Object* self, const std::vector<Value>& args) {
+        float density = 0.f;
+        if (!args.empty() && args[0].tag == ValueTag::Float && std::isfinite(args[0].v.f))
+          density = args[0].v.f;
+        else if (!args.empty() && args[0].tag == ValueTag::Int)
+          density = static_cast<float>(args[0].v.i);
+        part_set_pedestrian_density(self, density);
+        return Value::make_void();
+      });
+  jvm.natives().register_method(
+      "java.util.resource.GroundRef", "addPedestrianType",
+      "(Ljava/util/resource/GameRef;)V",
+      [](Object* self, const std::vector<Value>& args) {
+        Object* type = !args.empty() && args[0].tag == ValueTag::Obj ? args[0].v.o : nullptr;
+        part_add_pedestrian_type(self, type);
+        return Value::make_void();
+      });
+  jvm.natives().register_method(
+      "java.util.resource.GroundRef", "remPedestrianType",
+      "(Ljava/util/resource/GameRef;)V",
+      [](Object* self, const std::vector<Value>& args) {
+        Object* type = !args.empty() && args[0].tag == ValueTag::Obj ? args[0].v.o : nullptr;
+        part_remove_pedestrian_type(self, type);
+        return Value::make_void();
+      });
+  jvm.natives().register_method(
       "java.util.resource.GroundRef", "setFog", "(IFF)V",
       [](Object*, const std::vector<Value>& args) {
         const int32_t col =
@@ -641,6 +707,79 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
                                                                  : 0.f;
         gameref_set_fog(col, near_z, far_z);
         return Value::make_void();
+      });
+
+  auto finite_arg = [](const std::vector<Value>& args, float* out) {
+    if (args.empty()) return false;
+    if (args[0].tag == ValueTag::Float && std::isfinite(args[0].v.f)) {
+      *out = args[0].v.f;
+      return true;
+    }
+    if (args[0].tag == ValueTag::Int) {
+      *out = static_cast<float>(args[0].v.i);
+      return true;
+    }
+    return false;
+  };
+  jvm.natives().register_method(
+      "java.util.resource.Animation", "<init>",
+      "(Ljava/util/resource/RenderRef;Ljava/util/resource/ResourceRef;)V",
+      [&rpk](Object* self, const std::vector<Value>& args) {
+        if (!self || args.size() < 2 || args[0].tag != ValueTag::Obj ||
+            args[1].tag != ValueTag::Obj)
+          return Value::make_void();
+        character_bind_animation(self, args[0].v.o, resource_id_of(args[1].v.o), rpk);
+        return Value::make_void();
+      });
+  jvm.natives().register_method(
+      "java.util.resource.Animation", "finalize", "()V",
+      [](Object* self, const std::vector<Value>&) {
+        character_release_animation(self);
+        return Value::make_void();
+      });
+  jvm.natives().register_method(
+      "java.util.resource.Animation", "setSpeed", "(F)V",
+      [finite_arg](Object* self, const std::vector<Value>& args) {
+        float speed = 0.f;
+        if (finite_arg(args, &speed)) character_set_speed(self, speed);
+        return Value::make_void();
+      });
+  jvm.natives().register_method(
+      "java.util.resource.Animation", "setFade", "(F)V",
+      [finite_arg](Object* self, const std::vector<Value>& args) {
+        float fade = 0.f;
+        if (finite_arg(args, &fade)) character_set_fade(self, fade);
+        return Value::make_void();
+      });
+  jvm.natives().register_method(
+      "java.util.resource.Animation", "play", "()V",
+      [](Object* self, const std::vector<Value>&) {
+        character_play(self, false);
+        return Value::make_void();
+      });
+  jvm.natives().register_method(
+      "java.util.resource.Animation", "loopPlay", "()V",
+      [](Object* self, const std::vector<Value>&) {
+        character_play(self, true);
+        return Value::make_void();
+      });
+  jvm.natives().register_method(
+      "java.util.resource.Animation", "pause", "()V",
+      [](Object* self, const std::vector<Value>&) {
+        character_pause(self);
+        return Value::make_void();
+      });
+  jvm.natives().register_method(
+      "java.util.resource.Animation", "seek", "(F)V",
+      [finite_arg](Object* self, const std::vector<Value>& args) {
+        float position = 0.f;
+        if (finite_arg(args, &position)) character_seek(self, position);
+        return Value::make_void();
+      });
+  jvm.natives().register_method(
+      "java.util.resource.Animation", "getPos", "()F",
+      [](Object* self, const std::vector<Value>&) {
+        return Value::make_float(character_position(self));
       });
 }
 

@@ -61,6 +61,8 @@ add_executable(slrr_host
   src/resources/gameref.cpp
   src/resources/scene_instances.cpp
   src/resources/scx_mesh.cpp
+  src/resources/skeleton.cpp
+  src/resources/character.cpp
   src/resources/dds_image.cpp
   src/resources/ptx_image.cpp
   src/jvm/tufa.cpp

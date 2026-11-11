@@ -56,6 +56,11 @@ struct ScxGeometry {
   std::vector<float> uv2, uv3;
   std::vector<uint32_t> vertex_colors; // RPK POLY A8R8G8B8
   std::vector<uint32_t> indices; // triangles * 3
+  // Four influences per vertex, parallel to positions / 3. Empty when the
+  // mesh has no bone palette. Bone ids are indices into the skeleton the
+  // render descriptor names. A zero weight leaves that influence unused.
+  std::vector<uint16_t> skin_bones;
+  std::vector<float> skin_weights;
   std::vector<ScxGroup> groups;
   // RPK `texture` property order (or .tex). Index == ScxGroup::texture_index.
   std::vector<std::string> textures;

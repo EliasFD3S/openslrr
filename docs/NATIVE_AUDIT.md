@@ -11,9 +11,9 @@ implementations and following selected calls to their consumers.
 
 | Status | Stock signatures |
 | --- | ---: |
-| Registered with a body | 314 |
-| Registered with the explicit `native_noop` handler | 5 |
-| Absent from the registry | 57 |
+| Registered with a body | 327 |
+| Registered with the explicit `native_noop` handler | 4 |
+| Absent from the registry | 45 |
 | **Total** | **376** |
 
 The first category includes constant responses, inline empty bodies and
@@ -26,7 +26,6 @@ that category. It is not a compatibility score or a complete runtime trace.
 | --- | --- | --- |
 | `System` | `analyze(Object)`, `analyze(float)`, `analyze(int)` | The original discards the arguments. |
 | `GameRef` | `setActiveCollision()` | Enable collision for a generic world object. |
-| `RenderRef` | `setMatrix(int, ResourceRef, Vector3, Ypr)` | Transform a bone in a referenced space. The other `setMatrix` overload has a body. |
 
 ## Known mocks and partial implementations
 
@@ -39,14 +38,18 @@ that category. It is not a compatibility score or a complete runtime trace.
 | `System.isLoading`, `isLoadingReset`, `setLdPriority` | Track active RPK scans and measured pack-work history; reset seeds the 32-sample ring without clearing ongoing scans. Priority changes scan cadence. Mesh/texture streaming has no corresponding queue. |
 | `System.compileAll` | Embedded C++ compiler writes validated TUFA containers for source units, including multiple classes per file. Existing loaded classes require a restart. See SCRIPT_COMPILER.md. |
 | `System.info` | Selector 5 returns the live host VM heap count. Other selectors return an empty string. |
+| `Animation` | Binds a `.matrixdata` clip to the render named by the constructor. `play` / `loopPlay` / `pause` / `seek` / `getPos` / `setSpeed` sample it on the skeleton declared by that render. `setFade` blends the clip in from the bind pose. Each render keeps its own pose. |
+| `RenderRef.getBoneId` | Case-insensitive lookup in that skeleton. An unknown name, or a render with no skeleton, returns 0. |
+| `RenderRef.setMatrix(int, ResourceRef, Vector3, Ypr)` | Writes that bone's local pose. With another render as `bone_ref`, this render is parented on that bone. Script positions are metres. |
 | `Thread.setDaemon` | Sets and clears the per-thread flag. Shutdown still cancels every fiber. |
 | `System.simTime`, `timeWarp` | The simulation clock follows the warp factor, and setting it returns the previous factor. Physics uses the scaled elapsed time. UI clocks, sleeps and host timer dispatch use real time. |
 | `System.setMeasure`, `getConfigOptions` | The measure setting controls digital vehicle instruments. The options refresh reads gameplay settings and schedules a save when they change. |
 | `RenderRef.setFlare`, `Navigator.updateNavigator`, `GroundRef.getNearestCross` | Directional flares use the scene's texture and an approximate sprite layout. The GPS camera and markers follow scene objects. The crossing query returns null until the road index is available. |
 | `GfxEngine.numDisplayModes`, `currDisplayMode`, `displayModeName`, `changeVideoMode` | One fixed mode is exposed, 800×600×32 at index zero. The change call is empty. Startup window settings are a separate path. |
-| `RenderRef.getBoneId`, `plotRoute` | Always return zero. Bone lookup and route line construction are missing. |
+| `RenderRef.plotRoute` | Always returns zero. Route line construction is missing. |
 | `RenderRef.lineCreate`, `lineAdd` | Build renderable ribbons from positions, normals and widths. Color is applied per segment. |
-| `Chassis.setCooling`, `setSteerWheelRadius`, `setSteerWheel`, `setBuck`, `setNitroSFX` | Store configuration. No temperature simulation, cockpit steering animation, bucking effect or nitro audio consumes these values yet. |
+| `Chassis.setCooling`, `setSteerWheelRadius`, `setSteerWheel`, `setBuck`, `setNitroSFX` | Store configuration. No temperature simulation, bucking effect or nitro audio consumes these values yet. The installed wheel on slot type 11 turns about the cfg `steering` locator. |
+| `GroundRef.setPedestrianDensityN`, `addPedestrianType`, `remPedestrianType` | Density, after the script's Config factor, scales a walking crowd around the driven car, capped at 12. Each type's `native ped` cfg supplies the render and the looped walk clip. They do not follow a road graph. `pedestrianDistance` is still missing. |
 | `Part.setSfxLoopParams` | Stores the two parameters without applying them to a voice. |
 | `Chassis.setHornSFX` | Stores all indexed sounds. The current player input plays the index 1 sample once per press. |
 | `GameRef.getInfo`, `queueEvent` | Implement selected queries and commands. Unhandled queries return zero. Unhandled command paths still need coverage as new sections are exercised. |
@@ -79,14 +82,13 @@ being replaced by success-returning mocks.
 
 | System | Count | Methods |
 | --- | ---: | --- |
-| `GroundRef` | 24 | `setWater` (2 overloads), `addWaterLimit`, `addTrafficCar`, `remTrafficCar`, `notifyTrafficCar`, `addTrafficN`, `addTrafficP`, `delTraffic`, `setTrafficCarBehaviour`, `haltTrafficCross`, `haltTrafficPath`, `getStartDirection`, `findRoute`, `getRouteLength` (2 overloads), `getRoutePos`, `getRouteDist`, `alignToRoad`, `setPedestrianDensityN`, `addPedestrianType`, `remPedestrianType`, `removePedestrianType`, `pedestrianDistance` |
+| `GroundRef` | 21 | `setWater` (2 overloads), `addWaterLimit`, `addTrafficCar`, `remTrafficCar`, `notifyTrafficCar`, `addTrafficN`, `addTrafficP`, `delTraffic`, `setTrafficCarBehaviour`, `haltTrafficCross`, `haltTrafficPath`, `getStartDirection`, `findRoute`, `getRouteLength` (2 overloads), `getRoutePos`, `getRouteDist`, `alignToRoad`, `removePedestrianType`, `pedestrianDistance` |
 | `PhysicsRef` | 8 | `create`, `createSphere`, `setStatic`, `getPos`, `getVel` (2 overloads), `getAngVel`, `getOri` |
-| `Animation` | 9 | Constructor, `finalize`, `setSpeed`, `setFade`, `play`, `loopPlay`, `pause`, `seek`, `getPos` |
 | `ParticleSystem` | 9 | `init`, `stop`, `setFreq`, `setDirectSource`, `setSource`, `setCounter`, `getCounter`, `delAction`, `modePermanent` |
 | `Camera` | 1 | `setFog` |
 | `Painter` | 3 | `doPaint`, `paintPart`, `xPaint` |
 
-There are 54 missing active signatures and 3 missing leftovers, for 57 total.
+There are 42 missing active signatures and 3 missing leftovers, for 45 total.
 
 ## Roadmap
 
@@ -102,7 +104,7 @@ There are 54 missing active signatures and 3 missing leftovers, for 57 total.
 3. **Complete the navigation and race loop.** Read road and route data,
    implement the `GroundRef` route queries, `Navigator.updateNavigator`
    and route rendering. Verify map, rear view and cruise control in a race.
-   Add traffic and pedestrians after routes and collision are stable.
+   Add traffic after routes and collision are stable. Pedestrians already walk near the player; they do not follow the road graph.
 4. **Complete garage actions and effects.** Implement the `Painter` natives
    and resource-created sound, then animation, particles, flares and fog.
    Verify paint and installed-part state through a career save and reload.

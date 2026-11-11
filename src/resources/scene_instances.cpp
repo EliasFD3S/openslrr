@@ -5,6 +5,7 @@
 #include "slrr/part_config.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/rpk_index.hpp"
+#include "slrr/skeleton.hpp"
 #include "slrr/vehicle_dynamics.hpp"
 
 #include <algorithm>
@@ -575,6 +576,7 @@ read_ground_materials(const std::filesystem::path &path) {
 } // namespace
 
 void scene_instances_set_resources(const RpkIndex *resources) {
+  character_forget_all();
   g_resources = resources;
   g_world = g_sky = nullptr;
   g_preview_lamps = false;
@@ -637,6 +639,16 @@ bool chain_matrix(void *key, void *root, float *matrix, bool reflect) {
       std::copy(n->local_matrix, n->local_matrix + 16, local);
     else
       local_matrix(*n, local);
+    void* bone_owner = nullptr;
+    int bone_id = 0;
+    if (character_linked_bone(current, &bone_owner, &bone_id) && bone_owner == n->parent) {
+      float bone[16];
+      if (character_bone_metres(bone_owner, bone_id, bone)) {
+        float placed[16];
+        multiply(placed, bone, local);
+        std::copy(placed, placed + 16, local);
+      }
+    }
     multiply(matrix, local, matrix);
     if (current == root) {
       // Vertices are uploaded as S*v (S reflects Z). Instance matrix is S*M*S.
@@ -1154,6 +1166,10 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root) {
     }
     if (!instance.geometry)
       continue;
+    if (!n->line_geometry && g_resources) {
+      if (auto posed = character_posed(n->key, n->type_id, instance.geometry.get(), *g_resources))
+        instance.geometry = std::move(posed);
+    }
     instance.cull_backfaces = instance.geometry->ground_polygons;
     instance.key = n->key;
     instance.type_id = n->type_id;

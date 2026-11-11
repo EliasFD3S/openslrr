@@ -44,20 +44,20 @@ These milestones describe existing functionality, rather than a percentage of th
 
 ![Native bindings by family: with a body, no-op, or missing](assets/progress/native-coverage.svg)
 
-**314 with a body · 5 explicit no-ops · 57 missing**, out of **376 stock natives** (11 November 2026).
+**327 with a body · 4 explicit no-ops · 45 missing**, out of **376 stock natives** (11 November 2026).
 The bars show **numbers of functions**, not percentages. A body can still be partial or return a fixed value; these counts do not establish full behavior or validation in game. The separately counted no-op functions are explicitly registered as `native_noop`.
 
 | Family | With a body | No-op | Missing |
 | --- | ---: | ---: | ---: |
-| World | 4 | 0 | 50 |
+| World | 16 | 0 | 38 |
 | Language | 68 | 3 | 0 |
 | Sound & scripts | 15 | 0 | 3 |
-| Resources | 55 | 2 | 0 |
+| Resources | 56 | 1 | 0 |
 | Rendering | 35 | 0 | 1 |
 | Files & input | 37 | 0 | 0 |
 | Parts | 97 | 0 | 0 |
 | Leftovers | 3 | 0 | 3 |
-| **Total** | **314** | **5** | **57** |
+| **Total** | **327** | **4** | **45** |
 
 World covers GroundRef, particles, animation and PhysicsRef; language covers `java.lang`. Resources covers GameRef, ResourceRef, RenderRef and SfxRef; rendering covers GfxEngine, Text, Camera and Viewport. Files & input includes File, FindFile, Input, Controller and MouseCursor; parts includes Part, Chassis, WheelRef, DynoData and SfxTable. Sound & scripts covers Sound, Vehicle, Painter, Navigator and GameLogic. Leftovers groups the three networking compatibility calls and the unused Welder API; it does not establish their historical origin.
 
@@ -77,7 +77,7 @@ The snapshot matches the stock native table against registered class, method and
 | Workshop | ✅ Point at a part to read its name, hide the body or the engine, open panels with interpolated motion and adjust tunable parts. Remove or fit attached assemblies, and drag inventory parts onto Repair/Sell. Detached suspension parts regain their rest pose in the inventory |
 | Physics | ⏳ Fixed-step chassis, suspension and tyre contacts, differential lock, impact deformation and panel detachment. Handling and damage still need comparison with the original |
 | Audio and video | ✅ Effects, loops, FMV audio and four music playlists streamed with Media Foundation/XAudio2. Repeated effects and menu sounds have separate overlap limits |
-| Options | ✅ Game, Advanced Game and audio settings use the stock `save/game/options` format. Traffic and pedestrian density values are saved while their simulation is pending |
+| Options | ✅ Game, Advanced Game and audio settings use the stock `save/game/options` format. Pedestrian density scales a walking crowd in the city. Traffic density is saved while its simulation is pending |
 | Driving | ⏳ Test Track driving with engine SFX tables, keyboard and XInput, stock and CFG-defined instruments, and GPS. Acceleration has been compared with stock Nonus and Einvagen telemetry, with differences remaining |
 | World and career | ⏳ City, traffic and complete career flow; vehicle purchase/save/load still need end-to-end validation |
 

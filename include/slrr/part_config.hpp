@@ -97,6 +97,12 @@ struct PartConfig {
   PartPose render_pose;
   PartPose steering;
   bool has_steering = false;
+  // Driver locators. `seat` is the pose Vin is parented to. `pedals` is a
+  // point (no orientation): the feet aim there. Neither is a separate mesh.
+  PartPose seat;
+  bool has_seat = false;
+  float pedals[3] = {};
+  bool has_pedals = false;
   std::vector<PartPose> wheels;
   float max_steer = .6f, ackermann_length = 0;
   std::vector<PartPose> cameras;

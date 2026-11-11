@@ -4,6 +4,7 @@
 #include "slrr/host_input.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/skeleton.hpp"
 #include "slrr/vehicle_dynamics.hpp"
 
 #include <algorithm>
@@ -44,6 +45,8 @@ float gameref_now() {
 }
 
 void gameref_clear() {
+  part_drop_actors();
+  character_forget_all();
   g_refs.clear();
   g_lights.clear();
   g_next_live = 0x70000000;
@@ -93,6 +96,7 @@ bool gameref_bind_alias(void* reference,void* target) {
 
 void gameref_remove(void* key) {
   if (!key) return;
+  character_forget(key);
   script_events_destroy(static_cast<Object*>(key));
   auto own=g_refs.find(key);
   if(own!=g_refs.end()&&own->second.binding){g_refs.erase(own);return;}

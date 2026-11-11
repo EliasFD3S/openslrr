@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="465" viewBox="0 0 1120 465" role="img" aria-labelledby="title desc">
 <title id="title">Open SLRR native binding coverage</title>
-<desc id="desc">314 with a body, 5 no-op, 57 missing, out of 376. Bars show counts, not percentages of game completion.</desc>
+<desc id="desc">327 with a body, 4 no-op, 45 missing, out of 376. Bars show counts, not percentages of game completion.</desc>
 <rect width="1120" height="465" rx="12" fill="#0d1117"/>
 <g font-family="Segoe UI,Arial,sans-serif">
 <text x="28" y="34" font-size="21" fill="#f0f6fc" text-anchor="start">Native binding coverage</text>
-<text x="28" y="58" font-size="13" fill="#c9d1d9" text-anchor="start">314 with a body  /  5 no-op  /  57 missing  ·  376 stock natives</text>
+<text x="28" y="58" font-size="13" fill="#c9d1d9" text-anchor="start">327 with a body  /  4 no-op  /  45 missing  ·  376 stock natives</text>
 <line x1="170.0" x2="170.0" y1="80" y2="361" stroke="#21262d"/>
 <text x="170.0" y="381" font-size="12" fill="#8b949e" text-anchor="middle">0</text>
 <line x1="387.5" x2="387.5" y1="80" y2="361" stroke="#21262d"/>
@@ -16,10 +16,10 @@
 <line x1="1040.0" x2="1040.0" y1="80" y2="361" stroke="#21262d"/>
 <text x="1040.0" y="381" font-size="12" fill="#8b949e" text-anchor="middle">100</text>
 <text x="156" y="102" font-size="13" fill="#c9d1d9" text-anchor="end">World</text>
-<rect x="170" y="85" width="34.8" height="25" fill="#49a58d"><title>World: 4 with a body</title></rect>
-<text x="187.4" y="102" font-size="12" fill="#ffffff" text-anchor="middle">4</text>
-<rect x="204.8" y="85" width="434.99999999999994" height="25" fill="#ab474b"><title>World: 50 missing</title></rect>
-<text x="422.29999999999995" y="102" font-size="12" fill="#ffffff" text-anchor="middle">50</text>
+<rect x="170" y="85" width="139.2" height="25" fill="#49a58d"><title>World: 16 with a body</title></rect>
+<text x="239.6" y="102" font-size="12" fill="#ffffff" text-anchor="middle">16</text>
+<rect x="309.2" y="85" width="330.6" height="25" fill="#ab474b"><title>World: 38 missing</title></rect>
+<text x="474.5" y="102" font-size="12" fill="#ffffff" text-anchor="middle">38</text>
 <text x="649.8" y="102" font-size="12" fill="#8b949e" text-anchor="start">54</text>
 <text x="156" y="137" font-size="13" fill="#c9d1d9" text-anchor="end">Language</text>
 <rect x="170" y="120" width="591.5999999999999" height="25" fill="#49a58d"><title>Language: 68 with a body</title></rect>
@@ -32,9 +32,9 @@
 <rect x="300.5" y="155" width="26.099999999999998" height="25" fill="#ab474b"><title>Sound &amp; scripts: 3 missing</title></rect>
 <text x="336.6" y="172" font-size="12" fill="#8b949e" text-anchor="start">18</text>
 <text x="156" y="207" font-size="13" fill="#c9d1d9" text-anchor="end">Resources</text>
-<rect x="170" y="190" width="478.49999999999994" height="25" fill="#49a58d"><title>Resources: 55 with a body</title></rect>
-<text x="409.25" y="207" font-size="12" fill="#ffffff" text-anchor="middle">55</text>
-<rect x="648.5" y="190" width="17.4" height="25" fill="#d39338"><title>Resources: 2 no-op</title></rect>
+<rect x="170" y="190" width="487.19999999999993" height="25" fill="#49a58d"><title>Resources: 56 with a body</title></rect>
+<text x="413.59999999999997" y="207" font-size="12" fill="#ffffff" text-anchor="middle">56</text>
+<rect x="657.1999999999999" y="190" width="8.7" height="25" fill="#d39338"><title>Resources: 1 no-op</title></rect>
 <text x="675.9" y="207" font-size="12" fill="#8b949e" text-anchor="start">57</text>
 <text x="156" y="242" font-size="13" fill="#c9d1d9" text-anchor="end">Rendering</text>
 <rect x="170" y="225" width="304.5" height="25" fill="#49a58d"><title>Rendering: 35 with a body</title></rect>

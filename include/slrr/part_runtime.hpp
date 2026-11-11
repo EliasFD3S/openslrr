@@ -46,6 +46,13 @@ bool part_camera_pose(void* car, int camera, float* matrix);
 void *part_shadow_source(void *render, float *frame);
 // Advance only cars belonging to the active world, at a fixed physics step.
 void part_physics_advance(double seconds);
+// GroundRef pedestrian natives. Density is people per square metre after the
+// script's Config factor. Types are the GameRefs Valocity registers.
+void part_set_pedestrian_density(void* ground, float density);
+void part_add_pedestrian_type(void* ground, void* type);
+void part_remove_pedestrian_type(void* ground, void* type);
+// Map unload. Drops the seated driver and the walking crowd.
+void part_drop_actors();
 void part_pause_engine_audio(bool paused);
 struct PartPhysicsState {
   bool active = false;

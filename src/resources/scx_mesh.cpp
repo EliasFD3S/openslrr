@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <string_view>
 #include <cstdio>
 #include <cstring>
@@ -204,6 +205,7 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
 
   bool bbox_init = false;
   ScxGroup mat{};
+  std::vector<uint32_t> palette;
   bool have_mat = false;
   bool have_verts = false;
   uint32_t base = 0;
@@ -313,6 +315,26 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
           }
         }
       }
+    } else if (type == 2 || type == 3) {
+      // Chunk 3: reserved word, count, then bone ids. Chunk 2 is the same
+      // two-bone palette without the count. Ids index the render skeleton.
+      if (p + 4 > chunk_end) continue;
+      p += 4;
+      uint32_t count = 2;
+      if (type == 3) {
+        if (p + 4 > chunk_end) continue;
+        count = rd_u32(buf.data() + p);
+        p += 4;
+      }
+      if (count == 0 || count > 4096 ||
+          p + static_cast<size_t>(count) * 4 > chunk_end)
+        continue;
+      palette.clear();
+      palette.resize(count);
+      for (uint32_t i = 0; i < count; ++i) {
+        palette[i] = rd_u32(buf.data() + p);
+        p += 4;
+      }
     } else if (type == 4) {
       if (!have_mat) continue;
       if (have_verts) finish_group();
@@ -338,8 +360,49 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
         const float z = rd_f32(v + o + 8);
         o += 12;
         expand_bbox(info, x, y, z, bbox_init);
-        o += v4_weight_bytes(flags);
-        if (flags & 0x20) o += 4;
+        // One influence flag: 0x2 stores none, 0x4/0x8/0x10 store one less
+        // weight than the influence count. The last weight is 1 - sum.
+        const int explicit_weights =
+            (flags & 0x4) ? 1 : (flags & 0x8) ? 2 : (flags & 0x10) ? 3 : 0;
+        const uint32_t influence = flags & 0x1e;
+        const bool one_influence =
+            influence && (influence & (influence - 1u)) == 0;
+        float skin_w[4] = {};
+        uint16_t skin_b[4] = {0xffff, 0xffff, 0xffff, 0xffff};
+        bool skinned = false;
+        if (one_influence && !palette.empty()) {
+          float sum = 0.f;
+          for (int k = 0; k < explicit_weights; ++k) {
+            float weight = rd_f32(v + o);
+            o += 4;
+            if (!std::isfinite(weight) || weight < 0.f) weight = 0.f;
+            skin_w[k] = weight;
+            sum += weight;
+          }
+          if (explicit_weights < 4) {
+            const float rest = 1.f - sum;
+            skin_w[explicit_weights] = rest > 0.f ? rest : 0.f;
+          }
+          if (flags & 0x20) {
+            for (int k = 0; k < 4; ++k) {
+              const unsigned local = v[o + static_cast<size_t>(k)];
+              if (local < palette.size() && palette[local] <= 0xfffeu)
+                skin_b[k] = static_cast<uint16_t>(palette[local]);
+              else if (k <= explicit_weights)
+                skin_w[k] = 0.f;
+            }
+            o += 4;
+          } else {
+            for (int k = 0; k < 4; ++k)
+              if (static_cast<size_t>(k) < palette.size() &&
+                  palette[static_cast<size_t>(k)] <= 0xfffeu)
+                skin_b[k] = static_cast<uint16_t>(palette[static_cast<size_t>(k)]);
+          }
+          skinned = true;
+        } else {
+          o += v4_weight_bytes(flags);
+          if (flags & 0x20) o += 4;
+        }
         float nx = 0.f, ny = 1.f, nz = 0.f;
         if (flags & 0x40) {
           nx = rd_f32(v + o);
@@ -359,6 +422,11 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
         if(flags&0x400) {u2=rd_f32(v+o);v2=rd_f32(v+o+4);o+=8;}
         if(flags&0x800) {u3=rd_f32(v+o);v3=rd_f32(v+o+4);o+=8;}
         if (want_geo) {
+          if (skinned && geo.skin_weights.empty()) {
+            const size_t prior = geo.positions.size() / 3;
+            geo.skin_weights.assign(prior * 4, 0.f);
+            geo.skin_bones.assign(prior * 4, 0);
+          }
           geo.positions.push_back(x);
           geo.positions.push_back(y);
           geo.positions.push_back(z);
@@ -369,6 +437,12 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
           geo.uvs.push_back(vv);
           geo.uv2.push_back(u2); geo.uv2.push_back(v2);
           geo.uv3.push_back(u3); geo.uv3.push_back(v3);
+          if (!geo.skin_weights.empty()) {
+            for (int k = 0; k < 4; ++k) {
+              geo.skin_weights.push_back(skinned ? skin_w[k] : 0.f);
+              geo.skin_bones.push_back(skinned ? skin_b[k] : 0);
+            }
+          }
         }
       }
     } else if (type == 5) {
