@@ -38,7 +38,7 @@ The pinned renderer is bgfx.cmake commit `5ea74ee66662daef4089695846d6322da0dde9
 # In a worktree, use the main checkout's shared local CMake if tools/ is absent.
 ```
 
-Use a separate build directory for every worktree. Do not run concurrent builds in one directory. There is currently no committed automated test target; a successful compile is only a baseline, not behavioral verification. Add focused regression tests with fixes, especially for parsers, VM semantics, scheduler/GC behavior, and deterministic physics. Record exact commands and results in the agent report.
+Use a separate build directory for every worktree. Do not run concurrent builds in one directory. Shared CTest infrastructure is available: configure, build the `slrr_tests` target, then run `ctest --test-dir build-bgfx-x64 -C Release --output-on-failure --no-tests=error`. Lane tests use `SLRR_TEST`, `SLRR_REQUIRE`, and a `tests/*-tests.cmake` fragment with `slrr_add_test`. A successful compile is only a baseline, not behavioral verification. Add focused regression tests with fixes, especially for parsers, VM semantics, scheduler/GC behavior, and deterministic physics. Record exact commands and results in the agent report.
 
 Headless probes documented in the Markdown files are useful only when the current binary supports them. Check `slrr_host.exe --help` before using a probe. Interactive driving, rendering, audio, and physical gamepad behavior require explicit interactive validation; do not claim it from headless checks.
 

@@ -16,6 +16,8 @@ Baseline reviewed: `60d7d71` on `main`, 10 November 2026. This plan prioritizes 
 
 Create a committed `tests/` target with fast Windows x64 tests and CTest integration. Start with pure parser/value tests, then VM/native tests with small fixtures. Add malformed/truncated inputs and sanitizer-supported jobs where the Windows toolchain permits. Add CI for configure, Release build, and tests.
 
+**Integrated foundation:** shared CTest targets, fixture helpers, smoke tests, and a Windows CI workflow are now present. Production regression coverage and sanitizer-supported lanes remain open.
+
 **Exit:** a clean checkout can bootstrap, build, and run the same tests with one command; test binaries do not require the full game installation.
 
 ### 0.2 Fix confirmed memory-safety defects

@@ -81,7 +81,7 @@ The immediate constraint is not the 63 missing native signatures. It is memory-u
 
 ## Build, test, and release readiness
 
-- No committed first-party test tree, CTest registration, CI workflow, or reproducible version of the documented temporary VM/audio/UI diagnostics exists.
+- At the review baseline, no committed first-party test tree, CTest registration, CI workflow, or reproducible version of the documented temporary VM/audio/UI diagnostics existed. Shared CTest infrastructure, fixture helpers, smoke tests, and Windows CI have since been integrated; production regression coverage remains active work.
 - README.md refers to ignored/missing tools/render-native-coverage.py; NATIVE_AUDIT.md depends on external docs/stubs.txt. Coverage cannot be regenerated from a clean checkout.
 - validate-and-promote.ps1 builds and copies but runs no behavioral gate. Its source list omits required inputs, now includes downloaded tools, snapshots sources after building without a clean/lock check, and overwrites Release before verification. It needs canonical paths, fresh-parent creation, unique checkpoints, and pinned CMake selection.
 - The new multi-agent scripts must be integrated into a commit before agent worktrees are created; the base guard intentionally refuses a base lacking them.
