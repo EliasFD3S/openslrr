@@ -1,5 +1,6 @@
 #include "slrr/section_machine.hpp"
 #include "slrr/host_game_options.hpp"
+#include "slrr/diagnostics.hpp"
 
 #include <cstdio>
 
@@ -132,6 +133,17 @@ void SectionMachine::adopt_actual(Object* next) {
   auto* old = actual_;
   actual_ = next;
   actual_name_ = next ? next->class_name : "(null)";
+  if (diagnostics::enabled()) {
+    diagnostics::set_section(actual_name_);
+    diagnostics::Event event;
+    event.category = diagnostics::Category::Section;
+    event.name = "section.transition";
+    event.object = next;
+    event.class_name = actual_name_;
+    event.detail = (old ? old->class_name : "(null)") + " -> " + actual_name_;
+    event.result = "adopted";
+    diagnostics::trace(std::move(event));
+  }
   if (jvm_) {
     reset_catalog_return_pose(*jvm_, old, next);
     finish_selector_preview(*jvm_, old, false);
@@ -165,6 +177,17 @@ void SectionMachine::change_active_section(Object* next) {
   }
   actual_ = next;
   actual_name_ = next ? next->class_name : "(null)";
+  if (diagnostics::enabled()) {
+    diagnostics::set_section(actual_name_);
+    diagnostics::Event event;
+    event.category = diagnostics::Category::Section;
+    event.name = "section.transition";
+    event.object = next;
+    event.class_name = actual_name_;
+    event.detail = (old ? old->class_name : "(null)") + " -> " + actual_name_;
+    event.result = "changed";
+    diagnostics::trace(std::move(event));
+  }
   jvm_->set_static("java.game.GameLogic", "actualState",
                    Value::make_obj(actual_));
   std::printf("[section] actual=%s\n", actual_name_.c_str());

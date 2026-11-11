@@ -1,5 +1,7 @@
 #include "slrr/native_registry.hpp"
+#include "slrr/diagnostics.hpp"
 
+#include <chrono>
 #include <stdexcept>
 
 namespace slrr {
@@ -50,21 +52,54 @@ Value NativeRegistry::invoke(const std::string& class_fqn,
                              const std::string& method,
                              const std::string& java_sig, Object* self,
                              const std::vector<Value>& args) const {
-  auto it = methods_.find(key(class_fqn, method, java_sig));
-  if (it == methods_.end()) {
-    const std::string prefix = class_fqn + "#" + method + "#";
-    for (auto jt = methods_.begin(); jt != methods_.end(); ++jt) {
-      if (jt->first.compare(0, prefix.size(), prefix) != 0) continue;
-      if (descriptor_match(jt->first.substr(prefix.size()), java_sig)) {
-        it = jt;
-        break;
+  using Clock = std::chrono::steady_clock;
+  const bool tracing = diagnostics::enabled();
+  const auto started = tracing ? Clock::now() : Clock::time_point{};
+  auto trace_result = [&](const char* result, const char* error) noexcept {
+    if (!tracing) return;
+    try {
+      diagnostics::Event event;
+      event.category = diagnostics::Category::Native;
+      event.name = "native.invoke";
+      event.object = self;
+      event.class_name = class_fqn;
+      event.method = method;
+      event.signature = java_sig;
+      event.duration_ns = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              Clock::now() - started).count());
+      event.result = result;
+      event.error = error;
+      diagnostics::trace(std::move(event));
+    } catch (...) {
+    }
+  };
+
+  try {
+    auto it = methods_.find(key(class_fqn, method, java_sig));
+    if (it == methods_.end()) {
+      const std::string prefix = class_fqn + "#" + method + "#";
+      for (auto jt = methods_.begin(); jt != methods_.end(); ++jt) {
+        if (jt->first.compare(0, prefix.size(), prefix) != 0) continue;
+        if (descriptor_match(jt->first.substr(prefix.size()), java_sig)) {
+          it = jt;
+          break;
+        }
       }
     }
+    if (it == methods_.end())
+      throw std::runtime_error("Missing native: " + class_fqn + "#" + method +
+                               "#" + java_sig);
+    Value result = it->second(self, args);
+    trace_result("ok", "");
+    return result;
+  } catch (const std::exception& error) {
+    trace_result("error", error.what());
+    throw;
+  } catch (...) {
+    trace_result("error", "non-standard exception");
+    throw;
   }
-  if (it == methods_.end())
-    throw std::runtime_error("Missing native: " + class_fqn + "#" + method +
-                             "#" + java_sig);
-  return it->second(self, args);
 }
 
 std::vector<std::string> NativeRegistry::signatures() const {

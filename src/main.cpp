@@ -4,6 +4,7 @@
 #include "slrr/native_registry.hpp"
 #include "slrr/render_backend.hpp"
 #include "slrr/dyno_model.hpp"
+#include "slrr/diagnostics.hpp"
 #include "slrr/sl2_pacejka.hpp"
 #include "slrr/natives_boot.hpp"
 #include "slrr/gameref.hpp"
@@ -14,6 +15,10 @@
 #include <string>
 
 namespace {
+
+struct DiagnosticsSession {
+  ~DiagnosticsSession() { slrr::diagnostics::shutdown(); }
+};
 
 void usage() {
   std::printf(
@@ -30,6 +35,8 @@ void usage() {
       "           [--vehicle-osd PATH]\n"
       "           [PlayerName]\n"
       "\n"
+      "Diagnostics: --trace PATH writes structured JSONL (opt-in).\n"
+      "\n"
       "Default --game: FMV intros → Init(int) (Soft splash / menu).\n"
       "--auto-new skips to Garage (smoke). ESC skips boot intros.\n"
       "Game data: open-SL/game or SLRR_GAME_ROOT / --root.\n"
@@ -40,6 +47,7 @@ void usage() {
 
 int main(int argc, char** argv) {
   using namespace slrr;
+  DiagnosticsSession diagnostics_session;
   // Line-buffered stdout stalls a dialog on every log line. Keep a block
   // buffer; real failures still go to stderr.
   std::setvbuf(stdout, nullptr, _IOFBF, 1 << 16);
@@ -51,6 +59,7 @@ int main(int argc, char** argv) {
   bool want_gc = false;
   BootOptions opt;
   const char* root_arg = nullptr;
+  const char* trace_path = nullptr;
 
   for (int i = 1; i < argc; ++i) {
     const char* a = argv[i];
@@ -115,6 +124,14 @@ int main(int argc, char** argv) {
       root_arg = argv[++i];
       continue;
     }
+    if (std::strcmp(a, "--trace") == 0) {
+      if (i + 1 >= argc) {
+        std::fprintf(stderr, "missing path for --trace\n");
+        return 2;
+      }
+      trace_path = argv[++i];
+      continue;
+    }
     if (a[0] != '-') {
       opt.player_name = a;
       continue;
@@ -127,6 +144,14 @@ int main(int argc, char** argv) {
   if (!want_probe && !want_game && !want_pacejka && !want_dyno && !want_gc) {
     usage();
     return 1;
+  }
+
+  if (trace_path) {
+    std::string error;
+    if (!diagnostics::start(trace_path, error)) {
+      std::fprintf(stderr, "FAIL: %s\n", error.c_str());
+      return 2;
+    }
   }
 
   if (want_pacejka) {

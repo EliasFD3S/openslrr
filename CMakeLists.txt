@@ -18,6 +18,7 @@ endif()
 add_executable(slrr_host
   src/main.cpp
   src/platform/game_root.cpp
+  src/platform/diagnostics.cpp
   src/platform/host_input.cpp
   src/platform/host_sfx.cpp
   src/platform/host_music.cpp

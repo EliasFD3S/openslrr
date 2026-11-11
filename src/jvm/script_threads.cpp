@@ -1,4 +1,5 @@
 #include "slrr/script_threads.hpp"
+#include "slrr/diagnostics.hpp"
 #include "slrr/jvm.hpp"
 #include "slrr/natives_boot.hpp"
 #include <algorithm>
@@ -23,11 +24,13 @@ struct Thread {
   Scheduler* scheduler=nullptr; Object* object=nullptr;
   void* fiber=nullptr; bool alive=false, suspended=false, stopping=false;
   double wake=0; Jvm::ExecutionState execution;
+  std::uint64_t id=0; Clock::time_point started_at;
 };
 struct Scheduler {
   Jvm* vm=nullptr;void* host=nullptr;bool converted=false, ticking=false;
   Thread* current=nullptr;Clock::time_point deadline;
   size_t next=0;
+  std::uint64_t next_fiber_id=0;
   Jvm::ExecutionState host_execution;
   std::unordered_map<Object*,std::unique_ptr<Thread>> threads;
 };
@@ -44,14 +47,26 @@ void yield(Scheduler& s){
 }
 void WINAPI entry(void* p){
   auto& t=*static_cast<Thread*>(p);auto& s=*t.scheduler;
+  std::string result="ok",error;
   try {
     if(t.stopping)throw Cancelled{};
     Object* target=t.object;
     auto i=target->fields.find("target");
     if(i!=target->fields.end()&&i->second.tag==ValueTag::Obj&&i->second.v.o)target=i->second.v.o;
     s.vm->invoke_by_name(target->class_name,"run",{Value::make_obj(target)},false);
-  } catch(const Cancelled&) {} catch(const std::exception& e){std::fprintf(stderr,"[thread] %s\n",e.what());}
+  } catch(const Cancelled&) {
+    result="cancelled";
+  } catch(const std::exception& e){
+    result="error";error=e.what();std::fprintf(stderr,"[thread] %s\n",e.what());
+  }
   t.alive=false;t.object->fields["_thread_alive"]=Value::make_int(0);
+  if(diagnostics::enabled()){
+    diagnostics::Event event;event.category=diagnostics::Category::Fiber;
+    event.name="fiber.exit";event.object=t.object;event.result=std::move(result);
+    event.error=std::move(error);event.duration_ns=static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now()-t.started_at).count());
+    diagnostics::trace(std::move(event));
+  }
   yield(s);
   std::terminate();
 }
@@ -63,7 +78,10 @@ void resume(Scheduler& s,Thread& t){
   s.current=&t;s.deadline=Clock::now()+std::chrono::milliseconds(slice);
   s.vm->exchange_execution_state(s.host_execution);
   s.vm->exchange_execution_state(t.execution);
+  const auto previous_fiber=diagnostics::current_fiber_id();
+  diagnostics::set_fiber(t.id);
   SwitchToFiber(t.fiber);
+  if(previous_fiber)diagnostics::set_fiber(*previous_fiber);else diagnostics::clear_fiber();
   s.current=nullptr;
   if(!t.alive && t.fiber){DeleteFiber(t.fiber);t.fiber=nullptr;}
 }
@@ -89,6 +107,8 @@ void script_thread_start(Jvm& vm,Object* object){
   t=Thread{};
   t.scheduler=&s;
   t.object=object;
+  t.id=++s.next_fiber_id;
+  t.started_at=Clock::now();
 #ifdef _WIN32
   t.fiber=CreateFiberEx(64*1024,1024*1024,FIBER_FLAG_FLOAT_SWITCH,entry,&t);
   t.alive=t.fiber!=nullptr;
@@ -96,6 +116,13 @@ void script_thread_start(Jvm& vm,Object* object){
   std::fprintf(stderr,"[thread] cooperative stacks require Windows\n");
 #endif
   object->fields["_thread_alive"]=Value::make_int(t.alive?1:0);
+  if(diagnostics::enabled()){
+    diagnostics::Event event;event.category=diagnostics::Category::Fiber;
+    event.name="fiber.start";event.object=object;event.fiber_id=t.id;
+    event.result=t.alive?"ok":"error";
+    if(!t.alive)event.error="CreateFiberEx failed";
+    diagnostics::trace(std::move(event));
+  }
 }
 bool script_thread_alive(Jvm& vm,Object* o){auto* t=find(vm,o);return t&&t->alive&&!t->stopping;}
 int script_thread_priority(Object* o){
@@ -111,6 +138,11 @@ void script_thread_stop(Jvm& vm,Object* o){
   auto* t=find(vm,o);if(!t||!t->alive)return;
   t->stopping=true;t->suspended=false;t->wake=0;
   o->fields["_thread_alive"]=Value::make_int(0);
+  if(diagnostics::enabled()){
+    diagnostics::Event event;event.category=diagnostics::Category::Fiber;
+    event.name="fiber.stop";event.object=o;event.fiber_id=t->id;
+    event.result="stopping";diagnostics::trace(std::move(event));
+  }
   if(t->scheduler->current==t)throw Cancelled{};
 }
 void script_thread_suspend(Jvm& vm,Object* o,bool suspended){
@@ -133,7 +165,14 @@ bool script_thread_checkpoint(Jvm& vm){
   auto& s=*i->second;
 #ifdef _WIN32
   if(s.current->stopping)throw Cancelled{};
-  if(Clock::now()>=s.deadline){yield(s);return true;}
+  if(Clock::now()>=s.deadline){
+    if(diagnostics::enabled()){
+      diagnostics::Event event;event.category=diagnostics::Category::Fiber;
+      event.name="fiber.checkpoint";event.object=s.current->object;
+      event.result="timeslice";diagnostics::trace(std::move(event));
+    }
+    yield(s);return true;
+  }
 #endif
   return false;
 }
