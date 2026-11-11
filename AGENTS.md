@@ -6,6 +6,7 @@ compatibility pitfalls. Then read the specialized documentation for your task:
 
 - VM, threads, events, and dialogs: [SCRIPT_RUNTIME.md](docs/SCRIPT_RUNTIME.md).
 - Object lifetime: [VM_GC.md](docs/VM_GC.md).
+- Script compilation: [SCRIPT_COMPILER.md](docs/SCRIPT_COMPILER.md).
 - Bindings, no-ops, and limitations: [NATIVE_AUDIT.md](docs/NATIVE_AUDIT.md).
 - Building and running: [README.md](README.md).
 

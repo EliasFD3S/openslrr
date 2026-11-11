@@ -652,6 +652,7 @@ Documentation locale complémentaire :
 - [VM_GC](VM_GC.md) : racines, safe points et finalisation.
 - [NATIVE_AUDIT](NATIVE_AUDIT.md) : couverture et limites des bindings.
 - [HOST_NATIVE_UTILITIES](HOST_NATIVE_UTILITIES.md) : utilitaires et options.
+- [SCRIPT_COMPILER](SCRIPT_COMPILER.md) : compilation TUFA multiclasse et natives Language.
 
 Références de travail externes, à comparer à une révision identifiée :
 

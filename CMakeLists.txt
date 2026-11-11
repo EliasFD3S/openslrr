@@ -16,8 +16,21 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake/CMakeLists.txt
   message(FATAL_ERROR "Missing third_party/bgfx.cmake. See README.md for setup.")
 endif()
 
+add_library(slrr_script_compiler STATIC
+  third_party/slrrc/classes.cpp third_party/slrrc/classfile.cpp
+  third_party/slrrc/decl.cpp third_party/slrrc/diag.cpp
+  third_party/slrrc/emit.cpp third_party/slrrc/floatlit.cpp
+  third_party/slrrc/install.cpp third_party/slrrc/packs.cpp
+  third_party/slrrc/parser.cpp third_party/slrrc/pool.cpp
+  third_party/slrrc/scanner.cpp third_party/slrrc/slrrc.cpp
+  third_party/slrrc/write.cpp)
+set_target_properties(slrr_script_compiler PROPERTIES CXX_STANDARD 17)
+target_include_directories(slrr_script_compiler PUBLIC third_party/slrrc)
+target_compile_options(slrr_script_compiler PRIVATE /utf-8 /fp:precise)
+
 add_executable(slrr_host
   src/main.cpp
+  src/jvm/script_compiler.cpp
   src/platform/game_root.cpp
   src/platform/host_input.cpp
   src/platform/host_sfx.cpp
@@ -173,7 +186,7 @@ target_include_directories(slrr_host PRIVATE
   "${SLRR_SHADER_OUT}"
   "${BIMG_DIR}/3rdparty"
 )
-target_link_libraries(slrr_host PRIVATE bgfx bx bimg)
+target_link_libraries(slrr_host PRIVATE bgfx bx bimg slrr_script_compiler)
 target_compile_features(slrr_host PRIVATE cxx_std_20)
 target_compile_definitions(slrr_host PRIVATE SLRR_HAS_LIBBGFX=1)
 message(STATUS "slrr_host: libbgfx + mesh shaders enabled")

@@ -1,7 +1,8 @@
 # Native audit and roadmap
 
 Baseline snapshot from 9 November 2026, incrementally updated 11 November for
-the five resource/vehicle bindings below and the Leftovers classification.
+the resource/vehicle bindings, the Language work described in
+[SCRIPT_COMPILER.md](SCRIPT_COMPILER.md), and the Leftovers classification.
 The Release x64 registry was compared with the
 376 entries in the stock table at `docs/stubs.txt` in the research workspace.
 Matching uses owner, method and parameter types, including overloads. This
@@ -10,9 +11,9 @@ implementations and following selected calls to their consumers.
 
 | Status | Stock signatures |
 | --- | ---: |
-| Registered with a body | 312 |
-| Registered with the explicit `native_noop` handler | 6 |
-| Absent from the registry | 58 |
+| Registered with a body | 314 |
+| Registered with the explicit `native_noop` handler | 5 |
+| Absent from the registry | 57 |
 | **Total** | **376** |
 
 The first category includes constant responses, inline empty bodies and
@@ -23,7 +24,6 @@ that category. It is not a compatibility score or a complete runtime trace.
 
 | Owner | Native signatures | Missing effect |
 | --- | --- | --- |
-| `System` | `isLoadingReset()` | Seed the original resource streaming history. |
 | `System` | `analyze(Object)`, `analyze(float)`, `analyze(int)` | The original discards the arguments. |
 | `GameRef` | `setActiveCollision()` | Enable collision for a generic world object. |
 | `RenderRef` | `setMatrix(int, ResourceRef, Vector3, Ypr)` | Transform a bone in a referenced space. The other `setMatrix` overload has a body. |
@@ -36,7 +36,8 @@ that category. It is not a compatibility score or a complete runtime trace.
 | `GameRef.getDetail`, `RenderRef.getDetail` | Read the canonical instance's detail bias; the default is zero. No distance-dependent LOD bias producer is implemented yet. |
 | `Vehicle.getHorn` | Checks the selected horn SFX row on the canonical chassis, using live player horn input or the `sethorn` command. |
 | `Vehicle.hasCrime` | Returns the stored zone speed limit in m/s, or -1 without a zone. Automatic zone enter/leave producers are still missing. |
-| `System.isLoading`, `setLdPriority` | Report in-progress RPK scans and choose their cooperative work cadence. Mesh and texture streaming have no corresponding queue. |
+| `System.isLoading`, `isLoadingReset`, `setLdPriority` | Track active RPK scans and measured pack-work history; reset seeds the 32-sample ring without clearing ongoing scans. Priority changes scan cadence. Mesh/texture streaming has no corresponding queue. |
+| `System.compileAll` | Embedded C++ compiler writes validated TUFA containers for source units, including multiple classes per file. Existing loaded classes require a restart. See SCRIPT_COMPILER.md. |
 | `System.info` | Selector 5 returns the live host VM heap count. Other selectors return an empty string. |
 | `Thread.setDaemon` | Sets and clears the per-thread flag. Shutdown still cancels every fiber. |
 | `System.simTime`, `timeWarp` | The simulation clock follows the warp factor, and setting it returns the previous factor. Physics uses the scaled elapsed time. UI clocks, sleeps and host timer dispatch use real time. |
@@ -82,11 +83,10 @@ being replaced by success-returning mocks.
 | `PhysicsRef` | 8 | `create`, `createSphere`, `setStatic`, `getPos`, `getVel` (2 overloads), `getAngVel`, `getOri` |
 | `Animation` | 9 | Constructor, `finalize`, `setSpeed`, `setFade`, `play`, `loopPlay`, `pause`, `seek`, `getPos` |
 | `ParticleSystem` | 9 | `init`, `stop`, `setFreq`, `setDirectSource`, `setSource`, `setCounter`, `getCounter`, `delAction`, `modePermanent` |
-| `System` | 1 | `compileAll` |
 | `Camera` | 1 | `setFog` |
 | `Painter` | 3 | `doPaint`, `paintPart`, `xPaint` |
 
-There are 55 missing active signatures and 3 missing leftovers, for 58 total.
+There are 54 missing active signatures and 3 missing leftovers, for 57 total.
 
 ## Roadmap
 
@@ -108,7 +108,7 @@ There are 55 missing active signatures and 3 missing leftovers, for 58 total.
    Verify paint and installed-part state through a career save and reload.
 5. **Complete platform and optional systems.** Enumerate display modes,
    complete controller options and loader state, then assess networking and
-   script compilation/debug natives when needed by the supported workflows.
+   additional debug behavior when needed by the supported workflows.
 
 The stock driving, suspension and game-control pages were exercised with
 synthetic keyboard input in the Release x64 host. Each test applied a new

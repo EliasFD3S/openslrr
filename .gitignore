@@ -16,7 +16,8 @@ compile_commands.json
 # ==========================================
 # Third-party dependencies (bgfx)
 # ==========================================
-/third_party/
+/third_party/*
+!/third_party/slrrc/
 
 # ==========================================
 # Compiled binaries

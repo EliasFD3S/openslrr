@@ -8,6 +8,7 @@
 #include "slrr/video_fmv.hpp"
 #include "slrr/host_music.hpp"
 #include "slrr/host_game_options.hpp"
+#include "slrr/resource_loading.hpp"
 
 #include "slrr/gameref.hpp"
 #include "slrr/part_runtime.hpp"
@@ -359,6 +360,7 @@ void dispatch_mechanic_pointer(Jvm& jvm) {
 
 MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
                                    SectionMachine& sections, double dt) {
+  resource_loading_pump();
   host_music_update();
   host_game_options_update(jvm);
   const auto game_time = jvm.get_static("java.game.GameLogic", "time");
