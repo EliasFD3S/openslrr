@@ -534,23 +534,28 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
            (dot == std::string::npos || (body.size() == dot + 2 && body.back() >= '0' && body.back() <= '3'));
   };
 
-  // Stock assets and the wide-screen placement from the original HUD.
-  // The odometer sits left of the gauge at this aspect in build 606.
+  // Stock assets and their panel-relative placement in build 606.
   const VehicleHudLayout stock{{
       {true, cars_resource(0x55), {.742f, .994f, 0}},
-      {true, cars_resource(0x56), {.326f, 1.847f, 0}, {.48f, -.0001f, -.48f, .48f}},
+      {true, cars_resource(0x56), {.326f, 1.781f, 0}, {.48f, -.0001f, -.48f, .48f}},
       {}, {},
-      {true, cars_resource(0x58), {.298f, .865f, 0}, {}, 0xff4fe015, "%03.0f"},
-      {true, cars_resource(0x58), {.548f, .865f, 0}, {}, 0xff4fe015, "N123456R"},
-      {true, cars_resource(0x58), {-.50f, .755f, 0}, {}, 0xff4fe015, "%07.0f"},
+      {true, cars_resource(0x58), {.222f, .887f, 0}, {}, 0xff4fe015, "%03.0f"},
+      {true, cars_resource(0x58), {.407f, .889f, 0}, {}, 0xff4fe015, "N123456R"},
+      {true, cars_resource(0x58), {-.378f, .791f, 0}, {}, 0xff4fe015, "%07.0f"},
       {true, cars_resource(0x63), {-.227f, .925f, 0}},
-      {true, cars_resource(0x57), {.914f, .735f, 0}},
-      {true, cars_resource(0x5c), {-.126f, .834f, 0}, {}, 0xff000000},
-      {true, cars_resource(0x5c), {-.126f, .950f, 0}, {}, 0xff000000},
+      {true, cars_resource(0x57), {.670f, .743f, 0}},
+      {true, cars_resource(0x5c), {-.126f, .843f, 0}, {}, 0xff000000},
+      {true, cars_resource(0x5c), {-.126f, .948f, 0}, {}, 0xff000000},
   }};
   const float pixel_aspect = static_cast<float>(height_) / width_;
   // Size the stock strip from the viewport width while preserving its aspect.
   const float stock_scale = .5625f / pixel_aspect;
+  const auto stock_y = [&](size_t slot) {
+    // The anchors above are measured at 16:9. Keep every component attached
+    // to the same panel origin when the strip grows or shrinks vertically.
+    const float origin = stock[0].position[1];
+    return origin + (stock[slot].position[1] - origin) * stock_scale;
+  };
   constexpr uint16_t quad[] = {0, 1, 2, 1, 3, 2};
   for (size_t i = 0; i < stock.size(); ++i) {
     const HudSlot slot = static_cast<HudSlot>(i);
@@ -602,7 +607,8 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
         const auto green = static_cast<uint32_t>(255.f * std::min(1.f, 2.f * condition));
         color = 0xff000000u | (red << 16) | (green << 8);
       }
-      draw(*mesh, start, 4, quad, 6, x, item.position[1],
+      const float y = override.defined ? item.position[1] : stock_y(i);
+      draw(*mesh, start, 4, quad, 6, x, y,
            sy * pixel_aspect, sy, 0, p[0], p[1], color);
       continue;
     }
@@ -619,7 +625,8 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
                                                     : hud.mileage * hud.unit_scale;
         std::snprintf(buffer, sizeof(buffer), format, value);
       }
-      float x = item.position[0], y = item.position[1];
+      float x = item.position[0];
+      float y = override.defined ? item.position[1] : stock_y(i);
       if (std::abs(x) > 1.f || item.position[2] != 0.f) {
         x *= .42f;
         y *= -.82f;
@@ -651,7 +658,7 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     const float yscale = override.defined ? -.82f : -.406f * stock_scale;
     const float xscale = -yscale * pixel_aspect;
     const float x = override.defined ? item.position[0] * xscale : item.position[0];
-    const float y = override.defined ? item.position[1] * yscale : item.position[1];
+    const float y = override.defined ? item.position[1] * yscale : stock_y(i);
     draw(*mesh, 0, count, indices.data(), indices.size(),
          x, y,
          xscale * mesh->position_scale, yscale * mesh->position_scale,
