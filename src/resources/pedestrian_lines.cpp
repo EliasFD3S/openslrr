@@ -70,6 +70,8 @@ struct Zone {
   Boundary sides[2];
   Gate gates[2];
   float length = 0;
+  // 0 or 1: the edge facing the opposite sidewalk. -1 when the road side is unknown.
+  int inner = -1;
 };
 
 struct Sample {
@@ -102,13 +104,19 @@ V sample_boundary(const Boundary& side, float t) {
 // SLRR_rev zonePoint. The two kind-23 lines are the corridor edges. People
 // stand between them: laterals 0.25, 0.5 and 0.75, pulled to the middle
 // near a gate, and kept WALKING_CLEARANCE off each edge.
+// A wide pair reaches past the guardrail into the verge. On those, stay
+// about a metre in from the edge that faces the opposite sidewalk.
 V zone_point(const Zone& zone, float t, float lateral) {
   const V a = sample_boundary(zone.sides[0], t);
   const V b = sample_boundary(zone.sides[1], t);
   const float width = flat(a, b);
   const float margin = std::min(0.5f, std::max(0.15f, kClearance / std::max(1e-6f, width)));
   const float blend = std::min(1.f, std::min(t, 1.f - t) * zone.length / 4.f);
-  const float offset = std::clamp(0.5f + (lateral - 0.5f) * blend, margin, 1.f - margin);
+  float offset = std::clamp(0.5f + (lateral - 0.5f) * blend, margin, 1.f - margin);
+  if (zone.inner >= 0 && width > 5.2f) {
+    const float from_inner = std::clamp(1.15f + (lateral - 0.5f) * 0.7f, 0.8f, width - 1.6f);
+    offset = zone.inner == 0 ? from_inner / width : 1.f - from_inner / width;
+  }
   return lerp(a, b, offset);
 }
 
@@ -469,6 +477,29 @@ void build(Lines& lines) {
     zone.length = (zone.sides[0].length + zone.sides[1].length) * 0.5f;
     lines.zone_of.emplace(zone.id, static_cast<int>(lines.zones.size()));
     lines.zones.push_back(std::move(zone));
+  }
+  for (int i = 0; i < static_cast<int>(lines.zones.size()); ++i) {
+    Zone& zone = lines.zones[static_cast<size_t>(i)];
+    const V here = lerp(sample_boundary(zone.sides[0], 0.5f), sample_boundary(zone.sides[1], 0.5f), 0.5f);
+    float best = 1e9f;
+    int neighbor = -1;
+    for (int j = 0; j < static_cast<int>(lines.zones.size()); ++j) {
+      if (j == i) continue;
+      const Zone& other = lines.zones[static_cast<size_t>(j)];
+      const V there = lerp(sample_boundary(other.sides[0], 0.5f), sample_boundary(other.sides[1], 0.5f), 0.5f);
+      const float gap = flat(here, there);
+      // The opposite sidewalk sits across the roadway. A continuation of the
+      // same pavement is either much closer or much farther along the path.
+      if (gap < 10.f || gap > 40.f || gap >= best) continue;
+      best = gap;
+      neighbor = j;
+    }
+    if (neighbor < 0) continue;
+    const Zone& other = lines.zones[static_cast<size_t>(neighbor)];
+    const V there = lerp(sample_boundary(other.sides[0], 0.5f), sample_boundary(other.sides[1], 0.5f), 0.5f);
+    const V side0 = sample_boundary(zone.sides[0], 0.5f);
+    const V side1 = sample_boundary(zone.sides[1], 0.5f);
+    zone.inner = flat(side0, there) < flat(side1, there) ? 0 : 1;
   }
   for (int z = 0; z < static_cast<int>(lines.zones.size()); ++z) {
     const Zone& zone = lines.zones[static_cast<size_t>(z)];
