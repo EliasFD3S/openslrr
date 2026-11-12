@@ -845,13 +845,16 @@ void scene_instances_prepare_physics() {
     for (auto *n : render_nodes_in_world(g_world)) {
       if (!n || n->empty || n->sky_render || n->vehicle_material || n->line_geometry)
         continue;
+      // A skinned character is not landscape. Its bind mesh was becoming a
+      // solid obstacle, offset from the drawn body, and it destroyed the car.
+      if (n->alias == "pedestrian" || n->alias == "driver") continue;
       std::array<float, 16> m;
       if (!chain_matrix(n->key, g_world, m.data(), false))
         continue;
       const auto id = static_cast<uint32_t>(n->type_id);
       const auto collision = g_collision_overrides.find(id);
       auto geo = collision != g_collision_overrides.end() ? collision->second : geometry(id);
-      if (!geo)
+      if (!geo || !geo->skin_weights.empty())
         continue;
       active.insert(n->key);
       auto &cached = g_floor_meshes[n->key];

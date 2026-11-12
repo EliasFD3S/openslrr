@@ -150,7 +150,13 @@ void main()
 	if (u_alphaTest.w < -2.5) {
 		tex.rgb *= v_color0.rgb;
 	} else if (u_alphaTest.w < -1.5) {
-		tex.rgb = mix(tint, tex.rgb, tex.a);
+		// ColorMixTex. A wall atlas is a flat field plus the courses in alpha.
+		// Its color channel also has a black seam, and that seam repeats as a
+		// dark band across the facade. A chromatic texel is a sign or a poster
+		// and still mixes over the wall.
+		float chroma = max(tex.r, max(tex.g, tex.b)) - min(tex.r, min(tex.g, tex.b));
+		vec3 detail = mix(vec3(1.0, 1.0, 1.0), tex.rgb, step(0.08, chroma));
+		tex.rgb = mix(tint, detail, tex.a);
 		tint = vec3(1.0, 1.0, 1.0);
 	} else if (u_alphaTest.w < -0.5) {
 		// City window textures provide the mix weight for the vertex-coloured wall.

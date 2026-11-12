@@ -15,32 +15,6 @@ Object* object_field(Object* object, const char* name) {
              ? field->second.v.o : nullptr;
 }
 
-void reset_catalog_return_pose(Jvm& jvm, Object* previous, Object* next) {
-  if (!previous || !next) return;
-  if (previous->class_name == "java.game.Garage" &&
-      next->class_name == "java.game.Catalog") {
-    // Stock CMD_CATALOG sets SavePos = 1. Garage.exit then keeps both the
-    // live car pose and jack status. Use the stock reset branch's values.
-    previous->fields["StartPos"] =
-        Value::make_obj(jvm.new_object("java.lang.Vector3"));
-    previous->fields["StartYpr"] =
-        Value::make_obj(jvm.new_object("java.lang.Ypr"));
-    previous->fields["JackStatus"] = Value::make_int(0);
-  } else if (previous->class_name == "java.game.Catalog" &&
-             next->class_name == "java.game.Garage") {
-    auto* car = object_field(object_field(next, "player"), "car");
-    auto* pos = object_field(next, "StartPos");
-    auto* ypr = object_field(next, "StartYpr");
-    if (!car || !pos || !ypr) return;
-    // Returning from Catalog can reuse the same live chassis. Apply the
-    // parking pose even when the script skips placing that chassis again.
-    jvm.invoke("java.util.resource.GameRef", "setMatrix",
-               "(Ljava.lang.Vector3;Ljava.lang.Ypr;)V",
-               {Value::make_obj(car), Value::make_obj(pos), Value::make_obj(ypr)},
-               false);
-  }
-}
-
 void begin_selector_preview(Jvm& jvm, Object* selector) {
   if (!selector || selector->class_name != "java.game.CarSelect") return;
   const auto mode = selector->fields.find("Mode");
@@ -133,7 +107,6 @@ void SectionMachine::adopt_actual(Object* next) {
   actual_ = next;
   actual_name_ = next ? next->class_name : "(null)";
   if (jvm_) {
-    reset_catalog_return_pose(*jvm_, old, next);
     finish_selector_preview(*jvm_, old, false);
     begin_selector_preview(*jvm_, next);
   }
@@ -172,7 +145,6 @@ void SectionMachine::change_active_section(Object* next) {
     std::printf("[section] enter %s\n", actual_->class_name.c_str());
     call_lifecycle(jvm_, actual_, "enter", old);
   }
-  if (jvm_) reset_catalog_return_pose(*jvm_, old, next);
 }
 
 bool SectionMachine::auto_new_career(const std::string& player_name) {

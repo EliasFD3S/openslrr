@@ -172,12 +172,16 @@ struct PedAgent {
 };
 struct PedCrowd {
   float density = 0.f;
+  // Map value before the options slider (day 0.003, night 0.0005).
+  float map_density = 0.f;
   std::vector<void*> types;
   std::vector<PedKind> kinds;
   std::vector<PedAgent> agents;
   bool announced = false;
+  int next_kind = 0;
   double refill_at = 0;
   double prune_at = 0;
+  double report_at = 0;
 };
 std::unordered_map<void*, PedCrowd> crowds;
 uint32_t ped_rng = 0x51ee5u;
@@ -3176,12 +3180,21 @@ void tick_pedestrians(double seconds) {
       }
       ++usable;
     }
-    constexpr float kRadius = 150.f;
+    // Far enough that people are already on the sidewalk before they enter
+    // the view. 150 m clipped them into existence along the street.
+    constexpr float kRadius = 400.f;
+    const float slider = std::max(0.f, host_game_options().pedestrian_density);
+    // The map coefficients are people per square metre of sidewalk. At the
+    // slider maximum that asked for about twenty people inside 150 m.
+    constexpr float kDensityScale = 4.f;
+    crowd.density = crowd.map_density * slider * kDensityScale;
+    float area = 0.f;
     int want = 0;
     if (crowd.density > 0.f && usable > 0 && routed) {
       // StreetLegal stores people per square metre. The tick truncates
       // density times the walkable area, with no fixed headcount.
-      want = static_cast<int>(crowd.density * lines.area_within(car_x, car_y, car_z, kRadius));
+      area = lines.area_within(car_x, car_y, car_z, kRadius);
+      want = static_cast<int>(crowd.density * area);
     }
     auto retire = [](PedAgent& agent) {
       agent.line.ok = false;
@@ -3190,10 +3203,16 @@ void tick_pedestrians(double seconds) {
     };
     auto make_agent = [&]() -> PedAgent* {
       PedAgent agent;
-      agent.kind = static_cast<int>(crowd.agents.size() % crowd.kinds.size());
-      while (agent.kind < static_cast<int>(crowd.kinds.size()) && !crowd.kinds[agent.kind].render)
-        ++agent.kind;
-      if (agent.kind >= static_cast<int>(crowd.kinds.size())) return nullptr;
+      const int kind_count = static_cast<int>(crowd.kinds.size());
+      agent.kind = -1;
+      for (int step = 0; step < kind_count; ++step) {
+        const int candidate = (crowd.next_kind + step) % kind_count;
+        if (!crowd.kinds[static_cast<size_t>(candidate)].render) continue;
+        agent.kind = candidate;
+        crowd.next_kind = (candidate + 1) % kind_count;
+        break;
+      }
+      if (agent.kind < 0) return nullptr;
       const PedKind& kind = crowd.kinds[agent.kind];
       Object* render = runtime->new_object("java.util.resource.RenderRef");
       auto* node = gameref_upsert(render, GameRefKind::RenderRef);
@@ -3251,27 +3270,46 @@ void tick_pedestrians(double seconds) {
           const float span = (mesh->info.bbox_max[axis] - mesh->info.bbox_min[axis]) * scale;
           extent += span * span;
         }
-        car_block.radius = 0.5f * std::sqrt(extent) + 1.f;
+        const float radius = 0.5f * std::sqrt(extent) + 1.f;
+        // A part resource that is not the body mesh reports a city-sized box
+        // and would reject every sidewalk point after the first spawn.
+        if (radius >= 1.f && radius <= 12.f) car_block.radius = radius;
       }
     }
     if (routed && clock >= crowd.refill_at) {
       crowd.refill_at = clock + 0.25;
-      if (active < want) {
-        if (!spare) spare = make_agent();
-        if (spare) {
-          std::vector<PedestrianBlock> taken{car_block};
-          for (const auto& other : crowd.agents)
-            if (other.line.ok) taken.push_back({other.line.x, other.line.y, other.line.z, 2.f});
-          if (lines.spawn(car_x, car_y, car_z, kRadius, 35.f, ped_rng, spare->line, taken.data(),
-                          static_cast<int>(taken.size()))) {
-            spare->x = spare->line.x;
-            spare->z = spare->line.z;
-            spare->yaw = spare->line.yaw;
-            spare->placed = true;
-            ++active;
-          }
+      for (int made = 0; active < want && made < 8; ++made) {
+        if (!spare) {
+          for (auto& agent : crowd.agents)
+            if (!agent.line.ok) {
+              spare = &agent;
+              break;
+            }
         }
+        if (!spare) spare = make_agent();
+        if (!spare) break;
+        std::vector<PedestrianBlock> taken{car_block};
+        for (const auto& other : crowd.agents)
+          if (&other != spare && other.line.ok)
+            taken.push_back({other.line.x, other.line.y, other.line.z, 2.f});
+        // 12 m is the off-screen minimum. There is no frustum test here, and
+        // 35 m left the sidewalks in view empty while want stayed at 1 or 2.
+        if (!lines.spawn(car_x, car_y, car_z, kRadius, 12.f, ped_rng, spare->line, taken.data(),
+                         static_cast<int>(taken.size())))
+          break;
+        spare->x = spare->line.x;
+        spare->z = spare->line.z;
+        spare->yaw = spare->line.yaw;
+        spare->placed = true;
+        spare = nullptr;
+        ++active;
       }
+    }
+    if (crowd.density > 0.f && clock >= crowd.report_at) {
+      std::fprintf(stderr,
+                   "[ped] want=%d active=%d density=%.5f slider=%.2f area=%.0f radius=%.1f\n",
+                   want, active, crowd.density, slider, area, car_block.radius);
+      crowd.report_at = clock + 2.0;
     }
     if (!crowd.announced && active > 0) {
       std::fprintf(stderr, "[ped] %d walkers\n", active);
@@ -3372,7 +3410,13 @@ void part_physics_advance(double seconds) {
 
 void part_set_pedestrian_density(void* ground, float density) {
   if (!ground || !std::isfinite(density)) return;
-  crowds[ground].density = std::max(0.f, density);
+  density = std::max(0.f, density);
+  // GroundRef.setPedestrianDensity already multiplied by the slider. Undo that
+  // so a later move of the OptionsDialog control changes the live count.
+  PedCrowd& crowd = crowds[ground];
+  const float slider = host_game_options().pedestrian_density;
+  crowd.map_density = slider > 1e-4f ? density / slider : density;
+  crowd.density = crowd.map_density * std::max(0.f, slider);
 }
 
 void part_add_pedestrian_type(void* ground, void* type) {
