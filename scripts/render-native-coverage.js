@@ -385,6 +385,10 @@ function coverage() {
 
 function jsonText(document) { return JSON.stringify(document, null, 2) + "\n"; }
 
+// Git for Windows commonly checks text files out with CRLF line endings.
+// Coverage drift is about generated content, not the checkout's newline policy.
+function canonicalText(text) { return text.replace(/\r\n?/g, "\n"); }
+
 function svgText(document) {
   const totals = Object.fromEntries(["body", "noop", "missing"].map(key =>
     [key, document.categories.reduce((sum, row) => sum + row[key], 0)]));
@@ -443,7 +447,7 @@ function checkOutputs() {
   const document = coverage(), expected = new Map([[JSON_PATH, jsonText(document)], [SVG_PATH, svgText(document)]]);
   let clean = true;
   for (const [filePath, text] of expected) {
-    if (!fs.existsSync(filePath) || fs.readFileSync(filePath, "utf8") !== text) {
+    if (!fs.existsSync(filePath) || canonicalText(fs.readFileSync(filePath, "utf8")) !== text) {
       console.log("DRIFT: " + path.relative(ROOT, filePath) + "; run node scripts/render-native-coverage.js");
       clean = false;
     }
@@ -454,6 +458,8 @@ function checkOutputs() {
 
 function selfTest() {
   const document = coverage();
+  if (canonicalText(jsonText(document).replace(/\n/g, "\r\n")) !== jsonText(document))
+    throw new Error("CRLF checkout normalization changed the coverage comparison");
   if (document.total !== EXPECTED_STOCK_COUNT || document.categories.length !== CATEGORIES.length)
     throw new Error("coverage totals failed self-test");
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "native-coverage-test-"));
