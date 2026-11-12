@@ -176,6 +176,8 @@ struct PedCrowd {
   std::vector<PedKind> kinds;
   std::vector<PedAgent> agents;
   bool announced = false;
+  double refill_at = 0;
+  double prune_at = 0;
 };
 std::unordered_map<void*, PedCrowd> crowds;
 uint32_t ped_rng = 0x51ee5u;
@@ -3153,6 +3155,8 @@ void tick_pedestrians(double seconds) {
   const bool rooted = root && root != chassis &&
                       scene_instances_script_matrix(root, parent_m.data());
   const PartMatrix parent_inv = rooted ? part_matrix_inverse_rigid(parent_m) : eye_matrix();
+  static double clock = 0;
+  clock += seconds;
   for (auto& entry : crowds) {
     PedCrowd& crowd = entry.second;
     if (crowd.kinds.size() != crowd.types.size()) crowd.kinds.resize(crowd.types.size());
@@ -3172,114 +3176,145 @@ void tick_pedestrians(double seconds) {
       }
       ++usable;
     }
+    constexpr float kRadius = 150.f;
     int want = 0;
-    if (crowd.density > 0.f && usable > 0) {
-      constexpr float kArea = 150.f * 150.f * 3.14159265f;
-      want = static_cast<int>(std::lround(crowd.density * kArea));
-      want = std::clamp(want, 1, 12);
+    if (crowd.density > 0.f && usable > 0 && routed) {
+      // StreetLegal stores people per square metre. The tick truncates
+      // density times the walkable area, with no fixed headcount.
+      want = static_cast<int>(crowd.density * lines.area_within(car_x, car_y, car_z, kRadius));
     }
-    while (static_cast<int>(crowd.agents.size()) > want) {
-      if (crowd.agents.back().render) gameref_remove(crowd.agents.back().render);
-      crowd.agents.pop_back();
-    }
-    while (static_cast<int>(crowd.agents.size()) < want) {
+    auto retire = [](PedAgent& agent) {
+      agent.line.ok = false;
+      agent.placed = false;
+      if (auto* hidden = gameref_get(agent.render)) hidden->empty = true;
+    };
+    auto make_agent = [&]() -> PedAgent* {
       PedAgent agent;
       agent.kind = static_cast<int>(crowd.agents.size() % crowd.kinds.size());
       while (agent.kind < static_cast<int>(crowd.kinds.size()) && !crowd.kinds[agent.kind].render)
         ++agent.kind;
-      if (agent.kind >= static_cast<int>(crowd.kinds.size())) break;
+      if (agent.kind >= static_cast<int>(crowd.kinds.size())) return nullptr;
       const PedKind& kind = crowd.kinds[agent.kind];
       Object* render = runtime->new_object("java.util.resource.RenderRef");
       auto* node = gameref_upsert(render, GameRefKind::RenderRef);
       node->type_id = static_cast<int32_t>(kind.render);
       node->script = render;
       node->alias = "pedestrian";
-      node->empty = false;
+      node->empty = true;
       node->matrix_override = true;
       if (rooted) gameref_set_parent(render, root);
       if (kind.anim) {
         character_bind_animation(render, render, static_cast<int32_t>(kind.anim), *index);
-        character_set_speed(render, 1.f);
         character_play(render, true);
+        const float duration = character_duration(render);
+        if (duration > 0.f) character_seek(render, ped_unit() * duration);
       }
       agent.render = render;
       crowd.agents.push_back(agent);
+      return &crowd.agents.back();
+    };
+    int active = 0;
+    PedAgent* spare = nullptr;
+    for (auto& agent : crowd.agents) {
+      if (agent.line.ok) ++active;
+      else if (!spare) spare = &agent;
     }
-    if (!crowd.announced && !crowd.agents.empty()) {
-      std::fprintf(stderr, "[ped] %zu walkers\n", crowd.agents.size());
+    if (clock >= crowd.prune_at) {
+      std::vector<PedAgent*> order;
+      for (auto& agent : crowd.agents)
+        if (agent.line.ok) order.push_back(&agent);
+      std::sort(order.begin(), order.end(), [&](const PedAgent* a, const PedAgent* b) {
+        const float da = std::hypot(a->line.x - car_x, a->line.z - car_z);
+        const float db = std::hypot(b->line.x - car_x, b->line.z - car_z);
+        return da > db;
+      });
+      int remaining = static_cast<int>(order.size());
+      for (PedAgent* agent : order) {
+        const float away = std::hypot(agent->line.x - car_x, agent->line.z - car_z);
+        if (remaining > want || away > kRadius + 50.f) {
+          retire(*agent);
+          --remaining;
+        }
+      }
+      active = remaining;
+      crowd.prune_at = clock + 0.5;
+    }
+    PedestrianBlock car_block{car_x, car_y, car_z, 2.5f};
+    if (const auto* body = gameref_get(chassis)) {
+      car_block.vx = body->vel[0];
+      car_block.vy = body->vel[1];
+      car_block.vz = body->vel[2];
+      if (auto mesh = scene_instances_geometry(static_cast<uint32_t>(body->type_id))) {
+        const float scale = mesh->position_scale > 0.f ? mesh->position_scale : 0.01f;
+        float extent = 0.f;
+        for (int axis = 0; axis < 3; ++axis) {
+          const float span = (mesh->info.bbox_max[axis] - mesh->info.bbox_min[axis]) * scale;
+          extent += span * span;
+        }
+        car_block.radius = 0.5f * std::sqrt(extent) + 1.f;
+      }
+    }
+    if (routed && clock >= crowd.refill_at) {
+      crowd.refill_at = clock + 0.25;
+      if (active < want) {
+        if (!spare) spare = make_agent();
+        if (spare) {
+          std::vector<PedestrianBlock> taken{car_block};
+          for (const auto& other : crowd.agents)
+            if (other.line.ok) taken.push_back({other.line.x, other.line.y, other.line.z, 2.f});
+          if (lines.spawn(car_x, car_y, car_z, kRadius, 35.f, ped_rng, spare->line, taken.data(),
+                          static_cast<int>(taken.size()))) {
+            spare->x = spare->line.x;
+            spare->z = spare->line.z;
+            spare->yaw = spare->line.yaw;
+            spare->placed = true;
+            ++active;
+          }
+        }
+      }
+    }
+    if (!crowd.announced && active > 0) {
+      std::fprintf(stderr, "[ped] %d walkers\n", active);
       crowd.announced = true;
     }
     for (auto& agent : crowd.agents) {
       if (!agent.render || !gameref_get(agent.render)) continue;
-      float probe_y = car_y;
+      auto* node = gameref_get(agent.render);
+      if (!agent.line.ok) {
+        node->empty = true;
+        continue;
+      }
       if (routed) {
-        const float away = std::hypot(agent.line.x - car_x, agent.line.z - car_z);
-        if (!agent.line.ok || away > 180.f) {
-          std::vector<float> taken;
-          for (const auto& other : crowd.agents) {
-            if (!other.line.ok || &other == &agent) continue;
-            taken.push_back(other.line.x);
-            taken.push_back(other.line.z);
-          }
-          if (!lines.spawn(car_x, car_y, car_z, 150.f, 35.f, ped_rng, agent.line,
-                           taken.empty() ? nullptr : taken.data(),
-                           static_cast<int>(taken.size() / 2))) {
-            if (!agent.line.ok)
-              if (auto* hidden = gameref_get(agent.render)) hidden->empty = true;
-            continue;
-          }
-        } else if (dt > 0.f) {
-          lines.step(agent.line, dt, car_x, car_y, car_z, ped_rng);
+        if (dt > 0.f) lines.step(agent.line, dt, car_x, car_y, car_z, ped_rng);
+        if (!agent.line.ok) {
+          node->empty = true;
+          continue;
+        }
+        const float target = agent.line.yaw;
+        if (!agent.placed) agent.yaw = target;
+        else {
+          float delta = std::atan2(std::sin(target - agent.yaw), std::cos(target - agent.yaw));
+          agent.yaw += std::clamp(delta, -dt * 5.f, dt * 5.f);
         }
         agent.x = agent.line.x;
         agent.z = agent.line.z;
-        agent.yaw = agent.line.yaw;
         agent.placed = true;
-        probe_y = agent.line.y;
-        if (agent.line.speed > 0.f)
-          character_set_speed(agent.render, std::max(0.2f, agent.line.speed / 1.2f));
-      } else if (!agent.placed ||
-                 std::hypot(agent.x - car_x, agent.z - car_z) > 70.f) {
-        const float radius = 8.f + ped_unit() * 24.f;
-        const float ang = ped_unit() * 6.2831853f;
-        agent.x = car_x + std::sin(ang) * radius;
-        agent.z = car_z + std::cos(ang) * radius;
-        agent.yaw = ped_unit() * 6.2831853f;
-        agent.placed = true;
-      } else if (dt > 0.f) {
-        const float dx = car_x - agent.x, dz = car_z - agent.z;
-        const float dist = std::hypot(dx, dz);
-        if (dist > 40.f && dist > 1.f) {
-          float delta = std::atan2(dx, dz) - agent.yaw;
-          if (delta > 3.14159265f) delta -= 6.2831853f;
-          if (delta < -3.14159265f) delta += 6.2831853f;
-          agent.yaw += std::clamp(delta, -1.5f * dt, 1.5f * dt);
-        } else {
-          agent.yaw += (ped_unit() - 0.5f) * 0.6f * dt;
-        }
-        agent.x += std::sin(agent.yaw) * 1.25f * dt;
-        agent.z += std::cos(agent.yaw) * 1.25f * dt;
+        character_set_speed(agent.render, agent.line.speed / 1.2f);
       }
       const PedKind& kind = crowd.kinds[static_cast<size_t>(agent.kind)];
-      float ground = probe_y;
-      float sampled = 0.f;
-      if (scene_instances_floor(agent.x, agent.z, probe_y + 4.f, chassis, &sampled) &&
-          (!routed || std::fabs(sampled - probe_y) < 3.f))
-        ground = sampled;
-      const float anchor = ground - kind.pose.position[1] - kind.sole;
-      PartMatrix yaw = eye_matrix();
+      // Feet on the corridor point. The cfg render offset is not part of the
+      // streamed mount; the mesh sole is the skinned bounds minimum.
+      const float ground = routed ? agent.line.y : car_y;
+      PartMatrix world = eye_matrix();
       const float cy = std::cos(agent.yaw), sy = std::sin(agent.yaw);
-      yaw[0] = cy;
-      yaw[2] = -sy;
-      yaw[8] = sy;
-      yaw[10] = cy;
-      yaw[12] = agent.x;
-      yaw[13] = anchor;
-      yaw[14] = agent.z;
-      const PartMatrix world = part_matrix_multiply(yaw, part_pose_matrix(kind.pose));
+      world[0] = cy;
+      world[2] = -sy;
+      world[8] = sy;
+      world[10] = cy;
+      world[12] = agent.x;
+      world[13] = ground - kind.sole;
+      world[14] = agent.z;
       const PartMatrix local = rooted ? part_matrix_multiply(parent_inv, world) : world;
-      auto* node = gameref_get(agent.render);
-      if (!node) continue;
       std::copy(local.begin(), local.end(), node->local_matrix);
       node->matrix_override = true;
       node->empty = false;

@@ -66,6 +66,9 @@ struct ScxGeometry {
   std::vector<std::string> textures;
   // SCX positions are centimetres. POLY / script positions are already metres.
   float position_scale = 0.01f;
+  // Bumped when skinned positions change so the GPU buffer can be replaced
+  // without treating the mesh as a new object.
+  uint32_t revision = 0;
 };
 
 ScxMeshInfo parse_scx_file(const std::string& path);

@@ -118,6 +118,7 @@ class LibBgfxBackend final : public IRenderBackend {
     bgfx::IndexBufferHandle ibh = BGFX_INVALID_HANDLE;
     std::vector<bgfx::TextureHandle> tex;
     std::vector<std::string> shared_texture_paths;
+    uint32_t revision = 0;
   };
   struct SharedMapTexture {
     bgfx::TextureHandle handle;

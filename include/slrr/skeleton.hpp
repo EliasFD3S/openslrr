@@ -109,5 +109,6 @@ void character_play(void* animation, bool loop);
 void character_pause(void* animation);
 bool character_seek(void* animation, float seconds);
 float character_position(void* animation);
+float character_duration(void* animation);
 
 }  // namespace slrr

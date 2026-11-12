@@ -108,6 +108,8 @@ SLRR_TEST(pedestrian_follows_corridor) {
   SLRR_REQUIRE(rows[0].records[0].directions[0].z == 1.f);
   uint32_t rng = 1;
   slrr::PedestrianWalker walker;
+  SLRR_REQUIRE(std::fabs(lines.area_within(1.f, 0.f, 40.f, 50.f) - 160.f) < 1.f);
+  SLRR_REQUIRE(std::fabs(lines.area_within(1.f, 0.f, 40.f, 10.f) - 40.f) < 4.f);
   SLRR_REQUIRE(lines.spawn(1.f, 0.f, 40.f, 50.f, 0.f, rng, walker));
   SLRR_REQUIRE(walker.x > 0.05f && walker.x < 1.95f);
   const float z0 = walker.z;
@@ -116,10 +118,46 @@ SLRR_TEST(pedestrian_follows_corridor) {
   SLRR_REQUIRE(walker.x > 0.05f && walker.x < 1.95f);
   SLRR_REQUIRE((walker.z - z0) * static_cast<float>(sign) > 0.4f);
   SLRR_REQUIRE(!walker.transitioning);
-  const float blocked[2] = {walker.x, walker.z};
+  const slrr::PedestrianBlock blocked{walker.x, walker.y, walker.z, 2.f};
   slrr::PedestrianWalker other;
-  SLRR_REQUIRE(lines.spawn(1.f, 0.f, 40.f, 50.f, 0.f, rng, other, blocked, 1));
-  SLRR_REQUIRE(std::hypot(other.x - walker.x, other.z - walker.z) >= 2.f);
+  SLRR_REQUIRE(lines.spawn(1.f, 0.f, 40.f, 50.f, 0.f, rng, other, &blocked, 1));
+  SLRR_REQUIRE(std::hypot(other.x - walker.x, other.z - walker.z) >= 3.5f);
+}
+
+SLRR_TEST(pedestrian_city_walkers_stay_apart) {
+  const std::filesystem::path path = find_game_file("maps/city/ai/city.walk");
+  if (path.empty()) return;
+  std::ifstream in(path, std::ios::binary);
+  SLRR_REQUIRE(in.good());
+  const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  slrr::PedestrianLines lines;
+  SLRR_REQUIRE(lines.load(text));
+  const float focuses[][3] = {{-38.f, 5.f, -125.f},
+                              {-278.518f, 9.8f, 1033.002f},
+                              {355.381f, 1.6f, 418.244f},
+                              {-531.138f, 5.05f, -149.357f}};
+  for (const float* focus : focuses) {
+    uint32_t rng = 2;
+    slrr::PedestrianWalker walkers[12];
+    int alive = 0;
+    for (int n = 0; n < 12; ++n) {
+      std::vector<slrr::PedestrianBlock> taken;
+      for (int i = 0; i < alive; ++i)
+        taken.push_back({walkers[i].x, walkers[i].y, walkers[i].z, 2.f});
+      if (!lines.spawn(focus[0], focus[1], focus[2], 150.f, 35.f, rng, walkers[n],
+                       taken.empty() ? nullptr : taken.data(), static_cast<int>(taken.size())))
+        break;
+      ++alive;
+    }
+    auto closest = [&]() {
+      float best = 1e9f;
+      for (int i = 0; i < alive; ++i)
+        for (int j = i + 1; j < alive; ++j)
+          best = std::min(best, std::hypot(walkers[i].x - walkers[j].x, walkers[i].z - walkers[j].z));
+      return best;
+    };
+    if (alive > 1) SLRR_REQUIRE(closest() >= 3.5f - 0.05f);
+  }
 }
 
 SLRR_TEST(pedestrian_city_walk_has_corridors) {
@@ -131,6 +169,7 @@ SLRR_TEST(pedestrian_city_walk_has_corridors) {
   slrr::PedestrianLines lines;
   SLRR_REQUIRE(lines.load(text));
   SLRR_REQUIRE(lines.zones() == 788);
+  SLRR_REQUIRE(lines.area_within(-38.f, 5.f, -125.f, 150.f) > 6000.f);
   uint32_t rng = 2;
   slrr::PedestrianWalker walker;
   SLRR_REQUIRE(lines.spawn(-38.f, 5.f, -125.f, 80.f, 0.f, rng, walker));

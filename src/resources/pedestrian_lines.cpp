@@ -493,6 +493,25 @@ void remember(std::vector<std::array<float, 3>>* path, const std::vector<V>& poi
   for (const V& p : points) path->push_back({p.x, p.y, p.z});
 }
 
+// SLRR_rev PedestrianSpawnIndex.choose: a moving body is tested at its
+// closest approach within two seconds. A pedestrian obstacle has radius 2.
+bool inside_block(float x, float y, float z, const PedestrianBlock& block) {
+  if (std::fabs(y - block.y) > 4.f) return false;
+  const float dx = x - block.x;
+  const float dy = y - block.y;
+  const float dz = z - block.z;
+  const float speed2 = block.vx * block.vx + block.vy * block.vy + block.vz * block.vz;
+  const float approach = speed2 > 0.001f
+                             ? std::clamp((dx * block.vx + dy * block.vy + dz * block.vz) / speed2,
+                                          0.f, 2.f)
+                             : 0.f;
+  const float px = dx - block.vx * approach;
+  const float py = dy - block.vy * approach;
+  const float pz = dz - block.vz * approach;
+  const float limit = block.radius + 1.5f;
+  return px * px + py * py + pz * pz < limit * limit;
+}
+
 }  // namespace
 
 struct PedestrianLines::Data : Lines {};
@@ -522,8 +541,30 @@ bool PedestrianLines::load(const std::string& text) {
 
 int PedestrianLines::zones() const { return static_cast<int>(data_->zones.size()); }
 
+float PedestrianLines::area_within(float x, float y, float z, float radius) const {
+  if (radius <= 0.f) return 0.f;
+  const V focus{x, y, z};
+  float total = 0.f;
+  for (const Zone& zone : data_->zones) {
+    const int steps = std::max(1, static_cast<int>(std::ceil(zone.length / 2.f)));
+    V previous = zone_point(zone, 0.f, 0.5f);
+    float previous_width = flat(sample_boundary(zone.sides[0], 0.f), sample_boundary(zone.sides[1], 0.f));
+    for (int i = 1; i <= steps; ++i) {
+      const float t = static_cast<float>(i) / static_cast<float>(steps);
+      const V middle = zone_point(zone, t, 0.5f);
+      const float width = flat(sample_boundary(zone.sides[0], t), sample_boundary(zone.sides[1], t));
+      const V sample = lerp(previous, middle, 0.5f);
+      if (std::fabs(sample.y - y) <= 20.f && dist(sample, focus) <= radius)
+        total += (previous_width + width) * 0.5f * flat(previous, middle);
+      previous = middle;
+      previous_width = width;
+    }
+  }
+  return total;
+}
+
 bool PedestrianLines::spawn(float x, float y, float z, float radius, float min_distance,
-                            uint32_t& rng, PedestrianWalker& out, const float* blocked_xz,
+                            uint32_t& rng, PedestrianWalker& out, const PedestrianBlock* blocked,
                             int blocked_count) const {
   if (data_->zones.empty() || radius <= 0.f) return false;
   const V focus{x, y, z};
@@ -542,15 +583,11 @@ bool PedestrianLines::spawn(float x, float y, float z, float radius, float min_d
         if (distance > radius || distance < min_distance) continue;
         if (std::fabs(sample.position.y - y) > 20.f) continue;
         bool taken = false;
-        for (int i = 0; i < blocked_count; ++i) {
-          const float dx = sample.position.x - blocked_xz[i * 2];
-          const float dz = sample.position.z - blocked_xz[i * 2 + 1];
-          // SLRR_rev refuses a spot inside another body's radius plus 1.5 m.
-          if (dx * dx + dz * dz < 4.f) {
+        for (int i = 0; blocked && i < blocked_count; ++i)
+          if (inside_block(sample.position.x, sample.position.y, sample.position.z, blocked[i])) {
             taken = true;
             break;
           }
-        }
         if (taken) continue;
         if (unit(rng) < 1.f / static_cast<float>(++count)) choice = &sample;
       }

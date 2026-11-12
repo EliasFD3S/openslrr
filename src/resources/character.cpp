@@ -510,14 +510,16 @@ std::shared_ptr<const ScxGeometry> character_posed(void* key, int32_t type_id,
   if (!character->want_skin || !character->bind ||
       character->worlds.size() < character->bind->bones.size() * 16)
     return nullptr;
-  if (character->posed && character->posed_from == bind &&
-      character->posed_serial == character->pose_serial)
-    return character->posed;
-  character->posed = std::make_shared<ScxGeometry>(*bind);
-  character->posed_from = bind;
-  character->posed_serial = character->pose_serial;
+  if (!character->posed || character->posed_from != bind) {
+    character->posed = std::make_shared<ScxGeometry>(*bind);
+    character->posed_from = bind;
+    character->posed_serial = character->pose_serial + 1;
+  }
+  if (character->posed_serial == character->pose_serial) return character->posed;
   skeleton_skin(*bind, *character->bind, character->worlds.data(),
                 &character->posed->positions, &character->posed->normals);
+  character->posed_serial = character->pose_serial;
+  character->posed->revision++;
   return character->posed;
 }
 
@@ -811,6 +813,12 @@ bool character_seek(void* animation, float seconds) {
 float character_position(void* animation) {
   const Character* character = animation_character(animation);
   return character ? character->time : 0.f;
+}
+
+float character_duration(void* animation) {
+  const Character* character = animation_character(animation);
+  if (!character || !character->clip || character->clip->times.empty()) return 0.f;
+  return character->clip->times.back();
 }
 
 }  // namespace slrr

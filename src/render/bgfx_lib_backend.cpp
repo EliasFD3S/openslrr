@@ -770,7 +770,20 @@ SceneFrustum LibBgfxBackend::view_frustum(const float* view, const float* projec
       const auto* node = owner ? gameref_get(owner) : nullptr;
       const bool deformed = node && node->deformed_geometry.get() == key;
       if (deformed) current_deformed[owner] = key;
-      if (instance_meshes_.contains(key)) return;
+      if (auto found = instance_meshes_.find(key); found != instance_meshes_.end()) {
+        ScenePart& part = found->second;
+        if (part.revision != source->revision) {
+          if (bgfx::isValid(part.vbh)) bgfx::destroy(part.vbh);
+          if (bgfx::isValid(part.ibh)) bgfx::destroy(part.ibh);
+          part.vbh = BGFX_INVALID_HANDLE;
+          part.ibh = BGFX_INVALID_HANDLE;
+          part.geo.positions = source->positions;
+          part.geo.normals = source->normals;
+          part.revision = source->revision;
+          upload_part(part);
+        }
+        return;
+      }
       ScenePart part;
       part.source = source;
       part.geo = *source;
@@ -786,6 +799,7 @@ SceneFrustum LibBgfxBackend::view_frustum(const float* view, const float* projec
         }
       }
       if (part.tex.empty()) load_part_textures(part, map_prop);
+      part.revision = source->revision;
       instance_meshes_.emplace(key, std::move(part));
     };
     // Resident map models are shared by their placements. Camera culling only
