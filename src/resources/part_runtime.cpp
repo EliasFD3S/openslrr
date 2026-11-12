@@ -1,5 +1,6 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/part_runtime.hpp"
+#include "slrr/pedestrian_lines.hpp"
 #include "slrr/dyno_model.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/host_game_options.hpp"
@@ -167,6 +168,7 @@ struct PedAgent {
   int kind = 0;
   float x = 0.f, z = 0.f, yaw = 0.f;
   bool placed = false;
+  PedestrianWalker line;
 };
 struct PedCrowd {
   float density = 0.f;
@@ -1288,7 +1290,8 @@ static void apply_driving_options(Record& rec) {
 }
 
 bool part_command(Object *part, const std::string &command) {
-  part = canonical(part);
+  if (Object* body = as_part(part)) part = body;
+  else part = canonical(part);
   std::istringstream input(command);
   std::string verb;
   input >> verb;
@@ -3112,6 +3115,22 @@ void* chassis_root(Object* chassis) {
   return key;
 }
 
+PedestrianLines& city_walk() {
+  static PedestrianLines lines;
+  static bool loaded = false;
+  if (!loaded && index) {
+    loaded = true;
+    const std::filesystem::path path =
+        std::filesystem::path(index->game_root()) / "maps" / "city" / "ai" / "city.walk";
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return lines;
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (lines.load(text))
+      std::fprintf(stderr, "[ped] city.walk zones=%d\n", lines.zones());
+  }
+  return lines;
+}
+
 void tick_pedestrians(double seconds) {
   const float dt = static_cast<float>(std::min(seconds, 0.1));
   for (auto it = crowds.begin(); it != crowds.end();) {
@@ -3127,6 +3146,8 @@ void tick_pedestrians(double seconds) {
   PartMatrix car;
   if (!scene_instances_script_matrix(chassis, car.data())) return;
   const float car_x = car[12], car_y = car[13], car_z = car[14];
+  PedestrianLines& lines = city_walk();
+  const bool routed = lines.zones() > 0;
   void* root = chassis_root(chassis);
   PartMatrix parent_m;
   const bool rooted = root && root != chassis &&
@@ -3190,8 +3211,35 @@ void tick_pedestrians(double seconds) {
     }
     for (auto& agent : crowd.agents) {
       if (!agent.render || !gameref_get(agent.render)) continue;
-      if (!agent.placed ||
-          std::hypot(agent.x - car_x, agent.z - car_z) > 70.f) {
+      float probe_y = car_y;
+      if (routed) {
+        const float away = std::hypot(agent.line.x - car_x, agent.line.z - car_z);
+        if (!agent.line.ok || away > 180.f) {
+          std::vector<float> taken;
+          for (const auto& other : crowd.agents) {
+            if (!other.line.ok || &other == &agent) continue;
+            taken.push_back(other.line.x);
+            taken.push_back(other.line.z);
+          }
+          if (!lines.spawn(car_x, car_y, car_z, 150.f, 35.f, ped_rng, agent.line,
+                           taken.empty() ? nullptr : taken.data(),
+                           static_cast<int>(taken.size() / 2))) {
+            if (!agent.line.ok)
+              if (auto* hidden = gameref_get(agent.render)) hidden->empty = true;
+            continue;
+          }
+        } else if (dt > 0.f) {
+          lines.step(agent.line, dt, car_x, car_y, car_z, ped_rng);
+        }
+        agent.x = agent.line.x;
+        agent.z = agent.line.z;
+        agent.yaw = agent.line.yaw;
+        agent.placed = true;
+        probe_y = agent.line.y;
+        if (agent.line.speed > 0.f)
+          character_set_speed(agent.render, std::max(0.2f, agent.line.speed / 1.2f));
+      } else if (!agent.placed ||
+                 std::hypot(agent.x - car_x, agent.z - car_z) > 70.f) {
         const float radius = 8.f + ped_unit() * 24.f;
         const float ang = ped_unit() * 6.2831853f;
         agent.x = car_x + std::sin(ang) * radius;
@@ -3213,9 +3261,10 @@ void tick_pedestrians(double seconds) {
         agent.z += std::cos(agent.yaw) * 1.25f * dt;
       }
       const PedKind& kind = crowd.kinds[static_cast<size_t>(agent.kind)];
-      float ground = car_y;
+      float ground = probe_y;
       float sampled = 0.f;
-      if (scene_instances_floor(agent.x, agent.z, car_y + 4.f, chassis, &sampled))
+      if (scene_instances_floor(agent.x, agent.z, probe_y + 4.f, chassis, &sampled) &&
+          (!routed || std::fabs(sampled - probe_y) < 3.f))
         ground = sampled;
       const float anchor = ground - kind.pose.position[1] - kind.sole;
       PartMatrix yaw = eye_matrix();
@@ -3233,6 +3282,7 @@ void tick_pedestrians(double seconds) {
       if (!node) continue;
       std::copy(local.begin(), local.end(), node->local_matrix);
       node->matrix_override = true;
+      node->empty = false;
     }
   }
 }
@@ -3406,6 +3456,8 @@ Object* part_controlled_chassis() {
   const auto* target = gameref_find_live(controlled_vehicle);
   return target ? as_part(static_cast<Object*>(target->key)) : nullptr;
 }
+
+Object* part_chassis(Object* object) { return as_part(object); }
 
 Object* part_debug_chassis(Object* object) {
   return car(as_part(object));

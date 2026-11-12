@@ -2,6 +2,7 @@
 
 #include "slrr/scx_mesh.hpp"
 #include "slrr/skeleton.hpp"
+#include "slrr/format/bon.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -57,6 +58,15 @@ const char* kChildFirst =
     "0, 0\n";
 
 }  // namespace
+
+SLRR_TEST(bon_reads_the_same_record_without_a_bind) {
+  slrr::Skeleton skeleton;
+  std::string error;
+  SLRR_REQUIRE(slrr::bon_read(kChildFirst, &skeleton, &error));
+  SLRR_REQUIRE(skeleton.bones.size() == 2);
+  SLRR_REQUIRE(skeleton.order.size() == 2);
+  SLRR_REQUIRE(skeleton.inverse_bind.empty());
+}
 
 SLRR_TEST(skeleton_accepts_a_parent_declared_later) {
   slrr::Skeleton skeleton;

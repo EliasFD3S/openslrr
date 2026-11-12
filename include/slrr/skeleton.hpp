@@ -1,5 +1,7 @@
 #pragma once
 
+#include "slrr/format/matrixdata.hpp"
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -30,19 +32,13 @@ struct Skeleton {
   std::vector<float> inverse_bind;
 };
 
-struct ClipTrack {
-  std::string name;
-  std::vector<float> rotation;   // xyzw, four floats per key
-  std::vector<float> direction;  // xyz per key
-};
-
-struct Clip {
-  std::vector<float> times;
-  std::vector<ClipTrack> tracks;
-};
-
 bool skeleton_parse(std::string_view text, Skeleton* out, std::string* error);
-bool clip_parse(const uint8_t* data, size_t size, Clip* out, std::string* error);
+// Inverse of each bind-pose world matrix. Not stored in the .skl or .bon.
+void skeleton_prepare_bind(Skeleton& skeleton);
+
+inline bool clip_parse(const uint8_t* data, size_t size, Clip* out, std::string* error) {
+  return matrixdata_read(data, size, out, error);
+}
 
 // Column-major 4x4 locals and worlds, centimetres, one bone per 16 floats.
 void skeleton_local_bind(const Skeleton& skeleton, float* locals);

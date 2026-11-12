@@ -25,6 +25,19 @@
 
 namespace slrr {
 
+// A Vehicle is the script handle. When it is not bound to its chassis, the
+// mesh still hangs on the chassis field. Pose and parent that mesh.
+Object* placed_body(Object* self) {
+  Object* body = part_chassis(self);
+  if (!body) return self;
+  GameRefState* self_node = gameref_get(self);
+  GameRefState* body_node = gameref_get(body);
+  if (!body_node || body_node == self_node) return self;
+  body_node->flags &= ~kWorldTreeRoot;
+  body_node->empty = false;
+  return body;
+}
+
 // Resource `script path.class` → instance whose statics (MapName, MapImage)
 // are also instance fields. TrackSelect reads them off the Vector element.
 // The track constructor builds the world; the selector only needs the names.
@@ -344,8 +357,9 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
             getf("r", &roll);
           }
         }
-        gameref_set_matrix(self, px, py, pz, yaw, pitch, roll);
-        part_park_chassis(self);
+        Object* moved = placed_body(self);
+        gameref_set_matrix(moved, px, py, pz, yaw, pitch, roll);
+        part_park_chassis(moved);
         return Value::make_void();
       });
   jvm.natives().register_method(
@@ -390,7 +404,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
         Object* p =
             (!args.empty() && args[0].tag == ValueTag::Obj) ? args[0].v.o
                                                             : nullptr;
-        gameref_set_parent(self, p);
+        gameref_set_parent(placed_body(self), p);
         return Value::make_void();
       });
   // Soft PE GameRef lean — Runtime Resources/GameRef_*.

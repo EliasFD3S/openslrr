@@ -74,6 +74,8 @@ struct PartPhysicsState {
 };
 bool part_physics_state(Object *car, PartPhysicsState &state);
 Object* part_controlled_chassis();
+// Chassis mesh of a Vehicle. Follows a bound alias, then the chassis field.
+Object* part_chassis(Object* object);
 Object* part_debug_chassis(Object* object);
 struct VehicleHudState {
   const VehicleHudLayout *layout = nullptr;

@@ -1,4 +1,6 @@
 #include "slrr/skeleton.hpp"
+#include "slrr/format/bon.hpp"
+#include "slrr/format/skl.hpp"
 
 #include "slrr/gameref.hpp"
 #include "slrr/rpk_index.hpp"
@@ -93,8 +95,16 @@ std::shared_ptr<const Skeleton> load_skeleton(const RpkIndex& packs, const std::
   if (read_bytes(disk_path(packs, relative), &bytes)) {
     Skeleton skeleton;
     const std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    if (skeleton_parse(text, &skeleton, nullptr))
+    const bool lengths = relative.size() >= 4 &&
+                         (relative[relative.size() - 3] == 'b' || relative[relative.size() - 3] == 'B') &&
+                         (relative[relative.size() - 2] == 'o' || relative[relative.size() - 2] == 'O') &&
+                         (relative[relative.size() - 1] == 'n' || relative[relative.size() - 1] == 'N') &&
+                         relative[relative.size() - 4] == '.';
+    const bool ok = lengths ? bon_read(text, &skeleton, nullptr) : skl_read(text, &skeleton, nullptr);
+    if (ok) {
+      skeleton_prepare_bind(skeleton);
       parsed = std::make_shared<const Skeleton>(std::move(skeleton));
+    }
   }
   g_skeletons.emplace(key, parsed);
   return parsed;

@@ -1,9 +1,9 @@
 #include "slrr/skeleton.hpp"
+#include "slrr/format/skl.hpp"
 
 #include "slrr/scx_mesh.hpp"
 
 #include <algorithm>
-#include <charconv>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -11,52 +11,6 @@
 
 namespace slrr {
 namespace {
-
-void fail(std::string* error, const char* text) {
-  if (error && error->empty()) *error = text;
-}
-
-bool parse_numbers(std::string_view line, float* out, int count) {
-  int found = 0;
-  size_t cursor = 0;
-  while (found < count) {
-    while (cursor < line.size() &&
-           (line[cursor] == ' ' || line[cursor] == '\t'))
-      ++cursor;
-    if (cursor >= line.size()) return false;
-    size_t end = cursor;
-    while (end < line.size() && line[end] != ',') ++end;
-    std::string_view token = line.substr(cursor, end - cursor);
-    while (!token.empty() && (token.back() == ' ' || token.back() == '\t'))
-      token.remove_suffix(1);
-    if (token.empty()) return false;
-    float value = 0.f;
-    const auto parsed = std::from_chars(token.data(), token.data() + token.size(), value);
-    if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size() ||
-        !std::isfinite(value))
-      return false;
-    out[found++] = value;
-    cursor = end < line.size() ? end + 1 : end;
-  }
-  while (cursor < line.size() &&
-         (line[cursor] == ' ' || line[cursor] == '\t' || line[cursor] == ','))
-    ++cursor;
-  return cursor == line.size();
-}
-
-bool parse_index(std::string_view line, int* out) {
-  while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
-    line.remove_prefix(1);
-  while (!line.empty() && (line.back() == ' ' || line.back() == '\t'))
-    line.remove_suffix(1);
-  if (line.empty()) return false;
-  int value = 0;
-  const auto parsed = std::from_chars(line.data(), line.data() + line.size(), value);
-  if (parsed.ec != std::errc{} || parsed.ptr != line.data() + line.size())
-    return false;
-  *out = value;
-  return true;
-}
 
 void identity(float* m) {
   std::memset(m, 0, sizeof(float) * 16);
@@ -265,239 +219,22 @@ void sample_track(const Clip& clip, const ClipTrack& track, float time,
   for (int i = 0; i < 3; ++i) direction[i] = from[i] + (to[i] - from[i]) * blend;
 }
 
-bool hierarchy_ok(Skeleton* skeleton, std::string* error) {
-  const int count = static_cast<int>(skeleton->bones.size());
-  std::vector<uint8_t> state(static_cast<size_t>(count), 0);
-  skeleton->order.clear();
-  skeleton->order.reserve(static_cast<size_t>(count));
-  struct Frame { int index; bool leave; };
-  std::vector<Frame> stack;
-  for (int start = 0; start < count; ++start) {
-    if (state[static_cast<size_t>(start)]) continue;
-    stack.push_back({start, false});
-    while (!stack.empty()) {
-      const Frame frame = stack.back();
-      stack.pop_back();
-      if (frame.leave) {
-        state[static_cast<size_t>(frame.index)] = 2;
-        skeleton->order.push_back(frame.index);
-        continue;
-      }
-      const uint8_t seen = state[static_cast<size_t>(frame.index)];
-      if (seen == 2) continue;
-      if (seen == 1) {
-        fail(error, "cyclic skeleton");
-        return false;
-      }
-      const int parent = skeleton->bones[static_cast<size_t>(frame.index)].parent;
-      if (parent >= count) {
-        fail(error, "skeleton parent out of range");
-        return false;
-      }
-      state[static_cast<size_t>(frame.index)] = 1;
-      stack.push_back({frame.index, true});
-      if (parent >= 0) stack.push_back({parent, false});
-    }
-  }
-  return static_cast<int>(skeleton->order.size()) == count;
-}
-
 }  // namespace
 
 bool skeleton_parse(std::string_view text, Skeleton* out, std::string* error) {
-  if (!out) return false;
-  *out = {};
-  if (text.size() >= 3 && static_cast<unsigned char>(text[0]) == 0xef &&
-      static_cast<unsigned char>(text[1]) == 0xbb &&
-      static_cast<unsigned char>(text[2]) == 0xbf)
-    text.remove_prefix(3);
-  while (!text.empty() && (text.back() == '\n' || text.back() == '\r' ||
-                           text.back() == ' ' || text.back() == '\t'))
-    text.remove_suffix(1);
-  std::vector<std::string_view> lines;
-  size_t cursor = 0;
-  while (cursor < text.size()) {
-    size_t end = text.find('\n', cursor);
-    if (end == std::string_view::npos) end = text.size();
-    std::string_view line = text.substr(cursor, end - cursor);
-    if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
-    while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
-      line.remove_prefix(1);
-    while (!line.empty() && (line.back() == ' ' || line.back() == '\t'))
-      line.remove_suffix(1);
-    lines.push_back(line);
-    cursor = end < text.size() ? end + 1 : end;
-  }
-  if (lines.empty() || lines.size() % 9 != 0 || lines.size() > 9 * 4096) {
-    fail(error, "incomplete skeleton");
-    return false;
-  }
-  for (size_t i = 0; i < lines.size(); i += 9) {
-    SkeletonBone bone;
-    bone.name.assign(lines[i]);
-    if (bone.name.empty()) {
-      fail(error, "empty bone name");
-      return false;
-    }
-    for (const SkeletonBone& prior : out->bones) {
-      if (prior.name == bone.name) {
-        fail(error, "duplicate bone name");
-        return false;
-      }
-    }
-    if (!parse_index(lines[i + 1], &bone.parent) || bone.parent < -1) {
-      fail(error, "invalid bone parent");
-      return false;
-    }
-    float rotation[9];
-    for (int row = 0; row < 3; ++row)
-      if (!parse_numbers(lines[i + 2 + static_cast<size_t>(row)], rotation + row * 3, 3)) {
-        fail(error, "invalid bone rotation");
-        return false;
-      }
-    std::memcpy(bone.rotation, rotation, sizeof(rotation));
-    if (!parse_numbers(lines[i + 5], bone.position, 3)) {
-      fail(error, "invalid bone position");
-      return false;
-    }
-    for (int row = 0; row < 3; ++row) {
-      float pair[2];
-      if (!parse_numbers(lines[i + 6 + static_cast<size_t>(row)], pair, 2)) {
-        fail(error, "invalid bone limits");
-        return false;
-      }
-      bone.limit_min[row] = pair[0];
-      bone.limit_max[row] = pair[1];
-    }
-    out->bones.push_back(std::move(bone));
-  }
-  if (!hierarchy_ok(out, error)) return false;
-  const size_t count = out->bones.size();
-  std::vector<float> locals(count * 16), worlds(count * 16);
-  skeleton_local_bind(*out, locals.data());
-  skeleton_world(*out, locals.data(), worlds.data());
-  out->inverse_bind.resize(count * 16);
-  for (size_t i = 0; i < count; ++i)
-    invert_bind(worlds.data() + i * 16, out->inverse_bind.data() + i * 16);
+  if (!out || !skl_read(text, out, error)) return false;
+  skeleton_prepare_bind(*out);
   return true;
 }
 
-bool clip_parse(const uint8_t* data, size_t size, Clip* out, std::string* error) {
-  if (!out) return false;
-  *out = {};
-  auto word = [&](uint32_t* value) {
-    if (!data || size < 4) return false;
-    std::memcpy(value, data, 4);
-    data += 4;
-    size -= 4;
-    return true;
-  };
-  auto floats = [&](float* dest, int count) {
-    const size_t bytes = static_cast<size_t>(count) * 4;
-    if (size < bytes) return false;
-    std::memcpy(dest, data, bytes);
-    data += bytes;
-    size -= bytes;
-    return true;
-  };
-  uint32_t count = 0;
-  if (!word(&count) || count < 1 || count > 4096) {
-    fail(error, "invalid clip bone count");
-    return false;
-  }
-  uint32_t keys = 0;
-  out->tracks.resize(count);
-  for (uint32_t bone = 0; bone < count; ++bone) {
-    uint32_t declared = 0;
-    if (!word(&declared) || declared < 1) {
-      fail(error, "invalid clip key count");
-      return false;
-    }
-    if (bone == 0) {
-      keys = declared;
-      out->times.resize(keys);
-    } else if (declared != keys) {
-      fail(error, "inconsistent clip key count");
-      return false;
-    }
-    ClipTrack& track = out->tracks[bone];
-    track.rotation.resize(static_cast<size_t>(keys) * 4);
-    track.direction.resize(static_cast<size_t>(keys) * 3);
-    for (uint32_t key = 0; key < keys; ++key) {
-      float values[8];
-      if (!floats(values, 8)) {
-        fail(error, "truncated clip");
-        return false;
-      }
-      for (float value : values) {
-        if (!std::isfinite(value)) {
-          fail(error, "non-finite clip key");
-          return false;
-        }
-      }
-      if (bone == 0) {
-        if (values[0] < 0.f || (key > 0 && values[0] <= out->times[key - 1])) {
-          fail(error, "invalid clip times");
-          return false;
-        }
-        out->times[key] = values[0];
-      } else if (std::fabs(out->times[key] - values[0]) > 1e-5f) {
-        fail(error, "inconsistent clip times");
-        return false;
-      }
-      const float norm = std::sqrt(values[1] * values[1] + values[2] * values[2] +
-                                   values[3] * values[3] + values[4] * values[4]);
-      if (std::fabs(norm - 1.f) > 0.01f) {
-        fail(error, "invalid clip quaternion");
-        return false;
-      }
-      std::memcpy(track.rotation.data() + static_cast<size_t>(key) * 4, values + 1,
-                  sizeof(float) * 4);
-      std::memcpy(track.direction.data() + static_cast<size_t>(key) * 3, values + 5,
-                  sizeof(float) * 3);
-    }
-  }
-  std::string names(reinterpret_cast<const char*>(data), size);
-  names.erase(std::remove(names.begin(), names.end(), '\r'), names.end());
-  // A trailing newline is an empty name and is dropped. Interior blanks fail.
-  if (!names.empty() && names.back() == '\n') names.pop_back();
-  size_t cursor = 0;
-  for (uint32_t bone = 0; bone < count; ++bone) {
-    const size_t end = names.find('\n', cursor);
-    const size_t stop = end == std::string::npos ? names.size() : end;
-    std::string name = names.substr(cursor, stop - cursor);
-    while (!name.empty() && (name.back() == ' ' || name.back() == '\t')) name.pop_back();
-    size_t start = 0;
-    while (start < name.size() && (name[start] == ' ' || name[start] == '\t')) ++start;
-    if (start) name.erase(0, start);
-    if (name.empty()) {
-      fail(error, "empty clip bone name");
-      return false;
-    }
-    for (uint32_t prior = 0; prior < bone; ++prior) {
-      if (out->tracks[prior].name == name) {
-        fail(error, "duplicate clip bone name");
-        return false;
-      }
-    }
-    out->tracks[bone].name = std::move(name);
-    if (end == std::string::npos) {
-      if (bone + 1 != count) {
-        fail(error, "clip bone names missing");
-        return false;
-      }
-      return true;
-    }
-    cursor = end + 1;
-  }
-  if (cursor < names.size()) {
-    const std::string tail = names.substr(cursor);
-    if (tail.find_first_not_of(" \t\n") != std::string::npos) {
-      fail(error, "extra clip bone names");
-      return false;
-    }
-  }
-  return true;
+void skeleton_prepare_bind(Skeleton& skeleton) {
+  const size_t count = skeleton.bones.size();
+  std::vector<float> locals(count * 16), worlds(count * 16);
+  skeleton_local_bind(skeleton, locals.data());
+  skeleton_world(skeleton, locals.data(), worlds.data());
+  skeleton.inverse_bind.resize(count * 16);
+  for (size_t i = 0; i < count; ++i)
+    invert_bind(worlds.data() + i * 16, skeleton.inverse_bind.data() + i * 16);
 }
 
 void skeleton_local_bind(const Skeleton& skeleton, float* locals) {

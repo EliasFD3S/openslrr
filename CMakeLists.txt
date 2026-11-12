@@ -64,6 +64,12 @@ add_executable(slrr_host
   src/resources/scene_sun.cpp
   src/resources/part_config.cpp
   src/resources/part_runtime.cpp
+  src/resources/pedestrian_lines.cpp
+  src/formats/walk.cpp
+  src/formats/rest.cpp
+  src/formats/trc.cpp
+  src/formats/skeleton_text.cpp
+  src/formats/matrixdata.cpp
   src/resources/gameref.cpp
   src/resources/scene_instances.cpp
   src/resources/scx_mesh.cpp
