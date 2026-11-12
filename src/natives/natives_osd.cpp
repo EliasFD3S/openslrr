@@ -209,6 +209,23 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   jvm.natives().register_method(
       "java.render.Camera", "deactivate", "(Ljava.render.Viewport;)V",
       [](Object* self,const std::vector<Value>& args){if(auto* s=gameref_get(self);s&&(args.empty()||(args[0].tag==ValueTag::Obj&&args[0].v.o==s->viewport)))s->cam_active=false;return Value::make_void();});
+  jvm.natives().register_method(
+      "java.render.Camera", "setFog", "(IFF)V",
+      [](Object* self, const std::vector<Value>& args) {
+        auto* state = gameref_get(self);
+        if (!state) return Value::make_void();
+        auto number = [](const Value& value, float fallback) {
+          if (value.tag == ValueTag::Float) return value.v.f;
+          if (value.tag == ValueTag::Int) return static_cast<float>(value.v.i);
+          return fallback;
+        };
+        const int32_t color = !args.empty() && args[0].tag == ValueTag::Int ? args[0].v.i
+                                                                            : 0x0091badb;
+        const float near_z = args.size() > 1 ? number(args[1], 1500.f) : 1500.f;
+        const float far_z = args.size() > 2 ? number(args[2], 3000.f) : 3000.f;
+        gameref_camera_set_fog(*state, color, near_z, far_z);
+        return Value::make_void();
+      });
   // PhysicsRef PE natives — createButton TREE → createBox hit volumes.
   jvm.natives().register_method(
       "java.util.resource.PhysicsRef", "createBox",

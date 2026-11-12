@@ -1,11 +1,11 @@
-$input v_normal, v_texcoord0, v_texcoord1, v_texcoord2, v_color0, v_staticShadow, v_worldPos
+$input v_normal, v_texcoord0, v_texcoord1, v_texcoord2, v_color0, v_staticShadow, v_worldPos, v_tint
 
 #include <bgfx_shader.sh>
 
 SAMPLER2D(s_texColor, 0);
 SAMPLER2D(s_lightmap, 1);
 SAMPLER2D(s_meshMix, 2);
-SAMPLER2D(s_staticShadow, 3);
+SAMPLER2DSHADOW(s_staticShadow, 3);
 SAMPLER2D(s_carDepth, 4);
 uniform mat4 u_carDepthMtx;
 uniform vec4 u_carDepthParams;
@@ -33,6 +33,10 @@ uniform vec4 u_lightmapUv;
 // Diffuse and mix maps. scale 0,0 means the draw did not set a transform.
 uniform vec4 u_meshBaseUv;
 uniform vec4 u_meshMixUv;
+// rgb: horizon colour. a > 0.5 fades world meshes between u_fogRange.xy.
+uniform vec4 u_fogColor;
+uniform vec4 u_fogRange;
+uniform vec4 u_fogEye;
 
 vec2 uvSet(float channel, vec2 uv0, vec2 uv1, vec2 uv2)
 {
@@ -86,31 +90,54 @@ float cloudDensity(vec3 p)
 	return smoothstep(0.47, 0.68, shape) * sin(3.14159 * saturate((p.y - 650.0) / 480.0));
 }
 
+// Two grids whose scales are not multiples, with a drift that leaves the cell,
+// so the points do not sit on rows.
+float starField(vec2 sphere, vec2 scale, float seed)
+{
+	vec2 grid = sphere * scale;
+	vec2 cell = floor(grid);
+	vec2 jitter = vec2(cloudHash(vec3(cell, seed + 3.1)), cloudHash(vec3(cell, seed + 8.7)));
+	vec2 drift = vec2(cloudHash(vec3(cell, seed + 17.0)),
+	                  cloudHash(vec3(cell, seed + 29.0))) - vec2(0.5, 0.5);
+	float dist = length(fract(grid) - (jitter + drift * 1.15));
+	float size = mix(0.012, 0.07, cloudHash(vec3(cell, seed + 4.0)));
+	float spark = 1.0 - smoothstep(size * 0.2, size, dist);
+	float bright = mix(0.2, 1.0, cloudHash(vec3(cell, seed + 13.0)));
+	return spark * step(0.994, cloudHash(vec3(cell, seed))) * bright;
+}
+
 vec3 renderSky(vec3 ray, vec2 pixel)
 {
 	vec3 sun = u_sunDir.w > 0.5 ? normalize(u_sunDir.xyz) : normalize(vec3(0.3, 0.8, 0.2));
-	float daylight = saturate(dot(u_sunDiff.rgb, vec3(0.30, 0.59, 0.11)) * 1.6);
-	vec3 horizon = mix(vec3(0.07, 0.09, 0.14), vec3(0.57, 0.73, 0.86), daylight);
-	vec3 zenith = mix(vec3(0.01, 0.02, 0.05), vec3(0.12, 0.33, 0.65), daylight);
+	// Elevation, not the sun colour. The colour is already multiplied by a
+	// short daylight ramp, which skipped the orange band.
+	float day = smoothstep(-0.04, 0.42, sun.y);
+	float twilight = smoothstep(-0.16, 0.02, sun.y) * (1.0 - smoothstep(0.04, 0.38, sun.y));
+	vec3 horizon = mix(vec3(0.07, 0.09, 0.14), vec3(0.57, 0.73, 0.86), day);
+	horizon = mix(horizon, vec3(0.95, 0.42, 0.14), twilight);
+	vec2 sunFlat = sun.xz;
+	vec2 rayFlat = ray.xz;
+	float sunLen = length(sunFlat);
+	float rayLen = length(rayFlat);
+	float towardSun = sunLen > 0.001 && rayLen > 0.001
+	    ? saturate(dot(rayFlat / rayLen, sunFlat / sunLen)) : 0.0;
+	float band = twilight * (1.0 - smoothstep(0.0, 0.34, ray.y)) * towardSun;
+	horizon = mix(horizon, vec3(1.0, 0.36, 0.08), band * 0.9);
+	vec3 zenith = mix(vec3(0.01, 0.02, 0.05), vec3(0.12, 0.33, 0.65), day);
+	zenith = mix(zenith, vec3(0.28, 0.16, 0.22), twilight * 0.45);
 	vec3 sky = mix(horizon, zenith, sqrt(saturate(ray.y)));
 	float luminance = daylightDistribution(ray.y, dot(ray, sun)) /
 	                  max(daylightDistribution(1.0, sun.y), 0.05);
-	sky *= mix(1.0, clamp(sqrt(luminance), 0.65, 1.75), daylight);
-	// Star positions live in angular cells, so they stay fixed as the camera moves.
-	vec2 sphere = vec2(atan2(ray.z, ray.x) * 0.15915494 + 0.5, ray.y);
-	vec2 starGrid = sphere * vec2(960.0, 360.0);
-	vec2 starCell = floor(starGrid);
-	float starId = cloudHash(vec3(starCell, 61.0));
-	vec2 starPosition = vec2(cloudHash(vec3(starCell, 7.0)),
-	                         cloudHash(vec3(starCell, 19.0))) * 0.6 + 0.2;
-	float star = 1.0 - smoothstep(0.05, 0.22, length(fract(starGrid) - starPosition));
-	float stars = star * smoothstep(0.975, 1.0, starId) *
-	              (1.0 - daylight) * smoothstep(0.03, 0.18, ray.y);
+	sky *= mix(1.0, clamp(sqrt(luminance), 0.65, 1.75), day);
+	vec2 sphere = vec2(atan2(ray.z, ray.x), asin(clamp(ray.y, -1.0, 1.0)));
+	float stars = starField(sphere, vec2(210.0, 97.0), 61.0)
+	            + starField(sphere, vec2(347.0, 151.0), 19.0);
+	stars *= (1.0 - smoothstep(-0.04, 0.22, sun.y)) * smoothstep(0.02, 0.16, ray.y);
 	sky += vec3(0.73, 0.82, 1.0) * stars;
 	float alignment = dot(ray, sun);
 	float disc = smoothstep(0.99990, 0.99996, alignment);
-	float glow = pow(saturate(alignment), 256.0);
-	sky += u_sunDiff.rgb * (disc * 3.0 + glow * 0.18) * smoothstep(0.0, 0.08, sun.y);
+	float glow = pow(saturate(alignment), 96.0);
+	sky += u_sunDiff.rgb * (disc * 4.0 + glow * 0.45) * smoothstep(-0.04, 0.16, sun.y);
 	if (u_cloudSky.w < 1.5 || ray.y < 0.04) return sky;
 	float start = max(0.0, (650.0 - u_cloudSky.y) / ray.y);
 	float stop = min(12000.0, (1130.0 - u_cloudSky.y) / ray.y);
@@ -187,11 +214,6 @@ void main()
 	light = mix(light, 1.0, use);
 	bake = mix(vec3(1.0, 1.0, 1.0), bake, use);
 	float visibility = 1.0;
-	// Convert screen-space derivatives to depth change per shadow UV.
-	// Each tap then compares against the same receiver plane.
-	vec3 dx = dFdx(v_staticShadow);
-	vec3 dy = dFdy(v_staticShadow);
-	float det = dx.x * dy.y - dx.y * dy.x;
 	if (u_staticShadowParams.x > 0.0 && use < 0.5) {
 		vec3 p = v_staticShadow;
 		float edge = min(min(p.x, 1.0 - p.x), min(p.y, 1.0 - p.y));
@@ -199,26 +221,20 @@ void main()
 		float distanceToEye = length(v_worldPos - u_staticShadowEye.xyz);
 		if (distanceToEye < range && edge > u_staticShadowParams.y && p.z > 0.0 && p.z < 1.0) {
 			float texel = u_staticShadowParams.y;
-			vec2 grid = p.xy / texel - vec2(0.5, 0.5);
-			vec2 blend = fract(grid);
-			vec2 uv = (floor(grid) + vec2(0.5, 0.5)) * texel;
-			vec2 depthStep = vec2(0.0, 0.0);
-			if (abs(det) > 1e-12) {
-				depthStep = vec2(dx.z * dy.y - dy.z * dx.y, dx.x * dy.z - dy.x * dx.z)
-				          * (texel / det);
-				depthStep = clamp(depthStep, vec2(-0.004, -0.004), vec2(0.004, 0.004));
-			}
-			float depth = p.z - u_staticShadowParams.z - dot(depthStep, blend);
-			vec2 x = vec2(texel, 0.0);
-			vec2 y = vec2(0.0, texel);
-			float a = step(depth, texture2D(s_staticShadow, uv).r);
-			float b = step(depth + depthStep.x, texture2D(s_staticShadow, uv + x).r);
-			float c = step(depth + depthStep.y, texture2D(s_staticShadow, uv + y).r);
-			float d = step(depth + depthStep.x + depthStep.y, texture2D(s_staticShadow, uv + x + y).r);
-			float visible = mix(mix(a, b, blend.x), mix(c, d, blend.x), blend.y);
+			float slope = max(abs(dFdx(v_staticShadow.z)), abs(dFdy(v_staticShadow.z)));
+			float depth = p.z - min(u_staticShadowParams.z + slope, 0.0008);
+			// Hardware 2x2 compare. A point-sampled disk drew the shadow
+			// map's own texels as stripes on the garage apron.
+			vec2 o = vec2(texel * 1.5, texel * 0.5);
+			float visible = (
+				shadow2D(s_staticShadow, vec3(p.xy + vec2(-o.x, -o.y), depth)) +
+				shadow2D(s_staticShadow, vec3(p.xy + vec2( o.y, -o.x), depth)) +
+				shadow2D(s_staticShadow, vec3(p.xy + vec2( o.x,  o.y), depth)) +
+				shadow2D(s_staticShadow, vec3(p.xy + vec2(-o.y,  o.x), depth))
+			) * 0.25;
 			visibility -= (1.0 - visible) * u_staticShadowParams.x *
-			              (1.0 - smoothstep(range * 0.65, range, distanceToEye)) *
-			              smoothstep(0.01, 0.10, edge);
+			              (1.0 - smoothstep(range * 0.2, range, distanceToEye)) *
+			              smoothstep(0.0, 0.22, edge);
 		}
 	}
 	float carVisibility = 1.0;
@@ -245,7 +261,16 @@ void main()
 		float d2 = dot(delta, delta);
 		float fade = saturate(1.0 - d2 / (u_localLight.w * u_localLight.w));
 		float facing = max(dot(n, delta * inversesqrt(max(d2, 0.001))), 0.0);
-		illumination += vec3(1.0, 0.94, 0.80) * (fade * fade * facing * 3.0 / (1.0 + d2));
+		illumination += vec3(1.0, 0.94, 0.80) * (fade * fade * facing * 3.0 / (1.0 + d2))
+		              * mix(0.35, 1.0, visibility);
 	}
-	gl_FragColor = vec4(tex.rgb * bake * tint * illumination, outA * u_color.a);
+	vec3 shaded = tex.rgb * bake * tint * v_tint.rgb * illumination;
+	// Sky and OSD set u_alphaTest.y. Their fragments stay sharp.
+	if (u_fogColor.a > 0.5 && u_alphaTest.y < 0.5) {
+		float span = max(u_fogRange.y - u_fogRange.x, 1.0);
+		float t = saturate((length(v_worldPos - u_fogEye.xyz) - u_fogRange.x) / span);
+		t = t * t * (3.0 - 2.0 * t);
+		shaded = mix(shaded, u_fogColor.rgb, t);
+	}
+	gl_FragColor = vec4(shaded, outA * u_color.a);
 }

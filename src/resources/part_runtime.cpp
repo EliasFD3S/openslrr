@@ -1397,7 +1397,8 @@ bool part_command(Object *part, const std::string &command) {
         state->follow_vehicle = gameref_make_live(chassis);
         state->half_aov = 42.f;
         state->dmin = .03f;
-        state->dmax = 2000.f;
+        state->dmax = 3000.f;
+        gameref_camera_set_fog(*state, 0x0091badb, 1500.f, 3000.f);
         gameref_activate_camera(*state, *viewport, 1);
         return true;
       }
@@ -3220,14 +3221,6 @@ bool ped_point_hidden(float x, float y, float z, void* user) {
   return std::fabs(side) > depth * view->tan_x || std::fabs(lift) > depth * view->tan_y;
 }
 
-bool ped_behind_camera(const PedView& view, float x, float y, float z) {
-  if (!view.ok) return false;
-  const float dx = x - view.eye[0];
-  const float dy = y - view.eye[1];
-  const float dz = z - view.eye[2];
-  return dx * view.forward[0] + dy * view.forward[1] + dz * view.forward[2] < 0.f;
-}
-
 PedView ped_view() {
   PedView view;
   float at[3]{}, up[3] = {0.f, 1.f, 0.f}, fov = 42.f;
@@ -3377,8 +3370,6 @@ void tick_pedestrians(double seconds) {
       for (const PedKind& kind : crowd.kinds)
         if (kind.render) ids.push_back(kind.render);
       scene_instances_preload(ids);
-      while (static_cast<int>(crowd.agents.size()) < want)
-        if (!make_agent()) break;
       crowd.preloaded = true;
     }
     int active = 0;
@@ -3426,11 +3417,9 @@ void tick_pedestrians(double seconds) {
       }
     }
     if (routed && active < want && clock >= crowd.refill_at) {
-      // The map load fills the whole radius at once. After that the car
-      // drives out of it, and a handful every quarter second left the next
-      // streets empty for several seconds.
-      const bool filling = !crowd.stocked;
-      const int batch = filling ? std::max(want, 1) : 32;
+      // A full refill in one tick is the hitch, and it puts people on the
+      // street in front of the camera. A few per frame, off screen, walk in.
+      const int batch = 3;
       bool stalled = false;
       for (int made = 0; active < want && made < batch; ++made) {
         if (!spare) {
@@ -3449,10 +3438,9 @@ void tick_pedestrians(double seconds) {
         for (const auto& other : crowd.agents)
           if (&other != spare && other.line.ok)
             taken.push_back({other.line.x, other.line.y, other.line.z, 2.f});
-        // Ahead of the car as well. 35 m is the on-screen minimum, so a
-        // newcomer does not appear on the bumper while the avenue fills.
-        if (!lines.spawn(car_x, car_y, car_z, kRadius, filling ? 12.f : 35.f, ped_rng, spare->line,
-                         taken.data(), static_cast<int>(taken.size()))) {
+        if (!lines.spawn(car_x, car_y, car_z, kRadius, 12.f, ped_rng, spare->line,
+                         taken.data(), static_cast<int>(taken.size()),
+                         &ped_point_hidden, &view)) {
           stalled = true;
           break;
         }
@@ -3464,7 +3452,7 @@ void tick_pedestrians(double seconds) {
         spare = nullptr;
         ++active;
       }
-      if (filling && (active >= want || stalled)) crowd.stocked = true;
+      if (!crowd.stocked && (active >= want || stalled)) crowd.stocked = true;
       crowd.refill_at = stalled ? clock + 0.25 : clock;
     }
     if (crowd.density > 0.f && clock >= crowd.report_at) {
@@ -3512,9 +3500,10 @@ void tick_pedestrians(double seconds) {
       const PartMatrix local = rooted ? part_matrix_multiply(parent_inv, world) : world;
       std::copy(local.begin(), local.end(), node->local_matrix);
       node->matrix_override = true;
-      // Behind the camera the walker stays cached. The draw is the part
-      // that goes away, and it comes back when the view turns.
-      node->empty = ped_behind_camera(view, agent.x, ground, agent.z);
+      // Kept in the scene so the skinned mesh is uploaded once, at spawn,
+      // not on the frame the camera turns toward them. The draw itself
+      // skips anyone behind the camera.
+      node->empty = false;
     }
   }
   bool wake = false;

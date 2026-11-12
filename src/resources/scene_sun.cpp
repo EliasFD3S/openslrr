@@ -62,13 +62,22 @@ void scene_sun_apply_day_cycle(SceneSun& light) {
   light.direction[2] = .5268f * elevation;
   light.has_direction = true;
   light.set = true;
-  const float daylight = std::clamp(elevation * 5.f, 0.f, 1.f);
-  const float twilight = std::clamp((elevation + .16f) / .4f, 0.f, 1.f);
+  // The old ramp (* 5) was full day until the sun was almost down, then black.
+  // This one stays lit through the orange band and is out once it has set.
+  const float daylight = std::clamp((elevation + 0.06f) / 0.28f, 0.f, 1.f);
+  const float twilight = std::clamp((elevation - 0.02f) / 0.22f, 0.f, 1.f);
   constexpr float night[] = {.10f, .13f, .20f};
   constexpr float warm[] = {1.f, .66f, .44f};
+  // The city light is a tint that used to sit on a bright lightmap. Without
+  // that bake, a dim diffuse leaves noon looking grey. Lift it toward a
+  // full sun, and let the daylight ramp bring dusk back down.
+  const float base_luma = light.diffuse[0] * 0.2126f + light.diffuse[1] * 0.7152f +
+                          light.diffuse[2] * 0.0722f;
+  const float gain = base_luma > 1e-4f ? std::min(1.15f / base_luma, 2.8f) : 1.f;
   for (int i = 0; i < 3; ++i) {
-    light.diffuse[i] *= daylight * (warm[i] + (1.f - warm[i]) * twilight);
-    light.specular[i] *= daylight;
+    const float tint = warm[i] + (1.f - warm[i]) * twilight;
+    light.diffuse[i] *= daylight * std::max(gain, 1.f) * tint;
+    light.specular[i] *= daylight * std::max(gain, 1.f);
     light.ambient[i] = night[i] + (std::max(light.ambient[i], night[i]) - night[i]) * twilight;
   }
 }

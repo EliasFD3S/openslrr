@@ -27,6 +27,8 @@ namespace slrr {
 namespace {
 const RpkIndex *g_resources = nullptr;
 void *g_world = nullptr;
+SceneHizTest g_hiz = nullptr;
+void* g_hiz_user = nullptr;
 void *g_sky = nullptr;
 bool g_preview_lamps = false;
 uint32_t g_environment = 0;
@@ -53,15 +55,21 @@ uint64_t floor_cell(int32_t x, int32_t z) {
   return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) |
          static_cast<uint32_t>(z);
 }
+struct GroundPropBatch {
+  uint32_t render_id = 0;
+  std::vector<uint32_t> indices;
+};
 struct GroundProp {
   uint32_t render_id;
   PartMatrix pose;
   uint32_t color;
   std::array<float, 3> center{};
   float radius = 0.f;
+  bool batched = false;
 };
 struct GroundPropCell {
   std::vector<GroundProp> props;
+  std::vector<GroundPropBatch> batches;
   std::array<float, 3> center{};
   float radius = 0.f;
 };
@@ -1261,6 +1269,13 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root) {
   }
   return out;
 }
+void* scene_instances_world() { return g_world; }
+
+void scene_instances_set_hiz(SceneHizTest test, void* user) {
+  g_hiz = test;
+  g_hiz_user = user;
+}
+
 bool scene_instances_has_ground_props() {
   const auto* world = gameref_get(g_world);
   if (!world || g_ground_props.empty()) return false;
@@ -1296,8 +1311,17 @@ std::vector<SceneInstance> scene_instances_collect(
     const SceneSun lighting = out[i].lighting;
     for (const auto& [key, cell] : found->second.cells) {
         if (!visible(cell.center, cell.radius)) continue;
+        if (g_hiz) {
+          const auto cell_world = transform_point(shell, cell.center);
+          if (!g_hiz(cell_world.data(), cell.radius, g_hiz_user)) continue;
+        }
         for (const auto& prop : cell.props) {
+          if (prop.batched) continue;
           if (!visible(prop.center, prop.radius)) continue;
+          if (g_hiz) {
+            const auto prop_world = transform_point(shell, prop.center);
+            if (!g_hiz(prop_world.data(), prop.radius, g_hiz_user)) continue;
+          }
           auto mesh = geometry(prop.render_id);
           if (!mesh) continue;
           SceneInstance instance;
@@ -1315,6 +1339,72 @@ std::vector<SceneInstance> scene_instances_collect(
       }
   }
   return out;
+}
+
+void scene_instances_collect_batches(const SceneFrustum* frustum,
+                                     std::vector<SceneBatch>& out,
+                                     const float* reflection_origin) {
+  out.clear();
+  if (g_ground_props.empty()) return;
+  for (const auto& base : scene_instances_collect_root(g_world)) {
+    const auto found = g_ground_props.find(static_cast<uint32_t>(base.type_id));
+    if (found == g_ground_props.end()) continue;
+    PartMatrix shell;
+    if (!scene_instances_script_matrix(base.key, shell.data())) continue;
+    const auto visible = [&](const std::array<float, 3>& center, float radius) {
+      if (!frustum) return true;
+      const auto world = transform_point(shell, center);
+      for (const auto& plane : *frustum)
+        if (plane[0] * world[0] + plane[1] * world[1] - plane[2] * world[2] + plane[3] < -radius)
+          return false;
+      return true;
+    };
+    for (const auto& [key, cell] : found->second.cells) {
+      (void)key;
+      if (cell.batches.empty() || !visible(cell.center, cell.radius)) continue;
+      if (g_hiz) {
+        const auto cell_world = transform_point(shell, cell.center);
+        if (!g_hiz(cell_world.data(), cell.radius, g_hiz_user)) continue;
+      }
+      for (const auto& batch : cell.batches) {
+        auto mesh = geometry(batch.render_id);
+        if (!mesh) continue;
+        float extent = 0.f;
+        if (reflection_origin) {
+          const float scale = mesh->position_scale;
+          for (int axis = 0; axis < 3; ++axis)
+            extent = std::max(extent,
+                (mesh->info.bbox_max[axis] - mesh->info.bbox_min[axis]) * scale);
+        }
+        SceneBatch draw;
+        draw.geometry = std::move(mesh);
+        draw.lighting = base.lighting;
+        draw.instances.reserve(batch.indices.size());
+        for (const auto index : batch.indices) {
+          if (index >= cell.props.size()) continue;
+          const auto& prop = cell.props[index];
+          if (!visible(prop.center, prop.radius)) continue;
+          if (g_hiz) {
+            const auto prop_world = transform_point(shell, prop.center);
+            if (!g_hiz(prop_world.data(), prop.radius, g_hiz_user)) continue;
+          }
+          auto matrix = part_matrix_multiply(shell, prop.pose);
+          for (int col = 0; col < 4; ++col)
+            for (int row = 0; row < 4; ++row)
+              if ((col == 2) != (row == 2)) matrix[col * 4 + row] *= -1.f;
+          if (reflection_origin && extent > 0.f) {
+            const float dx = matrix[12] - reflection_origin[0];
+            const float dy = matrix[13] - reflection_origin[1];
+            const float dz = matrix[14] - reflection_origin[2];
+            const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (dist > 12.f && extent / dist * 128.f < 4.f) continue;
+          }
+          draw.instances.push_back({matrix, prop.color});
+        }
+        if (!draw.instances.empty()) out.push_back(std::move(draw));
+      }
+    }
+  }
 }
 
 void scene_instances_override_mesh(uint32_t id,
@@ -1497,6 +1587,37 @@ bool ground_prop_is_mesh(const RpkIndex& rpk, uint32_t resource) {
       (word > 0 && separators.find(alias[word - 1]) == std::string_view::npos) ||
       (word + 5 < alias.size() && separators.find(alias[word + 5]) == std::string_view::npos);
 }
+
+bool prop_mesh_batchable(const ScxGeometry& mesh) {
+  const bool v4 = mesh.info.version == 4;
+  const bool v3 = mesh.info.version == 3;
+  if (mesh.groups.empty() || mesh.ground_polygons || (!v4 && !v3)) return false;
+  for (const auto& group : mesh.groups) {
+    const auto flags = group.material_flags;
+    const bool glass = v4 && (flags & 0x40000000u) && (group.material_type & 0x04u);
+    const bool blend = glass || (v3 && (flags & 0x101u) == 0x101u);
+    const bool material_mix = v4 && group.material_type == 0x03u;
+    const bool cut = !material_mix && !blend &&
+        (v4 ? (flags & 0x20000000u) != 0 : (flags & 1u) != 0);
+    if (blend || material_mix || cut || group.mix_vertex_color) return false;
+  }
+  return true;
+}
+
+void build_prop_batches(GroundPropCell& cell, const std::unordered_set<uint32_t>& batchable) {
+  std::unordered_map<uint32_t, std::vector<uint32_t>> groups;
+  for (uint32_t index = 0; index < cell.props.size(); ++index) {
+    const auto id = cell.props[index].render_id;
+    if (!batchable.contains(id)) continue;
+    groups[id].push_back(index);
+  }
+  cell.batches.clear();
+  for (auto& [id, indices] : groups) {
+    if (indices.size() < 2) continue;
+    for (const auto index : indices) cell.props[index].batched = true;
+    cell.batches.push_back({id, std::move(indices)});
+  }
+}
 }
 
 void scene_instances_add_ground_props(const GroundMapData& map) {
@@ -1580,6 +1701,30 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
     if (cell.props.empty()) continue;
     for (int axis = 0; axis < 3; ++axis) cell.center[axis] = (lower[axis] + upper[axis]) * .5f;
     cell.radius = .5f * std::hypot(upper[0] - lower[0], upper[1] - lower[1], upper[2] - lower[2]);
+  }
+  std::unordered_set<uint32_t> batchable;
+  for (const auto id : props_map.resources) {
+    const auto mesh = geometry(id);
+    if (mesh && prop_mesh_batchable(*mesh)) batchable.insert(id);
+  }
+  std::vector<GroundPropCell*> jobs;
+  jobs.reserve(cells.size());
+  for (auto& [key, cell] : cells)
+    if (!cell.props.empty()) jobs.push_back(&cell);
+  std::atomic_size_t next{0};
+  const auto group = [&] {
+    for (size_t job = next.fetch_add(1); job < jobs.size(); job = next.fetch_add(1))
+      build_prop_batches(*jobs[job], batchable);
+  };
+  {
+    std::vector<std::jthread> workers;
+    const auto count = std::min<size_t>({jobs.size(), 4u,
+        std::max<size_t>(1u, std::thread::hardware_concurrency())});
+    try {
+      for (size_t i = 1; i < count; ++i) workers.emplace_back(group);
+    } catch (const std::system_error&) {
+    }
+    group();
   }
   std::erase_if(cells, [](const auto& entry) { return entry.second.props.empty(); });
   std::printf("[scene] ground props 0x%x placements=%zu renders=%zu\n", map.render_id,

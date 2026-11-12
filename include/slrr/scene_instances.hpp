@@ -36,6 +36,16 @@ struct SceneInstance {
 
 // Flat blob under a traffic car (kocsiarnyek). Vectors are metres in the
 // render object's local space, before the mesh Z flip.
+struct SceneBatchInstance {
+  std::array<float, 16> transform{};
+  uint32_t color = 0xffffff;
+};
+struct SceneBatch {
+  std::shared_ptr<const ScxGeometry> geometry;
+  SceneSun lighting{};
+  std::vector<SceneBatchInstance> instances;
+};
+
 struct SceneShadowDecal {
   bool present = false;
   float center[3] = {};
@@ -51,9 +61,20 @@ std::string scene_instances_envmap();
 void scene_instances_select(void *world, void *skydome, bool preview_lamps);
 using SceneFrustum = std::array<std::array<float, 4>, 6>;
 bool scene_instances_has_ground_props();
+void* scene_instances_world();
+// Previous-frame occlusion. A true result keeps the sphere. Null skips the
+// test, which is what the shadow map and the reflection faces do.
+using SceneHizTest = bool (*)(const float center[3], float radius, void* user);
+void scene_instances_set_hiz(SceneHizTest test, void* user);
 std::vector<SceneInstance> scene_instances_collect(
     const SceneFrustum* frustum = nullptr,
     std::vector<std::shared_ptr<const ScxGeometry>>* resident_props = nullptr);
+// Repeated opaque props already grouped per cell. reflection_origin, in
+// render metres, drops placements that cover fewer than about four pixels
+// of a 256² reflection face.
+void scene_instances_collect_batches(const SceneFrustum* frustum,
+                                     std::vector<SceneBatch>& out,
+                                     const float* reflection_origin = nullptr);
 std::vector<SceneInstance> scene_instances_collect_root(void *root);
 SceneSun scene_instances_light(void* root=nullptr);
 // Rejects missing parents, hidden subtrees and cycles.

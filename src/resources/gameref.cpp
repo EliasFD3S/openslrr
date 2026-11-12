@@ -686,7 +686,7 @@ static bool world_camera_pose(float eye[3], float at[3], float* fov, float* znea
     if (fov) *fov = cockpit ? cam->half_aov : 42.f;
     // Outside the cockpit, reserve more depth precision for close body seams.
     if (znear) *znear = cockpit ? .03f : .20f;
-    if (zfar) *zfar = 2000.f;
+    if (zfar) *zfar = 3000.f;
     return true;
   }
   // SLRR_rev javaSceneCamera (codex/physics-reverse-port @ c65675f): the
@@ -954,6 +954,14 @@ bool gameref_get_fog(int32_t* color, float* near_z, float* far_z) {
   if (near_z) *near_z = g_fog_near;
   if (far_z) *far_z = g_fog_far;
   return true;
+}
+
+void gameref_camera_set_fog(GameRefState& camera, int32_t color, float near_z,
+                            float far_z) {
+  camera.fog_set = true;
+  camera.fog_color = color;
+  camera.fog_near = near_z;
+  camera.fog_far = far_z > near_z ? far_z : near_z + 1.f;
 }
 
 

@@ -24,6 +24,82 @@ namespace slrr {
 
 void LibBgfxBackend::update_static_shadow(const float* eye, const VideoOptions& video) {
   static_shadow_active_ = false;
+  // The garage has no sun map. The neon reuses this same view and looks down
+  // on the bay, so the car and the room cast one shadow without a new pass.
+  if (garage_ && local_light_[3] > 0.f && video.shadows != 0 &&
+      debug_overlay_.render_options().map_shadows &&
+      bgfx::isValid(static_shadow_program_)) {
+    constexpr uint16_t size = kShadowResolution;
+    if (!bgfx::isValid(static_shadow_fb_) || size != static_shadow_size_) {
+      if (bgfx::isValid(static_shadow_fb_)) bgfx::destroy(static_shadow_fb_);
+      static_shadow_fb_ = BGFX_INVALID_HANDLE;
+      static_shadow_tex_ = BGFX_INVALID_HANDLE;
+      constexpr uint64_t flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
+          BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT;
+      const auto depth = bgfx::createTexture2D(size, size, false, 1,
+                                              bgfx::TextureFormat::D32F, flags);
+      if (!bgfx::isValid(depth)) return;
+      static_shadow_fb_ = bgfx::createFrameBuffer(1, &depth, true);
+      if (!bgfx::isValid(static_shadow_fb_)) {
+        bgfx::destroy(depth);
+        return;
+      }
+      static_shadow_tex_ = depth;
+      static_shadow_size_ = size;
+    }
+    const auto* caps = bgfx::getCaps();
+    const bx::Vec3 light{local_light_[0], local_light_[1], local_light_[2]};
+    float view[16], proj[16], clip[16];
+    bx::mtxLookAt(view, light, bx::Vec3{light.x, light.y - 1.f, light.z}, {0.f, 0.f, 1.f});
+    constexpr float extent = 10.f;
+    bx::mtxOrtho(proj, -extent, extent, -extent, extent, 0.15f, 16.f, 0.f,
+                 caps->homogeneousDepth);
+    bx::mtxMul(clip, view, proj);
+    const float crop[16] = {
+        .5f, 0.f, 0.f, 0.f, 0.f, caps->originBottomLeft ? .5f : -.5f, 0.f, 0.f,
+        0.f, 0.f, caps->homogeneousDepth ? .5f : 1.f, 0.f, .5f, .5f,
+        caps->homogeneousDepth ? .5f : 0.f, 1.f};
+    bx::mtxMul(static_shadow_matrix_.data(), clip, crop);
+    bgfx::setViewFrameBuffer(kStaticShadowView, static_shadow_fb_);
+    bgfx::setViewRect(kStaticShadowView, 0, 0, size, size);
+    bgfx::setViewClear(kStaticShadowView, BGFX_CLEAR_DEPTH, 0, 1.f, 0);
+    bgfx::setViewTransform(kStaticShadowView, view, proj);
+    bgfx::touch(kStaticShadowView);
+    const uint64_t state = BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS;
+    auto cast = [&](bgfx::VertexBufferHandle vb, bgfx::IndexBufferHandle ib,
+                    const auto& groups, const float* matrix) {
+      if (!bgfx::isValid(vb) || !bgfx::isValid(ib)) return;
+      auto submit = [&](uint32_t start, uint32_t count) {
+        const float opaque[4] = {0.f, -1.f, 0.f, 0.f};
+        bgfx::setUniform(u_static_shadow_params_, opaque);
+        bgfx::setTexture(0, s_tex_, white_tex_);
+        bgfx::setTransform(matrix);
+        bgfx::setVertexBuffer(0, vb);
+        bgfx::setIndexBuffer(ib, start, count);
+        bgfx::setState(state);
+        bgfx::submit(kStaticShadowView, static_shadow_program_);
+      };
+      if (groups.empty()) return;
+      for (const auto& group : groups) {
+        if ((group.material_flags & 0x40000000u) || group.diffuse[3] < .99f) continue;
+        submit(group.index_start, group.index_count);
+      }
+    };
+    // The room stays a receiver. Casting the shell from a light under the
+    // ceiling would put the whole floor in shadow.
+    for (const auto& instance : instances_) {
+      if (!instance.vehicle_material || instance.light_flags || !instance.geometry) continue;
+      const auto found = instance_meshes_.find(instance.geometry.get());
+      if (found == instance_meshes_.end()) continue;
+      cast(found->second.vbh, found->second.ibh, found->second.geo.groups,
+           instance.transform.data());
+    }
+    static_shadow_eye_ = {light.x, light.y, light.z};
+    static_shadow_distance_ = 40.f;
+    static_shadow_world_ = nullptr;
+    static_shadow_active_ = true;
+    return;
+  }
   if (!eye || video.shadows == 0 || !scene_instances_has_ground_props()) {
     static_shadow_world_ = nullptr;
     if (bgfx::isValid(static_shadow_fb_)) bgfx::destroy(static_shadow_fb_);
@@ -37,14 +113,16 @@ void LibBgfxBackend::update_static_shadow(const float* eye, const VideoOptions& 
       [](const SceneInstance& instance) { return instance.geometry->ground_polygons; });
   if (ground == instances_.end()) return;
   const auto sun = ground->lighting;
-  if (!sun.has_direction || sun.direction[1] >= -.08f) return;
+  if (!sun.has_direction || sun.direction[1] >= 0.02f) return;
   constexpr uint16_t size = kShadowResolution;
   // Static buildings shade streets well beyond the range of vehicle shadows.
   const bool conservative =
       (bgfx::getCaps()->supported & BGFX_CAPS_CONSERVATIVE_RASTER) != 0;
-  const float range = std::min(conservative ? 100.f : 65.f, video.view_distance);
-  const float step = std::max(10.f, range * .15f);
-  const float half_width = range + step + 24.f;
+  // Close to the car, a 150 m map turns each texel into a stripe on the
+  // ground. Keep the resolution on the street around the camera.
+  const float range = std::min(conservative ? 56.f : 36.f, video.view_distance);
+  const float step = std::max(8.f, range * .15f);
+  const float half_width = range + step;
   static_shadow_eye_ = {eye[0], eye[1], -eye[2]};
   const std::array<float, 3> focus{eye[0], eye[1], eye[2]};
   const float moved = std::hypot(eye[0] - static_shadow_focus_[0],
@@ -101,7 +179,13 @@ void LibBgfxBackend::update_static_shadow(const float* eye, const VideoOptions& 
   bgfx::setViewTransform(kStaticShadowView, view, proj);
   bgfx::touch(kStaticShadowView);
   for (const auto& instance : scene_instances_collect(&frustum)) {
-    if (instance.key && !instance.geometry->ground_polygons) continue;
+    // Cars have their own depth map. Skinned pedestrians move, so they would
+    // freeze into this cached map. Everything else on the map casts.
+    // The ground is the receiver. Casting it paints its own texels back
+    // onto the apron as a grid, and it is the heaviest mesh in the pass.
+    if (!instance.geometry || instance.sky || instance.vehicle_material ||
+        instance.gpu_skin || instance.light_flags || instance.geometry->ground_polygons)
+      continue;
     const auto found = instance_meshes_.find(instance.geometry.get());
     if (found == instance_meshes_.end()) continue;
     const auto& part = found->second;
@@ -132,6 +216,9 @@ void LibBgfxBackend::update_static_shadow(const float* eye, const VideoOptions& 
       bgfx::submit(kStaticShadowView, static_shadow_program_);
     }
   }
+  std::vector<SceneBatch> shadow_batches;
+  scene_instances_collect_batches(&frustum, shadow_batches);
+  draw_prop_batches(kStaticShadowView, shadow_batches, true, conservative);
   static_shadow_distance_ = range;
   static_shadow_world_ = ground->key;
   static_shadow_focus_ = focus;
@@ -163,7 +250,7 @@ void LibBgfxBackend::update_car_depth(const float* position, const VideoOptions&
       ? bx::Vec3{sun.direction[0], sun.direction[1], -sun.direction[2]}
       : bx::Vec3{0.f, -1.f, 0.f};
   const auto travel = bx::normalize(direction);
-  if (travel.y >= -.08f) return;
+  if (travel.y >= 0.02f) return;
   const bx::Vec3 centre{position[0], position[1], -position[2]};
   const bx::Vec3 up = std::abs(travel.y) > .98f ? bx::Vec3{0,0,1} : bx::Vec3{0,1,0};
   const auto* caps = bgfx::getCaps();

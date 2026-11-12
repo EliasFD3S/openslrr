@@ -83,6 +83,12 @@ struct GameRefState {
   float half_aov = 45.f;
   float dmin = 0.1f;
   float dmax = 100.f;
+  // Camera.setFog. The driving camera fades into the sky from 1.5 km to 3 km.
+  // GroundRef weather fog stays on the separate globals.
+  bool fog_set = false;
+  int32_t fog_color = 0x0091badb;
+  float fog_near = 1500.f;
+  float fog_far = 3000.f;
   int32_t cam_pri = 0;
   int32_t cam_seq = 0;
   bool cam_active = false;
@@ -216,5 +222,7 @@ std::vector<void*> gameref_world_roots();  // flags & WORLDTREEROOT
 
 void gameref_set_fog(int32_t color, float near_z, float far_z);
 bool gameref_get_fog(int32_t* color, float* near_z, float* far_z);
+void gameref_camera_set_fog(GameRefState& camera, int32_t color, float near_z,
+                            float far_z);
 
 }  // namespace slrr
