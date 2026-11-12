@@ -542,7 +542,7 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       {}, {},
       {true, cars_resource(0x58), {.222f, .887f, 0}, {}, 0xff4fe015, "%03.0f"},
       {true, cars_resource(0x58), {.407f, .889f, 0}, {}, 0xff4fe015, "N123456R"},
-      {true, cars_resource(0x58), {-.357f, .752f, 0}, {}, 0xff4fe015, "%07.0f"},
+      {true, cars_resource(0x58), {-.357f, .767f, 0}, {}, 0xff4fe015, "%07.0f"},
       {true, cars_resource(0x63), {-.227f, .925f, 0}},
       {true, cars_resource(0x57), {.646f, .631f, 0}},
       {true, cars_resource(0x5c), {-.126f, .843f, 0}, {}, 0xff000000},
