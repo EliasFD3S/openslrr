@@ -542,9 +542,9 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       {}, {},
       {true, cars_resource(0x58), {.222f, .887f, 0}, {}, 0xff4fe015, "%03.0f"},
       {true, cars_resource(0x58), {.407f, .889f, 0}, {}, 0xff4fe015, "N123456R"},
-      {true, cars_resource(0x58), {-.337f, .791f, 0}, {}, 0xff4fe015, "%07.0f"},
+      {true, cars_resource(0x58), {-.357f, .782f, 0}, {}, 0xff4fe015, "%07.0f"},
       {true, cars_resource(0x63), {-.227f, .925f, 0}},
-      {true, cars_resource(0x57), {.655f, .667f, 0}},
+      {true, cars_resource(0x57), {.646f, .631f, 0}},
       {true, cars_resource(0x5c), {-.126f, .843f, 0}, {}, 0xff000000},
       {true, cars_resource(0x5c), {-.126f, .948f, 0}, {}, 0xff000000},
   }};
@@ -598,7 +598,7 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       const size_t start = size_t(glyph) * 4;
       if ((start + 4) * 3 > mesh->positions.size()) continue;
       const float *p = mesh->positions.data() + start * 3;
-      const float sy = (damage ? (override.defined ? .00014f : .00028f) : .00032f) * stock_scale;
+      const float sy = (damage ? (override.defined ? .00014f : .00036f) : .00032f) * stock_scale;
       const float x = override.defined && damage && item.position[0] < 0.f
           ? -item.position[0] : item.position[0];
       uint32_t color = item.color;
@@ -632,7 +632,7 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
         x *= .42f;
         y *= -.82f;
       }
-      const float sy = .00018f * (override.defined ? 1.f : stock_scale);
+      const float sy = .00024f * (override.defined ? 1.f : stock_scale);
       const float sx = sy * pixel_aspect;
       for (const unsigned char ch : std::string(buffer)) {
         const size_t start = size_t(ch) * 4;
