@@ -169,6 +169,9 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
   // `this.pic = pic` (op 0x1c + assign): receiver is on top of the value.
   Object* pending_put_recv = nullptr;
   bool have_put_recv = false;
+  // A path such as `local.field = value` also leaves its explicit receiver
+  // above the value, even when the field is declared by the current class.
+  bool put_recv_from_path = false;
   // `elementData[i] = v` — 0x20 then assign.
   Object* pending_arr = nullptr;
   int32_t pending_arr_idx = -1;
@@ -762,6 +765,7 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
     return op == 0x07 || op == 0x08;
   };
   auto commit_assign = [&](bool keep) {
+    put_recv_from_path = false;
     if (pending_arr) {
       Value val = stack.empty() ? Value::make_obj(nullptr) : pop();
       if (pending_arr->is_array && pending_arr_idx >= 0) {
@@ -1212,6 +1216,7 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
             // Store paths still evaluate intermediate instance receivers.
             // A later class carrier explicitly selects a static path.
             path_static = false;
+            put_recv_from_path = true;
             break;
           }
         }
@@ -1468,16 +1473,17 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
         const bool is_assign = next_is_assign();
 
         if (is_assign) {
-          // `obj.field = value` pushes the value, then the receiver.
-          // `this.field = value` and `Class.field = value` leave only the
-          // value: store into this, or into the static named by path+class.
+          // `obj.field = value` pushes the value, then the receiver. The
+          // receiver's path, not the field owner's package, distinguishes it
+          // from an object value in `this.field = value`.
           const bool foreign =
               !ref.owner.empty() && ref.owner != cls.name();
-          if (foreign && !saw_class && !stack.empty() &&
+          if ((put_recv_from_path || foreign) && !saw_class && !stack.empty() &&
               stack.back().tag == ValueTag::Obj) {
             pending_put_recv = pop().v.o;
             have_put_recv = true;
           }
+          put_recv_from_path = false;
         } else if (!is_assign) {
           const bool foreign =
               !ref.owner.empty() && ref.owner != cls.name();
