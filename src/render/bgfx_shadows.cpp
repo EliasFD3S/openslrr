@@ -854,7 +854,8 @@ void LibBgfxBackend::draw_vehicle_shadows(uint16_t view_id, const float* eye,
       if(garage_)
         for (const ScenePart& part : parts_) receive(part.vbh, part.ibh, identity);
       for (const auto& instance : instances_) {
-        if (instance.sky || instance.vehicle_material || !instance.geometry)
+        if (instance.sky || instance.vehicle_material || instance.gpu_skin ||
+            !instance.geometry)
           continue;
         auto mesh = instance_meshes_.find(instance.geometry.get());
         if (mesh == instance_meshes_.end()) continue;

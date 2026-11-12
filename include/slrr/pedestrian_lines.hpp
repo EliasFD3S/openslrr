@@ -56,11 +56,16 @@ class PedestrianLines {
   // Walkable area, in square metres, of the corridor stretches inside the
   // ring. The original density is people per square metre of that area.
   float area_within(float x, float y, float z, float radius) const;
-  // Reservoir-sample a corridor point inside the ring. min_distance is 35
-  // in the city (SLRR_rev hides on-screen spawns closer than that).
+  // Reservoir-sample a corridor point inside the ring.
+  // Without `hidden`, min_distance applies to every sample.
+  // With it, SLRR_rev PedestrianSpawnIndex.choose: a hidden point is valid
+  // from 12 m, a visible one from 35 m, and any hidden candidate discards
+  // the visible ones.
   bool spawn(float x, float y, float z, float radius, float min_distance,
              uint32_t& rng, PedestrianWalker& out, const PedestrianBlock* blocked = nullptr,
-             int blocked_count = 0) const;
+             int blocked_count = 0,
+             bool (*hidden)(float x, float y, float z, void* user) = nullptr,
+             void* hidden_user = nullptr) const;
   void step(PedestrianWalker& walker, float dt, float car_x, float car_y,
             float car_z, uint32_t& rng) const;
 

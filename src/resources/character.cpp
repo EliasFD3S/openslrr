@@ -523,6 +523,16 @@ std::shared_ptr<const ScxGeometry> character_posed(void* key, int32_t type_id,
   return character->posed;
 }
 
+int character_skin_palette(void* key, int32_t type_id, const RpkIndex& packs,
+                           float* out, int capacity) {
+  if (!out || capacity <= 0) return 0;
+  Character* character = ensure_character(key, type_id, &packs);
+  if (!character || !character->bind) return 0;
+  rebuild(*character, gameref_now());
+  if (character->worlds.size() < character->bind->bones.size() * 16) return 0;
+  return skeleton_skin_palette(*character->bind, character->worlds.data(), out, capacity);
+}
+
 int character_find_bone(void* key, int32_t type_id, const RpkIndex& packs,
                         const std::string& name) {
   const Character* character = ensure_character(key, type_id, &packs);

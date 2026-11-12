@@ -55,6 +55,11 @@ void skeleton_skin(const ScxGeometry& bind, const Skeleton& skeleton,
                    const float* worlds, std::vector<float>* positions,
                    std::vector<float>* normals);
 
+// Column-major skin matrices in centimetres: world * inverse bind.
+// Writes min(bone count, capacity) matrices and returns how many.
+int skeleton_skin_palette(const Skeleton& skeleton, const float* worlds,
+                          float* out, int capacity);
+
 // Per-render pose. Keys are the script objects, not GameRefState addresses.
 void character_forget(void* key);
 void character_forget_all();
@@ -64,6 +69,11 @@ void character_forget_all();
 std::shared_ptr<const ScxGeometry> character_posed(void* key, int32_t type_id,
                                                    const ScxGeometry* bind,
                                                    const RpkIndex& packs);
+
+// Same bone matrices as the CPU skin, without copying vertices.
+// Returns 0 when the render has no skeleton. `out` is column-major.
+int character_skin_palette(void* key, int32_t type_id, const RpkIndex& packs,
+                           float* out, int capacity);
 
 // Skeleton index, or 0 when the render has no matching bone. Never negative.
 int character_bone_id(void* key, int32_t type_id, const RpkIndex& packs,

@@ -372,7 +372,11 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
       bgfx::setUniform(u_mesh_base_uv_, base_xf);
       bgfx::setUniform(u_mesh_mix_uv_, mix_xf);
       bgfx::setUniform(u_alpha_test_,settings);bgfx::setUniform(u_color_,tint);bgfx::setTransform(matrix);
-      bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,first,count);
+      const bool skinned = instance.gpu_skin && bgfx::isValid(part.skin_vbh) &&
+          bgfx::isValid(skin_program_) && instance.skin.size() >= 48u * 16u;
+      if (skinned) bgfx::setUniform(u_skin_bones_, instance.skin.data(), 48);
+      bgfx::setVertexBuffer(0, skinned ? part.skin_vbh : part.vbh);
+      bgfx::setIndexBuffer(part.ibh,first,count);
       bgfx::setTexture(0, s_tex_, tex, BGFX_SAMPLER_NONE);
       bgfx::TextureHandle mix = BGFX_INVALID_HANDLE;
       if (group && part.geo.position_scale == 1.f && group->mix_index != 0xffff) {
@@ -404,7 +408,7 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
         state |= BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS;
       }
       bgfx::setState(state);
-      bgfx::submit(view_id, program_);
+      bgfx::submit(view_id, skinned ? skin_program_ : program_);
     };
     if(part.geo.groups.empty())draw(0,static_cast<uint32_t>(part.geo.indices.size()),0,0,nullptr);
     else for(const auto&g:part.geo.groups)draw(g.index_start,g.index_count,g.texture_index,g.material_flags,&g);

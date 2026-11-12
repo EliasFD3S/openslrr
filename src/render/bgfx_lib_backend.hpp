@@ -115,6 +115,7 @@ class LibBgfxBackend final : public IRenderBackend {
     ScxGeometry geo;
     std::shared_ptr<const ScxGeometry> source;
     bgfx::VertexBufferHandle vbh = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle skin_vbh = BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle ibh = BGFX_INVALID_HANDLE;
     std::vector<bgfx::TextureHandle> tex;
     std::vector<std::string> shared_texture_paths;
@@ -183,6 +184,7 @@ class LibBgfxBackend final : public IRenderBackend {
 
 
   void upload_part(ScenePart& part);
+  void upload_skin(ScenePart& part);
 
 
   static bool is_logo_texture_slot(const ScxGeometry& geo, uint16_t tex_i);
@@ -280,6 +282,8 @@ class LibBgfxBackend final : public IRenderBackend {
   std::vector<ScenePart> parts_;
   bgfx::VertexLayout layout_;
   bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle skin_program_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_skin_bones_ = BGFX_INVALID_HANDLE;
   bgfx::TextureHandle white_tex_ = BGFX_INVALID_HANDLE;
   bgfx::TextureHandle fmv_tex_ = BGFX_INVALID_HANDLE;
   int32_t fmv_tex_w_ = 0;

@@ -349,4 +349,17 @@ void skeleton_skin(const ScxGeometry& bind, const Skeleton& skeleton,
   }
 }
 
+int skeleton_skin_palette(const Skeleton& skeleton, const float* worlds,
+                          float* out, int capacity) {
+  if (!out || capacity <= 0 || !worlds) return 0;
+  const int bones = static_cast<int>(skeleton.bones.size());
+  const int count = std::min(bones, capacity);
+  if (count <= 0 || skeleton.inverse_bind.size() < static_cast<size_t>(count) * 16)
+    return 0;
+  for (int i = 0; i < count; ++i)
+    multiply(out + static_cast<size_t>(i) * 16, worlds + static_cast<size_t>(i) * 16,
+             skeleton.inverse_bind.data() + static_cast<size_t>(i) * 16);
+  return count;
+}
+
 }  // namespace slrr

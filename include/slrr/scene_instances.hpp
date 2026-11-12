@@ -29,6 +29,9 @@ struct SceneInstance {
   uint32_t light_flags = 0;
   // Render-object id. Carries `flags` (dynamic shadow caster) and `shd_*`.
   int32_t type_id = 0;
+  // Upload-space bone palette (scaled, Z flipped). Empty keeps the CPU pose.
+  bool gpu_skin = false;
+  std::vector<float> skin;
 };
 
 // Flat blob under a traffic car (kocsiarnyek). Vectors are metres in the
@@ -58,6 +61,8 @@ bool scene_instance_transform(void *key, void *root, float *matrix);
 // Active world, unreflected script metres. False for inventory/other worlds.
 bool scene_instances_script_matrix(void *key, float *matrix);
 std::shared_ptr<const ScxGeometry> scene_instances_geometry(uint32_t resource);
+// Parse render meshes off the calling thread and publish them before return.
+void scene_instances_preload(const std::vector<uint32_t>& resources);
 std::string scene_instances_texture(uint32_t resource);
 // Nearest mesh the ray enters, in unreflected script metres. Sky and
 // instances outside the active world are ignored. Null when the ray only

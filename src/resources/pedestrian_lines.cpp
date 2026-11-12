@@ -99,6 +99,9 @@ V sample_boundary(const Boundary& side, float t) {
   return lerp(side.points[i - 1], side.points[i], (d - side.lengths[i - 1]) / span);
 }
 
+// SLRR_rev zonePoint. The two kind-23 lines are the corridor edges. People
+// stand between them: laterals 0.25, 0.5 and 0.75, pulled to the middle
+// near a gate, and kept WALKING_CLEARANCE off each edge.
 V zone_point(const Zone& zone, float t, float lateral) {
   const V a = sample_boundary(zone.sides[0], t);
   const V b = sample_boundary(zone.sides[1], t);
@@ -565,11 +568,13 @@ float PedestrianLines::area_within(float x, float y, float z, float radius) cons
 
 bool PedestrianLines::spawn(float x, float y, float z, float radius, float min_distance,
                             uint32_t& rng, PedestrianWalker& out, const PedestrianBlock* blocked,
-                            int blocked_count) const {
+                            int blocked_count, bool (*hidden)(float, float, float, void*),
+                            void* hidden_user) const {
   if (data_->zones.empty() || radius <= 0.f) return false;
   const V focus{x, y, z};
   const Sample* choice = nullptr;
   int count = 0;
+  bool blind = false;
   const int x0 = static_cast<int>(std::floor((x - radius) / kCell));
   const int x1 = static_cast<int>(std::floor((x + radius) / kCell));
   const int z0 = static_cast<int>(std::floor((z - radius) / kCell));
@@ -580,7 +585,10 @@ bool PedestrianLines::spawn(float x, float y, float z, float radius, float min_d
       if (found == data_->cells.end()) continue;
       for (const Sample& sample : found->second) {
         const float distance = dist(sample.position, focus);
-        if (distance > radius || distance < min_distance) continue;
+        const bool off = hidden && hidden(sample.position.x, sample.position.y,
+                                          sample.position.z, hidden_user);
+        const float nearest = hidden ? (off ? 12.f : 35.f) : min_distance;
+        if (distance > radius || distance < nearest) continue;
         if (std::fabs(sample.position.y - y) > 20.f) continue;
         bool taken = false;
         for (int i = 0; blocked && i < blocked_count; ++i)
@@ -589,6 +597,15 @@ bool PedestrianLines::spawn(float x, float y, float z, float radius, float min_d
             break;
           }
         if (taken) continue;
+        if (hidden) {
+          if (off && !blind) {
+            choice = nullptr;
+            count = 0;
+            blind = true;
+          } else if (blind && !off) {
+            continue;
+          }
+        }
         if (unit(rng) < 1.f / static_cast<float>(++count)) choice = &sample;
       }
     }

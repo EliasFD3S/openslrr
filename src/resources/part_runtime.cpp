@@ -23,8 +23,11 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <sstream>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -168,6 +171,7 @@ struct PedAgent {
   int kind = 0;
   float x = 0.f, z = 0.f, yaw = 0.f;
   bool placed = false;
+  uint32_t sim_gen = 0;
   PedestrianWalker line;
 };
 struct PedCrowd {
@@ -178,6 +182,10 @@ struct PedCrowd {
   std::vector<PedKind> kinds;
   std::vector<PedAgent> agents;
   bool announced = false;
+  bool preloaded = false;
+  // The whole radius is created once, when the map comes up. Later gaps
+  // refill a few at a time as the car moves.
+  bool stocked = false;
   int next_kind = 0;
   double refill_at = 0;
   double prune_at = 0;
@@ -3137,6 +3145,122 @@ PedestrianLines& city_walk() {
   return lines;
 }
 
+struct PedSlot {
+  void* crowd = nullptr;
+  size_t index = 0;
+  uint32_t gen = 0;
+  PedestrianWalker line;
+};
+
+// Steps walker records only. Render objects and the skeleton stay on the
+// thread that owns them; this one never calls into either.
+struct PedSim {
+  std::mutex mu;
+  std::condition_variable_any cv;
+  bool posted = false;
+  bool ready = false;
+  bool seeded = false;
+  float dt = 0.f, x = 0.f, y = 0.f, z = 0.f;
+  uint32_t step_rng = 1;
+  PedestrianLines* walk = nullptr;
+  std::vector<PedSlot> in, out;
+  void run(std::stop_token stop);
+  std::jthread thread{[this](std::stop_token stop) { run(stop); }};
+};
+
+void PedSim::run(std::stop_token stop) {
+  std::unique_lock lock(mu);
+  while (!stop.stop_requested()) {
+    cv.wait(lock, stop, [&] { return posted; });
+    if (stop.stop_requested()) return;
+    auto slots = std::move(in);
+    const float step_dt = dt;
+    const float cx = x, cy = y, cz = z;
+    uint32_t rng = step_rng;
+    PedestrianLines* lines = walk;
+    posted = false;
+    lock.unlock();
+    if (lines && step_dt > 0.f)
+      for (auto& slot : slots)
+        if (slot.line.ok) lines->step(slot.line, step_dt, cx, cy, cz, rng);
+    lock.lock();
+    out = std::move(slots);
+    step_rng = rng;
+    ready = true;
+  }
+}
+
+PedSim& ped_sim() {
+  static PedSim sim;
+  return sim;
+}
+
+// The chase camera's vertical field, the same angle mtxProj receives.
+// A point outside that cone is the SLRR_rev "hidden" spawn.
+struct PedView {
+  float eye[3]{};
+  float forward[3]{};
+  float right[3]{};
+  float up[3]{};
+  float tan_x = 1.f;
+  float tan_y = 1.f;
+  bool ok = false;
+};
+
+bool ped_point_hidden(float x, float y, float z, void* user) {
+  const auto* view = static_cast<const PedView*>(user);
+  if (!view || !view->ok) return false;
+  const float dx = x - view->eye[0];
+  const float dy = y - view->eye[1];
+  const float dz = z - view->eye[2];
+  const float depth = dx * view->forward[0] + dy * view->forward[1] + dz * view->forward[2];
+  if (depth <= 0.2f) return true;
+  const float side = dx * view->right[0] + dy * view->right[1] + dz * view->right[2];
+  const float lift = dx * view->up[0] + dy * view->up[1] + dz * view->up[2];
+  return std::fabs(side) > depth * view->tan_x || std::fabs(lift) > depth * view->tan_y;
+}
+
+bool ped_behind_camera(const PedView& view, float x, float y, float z) {
+  if (!view.ok) return false;
+  const float dx = x - view.eye[0];
+  const float dy = y - view.eye[1];
+  const float dz = z - view.eye[2];
+  return dx * view.forward[0] + dy * view.forward[1] + dz * view.forward[2] < 0.f;
+}
+
+PedView ped_view() {
+  PedView view;
+  float at[3]{}, up[3] = {0.f, 1.f, 0.f}, fov = 42.f;
+  if (!gameref_world_camera(view.eye, at, &fov, nullptr, nullptr, up)) return view;
+  float fx = at[0] - view.eye[0], fy = at[1] - view.eye[1], fz = at[2] - view.eye[2];
+  const float fl = std::sqrt(fx * fx + fy * fy + fz * fz);
+  if (!(fl > 1e-4f)) return view;
+  fx /= fl;
+  fy /= fl;
+  fz /= fl;
+  float rx = up[1] * fz - up[2] * fy;
+  float ry = up[2] * fx - up[0] * fz;
+  float rz = up[0] * fy - up[1] * fx;
+  float rl = std::sqrt(rx * rx + ry * ry + rz * rz);
+  if (!(rl > 1e-4f)) return view;
+  rx /= rl;
+  ry /= rl;
+  rz /= rl;
+  view.forward[0] = fx;
+  view.forward[1] = fy;
+  view.forward[2] = fz;
+  view.right[0] = rx;
+  view.right[1] = ry;
+  view.right[2] = rz;
+  view.up[0] = fy * rz - fz * ry;
+  view.up[1] = fz * rx - fx * rz;
+  view.up[2] = fx * ry - fy * rx;
+  view.tan_y = std::tan(std::clamp(fov, 10.f, 140.f) * 0.5f * 3.14159265f / 180.f);
+  view.tan_x = view.tan_y * (800.f / 600.f);
+  view.ok = true;
+  return view;
+}
+
 void tick_pedestrians(double seconds) {
   const float dt = static_cast<float>(std::min(seconds, 0.1));
   for (auto it = crowds.begin(); it != crowds.end();) {
@@ -3152,7 +3276,22 @@ void tick_pedestrians(double seconds) {
   PartMatrix car;
   if (!scene_instances_script_matrix(chassis, car.data())) return;
   const float car_x = car[12], car_y = car[13], car_z = car[14];
+  PedView view = ped_view();
   PedestrianLines& lines = city_walk();
+  {
+    PedSim& sim = ped_sim();
+    std::lock_guard lock(sim.mu);
+    if (sim.ready) {
+      for (const PedSlot& slot : sim.out) {
+        auto found = crowds.find(slot.crowd);
+        if (found == crowds.end() || slot.index >= found->second.agents.size()) continue;
+        PedAgent& agent = found->second.agents[slot.index];
+        if (agent.sim_gen != slot.gen || !agent.line.ok) continue;
+        agent.line = slot.line;
+      }
+      sim.ready = false;
+    }
+  }
   const bool routed = lines.zones() > 0;
   void* root = chassis_root(chassis);
   PartMatrix parent_m;
@@ -3199,6 +3338,7 @@ void tick_pedestrians(double seconds) {
     auto retire = [](PedAgent& agent) {
       agent.line.ok = false;
       agent.placed = false;
+      ++agent.sim_gen;
       if (auto* hidden = gameref_get(agent.render)) hidden->empty = true;
     };
     auto make_agent = [&]() -> PedAgent* {
@@ -3232,6 +3372,15 @@ void tick_pedestrians(double seconds) {
       crowd.agents.push_back(agent);
       return &crowd.agents.back();
     };
+    if (!crowd.preloaded && usable > 0 && want > 0) {
+      std::vector<uint32_t> ids;
+      for (const PedKind& kind : crowd.kinds)
+        if (kind.render) ids.push_back(kind.render);
+      scene_instances_preload(ids);
+      while (static_cast<int>(crowd.agents.size()) < want)
+        if (!make_agent()) break;
+      crowd.preloaded = true;
+    }
     int active = 0;
     PedAgent* spare = nullptr;
     for (auto& agent : crowd.agents) {
@@ -3276,9 +3425,14 @@ void tick_pedestrians(double seconds) {
         if (radius >= 1.f && radius <= 12.f) car_block.radius = radius;
       }
     }
-    if (routed && clock >= crowd.refill_at) {
-      crowd.refill_at = clock + 0.25;
-      for (int made = 0; active < want && made < 8; ++made) {
+    if (routed && active < want && clock >= crowd.refill_at) {
+      // The map load fills the whole radius at once. After that the car
+      // drives out of it, and a handful every quarter second left the next
+      // streets empty for several seconds.
+      const bool filling = !crowd.stocked;
+      const int batch = filling ? std::max(want, 1) : 32;
+      bool stalled = false;
+      for (int made = 0; active < want && made < batch; ++made) {
         if (!spare) {
           for (auto& agent : crowd.agents)
             if (!agent.line.ok) {
@@ -3287,23 +3441,31 @@ void tick_pedestrians(double seconds) {
             }
         }
         if (!spare) spare = make_agent();
-        if (!spare) break;
+        if (!spare) {
+          stalled = true;
+          break;
+        }
         std::vector<PedestrianBlock> taken{car_block};
         for (const auto& other : crowd.agents)
           if (&other != spare && other.line.ok)
             taken.push_back({other.line.x, other.line.y, other.line.z, 2.f});
-        // 12 m is the off-screen minimum. There is no frustum test here, and
-        // 35 m left the sidewalks in view empty while want stayed at 1 or 2.
-        if (!lines.spawn(car_x, car_y, car_z, kRadius, 12.f, ped_rng, spare->line, taken.data(),
-                         static_cast<int>(taken.size())))
+        // Ahead of the car as well. 35 m is the on-screen minimum, so a
+        // newcomer does not appear on the bumper while the avenue fills.
+        if (!lines.spawn(car_x, car_y, car_z, kRadius, filling ? 12.f : 35.f, ped_rng, spare->line,
+                         taken.data(), static_cast<int>(taken.size()))) {
+          stalled = true;
           break;
+        }
         spare->x = spare->line.x;
         spare->z = spare->line.z;
         spare->yaw = spare->line.yaw;
         spare->placed = true;
+        ++spare->sim_gen;
         spare = nullptr;
         ++active;
       }
+      if (filling && (active >= want || stalled)) crowd.stocked = true;
+      crowd.refill_at = stalled ? clock + 0.25 : clock;
     }
     if (crowd.density > 0.f && clock >= crowd.report_at) {
       std::fprintf(stderr,
@@ -3323,11 +3485,6 @@ void tick_pedestrians(double seconds) {
         continue;
       }
       if (routed) {
-        if (dt > 0.f) lines.step(agent.line, dt, car_x, car_y, car_z, ped_rng);
-        if (!agent.line.ok) {
-          node->empty = true;
-          continue;
-        }
         const float target = agent.line.yaw;
         if (!agent.placed) agent.yaw = target;
         else {
@@ -3355,9 +3512,45 @@ void tick_pedestrians(double seconds) {
       const PartMatrix local = rooted ? part_matrix_multiply(parent_inv, world) : world;
       std::copy(local.begin(), local.end(), node->local_matrix);
       node->matrix_override = true;
-      node->empty = false;
+      // Behind the camera the walker stays cached. The draw is the part
+      // that goes away, and it comes back when the view turns.
+      node->empty = ped_behind_camera(view, agent.x, ground, agent.z);
     }
   }
+  bool wake = false;
+  {
+    PedSim& sim = ped_sim();
+    std::lock_guard lock(sim.mu);
+    if (!sim.posted) {
+      sim.in.clear();
+      for (auto& entry : crowds) {
+        const auto& agents = entry.second.agents;
+        for (size_t i = 0; i < agents.size(); ++i) {
+          if (!agents[i].line.ok) continue;
+          PedSlot slot;
+          slot.crowd = entry.first;
+          slot.index = i;
+          slot.gen = agents[i].sim_gen;
+          slot.line = agents[i].line;
+          sim.in.push_back(std::move(slot));
+        }
+      }
+      if (!sim.in.empty()) {
+        if (!sim.seeded) {
+          sim.step_rng = ped_rng;
+          sim.seeded = true;
+        }
+        sim.dt = dt;
+        sim.x = car_x;
+        sim.y = car_y;
+        sim.z = car_z;
+        sim.walk = &lines;
+        sim.posted = true;
+        wake = true;
+      }
+    }
+  }
+  if (wake) ped_sim().cv.notify_one();
 }
 
 } // namespace

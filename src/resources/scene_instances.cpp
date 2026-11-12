@@ -575,6 +575,11 @@ read_ground_materials(const std::filesystem::path &path) {
 }
 } // namespace
 
+void scene_instances_preload(const std::vector<uint32_t>& resources) {
+  if (!g_resources || resources.empty()) return;
+  preload_ground_meshes(resources);
+}
+
 void scene_instances_set_resources(const RpkIndex *resources) {
   character_forget_all();
   g_resources = resources;
@@ -1169,7 +1174,43 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root) {
     }
     if (!instance.geometry)
       continue;
-    if (!n->line_geometry && g_resources) {
+    // Pedestrians share the bind mesh. The bone palette is a uniform, so the
+    // vertex buffer stays put while the clip advances.
+    constexpr int kSkinBones = 48;
+    if (!n->line_geometry && g_resources && n->alias == "pedestrian" &&
+        !instance.geometry->skin_weights.empty()) {
+      instance.skin.assign(static_cast<size_t>(kSkinBones) * 16, 0.f);
+      for (int bone = 0; bone < kSkinBones; ++bone) {
+        float* m = instance.skin.data() + static_cast<size_t>(bone) * 16;
+        m[0] = m[5] = m[10] = m[15] = 1.f;
+      }
+      const int count = character_skin_palette(n->key, n->type_id, *g_resources,
+                                               instance.skin.data(), kSkinBones);
+      if (count > 0) {
+        // Vertices are uploaded as position_scale * (x, y, -z). The palette
+        // has to land in that space: F*M*F, then scale the translation.
+        const float scale = instance.geometry->position_scale > 0.f
+            ? instance.geometry->position_scale : 0.01f;
+        for (int bone = 0; bone < kSkinBones; ++bone) {
+          float* m = instance.skin.data() + static_cast<size_t>(bone) * 16;
+          m[2] = -m[2];
+          m[6] = -m[6];
+          m[10] = -m[10];
+          m[14] = -m[14];
+          m[8] = -m[8];
+          m[9] = -m[9];
+          m[10] = -m[10];
+          m[11] = -m[11];
+          m[12] *= scale;
+          m[13] *= scale;
+          m[14] *= scale;
+        }
+        instance.gpu_skin = true;
+      } else {
+        instance.skin.clear();
+      }
+    }
+    if (!instance.gpu_skin && !n->line_geometry && g_resources) {
       if (auto posed = character_posed(n->key, n->type_id, instance.geometry.get(), *g_resources))
         instance.geometry = std::move(posed);
     }
