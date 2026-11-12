@@ -364,6 +364,13 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
       float tint[4]={((color>>16)&255)/255.f,((color>>8)&255)/255.f,(color&255)/255.f,1};
       if (material_mix)
         for (int i = 0; i < 3; ++i) tint[i] *= group->diffuse[i];
+      const ScxTextureMap identity;
+      const ScxTextureMap& base_uv = group ? group->base_map : identity;
+      const ScxTextureMap& mix_uv = group ? group->mix_map : identity;
+      const float base_xf[4] = {base_uv.scale_u, base_uv.scale_v, base_uv.offset_u, base_uv.offset_v};
+      const float mix_xf[4] = {mix_uv.scale_u, mix_uv.scale_v, mix_uv.offset_u, mix_uv.offset_v};
+      bgfx::setUniform(u_mesh_base_uv_, base_xf);
+      bgfx::setUniform(u_mesh_mix_uv_, mix_xf);
       bgfx::setUniform(u_alpha_test_,settings);bgfx::setUniform(u_color_,tint);bgfx::setTransform(matrix);
       bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,first,count);
       bgfx::setTexture(0, s_tex_, tex, BGFX_SAMPLER_NONE);

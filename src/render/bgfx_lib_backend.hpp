@@ -290,6 +290,8 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::UniformHandle s_mesh_mix_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_lightmap_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_lightmap_uv_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_mesh_base_uv_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_mesh_mix_uv_ = BGFX_INVALID_HANDLE;
   std::unordered_map<std::string, bgfx::TextureHandle> osd_tex_;
   std::unordered_map<void*, bgfx::TextureHandle> font_tex_;
   bgfx::UniformHandle u_alpha_test_ = BGFX_INVALID_HANDLE;

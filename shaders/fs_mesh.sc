@@ -30,12 +30,22 @@ uniform vec4 u_color;
 uniform vec4 u_lightmap;
 // scale.xy, offset.zw. Identity leaves the uv unchanged.
 uniform vec4 u_lightmapUv;
+// Diffuse and mix maps. scale 0,0 means the draw did not set a transform.
+uniform vec4 u_meshBaseUv;
+uniform vec4 u_meshMixUv;
 
 vec2 uvSet(float channel, vec2 uv0, vec2 uv1, vec2 uv2)
 {
 	if (channel > 1.5) return uv2;
 	if (channel > 0.5) return uv1;
 	return uv0;
+}
+
+vec2 mapUv(vec2 uv, vec4 xf)
+{
+	vec2 scale = xf.xy;
+	if (scale.x == 0.0 && scale.y == 0.0) scale = vec2(1.0, 1.0);
+	return uv * scale + xf.zw;
 }
 
 float cloudHash(vec3 p)
@@ -131,9 +141,9 @@ void main()
 	}
 	vec3 n = normalize(v_normal);
 	float ndl = max(abs(dot(n, normalize(vec3(0.35, 0.85, 0.45)))), 0.22);
-	vec4 tex = texture2D(s_texColor, uvSet(u_lightmap.y, v_texcoord0, v_texcoord1, v_texcoord2));
+	vec4 tex = texture2D(s_texColor, mapUv(uvSet(u_lightmap.y, v_texcoord0, v_texcoord1, v_texcoord2), u_meshBaseUv));
 	if (u_lightmap.w > 0.5) {
-		vec4 layer = texture2D(s_meshMix, uvSet(u_lightmap.w - 1.0, v_texcoord0, v_texcoord1, v_texcoord2));
+		vec4 layer = texture2D(s_meshMix, mapUv(uvSet(u_lightmap.w - 1.0, v_texcoord0, v_texcoord1, v_texcoord2), u_meshMixUv));
 		tex.rgb = mix(tex.rgb, layer.rgb, layer.a);
 	}
 	if ((u_alphaTest.x > 0.5 && tex.a < 0.5)

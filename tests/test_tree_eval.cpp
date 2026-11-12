@@ -6,6 +6,7 @@
 #include "slrr/script_threads.hpp"
 #include "slrr/tree_eval.hpp"
 
+#include <cstring>
 #include <memory>
 #include <string>
 #include <utility>
@@ -230,4 +231,36 @@ SLRR_TEST(tree_same_class_implicit_receiver_does_not_steal_object_value) {
   const slrr::TreeEvalResult result = evaluate(fixture, host, &source, 1);
   SLRR_REQUIRE(result.ok);
   require_string_field(source, "fuelType", "98 octane");
+}
+
+SLRR_TEST(tree_int_field_compound_add_truncates_float) {
+  CloneFixture fixture;
+  const uint32_t fee = fixture.field("towCarFee", "I");
+  auto& tree = fixture.cls.trees[1];
+  const float amount = 32.377f;
+  uint32_t bits = 0;
+  std::memcpy(&bits, &amount, sizeof(bits));
+  tree.push_back(node(0x0a, bits));
+  tree.push_back(node(0x1b, fee));
+  tree.push_back(node(0x08, 39));
+  tree.push_back(node(0x2a));
+
+  slrr::TufaMember method;
+  method.name = fixture.utf8("addFee");
+  method.descriptor = fixture.utf8("()V");
+  method.tree = 1;
+  method.locals = 1;
+  fixture.cls.instance_methods.push_back(method);
+
+  TestTreeHost host;
+  slrr::Object menu;
+  menu.class_name = fixture.class_name;
+  menu.fields["towCarFee"] = slrr::Value::make_int(0);
+
+  const slrr::TreeEvalResult result = evaluate(fixture, host, &menu, 1);
+  SLRR_REQUIRE(result.ok);
+  const auto it = menu.fields.find("towCarFee");
+  SLRR_REQUIRE(it != menu.fields.end());
+  SLRR_REQUIRE(it->second.tag == slrr::ValueTag::Int);
+  SLRR_REQUIRE(it->second.v.i == 32);
 }
