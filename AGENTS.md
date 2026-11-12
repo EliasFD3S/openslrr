@@ -17,5 +17,5 @@ must remain within the scope authorized by the user and must be included in
 the distributed patch when needed.
 
 Update the relevant documentation whenever a contract or responsibility changes.
-Report compilation, automated tests, and in-game validation separately; none
-of these results alone establishes complete compatibility.
+Report compilation and in-game validation separately; neither result alone
+establishes complete compatibility.

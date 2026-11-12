@@ -32,7 +32,7 @@ void usage() {
       "\n"
       "Default --game: FMV intros → Init(int) (Soft splash / menu).\n"
       "--auto-new skips to Garage (smoke). ESC skips boot intros.\n"
-      "Game data: open-SL/game or SLRR_GAME_ROOT / --root.\n"
+      "Game data: data/game, or SLRR_GAME_ROOT / --root.\n"
       "Reference only: open-SL/repos (do not edit as product code).\n");
 }
 
@@ -153,7 +153,7 @@ int main(int argc, char** argv) {
   if (opt.game_root.empty()) {
     std::fprintf(stderr,
                  "FAIL: game root not found (need system/Scripts/lang/System.class)\n"
-                 "  try: --root ..\\game   or set SLRR_GAME_ROOT\n");
+                 "  try: --root data\\game   or set SLRR_GAME_ROOT\n");
     return 1;
   }
   std::printf("[host] game_root=%s\n", opt.game_root.c_str());

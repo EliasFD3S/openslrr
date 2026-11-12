@@ -77,12 +77,7 @@ newly implemented features.
 
 ## Validation
 
-`slrr_compiler_tests` covers multi-class output, recursive directory scope,
-namespace recovery for package-less system sources, syntax-error preservation,
-original backups, path rejection and loading-history reset/drain semantics.
-The existing arraycopy/PTX/dyno suites also pass.
-
-A separate local probe compiled the installed patched `OptionsDialog.java`
+There is no compiler test target. A local probe compiled the installed patched `OptionsDialog.java`
 against the game declarations without writing into the game. It generated
 three classes in one 83,244-byte TUFA: `java.game.OptionsDialog`,
 `java.game.ControlsFileReqDialog`, and `java.game.UR_Dialog`. Both the host

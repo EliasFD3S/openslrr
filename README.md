@@ -44,7 +44,7 @@ These milestones describe existing functionality, rather than a percentage of th
 
 ![Native bindings by family: with a body, no-op, or missing](assets/progress/native-coverage.svg)
 
-**328 with a body · 4 explicit no-ops · 44 missing**, out of **376 stock natives** (12 November 2026).
+**329 with a body · 4 explicit no-ops · 43 missing**, out of **376 stock natives** (12 November 2026).
 The bars show **numbers of functions**, not percentages. A body can still be partial or return a fixed value; these counts do not establish full behavior or validation in game. The separately counted no-op functions are explicitly registered as `native_noop`.
 
 | Family | With a body | No-op | Missing |
@@ -53,11 +53,11 @@ The bars show **numbers of functions**, not percentages. A body can still be par
 | Language | 68 | 3 | 0 |
 | Sound & scripts | 15 | 0 | 3 |
 | Resources | 56 | 1 | 0 |
-| Rendering | 35 | 0 | 1 |
+| Rendering | 36 | 0 | 0 |
 | Files & input | 37 | 0 | 0 |
 | Parts | 97 | 0 | 0 |
 | Leftovers | 3 | 0 | 3 |
-| **Total** | **328** | **4** | **44** |
+| **Total** | **329** | **4** | **43** |
 
 World covers GroundRef, particles, animation and PhysicsRef; language covers `java.lang`. Resources covers GameRef, ResourceRef, RenderRef and SfxRef; rendering covers GfxEngine, Text, Camera and Viewport. Files & input includes File, FindFile, Input, Controller and MouseCursor; parts includes Part, Chassis, WheelRef, DynoData and SfxTable. Sound & scripts covers Sound, Vehicle, Painter, Navigator and GameLogic. Leftovers groups the three networking compatibility calls and the unused Welder API; it does not establish their historical origin.
 
@@ -125,26 +125,26 @@ git clone https://github.com/bkaradzic/bgfx.cmake.git third_party/bgfx.cmake
 git -C third_party/bgfx.cmake checkout 5ea74ee66662daef4089695846d6322da0dde94e
 ```
 
-Run the following commands from this folder, which contains `CMakeLists.txt`. In the local development workspace, it is named `host/`.
+Run the following commands from this folder, which contains `CMakeLists.txt`.
 
 ### Configure and build
 
 ```powershell
-cmake -S . -B build-bgfx-x64 -G "Visual Studio 17 2022" -A x64 -DSLRR_STAGE_BUILD=OFF
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 
-cmake --build build-bgfx-x64 --config Release --target slrr_host --parallel
+cmake --build build --config Release --target slrr_host --parallel
 ```
 
-The executable is generated at `build-bgfx-x64/Release/slrr_host.exe`. The first build includes bgfx and its shader tools, so it may take a while.
+The executable is generated at `build/Release/slrr_host.exe`. The first build includes bgfx and its shader tools, so it may take a while.
 
 ## Run
 
 ```powershell
-# Intros, then menus.
-.\build-bgfx-x64\Release\slrr_host.exe --game --root "D:\Games\SLRR"
+# Intros, then menus. This workspace keeps the install in data/game.
+.\build\Release\slrr_host.exe --game --root data\game --window
 
 # Baiern assembled from its scripts and configurations.
-.\build-bgfx-x64\Release\slrr_host.exe --game --spawn-car cars/racers/Baiern.rpk:0x6 --root "D:\Games\SLRR"
+.\build\Release\slrr_host.exe --game --spawn-car cars/racers/Baiern.rpk:0x6 --root data\game --window
 ```
 
 Press **Ctrl+F12** in any game section to toggle the ImGui debug panel.
@@ -159,15 +159,7 @@ Use **Game Options** for transmission, distance units, GPS mode, damage difficul
 
 In the garage, **right-click and drag**, the **arrow keys**, and the **scroll wheel** control the camera. From the garage, enter the **Test Track** to drive with your keyboard or XInput profile. **Escape** skips the intros.
 
-You can also set the game path with `$env:SLRR_GAME_ROOT`. The `--root` option takes priority; without either setting, the default folder is `../game`. Run `slrr_host.exe --help` for all options.
-
-## Build and promote with a backup
-
-```powershell
-.\validate-and-promote.ps1
-```
-
-This compiles the x64 candidate, archives the sources and previous executable, then copies the new executable to `build-bgfx-x64/Release/`. Close the running Release executable before promotion.
+You can also set the game path with `$env:SLRR_GAME_ROOT`. The `--root` option takes priority. Without either, the host looks for `data/game`, then `game` and `../game`. Run `slrr_host.exe --help` for all options.
 
 ## Sources and credits
 

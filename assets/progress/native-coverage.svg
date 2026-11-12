@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="465" viewBox="0 0 1120 465" role="img" aria-labelledby="title desc">
 <title id="title">Open SLRR native binding coverage</title>
-<desc id="desc">328 with a body, 4 no-op, 44 missing, out of 376. Bars show counts, not percentages of game completion.</desc>
+<desc id="desc">329 with a body, 4 no-op, 43 missing, out of 376. Bars show counts, not percentages of game completion.</desc>
 <rect width="1120" height="465" rx="12" fill="#0d1117"/>
 <g font-family="Segoe UI,Arial,sans-serif">
 <text x="28" y="34" font-size="21" fill="#f0f6fc" text-anchor="start">Native binding coverage</text>
-<text x="28" y="58" font-size="13" fill="#c9d1d9" text-anchor="start">328 with a body  /  4 no-op  /  44 missing  ·  376 stock natives</text>
+<text x="28" y="58" font-size="13" fill="#c9d1d9" text-anchor="start">329 with a body  /  4 no-op  /  43 missing  ·  376 stock natives</text>
 <line x1="170.0" x2="170.0" y1="80" y2="361" stroke="#21262d"/>
 <text x="170.0" y="381" font-size="12" fill="#8b949e" text-anchor="middle">0</text>
 <line x1="387.5" x2="387.5" y1="80" y2="361" stroke="#21262d"/>
@@ -37,9 +37,8 @@
 <rect x="657.1999999999999" y="190" width="8.7" height="25" fill="#d39338"><title>Resources: 1 no-op</title></rect>
 <text x="675.9" y="207" font-size="12" fill="#8b949e" text-anchor="start">57</text>
 <text x="156" y="242" font-size="13" fill="#c9d1d9" text-anchor="end">Rendering</text>
-<rect x="170" y="225" width="304.5" height="25" fill="#49a58d"><title>Rendering: 35 with a body</title></rect>
-<text x="322.25" y="242" font-size="12" fill="#ffffff" text-anchor="middle">35</text>
-<rect x="474.5" y="225" width="8.7" height="25" fill="#ab474b"><title>Rendering: 1 missing</title></rect>
+<rect x="170" y="225" width="313.2" height="25" fill="#49a58d"><title>Rendering: 36 with a body</title></rect>
+<text x="326.6" y="242" font-size="12" fill="#ffffff" text-anchor="middle">36</text>
 <text x="493.2" y="242" font-size="12" fill="#8b949e" text-anchor="start">36</text>
 <text x="156" y="277" font-size="13" fill="#c9d1d9" text-anchor="end">Files &amp; input</text>
 <rect x="170" y="260" width="321.9" height="25" fill="#49a58d"><title>Files &amp; input: 37 with a body</title></rect>

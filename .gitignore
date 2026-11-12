@@ -2,6 +2,7 @@
 # Build directories
 # ==========================================
 /out/
+/data/
 /build/
 /build-bgfx/
 /build-bgfx-x64/

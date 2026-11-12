@@ -1,7 +1,8 @@
 # Native audit and roadmap
 
-Baseline snapshot from 9 November 2026, incrementally updated 11 November for
-the resource/vehicle bindings, the Language work described in
+Baseline snapshot from 9 November 2026, incrementally updated 12 November.
+`Camera.setFog` is registered. Earlier increments covered the resource and
+vehicle bindings, the Language work described in
 [SCRIPT_COMPILER.md](SCRIPT_COMPILER.md), and the Leftovers classification.
 The Release x64 registry was compared with the
 376 entries in the stock table at `docs/stubs.txt` in the research workspace.
@@ -11,9 +12,9 @@ implementations and following selected calls to their consumers.
 
 | Status | Stock signatures |
 | --- | ---: |
-| Registered with a body | 328 |
+| Registered with a body | 329 |
 | Registered with the explicit `native_noop` handler | 4 |
-| Absent from the registry | 44 |
+| Absent from the registry | 43 |
 | **Total** | **376** |
 
 The first category includes constant responses, inline empty bodies and
@@ -46,6 +47,8 @@ that category. It is not a compatibility score or a complete runtime trace.
 | `System.setMeasure`, `getConfigOptions` | The measure setting controls digital vehicle instruments. The options refresh reads gameplay settings and schedules a save when they change. |
 | `RenderRef.setFlare`, `Navigator.updateNavigator`, `GroundRef.getNearestCross` | Directional flares use the scene's texture and an approximate sprite layout. The GPS camera and markers follow scene objects. The crossing query returns null until the road index is available. |
 | `GfxEngine.numDisplayModes`, `currDisplayMode`, `displayModeName`, `changeVideoMode` | One fixed mode is exposed, 800×600×32 at index zero. The change call is empty. Startup window settings are a separate path. |
+| `Camera.setFog` | Stores the color and the near and far distances on the driving camera. The fade uses those distances. The color argument is replaced by the day and twilight sky color before the shader reads it. |
+| `GroundRef.setFog` | Stores a global color and near and far distances. Nothing in the renderer reads them. |
 | `RenderRef.plotRoute` | Always returns zero. Route line construction is missing. |
 | `RenderRef.lineCreate`, `lineAdd` | Build renderable ribbons from positions, normals and widths. Color is applied per segment. |
 | `Chassis.setCooling`, `setSteerWheelRadius`, `setSteerWheel`, `setBuck`, `setNitroSFX` | Store configuration. No temperature simulation, bucking effect or nitro audio consumes these values yet. The installed wheel on slot type 11 turns about the cfg `steering` locator. |
@@ -86,10 +89,9 @@ being replaced by success-returning mocks.
 | `GroundRef` | 21 | `setWater` (2 overloads), `addWaterLimit`, `addTrafficCar`, `remTrafficCar`, `notifyTrafficCar`, `addTrafficN`, `addTrafficP`, `delTraffic`, `setTrafficCarBehaviour`, `haltTrafficCross`, `haltTrafficPath`, `getStartDirection`, `findRoute`, `getRouteLength` (2 overloads), `getRoutePos`, `getRouteDist`, `alignToRoad`, `removePedestrianType`, `pedestrianDistance` |
 | `PhysicsRef` | 7 | `create`, `createSphere`, `setStatic`, `getVel` (2 overloads), `getAngVel`, `getOri` |
 | `ParticleSystem` | 9 | `init`, `stop`, `setFreq`, `setDirectSource`, `setSource`, `setCounter`, `getCounter`, `delAction`, `modePermanent` |
-| `Camera` | 1 | `setFog` |
 | `Painter` | 3 | `doPaint`, `paintPart`, `xPaint` |
 
-There are 41 missing active signatures and 3 missing leftovers, for 44 total.
+There are 40 missing active signatures and 3 missing leftovers, for 43 total.
 
 ## Roadmap
 

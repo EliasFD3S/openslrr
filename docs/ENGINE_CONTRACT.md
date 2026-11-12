@@ -79,9 +79,9 @@ around in the scripts.
 
 For a shipped Java change: keep the old lines as comments when asked, explain
 the reason, compile into the appropriate game tree, and distribute the
-required files in `../patch/`. A file that exists only in `../game/` is not
-a reproducible patch. Check the Git status of those folders separately: the
-main working repository is `host/`.
+required files in `patch/`. A file that exists only in `data/game/` is not
+a reproducible patch. `data/` is local and stays out of the commit. The
+engine repository is this folder.
 
 ### Do not confuse the evidence
 
@@ -92,7 +92,7 @@ behavioral fidelity. Document the approximations.
 
 ## 3. Repository map
 
-All of the following paths are relative to `host/`.
+All of the following paths are relative to the repository root.
 
 | Directory / file | Role |
 | --- | --- |
@@ -114,12 +114,11 @@ All of the following paths are relative to `host/`.
 | `src/ui/` | OSD registries and behavior |
 | `src/platform/` | Input, options, cursor, effects, music, and FMV |
 | `include/slrr/` | Structures and interfaces between these systems |
-| `tests/` | Focused arraycopy, PTX, and dyno/GC regressions |
-| `out/` | Build products and local diagnostics; not a stable API |
+| `patch/` | Java changes shipped with the host |
+| `build/` | Local build products; not a stable API |
 
-The neighboring folders `../game/`, `../sources/`, `../sources2/`, and
-`../repos/` may supply data or references depending on the machine. Do not
-assume they exist in a fresh clone.
+`data/game`, `data/sources`, and `data/docs` are the local install and
+reference sources. They are gitignored. Do not assume them in a fresh clone.
 
 ## 4. Startup and game loop
 
@@ -246,7 +245,7 @@ Strong versus weak retention is part of the contract:
 The dyno illustrates weak retention: `g_sessions` no longer keeps every
 DynoData alive. The calculation that is temporarily active is protected.
 `dyno_forget` removes a session and `dyno_clear_sessions` cleans up a reset.
-See `dyno_model.cpp` and the dedicated tests.
+See `dyno_model.cpp`.
 
 `System.gc()` requests a deferred collection. Safe points prevent collection
 in the middle of an unsafe mutation. `disableGC`/`enableGC` are idempotent
@@ -541,7 +540,7 @@ to reload the world every frame.
 
 ### Before changing anything
 
-1. Read `git status`, the branch, and the existing diff in `host/`.
+1. Read `git status`, the branch, and the existing diff.
 2. Identify the calling script, the signature, and the owner of the state.
 3. Reproduce a reduced scenario with a known car or section.
 4. Trace the useful inputs, transitions, and destructions, without per-frame spam.
@@ -554,43 +553,33 @@ work.
 
 ### Build
 
-From `host/`, with Visual Studio 2022, CMake, and the dependencies configured:
+From the repository root, with Visual Studio 2022, CMake, and the dependencies configured:
 
 ```powershell
-cmake -S . -B out/build-bgfx-x64 -A x64
-cmake --build out/build-bgfx-x64 --config Release --parallel 8
-.\out\build-bgfx-x64\Release\slrr_host.exe --game --root ..\game --window
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release --target slrr_host --parallel
+.\build\Release\slrr_host.exe --game --root data\game --window
 ```
 
 An existing CMake cache must keep its generator. Check the README for
 prerequisites and dependencies. The compiled shader must match the source
 that was changed. Do not validate an old binary just because it starts.
 
-If the game is using the executable, build a separate candidate or wait for
-the game to close before replacing it. Do not stop the user's session without
-an instruction. Avoid globally renaming dependency targets during a candidate
-build.
+If the game is using the executable, wait for it to close before replacing
+it. Do not stop the user's session without an instruction.
 
-### Focused checks
+### Checks
 
-```powershell
-cmake -S . -B out/build-bgfx-x64 -DBUILD_TESTING=ON
-cmake --build out/build-bgfx-x64 --config Release --target slrr_tests --parallel 8
-ctest --test-dir out/build-bgfx-x64 -C Release --output-on-failure
-```
+There is no separate test target. The `--probe-dyno` and `--probe-gc`
+diagnostics cover some scenarios. See `main.cpp` for the accepted arguments.
 
-Tests are optional at build time. The current suites do not validate the
-whole game: they target arraycopy ranges, malformed PTX, and dyno
-sessions/curves with the GC. The `--probe-dyno` and `--probe-gc` diagnostics
-cover some scenarios. See `main.cpp` for the accepted arguments.
-
-For a UI fix, test interaction and focus. For a transition, repeat the round
-trip and watch instance, draw, and memory counts. For rendering, compare the
-same place, time, camera, and settings. For physics, compare simulated time,
-input, and the same car at several frame rates.
+For a UI fix, exercise interaction and focus. For a transition, repeat the
+round trip and watch instance, draw, and memory counts. For rendering,
+compare the same place, time, camera, and settings. For physics, compare
+simulated time, input, and the same car at several frame rates.
 
 A diagnostic can modify options or a save. Use a copy, or preserve and
-restore the files involved. A headless test does not replace a visual
+restore the files involved. A headless probe does not replace a visual
 validation and must not be presented as one.
 
 ### Shipping
@@ -628,8 +617,8 @@ code or a reproducible scenario.
 
 Driving, damage, the city, and the full career are still in development.
 Some APIs are absent or partial. Native counts and older comments can date
-from a state before the Enhanced renderer. The active code and recent tests
-are what count for the implementation.
+from a state before the Enhanced renderer. The active code is what counts
+for the implementation.
 
 Further local documentation:
 
