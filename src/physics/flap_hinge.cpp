@@ -142,6 +142,18 @@ void flap_size_from_points(FlapGeometry &g, const double (*points)[3],
   g.inertia = dot(com, com) + span * span / 12;
 }
 
+void flap_transform(FlapGeometry &g, const float m[16]) {
+  const auto apply = [&](double (&v)[3], double w) {
+    const double x = v[0], y = v[1], z = v[2];
+    for (int r = 0; r < 3; ++r)
+      v[r] = m[r] * x + m[4 + r] * y + m[8 + r] * z + m[12 + r] * w;
+  };
+  apply(g.pivot, 1);
+  apply(g.axis, 0);
+  apply(g.arm, 0);
+  apply(g.com, 0);
+}
+
 bool flap_toggle(FlapState &state) {
   if (state.open) {
     // Close: drive it shut; it latches when it gets there.
@@ -278,6 +290,13 @@ bool flap_step(FlapState &state, const FlapGeometry &g, const FlapLoads &loads,
     if (state.rate < 0) state.rate *= -(g.lower < 0 ? T::open_restitution
                                                      : T::closed_restitution);
     if (std::fabs(state.rate) < .05) state.rate = 0;
+  }
+  // A free panel that settled shut too gently to slam the latch still
+  // catches once it rests in the closed pose.
+  if (!state.hold && std::fabs(state.angle) < 1e-3 && std::fabs(state.rate) < .05 &&
+      state.since_release >= T::latch_delay) {
+    latch(state);
+    return before != 0;
   }
   return state.angle != before;
 }
