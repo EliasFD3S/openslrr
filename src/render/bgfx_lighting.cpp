@@ -453,8 +453,9 @@ void LibBgfxBackend::draw_prop_batches(uint16_t view_id,
         // The same alpha rules as a single placement (draw_instance and the
         // static shadow pass). Batched meshes have no blended sections.
         const bool v4 = part.geo.info.version == 4;
-        const bool cut = v4 ? (flags & 0x20000000u) != 0
-                            : part.geo.info.version != 3 || (flags & 1u) != 0;
+        const bool material_mix = group && v4 && group->material_type == 0x03u;
+        const bool cut = !material_mix && (v4 ? (flags & 0x20000000u) != 0
+                                              : part.geo.info.version != 3 || (flags & 1u) != 0);
         if (shadow) {
           const float threshold = !cut || !group ? -1.f
               : v4 ? group->alpha_reference / 255.f : .5f;
@@ -477,7 +478,8 @@ void LibBgfxBackend::draw_prop_batches(uint16_t view_id,
               part.geo.info.path.find("fa_tibi") != std::string::npos;
           const bool vertex_mix = group && group->mix_vertex_color;
           const float settings[4] = {alpha_test, vertex_mix ? 1.f : 0.f,
-                                     foliage_coverage ? 2.f : 0.f, vertex_mix ? -1.f : 0.f};
+                                     foliage_coverage ? 2.f : 0.f,
+                                     material_mix ? -2.f : vertex_mix ? -1.f : 0.f};
           bgfx::TextureHandle mix = BGFX_INVALID_HANDLE;
           if (group && part.geo.position_scale == 1.f && group->mix_index != 0xffff &&
               group->mix_index < part.tex.size() && bgfx::isValid(part.tex[group->mix_index]) &&
@@ -492,7 +494,12 @@ void LibBgfxBackend::draw_prop_batches(uint16_t view_id,
           bgfx::setUniform(u_mesh_base_uv_, base_xf);
           bgfx::setUniform(u_mesh_mix_uv_, mix_xf);
           bgfx::setUniform(u_alpha_test_, settings);
-          bgfx::setUniform(u_color_, white);
+          // The placement colour comes per instance; ColorMixTex multiplies
+          // it by the section diffuse in fs_mesh, like draw_instance's tint.
+          const float mix_tint[4] = {group && material_mix ? group->diffuse[0] : 1.f,
+                                     group && material_mix ? group->diffuse[1] : 1.f,
+                                     group && material_mix ? group->diffuse[2] : 1.f, 1.f};
+          bgfx::setUniform(u_color_, material_mix ? mix_tint : white);
           bgfx::setTransform(identity);
           bgfx::setVertexBuffer(0, part.vbh);
           bgfx::setIndexBuffer(part.ibh, first, index_count);

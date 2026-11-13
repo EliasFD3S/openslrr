@@ -1710,11 +1710,10 @@ bool prop_mesh_batchable(const ScxGeometry& mesh) {
     const auto flags = group.material_flags;
     const bool glass = v4 && (flags & 0x40000000u) && (group.material_type & 0x04u);
     const bool blend = glass || (v3 && (flags & 0x101u) == 0x101u);
-    // ColorMixTex blends the placement colour under the texture, which a
-    // per-instance tint cannot reproduce. Alpha-tested foliage and
-    // vertex-coloured walls draw the same way instanced.
-    const bool material_mix = v4 && group.material_type == 0x03u;
-    if (blend || material_mix) return false;
+    // Blended sections are drawn after the opaque world, one by one.
+    // Alpha-tested foliage, vertex-coloured walls and ColorMixTex facades
+    // (fs_mesh mixes the instance colour under the texture) draw instanced.
+    if (blend) return false;
   }
   return true;
 }

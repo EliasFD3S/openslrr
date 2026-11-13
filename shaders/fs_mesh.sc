@@ -184,6 +184,8 @@ void main()
 		outA = smoothstep(cutoff, cutoff + width, tex.a);
 	}
 	vec3 tint = u_color.rgb;
+	// The instanced prop path carries the placement colour here (1 elsewhere).
+	vec3 placement = v_tint.rgb;
 	if (u_alphaTest.w < -2.5) {
 		tex.rgb *= v_color0.rgb;
 	} else if (u_alphaTest.w < -1.5) {
@@ -193,8 +195,9 @@ void main()
 		// and still mixes over the wall.
 		float chroma = max(tex.r, max(tex.g, tex.b)) - min(tex.r, min(tex.g, tex.b));
 		vec3 detail = mix(vec3(1.0, 1.0, 1.0), tex.rgb, step(0.08, chroma));
-		tex.rgb = mix(tint, detail, tex.a);
+		tex.rgb = mix(tint * placement, detail, tex.a);
 		tint = vec3(1.0, 1.0, 1.0);
+		placement = vec3(1.0, 1.0, 1.0);
 	} else if (u_alphaTest.w < -0.5) {
 		// City window textures provide the mix weight for the vertex-coloured wall.
 		tex.rgb = mix(v_color0.rgb, tex.rgb, tex.a);
@@ -264,7 +267,7 @@ void main()
 		illumination += vec3(1.0, 0.94, 0.80) * (fade * fade * facing * 3.0 / (1.0 + d2))
 		              * mix(0.35, 1.0, visibility);
 	}
-	vec3 shaded = tex.rgb * bake * tint * v_tint.rgb * illumination;
+	vec3 shaded = tex.rgb * bake * tint * placement * illumination;
 	// Sky and OSD set u_alphaTest.y. Their fragments stay sharp.
 	if (u_fogColor.a > 0.5 && u_alphaTest.y < 0.5) {
 		float span = max(u_fogRange.y - u_fogRange.x, 1.0);
