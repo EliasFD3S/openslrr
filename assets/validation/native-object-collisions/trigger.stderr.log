@@ -1,0 +1,53 @@
+[validate-triggers] count=3 cars=1
+[validate-triggers]   id=1879048463 alias=garage2_trigger shape=1 size=6.0 pos=(355.38 1.60 418.24)
+[validate-triggers]   id=1879048462 alias=garage1_trigger shape=1 size=6.0 pos=(379.92 3.00 423.02)
+[validate-triggers]   id=1879048464 alias=garage3_trigger shape=1 size=6.0 pos=(-531.14 5.05 -149.36)
+[validate-state] pos=(379.987 3.417 423.030) speed=5.297 throttle=0.500 brake=0.000 gear=0 loose=0 free=0
+[validate-state] pos=(379.987 2.665 423.030) speed=14.715 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(380.031 1.951 422.998) speed=1.414 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(379.976 1.959 422.967) speed=2.185 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(379.733 1.959 422.926) speed=4.816 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(379.276 1.960 422.845) speed=7.620 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(378.663 1.961 422.736) speed=10.246 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(377.810 1.962 422.585) speed=13.042 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(376.754 1.964 422.398) speed=15.835 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(375.587 1.966 422.192) speed=18.128 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(374.178 1.969 421.943) speed=20.436 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-trigger] off trigger=1879048462 alias=garage1_trigger car=1879048226 delivered=1 activeTrigger=0
+[validate-state] pos=(372.704 1.971 421.683) speed=22.624 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(371.085 2.030 421.425) speed=22.846 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(369.321 2.113 421.123) speed=24.616 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(367.714 2.094 420.849) speed=26.305 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(365.580 2.108 420.447) speed=28.724 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(363.546 2.120 420.071) speed=30.807 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-trigger] on trigger=1879048463 alias=garage2_trigger car=1879048226 delivered=1 activeTrigger=2
+[validate-state] pos=(361.074 2.138 419.616) speed=33.026 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(358.590 2.135 419.154) speed=35.140 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(356.120 2.135 418.695) speed=37.139 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(353.156 2.135 418.144) speed=39.421 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(350.658 2.186 417.290) speed=33.225 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-trigger] off trigger=1879048463 alias=garage2_trigger car=1879048226 delivered=1 activeTrigger=0
+[validate-state] pos=(349.332 2.268 416.504) speed=17.997 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(348.596 2.308 416.278) speed=12.288 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(347.539 2.167 415.962) speed=18.762 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(346.289 2.135 415.462) speed=20.424 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(345.073 2.137 414.862) speed=19.504 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(343.726 2.134 414.313) speed=21.623 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(342.434 2.135 413.716) speed=22.433 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(341.611 2.135 413.285) speed=23.042 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(340.742 2.136 412.815) speed=23.149 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(339.324 2.138 412.055) speed=22.871 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(337.846 2.138 411.295) speed=22.064 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(336.714 2.139 410.650) speed=21.009 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(335.528 2.139 409.867) speed=19.585 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(334.331 2.141 409.036) speed=17.033 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(333.397 2.141 408.351) speed=13.877 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(332.728 2.135 407.763) speed=11.298 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(332.179 2.136 407.178) speed=7.953 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(331.866 2.136 406.795) speed=4.565 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(331.707 2.137 406.596) speed=2.424 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(331.604 2.137 406.481) speed=1.393 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(331.549 2.137 406.430) speed=0.838 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(331.526 2.137 406.406) speed=0.755 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(331.504 2.136 406.382) speed=0.722 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(331.485 2.136 406.361) speed=0.697 throttle=0.500 brake=0.000 gear=1 loose=0 free=0

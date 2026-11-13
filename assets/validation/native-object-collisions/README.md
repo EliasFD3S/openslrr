@@ -5,11 +5,14 @@ Validation target: PR #22. See the branch head for the exact final revision.
 ## Build and automated checks
 
 - Visual Studio 2022 / CMake Release x64 host linked successfully.
-- All 24 standalone tests passed with the Linux host compiler: 3 CFG parser,
-  4 PhysicsRef/activation, 15 collision-kernel (including box-triangle SAT), and
-  2 mass-response regressions.
-- The 15 collision-kernel tests also passed ASan/UBSan/leak detection.
-- `python3 scripts/check_knowledge_refs.py`: 212 references checked, 0 errors.
+- All 28 standalone tests passed with the Linux host compiler: 3 CFG parser
+  (malformed shapes keep the body and its mass), 4 PhysicsRef/activation
+  (including `setStatic(0)`), 15 collision-kernel (including box-triangle
+  SAT), 2 mass-response and 4 trigger-volume (parsing, containment, enter and
+  leave edges) regressions.
+- The collision-kernel and trigger-volume tests also passed ASan/UBSan/leak
+  detection.
+- `python3 scripts/check_knowledge_refs.py`: 216 references checked, 0 errors.
 
 ## Live Valo City runs
 
@@ -31,7 +34,7 @@ The PR was rebased onto main 60b143e and rebuilt with Visual Studio 2022 x64 Rel
 
 - Inventory of all loaded Valo City placements: 760 house/shop/hotel/garage placements, every one with at least one collision body (no placement without geometry, none promoted to a dynamic body). Per-type render-versus-collision bounds are in `building-coverage.txt` (140 native types).
 - The only native types without any collision geometry are street lamps (`lamp_*`, `trafficlamp`), low shrubs (`fa03a/b/c`, 1.4 m), balcony and letter fascia (`erkely*`, 6-19 m above the street) and ambience emitters. Positive-mass props (`kuka_*`, `tabla_*`, `lada_*`, `pad`, `tuzcsap`) are the dynamic path.
-- Several row-shop types (`09x6_shop`, `12x6_uveges`, `08p5x4_shop`, `18x6_haromboltiv`, `22x4_pub`, `14x6_ketszintajtos`, ...) are authored as a single thin facade body (0.1-0.9 m deep) over a 4-8 m deep render. Their side/back/roof volumes have no authored body in the CFG, so only the street face is solid. This is the stock data, not a loading failure.
+- Row-shop types (`09x6_shop`, `12x6_uveges`, `08p5x4_shop`, `18x6_haromboltiv`, `22x4_pub`, `14x6_ketszintajtos`, ...) have a single thin facade body (0.1-2.6 m deep). Their models are facades too: the extra render depth is the pavement and fittings in front of the facade (up to 3.6 m) and shallow door and shutter recesses behind it, which the facade body closes. A drive at the back of a `14x6_ketszintajtos` placement started off the map and fell, so there is no drivable ground behind it. An earlier version of this report read the render depth as building volume behind the facade; that was wrong.
 - In-game, a car at full throttle (19.4 m/s on approach) stopped at a thin box facade (`09x6_shop`, **8.06 m/s** contact, `storefront-box.stderr.log`) and at a thin SCX-mesh facade (`18x6_haromboltiv`, **8.32 m/s** contact, `storefront-mesh.stderr.log`). Suburban mesh houses (`krthaz11`, **5.20 m/s**) and the hotel boxes also block the car.
 
 ## Merge of PR #29, performance and wall contact (594e4b2)
@@ -45,11 +48,23 @@ PR #29 (city frame-rate fixes, `f73698d`) and main `1462d3c` were merged into th
 - **Chassis box against walls:** the four corner sphere probes leave a 1.1 m gap across the bumper. The chassis box is now also tested against the wall triangles of every static mesh. On the same build, the validation-only `SLRR_VALIDATION_NO_WALLS` toggle disables that test:
   - House corner at 45° (`krthaz11`): without the test the corner ended 1.45 m ahead of the car centre, about 0.6 m inside the bonnet; with it the car stopped after a 6.89 m/s contact with the corner at the front of the chassis box, 2.06 m ahead (`corner-nowalls.stderr.log`, `corner-walls.stderr.log`).
   - Picket fence (map collision): without the test the car slid 8 m along with the fence through its body (`fence-before.png`); with it the car stopped at the fence (`fence-after.png`, `fence-*.stderr.log`).
-  - These four runs used `594e4b2` plus `validation-only.patch`, whose only behavioural hook is the wall toggle.
+  - These four runs were made on `594e4b2` with the validation hooks and repeated on `62cba17` with the same results; the logs and captures in this folder are from `62cba17`.
+
+## Remaining limits and code review (62cba17)
+
+Main `9e5c179` was merged first (`265abad`). The runs below used `62cba17` with `validation-only.patch`, except the benchmark, which used the clean build.
+
+- **Trigger events:** the stock garage triggers (`Valocity.java`, 6 m spheres) were created and reported as volumes. Driving out of the spawn trigger raised `EVENT_TRIGGER_OFF` and driving into garage 2 raised `EVENT_TRIGGER_ON`; each was delivered to the stock handler, which set `activeTrigger` to 0 and then 2 (`trigger.stderr.log`). On the working tree before the review fixes, the car stopped inside the trigger and the stock one-second check opened "This is a higher club's garage, you can't enter!" (`trigger-dialog.png`). On `62cba17` the car slides along the glancing wall there instead (see below) and leaves the trigger, which raises `EVENT_TRIGGER_OFF`.
+- **Free PhysicsRef body:** a validation hook created a 1 m `PhysicsRef` box 3 m above the road and called the `setStatic(0)` path. It fell, came to rest (500 kg from the primitive density), was hit by the car at 7.8 m/s and pushed 3.8 m, then came to rest again (`free-body.stderr.log`).
+- **Promoted props return to scenery:** on the benchmark drive, two bins were promoted as the car passed. With the validation-only settle distance set to 15 m (the product uses 40 m beyond car reach, which this drive does not reach), both settled back to static props once the car was far away (`settle.stderr.log`, `loose` back to 0). Bins that used to jitter at 0.1-0.3 m/s forever now fall asleep.
+- **Facade-only shops:** the earlier limitation was wrong. The 12 stock row-shop types with one facade body have facade models: their extra render depth is the pavement in front (`facade-front.png`, where the car stops at the facade). Behind one there was no ground and the car fell off the map (`facade-back.png`, `facade-back.stderr.log`). A tried render-wall fallback changed nothing on the street side and was removed.
+- **Glancing walls:** before the review fix, a car that began a tick already touching a wall, as one pressed along it does, was rewound almost to its start pose every tick. At garage 2 it stopped dead against a 16° glancing wall contact. It now slides along that wall and drives on at about 19 km/h (`glancing-wall.stderr.log`, where later ticks start 2-3 cm inside the wall; the result is the same with the analytic shapes tested raised or at full height).
+- **Corner and fence regressions on `62cba17`:** with the wall test off, the `krthaz11` corner ended inside the bonnet and the car slid 8 m along the fence through its body. With it on, the car stopped at the corner (6.89 m/s contact) and at the fence (`fence-before.png`, `fence-after.png`, `corner-*.stderr.log`, `fence-*.stderr.log`).
+- **Benchmark:** three alternating runs each of the clean `f73698d` and `62cba17` builds (`perf-f73698d-r*.csv`, `perf-62cba17-r*.csv`). In this session the GPU took about 10.5 ms per frame for both builds, against 3 ms in the earlier session, so both ran at 91-94 FPS. Over the first 8 s, `f73698d` measured 94 FPS with 10.55 ms GPU, 0.85-0.89 ms physics and 0.89-1.08 ms collection; `62cba17` measured 91-92 FPS with 10.88-10.95 ms GPU, 0.79-1.17 ms physics and 0.84-1.21 ms collection. The 0.35 ms of extra GPU time goes with 72 more draws per frame from main's changes since PR #29's base. At 10 s the car is stopped at a tree with parts knocked off (`bench-62cba17-t10.png`).
 
 ## Reproducibility and cleanup
 
-`validation-only.patch` documents the isolated validation-only startup, throttle, frame-cap, tracing and wall-toggle hooks. They are not part of the product change. The patch entered the stock `Valocity` section directly because synthetic menu input was unreliable; physics and native-object collision code came from the PR revision.
+`validation-only.patch` (applies to `62cba17`) documents the isolated validation-only startup, throttle, frame-cap and tracing hooks, the wall and analytic-shape toggles, the free-box spawn and the settle-distance override. They are not part of the product change. The patch entered the stock `Valocity` section directly because synthetic menu input was unreliable; physics and native-object collision code came from the PR revision.
 
 Each host was closed after its run. For the earlier runs, the options, controls, career and temporary save directories were restored from the pre-run backup and compared byte-for-byte. The later runs left `save/game/options` and controls identical to that backup; other save folders now also hold careers created outside these runs, so they were not reset.
 

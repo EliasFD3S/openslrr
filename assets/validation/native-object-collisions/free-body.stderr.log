@@ -1,0 +1,59 @@
+[validate-free] spawned at (794.51 5.80 1265.65)
+[validate-state] pos=(794.503 2.582 1249.684) speed=0.231 throttle=0.600 brake=0.000 gear=0 loose=4 free=1
+[validate-state] pos=(794.490 2.582 1249.691) speed=0.112 throttle=0.600 brake=0.000 gear=1 loose=4 free=1
+[validate-free] mass=500.0 pos=(794.510 4.530 1265.652) speed=4.905 car=0 quiet=0
+[validate-state] pos=(794.485 2.581 1249.705) speed=0.968 throttle=0.600 brake=0.000 gear=1 loose=4 free=1
+[validate-state] pos=(794.481 2.578 1249.919) speed=4.665 throttle=0.600 brake=0.000 gear=1 loose=4 free=1
+[validate-free] mass=500.0 pos=(794.632 2.339 1265.917) speed=1.773 car=0 quiet=0
+[validate-state] pos=(794.477 2.571 1250.361) speed=7.933 throttle=0.600 brake=0.000 gear=1 loose=4 free=1
+[validate-state] pos=(794.473 2.564 1251.083) speed=11.449 throttle=0.600 brake=0.000 gear=1 loose=4 free=1
+[validate-free] mass=500.0 pos=(794.800 2.278 1266.236) speed=0.145 car=0 quiet=7
+[validate-state] pos=(794.469 2.548 1252.066) speed=15.057 throttle=0.600 brake=0.000 gear=1 loose=4 free=1
+[validate-state] pos=(794.470 2.482 1253.230) speed=18.259 throttle=0.600 brake=0.000 gear=1 loose=4 free=1
+[validate-free] mass=500.0 pos=(794.820 2.279 1266.285) speed=0.151 car=0 quiet=18
+[validate-state] pos=(794.456 2.472 1254.694) speed=20.927 throttle=0.600 brake=0.000 gear=1 loose=4 free=1
+[validate-state] pos=(794.461 2.394 1256.201) speed=23.516 throttle=0.600 brake=0.000 gear=1 loose=4 free=1
+[validate-free] mass=500.0 pos=(794.837 2.280 1266.338) speed=0.122 car=0 quiet=19
+[validate-state] pos=(794.451 2.378 1258.086) speed=27.049 throttle=0.600 brake=0.000 gear=1 loose=4 free=1
+[validate-free] mass=500.0 pos=(794.854 2.278 1266.383) speed=0.131 car=0 quiet=20
+[validate-state] pos=(794.450 2.359 1260.204) speed=30.013 throttle=0.600 brake=0.000 gear=1 loose=4 free=1
+[validate-state] pos=(794.450 2.340 1262.234) speed=32.519 throttle=0.600 brake=0.000 gear=1 loose=4 free=1
+[validate-state] pos=(794.451 2.316 1264.750) speed=35.337 throttle=0.600 brake=0.000 gear=1 loose=4 free=1
+[validate-state] pos=(794.454 2.309 1267.218) speed=32.154 throttle=0.600 brake=0.000 gear=1 loose=4 free=1
+[validate-free] mass=500.0 pos=(794.840 2.494 1266.471) speed=7.835 car=1 quiet=0
+[validate-state] pos=(794.504 2.321 1269.529) speed=32.332 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(794.595 2.367 1272.009) speed=34.698 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-free] mass=500.0 pos=(794.698 2.478 1268.641) speed=3.533 car=0 quiet=0
+[validate-state] pos=(794.300 2.430 1273.410) speed=7.582 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(794.043 2.371 1273.584) speed=2.513 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-free] mass=500.0 pos=(794.173 2.472 1269.809) speed=2.228 car=0 quiet=0
+[validate-state] pos=(793.993 2.349 1273.621) speed=1.059 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-free] mass=500.0 pos=(793.688 2.337 1270.053) speed=0.280 car=0 quiet=10
+[validate-state] pos=(793.960 2.348 1273.648) speed=0.601 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.941 2.347 1273.663) speed=0.374 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.922 2.345 1273.681) speed=0.500 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.906 2.345 1273.696) speed=0.372 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.890 2.344 1273.712) speed=0.500 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.875 2.344 1273.728) speed=0.493 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.860 2.343 1273.745) speed=0.480 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.849 2.343 1273.760) speed=0.489 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.835 2.342 1273.777) speed=0.330 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.824 2.342 1273.794) speed=0.480 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.814 2.342 1273.809) speed=0.307 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.804 2.341 1273.826) speed=0.304 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.797 2.341 1273.843) speed=0.475 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.789 2.341 1273.858) speed=0.292 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.782 2.341 1273.875) speed=0.342 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.777 2.341 1273.874) speed=0.038 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.775 2.341 1273.875) speed=0.264 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.773 2.340 1273.875) speed=0.270 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.770 2.340 1273.874) speed=0.039 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.769 2.340 1273.875) speed=0.270 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.766 2.340 1273.875) speed=0.269 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.764 2.340 1273.874) speed=0.040 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.762 2.340 1273.874) speed=0.038 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.760 2.340 1273.874) speed=0.036 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.758 2.340 1273.874) speed=0.036 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.756 2.340 1273.875) speed=0.269 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.755 2.340 1273.875) speed=0.269 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
+[validate-state] pos=(793.753 2.340 1273.875) speed=0.267 throttle=0.600 brake=0.000 gear=1 loose=5 free=1
