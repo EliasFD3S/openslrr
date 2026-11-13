@@ -427,7 +427,11 @@ uses the bounds centre (not necessarily the centre of mass), samples longer
 movements up to 8 times, then, when the tick began clear, bisects between the
 last clear sample and the first overlap so the car is put back near the moment
 of contact, and feeds
-the contact normal into the existing impact response. The oriented-shape
+the contact normal into the existing impact response. A slow approach (under
+1 m/s, such as a car held against a wall by its tyres) is instead pushed
+straight out of the overlap, a quarter-millimetre off the surface, keeping its
+movement along it; a larger gap made such a car touch only every other tick
+and shake. The oriented-shape
 query is still discrete, not a general continuous manifold solver; keep the
 triangle sweep path for terrain and tunneling protection.
 Positive-mass native placements do not enter static mesh or analytic collision
