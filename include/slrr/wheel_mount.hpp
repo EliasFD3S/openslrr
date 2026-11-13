@@ -26,9 +26,10 @@ struct WheelMountTuning {
 double contact_impulse_energy(const RigidBody& body, Vec3 point, Vec3 normal,
                               double closing_speed, double restitution = .12);
 
-// Condition after one impact. `shift` is the current chassis-cage
-// displacement of the hardpoint (m), `energy` the impact energy (J) and
-// `distance` the horizontal distance from the impact to the corner (m).
+// Condition after one update. `shift` is the settled chassis-cage
+// displacement of the hardpoint beyond its value when the wheel was fitted
+// (m), `energy` the impact energy (J) and `distance` the horizontal distance
+// from the impact to the corner (m). Either may be zero.
 float wheel_mount_condition(float condition, double shift, double energy, double distance,
                             const WheelMountTuning& tuning = {});
 

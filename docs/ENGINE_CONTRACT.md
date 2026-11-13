@@ -488,17 +488,22 @@ render shell, as SLRR_rev (77b0fb6, `vehicle-3d.ts`) does, and its cage mass is
 the part's own CFG mass (the chassis shell's own, not the assembly's). The phys
 mesh stays the part's collider and follows the cage.
 
-A corner loses its wheels when its mount condition reaches zero: either the
-chassis cage has pushed the wheel centre or strut top 0.3 m, or the impact
-energy |J|²/2M weighted by exp(-(d/0.65 m)²) of the horizontal distance to the
-corner has added up to 55 kJ. These are SLRR_rev values (`releaseFailedWheels`,
-`suspension-3d.ts` `deform`, `damageImpact`), not stock ones; floor contacts
-below 8 m/s do not count. Every part on a wheel slot of that corner (the rim
-with its tyre, an outer dually wheel) then breaks off like a panel and becomes a
-loose body of at least 14 kg. The chassis is refreshed, so the corner rests on
-the hardware still on its hub or, with none, on the chassis box. The hub
-hardware stays, and the dented chassis does not move the remaining wheels'
-hardpoints. Repair, or fitting a wheel to that corner, restores the mount.
+A corner loses its wheels when either of two independent conditions reaches
+zero: its strut, once the impact energy |J|²/2M weighted by exp(-(d/0.65 m)²) of
+the horizontal distance to the corner has added up to 55 kJ, or its mount, once
+the chassis cage, settled after an impact, holds the wheel centre or strut top
+0.3 m from where they were when the wheel was fitted. The transient crush peak right after an impact does
+not count, only the settled (plastic) shape. These are SLRR_rev values
+(`releaseFailedWheels`, `suspension-3d.ts` `deform`, `damageImpact`), not stock
+ones; floor contacts below 8 m/s do not count. Every part on a wheel slot of
+that corner (the rim with its tyre, an outer dually wheel) then breaks off like
+a panel and becomes a loose body of at least 14 kg. The chassis is refreshed,
+so the corner rests on the hardware still on its hub or, with none, on the
+chassis box. The hub hardware stays, and the dented chassis does not move the
+remaining wheels' hardpoints. Fitting a wheel to that corner restores a sound
+mount: a corner that is still dented keeps its current dent as the baseline,
+so the new wheel only falls off after a further 0.3 m of settled crush or 55 kJ
+of new impact energy. Repair clears the dent, the baseline and the mount.
 
 Deformation and detached parts need consistency between the impact, the local
 frame, the deformed mesh, the part state, and collision. Check separately:
