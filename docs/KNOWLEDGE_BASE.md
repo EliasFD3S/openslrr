@@ -321,13 +321,26 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   (`scene_instances_ground_frame`). Dynamic placements are excluded from both
   static ground caches and floor-mesh collection; mixed-mass placements stay
   static. Creating every such prop at load (about 4,000 in Valo City) cost
-  about 400 ms of physics per frame. Standalone dynamic `PhysicsRef` bodies are
-  still a separate unimplemented contract.
+  about 400 ms of physics per frame. A promoted prop at rest more than 40 m
+  beyond car reach becomes scenery again at its settled pose
+  (`src/resources/scene_instances.cpp:scene_instances_settle_dynamic`), as
+  does one whose world is left; a lost one (fallen off the map, still moving
+  after 10 s out of reach, pushed beyond its 64 m cell) returns to its map
+  pose. The GroundRef a prop is parented to comes from the shell that woke it:
+  each city visit builds a new GroundRef while the prop map stays cached.
+- `PhysicsRef.setStatic(0)` releases a script body to the free-body solver
+  (`src/resources/part_runtime.cpp:advance_free_bodies`), which reuses the
+  loose-body car and scene contacts and publishes pose and velocities.
+- Trigger volumes (`GameRef.RID_TRIGGER`, `java.game.Trigger`) are parsed by
+  `src/resources/trigger_volume.cpp:trigger_volume_parse` and raise
+  `EVENT_TRIGGER_ON`/`OFF` with the car's id from
+  `src/resources/scene_triggers.cpp:scene_triggers_tick`.
 - Besides the four corner sphere sweeps, the chassis box is tested against
   native boxes/spheres and against the wall triangles of every static mesh
   (`src/resources/scene_instances.cpp:scene_instances_contact_walls`, kernel
   `src/physics/scene_collision.cpp:overlap_triangle`), so corners, fence ends
-  and thin trunks between the probes still stop the car.
+  and thin trunks between the probes still stop the car. Both use the chassis
+  box above its lowest 30 %.
 - `scene_instances_prepare_physics` rebuilds the collision index from GameRef
   render nodes once per physics frame. Floor and sweep queries are
   `scene_instances_sample_floor` and `scene_instances_sweep_sphere`.
@@ -551,7 +564,8 @@ These are entry points, not fixes. Each needs its own reproduction.
   based on `SLRR_rev:src/engine/map-collision.ts:MapCollision`. Entirely
   positive-mass placements also use the loose-body solver with mass-aware car
   impulses; they sleep until contact and are absent from static caches.
-  Standalone dynamic PhysicsRef bodies remain unimplemented.
+  `setStatic(0)` PhysicsRef bodies use the same solver, and trigger volumes
+  raise `EVENT_TRIGGER_ON`/`OFF` for cars.
 - **#17 "Repair car" does not repair.** Stock `Part.repair()` raises wear and
   tear only up to `repair_max_wear` / `repair_max_tear` (0.95 in the MWM
   `Part.java`), then sends the native command `"repair"`

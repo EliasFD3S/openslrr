@@ -4,6 +4,7 @@
 #include "slrr/script_threads.hpp"
 #include "slrr/script_events.hpp"
 #include "slrr/scene_ambience.hpp"
+#include "slrr/scene_triggers.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/scene_presentation.hpp"
 #include "slrr/natives_boot.hpp"
@@ -773,6 +774,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     part_physics_advance(sim_seconds);
   }
   scene_ambience_tick(sim_seconds);
+  scene_triggers_tick(jvm);
 
   // Last write before the view is built. The chase camera must not cover
   // the showroom orbit, and nothing after the earlier spin may put it back.

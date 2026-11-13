@@ -72,6 +72,8 @@ add_executable(slrr_host
   src/resources/gameref.cpp
   src/resources/scene_instances.cpp
   src/resources/scene_ambience.cpp
+  src/resources/scene_triggers.cpp
+  src/resources/trigger_volume.cpp
   src/resources/scx_mesh.cpp
   src/resources/skeleton.cpp
   src/resources/character.cpp

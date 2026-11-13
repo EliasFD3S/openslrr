@@ -84,9 +84,11 @@ struct DormantProp {
   std::shared_ptr<const PartConfig> config;
   PartMatrix pose{};
   int32_t seed = 0;
-  void* ground = nullptr;
-  std::array<float, 3> lower{}, upper{};  // shell-local bounds
+  std::array<float, 3> local_lower{}, local_upper{};  // collision bounds, object frame
+  std::array<float, 3> lower{}, upper{};  // shell-local bounds, padded
   bool promoted = false;
+  void* live = nullptr;     // the loose body's node while promoted
+  PartMatrix live_shell{};  // its ground shell's world frame, captured on promotion
   std::vector<std::pair<GroundPropCell*, uint32_t>> props;  // render instances to hide
 };
 struct GroundPropMap {
@@ -98,7 +100,17 @@ struct GroundPropMap {
   collision::StaticIndex collision_shapes;
 };
 std::unordered_map<uint32_t, GroundPropMap> g_ground_props;
-std::vector<std::pair<GroundPropMap*, uint32_t>> g_pending_dormant;
+// The map is cached per render id and outlives its GroundRef: each visit to a
+// city builds a new GroundRef, so the one to parent a promoted prop to is
+// taken from the shell that woke it, never stored with the placement.
+struct PendingDormant {
+  GroundPropMap* map = nullptr;
+  uint32_t index = 0;
+  void* ground = nullptr;
+  PartMatrix shell{};
+};
+std::vector<PendingDormant> g_pending_dormant;
+std::unordered_map<void*, std::pair<GroundPropMap*, uint32_t>> g_live_dormant;
 
 struct GroundCollisionWorld {
   PartMatrix matrix{};
@@ -121,6 +133,9 @@ std::unordered_map<void*, PrimitiveSource> g_primitive_sources;
 
 struct NativeCollisionData {
   bool dynamic = false;
+  // Sum and centre of the positive-mass collision bodies, object frame.
+  float mass = 0.f;
+  std::array<float, 3> center{};
   // SCX bodies baked into the native object's local frame, in metres.
   std::shared_ptr<const ScxGeometry> mesh;
   // Primitive bodies keep their local poses until each placement is known.
@@ -728,6 +743,7 @@ void scene_instances_set_resources(const RpkIndex *resources) {
   g_ground_props.clear();
   scene_ambience_reset();
   g_pending_dormant.clear();
+  g_live_dormant.clear();
   g_ground_collision.clear();
   g_native_collision.clear();
   g_script_collision_shapes.clear();
@@ -820,10 +836,43 @@ bool scene_instances_script_matrix(void *key, float *matrix) {
   return g_world && chain_matrix(key, g_world, matrix, false);
 }
 
+namespace {
+// Shell-local bounds of a dormant placement at its current pose, padded so a
+// car is found a little before its box touches the collision mesh.
+void dormant_bounds(DormantProp& entry) {
+  entry.lower.fill(std::numeric_limits<float>::infinity());
+  entry.upper.fill(-std::numeric_limits<float>::infinity());
+  for (int corner = 0; corner < 8; ++corner) {
+    const auto world = transform_point(
+        entry.pose, {corner & 1 ? entry.local_upper[0] : entry.local_lower[0],
+                     corner & 2 ? entry.local_upper[1] : entry.local_lower[1],
+                     corner & 4 ? entry.local_upper[2] : entry.local_lower[2]});
+    for (int axis = 0; axis < 3; ++axis) {
+      entry.lower[axis] = std::min(entry.lower[axis], world[axis] - .5f);
+      entry.upper[axis] = std::max(entry.upper[axis], world[axis] + .5f);
+    }
+  }
+}
+
+template <typename Visit>
+void dormant_cells(const DormantProp& entry, Visit&& visit) {
+  const auto x0 = static_cast<int32_t>(std::floor(entry.lower[0] / kDormantCell));
+  const auto x1 = static_cast<int32_t>(std::floor(entry.upper[0] / kDormantCell));
+  const auto z0 = static_cast<int32_t>(std::floor(entry.lower[2] / kDormantCell));
+  const auto z1 = static_cast<int32_t>(std::floor(entry.upper[2] / kDormantCell));
+  for (int32_t x = x0; x <= x1; ++x)
+    for (int32_t z = z0; z <= z1; ++z) visit(floor_cell(x, z));
+}
+
+void show_dormant(DormantProp& entry, bool shown) {
+  for (const auto& [cell, prop] : entry.props)
+    if (prop < cell->props.size()) cell->props[prop].hidden = !shown;
+}
+}  // namespace
+
 void scene_instances_wake_dynamics(const float lower[3], const float upper[3]) {
   if (!lower || !upper) return;
   for (auto& [key, ground] : g_ground_collision) {
-    (void)key;
     auto* map = const_cast<GroundPropMap*>(ground.source);
     if (!map || map->dormant.empty()) continue;
     std::array<float, 3> lo, hi;
@@ -853,8 +902,10 @@ void scene_instances_wake_dynamics(const float lower[3], const float upper[3]) {
               entry.lower[1] > hi[1] || entry.upper[1] < lo[1] || entry.lower[2] > hi[2] ||
               entry.upper[2] < lo[2])
             continue;
+          const auto* shell = gameref_get(key);
+          if (!shell || !shell->parent) continue;
           entry.promoted = true;
-          g_pending_dormant.emplace_back(map, index);
+          g_pending_dormant.push_back({map, index, shell->parent, ground.matrix});
         }
       }
   }
@@ -864,14 +915,87 @@ void scene_instances_promote_dynamics() {
   if (g_pending_dormant.empty()) return;
   auto pending = std::move(g_pending_dormant);
   g_pending_dormant.clear();
-  for (const auto& [map, index] : pending) {
+  for (const auto& [map, index, ground, shell] : pending) {
     auto& entry = map->dormant[index];
+    void* node = part_add_dynamic_native(*entry.config, entry.config->renders, entry.pose,
+                                         ground, entry.seed);
+    if (!node) {
+      entry.promoted = false;
+      continue;
+    }
     // The loose body draws itself; hide the static instances it replaces.
-    for (const auto& [cell, prop] : entry.props)
-      if (prop < cell->props.size()) cell->props[prop].hidden = true;
-    part_add_dynamic_native(*entry.config, entry.config->renders, entry.pose, entry.ground,
-                            entry.seed);
+    entry.live = node;
+    // The frame the loose solver places the body in (see advance_loose_panels).
+    if (!scene_instances_ground_frame(ground, entry.live_shell.data())) entry.live_shell = shell;
+    g_live_dormant[node] = {map, index};
+    show_dormant(entry, false);
   }
+}
+
+bool scene_instances_settle_dynamic(void* node, const float* world_frame) {
+  const auto found = g_live_dormant.find(node);
+  if (found == g_live_dormant.end()) return false;
+  auto [map, index] = found->second;
+  g_live_dormant.erase(found);
+  auto& entry = map->dormant[index];
+  PartMatrix pose{}, delta{};
+  bool moved = world_frame != nullptr;
+  if (moved) {
+    PartMatrix world;
+    std::copy(world_frame, world_frame + 16, world.begin());
+    pose = part_matrix_multiply(part_matrix_inverse_rigid(entry.live_shell), world);
+    delta = part_matrix_multiply(pose, part_matrix_inverse_rigid(entry.pose));
+    // Its instances stay in their cells, whose culling spheres grow to keep
+    // them. A prop pushed further than a cell's width returns to its old pose
+    // instead of making its cell visible from everywhere.
+    for (const auto& [cell, prop_index] : entry.props) {
+      if (prop_index >= cell->props.size()) continue;
+      const auto center = transform_point(delta, cell->props[prop_index].center);
+      moved = moved && std::hypot(center[0] - cell->center[0], center[1] - cell->center[1],
+                                  center[2] - cell->center[2]) <= kPropCellSize;
+    }
+  }
+  if (moved) {
+    for (const auto& [cell, prop_index] : entry.props) {
+      if (prop_index >= cell->props.size()) continue;
+      auto& prop = cell->props[prop_index];
+      prop.pose = part_matrix_multiply(delta, prop.pose);
+      prop.center = transform_point(delta, prop.center);
+      const float reach = std::hypot(prop.center[0] - cell->center[0],
+                                     prop.center[1] - cell->center[1],
+                                     prop.center[2] - cell->center[2]) + prop.radius;
+      cell->radius = std::max(cell->radius, reach);
+    }
+    dormant_cells(entry, [&](uint64_t cell) {
+      auto grid = map->dormant_grid.find(cell);
+      if (grid != map->dormant_grid.end()) std::erase(grid->second, index);
+    });
+    entry.pose = pose;
+    dormant_bounds(entry);
+    dormant_cells(entry, [&](uint64_t cell) { map->dormant_grid[cell].push_back(index); });
+  }
+  entry.live = nullptr;
+  entry.promoted = false;
+  show_dormant(entry, true);
+  return true;
+}
+
+void scene_instances_local_matrix(const GameRefState& node, float matrix[16]) {
+  if (node.matrix_override)
+    std::copy(node.local_matrix, node.local_matrix + 16, matrix);
+  else
+    local_matrix(node, matrix);
+}
+
+bool scene_instances_native_body(uint32_t type, std::shared_ptr<const ScxGeometry>& mesh,
+                                 float& mass, float center[3]) {
+  if (!g_resources || !type || !center) return false;
+  const auto& native = native_collision_data(*g_resources, type);
+  if (!native.mesh) return false;
+  mesh = native.mesh;
+  mass = native.mass;
+  std::copy(native.center.begin(), native.center.end(), center);
+  return true;
 }
 
 bool scene_instances_ground_frame(void *ground, float *matrix) {
@@ -1070,7 +1194,7 @@ void scene_instances_prepare_physics() {
   if (g_world)
     for (auto *n : render_nodes_in_world(g_world, true)) {
       if (!n || n->empty || n->sky_render || n->vehicle_material || n->line_geometry ||
-          n->dynamic_native)
+          n->dynamic_native || n->physics_simulated)
         continue;
       // A skinned character is not landscape. Its bind mesh was becoming a
       // solid obstacle, offset from the drawn body, and it destroyed the car.
@@ -2181,11 +2305,17 @@ const NativeCollisionData& native_collision_data(
   bool positive_mass = false, zero_mass = false;
   for (const auto& body : parsed->bodies) {
     if (!body.collision) continue;
-    if (body.mass > 0.f)
+    if (body.mass > 0.f) {
       positive_mass = true;
-    else
+      cached->second.mass += body.mass;
+      for (int axis = 0; axis < 3; ++axis)
+        cached->second.center[axis] += body.pose.position[axis] * body.mass;
+    } else {
       zero_mass = true;
+    }
   }
+  if (cached->second.mass > 0.f)
+    for (auto& value : cached->second.center) value /= cached->second.mass;
   // Promote only an entirely positive-mass placement. A mixed placement keeps
   // every body static instead of moving one while baking another. A dynamic
   // type still builds its geometry: map loading uses its bounds to find the
@@ -2267,7 +2397,7 @@ void build_prop_batches(GroundPropCell& cell, const std::unordered_set<uint32_t>
 }
 }
 
-void scene_instances_add_ground_props(const GroundMapData& map, void* ground) {
+void scene_instances_add_ground_props(const GroundMapData& map) {
   if (!g_resources || map.placements.empty() || g_ground_props.contains(map.render_id))
     return;
   auto& props_map = g_ground_props[map.render_id];
@@ -2324,30 +2454,16 @@ void scene_instances_add_ground_props(const GroundMapData& map, void* ground) {
       entry.config = shared;
       entry.pose = pose;
       entry.seed = static_cast<int32_t>(seed);
-      entry.ground = ground;
       if (collision.mesh) {
-        entry.lower.fill(std::numeric_limits<float>::infinity());
-        entry.upper.fill(-std::numeric_limits<float>::infinity());
-        for (int corner = 0; corner < 8; ++corner) {
-          const auto& info = collision.mesh->info;
-          const float local[3] = {corner & 1 ? info.bbox_max[0] : info.bbox_min[0],
-                                  corner & 2 ? info.bbox_max[1] : info.bbox_min[1],
-                                  corner & 4 ? info.bbox_max[2] : info.bbox_min[2]};
-          const auto world = transform_point(pose, {local[0], local[1], local[2]});
-          for (int axis = 0; axis < 3; ++axis) {
-            entry.lower[axis] = std::min(entry.lower[axis], world[axis] - .5f);
-            entry.upper[axis] = std::max(entry.upper[axis], world[axis] + .5f);
-          }
+        for (int axis = 0; axis < 3; ++axis) {
+          entry.local_lower[axis] = collision.mesh->info.bbox_min[axis];
+          entry.local_upper[axis] = collision.mesh->info.bbox_max[axis];
         }
+        dormant_bounds(entry);
         dormant_index = static_cast<int32_t>(props_map.dormant.size());
-        const auto x0 = static_cast<int32_t>(std::floor(entry.lower[0] / kDormantCell));
-        const auto x1 = static_cast<int32_t>(std::floor(entry.upper[0] / kDormantCell));
-        const auto z0 = static_cast<int32_t>(std::floor(entry.lower[2] / kDormantCell));
-        const auto z1 = static_cast<int32_t>(std::floor(entry.upper[2] / kDormantCell));
-        for (int32_t x = x0; x <= x1; ++x)
-          for (int32_t z = z0; z <= z1; ++z)
-            props_map.dormant_grid[floor_cell(x, z)].push_back(
-                static_cast<uint32_t>(dormant_index));
+        dormant_cells(entry, [&](uint64_t cell) {
+          props_map.dormant_grid[cell].push_back(static_cast<uint32_t>(dormant_index));
+        });
         props_map.dormant.push_back(std::move(entry));
       }
     } else if (collision.mesh) {

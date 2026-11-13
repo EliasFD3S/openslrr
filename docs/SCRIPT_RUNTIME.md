@@ -57,8 +57,12 @@ methods take the stock GameRef/event/int or GameRef/event/String signatures;
 the default selects `handleEventAsync` when the listener enables async mode.
 
 The event emitter is connected to existing timer and mechanic part-pointer
-events. This does not create missing collision/trigger/traffic producers; those
-systems must emit their events when implemented. Legacy UI input paths remain.
+events, and to trigger volumes: `scene_triggers_tick` emits
+`EVENT_TRIGGER_ON` (0x20) and `EVENT_TRIGGER_OFF` (0x40) from a
+`GameRef.RID_TRIGGER` source when a car enters or leaves it, with the car's
+`id()` as the String param that stock handlers read with `token(0)`. Missing
+collision and traffic producers must still emit their events when
+implemented. Legacy UI input paths remain.
 
 Callback modes 8, 9 and 28 correspond to `control(float)`, `drive()` and
 `animate()`. They have separate ordered lists, idempotent registration and

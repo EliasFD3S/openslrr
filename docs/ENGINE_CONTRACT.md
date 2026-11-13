@@ -325,11 +325,33 @@ padded chassis bounds reach it. It is then promoted, after the vehicle loop,
 to a loose native body with its full CFG collision mesh and mass-weighted
 body-pose centre, and its static instances are hidden. The loose body sleeps
 until contact, reuses the loose-part solver for car and static-scene contacts,
-and updates every render slot from the simulated frame. A map can hold
-thousands of such props: creating them all as live bodies at load cost about
-400 ms of physics per frame in Valo City. Mixed-mass placements and zero-mass
-buildings, columns, trees and containers remain on the exact static path.
-Standalone dynamic `PhysicsRef` integration is not yet implemented.
+and updates every render slot, with its CFG render pose, from the simulated
+frame. Once it rests more than 40 m beyond the car's reach it becomes an
+ordinary prop again at the pose where it settled (for the rest of the
+session), so only props near the car are live. It returns to its map pose
+instead when it was pushed more than a 64 m prop cell away, falls below
+-500 m, or keeps moving out there for 10 s, and becomes scenery wherever it is
+when its world stops being the active one. A map can hold thousands of such props: creating them all as live
+bodies at load cost about 400 ms of physics per frame in Valo City.
+Mixed-mass placements and zero-mass buildings, columns, trees and containers
+remain on the exact static path.
+
+`PhysicsRef.setStatic(0)` hands a script body to the host free-body solver:
+it falls under gravity, rests on the scene, and exchanges impulses with the
+controlled car like a loose part, publishing its pose and velocities for
+`getPos`, `getOri`, `getVel` and `getAngVel`. `setMatrix` places it at rest,
+and `setStatic(1)` fixes it again. Created bodies stay fixed until then; the
+stock jack, lifts and showroom walls never call `setStatic`. A primitive has
+no authored mass, so it gets a 500 kg/m³ density; a `create` resource uses its
+CFG mass when it has one.
+
+`GameRef.RID_TRIGGER` (system:0x34) objects, which `java.game.Trigger` creates
+with `"x,y,z,yaw,pitch,roll,sphere,r"` or `"...,box,x,y,z"` params, are
+volumes. Each frame `scene_triggers_tick` raises `EVENT_TRIGGER_ON` when a
+top-level car of the active world enters one and `EVENT_TRIGGER_OFF` when it
+leaves, with the car's `id()` as the String param. A car that first appears
+inside a volume, or that `setMatrix` moves more than 25 m in one frame, raises
+nothing for that change. Box sizes are read as half extents, as in SLRR_rev.
 
 Keep these decisions separate: loading, CPU residency, GPU upload,
 visibility/frustum, shadow participation, and collision. An object outside
@@ -398,20 +420,25 @@ support and sphere-sweep queries. The chassis box is also tested directly:
 against indexed CFG/`PhysicsRef` boxes and spheres, and against the wall
 triangles (|normal.y| <= 0.65) of every static triangle set, with
 `overlap_triangle` in `scene_collision.cpp`. A thin trunk, a house corner or a
-fence end therefore cannot pass between the four chassis corner probes. The
-wall test leaves out the lowest 30 % of the chassis box, the band below the
-corner probes, so kerbs and road seams do not stop the car. The chassis query
+fence end therefore cannot pass between the four chassis corner probes. Both
+tests leave out the lowest 30 % of the chassis box, the band below the corner
+probes, so kerbs, steps and road seams are wheel support, not walls. The chassis query
 uses the bounds centre (not necessarily the centre of mass), samples longer
-movements, and feeds the contact normal into the existing impact response.
-The oriented-shape query is discrete, not a general continuous manifold
-solver; keep the triangle sweep path for terrain and tunneling protection.
+movements up to 8 times, then, when the tick began clear, bisects between the
+last clear sample and the first overlap so the car is put back near the moment
+of contact, and feeds
+the contact normal into the existing impact response. The oriented-shape
+query is still discrete, not a general continuous manifold solver; keep the
+triangle sweep path for terrain and tunneling protection.
 Positive-mass native placements do not enter static mesh or analytic collision
 caches. Their loose body is created only near a car; it uses the authored
 mesh, mass and centre, starts asleep, wakes on car contact, and exchanges
 equal/opposite impulses with both car and static scene. A sleeping loose body
-skips the per-part car test unless its bounding sphere can reach the car's. This is a host loose-body approximation, not a general
-dynamic triangle-mesh engine or an implementation of standalone dynamic
-`PhysicsRef` bodies.
+skips the per-part car test unless its bounding sphere can reach the car's.
+Free `PhysicsRef` bodies (`setStatic(0)`) use the same loose-body contacts.
+This is a host loose-body approximation, not a general dynamic triangle-mesh
+engine: loose bodies collide with the car and the static scene, not with
+each other.
 
 The frequency currently declared is **120 Hz**, with an update frequency
 declared at **60 Hz** in `vehicle_dynamics.hpp`. `advance(seconds)` uses an

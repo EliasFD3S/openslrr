@@ -37,6 +37,17 @@ void gameref_set_parent(void* key, void* parent) {
   if (auto* state = gameref_upsert(key)) state->parent = parent;
 }
 
+void gameref_set_physics_simulated(void* key, bool simulated) {
+  if (auto* state = gameref_get(key)) state->physics_simulated = simulated;
+}
+
+int32_t gameref_make_live(void* key) {
+  static int32_t next = 1;
+  auto* state = gameref_upsert(key);
+  if (state && !state->live_id) state->live_id = next++;
+  return state ? state->live_id : 0;
+}
+
 void script_threads_shutdown(Jvm&) {}
 void script_events_shutdown(Jvm&) {}
 bool script_thread_active(Jvm&) { return false; }
@@ -183,8 +194,15 @@ SLRR_TEST(physicsref_matrix_orientation_and_velocity_getters_use_body_state) {
   SLRR_REQUIRE(near(field(angular, "y"), 1));
   SLRR_REQUIRE(near(field(angular, "z"), 2));
 
+  SLRR_REQUIRE(!fixture.state().physics_simulated);
+  fixture.invoke("setStatic", "(I)V", {slrr::Value::make_int(0)});
+  SLRR_REQUIRE(fixture.state().physics_simulated);
+  SLRR_REQUIRE(!fixture.state().physics_static);
+  SLRR_REQUIRE(fixture.state().live_id != 0);  // the free-body solver keys on it
+
   fixture.invoke("setStatic", "(I)V", {slrr::Value::make_int(1)});
   SLRR_REQUIRE(fixture.state().physics_static);
+  SLRR_REQUIRE(!fixture.state().physics_simulated);
   velocity = object(fixture.invoke("getVel", "()Ljava.lang.Vector3;"));
   SLRR_REQUIRE(near(field(velocity, "x"), 0));
   angular = object(fixture.invoke("getAngVel", "()Ljava.lang.Vector3;"));

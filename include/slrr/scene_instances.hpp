@@ -92,11 +92,24 @@ bool scene_instances_script_matrix(void *key, float *matrix);
 // Render ground-shell matrix for placements owned by a GroundRef. Unlike the
 // GroundRef's own pose, this is the frame used by static map placements.
 bool scene_instances_ground_frame(void *ground, float *matrix);
+// A node's own pose (pos and ypr, or its local matrix override) relative to
+// its parent, column-major, script metres.
+void scene_instances_local_matrix(const GameRefState& node, float matrix[16]);
+// Collision mesh (object frame, metres), positive body mass and mass centre
+// of a native object type's CFG. False when the type has no collision body.
+bool scene_instances_native_body(uint32_t type, std::shared_ptr<const ScxGeometry>& mesh,
+                                 float& mass, float center[3]);
 // Positive-mass map placements are drawn as ordinary props until a vehicle
 // comes close. Queue every dormant placement overlapping a world-space box,
 // then create the loose bodies once the caller is outside its own iteration.
 void scene_instances_wake_dynamics(const float lower[3], const float upper[3]);
 void scene_instances_promote_dynamics();
+// A promoted placement goes back to being an ordinary prop. With a world frame
+// (script metres, in the world it was promoted in) its render instances and
+// wake bounds move to that pose, so a knocked-over bin stays where it settled
+// for the rest of the session; without one it reappears where it was before
+// promotion. Returns false when node is not a promoted placement.
+bool scene_instances_settle_dynamic(void* node, const float* world_frame);
 std::shared_ptr<const ScxGeometry> scene_instances_geometry(uint32_t resource);
 // Parse render meshes off the calling thread and publish them before return.
 void scene_instances_preload(const std::vector<uint32_t>& resources);
@@ -121,7 +134,7 @@ struct GroundMapData {
   std::vector<Placement> placements;
 };
 GroundMapData scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id);
-void scene_instances_add_ground_props(const GroundMapData& map, void* ground);
+void scene_instances_add_ground_props(const GroundMapData& map);
 // Drawn instead of the render object's .scx (a ground template is materials).
 void scene_instances_override_mesh(uint32_t id,
                                    std::shared_ptr<const ScxGeometry> geo);

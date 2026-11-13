@@ -57,6 +57,7 @@ GameRefState* create_body(Object* self, Object* parent, int32_t type,
   state->physics_shape = shape;
   std::copy(size, size + 3, state->physics_size);
   state->physics_static = false;
+  gameref_set_physics_simulated(self, false);
   state->collision_pending = false;
   state->collision_active = true;
   state->flags &= ~kCollisionQueued;
@@ -143,6 +144,10 @@ void register_physicsref_natives(Jvm& jvm) {
           return Value::make_void();
         state->physics_static = !args.empty() && args[0].tag == ValueTag::Int &&
                                 args[0].v.i != 0;
+        // setStatic(0) releases the body to the free-body solver
+        // (part_runtime advance_free_bodies); setStatic(1) fixes it again.
+        if (!state->physics_static) gameref_make_live(self);
+        gameref_set_physics_simulated(self, !state->physics_static);
         if (state->physics_static) {
           std::fill(std::begin(state->vel), std::end(state->vel), 0.f);
           std::fill(std::begin(state->angular_vel), std::end(state->angular_vel), 0.f);

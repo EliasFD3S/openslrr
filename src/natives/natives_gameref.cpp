@@ -607,6 +607,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
             (args.size() >= 3 && args[2].tag == ValueTag::Obj) ? args[2].v.o
                                                                : nullptr;
         gameref_bind_scene_camera(self, params ? params->str : std::string{});
+        gameref_bind_trigger(self, params ? params->str : std::string{});
         return Value::make_void();
       });
   jvm.natives().register_method(
@@ -629,6 +630,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
             (args.size() >= 3 && args[2].tag == ValueTag::Obj) ? args[2].v.o
                                                                : nullptr;
         gameref_bind_scene_camera(self, params ? params->str : std::string{});
+        gameref_bind_trigger(self, params ? params->str : std::string{});
         int32_t id = 0;
         if (type) {
           if (GameRefState* ts = gameref_get(type)) id = ts->type_id;

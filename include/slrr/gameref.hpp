@@ -1,5 +1,6 @@
 #pragma once
 
+#include "slrr/trigger_volume.hpp"
 #include "slrr/scx_mesh.hpp"
 #include "slrr/scene_sun.hpp"
 
@@ -87,7 +88,14 @@ struct GameRefState {
   PhysicsShape physics_shape = PhysicsShape::None;
   float physics_size[3] = {0, 0, 0};
   bool physics_static = true;
+  // setStatic(0): the body falls and is pushed. Created bodies stay fixed;
+  // the stock garage jack, lifts and walls never call setStatic.
+  bool physics_simulated = false;
   bool dynamic_native = false;
+  // RID_TRIGGER (system:0x34) volume from its creation params; see
+  // trigger_volume.hpp.
+  TriggerShape trigger_shape = TriggerShape::None;
+  float trigger_size[3] = {0, 0, 0};
   bool collision_pending = false;
   bool collision_active = false;
   std::string alias;
@@ -235,6 +243,15 @@ std::vector<GameRefState*> gameref_active_cameras();
 GameRefState* fullscreen_script_camera();
 // system:0x33. Constructor params are "x,y,z,yaw,pitch,roll,...".
 void gameref_bind_scene_camera(void* key, const std::string& params);
+// system:0x34 (GameRef.RID_TRIGGER). Parses the trigger volume from the
+// constructor params, poses the node and gives it a live id; other types are
+// ignored. Trigger keys are listed for the per-tick trigger events.
+void gameref_bind_trigger(void* key, const std::string& params);
+std::vector<void*> gameref_trigger_keys();
+// PhysicsRef.setStatic: a simulated body belongs to the host free-body
+// solver, which visits gameref_simulated_bodies() every physics tick.
+void gameref_set_physics_simulated(void* key, bool simulated);
+std::vector<GameRefState*> gameref_simulated_bodies();
 // render/look/move/zoom/hide on the script camera. A move with no look
 // target slides the pose with Pori; a move plus look orbits.
 bool gameref_scene_command(void* key, const std::string& line);

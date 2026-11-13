@@ -3,6 +3,7 @@
 #include "slrr/part_config.hpp"
 
 #include <cmath>
+#include <string>
 
 namespace {
 
@@ -44,16 +45,20 @@ SLRR_TEST(part_config_reads_native_box_sphere_and_mesh_bodies) {
   SLRR_REQUIRE(mesh.collision_mesh.empty());
 }
 
-SLRR_TEST(part_config_rejects_malformed_native_primitives) {
-  const auto box = slrr::parse_part_config(
-      "body 0 0 0 0 0 0 0 box 1 0 1\n");
-  SLRR_REQUIRE(!box.errors.empty());
-  SLRR_REQUIRE(box.bodies.empty());
-
-  const auto sphere = slrr::parse_part_config(
-      "body 0 0 0 0 0 0 0 sphere\n");
-  SLRR_REQUIRE(!sphere.errors.empty());
-  SLRR_REQUIRE(sphere.bodies.empty());
+SLRR_TEST(part_config_keeps_the_mass_of_malformed_native_primitives) {
+  // A bad extent must not drop the body: its mass still counts, as it did
+  // before shapes were parsed, and the CFG stays valid.
+  for (const char* line : {"body 0 0 0 0 0 0 40 box 1 0 1\n", "body 0 0 0 0 0 0 40 box 1 1\n",
+                           "body 0 0 0 0 0 0 40 box 1 x 1\n", "body 0 0 0 0 0 0 40 sphere\n",
+                           "body 0 0 0 0 0 0 40 sphere -2\n"}) {
+    const auto config = slrr::parse_part_config(std::string(line) + "render 0x123\n");
+    SLRR_REQUIRE(config.errors.empty());
+    SLRR_REQUIRE(config.valid);
+    SLRR_REQUIRE(config.bodies.size() == 1);
+    SLRR_REQUIRE(config.bodies[0].shape == slrr::PartBodyShape::None);
+    SLRR_REQUIRE(config.mass == 40.f);
+    SLRR_REQUIRE(config.unknown.size() == 1);
+  }
 }
 
 SLRR_TEST(part_config_keeps_unknown_body_shapes_compatible) {
@@ -69,7 +74,7 @@ SLRR_TEST(part_config_keeps_unknown_body_shapes_compatible) {
 int main() {
   const slrr::standalone::Test tests[] = {
       part_config_reads_native_box_sphere_and_mesh_bodies,
-      part_config_rejects_malformed_native_primitives,
+      part_config_keeps_the_mass_of_malformed_native_primitives,
       part_config_keeps_unknown_body_shapes_compatible,
   };
   return slrr::standalone::run("part_config", tests);
