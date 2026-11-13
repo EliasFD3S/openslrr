@@ -4,8 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OpenSLRR</title>
-  <script type="module" crossorigin src="./assets/index-DHlkprS3.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-Coxwgqkm.css">
+  <script>
+    try {
+      var theme = localStorage.getItem("openslrr-theme")
+      document.documentElement.dataset.theme = theme === "dark" ? "dark" : "light"
+    } catch (e) {
+      document.documentElement.dataset.theme = "light"
+    }
+  </script>
+  <script type="module" crossorigin src="./assets/index-DZBYqmKV.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-CGMUm1Yg.css">
 </head>
 <body>
   <div id="root"></div>
