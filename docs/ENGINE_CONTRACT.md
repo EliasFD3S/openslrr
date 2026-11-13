@@ -404,6 +404,21 @@ frame, the deformed mesh, the part state, and collision. Check separately:
 vibration at rest, permanent deformation, a panel opening, and an attachment
 breaking. A visual filter does not fix an unstable solver.
 
+Stock `Part.repair()` owns the wear/tear repair caps and recursively visits the
+installed tree. Its native `repair` command performs a one-shot local reset of
+that part's deformation, deformed collision/render data, and damage-associated
+slot/wheel state, then restores the affected CFG mount frames and base meshes.
+Use the script's `attachedParts` coverage and recurse natively only into detached
+assembly children that those lists omit; never traverse a child twice. Do not add
+a whole-car relink per part, a world reload, or a `GameRef.setState` call. The
+latter controls pose and velocities and can release the solver; it is not a damage
+repair API.
+Keep the latest intentional `setSlotPos` state separate from damage overlays so
+repair preserves it even on the same slot. Detached inventory damage must remain
+intact. Queue affected link visuals once per repaired part and flush them on the
+next existing part update, after the complete scripted walk; do not relink every
+ancestor/descendant subtree during each native call.
+
 ## 12. Enhanced rendering
 
 The current product uses bgfx. `--render-bgfx` is not required. Historical
@@ -435,6 +450,13 @@ distinct lifetimes. Check the six orientations, the frame, world transitions,
 the uniforms, and probe validity. Do not read a texture at the same time it
 is the destination of its own capture.
 
+Every world camera is a reflection scene: the garage, the dealers and the
+city all use the cubemap. The garage probe sits on the car body and its box
+is the garage bounds. Without a followed car, a world camera captures from
+the car nearest its target, so a showroom car reflects the room around it.
+A capture must draw what the main view draws; the garage shell is preloaded
+SCX geometry outside the instance list and is drawn explicitly.
+
 A checked "dynamic reflections" option does not prove that the car material
 reads that cubemap. Follow the binding into the shader. Check fallbacks to
 the old envmaps and the `vehicle_material` flags.
@@ -449,6 +471,13 @@ Resolution alone does not explain the pixels: coverage in metres, projection,
 depth, bias, filtering, leaf alpha, and the choice of casters also count.
 A building missing from the casters stays without a shadow even with a larger
 shadow map.
+
+Every shadow pass depends on a linked shader program. bgfx links a program
+only when the fragment shader's `$input` list equals the vertex shader's
+`$output` list; otherwise it returns an invalid handle and, in Release, prints
+nothing. The passes check the handle and switch themselves off. A varying added
+to `vs_mesh` must therefore be added to every fragment shader paired with it.
+Startup reports each failed program as `[bgfx] program <name> failed to link`.
 
 Do not collect casters using only the visible camera frustum.
 The list must respect the useful light volume. When the time of day changes,
@@ -499,6 +528,9 @@ announce a persistent option before testing a restart.
 
 `host_sfx` handles effects. `host_music` handles playlists. `video_fmv*`
 handles video playback. Engine loops use the scripts' SfxTables.
+`scene_ambience` plays the `sfx_loop`/`sfx_random` lines of map placements
+through `host_sfx`; it owns those voices and stops them when their ground
+shell leaves the active world.
 Do not substitute a fixed engine sound for an RPM/load curve.
 
 Simultaneous voices are deliberately bounded, and menu repeats are handled
@@ -585,8 +617,8 @@ validation and must not be presented as one.
 ### Shipping
 
 State the cause, the files involved, the validation that was actually done,
-the limits, and the patch files required. Do not update native-coverage
-figures from the number of C++ functions that changed.
+the limits, and the patch files required. Do not edit native-coverage
+figures by hand; regenerate them with `python scripts/render_native_coverage.py`.
 Document every new native: class, name, descriptor, parameters, effect,
 lifetime, and any persistence.
 

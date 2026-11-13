@@ -10,6 +10,7 @@
 #include "slrr/script_cfg.hpp"
 #include "slrr/slrr_font.hpp"
 #include "slrr/video_fmv.hpp"
+#include "slrr/scene_ambience.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/script_threads.hpp"
 #include "slrr/script_compiler.hpp"
@@ -329,8 +330,10 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         if (!args.empty() && args[0].tag == ValueTag::Float) scale = args[0].v.f;
         if (!args.empty() && args[0].tag == ValueTag::Int) scale = static_cast<float>(args[0].v.i);
         const float previous = jvm.time_warp(scale);
-        if (std::isfinite(scale) && scale >= 0.f && (previous == 0.f) != (scale == 0.f))
+        if (std::isfinite(scale) && scale >= 0.f && (previous == 0.f) != (scale == 0.f)) {
           part_pause_engine_audio(scale == 0.f);
+          scene_ambience_pause(scale == 0.f);
+        }
         return Value::make_float(previous);
       });
   // Compatibility calls in shipped System.java without runtime work.

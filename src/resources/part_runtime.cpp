@@ -87,6 +87,9 @@ struct Record {
     float p[3]{}, y[3]{};
   };
   std::unordered_map<int, PoseOverride> slot_pose;
+  // Latest intentional setSlotPos values, kept separate from damage overlays so
+  // repair can restore a user pose even when both target the same slot.
+  std::unordered_map<int, PoseOverride> slot_script_pose;
   std::vector<Object *> renders;
   struct LinkVisual {
     Object *node = nullptr;
@@ -139,6 +142,9 @@ struct Record {
 };
 std::unordered_map<Object *, std::vector<SfxItem>> sfx_items;
 std::unordered_map<Object *, Record> records;
+// Weak, one-shot repair work consumed by the next part update. Stock Java may
+// repair descendants before their parents, so links must not be relinked early.
+std::unordered_set<Object *> repair_relink_pending;
 struct LoosePanel {
   physics::RigidBody body;
   PartMatrix carrier_frame{};
@@ -193,6 +199,7 @@ struct PedCrowd {
 };
 std::unordered_map<void*, PedCrowd> crowds;
 uint32_t ped_rng = 0x51ee5u;
+float ped_backlog = 0.f;
 VehicleHudLayout hud_preview;
 std::string hud_preview_directory;
 constexpr double kPhysicsTick = 1.0 / physics::VehicleDynamics::update_frequency;
@@ -209,6 +216,7 @@ Record *record(Object *object) {
   auto found = records.find(canonical(object));
   return found == records.end() ? nullptr : &found->second;
 }
+void repair_part(Object *part, Record &rec);
 Object *object(const std::vector<Value> &args, size_t i) {
   return i < args.size() && args[i].tag == ValueTag::Obj ? args[i].v.o
                                                          : nullptr;
@@ -1459,6 +1467,10 @@ bool part_command(Object *part, const std::string &command) {
   auto *rec = record(part);
   if (!rec)
     return false;
+  if (verb == "repair") {
+    repair_part(part, *rec);
+    return true;
+  }
   if (verb == "setsteer" && rec->config->native_kind == "car") {
     float value = 0;
     if (!(input >> value) || !std::isfinite(value))
@@ -1583,6 +1595,7 @@ bool part_destroy(Object *part) {
   if (!rec)
     return false;
   loose_panels.erase(part);
+  repair_relink_pending.erase(part);
   if (auto camera = part->fields.find("_hostCockpitCamera"); camera != part->fields.end())
     gameref_remove(camera->second.v.o);
   auto children = rec->children;
@@ -2342,7 +2355,7 @@ void publish_deformation(Object* part, Record& rec) {
 }
 
 void restore_deformation(Object* part, Record& rec) {
-  if (!rec.deformation) return;
+  // Repair must also clear stale render/collision data if the cage is already gone.
   rec.deformation.reset();
   rec.deformed_collision.reset();
   rec.deformation_upload_ticks = 0;
@@ -2351,6 +2364,67 @@ void restore_deformation(Object* part, Record& rec) {
   for (const auto& [slot, child] : rec.children)
     if (const auto* installed = record(child); installed && installed->config->category == 2)
       place_child(part, slot, false);
+}
+
+bool scripted_parts_contain(Object* owner, Object* child) {
+  if (!owner) return false;
+  const auto attached = owner->fields.find("attachedParts");
+  if (attached == owner->fields.end() || attached->second.tag != ValueTag::Obj ||
+      !attached->second.v.o)
+    return false;
+  Object* vector = attached->second.v.o;
+  const auto data = vector->fields.find("elementData");
+  if (data == vector->fields.end() || data->second.tag != ValueTag::Obj ||
+      !data->second.v.o || !data->second.v.o->is_array)
+    return false;
+  const auto& slots = data->second.v.o->slots;
+  const int count = std::clamp(field_int(vector, "elementCount",
+                                         static_cast<int>(slots.size())),
+                               0, static_cast<int>(slots.size()));
+  for (int i = 0; i < count; ++i)
+    if (slots[static_cast<size_t>(i)].tag == ValueTag::Obj &&
+        slots[static_cast<size_t>(i)].v.o &&
+        canonical(slots[static_cast<size_t>(i)].v.o) == canonical(child))
+      return true;
+  return false;
+}
+
+void repair_part(Object* part, Record& rec) {
+  // SLRR_rev 77b0fb6 repairDamage: clear deformation and slot/wheel damage.
+  // Stock Part.repair already visits the installed tree, so keep this reset local.
+  restore_deformation(part, rec);
+  for (const auto& entry : rec.slot_damage) {
+    const int slot_index = entry.first;
+    if (slot_index < 0 || static_cast<size_t>(slot_index) >= rec.config->slots.size())
+      continue;
+    const int slot = rec.config->slots[static_cast<size_t>(slot_index)].id;
+    if (const auto scripted = rec.slot_script_pose.find(slot);
+        scripted != rec.slot_script_pose.end())
+      rec.slot_pose[slot] = scripted->second;
+    else
+      rec.slot_pose.erase(slot);
+    if (rec.state.parent && slot == rec.state.own_slot)
+      place_child(rec.state.parent, rec.state.parent_slot, false);
+    else
+      place_child(part, slot, false);
+  }
+  rec.slot_damage.clear();
+  for (auto& damage : rec.wheel_damage) damage.clear();
+  // Avoid relink_assembly here: stock repair can visit descendants before their
+  // parents. Queue each affected part once and flush after the scripted walk.
+  if (!rec.links.empty()) repair_relink_pending.insert(part);
+
+  // The chassis's attachedParts is flat and covers normal whole-car repair.
+  // A detached non-chassis assembly has no such script list in this host, so
+  // fill only those uncovered children instead of traversing them twice.
+  Object* chassis = car(part);
+  for (const auto& [slot, child] : rec.children) {
+    const bool scripted = scripted_parts_contain(part, child) ||
+        (chassis && chassis != part && scripted_parts_contain(chassis, child));
+    if (!scripted && runtime && record(child))
+      runtime->invoke_by_name(child->class_name, "repair",
+                              {Value::make_obj(child)}, false);
+  }
 }
 
 struct PanelContact {
@@ -3141,7 +3215,7 @@ PedestrianLines& city_walk() {
     if (!in) return lines;
     const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     if (lines.load(text))
-      std::fprintf(stderr, "[ped] city.walk zones=%d\n", lines.zones());
+      std::fprintf(stderr, "[ped] city.walk rows=%d\n", lines.rows());
   }
   return lines;
 }
@@ -3160,9 +3234,8 @@ struct PedSim {
   std::condition_variable_any cv;
   bool posted = false;
   bool ready = false;
-  bool seeded = false;
-  float dt = 0.f, x = 0.f, y = 0.f, z = 0.f;
-  uint32_t step_rng = 1;
+  float dt = 0.f;
+  std::vector<PedestrianCar> cars;
   PedestrianLines* walk = nullptr;
   std::vector<PedSlot> in, out;
   void run(std::stop_token stop);
@@ -3176,17 +3249,20 @@ void PedSim::run(std::stop_token stop) {
     if (stop.stop_requested()) return;
     auto slots = std::move(in);
     const float step_dt = dt;
-    const float cx = x, cy = y, cz = z;
-    uint32_t rng = step_rng;
+    const std::vector<PedestrianCar> obstacles = cars;
     PedestrianLines* lines = walk;
     posted = false;
     lock.unlock();
-    if (lines && step_dt > 0.f)
-      for (auto& slot : slots)
-        if (slot.line.ok) lines->step(slot.line, step_dt, cx, cy, cz, rng);
+    if (lines && step_dt > 0.f) {
+      // All walkers in one step: they steer around each other.
+      std::vector<PedestrianWalker> walkers;
+      walkers.reserve(slots.size());
+      for (const auto& slot : slots) walkers.push_back(slot.line);
+      lines->step(walkers, step_dt, obstacles.data(), static_cast<int>(obstacles.size()));
+      for (size_t i = 0; i < slots.size(); ++i) slots[i].line = walkers[i];
+    }
     lock.lock();
     out = std::move(slots);
-    step_rng = rng;
     ready = true;
   }
 }
@@ -3281,11 +3357,16 @@ void tick_pedestrians(double seconds) {
         PedAgent& agent = found->second.agents[slot.index];
         if (agent.sim_gen != slot.gen || !agent.line.ok) continue;
         agent.line = slot.line;
+        // Left through a gate with no row behind it: hide the body.
+        if (!agent.line.ok) {
+          agent.placed = false;
+          ++agent.sim_gen;
+        }
       }
       sim.ready = false;
     }
   }
-  const bool routed = lines.zones() > 0;
+  const bool routed = lines.rows() > 0;
   void* root = chassis_root(chassis);
   PartMatrix parent_m;
   const bool rooted = root && root != chassis &&
@@ -3473,16 +3554,14 @@ void tick_pedestrians(double seconds) {
         continue;
       }
       if (routed) {
-        const float target = agent.line.yaw;
-        if (!agent.placed) agent.yaw = target;
-        else {
-          float delta = std::atan2(std::sin(target - agent.yaw), std::cos(target - agent.yaw));
-          agent.yaw += std::clamp(delta, -dt * 5.f, dt * 5.f);
-        }
+        // The walker already turns at the original rate (pi per metre).
+        agent.yaw = agent.line.yaw;
         agent.x = agent.line.x;
         agent.z = agent.line.z;
         agent.placed = true;
-        character_set_speed(agent.render, agent.line.speed / 1.2f);
+        // The original advances the walk clip by the distance moved plus
+        // half the turn, so one metre walked is one second of clip.
+        character_set_speed(agent.render, agent.line.gait);
       }
       const PedKind& kind = crowd.kinds[static_cast<size_t>(agent.kind)];
       // Feet on the corridor point. The cfg render offset is not part of the
@@ -3510,7 +3589,9 @@ void tick_pedestrians(double seconds) {
   {
     PedSim& sim = ped_sim();
     std::lock_guard lock(sim.mu);
-    if (!sim.posted) {
+    if (sim.posted) {
+      ped_backlog = std::min(0.1f, ped_backlog + dt);
+    } else {
       sim.in.clear();
       for (auto& entry : crowds) {
         const auto& agents = entry.second.agents;
@@ -3525,14 +3606,16 @@ void tick_pedestrians(double seconds) {
         }
       }
       if (!sim.in.empty()) {
-        if (!sim.seeded) {
-          sim.step_rng = ped_rng;
-          sim.seeded = true;
+        // Frames that passed while the worker was busy still count.
+        sim.dt = std::min(0.1f, dt + ped_backlog);
+        ped_backlog = 0.f;
+        sim.cars.clear();
+        PedestrianCar car{car_x, car_y, car_z, 0.f, 0.f};
+        if (const auto* body = gameref_get(chassis)) {
+          car.vx = body->vel[0];
+          car.vz = body->vel[2];
         }
-        sim.dt = dt;
-        sim.x = car_x;
-        sim.y = car_y;
-        sim.z = car_z;
+        sim.cars.push_back(car);
         sim.walk = &lines;
         sim.posted = true;
         wake = true;
@@ -3555,6 +3638,13 @@ void part_pause_engine_audio(bool paused) {
 void part_physics_advance(double seconds) {
   if (!std::isfinite(seconds) || seconds < 0)
     throw std::invalid_argument("invalid vehicle elapsed time");
+  if (!repair_relink_pending.empty()) {
+    // One local relink per repaired part, after the complete stock repair walk.
+    // The empty-set check is the only steady-state cost.
+    for (Object* part : repair_relink_pending)
+      if (record(part)) relink_one(part);
+    repair_relink_pending.clear();
+  }
   // Hinges also animate while the chassis physics is suspended in the garage.
   // Advance a normalized phase so reversing mid-motion preserves the pose.
   const float hinge_step = static_cast<float>(seconds / 0.5);
@@ -3621,6 +3711,28 @@ void part_remove_pedestrian_type(void* ground, void* type) {
   if (index < crowd->second.kinds.size())
     crowd->second.kinds.erase(crowd->second.kinds.begin() + static_cast<std::ptrdiff_t>(index));
   clear_ped_agents(crowd->second);
+}
+
+float part_pedestrian_distance(void* ground, float x, float y, float z, int32_t type_id) {
+  // Pedestrian_distance @ 0x00589BE0 (slrr-reverse): nearest live walker,
+  // filtered by type id unless it is 0; -1 for an empty or unmatched list.
+  if (!ground || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return -1.f;
+  const auto crowd = crowds.find(ground);
+  if (crowd == crowds.end()) return -1.f;
+  float best = -1.f;
+  for (const PedAgent& agent : crowd->second.agents) {
+    if (!agent.line.ok || agent.kind < 0 ||
+        static_cast<size_t>(agent.kind) >= crowd->second.types.size())
+      continue;
+    if (type_id != 0) {
+      const auto* type = gameref_get(crowd->second.types[static_cast<size_t>(agent.kind)]);
+      if (!type || type->type_id != type_id) continue;
+    }
+    const float dx = agent.line.x - x, dy = agent.line.y - y, dz = agent.line.z - z;
+    const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (best < 0.f || d < best) best = d;
+  }
+  return best;
 }
 
 void part_drop_actors() {
@@ -3822,6 +3934,7 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   runtime = &jvm;
   for (auto &[key, rec] : records) release_side(rec);
   records.clear();
+  repair_relink_pending.clear();
   // Dyno sessions belong to the old world's Java objects. The registry is
   // deliberately weak during GC, so world teardown must release it explicitly.
   dyno_clear_sessions();
@@ -4345,21 +4458,25 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
          auto *pos = object(a, 1);
          auto *ori = object(a, 2);
          // Both null restores the cfg pose (hoods and doors do this).
-         if (!pos && !ori)
+         if (!pos && !ori) {
            p->slot_pose.erase(slot);
-         else {
+           p->slot_script_pose.erase(slot);
+         } else {
            auto &ov = p->slot_pose[slot];
+           auto &scripted = p->slot_script_pose[slot];
            if (pos) {
              ov.p[0] = comp(pos, "x");
              ov.p[1] = comp(pos, "y");
              ov.p[2] = comp(pos, "z");
-             ov.pos = true;
+             std::copy(ov.p, ov.p + 3, scripted.p);
+             ov.pos = scripted.pos = true;
            }
            if (ori) {
              ov.y[0] = comp(ori, "y");
              ov.y[1] = comp(ori, "p");
              ov.y[2] = comp(ori, "r");
-             ov.ypr = true;
+             std::copy(ov.y, ov.y + 3, scripted.y);
+             ov.ypr = scripted.ypr = true;
            }
          }
          if (p->state.parent && slot == p->state.own_slot)

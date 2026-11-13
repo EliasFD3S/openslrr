@@ -6,6 +6,9 @@ vehicle bindings, the Language work described in
 [SCRIPT_COMPILER.md](SCRIPT_COMPILER.md), and the Leftovers classification.
 The Release x64 registry was compared with the
 376 entries in the stock table at `docs/stubs.txt` in the research workspace.
+The same table is pinned in `assets/progress/stock-natives.json`, and
+`python scripts/render_native_coverage.py` recomputes the counts below and the
+README chart from the registrations in `src/`.
 Matching uses owner, method and parameter types, including overloads. This
 measures bindings. Behavioral status below comes from reviewing the C++
 implementations and following selected calls to their consumers.
@@ -39,7 +42,7 @@ that category. It is not a compatibility score or a complete runtime trace.
 | `System.isLoading`, `isLoadingReset`, `setLdPriority` | Track active RPK scans and measured pack-work history; reset seeds the 32-sample ring without clearing ongoing scans. Priority changes scan cadence. Mesh/texture streaming has no corresponding queue. |
 | `System.compileAll` | Embedded C++ compiler writes validated TUFA containers for source units, including multiple classes per file. Existing loaded classes require a restart. See SCRIPT_COMPILER.md. |
 | `System.info` | Selector 5 returns the live host VM heap count. Other selectors return an empty string. |
-| `Animation` | Binds a `.matrixdata` clip to the render named by the constructor. `play` / `loopPlay` / `pause` / `seek` / `getPos` / `setSpeed` sample it on the skeleton declared by that render. `setFade` blends the clip in from the bind pose. Each render keeps its own pose. |
+| `Animation` | The constructor is registered with the dotted TUFA descriptor; the earlier slash form never matched, so script `Animation`s stayed unbound. It binds a `.matrixdata` clip to the render named by the constructor. `play` / `loopPlay` / `pause` / `seek` / `getPos` / `setSpeed` sample it on the skeleton declared by that render. `setFade` blends the clip in from the bind pose. Each render keeps its own pose. |
 | `RenderRef.getBoneId` | Case-insensitive lookup in that skeleton. An unknown name, or a render with no skeleton, returns 0. |
 | `RenderRef.setMatrix(int, ResourceRef, Vector3, Ypr)` | Writes that bone's local pose. With another render as `bone_ref`, this render is parented on that bone. Script positions are metres. |
 | `Thread.setDaemon` | Sets and clears the per-thread flag. Shutdown still cancels every fiber. |
@@ -52,11 +55,11 @@ that category. It is not a compatibility score or a complete runtime trace.
 | `RenderRef.plotRoute` | Always returns zero. Route line construction is missing. |
 | `RenderRef.lineCreate`, `lineAdd` | Build renderable ribbons from positions, normals and widths. Color is applied per segment. |
 | `Chassis.setCooling`, `setSteerWheelRadius`, `setSteerWheel`, `setBuck`, `setNitroSFX` | Store configuration. No temperature simulation, bucking effect or nitro audio consumes these values yet. The installed wheel on slot type 11 turns about the cfg `steering` locator. |
-| `GroundRef.setPedestrianDensityN`, `addPedestrianType`, `remPedestrianType` | Density, after the script's Config factor, scales a walking crowd around the driven car, capped at 12. Each type's `native ped` cfg supplies the render and the looped walk clip. They do not follow a road graph. `pedestrianDistance` is still missing. |
+| `GroundRef.setPedestrianDensityN`, `addPedestrianType`, `remPedestrianType`, `removePedestrianType`, `pedestrianDistance` | Density, after the script's Config factor, sets people per square metre of `city.walk` row area around the driven car. Each type's `native ped` cfg supplies the render and the walk clip. Walkers follow the original engine model: free agents inside a row, pushed back by its walls and both sidewalk runs, leaving only through gates (see `src/resources/pedestrian_lines.cpp`). `removePedestrianType` is the original native table's name for `remPedestrianType`. `pedestrianDistance(pos, type)` returns the distance to the nearest live walker of that type id, or of any type for 0, and -1 when there is none. |
 | `PhysicsRef.getPos` | Returns the Vector3 stored by `setMatrix`. Without one, it returns a new Vector3 from the object's pose. |
 | `Part.setSfxLoopParams` | Stores the two parameters without applying them to a voice. |
 | `Chassis.setHornSFX` | Stores all indexed sounds. The current player input plays the index 1 sample once per press. |
-| `GameRef.getInfo`, `queueEvent` | Implement selected queries and commands. Unhandled queries return zero. Unhandled command paths still need coverage as new sections are exercised. |
+| `GameRef.getInfo`, `queueEvent` | Implement selected queries and commands. `repair` performs the native per-part deformation, damage-associated slot/wheel and CFG mount/base-mesh reset; stock Java owns the installed-tree recursion and wear/tear caps, with a native fallback only for detached assembly children omitted from `attachedParts`. Unhandled queries return zero. Other command paths still need coverage as new sections are exercised. |
 | `GameType.registerCallback`, notifications | Control, drive and animate callbacks run. Notifications have event routing and GC roots. Other callback modes and event producers still need verification. |
 | `Input.getAxis`, `activeAxis`, `Controller.user_SetAxisSmooth` | Keyboard, mouse and one logical XInput pad are wired. Pointer movement is excluded from rebinding. Negative mouse axis requests reset deltas, while their sensitivity argument remains unused. Smoothing uses a host time-based approximation. |
 | `Controller.user_SetAxisSpeed`, `user_SetAxisForce` | Scale software smoothing and override the logical axis value. The force coefficient and hardware feedback are unimplemented. |
@@ -86,12 +89,12 @@ being replaced by success-returning mocks.
 
 | System | Count | Methods |
 | --- | ---: | --- |
-| `GroundRef` | 21 | `setWater` (2 overloads), `addWaterLimit`, `addTrafficCar`, `remTrafficCar`, `notifyTrafficCar`, `addTrafficN`, `addTrafficP`, `delTraffic`, `setTrafficCarBehaviour`, `haltTrafficCross`, `haltTrafficPath`, `getStartDirection`, `findRoute`, `getRouteLength` (2 overloads), `getRoutePos`, `getRouteDist`, `alignToRoad`, `removePedestrianType`, `pedestrianDistance` |
+| `GroundRef` | 19 | `setWater` (2 overloads), `addWaterLimit`, `addTrafficCar`, `remTrafficCar`, `notifyTrafficCar`, `addTrafficN`, `addTrafficP`, `delTraffic`, `setTrafficCarBehaviour`, `haltTrafficCross`, `haltTrafficPath`, `getStartDirection`, `findRoute`, `getRouteLength` (2 overloads), `getRoutePos`, `getRouteDist`, `alignToRoad` |
 | `PhysicsRef` | 7 | `create`, `createSphere`, `setStatic`, `getVel` (2 overloads), `getAngVel`, `getOri` |
 | `ParticleSystem` | 9 | `init`, `stop`, `setFreq`, `setDirectSource`, `setSource`, `setCounter`, `getCounter`, `delAction`, `modePermanent` |
 | `Painter` | 3 | `doPaint`, `paintPart`, `xPaint` |
 
-There are 40 missing active signatures and 3 missing leftovers, for 43 total.
+There are 38 missing active signatures and 3 missing leftovers, for 41 total.
 
 ## Roadmap
 
@@ -107,7 +110,7 @@ There are 40 missing active signatures and 3 missing leftovers, for 43 total.
 3. **Complete the navigation and race loop.** Read road and route data,
    implement the `GroundRef` route queries, `Navigator.updateNavigator`
    and route rendering. Verify map, rear view and cruise control in a race.
-   Add traffic after routes and collision are stable. Pedestrians already walk near the player; they do not follow the road graph.
+   Add traffic after routes and collision are stable. Pedestrians already walk the `city.walk` sidewalk rows near the player; they do not use the road graph.
 4. **Complete garage actions and effects.** Implement the `Painter` natives
    and resource-created sound, then animation, particles, flares and fog.
    Verify paint and installed-part state through a career save and reload.

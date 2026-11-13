@@ -534,16 +534,17 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
            (dot == std::string::npos || (body.size() == dot + 2 && body.back() >= '0' && body.back() <= '3'));
   };
 
-  // Stock assets and their panel-relative placement in build 606.
+  // Stock assets and their panel-relative placement in build 606. Center the
+  // odometer in its box and keep the full car-health glyph inside its frame.
   const VehicleHudLayout stock{{
       {true, cars_resource(0x55), {.742f, .994f, 0}},
       {true, cars_resource(0x56), {.326f, 1.781f, 0}, {.48f, -.0001f, -.48f, .48f}},
       {}, {},
       {true, cars_resource(0x58), {.222f, .887f, 0}, {}, 0xff4fe015, "%03.0f"},
       {true, cars_resource(0x58), {.407f, .889f, 0}, {}, 0xff4fe015, "N123456R"},
-      {true, cars_resource(0x58), {-.378f, .791f, 0}, {}, 0xff4fe015, "%07.0f"},
+      {true, cars_resource(0x58), {-.357f, .767f, 0}, {}, 0xff4fe015, "%07.0f"},
       {true, cars_resource(0x63), {-.227f, .925f, 0}},
-      {true, cars_resource(0x57), {.670f, .743f, 0}},
+      {true, cars_resource(0x57), {.646f, .631f, 0}},
       {true, cars_resource(0x5c), {-.126f, .843f, 0}, {}, 0xff000000},
       {true, cars_resource(0x5c), {-.126f, .948f, 0}, {}, 0xff000000},
   }};
@@ -597,7 +598,7 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       const size_t start = size_t(glyph) * 4;
       if ((start + 4) * 3 > mesh->positions.size()) continue;
       const float *p = mesh->positions.data() + start * 3;
-      const float sy = (damage ? .00014f : .00032f) * stock_scale;
+      const float sy = (damage ? (override.defined ? .00014f : .00036f) : .00032f) * stock_scale;
       const float x = override.defined && damage && item.position[0] < 0.f
           ? -item.position[0] : item.position[0];
       uint32_t color = item.color;
@@ -608,8 +609,21 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
         color = 0xff000000u | (red << 16) | (green << 8);
       }
       const float y = override.defined ? item.position[1] : stock_y(i);
-      draw(*mesh, start, 4, quad, 6, x, y,
-           sy * pixel_aspect, sy, 0, p[0], p[1], color);
+      if (damage) {
+        // The stock font stores the car outline and its damage blips as
+        // separate glyphs in one shared coordinate system. Draw the complete
+        // assembly so the engine, wheels, skirts and body sections are visible.
+        for (const unsigned char part : "AELOTabcdhlpqrtuv") {
+          if (!part) continue;
+          const size_t part_start = size_t(part) * 4;
+          if ((part_start + 4) * 3 > mesh->positions.size()) continue;
+          draw(*mesh, part_start, 4, quad, 6, x, y,
+               sy * pixel_aspect, sy, 0, p[0], p[1], color);
+        }
+      } else {
+        draw(*mesh, start, 4, quad, 6, x, y,
+             sy * pixel_aspect, sy, 0, p[0], p[1], color);
+      }
       continue;
     }
     if (slot == HudSlot::Rpm || slot == HudSlot::Speed ||
@@ -631,7 +645,7 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
         x *= .42f;
         y *= -.82f;
       }
-      const float sy = override.defined ? .00018f : .00012f * stock_scale;
+      const float sy = .00024f * (override.defined ? 1.f : stock_scale);
       const float sx = sy * pixel_aspect;
       for (const unsigned char ch : std::string(buffer)) {
         const size_t start = size_t(ch) * 4;

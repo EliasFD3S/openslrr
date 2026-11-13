@@ -2,6 +2,7 @@
 #include "slrr/mainloop.hpp"
 #include "slrr/script_threads.hpp"
 #include "slrr/script_events.hpp"
+#include "slrr/scene_ambience.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/scene_presentation.hpp"
 #include "slrr/natives_boot.hpp"
@@ -752,7 +753,9 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
 
   spin_mechanic_inventory(jvm, frame_dt);
   if(!script_thread_alive(jvm,g_mechanic_thread))apply_mechanic_infoline(jvm, g_spinning_mechanic);
-  part_physics_advance(jvm.advance_sim_time(dt));
+  const double sim_seconds = jvm.advance_sim_time(dt);
+  part_physics_advance(sim_seconds);
+  scene_ambience_tick(sim_seconds);
 
   // Last write before the view is built. The chase camera must not cover
   // the showroom orbit, and nothing after the earlier spin may put it back.

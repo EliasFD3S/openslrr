@@ -2,6 +2,7 @@
 #include "natives_internal.hpp"
 
 #include "slrr/gameref.hpp"
+#include "slrr/scene_ambience.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/host_cursor.hpp"
@@ -74,6 +75,7 @@ void spawn_ground_shell(Jvm& jvm, const RpkIndex& rpk, Object* ground) {
     shell->type_id = static_cast<int32_t>(full);
     node->fields["id"] = Value::make_int(static_cast<int32_t>(full));
     gameref_set_parent(node, ground);
+    scene_ambience_attach(node, rpk, map);
     if (id == primary) ground->fields["_ground_shell"] = Value::make_obj(node);
     pending.insert(pending.end(), map.exterior_maps.begin(), map.exterior_maps.end());
     std::printf("[scene] ground shell 0x%x '%s' src=%s poly=%d phys=%zu\n", full,

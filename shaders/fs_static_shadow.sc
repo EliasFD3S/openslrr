@@ -1,4 +1,6 @@
-$input v_normal, v_texcoord0, v_texcoord1, v_texcoord2, v_color0, v_staticShadow, v_worldPos
+$input v_normal, v_texcoord0, v_texcoord1, v_texcoord2, v_color0, v_staticShadow, v_worldPos, v_tint
+// bgfx links a program only when this $input list equals the vertex shader's
+// $output list (vs_mesh, vs_mesh_inst). Keep the two in step.
 
 #include <bgfx_shader.sh>
 
