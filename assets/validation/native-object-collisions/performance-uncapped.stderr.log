@@ -1,0 +1,205 @@
+[music] scan Garage_Shop: 4 tracks
+[music] scan Roam_ride: 6 tracks
+[music] scan Race_chase: 4 tracks
+[music] scan Main_menu: 1 tracks
+[jvm] invoke depth exceeded java.util.resource.Dummy.<init>
+[part] no compatible free slot child=0x90104 root=0x90006
+[part] no compatible free slot child=0x9010e root=0x90006
+[part] no compatible free slot child=0x9011a root=0x90006
+[part] no compatible free slot child=0x90112 root=0x90006
+[part] no compatible free slot child=0x90111 root=0x90006
+[part] no compatible free slot child=0x90110 root=0x90006
+[part] no compatible free slot child=0x90117 root=0x90006
+[part] no compatible free slot child=0x90116 root=0x90006
+[part] no compatible free slot child=0x90108 root=0x90006
+[part] no compatible free slot child=0x90109 root=0x90006
+[part] no compatible free slot child=0x90114 root=0x90006
+[part] no compatible free slot child=0x90119 root=0x90006
+[part] no compatible free slot child=0x9010f root=0x90006
+[part] no compatible free slot child=0x9010d root=0x90006
+[part] no compatible free slot child=0x9010b root=0x90006
+[part] no compatible free slot child=0x90107 root=0x90006
+[part] no compatible free slot child=0x90118 root=0x90006
+[part] no compatible free slot child=0x90102 root=0x90006
+[part] no compatible free slot child=0x90106 root=0x90006
+[part] no compatible free slot child=0x9011e root=0x90006
+[part] no compatible free slot child=0x90115 root=0x90006
+[part] no compatible free slot child=0x9010a root=0x90006
+[part] no compatible free slot child=0x90103 root=0x90006
+[part] no compatible free slot child=0x90126 root=0x90006
+[part] no compatible free slot child=0x90128 root=0x90006
+[part] no compatible free slot child=0x9010c root=0x90006
+[part] no compatible free slot child=0x90113 root=0x90006
+[part] no compatible free slot child=0x120019 root=0x90006
+[part] no compatible free slot child=0x120019 root=0x90006
+[part] no compatible free slot child=0x120019 root=0x90006
+[part] no compatible free slot child=0x120019 root=0x90006
+[part] no compatible free slot child=0x90105 root=0x90006
+[music] set=0 track=1/4 playing=1 garage maditation v3_3 - hotel sinus.mp3
+[jvm] invoke depth exceeded java.util.resource.Dummy.<init>
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addTrafficN (Ljava.util.resource.GameRef;IFFF)I (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addTrafficN (Ljava.util.resource.GameRef;IFFF)I (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addTrafficN (Ljava.util.resource.GameRef;IFFF)I (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addTrafficN (Ljava.util.resource.GameRef;IFFF)I (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addTrafficN (Ljava.util.resource.GameRef;IFFF)I (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addTrafficN (Ljava.util.resource.GameRef;IFFF)I (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addTrafficN (Ljava.util.resource.GameRef;IFFF)I (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addTrafficN (Ljava.util.resource.GameRef;IFFF)I (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addTrafficN (Ljava.util.resource.GameRef;IFFF)I (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.setWater (Ljava.lang.Vector3;Ljava.lang.Vector3;FF)V (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addWaterLimit (Ljava.lang.Vector3;Ljava.lang.Vector3;)V (from java.util.resource.GroundRef)
+[music] set=1 track=1/6 playing=1 C.D.N. and Dramaties - Ali Ali radio edit masterded - Acti.mp3
+[driver] vin seated
+[ped] city.walk zones=788
+[ped] want=60 active=3 density=0.00120 slider=0.10 area=50225 radius=2.5
+[ped] 3 walkers
+[validate-perf] fps=13.8 floorBuilds=4
+[validate-state] pos=(-83.644 13.427 -558.629) speed=6.762 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=33.5 floorBuilds=4
+[validate-state] pos=(-78.746 13.548 -556.375) speed=29.945 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50165 radius=2.5
+[validate-perf] fps=37.0 floorBuilds=4
+[validate-state] pos=(-68.506 13.770 -551.641) speed=49.777 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=32.7 floorBuilds=4
+[ped] want=59 active=59 density=0.00120 slider=0.10 area=49552 radius=2.5
+[validate-state] pos=(-54.037 13.977 -544.993) speed=62.243 throttle=1.000 brake=0.000 clutch=0.000 gear=2 released=1 engaged=1
+[validate-perf] fps=34.4 floorBuilds=4
+[validate-contact] speed=20.9475 point=(-35.341 14.645 -535.932) normal=(-0.910 0.000 -0.414) body=(-37.046 14.602 -537.246)
+[validate-state] pos=(-37.099 14.595 -537.290) speed=1.592 throttle=1.000 brake=0.000 clutch=0.000 gear=2 released=1 engaged=1
+[validate-contact] speed=2.8343 point=(-35.341 14.645 -535.932) normal=(-0.669 0.000 -0.743) body=(-37.089 14.575 -537.288)
+[validate-contact] speed=0.7789 point=(-35.341 14.645 -535.932) normal=(-0.505 0.000 -0.863) body=(-37.135 14.547 -537.408)
+[validate-perf] fps=29.8 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50298 radius=2.5
+[validate-state] pos=(-38.020 14.422 -537.642) speed=5.003 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=23.6 floorBuilds=4
+[validate-state] pos=(-39.234 14.390 -535.525) speed=5.361 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=23.5 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50445 radius=2.5
+[validate-state] pos=(-39.429 14.354 -535.493) speed=0.926 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=22.3 floorBuilds=4
+[validate-state] pos=(-39.454 14.347 -535.482) speed=0.197 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=24.2 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50437 radius=2.5
+[validate-state] pos=(-39.483 14.346 -535.471) speed=0.344 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=24.2 floorBuilds=4
+[validate-state] pos=(-39.511 14.346 -535.460) speed=0.105 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=24.7 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50440 radius=2.5
+[validate-state] pos=(-39.538 14.344 -535.450) speed=0.202 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=24.4 floorBuilds=4
+[validate-state] pos=(-39.567 14.341 -535.438) speed=0.366 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=22.3 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50452 radius=2.5
+[validate-state] pos=(-39.595 14.347 -535.427) speed=0.150 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=19.9 floorBuilds=4
+[validate-state] pos=(-39.623 14.344 -535.417) speed=0.193 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=20.6 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50468 radius=2.5
+[validate-state] pos=(-39.651 14.342 -535.406) speed=0.195 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=20.9 floorBuilds=4
+[validate-state] pos=(-39.680 14.340 -535.396) speed=0.174 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=20.1 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50472 radius=2.5
+[validate-state] pos=(-39.706 14.343 -535.385) speed=0.494 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=20.7 floorBuilds=4
+[validate-state] pos=(-39.734 14.334 -535.376) speed=0.250 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=20.6 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50472 radius=2.5
+[validate-state] pos=(-39.761 14.336 -535.365) speed=0.164 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=20.4 floorBuilds=4
+[validate-state] pos=(-39.788 14.333 -535.355) speed=0.227 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=20.7 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50479 radius=2.5
+[validate-state] pos=(-39.816 14.335 -535.344) speed=0.151 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=20.4 floorBuilds=4
+[validate-state] pos=(-39.843 14.332 -535.335) speed=0.300 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=20.6 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50471 radius=2.5
+[validate-state] pos=(-39.870 14.333 -535.324) speed=0.174 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=19.4 floorBuilds=4
+[validate-state] pos=(-39.897 14.331 -535.313) speed=0.316 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=20.6 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50472 radius=2.5
+[validate-state] pos=(-39.927 14.330 -535.302) speed=0.117 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=25.0 floorBuilds=4
+[validate-state] pos=(-39.954 14.326 -535.292) speed=0.099 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=23.7 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50460 radius=2.5
+[validate-state] pos=(-39.981 14.328 -535.281) speed=0.148 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=25.1 floorBuilds=4
+[validate-state] pos=(-40.011 14.329 -535.270) speed=0.240 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=24.8 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50460 radius=2.5
+[validate-state] pos=(-40.038 14.331 -535.259) speed=0.186 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=25.8 floorBuilds=4
+[validate-state] pos=(-40.065 14.324 -535.250) speed=0.220 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=25.5 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50452 radius=2.5
+[validate-state] pos=(-40.093 14.328 -535.238) speed=0.110 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=25.6 floorBuilds=4
+[validate-state] pos=(-40.121 14.327 -535.227) speed=0.205 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=25.5 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50444 radius=2.5
+[validate-state] pos=(-40.145 14.325 -535.218) speed=0.177 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=24.4 floorBuilds=4
+[validate-state] pos=(-40.174 14.320 -535.209) speed=0.234 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=23.1 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50449 radius=2.5
+[validate-state] pos=(-40.197 14.322 -535.199) speed=0.149 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=25.7 floorBuilds=4
+[validate-state] pos=(-40.223 14.321 -535.190) speed=0.063 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=25.1 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50456 radius=2.5
+[validate-state] pos=(-40.250 14.322 -535.179) speed=0.132 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=24.8 floorBuilds=4
+[validate-state] pos=(-40.274 14.318 -535.170) speed=0.135 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=23.7 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50445 radius=2.5
+[validate-state] pos=(-40.299 14.322 -535.161) speed=0.313 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=24.2 floorBuilds=4
+[validate-state] pos=(-40.324 14.317 -535.151) speed=0.168 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=24.5 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50460 radius=2.5
+[validate-state] pos=(-40.350 14.319 -535.141) speed=0.191 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=24.2 floorBuilds=4
+[validate-state] pos=(-40.375 14.312 -535.132) speed=0.165 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=23.9 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50460 radius=2.5
+[validate-state] pos=(-40.402 14.318 -535.120) speed=0.129 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=23.2 floorBuilds=4
+[validate-state] pos=(-40.428 14.317 -535.111) speed=0.170 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=23.9 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50468 radius=2.5
+[validate-state] pos=(-40.455 14.314 -535.101) speed=0.285 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=24.1 floorBuilds=4
+[validate-state] pos=(-40.481 14.308 -535.092) speed=0.127 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=23.6 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50468 radius=2.5
+[validate-state] pos=(-40.508 14.307 -535.081) speed=0.122 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=24.2 floorBuilds=4
+[validate-state] pos=(-40.535 14.311 -535.071) speed=0.326 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=22.8 floorBuilds=4
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50457 radius=2.5
+[validate-state] pos=(-40.562 14.309 -535.061) speed=0.220 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=25.0 floorBuilds=4
+[validate-state] pos=(-40.588 14.309 -535.051) speed=0.194 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50457 radius=2.5
+[validate-perf] fps=23.8 floorBuilds=4
+[validate-state] pos=(-40.615 14.305 -535.042) speed=0.235 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=24.0 floorBuilds=4
+[validate-state] pos=(-40.642 14.303 -535.031) speed=0.155 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50438 radius=2.5
+[validate-perf] fps=23.9 floorBuilds=4
+[validate-state] pos=(-40.667 14.305 -535.021) speed=0.261 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=23.7 floorBuilds=4
+[validate-state] pos=(-40.693 14.305 -535.011) speed=0.288 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50430 radius=2.5
+[validate-perf] fps=23.5 floorBuilds=4
+[validate-state] pos=(-40.720 14.304 -535.001) speed=0.220 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=22.3 floorBuilds=4
+[validate-state] pos=(-40.748 14.308 -534.989) speed=0.470 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50416 radius=2.5
+[validate-perf] fps=24.9 floorBuilds=4
+[validate-state] pos=(-40.774 14.300 -534.980) speed=0.156 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-perf] fps=27.4 floorBuilds=4
+[validate-state] pos=(-40.799 14.302 -534.970) speed=0.129 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1

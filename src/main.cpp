@@ -28,6 +28,9 @@ void usage() {
       "           [--auto-cmd mainmenu|street|N]\n"
       "           [--spawn-car cars/racers/Baiern.rpk:0x6]\n"
       "           [--vehicle-osd PATH]\n"
+      "           [--perf-log CSV|-] [--bench-map TRACK] [--bench-drive SECONDS]\n"
+      "           [--bench-time HOUR] [--bench-shots DIR]\n"
+      "           [--no-vsync] [--debug-overlay]\n"
       "           [PlayerName]\n"
       "\n"
       "Default --game: FMV intros → Init(int) (Soft splash / menu).\n"
@@ -109,6 +112,36 @@ int main(int argc, char** argv) {
         opt.auto_cmd = 119;
       else
         opt.auto_cmd = static_cast<int32_t>(std::atoi(c));
+      continue;
+    }
+    if (std::strcmp(a, "--perf-log") == 0 && i + 1 < argc) {
+      opt.perf_log = true;
+      const char* path = argv[++i];
+      if (std::strcmp(path, "-") != 0) opt.perf_log_path = path;
+      continue;
+    }
+    if (std::strcmp(a, "--no-vsync") == 0) {
+      opt.vsync = false;
+      continue;
+    }
+    if (std::strcmp(a, "--debug-overlay") == 0) {
+      opt.debug_overlay = true;
+      continue;
+    }
+    if (std::strcmp(a, "--bench-time") == 0 && i + 1 < argc) {
+      opt.bench_hour = static_cast<float>(std::atof(argv[++i]));
+      continue;
+    }
+    if (std::strcmp(a, "--bench-shots") == 0 && i + 1 < argc) {
+      opt.bench_shots = argv[++i];
+      continue;
+    }
+    if (std::strcmp(a, "--bench-map") == 0 && i + 1 < argc) {
+      opt.bench_map = argv[++i];
+      continue;
+    }
+    if (std::strcmp(a, "--bench-drive") == 0 && i + 1 < argc) {
+      opt.bench_drive_seconds = static_cast<float>(std::atof(argv[++i]));
       continue;
     }
     if (std::strcmp(a, "--root") == 0 && i + 1 < argc) {

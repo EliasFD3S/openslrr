@@ -4,6 +4,7 @@
 #include "slrr/gameref.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/scene_sun.hpp"
+#include "slrr/frame_profiler.hpp"
 
 #include "slrr/dds_image.hpp"
 #include "slrr/host_cursor.hpp"
@@ -832,6 +833,10 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
 {
     ++frames_;
     if (!ready_) return;
+    struct FrameCache {
+      FrameCache() { scene_instances_frame_cache(true); }
+      ~FrameCache() { scene_instances_frame_cache(false); }
+    } frame_cache;
     auto video = host_game_options().video;
     const auto& debug_render = debug_overlay_.render_options();
     video.view_distance = 3000.f;
@@ -907,7 +912,10 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
     // Back to the menu closes that movie before the next one is ready.
     // A retired splash still counts as a widget but is not drawn, so the
     // frame was only the clear color. Keep the previous image instead.
-    if (!covered) sync_instances(view, proj);
+    if (!covered) {
+      perf::Scope scope(perf::Zone::Collect);
+      sync_instances(view, proj);
+    }
     auto is_opening = [](const std::string& path) {
       std::string low = path;
       for (char& c : low)
@@ -1070,6 +1078,7 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
     if (!covered && !video_fmv_block_osd()) draw_previews();
 
     if (show_debug) {
+      perf::Scope scope(perf::Zone::Osd);
       std::vector<Object*> vehicles;
       std::unordered_set<Object*> seen;
       const auto add = [&](Object* vehicle) {
@@ -1097,7 +1106,26 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       osd_set_hover_at(-100.f, -100.f);
     }
     input.debug_mouse_capture = capture;
-    bgfx::frame();
+    {
+      perf::Scope scope(perf::Zone::Present);
+      bgfx::frame();
+    }
+    if (perf::enabled()) {
+      // bgfx reports the frame its render thread finished last.
+      const auto* stats = bgfx::getStats();
+      const auto ms = [](int64_t ticks, int64_t frequency) {
+        return frequency > 0 ? static_cast<double>(ticks) * 1000. / static_cast<double>(frequency) : 0.;
+      };
+      perf::RenderSample sample;
+      sample.render_thread_ms = ms(stats->cpuTimeEnd - stats->cpuTimeBegin, stats->cpuTimerFreq);
+      sample.gpu_ms = ms(stats->gpuTimeEnd - stats->gpuTimeBegin, stats->gpuTimerFreq);
+      sample.wait_render_ms = ms(stats->waitRender, stats->cpuTimerFreq);
+      sample.draws = stats->numDraw;
+      for (const auto& instance : instances_) sample.instances += instance.sky ? 0u : 1u;
+      for (const auto& batch : prop_batches_)
+        sample.batch_instances += static_cast<uint32_t>(batch.instances.size());
+      perf::set_render_sample(sample);
+    }
     // The swap chain is filled while the window is hidden. Showing it first
     // presented one clear (0x1a2230) before the movie or the splash plate.
     const bool reveal = video_fmv_frame_ready() || garage_ || osd_overlay_ || show_debug;
@@ -1178,6 +1206,70 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
     }
     set_scx_mesh(3, sum_groups, sum_verts, sum_tris, mesh_min_, mesh_max_);
   }
+
+namespace {
+bool same_map(const ScxTextureMap& a, const ScxTextureMap& b) {
+  return a.channel == b.channel && a.tiling == b.tiling && a.scale_u == b.scale_u &&
+         a.scale_v == b.scale_v && a.offset_u == b.offset_u && a.offset_v == b.offset_v;
+}
+
+// Everything a draw reads from a group, except its index range and name.
+bool same_material(const ScxGroup& a, const ScxGroup& b) {
+  return a.texture_index == b.texture_index && a.mix_index == b.mix_index &&
+         a.reflection_index == b.reflection_index && a.lightmap_index == b.lightmap_index &&
+         a.illumination_index == b.illumination_index &&
+         a.mix_vertex_color == b.mix_vertex_color && a.material_type == b.material_type &&
+         a.reflection_strength == b.reflection_strength && same_map(a.base_map, b.base_map) &&
+         same_map(a.mix_map, b.mix_map) && same_map(a.reflection_map, b.reflection_map) &&
+         same_map(a.lightmap_map, b.lightmap_map) &&
+         same_map(a.illumination_map, b.illumination_map) &&
+         a.material_flags == b.material_flags && a.alpha_reference == b.alpha_reference &&
+         std::equal(std::begin(a.diffuse), std::end(a.diffuse), std::begin(b.diffuse)) &&
+         std::equal(std::begin(a.specular), std::end(a.specular), std::begin(b.specular)) &&
+         a.shininess == b.shininess;
+}
+}  // namespace
+
+void LibBgfxBackend::merge_material_groups(ScxGeometry& geo) {
+  if (geo.groups.size() < 2) return;
+  const bool v3 = geo.info.version == 3, v4 = geo.info.version == 4;
+  for (const auto& group : geo.groups) {
+    // Blended sections are drawn in their stored order. Leave such a mesh as is.
+    if ((v4 && (group.material_flags & 0x40000000u)) ||
+        (v3 && (group.material_flags & 0x101u) == 0x101u))
+      return;
+    if (static_cast<size_t>(group.index_start) + group.index_count > geo.indices.size()) return;
+  }
+  // Materials in order of first use; each keeps its sections in stored order.
+  std::vector<size_t> material_of(geo.groups.size());
+  std::vector<size_t> first;
+  for (size_t i = 0; i < geo.groups.size(); ++i) {
+    size_t m = 0;
+    while (m < first.size() && !same_material(geo.groups[first[m]], geo.groups[i])) ++m;
+    if (m == first.size()) first.push_back(i);
+    material_of[i] = m;
+  }
+  if (first.size() == geo.groups.size()) return;
+  std::vector<uint32_t> indices;
+  indices.reserve(geo.indices.size());
+  std::vector<ScxGroup> groups;
+  groups.reserve(first.size());
+  for (size_t m = 0; m < first.size(); ++m) {
+    ScxGroup merged = geo.groups[first[m]];
+    merged.index_start = static_cast<uint32_t>(indices.size());
+    for (size_t i = 0; i < geo.groups.size(); ++i) {
+      if (material_of[i] != m) continue;
+      const auto begin = geo.indices.begin() + geo.groups[i].index_start;
+      indices.insert(indices.end(), begin, begin + geo.groups[i].index_count);
+    }
+    merged.index_count = static_cast<uint32_t>(indices.size()) - merged.index_start;
+    groups.push_back(std::move(merged));
+  }
+  geo.indices = std::move(indices);
+  geo.groups = std::move(groups);
+  geo.info.groups = static_cast<int32_t>(geo.groups.size());
+}
+
 SceneFrustum LibBgfxBackend::view_frustum(const float* view, const float* projection) {
     float clip[16];
     bx::mtxMul(clip, view, projection);
@@ -1254,6 +1346,9 @@ SceneFrustum LibBgfxBackend::view_frustum(const float* view, const float* projec
       ScenePart part;
       part.source = source;
       part.geo = *source;
+      // Static map meshes repeat a few materials across hundreds of sections.
+      // Keep one draw per material instead of one per section.
+      if (!deformed && (map_prop || source->ground_polygons)) merge_material_groups(part.geo);
       upload_part(part);
       if (deformed) {
         const auto previous = deformed_meshes_.find(owner);
@@ -1322,6 +1417,7 @@ void LibBgfxBackend::destroy_reflections() {
 }
 
 void LibBgfxBackend::update_reflections(const float* eye) {
+    perf::Scope perf_scope(perf::Zone::Reflections);
     if (!eye || !reflection_scene_ || !host_enhanced_graphics().dynamic_reflections) {
       reflection_world_ = nullptr;
       reflection_face_ = 0;
@@ -1432,6 +1528,7 @@ void LibBgfxBackend::update_reflections(const float* eye) {
       const float origin_z = reflection_origin_[2];
       for (const auto& object : objects) {
         if (object.sky || object.vehicle_material ||
+            (object.gpu_skin && object.skin.empty()) ||
             !instance_meshes_.contains(object.geometry.get()))
           continue;
         // A 256² face does not need a bench that covers two pixels.
@@ -1463,6 +1560,7 @@ void LibBgfxBackend::update_reflections(const float* eye) {
 }
 
 void LibBgfxBackend::draw_sky(uint16_t view_id, const float* view, const float* projection) {
+    perf::Scope perf_scope(perf::Zone::World);
     if (bgfx::getAvailTransientVertexBuffer(6, layout_) < 6) return;
     bgfx::TransientVertexBuffer vertices;
     bgfx::allocTransientVertexBuffer(&vertices, 6, layout_);
@@ -1519,12 +1617,15 @@ void LibBgfxBackend::refresh_distance_fog(const float render_eye[3]) {
 }
 
 void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
+    perf::Scope perf_scope(perf::Zone::World);
     draw_prop_batches(view_id, prop_batches_, false);
     for (int pass = 0; pass < 2; ++pass)
       for (const auto& instance : instances_) {
         if (instance.sky) continue;
         // The mesh stays resident, so a pedestrian walking into view does not
         // upload on that frame. The triangles behind the camera are not sent.
+        // A walker outside the view frustum has no palette this frame.
+        if (instance.gpu_skin && instance.skin.empty()) continue;
         if (instance.gpu_skin) {
           const float x = instance.transform[12];
           const float y = instance.transform[13];
@@ -1538,6 +1639,7 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
   }
   void LibBgfxBackend::draw_previews()
 {
+    perf::Scope perf_scope(perf::Zone::World);
     uint16_t id = kPreview0;
     for(const auto&p:previews_) {
       if(id>=64)break;
@@ -1774,6 +1876,7 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
   }
   void LibBgfxBackend::draw_scene(uint16_t view_id)
 {
+    perf::Scope perf_scope(perf::Zone::World);
     float mtx[16];
     bx::mtxIdentity(mtx);
     // Stock map faces are two-sided. Culling either winding hid a side of
@@ -2252,6 +2355,10 @@ bool bgfx_osd_draw_enabled(IRenderBackend& render) {
 void bgfx_set_debug_context(IRenderBackend& render, Jvm& jvm,
                             const SectionMachine& sections) {
   if (auto* backend = as_lib(render)) backend->set_debug_context(jvm, sections);
+}
+
+void bgfx_set_debug_startup(IRenderBackend& render, bool vsync, bool overlay) {
+  if (auto* backend = as_lib(render)) backend->set_debug_startup(vsync, overlay);
 }
 
 }  // namespace slrr

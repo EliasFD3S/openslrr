@@ -30,6 +30,8 @@ struct SceneInstance {
   // Render-object id. Carries `flags` (dynamic shadow caster) and `shd_*`.
   int32_t type_id = 0;
   // Upload-space bone palette (scaled, Z flipped). Empty keeps the CPU pose.
+  // Inside a renderer frame, a walker outside the collecting view has
+  // gpu_skin set and an empty palette; it is kept for residency, not drawn.
   bool gpu_skin = false;
   std::vector<float> skin;
 };
@@ -76,11 +78,38 @@ void scene_instances_collect_batches(const SceneFrustum* frustum,
                                      std::vector<SceneBatch>& out,
                                      const float* reflection_origin = nullptr);
 std::vector<SceneInstance> scene_instances_collect_root(void *root);
+// The renderer encloses one flush in this scope. Inside it, collections of
+// the active world reuse a single snapshot of its render objects instead of
+// walking and posing them again for every view (camera, shadow, reflection).
+// Nothing in a flush changes the scene graph. Pedestrian bone palettes are
+// built only for walkers inside the frustum passed to scene_instances_collect.
+void scene_instances_frame_cache(bool enabled);
 SceneSun scene_instances_light(void* root=nullptr);
 // Rejects missing parents, hidden subtrees and cycles.
 bool scene_instance_transform(void *key, void *root, float *matrix);
 // Active world, unreflected script metres. False for inventory/other worlds.
 bool scene_instances_script_matrix(void *key, float *matrix);
+// Render ground-shell matrix for placements owned by a GroundRef. Unlike the
+// GroundRef's own pose, this is the frame used by static map placements.
+bool scene_instances_ground_frame(void *ground, float *matrix);
+// A node's own pose (pos and ypr, or its local matrix override) relative to
+// its parent, column-major, script metres.
+void scene_instances_local_matrix(const GameRefState& node, float matrix[16]);
+// Collision mesh (object frame, metres), positive body mass and mass centre
+// of a native object type's CFG. False when the type has no collision body.
+bool scene_instances_native_body(uint32_t type, std::shared_ptr<const ScxGeometry>& mesh,
+                                 float& mass, float center[3]);
+// Positive-mass map placements are drawn as ordinary props until a vehicle
+// comes close. Queue every dormant placement overlapping a world-space box,
+// then create the loose bodies once the caller is outside its own iteration.
+void scene_instances_wake_dynamics(const float lower[3], const float upper[3]);
+void scene_instances_promote_dynamics();
+// A promoted placement goes back to being an ordinary prop. With a world frame
+// (script metres, in the world it was promoted in) its render instances and
+// wake bounds move to that pose, so a knocked-over bin stays where it settled
+// for the rest of the session; without one it reappears where it was before
+// promotion. Returns false when node is not a promoted placement.
+bool scene_instances_settle_dynamic(void* node, const float* world_frame);
 std::shared_ptr<const ScxGeometry> scene_instances_geometry(uint32_t resource);
 // Parse render meshes off the calling thread and publish them before return.
 void scene_instances_preload(const std::vector<uint32_t>& resources);
@@ -131,6 +160,24 @@ struct SceneSphereHit {
 bool scene_instances_sweep_sphere(const float start[3], const float delta[3],
                                   float radius, SceneSphereHit &hit,
                                   float max_vertical_normal = 1.f);
+struct SceneBodyContact {
+  float normal[3] = {};
+  float point[3] = {};
+  float penetration = 0.f;
+  void* owner = nullptr;
+};
+// Full oriented chassis bounds against indexed native boxes and spheres.
+// The frame transforms local bounds to script metres; half is XYZ half size.
+bool scene_instances_contact_box(const float frame[16], const float half[3],
+                                 SceneBodyContact& contact,
+                                 const void* ignore = nullptr);
+// The same oriented box against the wall triangles (|normal.y| at most
+// max_vertical_normal) of every static triangle set the sphere sweep uses, so
+// a house corner or a fence end between the chassis corner probes still stops
+// the car. Deepest overlap wins.
+bool scene_instances_contact_walls(const float frame[16], const float half[3],
+                                   SceneBodyContact& contact,
+                                   float max_vertical_normal = .65f);
 // Part-local triangle queries. The sweep retains an earlier hit if supplied.
 bool scene_mesh_sweep_sphere(const ScxGeometry& mesh, physics::Vec3 start,
                              physics::Vec3 movement, double radius, SceneSphereHit& hit);

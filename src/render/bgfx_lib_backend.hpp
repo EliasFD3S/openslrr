@@ -106,6 +106,10 @@ class LibBgfxBackend final : public IRenderBackend {
   void set_debug_context(Jvm& jvm, const SectionMachine& sections) {
     debug_overlay_.set_context(jvm, sections);
   }
+  void set_debug_startup(bool vsync, bool overlay) {
+    debug_overlay_.render_options().vsync = vsync;
+    debug_overlay_.set_visible(overlay);
+  }
 
 
   void add_scx_geometry(ScxGeometry geo);
@@ -192,6 +196,9 @@ class LibBgfxBackend final : public IRenderBackend {
 
   void upload_part(ScenePart& part);
   void upload_skin(ScenePart& part);
+  // Renderer copy only: sections with identical materials become one group
+  // over a reordered index buffer. Meshes with blended sections are kept.
+  static void merge_material_groups(ScxGeometry& geo);
 
 
   static bool is_logo_texture_slot(const ScxGeometry& geo, uint16_t tex_i);

@@ -20,6 +20,12 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources);
 Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
                     uint32_t resource, const std::string &alias,
                     const std::string &params = {});
+// Positive-mass native map placement. Uses the loose-part mesh solver and
+// exchanges contact impulses with the controlled car and static scene.
+// Returns the loose body's node, or nullptr when it could not be created.
+Object* part_add_dynamic_native(const PartConfig& config,
+                             const std::vector<PartRender>& renders,
+                             const PartMatrix& world, void* parent, int32_t seed);
 bool part_install(Object *child, Object *root, int own_slot = 0,
                   int parent_slot = 0, const float *hint = nullptr);
 bool part_destroy(Object *part);
@@ -77,6 +83,14 @@ struct PartPhysicsState {
 };
 bool part_physics_state(Object *car, PartPhysicsState &state);
 Object* part_controlled_chassis();
+// Top-level cars of the active world, for trigger volumes: the chassis key,
+// the id() scripts see for its Vehicle, and the body position in script metres.
+struct PartVehiclePosition {
+  Object* chassis = nullptr;
+  int32_t id = 0;
+  float position[3] = {0.f, 0.f, 0.f};
+};
+std::vector<PartVehiclePosition> part_vehicle_positions();
 // Chassis mesh of a Vehicle. Follows a bound alias, then the chassis field.
 Object* part_chassis(Object* object);
 Object* part_debug_chassis(Object* object);
