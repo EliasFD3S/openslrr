@@ -450,6 +450,13 @@ distinct lifetimes. Check the six orientations, the frame, world transitions,
 the uniforms, and probe validity. Do not read a texture at the same time it
 is the destination of its own capture.
 
+Every world camera is a reflection scene: the garage, the dealers and the
+city all use the cubemap. The garage probe sits on the car body and its box
+is the garage bounds. Without a followed car, a world camera captures from
+the car nearest its target, so a showroom car reflects the room around it.
+A capture must draw what the main view draws; the garage shell is preloaded
+SCX geometry outside the instance list and is drawn explicitly.
+
 A checked "dynamic reflections" option does not prove that the car material
 reads that cubemap. Follow the binding into the shader. Check fallbacks to
 the old envmaps and the `vehicle_material` flags.
