@@ -357,6 +357,7 @@ Where OpenSLRR gaps already have an SLRR_rev implementation (revision
 | CFG `osd_*` gauges | `SLRR_rev:src/osd/java-gauges.ts` | Implemented |
 | Telemetry export for comparison | `SLRR_rev:src/engine/drive-telemetry.ts` | Same record format as the original-game captures |
 | Car damage | `SLRR_rev:src/engine/deformable-panel.ts`, `SLRR_rev:src/engine/vehicle-damage.ts`, `SLRR_rev:src/engine/vehicle-3d.ts` | SLRR_rev's own model, not original behaviour. OpenSLRR adapts its XPBD cage, builds cages over the render shell with the part's own mass as SLRR_rev does, and ports its wheel release (`releaseFailedWheels`, 0.3 m hardpoint travel, 55 kJ strut energy). SLRR_rev's mass is point masses at body poses with a render-bounds box inertia; OpenSLRR integrates each body's shape instead |
+| Physical flaps (#42) | `SLRR_rev:docs/native-status.md` lists `Part.flap` as unregistered; `SLRR_rev:src/engine/deformable-panel.ts` pins a hood cage with two hinge clamps and a latch | No hinge to migrate. OpenSLRR's `include/slrr/flap_hinge.hpp` is its own design |
 
 Missing in SLRR_rev too, so these need original research: all `Painter`
 and `ParticleSystem` natives, the `GroundRef` route queries (`findRoute`,
