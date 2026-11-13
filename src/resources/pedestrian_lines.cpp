@@ -618,6 +618,40 @@ bool PedestrianLines::spawn(float x, float y, float z, float radius, float min_d
   const Sample* choice = nullptr;
   int count = 0;
   bool blind = false;
+  // Every walker is a blocker, so testing each sample against all of them
+  // was quadratic in the crowd. A blocker at rest only reaches samples within
+  // radius + 1.5 m (inside_block), so bin those by cell; moving blockers are
+  // always tested. The answer for each sample is unchanged.
+  constexpr float kBlockCell = 8.f;
+  const auto block_cell = [](float value) {
+    return static_cast<int32_t>(std::floor(value / kBlockCell));
+  };
+  const auto block_key = [](int32_t cx, int32_t cz) {
+    return (static_cast<uint64_t>(static_cast<uint32_t>(cx)) << 32) | static_cast<uint32_t>(cz);
+  };
+  std::unordered_map<uint64_t, std::vector<int>> resting;
+  std::vector<int> moving;
+  for (int i = 0; blocked && i < blocked_count; ++i) {
+    const PedestrianBlock& block = blocked[i];
+    const float speed2 = block.vx * block.vx + block.vy * block.vy + block.vz * block.vz;
+    if (speed2 > 0.001f) {
+      moving.push_back(i);
+      continue;
+    }
+    const float reach = block.radius + 1.5f;
+    for (int32_t cx = block_cell(block.x - reach); cx <= block_cell(block.x + reach); ++cx)
+      for (int32_t cz = block_cell(block.z - reach); cz <= block_cell(block.z + reach); ++cz)
+        resting[block_key(cx, cz)].push_back(i);
+  }
+  const auto is_taken = [&](const V& p) {
+    for (const int i : moving)
+      if (inside_block(p.x, p.y, p.z, blocked[i])) return true;
+    const auto near = resting.find(block_key(block_cell(p.x), block_cell(p.z)));
+    if (near != resting.end())
+      for (const int i : near->second)
+        if (inside_block(p.x, p.y, p.z, blocked[i])) return true;
+    return false;
+  };
   const int x0 = static_cast<int>(std::floor((x - radius) / kCell));
   const int x1 = static_cast<int>(std::floor((x + radius) / kCell));
   const int z0 = static_cast<int>(std::floor((z - radius) / kCell));
@@ -633,13 +667,7 @@ bool PedestrianLines::spawn(float x, float y, float z, float radius, float min_d
         const float nearest = hidden ? (off ? 12.f : 35.f) : min_distance;
         if (distance > radius || distance < nearest) continue;
         if (std::fabs(sample.position.y - y) > 20.f) continue;
-        bool taken = false;
-        for (int i = 0; blocked && i < blocked_count; ++i)
-          if (inside_block(sample.position.x, sample.position.y, sample.position.z, blocked[i])) {
-            taken = true;
-            break;
-          }
-        if (taken) continue;
+        if (is_taken(sample.position)) continue;
         if (hidden) {
           if (off && !blind) {
             choice = nullptr;
