@@ -616,7 +616,10 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
       }
       if (until_quit) {
 #ifdef _WIN32
-        Sleep(1);
+        // Yield the rest of the time slice only. Sleep(1) cost 1.5 ms per
+        // frame even at 1 ms timer resolution, a quarter of a 160 FPS frame.
+        // With VSync on, presentation still paces the loop.
+        SwitchToThread();
 #endif
       }
     }
