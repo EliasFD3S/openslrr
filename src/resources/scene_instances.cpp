@@ -752,9 +752,11 @@ bool chain_matrix(void *key, void *root, float *matrix, bool reflect) {
   if (!key || !root || !matrix)
     return false;
   identity(matrix);
-  std::unordered_set<void *> seen;
+  // A parent cycle also ends here, after 128 links. This runs for every
+  // render node several times per frame, so it does not allocate.
+  size_t depth = 0;
   for (void *current = key; current;) {
-    if (!seen.insert(current).second || seen.size() > 128)
+    if (++depth > 128)
       return false;
     auto *n = gameref_get(current);
     if (!n || n->empty || (n->flags & kWorldTreeLeaf))
@@ -1445,7 +1447,47 @@ SceneSun scene_instances_light(void* root) {
     scene_sun_apply_day_cycle(selected);
   return selected;
 }
-std::vector<SceneInstance> scene_instances_collect_root(void *root) {
+namespace {
+constexpr int kSkinBones = 48;
+
+// False when the clip gives no bones; the instance then keeps the CPU pose.
+bool skin_palette(SceneInstance& instance, void* key, int32_t type_id) {
+  instance.skin.assign(static_cast<size_t>(kSkinBones) * 16, 0.f);
+  for (int bone = 0; bone < kSkinBones; ++bone) {
+    float* m = instance.skin.data() + static_cast<size_t>(bone) * 16;
+    m[0] = m[5] = m[10] = m[15] = 1.f;
+  }
+  const int count = character_skin_palette(key, type_id, *g_resources,
+                                           instance.skin.data(), kSkinBones);
+  if (count <= 0) {
+    instance.skin.clear();
+    instance.gpu_skin = false;
+    return false;
+  }
+  // Vertices are uploaded as position_scale * (x, y, -z). The palette
+  // has to land in that space: F*M*F, then scale the translation.
+  const float scale = instance.geometry->position_scale > 0.f
+      ? instance.geometry->position_scale : 0.01f;
+  for (int bone = 0; bone < kSkinBones; ++bone) {
+    float* m = instance.skin.data() + static_cast<size_t>(bone) * 16;
+    m[2] = -m[2];
+    m[6] = -m[6];
+    m[10] = -m[10];
+    m[14] = -m[14];
+    m[8] = -m[8];
+    m[9] = -m[9];
+    m[10] = -m[10];
+    m[11] = -m[11];
+    m[12] *= scale;
+    m[13] *= scale;
+    m[14] *= scale;
+  }
+  instance.gpu_skin = true;
+  return true;
+}
+
+// defer_skin leaves pedestrians with gpu_skin set and an empty palette.
+std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
   std::vector<SceneInstance> out;
   if (!g_resources || !root)
     return out;
@@ -1473,39 +1515,11 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root) {
       continue;
     // Pedestrians share the bind mesh. The bone palette is a uniform, so the
     // vertex buffer stays put while the clip advances.
-    constexpr int kSkinBones = 48;
     if (!n->line_geometry && g_resources && n->alias == "pedestrian" &&
         !instance.geometry->skin_weights.empty()) {
-      instance.skin.assign(static_cast<size_t>(kSkinBones) * 16, 0.f);
-      for (int bone = 0; bone < kSkinBones; ++bone) {
-        float* m = instance.skin.data() + static_cast<size_t>(bone) * 16;
-        m[0] = m[5] = m[10] = m[15] = 1.f;
-      }
-      const int count = character_skin_palette(n->key, n->type_id, *g_resources,
-                                               instance.skin.data(), kSkinBones);
-      if (count > 0) {
-        // Vertices are uploaded as position_scale * (x, y, -z). The palette
-        // has to land in that space: F*M*F, then scale the translation.
-        const float scale = instance.geometry->position_scale > 0.f
-            ? instance.geometry->position_scale : 0.01f;
-        for (int bone = 0; bone < kSkinBones; ++bone) {
-          float* m = instance.skin.data() + static_cast<size_t>(bone) * 16;
-          m[2] = -m[2];
-          m[6] = -m[6];
-          m[10] = -m[10];
-          m[14] = -m[14];
-          m[8] = -m[8];
-          m[9] = -m[9];
-          m[10] = -m[10];
-          m[11] = -m[11];
-          m[12] *= scale;
-          m[13] *= scale;
-          m[14] *= scale;
-        }
-        instance.gpu_skin = true;
-      } else {
-        instance.skin.clear();
-      }
+      // A deferred palette is filled per view, only for walkers in its frustum.
+      if (defer_skin) instance.gpu_skin = true;
+      else skin_palette(instance, n->key, n->type_id);
     }
     if (!instance.gpu_skin && !n->line_geometry && g_resources) {
       if (auto posed = character_posed(n->key, n->type_id, instance.geometry.get(), *g_resources))
@@ -1558,7 +1572,88 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root) {
   }
   return out;
 }
+}  // namespace
+
+std::vector<SceneInstance> scene_instances_collect_root(void *root) {
+  return collect_root(root, false);
+}
 void* scene_instances_world() { return g_world; }
+
+namespace {
+bool g_frame_cache = false;
+bool g_frame_world_valid = false;
+void* g_frame_world_root = nullptr;
+std::vector<SceneInstance> g_frame_world;
+// Palettes (or CPU poses) already built this frame, shared by every view.
+struct FrameCharacter {
+  std::vector<float> skin;
+  std::shared_ptr<const ScxGeometry> geometry;
+  bool gpu_skin = false;
+};
+std::unordered_map<void*, FrameCharacter> g_frame_characters;
+
+// Outside a frame scope the caller's `local` receives a fresh collection.
+const std::vector<SceneInstance>& world_instances(std::vector<SceneInstance>& local) {
+  if (!g_frame_cache) {
+    local = scene_instances_collect_root(g_world);
+    return local;
+  }
+  if (!g_frame_world_valid || g_frame_world_root != g_world) {
+    g_frame_world = collect_root(g_world, true);
+    g_frame_world_root = g_world;
+    g_frame_world_valid = true;
+  }
+  return g_frame_world;
+}
+// A walker's bind mesh with a metre of slack for the swinging limbs.
+bool character_in_view(const SceneInstance& instance, const SceneFrustum& frustum) {
+  const auto& info = instance.geometry->info;
+  const float scale = instance.geometry->position_scale > 0.f
+      ? instance.geometry->position_scale : 0.01f;
+  float local[3], half[3];
+  for (int axis = 0; axis < 3; ++axis) {
+    local[axis] = (info.bbox_min[axis] + info.bbox_max[axis]) * .5f * scale;
+    half[axis] = (info.bbox_max[axis] - info.bbox_min[axis]) * .5f * scale;
+  }
+  local[2] = -local[2];
+  const auto& m = instance.transform;
+  float centre[3];
+  for (int axis = 0; axis < 3; ++axis)
+    centre[axis] = m[axis] * local[0] + m[4 + axis] * local[1] + m[8 + axis] * local[2] +
+                   m[12 + axis];
+  const float radius = std::hypot(half[0], half[1], half[2]) + 1.f;
+  for (const auto& plane : frustum)
+    if (plane[0] * centre[0] + plane[1] * centre[1] + plane[2] * centre[2] + plane[3] < -radius)
+      return false;
+  return true;
+}
+
+void complete_skin(SceneInstance& instance) {
+  auto [found, fresh] = g_frame_characters.try_emplace(instance.key);
+  auto& cached = found->second;
+  if (fresh) {
+    if (!skin_palette(instance, instance.key, instance.type_id))
+      if (auto posed = character_posed(instance.key, instance.type_id,
+                                       instance.geometry.get(), *g_resources))
+        instance.geometry = std::move(posed);
+    cached = {instance.skin, instance.geometry, instance.gpu_skin};
+    return;
+  }
+  instance.skin = cached.skin;
+  instance.geometry = cached.geometry;
+  instance.gpu_skin = cached.gpu_skin;
+}
+}  // namespace
+
+void scene_instances_frame_cache(bool enabled) {
+  g_frame_cache = enabled;
+  g_frame_world_valid = false;
+  g_frame_characters.clear();
+  if (!enabled) {
+    g_frame_world.clear();
+    g_frame_world_root = nullptr;
+  }
+}
 
 void scene_instances_set_hiz(SceneHizTest test, void* user) {
   g_hiz = test;
@@ -1578,7 +1673,13 @@ bool scene_instances_has_ground_props() {
 std::vector<SceneInstance> scene_instances_collect(
     const SceneFrustum* frustum,
     std::vector<std::shared_ptr<const ScxGeometry>>* resident_props) {
-  auto out = scene_instances_collect_root(g_world);
+  std::vector<SceneInstance> out;
+  if (const auto& world = world_instances(out); &world != &out) out = world;
+  // Walkers outside this view keep an empty palette; the renderer skips them.
+  for (auto& instance : out)
+    if (instance.gpu_skin && instance.skin.empty() &&
+        (!frustum || character_in_view(instance, *frustum)))
+      complete_skin(instance);
   if (g_ground_props.empty()) return out;
   const size_t base_count = out.size();
   for (size_t i = 0; i < base_count; ++i) {
@@ -1635,7 +1736,10 @@ void scene_instances_collect_batches(const SceneFrustum* frustum,
                                      const float* reflection_origin) {
   out.clear();
   if (g_ground_props.empty()) return;
-  for (const auto& base : scene_instances_collect_root(g_world)) {
+  std::vector<SceneInstance> local;
+  // One batch per mesh and shell, whatever cell its placements come from.
+  std::unordered_map<uint64_t, size_t> batch_of;
+  for (const auto& base : world_instances(local)) {
     const auto found = g_ground_props.find(static_cast<uint32_t>(base.type_id));
     if (found == g_ground_props.end()) continue;
     PartMatrix shell;
@@ -1656,7 +1760,11 @@ void scene_instances_collect_batches(const SceneFrustum* frustum,
         if (!g_hiz(cell_world.data(), cell.radius, g_hiz_user)) continue;
       }
       for (const auto& batch : cell.batches) {
-        auto mesh = geometry(batch.render_id);
+        const uint64_t batch_key = (static_cast<uint64_t>(static_cast<uint32_t>(base.type_id)) << 32) |
+                                   batch.render_id;
+        const auto existing = batch_of.find(batch_key);
+        auto mesh = existing != batch_of.end() ? out[existing->second].geometry
+                                               : geometry(batch.render_id);
         if (!mesh) continue;
         float extent = 0.f;
         if (reflection_origin) {
@@ -1665,10 +1773,13 @@ void scene_instances_collect_batches(const SceneFrustum* frustum,
             extent = std::max(extent,
                 (mesh->info.bbox_max[axis] - mesh->info.bbox_min[axis]) * scale);
         }
-        SceneBatch draw;
-        draw.geometry = std::move(mesh);
-        draw.lighting = base.lighting;
-        draw.instances.reserve(batch.indices.size());
+        SceneBatch fresh;
+        SceneBatch& draw = existing != batch_of.end() ? out[existing->second] : fresh;
+        if (existing == batch_of.end()) {
+          draw.geometry = std::move(mesh);
+          draw.lighting = base.lighting;
+          draw.instances.reserve(batch.indices.size());
+        }
         for (const auto index : batch.indices) {
           if (index >= cell.props.size()) continue;
           const auto& prop = cell.props[index];
@@ -1690,7 +1801,10 @@ void scene_instances_collect_batches(const SceneFrustum* frustum,
           }
           draw.instances.push_back({matrix, prop.color});
         }
-        if (!draw.instances.empty()) out.push_back(std::move(draw));
+        if (existing == batch_of.end() && !draw.instances.empty()) {
+          batch_of.emplace(batch_key, out.size());
+          out.push_back(std::move(fresh));
+        }
       }
     }
   }
@@ -1967,10 +2081,10 @@ bool prop_mesh_batchable(const ScxGeometry& mesh) {
     const auto flags = group.material_flags;
     const bool glass = v4 && (flags & 0x40000000u) && (group.material_type & 0x04u);
     const bool blend = glass || (v3 && (flags & 0x101u) == 0x101u);
-    const bool material_mix = v4 && group.material_type == 0x03u;
-    const bool cut = !material_mix && !blend &&
-        (v4 ? (flags & 0x20000000u) != 0 : (flags & 1u) != 0);
-    if (blend || material_mix || cut || group.mix_vertex_color) return false;
+    // Blended sections are drawn after the opaque world, one by one.
+    // Alpha-tested foliage, vertex-coloured walls and ColorMixTex facades
+    // (fs_mesh mixes the instance colour under the texture) draw instanced.
+    if (blend) return false;
   }
   return true;
 }
@@ -1983,8 +2097,9 @@ void build_prop_batches(GroundPropCell& cell, const std::unordered_set<uint32_t>
     groups[id].push_back(index);
   }
   cell.batches.clear();
+  // A single placement is batched too: collection merges the same mesh from
+  // every visible cell into one instanced draw.
   for (auto& [id, indices] : groups) {
-    if (indices.size() < 2) continue;
     for (const auto index : indices) cell.props[index].batched = true;
     cell.batches.push_back({id, std::move(indices)});
   }

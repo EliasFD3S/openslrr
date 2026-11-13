@@ -450,20 +450,41 @@ void LibBgfxBackend::draw_prop_batches(uint16_t view_id,
         const uint32_t flags = group ? group->material_flags : 0;
         const auto tex = slot < part.tex.size() && bgfx::isValid(part.tex[slot])
                              ? part.tex[slot] : white_tex_;
+        // The same alpha rules as a single placement (draw_instance and the
+        // static shadow pass). Batched meshes have no blended sections.
+        const bool v4 = part.geo.info.version == 4;
+        const bool material_mix = group && v4 && group->material_type == 0x03u;
+        const bool cut = !material_mix && (v4 ? (flags & 0x20000000u) != 0
+                                              : part.geo.info.version != 3 || (flags & 1u) != 0);
         if (shadow) {
-          const float params[4] = {0.f, -1.f,
+          const float threshold = !cut || !group ? -1.f
+              : v4 ? group->alpha_reference / 255.f : .5f;
+          const float params[4] = {0.f, threshold,
                                    group ? static_cast<float>(group->base_map.channel) : 0.f, 0.f};
           bgfx::setUniform(u_static_shadow_params_, params);
           bgfx::setTexture(0, s_tex_, tex);
           bgfx::setTransform(identity);
           bgfx::setVertexBuffer(0, part.vbh);
           bgfx::setIndexBuffer(part.ibh, first, index_count);
+          // Like a single caster in update_static_shadow: both faces cast.
           uint64_t state = BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS;
-          if (!(flags & 0x02000000u)) state |= BGFX_STATE_CULL_CW;
           if (conservative) state |= BGFX_STATE_CONSERVATIVE_RASTER;
           bgfx::setState(state);
         } else {
-          const float settings[4] = {};
+          const float alpha_test = !cut ? 0.f : v4 && group
+              ? -(1.f + group->alpha_reference) / 255.f : 1.f;
+          const bool foliage_coverage = cut && v4 && view_id < 72 &&
+              (reset_flags_ & BGFX_RESET_MSAA_MASK) &&
+              part.geo.info.path.find("fa_tibi") != std::string::npos;
+          const bool vertex_mix = group && group->mix_vertex_color;
+          const float settings[4] = {alpha_test, vertex_mix ? 1.f : 0.f,
+                                     foliage_coverage ? 2.f : 0.f,
+                                     material_mix ? -2.f : vertex_mix ? -1.f : 0.f};
+          bgfx::TextureHandle mix = BGFX_INVALID_HANDLE;
+          if (group && part.geo.position_scale == 1.f && group->mix_index != 0xffff &&
+              group->mix_index < part.tex.size() && bgfx::isValid(part.tex[group->mix_index]) &&
+              part.tex[group->mix_index].idx != white_tex_.idx)
+            mix = part.tex[group->mix_index];
           const float white[4] = {1.f, 1.f, 1.f, 1.f};
           const ScxTextureMap identity_uv;
           const auto& base_uv = group ? group->base_map : identity_uv;
@@ -473,18 +494,24 @@ void LibBgfxBackend::draw_prop_batches(uint16_t view_id,
           bgfx::setUniform(u_mesh_base_uv_, base_xf);
           bgfx::setUniform(u_mesh_mix_uv_, mix_xf);
           bgfx::setUniform(u_alpha_test_, settings);
-          bgfx::setUniform(u_color_, white);
+          // The placement colour comes per instance; ColorMixTex multiplies
+          // it by the section diffuse in fs_mesh, like draw_instance's tint.
+          const float mix_tint[4] = {group && material_mix ? group->diffuse[0] : 1.f,
+                                     group && material_mix ? group->diffuse[1] : 1.f,
+                                     group && material_mix ? group->diffuse[2] : 1.f, 1.f};
+          bgfx::setUniform(u_color_, material_mix ? mix_tint : white);
           bgfx::setTransform(identity);
           bgfx::setVertexBuffer(0, part.vbh);
           bgfx::setIndexBuffer(part.ibh, first, index_count);
           bgfx::setTexture(0, s_tex_, tex, BGFX_SAMPLER_NONE);
           const bool receive = view_id < 72;
-          bind_baked_light(group, &part.tex, BGFX_INVALID_HANDLE, receive,
+          bind_baked_light(group, &part.tex, mix, receive,
                            outdoor_lighting_ && graphics.dynamic_lighting ? &batch.lighting : nullptr,
                            nullptr);
           if (receive) bgfx::setUniform(u_local_light_, local_light_.data());
           uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_MSAA |
                            BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_GREATER;
+          if (foliage_coverage) state |= BGFX_STATE_BLEND_ALPHA_TO_COVERAGE;
           if (!(flags & 0x02000000u)) state |= BGFX_STATE_CULL_CW;
           bgfx::setState(state);
         }

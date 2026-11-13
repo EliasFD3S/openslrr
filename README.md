@@ -153,6 +153,16 @@ The executable is generated at `build/Release/slrr_host.exe`. The first build in
 ```
 
 Press **Ctrl+F12** in any game section to toggle the ImGui debug panel.
+
+To measure frame time on a repeatable Valo City drive (the same street, frame by frame, for every build):
+
+```powershell
+.\build\Release\slrr_host.exe --game --window --root data\game --no-vsync `
+  --spawn-car cars/racers/Baiern.rpk:0x6 --bench-map ValoCity --bench-drive 40 --bench-time 13 `
+  --perf-log city.csv
+```
+
+`--perf-log` prints one `[perf]` line per simulated second and writes the same fields to the CSV file. Add `--bench-shots DIR` to capture the window every 10 seconds. The run writes `save/game/options` on exit like a normal session.
 Select a visible vehicle or a preview in **Vehicle**, or use **Freeze
 telemetry** to hold a sample. **Tuning** changes tyre parameters and
 simulation speed live. **Renderer** has visual toggles. **Section** shows

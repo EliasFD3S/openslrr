@@ -108,8 +108,8 @@ current gaps to SLRR_rev code are in
   but `/tools/` is gitignored (`.gitignore`) and the file is not tracked.
   CMake stops with "Cannot find source file" unless the file exists locally.
   The README's coverage generator under `tools/` is missing for the same
-  reason. This was inferred from standard CMake behaviour and `git ls-files`,
-  not reproduced on Windows.
+  reason. Reproduced on Windows with a fresh export of `b907b6b`; a local
+  one-line `int main() { return 0; }` stub unblocks the build.
 - The vendored compiler `third_party/slrrc` is a C++17 static library built
   with `/fp:precise`; its literal self-test must pass before any output is
   published (`src/jvm/script_compiler.cpp:script_compile_all`).
@@ -120,6 +120,19 @@ current gaps to SLRR_rev code are in
   positional player name, and the headless probes `--probe`, `--probe-gc`,
   `--probe-dyno`, `--probe-pacejka`. `escape` is accepted but missing from
   the usage text.
+- Performance flags: `--perf-log CSV|-` prints one `[perf]` line per second
+  (frame time, scripts, physics, scene collection, shadows, reflections,
+  world and OSD submission, present wait, bgfx render-thread and GPU time,
+  draws) and appends CSV rows (`src/platform/frame_profiler.cpp`).
+  `--no-vsync` and `--debug-overlay` set the Ctrl+F12 panel at startup.
+  The repeatable city run is
+  `--spawn-car cars/racers/Baiern.rpk:0x6 --bench-map ValoCity --bench-drive 40 --bench-time 13`:
+  it starts the MapBox track from the garage, settles the car for two
+  simulated seconds, then holds full throttle with the wheel straight at a
+  fixed 1/60 s step per frame, so every build covers the same street frame
+  by frame and each CSV row is one simulated second. `--bench-shots DIR`
+  writes window captures every 10 simulated seconds
+  (`src/boot/boot.cpp:boot_game`).
 - Environment variables: `SLRR_GAME_ROOT` and `SLRR_VLC_DIR`
   (`src/platform/video_fmv_vlc.cpp`). There are no others.
 - There is no test target on `main`. `main` had a CTest suite (added in
@@ -187,7 +200,8 @@ Code that exists but is not used:
 3. `src/boot/boot.cpp:start_init` runs `Init.<init>(I)` with halting on the
    first unbound native.
 4. The main loop repeats: window pump, section render sync,
-   `mainloop_frame`, GC safe point, `Sleep(1)`.
+   `mainloop_frame`, GC safe point, then a `SwitchToThread` yield (a
+   `Sleep(1)` cost about 1.5 ms per frame).
 
 ### 5.2 Frame order
 
@@ -277,9 +291,20 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   (`src/resources/scene_instances.cpp:append_ground_placement`,
   `src/resources/scene_instances.cpp:append_ground_collision`).
   The `PHYS` chunk is used as map collision; SLRR_rev has not decoded it.
-- Placements (trees, lamps, buildings) become instanced render props in 64 m
-  cells (`src/resources/scene_instances.cpp:scene_instances_add_ground_props`).
-  `ground_prop_config` retains the full native CFG. Box, sphere and SCX bodies
+- Placements (trees, lamps, buildings) become render props in 64 m cells
+  (`src/resources/scene_instances.cpp:scene_instances_add_ground_props`).
+  Every placement of a mesh without blended sections is instanced
+  (`src/resources/scene_instances.cpp:prop_mesh_batchable`); `fs_mesh` mixes
+  the per-instance colour into ColorMixTex (paint-masked) facades,
+  and `scene_instances_collect_batches` merges one mesh's visible placements
+  from all cells into one batch. The rest are drawn one by one.
+- The renderer's copy of a ground mesh or map prop merges sections with
+  identical materials into one group
+  (`src/render/bgfx_lib_backend.cpp:merge_material_groups`); the scene's
+  own geometry, used for collision and picking, keeps its sections.
+- During `flush`, collections of the active world share one snapshot
+  (`src/resources/scene_instances.cpp:scene_instances_frame_cache`).
+- `ground_prop_config` retains the full native CFG. Box, sphere and SCX bodies
   are cached per type, transformed by placement/body pose, merged into a
   spatially indexed collision mesh per map and added to the exact shape index.
   They are independent of render variant, LOD, visibility and culling.
@@ -525,16 +550,18 @@ These are entry points, not fixes. Each needs its own reproduction.
   receive the native fallback.
   SLRR_rev's corresponding implementation is
   `SLRR_rev:src/runtime/part-native.ts:repairDamage` (revision `77b0fb6`).
-- **#18 city performance.** The reported profile is CPU-bound. Each frame
-  collects instances for the main view plus `reflection_faces` cube faces
-  (default 1); the map shadow re-collects when the camera moves at least
-  8 m or the sun changes. Every collection walks the GameRef tree and
-  recomputes each parent chain with an allocation
-  (`src/resources/scene_instances.cpp:chain_matrix`). Alpha-cutout trees are
-  never instanced (`prop_mesh_batchable`). Other per-frame costs:
-  `gameref_find_live` is a linear scan, `native_has_alias` runs on every
-  Java invoke, and every instance-field store calls `osd_on_field_write`.
-  Measure before changing anything.
+- **#18 city performance.** Measured with `--perf-log` and the city
+  benchmark (§3) before the fix: pedestrian area sampling took about 4 ms
+  per frame (`src/resources/pedestrian_lines.cpp:area_within`), the two
+  Valo City ground meshes cost 1,372 draws in the camera view and again in
+  the reflection face, every view re-walked the GameRef tree and re-posed
+  every walker within 400 m (about 3 ms for the 600 walkers of the patched
+  density), spawning tested each sample against every walker, trees were
+  never instanced, and the main loop slept 1.5 ms per frame. All of these
+  are addressed. Remaining per-frame costs: scene collection (about 1–2 ms),
+  a 50–140 ms frame every few seconds (not yet isolated), `gameref_find_live`
+  is a linear scan, `native_has_alias` runs on every Java invoke, and every
+  instance-field store calls `osd_on_field_write`.
 - **#19 pedestrians on the road.** Addressed by the port of the original
   walker model (§5.7). The `Animation` constructor descriptor used slashes
   and never matched, so script animations were unbound; it now uses the

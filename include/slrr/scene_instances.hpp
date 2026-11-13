@@ -30,6 +30,8 @@ struct SceneInstance {
   // Render-object id. Carries `flags` (dynamic shadow caster) and `shd_*`.
   int32_t type_id = 0;
   // Upload-space bone palette (scaled, Z flipped). Empty keeps the CPU pose.
+  // Inside a renderer frame, a walker outside the collecting view has
+  // gpu_skin set and an empty palette; it is kept for residency, not drawn.
   bool gpu_skin = false;
   std::vector<float> skin;
 };
@@ -76,6 +78,12 @@ void scene_instances_collect_batches(const SceneFrustum* frustum,
                                      std::vector<SceneBatch>& out,
                                      const float* reflection_origin = nullptr);
 std::vector<SceneInstance> scene_instances_collect_root(void *root);
+// The renderer encloses one flush in this scope. Inside it, collections of
+// the active world reuse a single snapshot of its render objects instead of
+// walking and posing them again for every view (camera, shadow, reflection).
+// Nothing in a flush changes the scene graph. Pedestrian bone palettes are
+// built only for walkers inside the frustum passed to scene_instances_collect.
+void scene_instances_frame_cache(bool enabled);
 SceneSun scene_instances_light(void* root=nullptr);
 // Rejects missing parents, hidden subtrees and cycles.
 bool scene_instance_transform(void *key, void *root, float *matrix);

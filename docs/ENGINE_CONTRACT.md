@@ -640,6 +640,13 @@ round trip and watch instance, draw, and memory counts. For rendering,
 compare the same place, time, camera, and settings. For physics, compare
 simulated time, input, and the same car at several frame rates.
 
+For frame rate, `--perf-log` splits each second into scripts, physics,
+scene collection, shadows, reflections, world and OSD submission and the
+present wait, with bgfx render-thread and GPU time and draw counts. The
+`--bench-map ValoCity --bench-drive N` run advances a fixed 1/60 s per frame,
+so builds compare row by row on the same street until the car's first
+crash (README, [KNOWLEDGE_BASE §3](KNOWLEDGE_BASE.md#3-build-run-and-diagnostics)).
+
 A diagnostic can modify options or a save. Use a copy, or preserve and
 restore the files involved. A headless probe does not replace a visual
 validation and must not be presented as one.
