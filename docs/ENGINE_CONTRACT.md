@@ -404,6 +404,21 @@ frame, the deformed mesh, the part state, and collision. Check separately:
 vibration at rest, permanent deformation, a panel opening, and an attachment
 breaking. A visual filter does not fix an unstable solver.
 
+Stock `Part.repair()` owns the wear/tear repair caps and recursively visits the
+installed tree. Its native `repair` command performs a one-shot local reset of
+that part's deformation, deformed collision/render data, and damage-associated
+slot/wheel state, then restores the affected CFG mount frames and base meshes.
+Use the script's `attachedParts` coverage and recurse natively only into detached
+assembly children that those lists omit; never traverse a child twice. Do not add
+a whole-car relink per part, a world reload, or a `GameRef.setState` call. The
+latter controls pose and velocities and can release the solver; it is not a damage
+repair API.
+Keep the latest intentional `setSlotPos` state separate from damage overlays so
+repair preserves it even on the same slot. Detached inventory damage must remain
+intact. Queue affected link visuals once per repaired part and flush them on the
+next existing part update, after the complete scripted walk; do not relink every
+ancestor/descendant subtree during each native call.
+
 ## 12. Enhanced rendering
 
 The current product uses bgfx. `--render-bgfx` is not required. Historical
