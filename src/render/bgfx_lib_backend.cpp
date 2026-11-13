@@ -822,6 +822,10 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
 {
     ++frames_;
     if (!ready_) return;
+    struct FrameCache {
+      FrameCache() { scene_instances_frame_cache(true); }
+      ~FrameCache() { scene_instances_frame_cache(false); }
+    } frame_cache;
     auto video = host_game_options().video;
     const auto& debug_render = debug_overlay_.render_options();
     video.view_distance = 3000.f;
@@ -1165,6 +1169,70 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
     }
     set_scx_mesh(3, sum_groups, sum_verts, sum_tris, mesh_min_, mesh_max_);
   }
+
+namespace {
+bool same_map(const ScxTextureMap& a, const ScxTextureMap& b) {
+  return a.channel == b.channel && a.tiling == b.tiling && a.scale_u == b.scale_u &&
+         a.scale_v == b.scale_v && a.offset_u == b.offset_u && a.offset_v == b.offset_v;
+}
+
+// Everything a draw reads from a group, except its index range and name.
+bool same_material(const ScxGroup& a, const ScxGroup& b) {
+  return a.texture_index == b.texture_index && a.mix_index == b.mix_index &&
+         a.reflection_index == b.reflection_index && a.lightmap_index == b.lightmap_index &&
+         a.illumination_index == b.illumination_index &&
+         a.mix_vertex_color == b.mix_vertex_color && a.material_type == b.material_type &&
+         a.reflection_strength == b.reflection_strength && same_map(a.base_map, b.base_map) &&
+         same_map(a.mix_map, b.mix_map) && same_map(a.reflection_map, b.reflection_map) &&
+         same_map(a.lightmap_map, b.lightmap_map) &&
+         same_map(a.illumination_map, b.illumination_map) &&
+         a.material_flags == b.material_flags && a.alpha_reference == b.alpha_reference &&
+         std::equal(std::begin(a.diffuse), std::end(a.diffuse), std::begin(b.diffuse)) &&
+         std::equal(std::begin(a.specular), std::end(a.specular), std::begin(b.specular)) &&
+         a.shininess == b.shininess;
+}
+}  // namespace
+
+void LibBgfxBackend::merge_material_groups(ScxGeometry& geo) {
+  if (geo.groups.size() < 2) return;
+  const bool v3 = geo.info.version == 3, v4 = geo.info.version == 4;
+  for (const auto& group : geo.groups) {
+    // Blended sections are drawn in their stored order. Leave such a mesh as is.
+    if ((v4 && (group.material_flags & 0x40000000u)) ||
+        (v3 && (group.material_flags & 0x101u) == 0x101u))
+      return;
+    if (static_cast<size_t>(group.index_start) + group.index_count > geo.indices.size()) return;
+  }
+  // Materials in order of first use; each keeps its sections in stored order.
+  std::vector<size_t> material_of(geo.groups.size());
+  std::vector<size_t> first;
+  for (size_t i = 0; i < geo.groups.size(); ++i) {
+    size_t m = 0;
+    while (m < first.size() && !same_material(geo.groups[first[m]], geo.groups[i])) ++m;
+    if (m == first.size()) first.push_back(i);
+    material_of[i] = m;
+  }
+  if (first.size() == geo.groups.size()) return;
+  std::vector<uint32_t> indices;
+  indices.reserve(geo.indices.size());
+  std::vector<ScxGroup> groups;
+  groups.reserve(first.size());
+  for (size_t m = 0; m < first.size(); ++m) {
+    ScxGroup merged = geo.groups[first[m]];
+    merged.index_start = static_cast<uint32_t>(indices.size());
+    for (size_t i = 0; i < geo.groups.size(); ++i) {
+      if (material_of[i] != m) continue;
+      const auto begin = geo.indices.begin() + geo.groups[i].index_start;
+      indices.insert(indices.end(), begin, begin + geo.groups[i].index_count);
+    }
+    merged.index_count = static_cast<uint32_t>(indices.size()) - merged.index_start;
+    groups.push_back(std::move(merged));
+  }
+  geo.indices = std::move(indices);
+  geo.groups = std::move(groups);
+  geo.info.groups = static_cast<int32_t>(geo.groups.size());
+}
+
 SceneFrustum LibBgfxBackend::view_frustum(const float* view, const float* projection) {
     float clip[16];
     bx::mtxMul(clip, view, projection);
@@ -1241,6 +1309,9 @@ SceneFrustum LibBgfxBackend::view_frustum(const float* view, const float* projec
       ScenePart part;
       part.source = source;
       part.geo = *source;
+      // Static map meshes repeat a few materials across hundreds of sections.
+      // Keep one draw per material instead of one per section.
+      if (!deformed && (map_prop || source->ground_polygons)) merge_material_groups(part.geo);
       upload_part(part);
       if (deformed) {
         const auto previous = deformed_meshes_.find(owner);

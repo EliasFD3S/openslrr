@@ -76,6 +76,11 @@ void scene_instances_collect_batches(const SceneFrustum* frustum,
                                      std::vector<SceneBatch>& out,
                                      const float* reflection_origin = nullptr);
 std::vector<SceneInstance> scene_instances_collect_root(void *root);
+// The renderer encloses one flush in this scope. Inside it, collections of
+// the active world reuse a single snapshot of its render objects instead of
+// walking and posing them again for every view (camera, shadow, reflection).
+// Nothing in a flush changes the scene graph.
+void scene_instances_frame_cache(bool enabled);
 SceneSun scene_instances_light(void* root=nullptr);
 // Rejects missing parents, hidden subtrees and cycles.
 bool scene_instance_transform(void *key, void *root, float *matrix);

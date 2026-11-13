@@ -196,6 +196,9 @@ class LibBgfxBackend final : public IRenderBackend {
 
   void upload_part(ScenePart& part);
   void upload_skin(ScenePart& part);
+  // Renderer copy only: sections with identical materials become one group
+  // over a reordered index buffer. Meshes with blended sections are kept.
+  static void merge_material_groups(ScxGeometry& geo);
 
 
   static bool is_logo_texture_slot(const ScxGeometry& geo, uint16_t tex_i);
