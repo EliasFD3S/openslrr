@@ -91,11 +91,20 @@ struct WheelConfig {
   bool has_hub = false;
   std::array<float, 10> hub{};
   Quaternion hub_alignment;
+  // WheelRef.setInstantCenter (Suspension.setRollCenter), relative to
+  // `center` in chassis axes: the front-view centre uses x/y, the side-view
+  // centre z/y. The links carry the tyre force along the line from the
+  // contact patch through the centre, so part of it lifts or pulls the body
+  // (roll centre, anti-dive, anti-squat) instead of going through the spring.
+  bool front_instant_center = false, side_instant_center = false;
+  Vec3 front_center_offset, side_center_offset;
   bool linked() const { return unsprung > 0 || arm_length > 0; }
 };
 struct WheelState {
   bool contact = false, seeded = false;
-  double length = 0, speed = 0, force = 0;
+  // force: spring and damper support. jacking: vertical force the links add
+  // at the patch from the instant centres. The tyre load is their sum.
+  double length = 0, speed = 0, force = 0, jacking = 0;
   Vec3 center, normal{0, 1, 0}, hub, patch;
   Quaternion hub_rotation;
   double spin = 0, rotation = 0;
