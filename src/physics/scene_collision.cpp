@@ -365,6 +365,93 @@ bool make_sphere(const PartMatrix& frame, double radius, Sphere& output) noexcep
   return true;
 }
 
+namespace {
+
+// Ericson, Real-Time Collision Detection, 5.1.5.
+Vec3 closest_point_on_triangle(Vec3 p, const std::array<Vec3, 3>& t) {
+  const Vec3 ab = t[1] - t[0], ac = t[2] - t[0], ap = p - t[0];
+  const double d1 = ab.dot(ap), d2 = ac.dot(ap);
+  if (d1 <= 0 && d2 <= 0) return t[0];
+  const Vec3 bp = p - t[1];
+  const double d3 = ab.dot(bp), d4 = ac.dot(bp);
+  if (d3 >= 0 && d4 <= d3) return t[1];
+  const double vc = d1 * d4 - d3 * d2;
+  if (vc <= 0 && d1 >= 0 && d3 <= 0) return t[0] + ab * (d1 / (d1 - d3));
+  const Vec3 cp = p - t[2];
+  const double d5 = ab.dot(cp), d6 = ac.dot(cp);
+  if (d6 >= 0 && d5 <= d6) return t[2];
+  const double vb = d5 * d2 - d1 * d6;
+  if (vb <= 0 && d2 >= 0 && d6 <= 0) return t[0] + ac * (d2 / (d2 - d6));
+  const double va = d3 * d6 - d5 * d4;
+  if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0)
+    return t[1] + (t[2] - t[1]) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
+  const double denominator = 1.0 / (va + vb + vc);
+  return t[0] + ab * (vb * denominator) + ac * (vc * denominator);
+}
+
+}  // namespace
+
+std::optional<Contact> overlap_triangle(const Box& moving,
+                                        const std::array<Vec3, 3>& triangle) noexcept {
+  if (!valid_box(moving)) return std::nullopt;
+  for (const Vec3& vertex : triangle)
+    if (!finite(vertex)) return std::nullopt;
+  const Vec3 edges[3] = {triangle[1] - triangle[0], triangle[2] - triangle[1],
+                         triangle[0] - triangle[2]};
+  const Vec3 face = edges[0].cross(edges[2] * -1.0);
+  if (face.dot(face) <= kGeometryEpsilon * kGeometryEpsilon) return std::nullopt;
+
+  double best = std::numeric_limits<double>::infinity();
+  Vec3 normal{0, 1, 0};
+  double depth = 0;
+  // Edge-edge axes win only when clearly shallower, which keeps the face
+  // normal for a box pressed flat against a wall.
+  const auto test_axis = [&](Vec3 axis, double bias) {
+    const double length2 = axis.dot(axis);
+    if (length2 <= 1e-18) return true;
+    axis = axis / std::sqrt(length2);
+    const double centre = moving.center.dot(axis);
+    double radius = 0;
+    for (int local = 0; local < 3; ++local)
+      radius += component(moving.half_extents, local) * std::abs(moving.axes[local].dot(axis));
+    double lowest = triangle[0].dot(axis), highest = lowest;
+    for (int vertex = 1; vertex < 3; ++vertex) {
+      const double projection = triangle[vertex].dot(axis);
+      lowest = std::min(lowest, projection);
+      highest = std::max(highest, projection);
+    }
+    const double tolerance = kGeometryEpsilon * (1.0 + std::abs(centre) + radius);
+    if (centre - radius > highest + tolerance || centre + radius < lowest - tolerance)
+      return false;
+    // Move the box along +axis until its low end clears the triangle, or
+    // along -axis until its high end does; keep the shorter way out.
+    const double forward = highest - (centre - radius);
+    const double backward = (centre + radius) - lowest;
+    const bool positive = forward < backward ||
+                          (forward == backward && centre >= (lowest + highest) * .5);
+    const double push = std::max(0.0, positive ? forward : backward);
+    if (push * bias < best) {
+      best = push * bias;
+      depth = push;
+      normal = positive ? axis : axis * -1.0;
+    }
+    return true;
+  };
+
+  if (!test_axis(face, 1.0)) return std::nullopt;
+  for (const Vec3& axis : moving.axes)
+    if (!test_axis(axis, 1.0)) return std::nullopt;
+  for (const Vec3& axis : moving.axes)
+    for (const Vec3& edge : edges)
+      if (!test_axis(axis.cross(edge), 1.05)) return std::nullopt;
+
+  Contact contact;
+  contact.normal = normal;
+  contact.penetration = depth;
+  contact.point = closest_point_on_triangle(moving.center, triangle);
+  return contact;
+}
+
 ScxGeometry make_box_mesh(const PartMatrix& frame, Vec3 half_extents) {
   Box box;
   if (!make_box(frame, half_extents, box))

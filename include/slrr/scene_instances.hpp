@@ -92,6 +92,11 @@ bool scene_instances_script_matrix(void *key, float *matrix);
 // Render ground-shell matrix for placements owned by a GroundRef. Unlike the
 // GroundRef's own pose, this is the frame used by static map placements.
 bool scene_instances_ground_frame(void *ground, float *matrix);
+// Positive-mass map placements are drawn as ordinary props until a vehicle
+// comes close. Queue every dormant placement overlapping a world-space box,
+// then create the loose bodies once the caller is outside its own iteration.
+void scene_instances_wake_dynamics(const float lower[3], const float upper[3]);
+void scene_instances_promote_dynamics();
 std::shared_ptr<const ScxGeometry> scene_instances_geometry(uint32_t resource);
 // Parse render meshes off the calling thread and publish them before return.
 void scene_instances_preload(const std::vector<uint32_t>& resources);
@@ -153,6 +158,13 @@ struct SceneBodyContact {
 bool scene_instances_contact_box(const float frame[16], const float half[3],
                                  SceneBodyContact& contact,
                                  const void* ignore = nullptr);
+// The same oriented box against the wall triangles (|normal.y| at most
+// max_vertical_normal) of every static triangle set the sphere sweep uses, so
+// a house corner or a fence end between the chassis corner probes still stops
+// the car. Deepest overlap wins.
+bool scene_instances_contact_walls(const float frame[16], const float half[3],
+                                   SceneBodyContact& contact,
+                                   float max_vertical_normal = .65f);
 // Part-local triangle queries. The sweep retains an earlier hit if supplied.
 bool scene_mesh_sweep_sphere(const ScxGeometry& mesh, physics::Vec3 start,
                              physics::Vec3 movement, double radius, SceneSphereHit& hit);

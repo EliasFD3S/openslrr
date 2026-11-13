@@ -320,12 +320,16 @@ not selected by render variant, LOD, visibility or culling. Script-created
 `PhysicsRef` primitives and generic objects activated by
 `GameRef.setActiveCollision` use the same scene index; OSD click volumes are
 a separate contract. A placement whose collision-enabled bodies all have
-positive mass is promoted to a loose native body with its full CFG collision
-mesh and mass-weighted body-pose centre. It sleeps until contact, reuses the
-loose-part solver for car and static-scene contacts, and updates every render
-slot from the simulated frame. Mixed-mass placements and zero-mass buildings,
-columns, trees and containers remain on the exact static path. Standalone
-dynamic `PhysicsRef` integration is not yet implemented.
+positive mass stays an ordinary instanced prop with no collider until a car's
+padded chassis bounds reach it. It is then promoted, after the vehicle loop,
+to a loose native body with its full CFG collision mesh and mass-weighted
+body-pose centre, and its static instances are hidden. The loose body sleeps
+until contact, reuses the loose-part solver for car and static-scene contacts,
+and updates every render slot from the simulated frame. A map can hold
+thousands of such props: creating them all as live bodies at load cost about
+400 ms of physics per frame in Valo City. Mixed-mass placements and zero-mass
+buildings, columns, trees and containers remain on the exact static path.
+Standalone dynamic `PhysicsRef` integration is not yet implemented.
 
 Keep these decisions separate: loading, CPU residency, GPU upload,
 visibility/frustum, shadow participation, and collision. An object outside
@@ -390,17 +394,22 @@ and the transmission. `part_runtime` extracts part properties and publishes
 the results into the render graph.
 
 Static scene collision has two complementary paths. Triangle meshes serve
-support and sphere-sweep queries. Indexed CFG/`PhysicsRef` boxes and spheres
-also use the exact oriented-shape contacts in `scene_collision.cpp`, so a
-thin trunk cannot pass between the chassis corner probes. The chassis query
+support and sphere-sweep queries. The chassis box is also tested directly:
+against indexed CFG/`PhysicsRef` boxes and spheres, and against the wall
+triangles (|normal.y| <= 0.65) of every static triangle set, with
+`overlap_triangle` in `scene_collision.cpp`. A thin trunk, a house corner or a
+fence end therefore cannot pass between the four chassis corner probes. The
+wall test leaves out the lowest 30 % of the chassis box, the band below the
+corner probes, so kerbs and road seams do not stop the car. The chassis query
 uses the bounds centre (not necessarily the centre of mass), samples longer
 movements, and feeds the contact normal into the existing impact response.
 The oriented-shape query is discrete, not a general continuous manifold
 solver; keep the triangle sweep path for terrain and tunneling protection.
 Positive-mass native placements do not enter static mesh or analytic collision
-caches. Their loose body uses the authored mesh, mass and centre, starts
-asleep, wakes on car contact, and exchanges equal/opposite impulses with both
-car and static scene. This is a host loose-body approximation, not a general
+caches. Their loose body is created only near a car; it uses the authored
+mesh, mass and centre, starts asleep, wakes on car contact, and exchanges
+equal/opposite impulses with both car and static scene. A sleeping loose body
+skips the per-part car test unless its bounding sphere can reach the car's. This is a host loose-body approximation, not a general
 dynamic triangle-mesh engine or an implementation of standalone dynamic
 `PhysicsRef` bodies.
 

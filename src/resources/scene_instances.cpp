@@ -68,6 +68,8 @@ struct GroundProp {
   std::array<float, 3> center{};
   float radius = 0.f;
   bool batched = false;
+  bool hidden = false;   // replaced by a live loose body
+  int32_t dormant = -1;  // index into GroundPropMap::dormant, or -1
 };
 struct GroundPropCell {
   std::vector<GroundProp> props;
@@ -75,13 +77,28 @@ struct GroundPropCell {
   std::array<float, 3> center{};
   float radius = 0.f;
 };
+// A positive-mass placement stays an instanced render prop until a car comes
+// close. Only then does it become a live loose body, so a map with thousands of
+// small props costs nothing per tick while they lie undisturbed.
+struct DormantProp {
+  std::shared_ptr<const PartConfig> config;
+  PartMatrix pose{};
+  int32_t seed = 0;
+  void* ground = nullptr;
+  std::array<float, 3> lower{}, upper{};  // shell-local bounds
+  bool promoted = false;
+  std::vector<std::pair<GroundPropCell*, uint32_t>> props;  // render instances to hide
+};
 struct GroundPropMap {
+  std::vector<DormantProp> dormant;
+  std::unordered_map<uint64_t, std::vector<uint32_t>> dormant_grid;
   std::unordered_map<uint64_t, GroundPropCell> cells;
   std::vector<uint32_t> resources;
   std::vector<StaticMesh> collision_meshes;
   collision::StaticIndex collision_shapes;
 };
 std::unordered_map<uint32_t, GroundPropMap> g_ground_props;
+std::vector<std::pair<GroundPropMap*, uint32_t>> g_pending_dormant;
 
 struct GroundCollisionWorld {
   PartMatrix matrix{};
@@ -114,6 +131,7 @@ bool ground_prop_config(const RpkIndex& rpk, uint32_t type, PartConfig& out);
 const NativeCollisionData& native_collision_data(
     const RpkIndex& rpk, uint32_t type, const PartConfig* parsed = nullptr);
 constexpr float kPropCellSize = 64.f;
+constexpr float kDormantCell = 16.f;
 
 int32_t prop_cell(float value) {
   return static_cast<int32_t>(std::floor(value / kPropCellSize));
@@ -709,6 +727,7 @@ void scene_instances_set_resources(const RpkIndex *resources) {
   g_collision_overrides.clear();
   g_ground_props.clear();
   scene_ambience_reset();
+  g_pending_dormant.clear();
   g_ground_collision.clear();
   g_native_collision.clear();
   g_script_collision_shapes.clear();
@@ -799,6 +818,60 @@ bool scene_instance_transform(void *key, void *root, float *matrix) {
 }
 bool scene_instances_script_matrix(void *key, float *matrix) {
   return g_world && chain_matrix(key, g_world, matrix, false);
+}
+
+void scene_instances_wake_dynamics(const float lower[3], const float upper[3]) {
+  if (!lower || !upper) return;
+  for (auto& [key, ground] : g_ground_collision) {
+    (void)key;
+    auto* map = const_cast<GroundPropMap*>(ground.source);
+    if (!map || map->dormant.empty()) continue;
+    std::array<float, 3> lo, hi;
+    lo.fill(std::numeric_limits<float>::infinity());
+    hi.fill(-std::numeric_limits<float>::infinity());
+    for (int corner = 0; corner < 8; ++corner) {
+      const auto local = transform_point(
+          ground.inverse, {corner & 1 ? upper[0] : lower[0], corner & 2 ? upper[1] : lower[1],
+                           corner & 4 ? upper[2] : lower[2]});
+      for (int axis = 0; axis < 3; ++axis) {
+        lo[axis] = std::min(lo[axis], local[axis]);
+        hi[axis] = std::max(hi[axis], local[axis]);
+      }
+    }
+    const auto x0 = static_cast<int32_t>(std::floor(lo[0] / kDormantCell));
+    const auto x1 = static_cast<int32_t>(std::floor(hi[0] / kDormantCell));
+    const auto z0 = static_cast<int32_t>(std::floor(lo[2] / kDormantCell));
+    const auto z1 = static_cast<int32_t>(std::floor(hi[2] / kDormantCell));
+    if (static_cast<int64_t>(x1 - x0 + 1) * (z1 - z0 + 1) > 256) continue;
+    for (int32_t x = x0; x <= x1; ++x)
+      for (int32_t z = z0; z <= z1; ++z) {
+        const auto cell = map->dormant_grid.find(floor_cell(x, z));
+        if (cell == map->dormant_grid.end()) continue;
+        for (const auto index : cell->second) {
+          auto& entry = map->dormant[index];
+          if (entry.promoted || entry.lower[0] > hi[0] || entry.upper[0] < lo[0] ||
+              entry.lower[1] > hi[1] || entry.upper[1] < lo[1] || entry.lower[2] > hi[2] ||
+              entry.upper[2] < lo[2])
+            continue;
+          entry.promoted = true;
+          g_pending_dormant.emplace_back(map, index);
+        }
+      }
+  }
+}
+
+void scene_instances_promote_dynamics() {
+  if (g_pending_dormant.empty()) return;
+  auto pending = std::move(g_pending_dormant);
+  g_pending_dormant.clear();
+  for (const auto& [map, index] : pending) {
+    auto& entry = map->dormant[index];
+    // The loose body draws itself; hide the static instances it replaces.
+    for (const auto& [cell, prop] : entry.props)
+      if (prop < cell->props.size()) cell->props[prop].hidden = true;
+    part_add_dynamic_native(*entry.config, entry.config->renders, entry.pose, entry.ground,
+                            entry.seed);
+  }
 }
 
 bool scene_instances_ground_frame(void *ground, float *matrix) {
@@ -1335,6 +1408,92 @@ bool scene_instances_contact_box(const float frame[16], const float half[3],
   return true;
 }
 
+bool scene_instances_contact_walls(const float frame[16], const float half[3],
+                                   SceneBodyContact& contact, float max_vertical_normal) {
+  contact = {};
+  if (!frame || !half) return false;
+  PartMatrix matrix{};
+  std::copy(frame, frame + 16, matrix.begin());
+  collision::Box box;
+  if (!collision::make_box(matrix, {half[0], half[1], half[2]}, box)) return false;
+  float lower[3], upper[3];
+  for (int axis = 0; axis < 3; ++axis) {
+    float radius = 0.f;
+    for (int local = 0; local < 3; ++local)
+      radius += std::fabs(matrix[local * 4 + axis]) * half[local];
+    lower[axis] = matrix[12 + axis] - radius;
+    upper[axis] = matrix[12 + axis] + radius;
+  }
+  std::optional<collision::Contact> best;
+  const auto test = [&](const StaticMesh& mesh, const std::vector<uint32_t>& indices) {
+    for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+      std::array<physics::Vec3, 3> triangle;
+      bool inside = true;
+      float tri_lower[3], tri_upper[3];
+      for (int k = 0; k < 3; ++k) {
+        const size_t offset = static_cast<size_t>(indices[i + k]) * 3;
+        if (offset + 2 >= mesh.positions.size()) {
+          inside = false;
+          break;
+        }
+        const float* p = mesh.positions.data() + offset;
+        triangle[k] = {p[0] * mesh.scale, p[1] * mesh.scale, p[2] * mesh.scale};
+        for (int axis = 0; axis < 3; ++axis) {
+          const float value = p[axis] * mesh.scale;
+          tri_lower[axis] = k ? std::min(tri_lower[axis], value) : value;
+          tri_upper[axis] = k ? std::max(tri_upper[axis], value) : value;
+        }
+      }
+      if (!inside) continue;
+      for (int axis = 0; axis < 3 && inside; ++axis)
+        inside = tri_upper[axis] >= lower[axis] && tri_lower[axis] <= upper[axis];
+      if (!inside) continue;
+      const physics::Vec3 face =
+          (triangle[1] - triangle[0]).cross(triangle[2] - triangle[0]).normalized();
+      if (face.dot(face) < .5 || std::abs(face.y) > max_vertical_normal) continue;
+      const auto candidate = collision::overlap_triangle(box, triangle);
+      if (!candidate || std::abs(candidate->normal.y) > max_vertical_normal) continue;
+      if (!best || candidate->penetration > best->penetration) best = candidate;
+    }
+  };
+  const auto test_mesh = [&](const StaticMesh& mesh) {
+    const int32_t x0 = cell_coordinate(lower[0], mesh), x1 = cell_coordinate(upper[0], mesh);
+    const int32_t z0 = cell_coordinate(lower[2], mesh), z1 = cell_coordinate(upper[2], mesh);
+    if (static_cast<int64_t>(x1 - x0 + 1) * (z1 - z0 + 1) > 256) return;
+    for (int32_t x = x0; x <= x1; ++x)
+      for (int32_t z = z0; z <= z1; ++z) {
+        const auto cell = mesh.cells.find(floor_cell(x, z));
+        if (cell != mesh.cells.end()) test(mesh, cell->second);
+      }
+    test(mesh, mesh.large_triangles);
+  };
+  // The same triangle sets as scene_instances_sweep_sphere: map collision
+  // (fences and walls included), native placements and activated objects.
+  if (!g_floor_prepared) scene_instances_prepare_physics();
+  if (g_static_enabled)
+    for (const auto& mesh : g_static) test_mesh(mesh);
+  for (const auto& [key, ground] : g_ground_collision) {
+    (void)key;
+    bool separated = false;
+    if (ground.has_bounds)
+      for (int axis = 0; axis < 3; ++axis)
+        separated = separated || upper[axis] < ground.bounds_min[axis] ||
+                    lower[axis] > ground.bounds_max[axis];
+    if (separated) continue;
+    for (const auto& mesh : ground.meshes) test_mesh(mesh);
+  }
+  for (const auto& entry : g_floor_meshes) test_mesh(entry.second.mesh);
+  if (!best) return false;
+  for (int axis = 0; axis < 3; ++axis) {
+    contact.normal[axis] = static_cast<float>(axis == 0 ? best->normal.x
+                                              : axis == 1 ? best->normal.y : best->normal.z);
+    contact.point[axis] = static_cast<float>(axis == 0 ? best->point.x
+                                             : axis == 1 ? best->point.y : best->point.z);
+  }
+  contact.penetration = static_cast<float>(best->penetration);
+  return true;
+}
+
 bool scene_instances_sample_floor(float x, float z, float below, void *ignore,
                                   SceneFloorHit &sample) {
   if (!g_floor_prepared) scene_instances_prepare_physics();
@@ -1706,7 +1865,7 @@ std::vector<SceneInstance> scene_instances_collect(
           if (!g_hiz(cell_world.data(), cell.radius, g_hiz_user)) continue;
         }
         for (const auto& prop : cell.props) {
-          if (prop.batched) continue;
+          if (prop.batched || prop.hidden) continue;
           if (!visible(prop.center, prop.radius)) continue;
           if (g_hiz) {
             const auto prop_world = transform_point(shell, prop.center);
@@ -1783,7 +1942,7 @@ void scene_instances_collect_batches(const SceneFrustum* frustum,
         for (const auto index : batch.indices) {
           if (index >= cell.props.size()) continue;
           const auto& prop = cell.props[index];
-          if (!visible(prop.center, prop.radius)) continue;
+          if (prop.hidden || !visible(prop.center, prop.radius)) continue;
           if (g_hiz) {
             const auto prop_world = transform_point(shell, prop.center);
             if (!g_hiz(prop_world.data(), prop.radius, g_hiz_user)) continue;
@@ -2028,10 +2187,12 @@ const NativeCollisionData& native_collision_data(
       zero_mass = true;
   }
   // Promote only an entirely positive-mass placement. A mixed placement keeps
-  // every body static instead of moving one while baking another.
+  // every body static instead of moving one while baking another. A dynamic
+  // type still builds its geometry: map loading uses its bounds to find the
+  // dormant placement, and only static placements enter the ground caches.
   cached->second.dynamic = positive_mass && !zero_mass;
   for (const auto& body : parsed->bodies) {
-    if (!body.collision || cached->second.dynamic) continue;
+    if (!body.collision) continue;
     const auto frame = part_pose_matrix(body.pose);
     if (body.shape == PartBodyShape::Box) {
       cached->second.primitives.push_back(body);
@@ -2112,6 +2273,7 @@ void scene_instances_add_ground_props(const GroundMapData& map, void* ground) {
   auto& props_map = g_ground_props[map.render_id];
   auto& cells = props_map.cells;
   std::unordered_map<uint32_t, PartConfig> object_types;
+  std::unordered_map<uint32_t, std::shared_ptr<const PartConfig>> dormant_types;
   std::unordered_map<uint32_t, bool> visible_resources;
   const auto is_visible = [&](uint32_t resource) {
     if (!resource) return false;
@@ -2152,21 +2314,54 @@ void scene_instances_add_ground_props(const GroundMapData& map, void* ground) {
         ? static_cast<int32_t>(std::fmod(static_cast<double>(sum), 2147483648.)) : 0;
     const uint32_t seed = static_cast<uint32_t>(placement.seed >= 0 ? placement.seed : fallback)
                           & 0x7fffffffu;
+    int32_t dormant_index = -1;
     if (collision.dynamic) {
-      part_add_dynamic_native(type->second, type->second.renders, pose, ground,
-                              static_cast<int32_t>(seed));
-      continue;
-    }
-    if (collision.mesh)
+      // Rendered as a plain instanced prop until a car comes close; see
+      // scene_instances_wake_dynamics.
+      auto& shared = dormant_types[placement.type];
+      if (!shared) shared = std::make_shared<const PartConfig>(type->second);
+      DormantProp entry;
+      entry.config = shared;
+      entry.pose = pose;
+      entry.seed = static_cast<int32_t>(seed);
+      entry.ground = ground;
+      if (collision.mesh) {
+        entry.lower.fill(std::numeric_limits<float>::infinity());
+        entry.upper.fill(-std::numeric_limits<float>::infinity());
+        for (int corner = 0; corner < 8; ++corner) {
+          const auto& info = collision.mesh->info;
+          const float local[3] = {corner & 1 ? info.bbox_max[0] : info.bbox_min[0],
+                                  corner & 2 ? info.bbox_max[1] : info.bbox_min[1],
+                                  corner & 4 ? info.bbox_max[2] : info.bbox_min[2]};
+          const auto world = transform_point(pose, {local[0], local[1], local[2]});
+          for (int axis = 0; axis < 3; ++axis) {
+            entry.lower[axis] = std::min(entry.lower[axis], world[axis] - .5f);
+            entry.upper[axis] = std::max(entry.upper[axis], world[axis] + .5f);
+          }
+        }
+        dormant_index = static_cast<int32_t>(props_map.dormant.size());
+        const auto x0 = static_cast<int32_t>(std::floor(entry.lower[0] / kDormantCell));
+        const auto x1 = static_cast<int32_t>(std::floor(entry.upper[0] / kDormantCell));
+        const auto z0 = static_cast<int32_t>(std::floor(entry.lower[2] / kDormantCell));
+        const auto z1 = static_cast<int32_t>(std::floor(entry.upper[2] / kDormantCell));
+        for (int32_t x = x0; x <= x1; ++x)
+          for (int32_t z = z0; z <= z1; ++z)
+            props_map.dormant_grid[floor_cell(x, z)].push_back(
+                static_cast<uint32_t>(dormant_index));
+        props_map.dormant.push_back(std::move(entry));
+      }
+    } else if (collision.mesh) {
       props_map.collision_meshes.push_back(bake_static_mesh(*collision.mesh, pose));
-    for (const auto& body : collision.primitives) {
-      const auto frame = part_matrix_multiply(pose, part_pose_matrix(body.pose));
-      if (body.shape == PartBodyShape::Box)
-        props_map.collision_shapes.add_box(
-            frame, {body.box_half[0], body.box_half[1], body.box_half[2]});
-      else if (body.shape == PartBodyShape::Sphere)
-        props_map.collision_shapes.add_sphere(frame, body.sphere_radius);
     }
+    if (!collision.dynamic)
+      for (const auto& body : collision.primitives) {
+        const auto frame = part_matrix_multiply(pose, part_pose_matrix(body.pose));
+        if (body.shape == PartBodyShape::Box)
+          props_map.collision_shapes.add_box(
+              frame, {body.box_half[0], body.box_half[1], body.box_half[2]});
+        else if (body.shape == PartBodyShape::Sphere)
+          props_map.collision_shapes.add_sphere(frame, body.sphere_radius);
+      }
     if (type->second.renders.empty()) continue;
     for (const auto& render : type->second.renders) {
       const auto resource = render.variants.empty() ? render.resource
@@ -2174,8 +2369,9 @@ void scene_instances_add_ground_props(const GroundMapData& map, void* ground) {
       if (!is_visible(resource)) continue;
       const auto color = render.colors.empty() ? 0xffffffu : render.colors[seed % render.colors.size()];
       const auto transform = part_matrix_multiply(pose, part_pose_matrix(render.pose));
-      cells[floor_cell(prop_cell(transform[12]), prop_cell(transform[14]))].props.push_back(
-          {resource, transform, color});
+      auto& render_cell = cells[floor_cell(prop_cell(transform[12]), prop_cell(transform[14]))];
+      render_cell.props.push_back({resource, transform, color});
+      render_cell.props.back().dormant = dormant_index;
       used_resources.insert(resource);
       ++props;
     }
@@ -2187,6 +2383,10 @@ void scene_instances_add_ground_props(const GroundMapData& map, void* ground) {
     lower.fill(std::numeric_limits<float>::infinity());
     upper.fill(-std::numeric_limits<float>::infinity());
     std::erase_if(cell.props, [](const GroundProp& prop) { return !geometry(prop.render_id); });
+    for (uint32_t index = 0; index < cell.props.size(); ++index)
+      if (cell.props[index].dormant >= 0)
+        props_map.dormant[static_cast<size_t>(cell.props[index].dormant)].props.push_back(
+            {&cell, index});
     for (auto& prop : cell.props) {
       const auto mesh = geometry(prop.render_id);
       std::array<float, 3> center{}, half{};

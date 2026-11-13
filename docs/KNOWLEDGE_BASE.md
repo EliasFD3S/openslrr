@@ -308,14 +308,26 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   are cached per type, transformed by placement/body pose, merged into a
   spatially indexed collision mesh per map and added to the exact shape index.
   They are independent of render variant, LOD, visibility and culling.
-- If every collision-enabled body has positive mass, the whole placement becomes
-  a loose native body (`part_add_dynamic_native`) with its full collision mesh,
-  authored mass and mass-weighted body-pose centre. It sleeps until car contact,
-  wakes for equal/opposite car impulses, and publishes every render slot from
-  the ground-shell frame (`scene_instances_ground_frame`). Dynamic placements
-  are excluded from both static ground caches and floor-mesh collection;
-  mixed-mass placements stay static. Standalone dynamic `PhysicsRef` bodies are
+- If every collision-enabled body has positive mass, the placement is drawn as
+  an ordinary prop and recorded as dormant. `collide_chassis` queues dormant
+  placements inside the padded chassis bounds
+  (`src/resources/scene_instances.cpp:scene_instances_wake_dynamics`); after the
+  vehicle loop each becomes a loose native body (`part_add_dynamic_native`)
+  with its full collision mesh, authored mass and mass-weighted body-pose
+  centre, and its static instances are hidden
+  (`src/resources/scene_instances.cpp:scene_instances_promote_dynamics`). It
+  sleeps until car contact, wakes for equal/opposite car impulses, and
+  publishes every render slot from the ground-shell frame
+  (`scene_instances_ground_frame`). Dynamic placements are excluded from both
+  static ground caches and floor-mesh collection; mixed-mass placements stay
+  static. Creating every such prop at load (about 4,000 in Valo City) cost
+  about 400 ms of physics per frame. Standalone dynamic `PhysicsRef` bodies are
   still a separate unimplemented contract.
+- Besides the four corner sphere sweeps, the chassis box is tested against
+  native boxes/spheres and against the wall triangles of every static mesh
+  (`src/resources/scene_instances.cpp:scene_instances_contact_walls`, kernel
+  `src/physics/scene_collision.cpp:overlap_triangle`), so corners, fence ends
+  and thin trunks between the probes still stop the car.
 - `scene_instances_prepare_physics` rebuilds the collision index from GameRef
   render nodes once per physics frame. Floor and sweep queries are
   `scene_instances_sample_floor` and `scene_instances_sweep_sphere`.

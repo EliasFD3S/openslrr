@@ -49,6 +49,13 @@ struct Contact {
   physics::Vec3 point{};
 };
 
+// Separating-axis overlap of a box with one triangle. The normal points from
+// the triangle towards the box centre's side, so moving the box along it by
+// `penetration` separates them; `point` is the triangle point nearest to the
+// box centre. Degenerate triangles and invalid boxes never overlap.
+std::optional<Contact> overlap_triangle(const Box& moving,
+                                        const std::array<physics::Vec3, 3>& triangle) noexcept;
+
 struct QueryStats {
   std::size_t broadphase_candidates = 0;
   std::size_t narrowphase_tests = 0;

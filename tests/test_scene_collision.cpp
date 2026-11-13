@@ -327,8 +327,71 @@ SLRR_TEST(analytic_bounds_cover_full_sphere_and_clear_with_index) {
   SLRR_REQUIRE(!index.bounds().has_value());
 }
 
+SLRR_TEST(box_pressed_into_a_wall_triangle_is_pushed_out_along_the_face) {
+  using slrr::collision::overlap_triangle;
+  // A vertical wall in the x = 0 plane, facing +x, larger than the box.
+  const std::array<Vec3, 3> wall = {Vec3{0, -5, -10}, Vec3{0, 10, 0}, Vec3{0, -5, 10}};
+  Box box;
+  SLRR_REQUIRE(slrr::collision::make_box(identity({0.8, 0.5, 0.3}), {1.0, 0.4, 2.0}, box));
+  const auto hit = overlap_triangle(box, wall);
+  SLRR_REQUIRE(hit.has_value());
+  require_unit(hit->normal);
+  SLRR_REQUIRE(near(hit->normal, {1, 0, 0}));
+  SLRR_REQUIRE(near(hit->penetration, 0.2));
+  SLRR_REQUIRE(near(hit->point, {0, 0.5, 0.3}));
+
+  // The same wall seen from its other side pushes the box back to that side.
+  SLRR_REQUIRE(slrr::collision::make_box(identity({-0.9, 0.5, 0.3}), {1.0, 0.4, 2.0}, box));
+  const auto back = overlap_triangle(box, wall);
+  SLRR_REQUIRE(back.has_value());
+  SLRR_REQUIRE(near(back->normal, {-1, 0, 0}));
+  SLRR_REQUIRE(near(back->penetration, 0.1));
+}
+
+SLRR_TEST(house_corner_between_corner_probes_is_found_by_the_chassis_box) {
+  using slrr::collision::overlap_triangle;
+  constexpr double probe_radius = 0.18;
+  // The convex corner of a house at the origin, walls along -x and -z.
+  // A car heads towards -z with the corner just inside its front bumper.
+  const Vec3 car_centre{0.0, 0.6, 2.2};
+  const Vec3 car_half{0.9, 0.4, 2.3};
+  const std::array<Vec3, 3> side_wall = {Vec3{0, 0, 0}, Vec3{0, 3, 0}, Vec3{0, 0, -10}};
+  const std::array<Vec3, 3> front_wall = {Vec3{0, 0, 0}, Vec3{-10, 0, 0}, Vec3{0, 3, 0}};
+  // Both front corner probes miss: they straddle the corner by 0.72 m.
+  for (double x : {-1.0, 1.0}) {
+    const Vec3 probe = car_centre + Vec3{x * (car_half.x - probe_radius), 0,
+                                          -(car_half.z - probe_radius)};
+    SLRR_REQUIRE(std::abs(probe.x) > probe_radius);
+  }
+  Box box;
+  SLRR_REQUIRE(slrr::collision::make_box(identity(car_centre), car_half, box));
+  const auto side = overlap_triangle(box, side_wall);
+  const auto front = overlap_triangle(box, front_wall);
+  SLRR_REQUIRE(side.has_value());
+  SLRR_REQUIRE(front.has_value());
+  // The bumper is 0.1 m past the front wall: that is the shallow way out.
+  SLRR_REQUIRE(near(front->normal, {0, 0, 1}));
+  SLRR_REQUIRE(near(front->penetration, 0.1));
+}
+
+SLRR_TEST(separated_and_degenerate_triangles_do_not_overlap) {
+  using slrr::collision::overlap_triangle;
+  Box box;
+  SLRR_REQUIRE(slrr::collision::make_box(rotated_y(0.4, {0, 1, 0}), {1, 1, 1}, box));
+  // Beyond the rotated box's corner reach (sqrt 2 in the xz plane).
+  const std::array<Vec3, 3> far_wall = {Vec3{1.5, -5, -10}, Vec3{1.5, 10, 0}, Vec3{1.5, -5, 10}};
+  SLRR_REQUIRE(!overlap_triangle(box, far_wall).has_value());
+  const std::array<Vec3, 3> line = {Vec3{0, 0, 0}, Vec3{0, 1, 0}, Vec3{0, 2, 0}};
+  SLRR_REQUIRE(!overlap_triangle(box, line).has_value());
+  const std::array<Vec3, 3> invalid = {Vec3{0, 0, 0}, Vec3{std::nan(""), 1, 0}, Vec3{0, 2, 1}};
+  SLRR_REQUIRE(!overlap_triangle(box, invalid).has_value());
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
+      box_pressed_into_a_wall_triangle_is_pushed_out_along_the_face,
+      house_corner_between_corner_probes_is_found_by_the_chassis_box,
+      separated_and_degenerate_triangles_do_not_overlap,
       box_mesh_is_world_space_geometry_in_metres,
       sphere_mesh_has_bounded_metre_positions_and_real_triangles,
       invalid_dimensions_and_frames_are_rejected_without_geometry,

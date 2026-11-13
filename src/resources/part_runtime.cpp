@@ -2244,8 +2244,23 @@ physics::VehicleDynamics::Impact collide_chassis(Record& rec, physics::Vec3 befo
   const float half[3] = {float((body.maximum.x - body.minimum.x) * .5),
                          float((body.maximum.y - body.minimum.y) * .5),
                          float((body.maximum.z - body.minimum.z) * .5)};
+  {
+    // Props that are still plain scenery become loose bodies before the car
+    // reaches them; the margin covers the next tick of travel.
+    const float reach = std::sqrt(half[0] * half[0] + half[1] * half[1] + half[2] * half[2]) +
+                        3.f + static_cast<float>(delta.length()) * 2.f;
+    const float lower[3] = {float(world_center.x) - reach, float(world_center.y) - reach,
+                            float(world_center.z) - reach};
+    const float upper[3] = {float(world_center.x) + reach, float(world_center.y) + reach,
+                            float(world_center.z) + reach};
+    scene_instances_wake_dynamics(lower, upper);
+  }
   const int samples = static_cast<int>(
       std::clamp(std::ceil(delta.length() / .2), 1.0, 8.0));
+  // Wall meshes use the box above the lowest 30 % of the chassis, the band the
+  // corner probes also start at, so kerbs and road seams do not stop the car.
+  const float wall_half[3] = {half[0], half[1] * .7f, half[2]};
+  const float wall_lift = half[1] * .3f;
   SceneBodyContact primitive;
   double primitive_fraction = 1.0;
   bool has_primitive = false;
@@ -2254,7 +2269,13 @@ physics::VehicleDynamics::Impact collide_chassis(Record& rec, physics::Vec3 befo
     PartMatrix probe = frame;
     for (int axis = 0; axis < 3; ++axis)
       probe[12 + axis] -= static_cast<float>(movement[axis] * (1.0 - fraction));
-    if (!scene_instances_contact_box(probe.data(), half, primitive)) continue;
+    SceneBodyContact shape, wall;
+    const bool shape_hit = scene_instances_contact_box(probe.data(), half, shape);
+    PartMatrix raised = probe;
+    for (int axis = 0; axis < 3; ++axis) raised[12 + axis] += probe[4 + axis] * wall_lift;
+    const bool wall_hit = scene_instances_contact_walls(raised.data(), wall_half, wall);
+    if (!shape_hit && !wall_hit) continue;
+    primitive = shape_hit && (!wall_hit || shape.penetration >= wall.penetration) ? shape : wall;
     primitive_fraction = fraction;
     has_primitive = true;
     break;
@@ -2831,10 +2852,19 @@ void advance_loose_panels() {
     constexpr unsigned rest_ticks = physics::VehicleDynamics::update_frequency / 2;
     const bool sleeping = loose.quiet_ticks >= rest_ticks;
     auto& body = loose.body;
+    // The per-part car test is the expensive step. Skip it unless the two
+    // bounding spheres, padded by this tick's travel, can touch.
+    const auto& car = vehicle->dynamics.body;
+    const Vec3 gap = body.position - car.position;
+    const double reach = ((car.maximum - car.minimum).length() +
+                          (body.maximum - body.minimum).length()) * .5 + 1.0 +
+                         (car.velocity.length() + body.velocity.length()) * kPhysicsTick * 2.0;
+    const bool near = gap.dot(gap) < reach * reach;
+    if (sleeping && !near) continue;
     const Vec3 before = body.position;
     const auto previous = body.corners();
     if (!sleeping) body.integrate(kPhysicsTick);
-    const bool carrier_contact = collide_loose_with_car(
+    const bool carrier_contact = near && collide_loose_with_car(
         body, previous, before, chassis, *vehicle, previous_carrier);
     if (sleeping && !carrier_contact) continue;
     const Vec3 movement = body.position - before;
@@ -3032,6 +3062,8 @@ void advance_chassis_tick() {
       }
     }
   }
+  // After the records loop: creating a loose body inserts into `records`.
+  scene_instances_promote_dynamics();
   for (auto* part : released)
     if (auto* panel = record(part))
       if (auto* chassis = car(part))
