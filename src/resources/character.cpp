@@ -737,12 +737,10 @@ bool character_place_bone(void* key, int32_t type_id, const RpkIndex& packs, int
   if (bone < 0 || bone >= count) return false;
   for (int i = 0; i < 3; ++i)
     if (!std::isfinite(position_m[i])) return false;
-  // Bind orientation in render space, with the requested origin.
-  std::vector<float> locals(static_cast<size_t>(count) * 16), worlds(locals.size());
-  skeleton_local_bind(*character->bind, locals.data());
-  skeleton_world(*character->bind, locals.data(), worlds.data());
+  // Bind orientation in render space, with the requested origin. This runs
+  // for every rigged link at each physics tick, so it allocates nothing.
   float world[16];
-  std::memcpy(world, worlds.data() + bone * 16, sizeof(world));
+  if (!skeleton_bind_world(*character->bind, bone, world)) return false;
   for (int i = 0; i < 3; ++i) world[12 + i] = position_m[i] * 100.f;
   const int parent = character->bind->bones[static_cast<size_t>(bone)].parent;
   float local[16];

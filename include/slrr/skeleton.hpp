@@ -45,6 +45,9 @@ inline bool clip_parse(const uint8_t* data, size_t size, Clip* out, std::string*
 // Column-major 4x4 locals and worlds, centimetres, one bone per 16 floats.
 void skeleton_local_bind(const Skeleton& skeleton, float* locals);
 void skeleton_world(const Skeleton& skeleton, const float* locals, float* worlds);
+// One bone's bind-pose world matrix, without scratch buffers. False when
+// `bone` is out of range.
+bool skeleton_bind_world(const Skeleton& skeleton, int bone, float* out);
 
 // Replaces the local matrix of each bone that has a track. Other bones are
 // left as the caller wrote them. Translation is direction * bone length,
