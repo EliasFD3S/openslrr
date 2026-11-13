@@ -265,6 +265,17 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
       std::fprintf(stderr, "[shadow] shader program creation failed: caster=%d receiver=%d\n",
                    bgfx::isValid(shadow_program_), bgfx::isValid(shadow_recv_));
     u_shadow_ramp_ = bgfx::createUniform("u_shadowRamp", bgfx::UniformType::Vec4);
+    // bgfx returns an invalid program, without a message in Release, when the
+    // fragment $input list differs from the vertex $output list. The features
+    // behind these programs then switch themselves off silently.
+    const std::pair<const char*, bgfx::ProgramHandle> programs[] = {
+        {"mesh", program_}, {"skin", skin_program_},
+        {"static_shadow", static_shadow_program_}, {"inst", inst_program_},
+        {"inst_shadow", inst_shadow_program_}, {"present", present_program_},
+        {"hiz", hiz_program_}, {"vehicle", vehicle_program_}};
+    for (const auto& [name, handle] : programs)
+      if (!bgfx::isValid(handle))
+        std::fprintf(stderr, "[bgfx] program %s failed to link\n", name);
     layout_.begin()
         .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
         .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
