@@ -428,9 +428,11 @@ such a slot is a one-degree-of-freedom hinged plate
   inward push.
 - A free panel reacts to gravity, to the carrier's velocity change at the
   hinge and its rotation, and to the relative wind, with damped end stops.
-  It latches again when it slams shut. A part moved to another slot or taken
-  off starts closed and latched. The hinge state is not saved: a loaded car
-  starts with every panel closed and latched.
+  It latches again when it slams shut or comes to rest closed. The simulated
+  hinge follows the current slot pose and installed mass, like the drawn one.
+  A part moved to another slot or taken off starts closed and latched. The
+  hinge state is not saved: a loaded car starts with every panel closed and
+  latched.
 
 The panel has no collision of its own: an open door can pass through a wall,
 and only chassis contacts reach it, measured against the panel as it hangs.

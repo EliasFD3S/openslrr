@@ -262,6 +262,70 @@ SLRR_TEST(gravity_and_wind_act_on_free_panels) {
   SLRR_REQUIRE(ajar.latched);
 }
 
+SLRR_TEST(a_free_panel_that_settles_shut_relatches) {
+  FlapLoads still;
+  // A hood a hair open falls shut too gently to slam the latch, then rests.
+  const auto hood = baiern_hood();
+  FlapState h;
+  h.latched = false;
+  h.open = true;
+  h.angle = .001;
+  h.since_release = 1;
+  run(h, hood, still, 1);
+  SLRR_REQUIRE(h.latched && !h.open && h.angle == 0);
+  // A door at rest in the closed pose catches once the release has settled.
+  const auto door = baiern_left_door();
+  FlapState d;
+  d.latched = false;
+  d.open = true;
+  d.since_release = .1;
+  flap_step(d, door, still, kStep);
+  SLRR_REQUIRE(!d.latched && d.open);
+  run(d, door, still, .25);
+  SLRR_REQUIRE(d.latched && !d.open);
+  // Toggling it now opens it on the first click.
+  SLRR_REQUIRE(flap_toggle(d));
+  run(d, door, still, .6);
+  SLRR_REQUIRE(near(d.angle, door.upper, 1e-3));
+  // A door released by a hit that does not push it (a vertical jolt) drifts
+  // off its seal and stays free.
+  FlapState hit;
+  const double point[3] = {-.9, -.1, -.818 + .55}, up[3] = {0, 1, 0};
+  SLRR_REQUIRE(flap_hit(hit, door, point, up, 4));
+  run(hit, door, still, 2);
+  SLRR_REQUIRE(!hit.latched && hit.angle > .2);
+}
+
+SLRR_TEST(the_hinge_follows_a_moved_slot) {
+  const auto door = baiern_left_door();
+  // A damage pose: 0.1 rad about Y and a small offset, column-major.
+  const float c = std::cos(.1f), s = std::sin(.1f);
+  const float delta[16] = {c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, .02f, -.01f, .03f, 1};
+  auto moved = door;
+  slrr::physics::flap_transform(moved, delta);
+  SLRR_REQUIRE(near(moved.upper, door.upper) && near(moved.mass, door.mass) &&
+               near(moved.inertia, door.inertia) && near(moved.length, door.length));
+  const auto carry = [&](const double p[3], double w, double out[3]) {
+    for (int r = 0; r < 3; ++r)
+      out[r] = delta[r] * p[0] + delta[4 + r] * p[1] + delta[8 + r] * p[2] + delta[12 + r] * w;
+  };
+  // The open panel is the moved closed panel turned about the moved hinge.
+  double edge[3], expected[3], moved_edge[3];
+  edge_at(door, .7, edge);
+  carry(edge, 1, expected);
+  edge_at(moved, .7, moved_edge);
+  for (int r = 0; r < 3; ++r) SLRR_REQUIRE(near(moved_edge[r], expected[r]));
+  // The same hit, seen in the moved frame, swings it the same way.
+  const double point[3] = {-.9, -.1, -.818 + .55}, normal[3] = {1, 0, 0};
+  double moved_point[3], moved_normal[3];
+  carry(point, 1, moved_point);
+  carry(normal, 0, moved_normal);
+  FlapState a, b;
+  flap_hit(a, door, point, normal, 8);
+  flap_hit(b, moved, moved_point, moved_normal, 8);
+  SLRR_REQUIRE(near(a.rate, b.rate));
+}
+
 SLRR_TEST(end_stops_bound_motion_without_nan) {
   const auto door = baiern_left_door();
   FlapState s;
@@ -292,6 +356,8 @@ int main() {
       free_door_follows_the_carrier_and_relatches_when_slammed,
       a_door_left_open_gives_way_when_the_car_pulls_away,
       gravity_and_wind_act_on_free_panels,
+      a_free_panel_that_settles_shut_relatches,
+      the_hinge_follows_a_moved_slot,
       end_stops_bound_motion_without_nan,
   };
   return slrr::standalone::run("flap_hinge", tests);
