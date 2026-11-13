@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenSLRR natives</title>
+  <link rel="stylesheet" href="css/slrr.css">
+</head>
+<body>
+  <main class="screen">
+    <div class="bezel">
+      <header class="top">
+        <h1 class="brand">OPEN <span>SLRR</span></h1>
+        <div class="lamps" aria-hidden="true"><i class="lamp on"></i><i class="lamp on"></i><i class="lamp"></i></div>
+      </header>
+      <nav class="menu">
+        <a href="index.html">Garage</a>
+        <a href="natives.html" aria-current="page">Natives</a>
+      </nav>
+      <p class="lead">Declarations from the game scripts. The mark on the left is the host: in, partial, no-op, or not registered. Notes describe the gap when the call is not the original behavior.</p>
+      <div class="tools">
+        <input id="q" type="search" placeholder="filter  setFog, Chassis, traffic" autocomplete="off">
+        <div class="counts" id="counts"></div>
+      </div>
+      <div class="grid">
+        <aside class="classes" id="classes"></aside>
+        <div class="list" id="list"></div>
+      </div>
+      <footer class="hint">TYPE TO FILTER &nbsp;&nbsp; CLICK A CLASS &nbsp;&nbsp; ESC CLEARS</footer>
+    </div>
+  </main>
+  <script src="js/catalog.js"></script>
+  <script src="js/natives.js"></script>
+</body>
+</html>
