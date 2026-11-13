@@ -47,6 +47,19 @@ void RigidBody::configure(double kilograms, Vec3 lo, Vec3 hi, Vec3 com) {
                       12 / (mass * (s.x * s.x + s.z * s.z)),
                       12 / (mass * (s.x * s.x + s.y * s.y))};
 }
+void RigidBody::configure(double kilograms, Vec3 lo, Vec3 hi, Vec3 com,
+                          Vec3 moments) {
+  configure(kilograms, lo, hi, com);
+  const auto use = [](double moment, double& inverse) {
+    if (std::isfinite(moment) && moment > 0) inverse = 1 / moment;
+  };
+  use(moments.x, inverse_inertia_.x);
+  use(moments.y, inverse_inertia_.y);
+  use(moments.z, inverse_inertia_.z);
+}
+Vec3 RigidBody::inertia() const {
+  return {1 / inverse_inertia_.x, 1 / inverse_inertia_.y, 1 / inverse_inertia_.z};
+}
 void RigidBody::set_frame(const Matrix &m) {
   for (float v : m)
     if (!std::isfinite(v))
