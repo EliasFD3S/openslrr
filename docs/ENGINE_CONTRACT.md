@@ -380,6 +380,13 @@ accumulator. Do not bring back "once per frame" integration, and do not
 assume that an older 700 Hz discussion describes the current code.
 An FPS gain must not speed up simulated time.
 
+Frames do not line up with host ticks. A car is drawn between its last two
+ticks, by the fraction of a tick still left unsimulated
+(`gameref_render_matrix`). Scripts, collisions and the published node matrix
+keep the ticked pose. Rendering, the driving cameras and car shadows use the
+drawn pose (`scene_instance_transform`, `scene_instances_render_matrix`); do
+not mix the two for one visible element.
+
 A missing ground contact means air, not an implicit floor at Y=0.
 Tire radius, centers/hubs, springs, damping, unsprung masses, and bump stops
 must stay consistent. Do not pin a car at an arbitrary height to hide a

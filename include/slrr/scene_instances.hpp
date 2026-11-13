@@ -77,10 +77,14 @@ void scene_instances_collect_batches(const SceneFrustum* frustum,
                                      const float* reflection_origin = nullptr);
 std::vector<SceneInstance> scene_instances_collect_root(void *root);
 SceneSun scene_instances_light(void* root=nullptr);
-// Rejects missing parents, hidden subtrees and cycles.
+// Rejects missing parents, hidden subtrees and cycles. Draws simulated
+// bodies at their pose interpolated between physics ticks.
 bool scene_instance_transform(void *key, void *root, float *matrix);
 // Active world, unreflected script metres. False for inventory/other worlds.
 bool scene_instances_script_matrix(void *key, float *matrix);
+// The same, at the drawn pose (gameref_render_matrix). Use it for cameras,
+// shadows and anything else that must stay on the drawn car.
+bool scene_instances_render_matrix(void *key, float *matrix);
 std::shared_ptr<const ScxGeometry> scene_instances_geometry(uint32_t resource);
 // Parse render meshes off the calling thread and publish them before return.
 void scene_instances_preload(const std::vector<uint32_t>& resources);

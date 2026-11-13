@@ -135,6 +135,12 @@ struct Record {
   int reported_contacts = -1, physics_status_lines = 0;
   void *physics_parent = nullptr;
   PartMatrix published_frame{};
+  // Body pose before the last host tick and the parent frame of that tick.
+  // The drawn pose blends from it to the published one (publish_render_poses).
+  bool render_blend = false;
+  physics::Vec3 render_from_position;
+  physics::Quaternion render_from_orientation;
+  PartMatrix render_parent{};
   std::array<Object *, 3> sfx{};
 };
 std::unordered_map<Object *, std::vector<SfxItem>> sfx_items;
@@ -2679,6 +2685,7 @@ void advance_chassis_tick() {
       }
     }
     rec.engine_running = false;
+    rec.render_blend = false;
     if (rec.config->native_kind != "car" || rec.state.parent ||
         (rec.physics_suspended && !rec.physics_pending_placement))
       continue;
@@ -2724,6 +2731,7 @@ void advance_chassis_tick() {
     };
     // Two fixed 120 Hz substeps per host vehicle update.
     const auto before = rec.dynamics.body.position;
+    const auto orientation_before = rec.dynamics.body.orientation;
     const auto velocity_before = rec.dynamics.body.velocity;
     const auto steps = rec.dynamics.advance(kPhysicsTick, terrain);
     if (rec.physics_released && rec.dynamics.drive.torque) {
@@ -2748,10 +2756,15 @@ void advance_chassis_tick() {
       rec.mileage += static_cast<float>(std::hypot(delta.x, delta.z) * .1);
     }
     rec.engine_running = rec.dynamics.drive.torque && rec.dynamics.engine_running;
-    if (steps)
+    if (steps) {
       dynamics_sync(chassis, rec, parent);
-    else
+      rec.render_blend = true;
+      rec.render_from_position = before;
+      rec.render_from_orientation = orientation_before;
+      rec.render_parent = parent;
+    } else {
       rec.published_frame = local;
+    }
     if (rec.deformation && rec.deformation->active() && advance_deformation(chassis, rec, steps)) {
       rec.deformation_upload_ticks += steps;
       if (rec.deformation_upload_ticks >= physics::VehicleDynamics::frequency / 20 ||
@@ -2792,6 +2805,39 @@ void advance_chassis_tick() {
       if (auto* chassis = car(part))
         if (auto* vehicle = record(chassis))
           detach_panel(part, *panel, chassis, *vehicle);
+}
+
+// Physics runs at a fixed 60 Hz, but frames come at the display rate. Drawing
+// the last tick made turns and motion step whenever a frame ran zero or two
+// ticks. Draw each car between its last two ticks instead, by the fraction of
+// a tick that is still unsimulated. Scripts and physics keep the ticked pose.
+void publish_render_poses(double alpha) {
+  alpha = std::clamp(alpha, 0., 1.);
+  for (auto& [chassis, rec] : records) {
+    if (rec.config->native_kind != "car") continue;
+    auto* node = gameref_get(chassis);
+    if (!node) continue;
+    node->render_pose = false;
+    if (!rec.render_blend || !node->matrix_override) continue;
+    const auto& body = rec.dynamics.body;
+    auto from = rec.render_from_orientation;
+    const auto& to = body.orientation;
+    // Blend along the shorter arc.
+    const double sign =
+        from.x * to.x + from.y * to.y + from.z * to.z + from.w * to.w < 0 ? -1 : 1;
+    from = {from.x * sign, from.y * sign, from.z * sign, from.w * sign};
+    physics::RigidBody drawn = body;
+    drawn.position = rec.render_from_position + (body.position - rec.render_from_position) * alpha;
+    drawn.orientation = physics::Quaternion{from.x + (to.x - from.x) * alpha,
+                                            from.y + (to.y - from.y) * alpha,
+                                            from.z + (to.z - from.z) * alpha,
+                                            from.w + (to.w - from.w) * alpha}.normalized();
+    const auto local = part_matrix_multiply(part_matrix_inverse_rigid(rec.render_parent),
+                                            drawn.frame());
+    std::copy(local.begin(), local.end(), node->render_matrix);
+    std::copy(node->local_matrix, node->local_matrix + 16, node->render_basis);
+    node->render_pose = true;
+  }
 }
 
 void transform_point(const PartMatrix& m, float x, float y, float z, float out[3]) {
@@ -3594,6 +3640,7 @@ void part_physics_advance(double seconds) {
         update_engine_audio(rec, rec.engine_running);
     }
   }
+  publish_render_poses(physics_elapsed / kPhysicsTick);
   // After the solver, so a flap or a wheel placement cannot put the column back.
   pose_steering_wheels();
   pose_driver();
@@ -3760,7 +3807,7 @@ void *part_shadow_source(void *render, float *frame) {
   for (int guard = 0; render && guard < 64; ++guard) {
     if (auto *rec = record(static_cast<Object *>(render));
         rec && rec->config->native_kind == "car")
-      return scene_instances_script_matrix(render, frame) ? render : nullptr;
+      return scene_instances_render_matrix(render, frame) ? render : nullptr;
     auto *node = gameref_get(render);
     render = node ? node->parent : nullptr;
   }
@@ -3770,17 +3817,19 @@ bool part_camera_pose(void* car, int camera, float* matrix) {
   auto* chassis = as_part(static_cast<Object*>(car));
   const auto* rec = record(chassis);
   PartMatrix frame;
-  if (!rec || !scene_instances_script_matrix(chassis, frame.data())) return false;
+  // Follow the drawn car, so the view does not step against it.
+  if (!rec || !scene_instances_render_matrix(chassis, frame.data())) return false;
   if (camera >= 0) {
     if (static_cast<size_t>(camera) >= rec->config->cameras.size()) return false;
+    const PartMatrix body = frame;
     frame = part_matrix_multiply(frame, part_pose_matrix(rec->config->cameras[camera]));
     const auto* controlled = gameref_find_live(controlled_vehicle);
     if (controlled && rec->physics_released &&
         as_part(static_cast<Object*>(controlled->key)) == chassis) {
-      const auto offset = rec->dynamics.body.orientation.rotate(rec->cockpit_offset);
-      frame[12] += float(offset.x);
-      frame[13] += float(offset.y);
-      frame[14] += float(offset.z);
+      const auto& lean = rec->cockpit_offset;
+      for (int i = 0; i < 3; ++i)
+        frame[12 + i] += static_cast<float>(body[i] * lean.x + body[4 + i] * lean.y +
+                                            body[8 + i] * lean.z);
     }
   }
   std::copy(frame.begin(), frame.end(), matrix);
