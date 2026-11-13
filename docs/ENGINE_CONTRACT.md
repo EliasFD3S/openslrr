@@ -312,6 +312,47 @@ map chains and their placed objects.
 descriptions and placements. It does not necessarily mean a new Java native
 to register. Inspect the data and the instantiation path first.
 
+Native ICFG loading retains both renders and collision bodies. CFG `box`
+half extents, `sphere` radii and SCX collision meshes are cached per type,
+then instanced with `placement pose × body pose`. `nocollision` suppresses
+the body. Collision follows the active ground shell's world transform and is
+not selected by render variant, LOD, visibility or culling. Script-created
+`PhysicsRef` primitives and generic objects activated by
+`GameRef.setActiveCollision` use the same scene index; OSD click volumes are
+a separate contract. A placement whose collision-enabled bodies all have
+positive mass stays an ordinary instanced prop with no collider until a car's
+padded chassis bounds reach it. It is then promoted, after the vehicle loop,
+to a loose native body with its full CFG collision mesh and mass-weighted
+body-pose centre, and its static instances are hidden. The loose body sleeps
+until contact, reuses the loose-part solver for car and static-scene contacts,
+and updates every render slot, with its CFG render pose, from the simulated
+frame. Once it rests more than 40 m beyond the car's reach it becomes an
+ordinary prop again at the pose where it settled (for the rest of the
+session), so only props near the car are live. It returns to its map pose
+instead when it was pushed more than a 64 m prop cell away, falls below
+-500 m, or keeps moving out there for 10 s, and becomes scenery wherever it is
+when its world stops being the active one. A map can hold thousands of such props: creating them all as live
+bodies at load cost about 400 ms of physics per frame in Valo City.
+Mixed-mass placements and zero-mass buildings, columns, trees and containers
+remain on the exact static path.
+
+`PhysicsRef.setStatic(0)` hands a script body to the host free-body solver:
+it falls under gravity, rests on the scene, and exchanges impulses with the
+controlled car like a loose part, publishing its pose and velocities for
+`getPos`, `getOri`, `getVel` and `getAngVel`. `setMatrix` places it at rest,
+and `setStatic(1)` fixes it again. Created bodies stay fixed until then; the
+stock jack, lifts and showroom walls never call `setStatic`. A primitive has
+no authored mass, so it gets a 500 kg/m³ density; a `create` resource uses its
+CFG mass when it has one.
+
+`GameRef.RID_TRIGGER` (system:0x34) objects, which `java.game.Trigger` creates
+with `"x,y,z,yaw,pitch,roll,sphere,r"` or `"...,box,x,y,z"` params, are
+volumes. Each frame `scene_triggers_tick` raises `EVENT_TRIGGER_ON` when a
+top-level car of the active world enters one and `EVENT_TRIGGER_OFF` when it
+leaves, with the car's `id()` as the String param. A car that first appears
+inside a volume, or that `setMatrix` moves more than 25 m in one frame, raises
+nothing for that change. Box sizes are read as half extents, as in SLRR_rev.
+
 Keep these decisions separate: loading, CPU residency, GPU upload,
 visibility/frustum, shadow participation, and collision. An object outside
 the screen can cast a visible shadow. Render culling must not remove the
@@ -374,6 +415,31 @@ the main physics frame.
 and the transmission. `part_runtime` extracts part properties and publishes
 the results into the render graph.
 
+Static scene collision has two complementary paths. Triangle meshes serve
+support and sphere-sweep queries. The chassis box is also tested directly:
+against indexed CFG/`PhysicsRef` boxes and spheres, and against the wall
+triangles (|normal.y| <= 0.65) of every static triangle set, with
+`overlap_triangle` in `scene_collision.cpp`. A thin trunk, a house corner or a
+fence end therefore cannot pass between the four chassis corner probes. Both
+tests leave out the lowest 30 % of the chassis box, the band below the corner
+probes, so kerbs, steps and road seams are wheel support, not walls. The chassis query
+uses the bounds centre (not necessarily the centre of mass), samples longer
+movements up to 8 times, then, when the tick began clear, bisects between the
+last clear sample and the first overlap so the car is put back near the moment
+of contact, and feeds
+the contact normal into the existing impact response. The oriented-shape
+query is still discrete, not a general continuous manifold solver; keep the
+triangle sweep path for terrain and tunneling protection.
+Positive-mass native placements do not enter static mesh or analytic collision
+caches. Their loose body is created only near a car; it uses the authored
+mesh, mass and centre, starts asleep, wakes on car contact, and exchanges
+equal/opposite impulses with both car and static scene. A sleeping loose body
+skips the per-part car test unless its bounding sphere can reach the car's.
+Free `PhysicsRef` bodies (`setStatic(0)`) use the same loose-body contacts.
+This is a host loose-body approximation, not a general dynamic triangle-mesh
+engine: loose bodies collide with the car and the static scene, not with
+each other.
+
 The frequency currently declared is **120 Hz**, with an update frequency
 declared at **60 Hz** in `vehicle_dynamics.hpp`. `advance(seconds)` uses an
 accumulator. Do not bring back "once per frame" integration, and do not
@@ -391,6 +457,15 @@ A missing ground contact means air, not an implicit floor at Y=0.
 Tire radius, centers/hubs, springs, damping, unsprung masses, and bump stops
 must stay consistent. Do not pin a car at an arbitrary height to hide a
 collision problem.
+
+The scripts size the wheel of the stock rim slot (`101 + corner`). When that
+slot is empty, the corner keeps a physical wheel while hardware remains on
+its other wheel slots (type 101–104, such as an outer dually wheel) or on its
+hub (type 201–204). Its radius is how far that hardware reaches below the
+wheel centre, so the car rests on the brake or dually wheel as drawn.
+`Brake.updatevariables` writes the rotor size plus 0.02 m, but the stock rotor
+mesh does not scale with it. A corner with none of this hardware loses its
+wheel and falls back to the chassis box contacts.
 
 For driving, follow throttle → dyno torque → clutch/gears → distribution to
 the wheels → rotational speed → slip → tire forces → forces and moments on
@@ -410,6 +485,21 @@ Deformation and detached parts need consistency between the impact, the local
 frame, the deformed mesh, the part state, and collision. Check separately:
 vibration at rest, permanent deformation, a panel opening, and an attachment
 breaking. A visual filter does not fix an unstable solver.
+
+Stock `Part.repair()` owns the wear/tear repair caps and recursively visits the
+installed tree. Its native `repair` command performs a one-shot local reset of
+that part's deformation, deformed collision/render data, and damage-associated
+slot/wheel state, then restores the affected CFG mount frames and base meshes.
+Use the script's `attachedParts` coverage and recurse natively only into detached
+assembly children that those lists omit; never traverse a child twice. Do not add
+a whole-car relink per part, a world reload, or a `GameRef.setState` call. The
+latter controls pose and velocities and can release the solver; it is not a damage
+repair API.
+Keep the latest intentional `setSlotPos` state separate from damage overlays so
+repair preserves it even on the same slot. Detached inventory damage must remain
+intact. Queue affected link visuals once per repaired part and flush them on the
+next existing part update, after the complete scripted walk; do not relink every
+ancestor/descendant subtree during each native call.
 
 ## 12. Enhanced rendering
 
@@ -441,6 +531,13 @@ Capture, writing the faces, publishing a ready cubemap, and sampling it have
 distinct lifetimes. Check the six orientations, the frame, world transitions,
 the uniforms, and probe validity. Do not read a texture at the same time it
 is the destination of its own capture.
+
+Every world camera is a reflection scene: the garage, the dealers and the
+city all use the cubemap. The garage probe sits on the car body and its box
+is the garage bounds. Without a followed car, a world camera captures from
+the car nearest its target, so a showroom car reflects the room around it.
+A capture must draw what the main view draws; the garage shell is preloaded
+SCX geometry outside the instance list and is drawn explicitly.
 
 A checked "dynamic reflections" option does not prove that the car material
 reads that cubemap. Follow the binding into the shader. Check fallbacks to
@@ -594,6 +691,13 @@ For a UI fix, exercise interaction and focus. For a transition, repeat the
 round trip and watch instance, draw, and memory counts. For rendering,
 compare the same place, time, camera, and settings. For physics, compare
 simulated time, input, and the same car at several frame rates.
+
+For frame rate, `--perf-log` splits each second into scripts, physics,
+scene collection, shadows, reflections, world and OSD submission and the
+present wait, with bgfx render-thread and GPU time and draw counts. The
+`--bench-map ValoCity --bench-drive N` run advances a fixed 1/60 s per frame,
+so builds compare row by row on the same street until the car's first
+crash (README, [KNOWLEDGE_BASE §3](KNOWLEDGE_BASE.md#3-build-run-and-diagnostics)).
 
 A diagnostic can modify options or a save. Use a copy, or preserve and
 restore the files involved. A headless probe does not replace a visual

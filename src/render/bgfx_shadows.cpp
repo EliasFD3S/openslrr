@@ -1,5 +1,6 @@
 // Cached map shadows, car shadow maps and the traffic kocsiarnyek decal.
 #include "bgfx_lib_backend.hpp"
+#include "slrr/frame_profiler.hpp"
 
 #include "slrr/part_runtime.hpp"
 #include "slrr/dds_image.hpp"
@@ -23,6 +24,7 @@
 namespace slrr {
 
 void LibBgfxBackend::update_static_shadow(const float* eye, const VideoOptions& video) {
+  perf::Scope perf_scope(perf::Zone::Shadows);
   static_shadow_active_ = false;
   // The garage has no sun map. The neon reuses this same view and looks down
   // on the bay, so the car and the room cast one shadow without a new pass.
@@ -227,6 +229,7 @@ void LibBgfxBackend::update_static_shadow(const float* eye, const VideoOptions& 
 }
 
 void LibBgfxBackend::update_car_depth(const float* position, const VideoOptions& video) {
+  perf::Scope perf_scope(perf::Zone::Shadows);
   car_depth_active_ = false;
   if (!position || video.shadows == 0 || !debug_overlay_.render_options().shadows ||
       !bgfx::isValid(static_shadow_program_)) return;

@@ -20,6 +20,9 @@ namespace slrr {
 namespace {
 
 std::unordered_map<void*, GameRefState> g_refs;
+// Canonical keys of trigger volumes and of free PhysicsRef bodies, so their
+// per-frame and per-tick passes do not scan every GameRef.
+std::unordered_set<void*> g_trigger_refs, g_simulated_refs;
 std::unordered_set<void*> g_lights;
 int32_t g_next_live = 0x70000000;
 int32_t g_fog_color = 0;
@@ -55,6 +58,8 @@ void gameref_clear() {
   part_drop_actors();
   character_forget_all();
   g_refs.clear();
+  g_trigger_refs.clear();
+  g_simulated_refs.clear();
   g_lights.clear();
   g_next_live = 0x70000000;
   g_fog = false;
@@ -103,6 +108,8 @@ bool gameref_bind_alias(void* reference,void* target) {
 
 void gameref_remove(void* key) {
   if (!key) return;
+  g_trigger_refs.erase(key);
+  g_simulated_refs.erase(key);
   character_forget(key);
   script_events_destroy(static_cast<Object*>(key));
   auto own=g_refs.find(key);
@@ -150,6 +157,16 @@ void gameref_clear_flags(void* key, int32_t flags) {
 int32_t gameref_get_flags(void* key) {
   GameRefState* n = gameref_get(key);
   return n ? n->flags : 0;
+}
+
+void gameref_request_active_collision(void* key) {
+  GameRefState* n = gameref_get(key);
+  if (!n) n = gameref_upsert(key);
+  if (n) gameref_queue_collision_state(*n);
+}
+
+void gameref_process_collision_requests() {
+  for (auto& [key, n] : g_refs) gameref_activate_collision_state(n);
 }
 
 void gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
@@ -231,6 +248,51 @@ void gameref_bind_scene_camera(void* key, const std::string& params) {
   st->cam_az_set = false;
   if (fields >= 3)
     gameref_set_matrix(key, p[0], p[1], p[2], p[3], p[4], p[5]);
+}
+
+void gameref_bind_trigger(void* key, const std::string& params) {
+  GameRefState* st = gameref_get(key);
+  if (!st || (st->type_id & 0xFFFF) != 0x34) return;
+  TriggerVolume volume;
+  if (!trigger_volume_parse(params, volume)) return;
+  st->trigger_shape = volume.shape;
+  std::copy(volume.size, volume.size + 3, st->trigger_size);
+  g_trigger_refs.insert(st->key);
+  // Scripts compare trigger handles by id() (ROCTrack, Nevada_Track).
+  gameref_make_live(key);
+  const float* p = volume.pose;
+  gameref_set_matrix(key, p[0], p[1], p[2], p[3], p[4], p[5]);
+}
+
+void gameref_set_physics_simulated(void* key, bool simulated) {
+  GameRefState* st = gameref_get(key);
+  if (!st) return;
+  st->physics_simulated = simulated;
+  if (simulated)
+    g_simulated_refs.insert(st->key);
+  else
+    g_simulated_refs.erase(st->key);
+}
+
+std::vector<GameRefState*> gameref_simulated_bodies() {
+  std::vector<GameRefState*> bodies;
+  for (void* key : g_simulated_refs) {
+    const auto found = g_refs.find(key);
+    if (found != g_refs.end() && found->second.physics_simulated &&
+        found->second.physics_shape != PhysicsShape::None)
+      bodies.push_back(&found->second);
+  }
+  return bodies;
+}
+
+std::vector<void*> gameref_trigger_keys() {
+  std::vector<void*> keys;
+  for (void* key : g_trigger_refs) {
+    const auto found = g_refs.find(key);
+    if (found != g_refs.end() && found->second.trigger_shape != TriggerShape::None)
+      keys.push_back(key);
+  }
+  return keys;
 }
 
 void aim_matrix(GameRefState* cam, const float eye[3], const float at[3]) {

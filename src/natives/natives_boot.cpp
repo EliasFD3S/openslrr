@@ -568,6 +568,7 @@ void register_boot_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   register_io_natives(jvm, rpk, sections);
   register_lang_natives(jvm, rpk, sections);
   register_osd_natives(jvm, rpk, sections);
+  register_physicsref_natives(jvm);
   register_gameref_natives(jvm, rpk, sections);
   register_renderref_natives(jvm, rpk, sections);
   register_resref_natives(jvm, rpk, sections);

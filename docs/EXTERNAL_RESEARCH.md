@@ -190,8 +190,10 @@ All little-endian. Each item notes OpenSLRR's status.
   inventory and catalog previews (`SLRR_rev:docs/part-previews.md`). **source**
 - `Part.repair()` ends with the native command `"repair"`; the Java
   mesh-replacement alternative is commented out (`SLRR_rev:docs/deformable-physics.md`).
-  Confirmed in the MWM source (`GAME:parts/scripts/src/Part.java:repair`). OpenSLRR has no
-  such verb. **source**
+  Confirmed in the MWM source (`GAME:parts/scripts/src/Part.java:repair`). OpenSLRR's
+  native command now clears local deformation and damage-associated slot/wheel
+  state; stock Java owns the normal tree walk and repair caps, with a native
+  fallback for detached assembly children omitted from `attachedParts`. **source**
 - `GroundRef.getNearestCross(pos, dist)` searches both crossing pools for the
   node minimising `| |node − pos| − dist |`, so `dist` is not a cutoff; ties
   keep file order; the result is a new `Vector3`

@@ -108,8 +108,8 @@ current gaps to SLRR_rev code are in
   but `/tools/` is gitignored (`.gitignore`) and the file is not tracked.
   CMake stops with "Cannot find source file" unless the file exists locally.
   The README's coverage generator under `tools/` is missing for the same
-  reason. This was inferred from standard CMake behaviour and `git ls-files`,
-  not reproduced on Windows.
+  reason. Reproduced on Windows with a fresh export of `b907b6b`; a local
+  one-line `int main() { return 0; }` stub unblocks the build.
 - The vendored compiler `third_party/slrrc` is a C++17 static library built
   with `/fp:precise`; its literal self-test must pass before any output is
   published (`src/jvm/script_compiler.cpp:script_compile_all`).
@@ -120,6 +120,19 @@ current gaps to SLRR_rev code are in
   positional player name, and the headless probes `--probe`, `--probe-gc`,
   `--probe-dyno`, `--probe-pacejka`. `escape` is accepted but missing from
   the usage text.
+- Performance flags: `--perf-log CSV|-` prints one `[perf]` line per second
+  (frame time, scripts, physics, scene collection, shadows, reflections,
+  world and OSD submission, present wait, bgfx render-thread and GPU time,
+  draws) and appends CSV rows (`src/platform/frame_profiler.cpp`).
+  `--no-vsync` and `--debug-overlay` set the Ctrl+F12 panel at startup.
+  The repeatable city run is
+  `--spawn-car cars/racers/Baiern.rpk:0x6 --bench-map ValoCity --bench-drive 40 --bench-time 13`:
+  it starts the MapBox track from the garage, settles the car for two
+  simulated seconds, then holds full throttle with the wheel straight at a
+  fixed 1/60 s step per frame, so every build covers the same street frame
+  by frame and each CSV row is one simulated second. `--bench-shots DIR`
+  writes window captures every 10 simulated seconds
+  (`src/boot/boot.cpp:boot_game`).
 - Environment variables: `SLRR_GAME_ROOT` and `SLRR_VLC_DIR`
   (`src/platform/video_fmv_vlc.cpp`). There are no others.
 - There is no test target on `main`. `main` had a CTest suite (added in
@@ -187,7 +200,8 @@ Code that exists but is not used:
 3. `src/boot/boot.cpp:start_init` runs `Init.<init>(I)` with halting on the
    first unbound native.
 4. The main loop repeats: window pump, section render sync,
-   `mainloop_frame`, GC safe point, `Sleep(1)`.
+   `mainloop_frame`, GC safe point, then a `SwitchToThread` yield (a
+   `Sleep(1)` cost about 1.5 ms per frame).
 
 ### 5.2 Frame order
 
@@ -283,11 +297,56 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   (`src/resources/scene_instances.cpp:append_ground_placement`,
   `src/resources/scene_instances.cpp:append_ground_collision`).
   The `PHYS` chunk is used as map collision; SLRR_rev has not decoded it.
-- Placements (trees, lamps, buildings) become instanced render props in 64 m
-  cells (`src/resources/scene_instances.cpp:scene_instances_add_ground_props`).
-  Only the `render` lines of their CFG are kept
-  (`src/resources/scene_instances.cpp:ground_prop_renders`). They are not
-  GameRef nodes and are **not** in the collision index.
+- Placements (trees, lamps, buildings) become render props in 64 m cells
+  (`src/resources/scene_instances.cpp:scene_instances_add_ground_props`).
+  Every placement of a mesh without blended sections is instanced
+  (`src/resources/scene_instances.cpp:prop_mesh_batchable`); `fs_mesh` mixes
+  the per-instance colour into ColorMixTex (paint-masked) facades,
+  and `scene_instances_collect_batches` merges one mesh's visible placements
+  from all cells into one batch. The rest are drawn one by one.
+- The renderer's copy of a ground mesh or map prop merges sections with
+  identical materials into one group
+  (`src/render/bgfx_lib_backend.cpp:merge_material_groups`); the scene's
+  own geometry, used for collision and picking, keeps its sections.
+- During `flush`, collections of the active world share one snapshot
+  (`src/resources/scene_instances.cpp:scene_instances_frame_cache`).
+- `ground_prop_config` retains the full native CFG. Box, sphere and SCX bodies
+  are cached per type, transformed by placement/body pose, merged into a
+  spatially indexed collision mesh per map and added to the exact shape index.
+  They are independent of render variant, LOD, visibility and culling.
+- If every collision-enabled body has positive mass, the placement is drawn as
+  an ordinary prop and recorded as dormant. `collide_chassis` queues dormant
+  placements inside the padded chassis bounds
+  (`src/resources/scene_instances.cpp:scene_instances_wake_dynamics`); after the
+  vehicle loop each becomes a loose native body (`part_add_dynamic_native`)
+  with its full collision mesh, authored mass and mass-weighted body-pose
+  centre, and its static instances are hidden
+  (`src/resources/scene_instances.cpp:scene_instances_promote_dynamics`). It
+  sleeps until car contact, wakes for equal/opposite car impulses, and
+  publishes every render slot from the ground-shell frame
+  (`scene_instances_ground_frame`). Dynamic placements are excluded from both
+  static ground caches and floor-mesh collection; mixed-mass placements stay
+  static. Creating every such prop at load (about 4,000 in Valo City) cost
+  about 400 ms of physics per frame. A promoted prop at rest more than 40 m
+  beyond car reach becomes scenery again at its settled pose
+  (`src/resources/scene_instances.cpp:scene_instances_settle_dynamic`), as
+  does one whose world is left; a lost one (fallen off the map, still moving
+  after 10 s out of reach, pushed beyond its 64 m cell) returns to its map
+  pose. The GroundRef a prop is parented to comes from the shell that woke it:
+  each city visit builds a new GroundRef while the prop map stays cached.
+- `PhysicsRef.setStatic(0)` releases a script body to the free-body solver
+  (`src/resources/part_runtime.cpp:advance_free_bodies`), which reuses the
+  loose-body car and scene contacts and publishes pose and velocities.
+- Trigger volumes (`GameRef.RID_TRIGGER`, `java.game.Trigger`) are parsed by
+  `src/resources/trigger_volume.cpp:trigger_volume_parse` and raise
+  `EVENT_TRIGGER_ON`/`OFF` with the car's id from
+  `src/resources/scene_triggers.cpp:scene_triggers_tick`.
+- Besides the four corner sphere sweeps, the chassis box is tested against
+  native boxes/spheres and against the wall triangles of every static mesh
+  (`src/resources/scene_instances.cpp:scene_instances_contact_walls`, kernel
+  `src/physics/scene_collision.cpp:overlap_triangle`), so corners, fence ends
+  and thin trunks between the probes still stop the car. Both use the chassis
+  box above its lowest 30 %.
 - `scene_instances_prepare_physics` rebuilds the collision index from GameRef
   render nodes once per physics frame. Floor and sweep queries are
   `scene_instances_sample_floor` and `scene_instances_sweep_sphere`.
@@ -371,10 +430,10 @@ Resources and data:
 - The high bit of a RID can be set while scripts hold it as `int32_t`.
   Never serialize a native pointer into a RID or script integer.
 - A CFG `box` body holds half-extents. `PhysicsRef.createBox` takes full
-  sizes. Target rule for world collision: objects without a `body` must not
-  get collision from their render mesh. Today the collision index is still
-  built from GameRef render geometry unless a map supplies a collision
-  override (`src/resources/scene_instances.cpp:scene_instances_prepare_physics`).
+  sizes. Native CFG bodies are authoritative: an object without a `body`, or
+  with `nocollision`, gets no collision from its render mesh. Ground shells
+  and legacy RenderRefs keep their separate collision/override path
+  (`src/resources/scene_instances.cpp:scene_instances_prepare_physics`).
 - A `linked a [b] [parentSlot]` rule: the first matching rule wins; do not
   sort them. LOD renders are alternatives, not layers.
 
@@ -385,9 +444,12 @@ Physics:
 - The physics delta is clamped to 0.1 s and scaled by the time warp
   (`src/jvm/jvm.cpp:advance_sim_time`), and at most four host ticks run per
   frame, so below 15 FPS the simulation slows down.
-- Repairs and resets must restore deformation, slot damage and wheel damage
-  together. Today deformation is restored only when Java sets tear to at
-  least 1 (`src/resources/part_runtime.cpp:restore_deformation`).
+- Repairs must restore deformation, damage-associated slot state and wheel
+  damage together. The native `repair` command does this locally for each part
+  (`src/resources/part_runtime.cpp:repair_part`); stock Java covers the normal
+  tree walk, with a native fallback only for detached assembly children omitted
+  from `attachedParts`. A standalone `setTear` still clears deformation only when
+  Java sets tear to at least 1 (`src/resources/part_runtime.cpp:restore_deformation`).
 
 Rendering and UI:
 
@@ -500,39 +562,52 @@ These are entry points, not fixes. Each needs its own reproduction.
   table in `src/render/bgfx_osd.cpp:draw_vehicle_hud`. Speed, gear and
   mileage are drawn left-aligned at their anchor, so centring needs the
   string width. CFG `osd_*` overrides take separate branches.
-- **#16 car drives through trees.** Placement CFG `body` lines are parsed by
-  `parse_part_config` but dropped by `ground_prop_renders`, and props never
-  enter `scene_instances_prepare_physics`. `PartBody` keeps only `.scx`
-  collision paths, so the `box` dimensions of stock tree trunks (half-extents
-  about 0.05 × 3 × 0.05 m) are discarded (`include/slrr/part_config.hpp:PartBody`).
-  A 0.1 m trunk can slip between the four chassis probe spheres, so a fix
-  needs a volume test. The owner also points at the seven missing
-  `PhysicsRef` natives and the `setActiveCollision` no-op. SLRR_rev
-  implements box bodies with a full box-versus-box test
-  (`SLRR_rev:src/engine/map-collision.ts:MapCollision`) and
-  `setActiveCollision`.
+- **#16 car drives through trees (PR #22).** `ground_prop_config` now keeps
+  native CFG bodies. Placements use cached triangle and exact box/sphere
+  collision paths, including a full chassis volume test for thin trunks.
+  `PhysicsRef` has its seven missing signatures, and `setActiveCollision`
+  queues activation at the physics boundary. The oriented-box behavior is
+  based on `SLRR_rev:src/engine/map-collision.ts:MapCollision`. Entirely
+  positive-mass placements also use the loose-body solver with mass-aware car
+  impulses; they sleep until contact and are absent from static caches.
+  `setStatic(0)` PhysicsRef bodies use the same solver, and trigger volumes
+  raise `EVENT_TRIGGER_ON`/`OFF` for cars.
 - **#17 "Repair car" does not repair.** Stock `Part.repair()` raises wear and
   tear only up to `repair_max_wear` / `repair_max_tear` (0.95 in the MWM
   `Part.java`), then sends the native command `"repair"`
-  (`GAME:parts/scripts/src/Part.java:repair`). `part_command` has no
-  `repair` verb, and deformation is restored only when tear reaches 1, so
-  nothing visual is reset (`src/resources/part_runtime.cpp:part_command`).
-  SLRR_rev implements the verb (`SLRR_rev:src/runtime/part-native.ts:repairDamage`).
-- **#18 city performance.** The reported profile is CPU-bound. Each frame
-  collects instances for the main view plus `reflection_faces` cube faces
-  (default 1); the map shadow re-collects when the camera moves at least
-  8 m or the sun changes. Every collection walks the GameRef tree and
-  recomputes each parent chain with an allocation
-  (`src/resources/scene_instances.cpp:chain_matrix`). Alpha-cutout trees are
-  never instanced (`prop_mesh_batchable`). Other per-frame costs:
-  `gameref_find_live` is a linear scan, `native_has_alias` runs on every
-  Java invoke, and every instance-field store calls `osd_on_field_write`.
-  Measure before changing anything.
+  (`GAME:parts/scripts/src/Part.java:repair`). `part_command` now routes that
+  one-shot command to `repair_part`, which restores local deformation and
+  damage-associated slot/wheel state. Normal script-covered children are not
+  traversed again; only detached assembly children missing from `attachedParts`
+  receive the native fallback.
+  SLRR_rev's corresponding implementation is
+  `SLRR_rev:src/runtime/part-native.ts:repairDamage` (revision `77b0fb6`).
+- **#18 city performance.** Measured with `--perf-log` and the city
+  benchmark (§3) before the fix: pedestrian area sampling took about 4 ms
+  per frame (`src/resources/pedestrian_lines.cpp:area_within`), the two
+  Valo City ground meshes cost 1,372 draws in the camera view and again in
+  the reflection face, every view re-walked the GameRef tree and re-posed
+  every walker within 400 m (about 3 ms for the 600 walkers of the patched
+  density), spawning tested each sample against every walker, trees were
+  never instanced, and the main loop slept 1.5 ms per frame. All of these
+  are addressed. Remaining per-frame costs: scene collection (about 1–2 ms),
+  a 50–140 ms frame every few seconds (not yet isolated), `gameref_find_live`
+  is a linear scan, `native_has_alias` runs on every Java invoke, and every
+  instance-field store calls `osd_on_field_write`.
 - **#19 pedestrians on the road.** Addressed by the port of the original
   walker model (§5.7). The `Animation` constructor descriptor used slashes
   and never matched, so script animations were unbound; it now uses the
   dotted form. Open: the car-flee side choice and exact accumulator roles in
   0x00586e40 are only partly decoded, and `city.rest` is still unused.
+- **#38 matte cars at the car dealers.** Paint, chrome and glass read the
+  dynamic cubemap only in a reflection scene. The dealers have a map and a
+  script camera, but no garage flag and no followed car, so they used to
+  render without any reflection. Every world camera is now a reflection
+  scene, and without a followed car the probe sits on the car nearest the
+  camera target (`src/render/bgfx_lib_backend.cpp:flush`). The garage
+  capture also draws the preloaded garage shell; before, the paint and glass
+  mirrored only the props and the clear colour
+  (`src/render/bgfx_lib_backend.cpp:update_reflections`).
 
 ## 12. Self-check
 
@@ -555,17 +630,21 @@ Each answer names its evidence.
    60 Hz host ticks with two 120 Hz substeps, at most four ticks per frame.
 7. *Why does a fresh clone fail to configure?* `CMakeLists.txt` needs the
    untracked, gitignored `tools/compile_game_sources.cpp` (§3).
-8. *Why do cars pass through Valo City trees?* Placement bodies are dropped
-   and props are not in the collision index (§11, #16).
-9. *Why does garage repair leave dents?* There is no native `repair` verb
-   and stock repair caps tear at 0.95 (§11, #17).
+8. *Why did cars pass through Valo City trees?* Placement bodies were dropped
+   and props were not in the collision index. PR #22 retains and indexes those
+   bodies and adds full-chassis contact coverage (§11, #16).
+9. *How does garage repair clear dents without forcing 100% condition?* Stock
+   Java applies its repair caps and recursively calls the native `repair`
+   command; that command restores local deformation and slot/wheel damage
+   without changing the script-selected wear/tear values (§11, #17).
 10. *Where does the city's frame time go?* Unmeasured. Repeated scene walks
     with chain-matrix allocation are the first suspects (§11, #18).
 11. *Do pedestrians follow a road graph?* No. They walk freely inside the
     `city.walk` sidewalk rows and change rows through gates; the TRC road
     network is parsed by unused code (§5.7).
-12. *Is `GameRef.setActiveCollision` implemented?* No, it is an explicit
-    `native_noop` (`src/natives/natives_gameref.cpp:register_gameref_natives`).
+12. *Is `GameRef.setActiveCollision` implemented?* Yes. PR #22 queues an
+    idempotent request and consumes it at the physics boundary
+    (`src/resources/gameref.cpp:gameref_process_collision_requests`).
 13. *Which tyre model drives the car?* `src/physics/tire_model.cpp:tire_forces`,
     not `sl2_pacejka.cpp`.
 14. *Can SLRR_rev's EXE addresses be used for the MWM binary?* No. They

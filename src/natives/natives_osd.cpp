@@ -239,6 +239,7 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         };
         const float sx = args.size() > 1 ? num(args[1], 0.1f) : 0.1f;
         const float sy = args.size() > 2 ? num(args[2], 0.1f) : 0.1f;
+        const float sz = args.size() > 3 ? num(args[3], 0.1f) : 0.1f;
         Object* group =
             (!args.empty() && args[0].tag == ValueTag::Obj) ? args[0].v.o
                                                             : nullptr;
@@ -251,7 +252,14 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         }
         float hw = 0.f, hh = 0.f;
         // World colliders have no OSD owner. Their names are for debugging.
-        if (!osd) return Value::make_void();
+        if (!osd) {
+          const std::string label = args.size() > 4 && args[4].tag == ValueTag::Obj &&
+                                            args[4].v.o
+                                        ? args[4].v.o->str
+                                        : "physics_box";
+          physicsref_create_box(self, group, sx, sy, sz, label);
+          return Value::make_void();
+        }
         osd_mesh_halves(osd, sx, sy, &hw, &hh, nullptr);
         OsdWidget w;
         w.cmd = 0;
@@ -302,6 +310,10 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         auto wit = self->fields.find("_osd_wi");
         if (wit != self->fields.end() && wit->second.tag == ValueTag::Int)
           osd_set_widget_pos(wit->second.v.i, nx, ny);
+        physicsref_set_matrix(self, pos,
+                              args.size() > 1 && args[1].tag == ValueTag::Obj
+                                  ? args[1].v.o
+                                  : nullptr);
         self->fields["pos"] = args[0];
         return Value::make_void();
       });

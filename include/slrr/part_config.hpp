@@ -12,10 +12,21 @@ struct PartPose {
   std::array<float, 3> position{};
   std::array<float, 3> rotation{}; // yaw, pitch, roll in radians
 };
+enum class PartBodyShape : uint8_t {
+  None,
+  Box,
+  Sphere,
+  Mesh,
+};
 // One `body` line. Mass is kilograms; the pose is in the part's own frame.
+// Box values are half extents and the sphere value is a radius, all in metres.
 struct PartBody {
   PartPose pose;
   float mass = 0;
+  PartBodyShape shape = PartBodyShape::None;
+  std::array<float, 3> box_half{};
+  float sphere_radius = 0.f;
+  bool collision = true;
   std::string collision_mesh;
 };
 // `spring base travel damping` consumed by the next `wheel`. Missing lines

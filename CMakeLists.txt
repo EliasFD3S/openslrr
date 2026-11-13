@@ -35,6 +35,7 @@ add_executable(slrr_host
   src/main.cpp
   src/jvm/script_compiler.cpp
   src/platform/game_root.cpp
+  src/platform/frame_profiler.cpp
   src/platform/host_input.cpp
   src/platform/host_sfx.cpp
   src/platform/host_music.cpp
@@ -47,6 +48,7 @@ add_executable(slrr_host
   src/natives/natives_io.cpp
   src/natives/natives_lang.cpp
   src/natives/natives_osd.cpp
+  src/natives/natives_physicsref.cpp
   src/natives/natives_gameref.cpp
   src/natives/natives_renderref.cpp
   src/natives/natives_resref.cpp
@@ -70,6 +72,8 @@ add_executable(slrr_host
   src/resources/gameref.cpp
   src/resources/scene_instances.cpp
   src/resources/scene_ambience.cpp
+  src/resources/scene_triggers.cpp
+  src/resources/trigger_volume.cpp
   src/resources/scx_mesh.cpp
   src/resources/skeleton.cpp
   src/resources/character.cpp
@@ -88,6 +92,7 @@ add_executable(slrr_host
   src/physics/tire_model.cpp
   src/physics/dyno_model.cpp
   src/physics/vehicle_dynamics.cpp
+  src/physics/scene_collision.cpp
   src/physics/deformation_cage.cpp
   src/physics/suspension_geometry.cpp
 )

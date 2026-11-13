@@ -331,6 +331,14 @@ void host_input_update_controller(Object* controller, float dt) {
       std::any_of(controller->input->bindings.begin(), controller->input->bindings.end(),
                   [](const InputBinding& b) { return b.device == kPad && b.physical == 23; });
   in.drive_reverse = keys[0x13] || (!pad_y_mapped && pad[23] > .5f);
+  if (in.bench_throttle >= 0.f) {
+    in.drive_throttle = in.bench_throttle;
+    in.drive_brake = 0.f;
+    in.drive_steer = 0.f;
+    in.drive_steer_analog = false;
+    in.drive_handbrake = false;
+    in.drive_reverse = false;
+  }
 }
 
 void host_input_create_hotkey(Jvm& jvm, Object* key, Object* handler,
