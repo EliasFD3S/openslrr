@@ -694,6 +694,27 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
         part_remove_pedestrian_type(self, type);
         return Value::make_void();
       });
+  // The original native table names this entry removePedestrianType; the
+  // stock GroundRef declares remPedestrianType. Both reach the same body.
+  jvm.natives().register_method(
+      "java.util.resource.GroundRef", "removePedestrianType",
+      "(Ljava.util.resource.GameRef;)V",
+      [](Object* self, const std::vector<Value>& args) {
+        Object* type = !args.empty() && args[0].tag == ValueTag::Obj ? args[0].v.o : nullptr;
+        part_remove_pedestrian_type(self, type);
+        return Value::make_void();
+      });
+  jvm.natives().register_method(
+      "java.util.resource.GroundRef", "pedestrianDistance",
+      "(Ljava.lang.Vector3;I)F",
+      [](Object* self, const std::vector<Value>& args) {
+        if (args.size() < 2 || args[0].tag != ValueTag::Obj || !args[0].v.o ||
+            args[1].tag != ValueTag::Int)
+          return Value::make_float(-1.f);
+        const auto pos = line_vector(args[0].v.o, {});
+        return Value::make_float(
+            part_pedestrian_distance(self, pos[0], pos[1], pos[2], args[1].v.i));
+      });
   jvm.natives().register_method(
       "java.util.resource.GroundRef", "setFog", "(IFF)V",
       [](Object*, const std::vector<Value>& args) {
@@ -723,7 +744,9 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
   };
   jvm.natives().register_method(
       "java.util.resource.Animation", "<init>",
-      "(Ljava/util/resource/RenderRef;Ljava/util/resource/ResourceRef;)V",
+      // TUFA descriptors use dots. The slash form never matched, so the
+      // VM's silent native-<init> fallback left every script Animation unbound.
+      "(Ljava.util.resource.RenderRef;Ljava.util.resource.ResourceRef;)V",
       [&rpk](Object* self, const std::vector<Value>& args) {
         if (!self || args.size() < 2 || args[0].tag != ValueTag::Obj ||
             args[1].tag != ValueTag::Obj)
