@@ -515,7 +515,10 @@ box, a sphere, or its phys SCX hull when that is a closed surface, else the
 hull's bounds), and the pieces are summed in the chassis frame with the
 parallel-axis theorem. The stock game only sums point masses and has no
 authored centre; this is a host model, and the products of inertia are dropped
-because the rigid body takes principal moments along the chassis axes. Parts
+because the rigid body takes principal moments along the chassis axes
+(`dynamics_configure` passes them to `RigidBody::configure`; no axis drops
+below 30 % of the solid box of the chassis render bounds, which stays the
+fallback). Parts
 without bodies (stock running gear, rims and tyres) add no mass. Crush zones
 are not those meshes: a deformation cage is generated over the part's visible
 render shell, as SLRR_rev (77b0fb6, `vehicle-3d.ts`) does, and its cage mass is
