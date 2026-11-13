@@ -115,6 +115,20 @@ SLRR_TEST(sphere_and_degenerate_inputs) {
   SLRR_REQUIRE(sum.empty());
 }
 
+// The body-less fallback: CFG masses as points at the part origins.
+SLRR_TEST(point_mass_fallback_keeps_mass_and_centre_with_unknown_spread) {
+  MassProperties single;
+  slrr::physics::accumulate(single, slrr::physics::point_mass(900.0, {0.1, -0.2, 0.3}));
+  SLRR_REQUIRE(near(single.mass, 900.0) && near(single.center.z, 0.3));
+  // One point has no spread: every moment is zero, which callers read as
+  // "unknown" and replace with the bounds box.
+  SLRR_REQUIRE(single.moments().x == 0 && single.moments().y == 0 && single.moments().z == 0);
+  MassProperties pair = single;
+  slrr::physics::accumulate(pair, slrr::physics::point_mass(100.0, {0.1, -0.2, -1.7}));
+  SLRR_REQUIRE(near(pair.mass, 1000.0) && near(pair.center.z, 0.1));
+  SLRR_REQUIRE(near(pair.inertia[0], 900 * 0.04 + 100 * 3.24) && pair.inertia[8] == 0);
+}
+
 int main() {
   constexpr slrr::standalone::Test tests[] = {
       closed_phys_hull_matches_the_analytic_box,
@@ -122,6 +136,7 @@ int main() {
       parallel_axis_sum_of_two_points_is_the_dumbbell,
       split_box_sums_to_the_whole_box,
       sphere_and_degenerate_inputs,
+      point_mass_fallback_keeps_mass_and_centre_with_unknown_spread,
   };
   return slrr::standalone::run("mass_properties", tests);
 }
