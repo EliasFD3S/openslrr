@@ -33,6 +33,7 @@ a { color: inherit; text-decoration: none; }
   position: sticky;
   top: 0;
   height: 100vh;
+  width: 272px;
   overflow: auto;
   background: var(--panel);
   border-right: 1px solid var(--line);
@@ -71,6 +72,8 @@ a { color: inherit; text-decoration: none; }
   font: 13px/1.35 "Segoe UI", Tahoma, sans-serif;
   padding: 6px 10px;
   cursor: pointer;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .side a[aria-current="page"],
