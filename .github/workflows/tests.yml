@@ -103,6 +103,19 @@ jobs:
           & $cmake --build build-asan --config Release --target slrr_host slrr_tests --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Add ASan runtime to PATH
+        run: |
+          # The instrumented executables load the MSVC ASan runtime DLL from the
+          # toolset bin directory CMake selected; the runner does not put it on PATH.
+          $cache = Join-Path $env:GITHUB_WORKSPACE 'build-asan/CMakeCache.txt'
+          $match = Select-String -Path $cache -Pattern '^CMAKE_LINKER:FILEPATH=(.+)$' | Select-Object -First 1
+          if (-not $match) { throw 'CMAKE_LINKER not found in build-asan/CMakeCache.txt' }
+          $dir = Split-Path -Parent $match.Matches[0].Groups[1].Value
+          if (-not (Test-Path (Join-Path $dir 'clang_rt.asan_dynamic-x86_64.dll'))) {
+            throw "MSVC ASan runtime not found in $dir"
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+
       - name: Run ASan tests
         run: |
           $env:ASAN_OPTIONS = 'abort_on_error=1:symbolize=0'
