@@ -1725,8 +1725,8 @@ bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
     }
     return false;
   };
-  float mass = 0, com[3]{};
-  assembly_mass_center(chassis, mass, com);
+  float mass = 0, com[3]{}, inertia[3]{};
+  assembly_mass_properties(chassis, mass, com, inertia);
   if (!(mass > 0))
     return unavailable("missing positive CFG body mass");
   const uint32_t render = rec.render_set ? rec.render_id : rec.config->render;
@@ -1757,7 +1757,19 @@ bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
                    geometry.info.bbox_max[2] * scale};
   const auto velocity = rec.dynamics.body.velocity,
              momentum = rec.dynamics.body.momentum;
-  rec.dynamics.body.configure(mass, lo, hi, {com[0], com[1], com[2]});
+  // The installed parts' own mass distribution. A few point masses (a car
+  // whose parts lack body shapes) can leave an axis nearly free, so no axis
+  // drops below 30 % of the solid box of the chassis render bounds, which also
+  // remains the fallback for any axis the parts cannot give.
+  const physics::Vec3 size = hi - lo;
+  const double box[3] = {mass * (size.y * size.y + size.z * size.z) / 12,
+                         mass * (size.x * size.x + size.z * size.z) / 12,
+                         mass * (size.x * size.x + size.y * size.y) / 12};
+  physics::Vec3 moments;
+  double* axes[3] = {&moments.x, &moments.y, &moments.z};
+  for (int axis = 0; axis < 3; ++axis)
+    *axes[axis] = inertia[axis] > 0 ? std::max<double>(inertia[axis], box[axis] * .3) : 0;
+  rec.dynamics.body.configure(mass, lo, hi, {com[0], com[1], com[2]}, moments);
   const bool held = rec.physics_ready;
   rec.dynamics.body.set_frame(frame);
   if (held) {
