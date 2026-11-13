@@ -14,13 +14,6 @@
   const query = document.getElementById("q");
   let active = "All";
 
-  const names = ["All"].concat(
-    Array.from(new Set(rows.map((row) => row.class))).sort()
-  );
-  classes.innerHTML = names
-    .map((name) => `<button type="button" data-class="${text(name)}">${name === "All" ? "All classes" : text(name)}</button>`)
-    .join("");
-
   function text(value) {
     return String(value)
       .replace(/&/g, "&amp;")
@@ -28,10 +21,19 @@
       .replace(/>/g, "&gt;");
   }
 
+  const names = ["All"].concat(
+    Array.from(new Set(rows.map((row) => row.class))).sort()
+  );
+  classes.innerHTML = names
+    .map((name) => {
+      const label = name === "All" ? "All natives" : name;
+      return `<button type="button" data-class="${text(name)}">${text(label)}</button>`;
+    })
+    .join("");
+
   function signature(row) {
     if (!row.ret) return `${row.name}${row.params}`;
-    const args = row.params ? row.params : "";
-    return `${row.ret} ${row.name}(${args})`;
+    return `${row.ret} ${row.name}(${row.params || ""})`;
   }
 
   function render() {
@@ -39,8 +41,7 @@
     const shown = rows.filter((row) => {
       if (active !== "All" && row.class !== active) return false;
       if (!needle) return true;
-      const hay = `${row.class} ${row.name} ${row.params} ${row.note}`.toLowerCase();
-      return hay.includes(needle);
+      return `${row.class} ${row.name} ${row.params} ${row.note}`.toLowerCase().includes(needle);
     });
     const groups = new Map();
     for (const row of shown) {
@@ -49,13 +50,13 @@
     }
     const html = [];
     for (const [name, items] of groups) {
-        html.push(`<div class="group">${text(name)}</div>`);
-        for (const row of items) {
-          const note = row.note ? `<div class="note">${text(row.note)}</div>` : "";
-          html.push(
-            `<article class="native"><div class="badge ${row.status}">${labels[row.status]}</div><div><div class="sig">${text(signature(row))}</div>${note}</div></article>`
-          );
-        }
+      html.push(`<div class="group">${text(name)}</div>`);
+      for (const row of items) {
+        const note = row.note ? `<div class="note">${text(row.note)}</div>` : "";
+        html.push(
+          `<article class="native"><div class="badge ${row.status}">${labels[row.status]}</div><div><div class="sig">${text(signature(row))}</div>${note}</div></article>`
+        );
+      }
     }
     list.innerHTML = html.join("") || `<article class="native"><div class="note">No native matches.</div></article>`;
     counts.textContent = `${shown.length} / ${rows.length}`;

@@ -7,37 +7,35 @@
   <link rel="stylesheet" href="css/slrr.css">
 </head>
 <body>
-  <main class="screen">
-    <div class="bezel">
-      <header class="top">
-        <h1 class="brand">OPEN <span>SLRR</span></h1>
-        <div class="lamps" aria-hidden="true"><i class="lamp on"></i><i class="lamp"></i><i class="lamp on"></i></div>
-      </header>
-      <nav class="menu">
-        <a href="index.html" aria-current="page">Garage</a>
-        <a href="natives.html">Natives</a>
-      </nav>
-      <p class="lead">OpenSLRR is a C++ engine for the scripts and cars of Street Legal Racing: Redline. The game data stays yours. This site is the modder reference for the natives those scripts call.</p>
-      <div class="cards">
-        <section class="card">
-          <h2>For modders</h2>
-          <p>A native is an engine call declared on a script class. Parts, chassis, ground, camera, input and sound all go through one. The catalog lists the declarations from the game sources and whether this host implements them.</p>
-        </section>
-        <section class="card">
-          <h2>How to read one</h2>
-          <p>Positions are metres. Colors are <span class="sig">0x00RRGGBB</span>. Yellow means the native is in the host. Orange means the call exists and does less than the original. Red means it is not registered, so a script that needs it will not get the stock behavior.</p>
-        </section>
-        <section class="card">
-          <h2>What is still open</h2>
-          <p>Traffic, water, route queries and most particles are not registered. Pedestrians are a host crowd, not the sidewalk graph. <span class="sig">GroundRef.setFog</span> stores values the renderer does not read. <span class="sig">Camera.setFog</span> keeps the distances and replaces the script color with the sky.</p>
-        </section>
-        <section class="card">
-          <h2>The engine</h2>
-          <p>Windows x64, bgfx, the stock menus and the garage. Build from the repository root into <span class="sig">build/</span>. Point <span class="sig">--root</span> at the game install, <span class="sig">data/game</span> in this workspace.</p>
-        </section>
-      </div>
-      <footer class="hint">ENTER &nbsp; NATIVES &nbsp;&nbsp; ESC &nbsp; BACK</footer>
-    </div>
-  </main>
+  <div class="layout">
+    <aside class="side">
+      <a class="logo" href="index.html"><img src="img/open-slrr.png" alt="OpenSLRR"></a>
+      <h2>Start</h2>
+      <a href="index.html" aria-current="page">Overview</a>
+      <a href="index.html#build">Build</a>
+      <h2>Modding</h2>
+      <a href="index.html#reading">Reading a native</a>
+      <a href="index.html#gaps">What is still open</a>
+      <h2>Reference</h2>
+      <a href="natives.html">All natives</a>
+    </aside>
+    <main class="doc">
+      <h1 id="overview">Overview</h1>
+      <p>OpenSLRR is a C++ engine for the scripts and cars of Street Legal Racing: Redline. The game data stays yours. This documentation is the modder reference for the natives those scripts call.</p>
+
+      <h2 id="build">Build</h2>
+      <p>Windows x64, Visual Studio 2022, and bgfx. From the repository root:</p>
+      <p><code>cmake -S . -B build -G "Visual Studio 17 2022" -A x64</code></p>
+      <p><code>cmake --build build --config Release --target slrr_host --parallel</code></p>
+      <p>The executable is <code>build/Release/slrr_host.exe</code>. Point <code>--root</code> at the game install. In this workspace that folder is <code>data/game</code>.</p>
+
+      <h2 id="reading">Reading a native</h2>
+      <p>A native is an engine call declared on a script class. Positions are metres. Colors are <code>0x00RRGGBB</code>.</p>
+      <p>Yellow means the native is in the host. Orange means the call exists and does less than the original. Red means it is not registered, so a script that needs it will not get the stock behavior.</p>
+
+      <h2 id="gaps">What is still open</h2>
+      <p>Traffic, water, route queries and most particles are not registered. Pedestrians are a host crowd, not the sidewalk graph. <code>GroundRef.setFog</code> stores values the renderer does not read. <code>Camera.setFog</code> keeps the distances and replaces the script color with the sky.</p>
+    </main>
+  </div>
 </body>
 </html>
