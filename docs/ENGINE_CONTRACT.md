@@ -474,6 +474,32 @@ including nitro. Do not mix an old nitro bank with a new RPM step or a new
 geometry. Bound indices before the integer conversion. The last exact sample
 must remain reachable.
 
+Mass distribution and crush zones are separate models. The car's mass,
+centre of mass and inertia come from the installed parts' CFG `body` lines
+(`assembly_mass_properties`): each line's mass is spread over its own shape (a
+box, a sphere, or its phys SCX hull when that is a closed surface, else the
+hull's bounds), and the pieces are summed in the chassis frame with the
+parallel-axis theorem. The stock game only sums point masses and has no
+authored centre; this is a host model, and the products of inertia are dropped
+because the rigid body takes principal moments along the chassis axes. Parts
+without bodies (stock running gear, rims and tyres) add no mass. Crush zones
+are not those meshes: a deformation cage is generated over the part's visible
+render shell, as SLRR_rev (77b0fb6, `vehicle-3d.ts`) does, and its cage mass is
+the part's own CFG mass (the chassis shell's own, not the assembly's). The phys
+mesh stays the part's collider and follows the cage.
+
+A corner loses its wheels when its mount condition reaches zero: either the
+chassis cage has pushed the wheel centre or strut top 0.3 m, or the impact
+energy |J|²/2M weighted by exp(-(d/0.65 m)²) of the horizontal distance to the
+corner has added up to 55 kJ. These are SLRR_rev values (`releaseFailedWheels`,
+`suspension-3d.ts` `deform`, `damageImpact`), not stock ones; floor contacts
+below 8 m/s do not count. Every part on a wheel slot of that corner (the rim
+with its tyre, an outer dually wheel) then breaks off like a panel and becomes a
+loose body of at least 14 kg. The chassis is refreshed, so the corner rests on
+the hardware still on its hub or, with none, on the chassis box. The hub
+hardware stays, and the dented chassis does not move the remaining wheels'
+hardpoints. Repair, or fitting a wheel to that corner, restores the mount.
+
 Deformation and detached parts need consistency between the impact, the local
 frame, the deformed mesh, the part state, and collision. Check separately:
 vibration at rest, permanent deformation, a panel opening, and an attachment
