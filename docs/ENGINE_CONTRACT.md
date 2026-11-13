@@ -506,6 +506,9 @@ announce a persistent option before testing a restart.
 
 `host_sfx` handles effects. `host_music` handles playlists. `video_fmv*`
 handles video playback. Engine loops use the scripts' SfxTables.
+`scene_ambience` plays the `sfx_loop`/`sfx_random` lines of map placements
+through `host_sfx`; it owns those voices and stops them when their ground
+shell leaves the active world.
 Do not substitute a fixed engine sound for an RPM/load curve.
 
 Simultaneous voices are deliberately bounded, and menu repeats are handled

@@ -85,3 +85,38 @@ focus, not because they should swallow mouse input. Their hit volumes now
 remain clickable. An active modal OSD also prevents unmatched mouse clicks
 from becoming mechanic/world clicks. A headless wide-dialog display/wait
 probe drags the slider, remains waiting, and closes only on an explicit OK.
+
+## Map ambient sounds
+
+Map placements (`gametype ... params`) can point at object CFGs with ambient
+sound lines. In the stock Valo City (`objects.rpk`) these are the
+`ambience_placeholders` (city-centre traffic from 8 to 18 h, the island sea
+loop), the `fa*` trees (birds, 4-21 h), the `kuka_*` bins (flies) and the
+`krthaz*` houses (dogs in the morning, grasshoppers at night): about 13,700
+emitters across `city` and `city2`. `scene_ambience` registers them when
+`spawn_ground_shell` creates a ground shell and updates them once per frame
+with simulated seconds. The rules below come from `StreetLegal_Redline.exe`
+(SLRR 2.2.1):
+
+| Rule | Original |
+| --- | --- |
+| `sfx_loop <sound> <radius> [from_hour=0] [to_hour=24]`. One loop per object; a later line replaces an earlier one, so the city centre plays only its second traffic loop. | parser 0x465340 |
+| `sfx_random <sound> <radius> [min_s=1] [max_s=1] [from_hour=0] [to_hour=24]`, at most 16 per object. | parser 0x465410 |
+| Hours become truncated seconds of the day. The window is `[from, to)` and wraps at midnight (`18 8` is night). | 0x4670a0 |
+| One timer per object. The first delay uses entry 0's min/max; each firing plays a uniformly drawn entry and schedules the next draw after that entry's own min + random range. Outside its hours an entry retries 30-90 s later. | 0x4660f7, 0x467983 |
+| A sound starts only when `distance² - radius² <= 250²` (`distance <= 250 m` when the radius is 0). | 0x550560 |
+| Gain is the sound resource's `volume` times DirectSound 3D rolloff: full inside `mindist`, `mindist / distance` up to `maxdist`, constant beyond. The original sets these distances on the 3D buffer. | 0x55b6a0 |
+
+The listener is the world camera. Loops follow the listener every frame and
+stop when they leave their range or hours, when their shell leaves the
+active world, and when the game root changes. They pause with
+`System.timeWarp(0)` like the engine loops. Random one-shots use the normal
+transient-effect path, so the 32-voice budget and repeat coalescing above
+still apply.
+
+Limitations: there is no stereo panning or Doppler; voices are not positioned
+in 3D, only attenuated by distance. The original's `instances` and `flags`
+sound properties are not interpreted. Many trees request the same bird cue,
+so the transient coalescing keeps at most two copies of it playing.
+`SLRR_AMBIENCE_LOG=1` logs each random request. Loop starts and stops are
+always logged as `[ambience]`.
