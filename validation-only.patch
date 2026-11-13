@@ -1,0 +1,163 @@
+diff --git a/part_runtime.cpp b/part_runtime.cpp
+index d5f0e92..343bb60 100644
+--- a/part_runtime.cpp
++++ b/part_runtime.cpp
+@@ -2658,7 +2658,158 @@ bool advance_deformation(Object* part, Record& rec, unsigned steps) {
+   });
+ }
+ 
++// VALIDATION ONLY (issue #37): remove one corner's parts in the garage and log.
++void validation_wheel_probe() {
++  static const char* corner_env = std::getenv("SLRR_VALIDATE_WHEEL");
++  if (!corner_env) return;
++  static unsigned ticks = 0;
++  static bool removed = false;
++  const int corner = std::atoi(corner_env);
++  const char* delay_env = std::getenv("SLRR_VALIDATE_WHEEL_DELAY");
++  const unsigned delay = static_cast<unsigned>((delay_env ? std::atoi(delay_env) : 20)) *
++                         physics::VehicleDynamics::update_frequency;
++  const char* slots_env = std::getenv("SLRR_VALIDATE_WHEEL_SLOTS");
++  const std::string slots = slots_env ? slots_env : "101";
++  ++ticks;
++  if (const char* cam = std::getenv("SLRR_VALIDATE_CAM");
++      cam && ticks + 240 >= delay && ticks + 180 < delay) {
++    float yaw = 0, pitch = 0, zoom = 0;
++    std::sscanf(cam, "%f,%f,%f", &yaw, &pitch, &zoom);
++    auto& in = host_input();
++    in.mouse_dx += yaw / 60.f;
++    in.mouse_dy += pitch / 60.f;
++    in.look_zoom += zoom / 60.f;
++  }
++  Object* best = nullptr;
++  size_t best_size = 0;
++  for (auto& entry : records) {
++    if (!entry.second.config || entry.second.config->native_kind != "car" ||
++        entry.second.state.parent)
++      continue;
++    const size_t size = part_installed_tree(entry.first).size();
++    if (size > best_size) {
++      best = entry.first;
++      best_size = size;
++    }
++  }
++  if (!best) return;
++  {
++    Object* chassis = best;
++    auto& rec = records[best];
++    if (ticks == delay - 2) {
++      for (float z = -4.f; z <= 4.01f; z += .25f) {
++        std::string row;
++        for (float x = -3.f; x <= 3.01f; x += .25f) {
++          SceneFloorHit hit;
++          char cell[16];
++          if (scene_instances_sample_floor(x, z, 3.f, chassis, hit))
++            std::snprintf(cell, sizeof cell, "%6.2f", hit.height);
++          else
++            std::snprintf(cell, sizeof cell, "  none");
++          row += cell;
++        }
++        std::fprintf(stderr, "[validate] floor z=%5.2f %s\n", z, row.c_str());
++      }
++    }
++    if (ticks == delay - 1) {
++      for (const auto& item : part_installed_tree(chassis)) {
++        const auto* part = record(item.object);
++        std::fprintf(stderr, "[validate] part parent_slot=%d own_slot=%d %s\n", item.parent_slot,
++                     item.own_slot, part ? part->config->source.c_str() : "?");
++      }
++    }
++    if (!removed && ticks >= delay) {
++      removed = true;
++      std::stringstream list(slots);
++      std::string token;
++      while (std::getline(list, token, ',')) {
++        const int slot = std::atoi(token.c_str()) + corner;
++        for (const auto& item : part_installed_tree(chassis))
++          if (item.parent_slot == slot && item.object != chassis) {
++            std::fprintf(stderr, "[validate] remove slot=%d %s\n", slot,
++                         record(item.object)->config->source.c_str());
++            part_destroy(item.object);
++            break;
++          }
++      }
++      refresh_chassis(chassis);
++      rec.physics_suspended = false;
++      rec.physics_dirty = true;
++    }
++    if (ticks + 30 >= delay && ticks % 60 == 0) {
++      const auto& body = rec.dynamics.body;
++      const auto up = body.orientation.rotate({0, 1, 0});
++      const auto fwd = body.orientation.rotate({0, 0, 1});
++      PartMatrix probe_frame;
++      auto* probe_node = gameref_get(chassis);
++      std::fprintf(stderr, "[validate] obj=%p ready=%d dirty=%d pending=%d node=%d parent=%p mat=%d pmat=%d\n",
++                   (void*)chassis, rec.physics_ready, rec.physics_dirty,
++                   rec.physics_pending_placement, probe_node != nullptr,
++                   probe_node ? probe_node->parent : nullptr,
++                   scene_instances_script_matrix(chassis, probe_frame.data()),
++                   probe_node && probe_node->parent &&
++                       scene_instances_script_matrix(probe_node->parent, probe_frame.data()));
++      std::fprintf(stderr,
++                   "[validate] t=%.2f susp=%d rel=%d pos=%.3f,%.3f,%.3f up=%.3f,%.3f,%.3f "
++                   "fwd=%.3f,%.3f,%.3f v=%.3f box=[%.2f,%.2f,%.2f]..[%.2f,%.2f,%.2f]\n",
++                   ticks / double(physics::VehicleDynamics::update_frequency),
++                   rec.physics_suspended, rec.physics_released, body.position.x, body.position.y,
++                   body.position.z, up.x, up.y, up.z, fwd.x, fwd.y, fwd.z, body.velocity.length(),
++                   body.minimum.x, body.minimum.y, body.minimum.z, body.maximum.x,
++                   body.maximum.y, body.maximum.z);
++      for (size_t i = 0; i < 4; ++i) {
++        const auto& w = rec.dynamics.wheels[i];
++        const auto& s = rec.dynamics.state[i];
++        std::fprintf(stderr, "[validate]   wheel%zu en=%d rigid=%d r=%.3f len=%.3f contact=%d force=%.0f center=%.3f,%.3f,%.3f\n",
++                     i, w.enabled, w.rigid_contact, w.radius, s.length, s.contact, s.force,
++                     s.center.x, s.center.y, s.center.z);
++      }
++      {
++        double worst = -1e9;
++        std::string worst_part;
++        float wp[3] = {};
++        for (const auto& item : part_installed_tree(chassis)) {
++          auto* part = record(item.object);
++          if (!part) continue;
++          for (auto* render : part->renders) {
++            auto* rn = gameref_get(render);
++            if (!rn || rn->empty || rn->light_flags) continue;
++            auto mesh = scene_instances_geometry(static_cast<uint32_t>(rn->type_id));
++            float m[16];
++            if (!mesh || !scene_instances_script_matrix(render, m)) continue;
++            const float sc = mesh->position_scale;
++            for (size_t v = 0; v + 2 < mesh->positions.size(); v += 3) {
++              const float px = mesh->positions[v] * sc, py = mesh->positions[v + 1] * sc,
++                          pz = mesh->positions[v + 2] * sc;
++              const float x = m[0] * px + m[4] * py + m[8] * pz + m[12];
++              const float y = m[1] * px + m[5] * py + m[9] * pz + m[13];
++              const float z = m[2] * px + m[6] * py + m[10] * pz + m[14];
++              if (y > body.position.y) continue;
++              SceneFloorHit hit;
++              if (!scene_instances_sample_floor(x, z, y + .5f, chassis, hit)) continue;
++              if (hit.height - y > worst) {
++                worst = hit.height - y;
++                worst_part = part->config->source;
++                wp[0] = x; wp[1] = y; wp[2] = z;
++              }
++            }
++          }
++        }
++        std::fprintf(stderr, "[validate]   deepest render vertex below floor: %.3f m at %.2f,%.2f,%.2f %s\n",
++                     worst, wp[0], wp[1], wp[2], worst_part.c_str());
++      }
++      for (const auto& c : body.corners()) {
++        SceneFloorHit hit;
++        const bool ok = scene_instances_sample_floor(float(c.x), float(c.z), float(c.y + 2), chassis, hit);
++        std::fprintf(stderr, "[validate]   corner %.3f,%.3f,%.3f floor=%s%.3f\n", c.x, c.y, c.z,
++                     ok ? "" : "none:", ok ? hit.height : 0.f);
++      }
++    }
++  }
++}
++
+ void advance_chassis_tick() {
++  validation_wheel_probe();
+   advance_loose_panels();
+   std::vector<Object*> released;
+   const auto* target = gameref_find_live(controlled_vehicle);
