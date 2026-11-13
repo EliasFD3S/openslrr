@@ -51,6 +51,9 @@ void part_physics_advance(double seconds);
 void part_set_pedestrian_density(void* ground, float density);
 void part_add_pedestrian_type(void* ground, void* type);
 void part_remove_pedestrian_type(void* ground, void* type);
+// Distance in metres from a point to the nearest live pedestrian of that
+// type id on this ground, or of any type when type_id is 0. -1 when none.
+float part_pedestrian_distance(void* ground, float x, float y, float z, int32_t type_id);
 // Map unload. Drops the seated driver and the walking crowd.
 void part_drop_actors();
 void part_pause_engine_audio(bool paused);

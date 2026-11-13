@@ -157,6 +157,14 @@ All little-endian. Each item notes OpenSLRR's status.
 - 1,799 text rows `bounds id;payload`; the payload is binary encoded as
   letter pairs A–P. Record kinds: 21 junction wall quad, 22 gate quad with
   links, 23 sidewalk run. Junction quads are relative to the row origin.
+- The original reader (StreetLegal_Redline.exe 0x00586580) settles the
+  layout (**exe**, MWM 2.2.1 binary): a header of origin X/Z, floor slopes and height (the
+  "width" float of the SLRR_rev reader is the floor height), a record count,
+  records `{kind; [N, N+1 spline nodes]; x0, z0, x1, z1; id}`, then the row's
+  link list. There is no nested child record. Id -1 makes a wall or a run;
+  any other id is a gate into that row. Runs are Hermite splines whose stored
+  tangent lengths are ignored (0x0057c590). Edges wind counter-clockwise, so
+  (-dz, dx) points into the row.
 - Observed in the original game (**obs**): paired runs bound a zone that
   people walk along; gates are goals; they leave a zone only through a
   junction transition; a nearby car makes them hurry while staying inside
@@ -261,9 +269,14 @@ All little-endian. Each item notes OpenSLRR's status.
 - **Pedestrian controller** (`SLRR_rev:docs/character-skeleton-research.md`):
   corridors from two runs and two gates, lateral positions 0.25–0.75 with
   0.3 m clearance, transitions only through linked gates and inside the
-  junction contour, never joining unlinked geometry. OpenSLRR's
-  `src/resources/pedestrian_lines.cpp` ports this and adds its own inner-edge
-  guess for wide corridors. **design**
+  junction contour, never joining unlinked geometry. **design**
+- **Original walker** (StreetLegal_Redline.exe tick 0x00589cb0) **exe**:
+  free agents of radius 1 m at 1 m/s, steered by a persistent heading and the
+  four strongest influences (walls and runs, other walkers, cars), pushed
+  back to 1 m from walls and runs, and moved to the next row when they cross
+  a gate. Spawns are 10-90 % across a corridor. OpenSLRR's
+  `src/resources/pedestrian_lines.cpp` ports this model in place of the
+  SLRR_rev lateral lanes.
 
 ## 6. Rendering performance lessons
 
@@ -336,7 +349,7 @@ Where OpenSLRR gaps already have an SLRR_rev implementation (revision
 | `GroundRef.getNearestCross` | `SLRR_rev:src/runtime/ground-road-native.ts:GroundRoadNative`, `SLRR_rev:src/engine/road-nearest.ts:nearestRoadCrossing`, `SLRR_rev:src/formats/trc.ts` | Implemented with the documented radius semantics |
 | Traffic model natives | `SLRR_rev:src/runtime/traffic-native.ts` | `addTrafficN` and `delTraffic` keep per-ground model weights. `addTrafficCar`, `setWater` and `Navigator.updateNavigator` are mocks in `SLRR_rev:src/runtime/game-boot.ts` |
 | Traffic simulation and signals | `SLRR_rev:src/engine/road-traffic.ts`, `SLRR_rev:src/engine/traffic-stream.ts`, `SLRR_rev:src/engine/traffic-control.ts`, `SLRR_rev:src/engine/bot.ts`, `SLRR_rev:src/render/traffic-lamps.ts` | Host design driven by the TRC graph; not tied to the stock traffic natives yet |
-| Pedestrians on sidewalks (#19) | `SLRR_rev:src/formats/pedestrian.ts`, `SLRR_rev:src/engine/pedestrian-walking.ts`, `SLRR_rev:src/engine/pedestrian-transition.ts`, `SLRR_rev:src/render/pedestrian-crowd.ts`, `SLRR_rev:src/render/character-ragdoll.ts` | OpenSLRR already ported the corridors; compare its transitions and its inner-edge guess with these. The ragdoll is not ported |
+| Pedestrians on sidewalks (#19) | `SLRR_rev:src/formats/pedestrian.ts`, `SLRR_rev:src/engine/pedestrian-walking.ts`, `SLRR_rev:src/engine/pedestrian-transition.ts`, `SLRR_rev:src/render/pedestrian-crowd.ts`, `SLRR_rev:src/render/character-ragdoll.ts` | Format reading kept for reference; OpenSLRR now follows the original walker recovered from the executable (§5). The ragdoll is not ported |
 | Engine and drivetrain physics | `SLRR_rev:src/engine/combustion-model.ts:CombustionModel`, `SLRR_rev:src/engine/native-vehicle-physics.ts`, `SLRR_rev:src/engine/mechanical-system.ts` | Recovered from sl-remastered plus fitted host responses; settle the dyno endpoint disagreement first (§4) |
 | City rendering cost (#18) | `SLRR_rev:src/render/map-material-pool.ts`, `SLRR_rev:src/render/building-material-batch.ts`, `SLRR_rev:src/render/map-object-stream.ts`, `SLRR_rev:src/render/map-geometry-chunks.ts`, `SLRR_rev:src/render/map-gpu-occlusion.ts`, `SLRR_rev:src/render/static-map-shadows.ts` | Measured techniques (§6); port the idea, not the WebGL code |
 | CFG `osd_*` gauges | `SLRR_rev:src/osd/java-gauges.ts` | Implemented |
@@ -347,8 +360,10 @@ Missing in SLRR_rev too, so these need original research: all `Painter`
 and `ParticleSystem` natives, the `GroundRef` route queries (`findRoute`,
 `getRouteLength`, `getRoutePos`, `getRouteDist`, `alignToRoad`,
 `getStartDirection`), `RenderRef.plotRoute`, `PhysicsRef.create` and
-`createSphere`, dynamic standalone `PhysicsRef` bodies,
-`pedestrianDistance`, `removePedestrianType` and `haltTrafficCross`.
+`createSphere`, dynamic standalone `PhysicsRef` bodies and
+`haltTrafficCross`. OpenSLRR implements `pedestrianDistance` and
+`removePedestrianType` from the slrr-reverse notes on 0x00589BE0 and
+0x00484E20.
 
 ## 8. Draft PR #3: what it contains and what applies to main
 

@@ -1,6 +1,7 @@
 #include "slrr/format/walk.hpp"
 
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <string>
 #include <unordered_set>
@@ -44,66 +45,33 @@ struct Reader {
   bool finish() const { return ok && at == size; }
 };
 
-bool read_record(Reader& reader, WalkRecord* out, int depth) {
-  if (depth > 8) {
-    reader.fail("Pedestrian link nesting too deep");
-    return false;
-  }
+// Record layout of the original reader (0x00586580).
+bool read_record(Reader& reader, WalkRecord* out) {
   const uint32_t kind = reader.word();
   if (!reader.ok) return false;
-  out->kind = static_cast<int>(kind);
-  if (kind == 21) {
-    for (int i = 0; i < 4; ++i) out->quad.push_back(reader.flt());
-    return reader.ok;
+  if (kind != 21 && kind != 22 && kind != 23) {
+    reader.fail("Unknown pedestrian record type");
+    return false;
   }
+  out->kind = static_cast<int>(kind);
   if (kind == 23) {
     const uint32_t count = reader.word();
-    if (reader.ok && (count < 3 || count > 6)) {
+    // Stock runs hold 3 to 6 spans. A bound keeps a corrupt count from
+    // reserving the whole payload.
+    if (reader.ok && (count < 1 || count > 64)) {
       reader.fail("Invalid pedestrian waypoint count");
       return false;
     }
     for (uint32_t i = 0; reader.ok && i <= count; ++i) {
-      WalkVec point{reader.flt(), reader.flt(), reader.flt()};
-      WalkVec direction{reader.flt(), reader.flt(), reader.flt()};
-      out->points.push_back(point);
-      out->directions.push_back(direction);
-    }
-    for (int i = 0; i < 4; ++i) out->quad.push_back(reader.flt());
-    if (!reader.ok) return false;
-    const WalkVec& first = out->points.front();
-    const WalkVec& last = out->points.back();
-    const float ends[4] = {first.x, first.z, last.x, last.z};
-    for (int i = 0; i < 4; ++i)
-      if (std::fabs(out->quad[static_cast<size_t>(i)] - ends[i]) > 0.01f) {
-        reader.fail("Pedestrian sidewalk endpoints disagree");
-        return false;
-      }
-    return true;
-  }
-  if (kind != 22) {
-    reader.fail("Unknown pedestrian record type");
-    return false;
-  }
-  for (int i = 0; i < 4; ++i) out->quad.push_back(reader.flt());
-  out->id = static_cast<int>(reader.word());
-  out->has_id = reader.ok;
-  if (!reader.ok) return false;
-  if (reader.at + 4 <= reader.size) {
-    uint32_t type = 0;
-    std::memcpy(&type, reader.data + reader.at, 4);
-    if (type >= 21 && type <= 23) {
-      out->child = std::make_unique<WalkRecord>();
-      return read_record(reader, out->child.get(), depth + 1);
+      WalkNode node;
+      node.point = {reader.flt(), reader.flt(), reader.flt()};
+      node.tangent = {reader.flt(), reader.flt(), reader.flt()};
+      out->nodes.push_back(node);
     }
   }
-  while (reader.ok && reader.at + 4 <= reader.size)
-    out->links.push_back(static_cast<int>(reader.word()));
-  if (!reader.ok) return false;
-  if (out->links.size() < 4 || out->links.size() > 6) {
-    reader.fail("Invalid pedestrian leaf count");
-    return false;
-  }
-  return true;
+  for (float& value : out->quad) value = reader.flt();
+  out->id = static_cast<int32_t>(reader.word());
+  return reader.ok;
 }
 
 bool header(std::string_view line, float box[6], int* id, std::string_view* payload,
@@ -194,74 +162,36 @@ bool walk_read(std::string_view text, std::vector<WalkRow>* out, std::string* er
       }
       bytes[i] = static_cast<uint8_t>((hi - 'A') * 16 + (lo - 'A'));
     }
-    Reader whole{bytes.data(), bytes.size(), 0, true, error};
-    if (whole.word() != bytes.size() - 4) {
+    Reader reader{bytes.data(), bytes.size(), 0, true, error};
+    if (reader.word() != bytes.size() - 4) {
       fail(error, "Pedestrian payload length mismatch");
       return false;
     }
-    std::vector<std::pair<size_t, size_t>> sections;
-    size_t section = 4;
-    for (size_t at = 4; at + 4 <= bytes.size(); at += 4) {
-      uint32_t word = 0;
-      std::memcpy(&word, bytes.data() + at, 4);
-      if (word == 0xffffffffu) {
-        sections.emplace_back(section, at);
-        section = at + 4;
-      }
-    }
-    if (sections.empty()) {
-      fail(error, "Pedestrian first record has no terminator");
+    row.origin_x = reader.flt();
+    row.origin_z = reader.flt();
+    row.slope_x = reader.flt();
+    row.slope_z = reader.flt();
+    row.height = reader.flt();
+    const uint32_t records = reader.word();
+    if (reader.ok && records > 64) {
+      fail(error, "Invalid pedestrian record count");
       return false;
     }
-    {
-      Reader first{bytes.data() + sections[0].first, sections[0].second - sections[0].first, 0,
-                   true, error};
-      for (float& value : row.origin) value = first.flt();
-      row.width = first.flt();
-      const uint32_t tag = first.word();
-      row.tag = static_cast<int>(tag);
-      if (first.ok && tag != 3 && tag != 4) {
-        fail(error, "Invalid pedestrian first tag");
-        return false;
-      }
+    for (uint32_t i = 0; reader.ok && i < records; ++i) {
       row.records.emplace_back();
-      if (!read_record(first, &row.records.back(), 0) || !first.finish()) {
-        if (error && error->empty()) fail(error, "Unexplained pedestrian record bytes");
-        return false;
-      }
+      if (!read_record(reader, &row.records.back())) break;
     }
-    for (size_t i = 1; i < sections.size(); ++i) {
-      Reader mid{bytes.data() + sections[i].first, sections[i].second - sections[i].first, 0,
-                 true, error};
-      row.records.emplace_back();
-      if (!read_record(mid, &row.records.back(), 0) || !mid.finish()) {
-        if (error && error->empty()) fail(error, "Unexplained pedestrian record bytes");
-        return false;
-      }
-    }
-    Reader tail{bytes.data() + section, bytes.size() - section, 0, true, error};
-    const uint32_t type = tail.word();
-    tail.at = 0;
-    if (type >= 1 && type <= 7 && tail.size == 4u + type * 4u) {
-      tail.word();
-      for (uint32_t i = 0; tail.ok && i < type; ++i)
-        row.links.push_back(static_cast<int>(tail.word()));
-    } else if (type == 22) {
-      row.records.emplace_back();
-      if (!read_record(tail, &row.records.back(), 0)) return false;
-    } else {
-      fail(error, "Invalid pedestrian tail");
+    const uint32_t links = reader.word();
+    if (reader.ok && links > 64) {
+      fail(error, "Invalid pedestrian link count");
       return false;
     }
-    if (!tail.finish()) {
-      if (error && error->empty()) fail(error, "Unexplained pedestrian record bytes");
+    for (uint32_t i = 0; reader.ok && i < links; ++i)
+      row.links.push_back(static_cast<int32_t>(reader.word()));
+    if (!reader.finish()) {
+      fail(error, "Unexplained pedestrian record bytes");
       return false;
     }
-    auto collect = [&](auto& self, const WalkRecord& record) -> void {
-      row.links.insert(row.links.end(), record.links.begin(), record.links.end());
-      if (record.child) self(self, *record.child);
-    };
-    for (const WalkRecord& record : row.records) collect(collect, record);
     out->push_back(std::move(row));
   }
   std::unordered_set<int> ids;
@@ -271,13 +201,8 @@ bool walk_read(std::string_view text, std::vector<WalkRow>* out, std::string* er
       out->clear();
       return false;
     }
-  for (const WalkRow& row : *out)
-    for (int link : row.links)
-      if (!ids.count(link)) {
-        fail(error, "Pedestrian link outside walk table");
-        out->clear();
-        return false;
-      }
+  // Gate and link ids are resolved when rows load; the engine ignores a row
+  // that is not there, so an unknown id is not a format error.
   return true;
 }
 

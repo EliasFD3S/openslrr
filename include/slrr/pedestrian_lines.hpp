@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -19,28 +18,37 @@ struct PedestrianBlock {
   float vz = 0.f;
 };
 
-// One walker on a city.walk corridor. The step matches SLRR_rev
-// WalkingPedestrian: advance along the paired boundaries, then cross a
-// junction by its explicit gates.
-struct PedestrianWalker {
-  int zone = -1;
-  float t = 0.5f;
-  float lateral = 0.5f;
-  int sign = 1;
-  float speed = 0.f;
-  float base_speed = 1.f;
-  float flee_speed = 2.f;
-  float cooldown = 0.f;
-  bool fleeing = false;
-  bool transitioning = false;
-  int target = -1;
-  int entry = 0;
-  float tr_t = 0.f;
-  std::vector<std::array<float, 3>> path;
+// A moving vehicle the walkers get out of the way of. The original turns
+// every dynamic object into {position, direction, radius 3, speed}.
+struct PedestrianCar {
   float x = 0.f;
   float y = 0.f;
   float z = 0.f;
+  float vx = 0.f;
+  float vz = 0.f;
+};
+
+// One walker. Like the original (0x00589cb0), it is a free agent inside a
+// city.walk row: the row's walls and both sidewalk runs push it back, and it
+// leaves the row only through a gate into the neighbouring row.
+struct PedestrianWalker {
+  int row = -1;
+  float x = 0.f;
+  float y = 0.f;
+  float z = 0.f;
+  // Unit heading on the ground plane. Only walls and runs turn it.
+  float hx = 0.f;
+  float hz = 1.f;
+  // Ground velocity of the last step, metres per second.
+  float vx = 0.f;
+  float vz = 0.f;
+  float speed = 0.f;
+  // Facing, turned toward the direction of travel at pi radians per metre.
   float yaw = 0.f;
+  // Walk-clip rate: the original advances the clip by the distance moved
+  // plus half the turn (0x00587820), here per second.
+  float gait = 0.f;
+  bool fleeing = false;
   bool ok = false;
 };
 
@@ -52,22 +60,27 @@ class PedestrianLines {
   PedestrianLines& operator=(const PedestrianLines&) = delete;
 
   bool load(const std::string& text);
-  int zones() const;
-  // Walkable area, in square metres, of the corridor stretches inside the
-  // ring. The original density is people per square metre of that area.
+  // Rows walkers can stand in.
+  int rows() const;
+  // Walkable area, in square metres, of the rows whose centre lies inside
+  // the ring. The original density is people per square metre of that area.
   float area_within(float x, float y, float z, float radius) const;
-  // Reservoir-sample a corridor point inside the ring.
-  // Without `hidden`, min_distance applies to every sample.
-  // With it, SLRR_rev PedestrianSpawnIndex.choose: a hidden point is valid
-  // from 12 m, a visible one from 35 m, and any hidden candidate discards
-  // the visible ones.
+  // Place a walker in a row near the focus with the original spawn rule.
+  // Without `hidden`, min_distance applies to every candidate. With it, the
+  // SLRR_rev rule: a hidden point is valid from 12 m, a visible one from
+  // 35 m, and a hidden candidate is preferred.
   bool spawn(float x, float y, float z, float radius, float min_distance,
              uint32_t& rng, PedestrianWalker& out, const PedestrianBlock* blocked = nullptr,
              int blocked_count = 0,
              bool (*hidden)(float x, float y, float z, void* user) = nullptr,
              void* hidden_user = nullptr) const;
-  void step(PedestrianWalker& walker, float dt, float car_x, float car_y,
-            float car_z, uint32_t& rng) const;
+  // Advance every walker together, so they avoid each other. A walker that
+  // leaves through a gate with no row behind it is retired (ok = false).
+  void step(std::vector<PedestrianWalker>& walkers, float dt, const PedestrianCar* cars,
+            int car_count) const;
+  // True when (x, z) at height y lies inside a row, kept clear of its edges by
+  // `clearance` metres. Used by checks and diagnostics.
+  bool inside(float x, float y, float z, float clearance) const;
 
  private:
   struct Data;

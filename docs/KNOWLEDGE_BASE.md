@@ -152,7 +152,7 @@ current gaps to SLRR_rev code are in
 | Part CFG | `src/resources/part_config.cpp:parse_part_config` | Slots, wheels, renders, bodies, HUD `osd_*` lines |
 | Parts and cars | `src/resources/part_runtime.cpp:part_create`, `src/resources/part_runtime.cpp:part_command`, `src/resources/part_runtime.cpp:part_physics_advance` | Part/Chassis/Vehicle natives, assembly, damage, pedestrians, HUD state (about 4,900 lines) |
 | Physics | `src/physics/vehicle_dynamics.cpp`, `src/physics/tire_model.cpp`, `src/physics/dyno_model.cpp`, `src/physics/deformation_cage.cpp` | Rigid body, tyres, dyno, deformation |
-| Pedestrians | `src/resources/pedestrian_lines.cpp`, `src/formats/walk.cpp` | Sidewalk corridors from `city.walk` |
+| Pedestrians | `src/resources/pedestrian_lines.cpp`, `src/formats/walk.cpp` | Walkers in the `city.walk` sidewalk rows, after the original engine |
 | Characters | `src/resources/character.cpp`, `src/resources/skeleton.cpp`, `src/formats/matrixdata.cpp` | Skeletons, clips, skinning, Animation |
 | Renderer | `src/render/bgfx_lib_backend.cpp:flush`, `src/render/bgfx_lighting.cpp:draw_instance`, `src/render/bgfx_shadows.cpp`, `src/render/bgfx_osd.cpp:draw_osd` | Frame, materials, shadows, OSD and HUD |
 | UI | `src/ui/osd_registry.cpp:osd_add_widget`, `src/ui/osd_registry.cpp:osd_on_field_write` | OSD widgets, hit-testing, modal state |
@@ -293,14 +293,22 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
 - `city_walk` loads the hard-coded `maps/city/ai/city.walk`; walkers run on a
   worker thread (`src/resources/part_runtime.cpp:PedSim`,
   `src/resources/part_runtime.cpp:tick_pedestrians`).
-- Corridors are rows with exactly two kind-23 runs and two kind-22 gates
-  (`src/resources/pedestrian_lines.cpp:build`). For corridors wider than
-  5.2 m, `zone_point` keeps people near a guessed inner edge; that guess is
-  an OpenSLRR-only heuristic.
-- The headcount is `density × walkable area` inside 400 m, with no fixed
-  cap. Height comes from the walk data, not from the floor.
+- The row layout is the original reader's (0x00586580,
+  `src/formats/walk.cpp:walk_read`): a header of origin, floor slopes and
+  height, then edges. An edge with id -1 is a wall (kind 21) or a sidewalk
+  run (kind 23, a Hermite spline); any other id is a gate into that row.
+- Walkers follow the original model (tick 0x00589cb0,
+  `src/resources/pedestrian_lines.cpp:PedestrianLines::step`): free agents
+  with a heading, 1 m radius and 1 m/s. Walls and both runs repel them and
+  push them back to 1 m; the four strongest influences steer; they leave a
+  row only through a gate. Stock gate links form closed block rings, so no
+  route crosses a carriageway.
+- Spawns use the original formula per row (corridor: 10-90 % across the
+  runs; other rows: a fan triangle). The headcount is `density × row area`
+  inside 400 m, with no fixed cap. Height comes from the walk data.
 - Pedestrians are skinned and animated through the same Animation code the
-  natives use (`src/resources/character.cpp:character_bind_animation`).
+  natives use (`src/resources/character.cpp:character_bind_animation`); the
+  clip advances with the distance walked, as in the original (0x00587820).
 
 ### 5.8 HUD and OSD
 
@@ -405,19 +413,20 @@ Process:
 | Prop cell | 64 m | `src/resources/scene_instances.cpp:kPropCellSize` |
 | Shadow maps | 2048² | `src/render/bgfx_lib_backend.hpp:kShadowResolution` |
 | Pedestrian radius / density scale | 400 m / ×4 | `src/resources/part_runtime.cpp:tick_pedestrians` |
+| Walker body radius / speed | 1 m / 1 m/s (original) | `src/resources/pedestrian_lines.cpp:kRadius` |
 | Live GameRef IDs | from `0x70000000` | `src/resources/gameref.cpp:g_next_live` |
 
 ## 8. Native coverage at a glance
 
 From [NATIVE_AUDIT.md](NATIVE_AUDIT.md) and
 `assets/progress/native-coverage.json` (12 November 2026): of 376 stock
-signatures, 329 have a body, 4 are explicit no-ops and 43 are missing.
+signatures, 331 have a body, 4 are explicit no-ops and 41 are missing.
 `scripts/render_native_coverage.py` recomputes these counts from `src/`;
 `--list missing` prints the missing signatures.
 
 | Missing family | Count | Blocks |
 | --- | ---: | --- |
-| `GroundRef` routes, traffic, water, pedestrians | 21 | Navigation, traffic, `pedestrianDistance`, `removePedestrianType` |
+| `GroundRef` routes, traffic, water | 19 | Navigation, traffic |
 | `PhysicsRef` | 7 | `create`, `createSphere`, `setStatic`, `getVel` ×2, `getAngVel`, `getOri`: world physics objects |
 | `ParticleSystem` | 9 | Smoke, sparks and other effects |
 | `Painter` | 3 | Paint booth: `doPaint`, `paintPart`, `xPaint` |
@@ -439,11 +448,9 @@ reads, and `Part.setSfxLoopParams` stores values without applying them.
 | README lists "projected car shadows" | The projected pass `draw_vehicle_shadows` is never called. Car shadows come from the car depth map (`src/render/bgfx_shadows.cpp:update_car_depth`) |
 | `patch/README.md`: exterior scenery range 5 km | `flush` forces 3,000 m (`src/render/bgfx_lib_backend.cpp:flush`) |
 | `patch/README.md`: "F12 → Renderer" | The panel opens with Ctrl+F12 |
-| NATIVE_AUDIT: pedestrian crowd capped at 12 and not following a road graph | No headcount cap; walkers follow `city.walk` sidewalk corridors (not the TRC road graph) |
 | README: pedestrian density slider scales the crowd; `patch/README.md`: the slider is gone | The patched OptionsDialog drops the slider and forces `Config.pedestrianDensity = 1.5` (`patch/sl/Scripts/game/src/OptionsDialog.java`); the host still scales the crowd by that value (`src/resources/part_runtime.cpp:tick_pedestrians`) |
 | NATIVE_AUDIT: `GfxEngine` exposes one fixed 800×600 mode and an empty change call | Modes are enumerated with `EnumDisplaySettingsW` and applied (`src/natives/natives_script.cpp:display_modes`) |
 | HOST_NATIVE_UTILITIES: engine-loop audio not yet implemented | `update_engine_audio` runs every physics frame |
-| Issue #19: Animation natives are not bound | They are registered and drive the host crowd (`src/natives/natives_renderref.cpp:register_renderref_natives`) |
 | `.gitignore` last line `*.md !README.md` | A single malformed pattern that matches nothing; Markdown files are not ignored |
 | Stale comments: "no green-thread budget yet" in `src/boot/mainloop.cpp`, "240 Hz tick" in `src/resources/scene_instances.cpp`, "WGL until libbgfx is linked" in `include/slrr/render_backend.hpp` | Fibers have budgets, physics is 120/60 Hz, libbgfx is always linked |
 
@@ -505,15 +512,11 @@ These are entry points, not fixes. Each needs its own reproduction.
   `gameref_find_live` is a linear scan, `native_has_alias` runs on every
   Java invoke, and every instance-field store calls `osd_on_field_write`.
   Measure before changing anything.
-- **#19 pedestrians on the road.** The crowd already follows `city.walk`.
-  Candidates: the OpenSLRR-only inner-edge guess in `zone_point`, junction
-  transitions through polygons that include the carriageway
-  (`src/resources/pedestrian_lines.cpp:constrained_transition`), and heights
-  taken from the walk data. The road network parser exists but is unused.
-  Compare the transitions with SLRR_rev's
-  (`SLRR_rev:src/engine/pedestrian-transition.ts`).
-  Placement through the stock natives needs the missing
-  `pedestrianDistance` and `removePedestrianType`.
+- **#19 pedestrians on the road.** Addressed by the port of the original
+  walker model (§5.7). The `Animation` constructor descriptor used slashes
+  and never matched, so script animations were unbound; it now uses the
+  dotted form. Open: the car-flee side choice and exact accumulator roles in
+  0x00586e40 are only partly decoded, and `city.rest` is still unused.
 
 ## 12. Self-check
 
@@ -542,8 +545,9 @@ Each answer names its evidence.
    and stock repair caps tear at 0.95 (§11, #17).
 10. *Where does the city's frame time go?* Unmeasured. Repeated scene walks
     with chain-matrix allocation are the first suspects (§11, #18).
-11. *Do pedestrians follow a road graph?* They follow `city.walk` sidewalk
-    corridors; the TRC road network is parsed by unused code (§5.7).
+11. *Do pedestrians follow a road graph?* No. They walk freely inside the
+    `city.walk` sidewalk rows and change rows through gates; the TRC road
+    network is parsed by unused code (§5.7).
 12. *Is `GameRef.setActiveCollision` implemented?* No, it is an explicit
     `native_noop` (`src/natives/natives_gameref.cpp:register_gameref_natives`).
 13. *Which tyre model drives the car?* `src/physics/tire_model.cpp:tire_forces`,

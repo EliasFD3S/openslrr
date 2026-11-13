@@ -193,6 +193,7 @@ struct PedCrowd {
 };
 std::unordered_map<void*, PedCrowd> crowds;
 uint32_t ped_rng = 0x51ee5u;
+float ped_backlog = 0.f;
 VehicleHudLayout hud_preview;
 std::string hud_preview_directory;
 constexpr double kPhysicsTick = 1.0 / physics::VehicleDynamics::update_frequency;
@@ -3141,7 +3142,7 @@ PedestrianLines& city_walk() {
     if (!in) return lines;
     const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     if (lines.load(text))
-      std::fprintf(stderr, "[ped] city.walk zones=%d\n", lines.zones());
+      std::fprintf(stderr, "[ped] city.walk rows=%d\n", lines.rows());
   }
   return lines;
 }
@@ -3160,9 +3161,8 @@ struct PedSim {
   std::condition_variable_any cv;
   bool posted = false;
   bool ready = false;
-  bool seeded = false;
-  float dt = 0.f, x = 0.f, y = 0.f, z = 0.f;
-  uint32_t step_rng = 1;
+  float dt = 0.f;
+  std::vector<PedestrianCar> cars;
   PedestrianLines* walk = nullptr;
   std::vector<PedSlot> in, out;
   void run(std::stop_token stop);
@@ -3176,17 +3176,20 @@ void PedSim::run(std::stop_token stop) {
     if (stop.stop_requested()) return;
     auto slots = std::move(in);
     const float step_dt = dt;
-    const float cx = x, cy = y, cz = z;
-    uint32_t rng = step_rng;
+    const std::vector<PedestrianCar> obstacles = cars;
     PedestrianLines* lines = walk;
     posted = false;
     lock.unlock();
-    if (lines && step_dt > 0.f)
-      for (auto& slot : slots)
-        if (slot.line.ok) lines->step(slot.line, step_dt, cx, cy, cz, rng);
+    if (lines && step_dt > 0.f) {
+      // All walkers in one step: they steer around each other.
+      std::vector<PedestrianWalker> walkers;
+      walkers.reserve(slots.size());
+      for (const auto& slot : slots) walkers.push_back(slot.line);
+      lines->step(walkers, step_dt, obstacles.data(), static_cast<int>(obstacles.size()));
+      for (size_t i = 0; i < slots.size(); ++i) slots[i].line = walkers[i];
+    }
     lock.lock();
     out = std::move(slots);
-    step_rng = rng;
     ready = true;
   }
 }
@@ -3281,11 +3284,16 @@ void tick_pedestrians(double seconds) {
         PedAgent& agent = found->second.agents[slot.index];
         if (agent.sim_gen != slot.gen || !agent.line.ok) continue;
         agent.line = slot.line;
+        // Left through a gate with no row behind it: hide the body.
+        if (!agent.line.ok) {
+          agent.placed = false;
+          ++agent.sim_gen;
+        }
       }
       sim.ready = false;
     }
   }
-  const bool routed = lines.zones() > 0;
+  const bool routed = lines.rows() > 0;
   void* root = chassis_root(chassis);
   PartMatrix parent_m;
   const bool rooted = root && root != chassis &&
@@ -3473,16 +3481,14 @@ void tick_pedestrians(double seconds) {
         continue;
       }
       if (routed) {
-        const float target = agent.line.yaw;
-        if (!agent.placed) agent.yaw = target;
-        else {
-          float delta = std::atan2(std::sin(target - agent.yaw), std::cos(target - agent.yaw));
-          agent.yaw += std::clamp(delta, -dt * 5.f, dt * 5.f);
-        }
+        // The walker already turns at the original rate (pi per metre).
+        agent.yaw = agent.line.yaw;
         agent.x = agent.line.x;
         agent.z = agent.line.z;
         agent.placed = true;
-        character_set_speed(agent.render, agent.line.speed / 1.2f);
+        // The original advances the walk clip by the distance moved plus
+        // half the turn, so one metre walked is one second of clip.
+        character_set_speed(agent.render, agent.line.gait);
       }
       const PedKind& kind = crowd.kinds[static_cast<size_t>(agent.kind)];
       // Feet on the corridor point. The cfg render offset is not part of the
@@ -3510,7 +3516,9 @@ void tick_pedestrians(double seconds) {
   {
     PedSim& sim = ped_sim();
     std::lock_guard lock(sim.mu);
-    if (!sim.posted) {
+    if (sim.posted) {
+      ped_backlog = std::min(0.1f, ped_backlog + dt);
+    } else {
       sim.in.clear();
       for (auto& entry : crowds) {
         const auto& agents = entry.second.agents;
@@ -3525,14 +3533,16 @@ void tick_pedestrians(double seconds) {
         }
       }
       if (!sim.in.empty()) {
-        if (!sim.seeded) {
-          sim.step_rng = ped_rng;
-          sim.seeded = true;
+        // Frames that passed while the worker was busy still count.
+        sim.dt = std::min(0.1f, dt + ped_backlog);
+        ped_backlog = 0.f;
+        sim.cars.clear();
+        PedestrianCar car{car_x, car_y, car_z, 0.f, 0.f};
+        if (const auto* body = gameref_get(chassis)) {
+          car.vx = body->vel[0];
+          car.vz = body->vel[2];
         }
-        sim.dt = dt;
-        sim.x = car_x;
-        sim.y = car_y;
-        sim.z = car_z;
+        sim.cars.push_back(car);
         sim.walk = &lines;
         sim.posted = true;
         wake = true;
@@ -3621,6 +3631,28 @@ void part_remove_pedestrian_type(void* ground, void* type) {
   if (index < crowd->second.kinds.size())
     crowd->second.kinds.erase(crowd->second.kinds.begin() + static_cast<std::ptrdiff_t>(index));
   clear_ped_agents(crowd->second);
+}
+
+float part_pedestrian_distance(void* ground, float x, float y, float z, int32_t type_id) {
+  // Pedestrian_distance @ 0x00589BE0 (slrr-reverse): nearest live walker,
+  // filtered by type id unless it is 0; -1 for an empty or unmatched list.
+  if (!ground || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return -1.f;
+  const auto crowd = crowds.find(ground);
+  if (crowd == crowds.end()) return -1.f;
+  float best = -1.f;
+  for (const PedAgent& agent : crowd->second.agents) {
+    if (!agent.line.ok || agent.kind < 0 ||
+        static_cast<size_t>(agent.kind) >= crowd->second.types.size())
+      continue;
+    if (type_id != 0) {
+      const auto* type = gameref_get(crowd->second.types[static_cast<size_t>(agent.kind)]);
+      if (!type || type->type_id != type_id) continue;
+    }
+    const float dx = agent.line.x - x, dy = agent.line.y - y, dz = agent.line.z - z;
+    const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (best < 0.f || d < best) best = d;
+  }
+  return best;
 }
 
 void part_drop_actors() {
