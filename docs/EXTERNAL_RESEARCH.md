@@ -356,7 +356,7 @@ Where OpenSLRR gaps already have an SLRR_rev implementation (revision
 | City rendering cost (#18) | `SLRR_rev:src/render/map-material-pool.ts`, `SLRR_rev:src/render/building-material-batch.ts`, `SLRR_rev:src/render/map-object-stream.ts`, `SLRR_rev:src/render/map-geometry-chunks.ts`, `SLRR_rev:src/render/map-gpu-occlusion.ts`, `SLRR_rev:src/render/static-map-shadows.ts` | Measured techniques (§6); port the idea, not the WebGL code |
 | CFG `osd_*` gauges | `SLRR_rev:src/osd/java-gauges.ts` | Implemented |
 | Telemetry export for comparison | `SLRR_rev:src/engine/drive-telemetry.ts` | Same record format as the original-game captures |
-| Car damage | `SLRR_rev:src/engine/deformable-panel.ts`, `SLRR_rev:src/engine/vehicle-damage.ts` | SLRR_rev's own model, not original behaviour |
+| Car damage | `SLRR_rev:src/engine/deformable-panel.ts`, `SLRR_rev:src/engine/vehicle-damage.ts`, `SLRR_rev:src/engine/vehicle-3d.ts` | SLRR_rev's own model, not original behaviour. OpenSLRR adapts its XPBD cage, builds cages over the render shell with the part's own mass as SLRR_rev does, and ports its wheel release (`releaseFailedWheels`, 0.3 m hardpoint travel, 55 kJ strut energy). SLRR_rev's mass is point masses at body poses with a render-bounds box inertia; OpenSLRR integrates each body's shape instead |
 
 Missing in SLRR_rev too, so these need original research: all `Painter`
 and `ParticleSystem` natives, the `GroundRef` route queries (`findRoute`,

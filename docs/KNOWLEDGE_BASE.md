@@ -164,7 +164,7 @@ current gaps to SLRR_rev code are in
 | Scene | `src/resources/scene_instances.cpp:scene_instances_collect`, `src/resources/scene_instances.cpp:scene_instances_ground_map` | Render instances, maps, placements, collision index |
 | Part CFG | `src/resources/part_config.cpp:parse_part_config` | Slots, wheels, renders, bodies, HUD `osd_*` lines |
 | Parts and cars | `src/resources/part_runtime.cpp:part_create`, `src/resources/part_runtime.cpp:part_command`, `src/resources/part_runtime.cpp:part_physics_advance` | Part/Chassis/Vehicle natives, assembly, damage, pedestrians, HUD state (about 4,900 lines) |
-| Physics | `src/physics/vehicle_dynamics.cpp`, `src/physics/tire_model.cpp`, `src/physics/dyno_model.cpp`, `src/physics/deformation_cage.cpp` | Rigid body, tyres, dyno, deformation |
+| Physics | `src/physics/vehicle_dynamics.cpp`, `src/physics/tire_model.cpp`, `src/physics/dyno_model.cpp`, `src/physics/deformation_cage.cpp`, `src/physics/mass_properties.cpp`, `src/physics/wheel_mount.cpp` | Rigid body, tyres, dyno, deformation, assembled mass properties, wheel mount failure |
 | Pedestrians | `src/resources/pedestrian_lines.cpp`, `src/formats/walk.cpp` | Walkers in the `city.walk` sidewalk rows, after the original engine |
 | Characters | `src/resources/character.cpp`, `src/resources/skeleton.cpp`, `src/formats/matrixdata.cpp` | Skeletons, clips, skinning, Animation |
 | Renderer | `src/render/bgfx_lib_backend.cpp:flush`, `src/render/bgfx_lighting.cpp:draw_instance`, `src/render/bgfx_shadows.cpp`, `src/render/bgfx_osd.cpp:draw_osd` | Frame, materials, shadows, OSD and HUD |
@@ -279,6 +279,16 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
    `src/resources/part_runtime.cpp:configure_drive`).
 5. Impacts feed `damage_chassis` and the XPBD cage
    (`src/physics/deformation_cage.cpp`). `dynamics_sync` publishes poses.
+6. Mass, centre of mass and inertia come from the installed parts' CFG bodies,
+   each spread over its own box, sphere or closed phys hull
+   (`src/resources/part_runtime.cpp:assembly_mass_properties`,
+   `src/physics/mass_properties.cpp:mesh_mass`). Crush cages are generated over
+   the render shell instead (`src/resources/part_runtime.cpp:panel_contact`), so
+   the phys bodies are mass and collision, not deformation zones.
+7. A corner whose mount condition reaches zero loses its wheel slots' parts as
+   loose bodies (`src/resources/part_runtime.cpp:damage_wheel_mounts`,
+   `src/resources/part_runtime.cpp:detach_panel`); the refreshed chassis rests
+   that corner on its remaining hub hardware.
 
 ### 5.6 Maps and world
 
@@ -438,6 +448,10 @@ Physics:
 - The physics delta is clamped to 0.1 s and scaled by the time warp
   (`src/jvm/jvm.cpp:advance_sim_time`), and at most four host ticks run per
   frame, so below 15 FPS the simulation slows down.
+- A CFG `body` line is mass and collision; it is not a crush zone. Do not size
+  a deformation cage from the phys SCX bodies, and do not take inertia from the
+  render bounds: 815 of the 818 stock racer phys hulls with mass are closed
+  solids, and the mass properties integrate them.
 - Repairs must restore deformation, damage-associated slot state and wheel
   damage together. The native `repair` command does this locally for each part
   (`src/resources/part_runtime.cpp:repair_part`); stock Java covers the normal
