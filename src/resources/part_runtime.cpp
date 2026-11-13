@@ -128,9 +128,14 @@ struct Record {
   std::vector<Buck> bucks;
   std::array<WheelPhys, 8> wheels{};
   std::array<std::string, 8> wheel_damage{};
-  // Chassis only: condition of each corner's wheel mount, 1 intact. At zero
-  // the corner's wheels break off (damage_wheel_mounts).
+  // Chassis only, 1 intact: each corner's wheel mount against settled
+  // hardpoint travel (settle_wheel_mounts) and its strut against impact
+  // energy (damage_wheel_mounts). Either at zero breaks the wheels off.
   std::array<float, 4> wheel_mount{1.f, 1.f, 1.f, 1.f};
+  std::array<float, 4> wheel_strut{1.f, 1.f, 1.f, 1.f};
+  // Settled cage displacement of each corner's hardpoints when its wheel was
+  // fitted; only crush beyond it counts against the mount.
+  std::array<double, 4> wheel_shift_base{};
   bool dynamic_frames = false;
   bool physics_pending_placement = true;
   // start releases the body. Until then a chassis only settles onto a floor.
@@ -164,6 +169,9 @@ struct LoosePanel {
   unsigned far_awake_ticks = 0;  // awake beyond car reach; see advance_loose_panels
 };
 std::unordered_map<Object *, LoosePanel> loose_panels;
+// Wheel parts whose corner mount failed when a chassis cage settled during
+// the records loop; advance_chassis_tick detaches them after it.
+std::vector<Object *> settled_wheel_releases;
 // Script PhysicsRef bodies released by setStatic(0), keyed by their GameRef.
 struct FreeBody {
   int32_t live_id = 0;  // guards against a reused key
@@ -1141,6 +1149,44 @@ void assembly_mass_center(Object *chassis, float &mass, float com[3]) {
   float inertia[3];
   assembly_mass_properties(chassis, mass, com, inertia);
 }
+// How far the chassis cage currently moves a corner's wheel centre or strut
+// top (the CFG spring base plus travel above the centre), in metres.
+double corner_hardpoint_shift(const Record &rec, size_t corner) {
+  if (!rec.deformation || corner >= rec.config->wheels.size())
+    return 0;
+  const auto &position = rec.config->wheels[corner].position;
+  const physics::Vec3 center{position[0], position[1], position[2]};
+  const auto &wheel = rec.dynamics.wheels[corner];
+  const physics::Vec3 up =
+      wheel.down.length() > .5 ? -wheel.down.normalized() : physics::Vec3{0, 1, 0};
+  const physics::Vec3 hardpoint =
+      center + up * (wheel.anchor_length() > 0 ? wheel.anchor_length() : .39);
+  return std::max(rec.deformation->displacement(center).length(),
+                  rec.deformation->displacement(hardpoint).length());
+}
+// The parts on a corner's wheel slots: the rim and any other wheel of the
+// corner (an outer dually wheel). Each subtree breaks off with its tyre.
+void corner_wheel_parts(const Record &rec, size_t corner, std::vector<Object *> &out) {
+  for (const auto &slot : rec.config->slots)
+    if (slot.type == 101 + static_cast<int>(corner))
+      if (const auto child = rec.children.find(slot.id); child != rec.children.end())
+        out.push_back(child->second);
+}
+// The chassis cage has settled after an impact, so its node positions are the
+// plastic shape rather than the transient crush peak. SLRR_rev 77b0fb6 ends a
+// mount at 0.3 m of hardpoint travel (vehicle-3d.ts moveMounts,
+// suspension-3d.ts deform); only travel beyond the dent the corner already had
+// when its wheel was fitted counts.
+void settle_wheel_mounts(Record &rec, std::vector<Object *> &released) {
+  for (size_t corner = 0; corner < 4 && corner < rec.config->wheels.size(); ++corner) {
+    const double shift =
+        std::max(0.0, corner_hardpoint_shift(rec, corner) - rec.wheel_shift_base[corner]);
+    auto &condition = rec.wheel_mount[corner];
+    condition = physics::wheel_mount_condition(condition, shift, 0, 0);
+    if (condition <= 0)
+      corner_wheel_parts(rec, corner, released);
+  }
+}
 // The exe calls Chassis.updatevariables from forceUpdate when the script
 // has not set suspend_update. That walk is what fills dynodata and runs
 // calcDyno. A part install asks for the same pass once the car is live.
@@ -1341,9 +1387,13 @@ bool part_install(Object *child, Object *root, int own, int target,
   c->state.parent_slot = selected.mount->id;
   c->state.own_slot = selected.mate->id;
   p->children[selected.mount->id] = child;
-  // A wheel fitted to a corner whose mount failed starts on a sound mount.
-  if (selected.mount->type >= 101 && selected.mount->type <= 104)
-    p->wheel_mount[static_cast<size_t>(selected.mount->type - 101)] = 1.f;
+  // A wheel fitted to a corner whose mount failed starts on a sound mount; a
+  // corner that is still dented keeps that dent as its new baseline.
+  if (selected.mount->type >= 101 && selected.mount->type <= 104) {
+    const auto corner = static_cast<size_t>(selected.mount->type - 101);
+    p->wheel_mount[corner] = p->wheel_strut[corner] = 1.f;
+    p->wheel_shift_base[corner] = corner_hardpoint_shift(*p, corner);
+  }
   loose_panels.erase(child);
   if (runtime)
     if (auto *chassis = car(child)) {
@@ -2669,6 +2719,8 @@ void repair_part(Object* part, Record& rec) {
   rec.slot_damage.clear();
   for (auto& damage : rec.wheel_damage) damage.clear();
   rec.wheel_mount.fill(1.f);
+  rec.wheel_strut.fill(1.f);
+  rec.wheel_shift_base.fill(0.0);
   // Avoid relink_assembly here: stock repair can visit descendants before their
   // parents. Queue each affected part once and flush after the scripted walk.
   if (!rec.links.empty()) repair_relink_pending.insert(part);
@@ -2745,42 +2797,27 @@ PanelContact panel_contact(Record& rec, physics::Vec3 impact) {
   return result;
 }
 
-// SLRR_rev 77b0fb6 wheel release (physics::wheel_mount_condition): a corner
-// loses its wheel when the chassis cage has pushed its wheel centre or strut
-// top 0.3 m, or when the impact energy reaching the corner hardware adds up to
-// 55 kJ. The impulse is the one that stops the closing speed through the
-// effective mass at the contact (restitution 0.12, as collide_chassis). A
-// floor contact below 8 m/s is routine chassis support (kerbs, bottoming out)
-// and, as in SLRR_rev, does not load the mounts.
+// SLRR_rev 77b0fb6 wheel release (physics::wheel_mount_condition), impact
+// half: the impact energy reaching a corner's hardware adds up against 55 kJ.
+// The impulse is the one that stops the closing speed through the effective
+// mass at the contact (restitution 0.12, as collide_chassis). A floor contact
+// below 8 m/s is routine chassis support (kerbs, bottoming out) and, as in
+// SLRR_rev, does not load the mounts. The hardpoint-travel half waits for the
+// chassis cage to settle (settle_wheel_mounts): right after impact() the cage
+// shows the transient crush peak, including the elastic part.
 void damage_wheel_mounts(Record& rec, const physics::VehicleDynamics::Impact& hit,
                          physics::Vec3 local_hit, double internal,
                          std::vector<Object*>& released) {
-  using physics::Vec3;
   const double energy = internal > 0 && (hit.normal.y <= .65 || hit.speed >= 8)
       ? physics::contact_impulse_energy(rec.dynamics.body, hit.point, hit.normal, hit.speed) * internal
       : 0.0;
+  if (!(energy > 0)) return;
   for (size_t corner = 0; corner < 4 && corner < rec.config->wheels.size(); ++corner) {
-    auto& condition = rec.wheel_mount[corner];
-    const auto& position = rec.config->wheels[corner].position;
-    const Vec3 center{position[0], position[1], position[2]};
-    double shift = 0;
-    if (rec.deformation) {
-      // The strut top: the CFG spring base plus travel above the wheel centre.
-      const auto& wheel = rec.dynamics.wheels[corner];
-      const Vec3 up = wheel.down.length() > .5 ? -wheel.down.normalized() : Vec3{0, 1, 0};
-      const Vec3 hardpoint = center + up * (wheel.anchor_length() > 0 ? wheel.anchor_length() : .39);
-      shift = std::max(rec.deformation->displacement(center).length(),
-                       rec.deformation->displacement(hardpoint).length());
-    }
+    auto& condition = rec.wheel_strut[corner];
+    const auto& center = rec.config->wheels[corner].position;
     condition = physics::wheel_mount_condition(
-        condition, shift, energy, std::hypot(local_hit.x - center.x, local_hit.z - center.z));
-    if (condition > 0) continue;
-    // The rim slot and any other wheel slot of the corner (an outer dually
-    // wheel); each subtree breaks off with what it carries (the tyre).
-    for (const auto& slot : rec.config->slots)
-      if (slot.type == 101 + static_cast<int>(corner))
-        if (const auto child = rec.children.find(slot.id); child != rec.children.end())
-          released.push_back(child->second);
+        condition, 0, energy, std::hypot(local_hit.x - center[0], local_hit.z - center[2]));
+    if (condition <= 0) corner_wheel_parts(rec, corner, released);
   }
 }
 
@@ -3293,7 +3330,7 @@ bool advance_deformation(Object* part, Record& rec, unsigned steps) {
   if (!scene_instances_script_matrix(part, frame.data())) return false;
   const Vec3 x{frame[0], frame[1], frame[2]}, y{frame[4], frame[5], frame[6]},
              z{frame[8], frame[9], frame[10]}, origin{frame[12], frame[13], frame[14]};
-  return rec.deformation->advance(steps, [&](Vec3 position, Vec3& point, Vec3& normal) {
+  const bool advanced = rec.deformation->advance(steps, [&](Vec3 position, Vec3& point, Vec3& normal) {
     const Vec3 world = origin + x * position.x + y * position.y + z * position.z;
     SceneFloorHit floor;
     // Use a narrow band so overhead surfaces cannot snap a node through a deck.
@@ -3306,6 +3343,11 @@ bool advance_deformation(Object* part, Record& rec, unsigned steps) {
     normal = {n.dot(x), n.dot(y), n.dot(z)};
     return true;
   });
+  // A chassis cage that has just settled holds its plastic shape: check the
+  // wheel mounts against it. Detaching waits for the end of the records loop.
+  if (advanced && !rec.deformation->active() && rec.config->native_kind == "car")
+    settle_wheel_mounts(rec, settled_wheel_releases);
+  return advanced;
 }
 
 namespace {
@@ -3580,6 +3622,9 @@ void advance_chassis_tick() {
   }
   // After the records loop: creating a loose body inserts into `records`.
   scene_instances_promote_dynamics();
+  // Wheels whose mounts failed when a chassis cage settled (advance_deformation).
+  released.insert(released.end(), settled_wheel_releases.begin(), settled_wheel_releases.end());
+  settled_wheel_releases.clear();
   for (auto* part : released)
     if (auto* panel = record(part))
       if (auto* chassis = car(part))
@@ -4683,6 +4728,7 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   // deliberately weak during GC, so world teardown must release it explicitly.
   dyno_clear_sessions();
   loose_panels.clear();
+  settled_wheel_releases.clear();
   controlled_vehicle = 0;
   hud_preview = {};
   hud_preview_directory.clear();
