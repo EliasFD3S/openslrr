@@ -424,6 +424,15 @@ Tire radius, centers/hubs, springs, damping, unsprung masses, and bump stops
 must stay consistent. Do not pin a car at an arbitrary height to hide a
 collision problem.
 
+The scripts size the wheel of the stock rim slot (`101 + corner`). When that
+slot is empty, the corner keeps a physical wheel while hardware remains on
+its other wheel slots (type 101–104, such as an outer dually wheel) or on its
+hub (type 201–204). Its radius is how far that hardware reaches below the
+wheel centre, so the car rests on the brake or dually wheel as drawn.
+`Brake.updatevariables` writes the rotor size plus 0.02 m, but the stock rotor
+mesh does not scale with it. A corner with none of this hardware loses its
+wheel and falls back to the chassis box contacts.
+
 For driving, follow throttle → dyno torque → clutch/gears → distribution to
 the wheels → rotational speed → slip → tire forces → forces and moments on
 the body. A loss of grip is not proof that only a differential or an
