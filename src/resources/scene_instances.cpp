@@ -5,6 +5,7 @@
 #include "slrr/part_config.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/rpk_index.hpp"
+#include "slrr/scene_ambience.hpp"
 #include "slrr/skeleton.hpp"
 #include "slrr/vehicle_dynamics.hpp"
 
@@ -597,6 +598,7 @@ void scene_instances_set_resources(const RpkIndex *resources) {
   g_overrides.clear();
   g_collision_overrides.clear();
   g_ground_props.clear();
+  scene_ambience_reset();
   g_texture_paths.clear();
   g_static.clear();
   g_floor_meshes.clear();

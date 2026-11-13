@@ -156,6 +156,7 @@ current gaps to SLRR_rev code are in
 | Characters | `src/resources/character.cpp`, `src/resources/skeleton.cpp`, `src/formats/matrixdata.cpp` | Skeletons, clips, skinning, Animation |
 | Renderer | `src/render/bgfx_lib_backend.cpp:flush`, `src/render/bgfx_lighting.cpp:draw_instance`, `src/render/bgfx_shadows.cpp`, `src/render/bgfx_osd.cpp:draw_osd` | Frame, materials, shadows, OSD and HUD |
 | UI | `src/ui/osd_registry.cpp:osd_add_widget`, `src/ui/osd_registry.cpp:osd_on_field_write` | OSD widgets, hit-testing, modal state |
+| Map ambience | `src/resources/scene_ambience.cpp:scene_ambience_attach`, `src/resources/scene_ambience.cpp:scene_ambience_tick` | `sfx_loop`/`sfx_random` lines of map placements |
 | Platform | `src/platform/host_input.cpp`, `src/platform/host_sfx.cpp`, `src/platform/host_music.cpp`, `src/platform/video_fmv.cpp`, `src/platform/host_game_options.cpp` | Input, audio, FMV, options |
 
 Code that exists but is not used:
@@ -196,9 +197,9 @@ music, options update (Config re-read every 100 ms, debounced save), sun time,
 GameType thread is not alive), controller and hotkeys,
 `script_callbacks_tick`, world camera, `dispatch_due_timers`, credits and
 loading-screen special cases, the fallback clock, mechanic inventory,
-`part_physics_advance`, camera follow, mechanic pointer, `render.flush()` and
-the quit check. Do not move an event delivery or add a second pump for the
-same port.
+`part_physics_advance`, `scene_ambience_tick`, camera follow, mechanic
+pointer, `render.flush()` and the quit check. Do not move an event delivery
+or add a second pump for the same port.
 
 Inside `src/resources/part_runtime.cpp:part_physics_advance`: hinges, then
 `scene_instances_prepare_physics`, then N chassis ticks, engine audio,
@@ -284,6 +285,13 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
 - `scene_instances_prepare_physics` rebuilds the collision index from GameRef
   render nodes once per physics frame. Floor and sweep queries are
   `scene_instances_sample_floor` and `scene_instances_sweep_sphere`.
+- Placements whose CFG has `sfx_loop`/`sfx_random` lines become ambient
+  emitters of their ground shell
+  (`src/resources/scene_ambience.cpp:scene_ambience_attach`). The world camera
+  is the listener; the shell must be in the active world
+  (`src/resources/scene_ambience.cpp:scene_ambience_tick`). Rules and
+  executable addresses are in
+  [HOST_NATIVE_UTILITIES.md](HOST_NATIVE_UTILITIES.md#map-ambient-sounds).
 - The per-instance seed and variant choice match the reverse-engineered
   rule: `trunc(x+y+z) & 0x7fffffff` when the seventh parameter is missing,
   then `rendertypes[seed % n]` and `colors[seed % n]`.
@@ -401,6 +409,7 @@ Process:
 | Script pass budget | 8 ms, 16 ms with a MAX_PRIORITY thread | `src/jvm/script_threads.cpp:script_threads_tick` |
 | Fiber stack | 64 KiB commit, 1 MiB reserve | `src/jvm/script_threads.cpp:script_thread_start` |
 | SFX voices | 32 total, 3 menu, 2 copies per cue, 35 ms coalescing | `src/platform/host_sfx.cpp:host_sfx_play_file` |
+| Ambient start range | 250 m beyond the CFG radius | `src/resources/scene_ambience.cpp:scene_ambience_audible` |
 | Chassis wall probe | four spheres of 0.18 m | `src/resources/part_runtime.cpp:collide_chassis` |
 | Prop cell | 64 m | `src/resources/scene_instances.cpp:kPropCellSize` |
 | Shadow maps | 2048² | `src/render/bgfx_lib_backend.hpp:kShadowResolution` |
