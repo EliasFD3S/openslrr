@@ -19,6 +19,7 @@
 </p>
 
 ---
+## Documentation
 
 The modder documentation — natives, engine objects, and how to write a class, a scene, or an OSD — is published at **[eliasfd3s.github.io/openslrr](https://eliasfd3s.github.io/openslrr/)**.
 
