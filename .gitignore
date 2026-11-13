@@ -3,6 +3,7 @@
 # ==========================================
 /out/
 /data/
+/site/
 /build/
 /build-bgfx/
 /build-bgfx-x64/
