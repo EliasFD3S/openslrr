@@ -270,8 +270,7 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
     }
     const bool use_f =
         a.tag == ValueTag::Float || b.tag == ValueTag::Float;
-    // Ordered compares on floats. `!=` / `==` stay integer so the MWM
-    // sqrt check (two floats, compared as ints) still passes.
+    // Ordered compares on floats. `==` and `!=` compare by value below.
     if (use_f && tag >= 8 && tag <= 11) {
       auto num = [](const Value& v) -> float {
         if (v.tag == ValueTag::Float) return v.v.f;
@@ -337,11 +336,15 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
         r = ai & bi;
         break;
       case 6:
-        // Float != stays an integer compare: both floats become 0, so the
-        // MWM sqrt check (two equal floats) still passes. Object != is
-        // pointer identity — `texture != Osd.RRT_NONE` was always false,
-        // so RectangleTemplate never swapped the plate texture.
-        if (a.tag == ValueTag::Obj || b.tag == ValueTag::Obj)
+        // `!=` is the negation of `==`. Object != is pointer identity —
+        // `texture != Osd.RRT_NONE` was always false, so RectangleTemplate
+        // never swapped the plate texture. A float operand compares by value:
+        // reading both floats as integer 0 made every float `!=` false, so
+        // Tyre.SetInflation(I) never applied a new pressure and every tyre
+        // stayed at its 0.5 bar floor. The MWM key check
+        // (`Check(key) != Math.sqrt(key)+3.75`) computes the same float on
+        // both sides and is still false.
+        if (a.tag == ValueTag::Obj || b.tag == ValueTag::Obj || use_f)
           r = values_equal(a, b) ? 0 : 1;
         else
           r = ai != bi;
