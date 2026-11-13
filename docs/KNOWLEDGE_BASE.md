@@ -464,6 +464,7 @@ run time.
 | Any pad binding disables every XInput fallback axis | `src/platform/host_input.cpp` |
 | Root-scoped caches survive a game-root change | `src/resources/script_cfg.cpp:frontend_scripts`, `src/resources/scene_instances.cpp` |
 | `shaders/varying.def.sc` declares `v_worldPos` twice | `shaders/varying.def.sc` |
+| The `present` and `hiz` programs never link: `fs_present` and `fs_hiz` read only `v_texcoord0` but are paired with `vs_mesh`, so the offscreen scene target and the HiZ pyramid are skipped. Startup logs `[bgfx] program … failed to link` | `src/render/bgfx_lib_backend.cpp:LibBgfxBackend::open` |
 
 Fixed on `main`: `System.arraycopy` overflow, PTX bounds, dyno session
 lifetime and sampling, and the `Vehicle.getHorn` / `hasCrime` registrations.

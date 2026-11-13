@@ -450,6 +450,13 @@ depth, bias, filtering, leaf alpha, and the choice of casters also count.
 A building missing from the casters stays without a shadow even with a larger
 shadow map.
 
+Every shadow pass depends on a linked shader program. bgfx links a program
+only when the fragment shader's `$input` list equals the vertex shader's
+`$output` list; otherwise it returns an invalid handle and, in Release, prints
+nothing. The passes check the handle and switch themselves off. A varying added
+to `vs_mesh` must therefore be added to every fragment shader paired with it.
+Startup reports each failed program as `[bgfx] program <name> failed to link`.
+
 Do not collect casters using only the visible camera frustum.
 The list must respect the useful light volume. When the time of day changes,
 sun-dependent matrices and caches must be invalidated.
