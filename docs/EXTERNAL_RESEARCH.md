@@ -357,6 +357,7 @@ Where OpenSLRR gaps already have an SLRR_rev implementation (revision
 | CFG `osd_*` gauges | `SLRR_rev:src/osd/java-gauges.ts` | Implemented |
 | Telemetry export for comparison | `SLRR_rev:src/engine/drive-telemetry.ts` | Same record format as the original-game captures |
 | Car damage | `SLRR_rev:src/engine/deformable-panel.ts`, `SLRR_rev:src/engine/vehicle-damage.ts` | SLRR_rev's own model, not original behaviour |
+| Physical flaps (#42) | `SLRR_rev:docs/native-status.md` lists `Part.flap` as unregistered; `SLRR_rev:src/engine/deformable-panel.ts` pins a hood cage with two hinge clamps and a latch | No hinge to migrate. OpenSLRR's `include/slrr/flap_hinge.hpp` is its own design |
 
 Missing in SLRR_rev too, so these need original research: all `Painter`
 and `ParticleSystem` natives, the `GroundRef` route queries (`findRoute`,

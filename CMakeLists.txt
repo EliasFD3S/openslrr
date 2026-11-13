@@ -95,6 +95,7 @@ add_executable(slrr_host
   src/physics/scene_collision.cpp
   src/physics/deformation_cage.cpp
   src/physics/suspension_geometry.cpp
+  src/physics/flap_hinge.cpp
 )
 
 if(WIN32)
