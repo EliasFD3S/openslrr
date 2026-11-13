@@ -312,6 +312,21 @@ map chains and their placed objects.
 descriptions and placements. It does not necessarily mean a new Java native
 to register. Inspect the data and the instantiation path first.
 
+Native ICFG loading retains both renders and collision bodies. CFG `box`
+half extents, `sphere` radii and SCX collision meshes are cached per type,
+then instanced with `placement pose × body pose`. `nocollision` suppresses
+the body. Collision follows the active ground shell's world transform and is
+not selected by render variant, LOD, visibility or culling. Script-created
+`PhysicsRef` primitives and generic objects activated by
+`GameRef.setActiveCollision` use the same scene index; OSD click volumes are
+a separate contract. A placement whose collision-enabled bodies all have
+positive mass is promoted to a loose native body with its full CFG collision
+mesh and mass-weighted body-pose centre. It sleeps until contact, reuses the
+loose-part solver for car and static-scene contacts, and updates every render
+slot from the simulated frame. Mixed-mass placements and zero-mass buildings,
+columns, trees and containers remain on the exact static path. Standalone
+dynamic `PhysicsRef` integration is not yet implemented.
+
 Keep these decisions separate: loading, CPU residency, GPU upload,
 visibility/frustum, shadow participation, and collision. An object outside
 the screen can cast a visible shadow. Render culling must not remove the
@@ -373,6 +388,21 @@ the main physics frame.
 `VehicleDynamics` owns the rigid body, wheel states, suspension parameters,
 and the transmission. `part_runtime` extracts part properties and publishes
 the results into the render graph.
+
+Static scene collision has two complementary paths. Triangle meshes serve
+support and sphere-sweep queries. Indexed CFG/`PhysicsRef` boxes and spheres
+also use the exact oriented-shape contacts in `scene_collision.cpp`, so a
+thin trunk cannot pass between the chassis corner probes. The chassis query
+uses the bounds centre (not necessarily the centre of mass), samples longer
+movements, and feeds the contact normal into the existing impact response.
+The oriented-shape query is discrete, not a general continuous manifold
+solver; keep the triangle sweep path for terrain and tunneling protection.
+Positive-mass native placements do not enter static mesh or analytic collision
+caches. Their loose body uses the authored mesh, mass and centre, starts
+asleep, wakes on car contact, and exchanges equal/opposite impulses with both
+car and static scene. This is a host loose-body approximation, not a general
+dynamic triangle-mesh engine or an implementation of standalone dynamic
+`PhysicsRef` bodies.
 
 The frequency currently declared is **120 Hz**, with an update frequency
 declared at **60 Hz** in `vehicle_dynamics.hpp`. `advance(seconds)` uses an

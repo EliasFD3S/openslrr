@@ -5,9 +5,9 @@
   "categories": [
     {
       "name": "World",
-      "body": 19,
+      "body": 26,
       "noop": 0,
-      "missing": 35
+      "missing": 28
     },
     {
       "name": "Language",
@@ -23,8 +23,8 @@
     },
     {
       "name": "Resources",
-      "body": 56,
-      "noop": 1,
+      "body": 57,
+      "noop": 0,
       "missing": 0
     },
     {

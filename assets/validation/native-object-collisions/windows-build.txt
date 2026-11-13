@@ -1,0 +1,15 @@
+Exact final-head Windows validation build
+=======================================
+
+Revision: 0a643069c77b7cbb9c5955aa9329fbac85d06513
+Base: origin/main 5e39e9a (Restore map and car shadows)
+Toolchain: Visual Studio 2022 / CMake, x64 Release
+Target: slrr_host
+
+The isolated worktree was reset to the revision above, then only the
+validation-only startup, throttle, frame-cap and tracing hooks were applied.
+The host linked successfully at:
+
+C:\openslrr\open-SL\validation\collision-support\build-bgfx-x64\Release\slrr_host.exe
+
+No product code or validation hook was merged into the original game data.

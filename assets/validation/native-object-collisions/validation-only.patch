@@ -1,0 +1,398 @@
+diff --git a/include/slrr/boot.hpp b/include/slrr/boot.hpp
+index 4ab5fd6..da07e1b 100644
+--- a/include/slrr/boot.hpp
++++ b/include/slrr/boot.hpp
+@@ -14,6 +14,7 @@ struct BootOptions {
+   std::string vehicle_osd; // optional standalone gauge CFG for preview
+   bool window = false;
+   bool auto_new = false;
++  bool auto_city = false;  // validation-only: enter stock Valocity after garage setup
+   // After Garage: fire Garage.osdCommand (101 MAINMENU / 109 HITTHESTREET / 0=skip).
+   int32_t auto_cmd = 0;
+   int32_t max_frames = 0;  // 0 = until quit
+diff --git a/src/boot/boot.cpp b/src/boot/boot.cpp
+index 6f7b0bd..bc3a488 100644
+--- a/src/boot/boot.cpp
++++ b/src/boot/boot.cpp
+@@ -23,6 +23,7 @@
+
+ #include <chrono>
+ #include <cstdio>
++#include <cstdlib>
+ #include <exception>
+
+ #ifdef _WIN32
+@@ -452,6 +453,49 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
+                false);
+   }
+
++  if (opt.auto_city) {
++    Object* city = jvm.new_object("java.game.Valocity");
++    if (!city) {
++      std::fprintf(stderr, "[validation] cannot create Valocity\n");
++      if (render.ready()) render.close();
++      return 12;
++    }
++    jvm.invoke("java.game.Valocity", "<init>", "()V",
++               {Value::make_obj(city)}, false);
++    const Value free_ride = jvm.get_static("java.game.GameLogic", "GM_FREERIDE");
++    if (free_ride.tag == ValueTag::Int)
++      jvm.set_static("java.game.GameLogic", "gameMode", free_ride);
++    if (const char* sx = std::getenv("SLRR_VALIDATION_START_X")) {
++      const char* sy = std::getenv("SLRR_VALIDATION_START_Y");
++      const char* sz = std::getenv("SLRR_VALIDATION_START_Z");
++      const char* syaw = std::getenv("SLRR_VALIDATION_START_YAW");
++      if (sy && sz && syaw) {
++        const Value career = jvm.get_static("java.game.GameLogic", "GM_CARREER");
++        if (career.tag == ValueTag::Int)
++          jvm.set_static("java.game.GameLogic", "gameMode", career);
++        auto* position = jvm.new_object("java.lang.Vector3");
++        auto* orientation = jvm.new_object("java.lang.Ypr");
++        if (position && orientation) {
++          position->fields["x"] = Value::make_float(std::strtof(sx, nullptr));
++          position->fields["y"] = Value::make_float(std::strtof(sy, nullptr));
++          position->fields["z"] = Value::make_float(std::strtof(sz, nullptr));
++          orientation->fields["y"] = Value::make_float(std::strtof(syaw, nullptr));
++          auto positions = city->fields.find("posGarage");
++          auto orientations = city->fields.find("oriGarage");
++          if (positions != city->fields.end() && positions->second.tag == ValueTag::Obj &&
++              positions->second.v.o && positions->second.v.o->is_array &&
++              !positions->second.v.o->slots.empty())
++            positions->second.v.o->slots[0] = Value::make_obj(position);
++          if (orientations != city->fields.end() && orientations->second.tag == ValueTag::Obj &&
++              orientations->second.v.o && orientations->second.v.o->is_array &&
++              !orientations->second.v.o->slots.empty())
++            orientations->second.v.o->slots[0] = Value::make_obj(orientation);
++        }
++      }
++    }
++    sections.change_active_section(city);
++  }
++
+   int32_t osd_n = osd_widget_count();
+   Object* garage_obj = sections.garage();
+   if (!garage_obj) garage_obj = sections.actual();
+@@ -523,6 +567,12 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
+     const bool until_quit = opt.max_frames <= 0;
+     if (until_quit)
+       std::printf("[boot] Soft MainLoop until window close\n");
++    const int validation_frame_ms = [] {
++      const char* value = std::getenv("SLRR_VALIDATION_FRAME_MS");
++      if (!value) return 1;
++      const int parsed = std::atoi(value);
++      return parsed < 1 ? 1 : (parsed > 100 ? 100 : parsed);
++    }();
+     while (until_quit || frames < opt.max_frames) {
+       // Soft PollWindowQuit adjacency — pump before Input/sim like stock
+       // neighbors (Input_tick still inside mainloop_frame).
+@@ -534,7 +584,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
+       if (fr.quit) break;
+       if (until_quit) {
+ #ifdef _WIN32
+-        Sleep(1);
++        Sleep(validation_frame_ms);
+ #endif
+       }
+     }
+diff --git a/src/boot/mainloop.cpp b/src/boot/mainloop.cpp
+index d1eae6e..c1d7a20 100644
+--- a/src/boot/mainloop.cpp
++++ b/src/boot/mainloop.cpp
+@@ -19,6 +19,7 @@
+ #include <chrono>
+ #include <cmath>
+ #include <cstdio>
++#include <cstdlib>
+ #include <string>
+ #ifdef _WIN32
+ #define NOMINMAX
+@@ -380,6 +381,19 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
+   }
+   script_threads_tick(jvm);
+   MainLoopFrameResult out;
++  if (std::getenv("SLRR_VALIDATION_TRACE")) {
++    static double perf_elapsed = 0.0;
++    static unsigned perf_frames = 0;
++    perf_elapsed += dt;
++    ++perf_frames;
++    if (perf_elapsed >= 1.0) {
++      std::fprintf(stderr, "[validate-perf] fps=%.1f floorBuilds=%llu\n",
++                   perf_frames / perf_elapsed,
++                   static_cast<unsigned long long>(scene_instances_floor_builds()));
++      perf_elapsed = 0.0;
++      perf_frames = 0;
++    }
++  }
+   mainloop_adopt_section(jvm, sections);
+   pump_async_messages(jvm, sections.actual());
+
+diff --git a/src/main.cpp b/src/main.cpp
+index a0490c2..2f10655 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -92,6 +92,11 @@ int main(int argc, char** argv) {
+       opt.auto_new = true;
+       continue;
+     }
++    if (std::strcmp(a, "--auto-city") == 0) {
++      opt.auto_city = true;
++      opt.auto_new = true;
++      continue;
++    }
+     if(std::strcmp(a,"--spawn-car")==0&&i+1<argc){
+       opt.spawn_car=argv[++i];opt.auto_new=true;continue;
+     }
+diff --git a/src/physics/scene_collision.cpp b/src/physics/scene_collision.cpp
+index c4d04ea..d0ebed5 100644
+--- a/src/physics/scene_collision.cpp
++++ b/src/physics/scene_collision.cpp
+@@ -2,6 +2,8 @@
+
+ #include <algorithm>
+ #include <cmath>
++#include <cstdio>
++#include <cstdlib>
+ #include <limits>
+ #include <stdexcept>
+ #include <unordered_map>
+@@ -562,6 +564,19 @@ std::optional<Contact> StaticIndex::overlap(const Box& moving, Owner ignore_owne
+   std::sort(candidates.begin(), candidates.end());
+   candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+   if (stats) stats->broadphase_candidates = candidates.size();
++  if (std::getenv("SLRR_VALIDATION_TRACE_BOUNDS")) {
++    std::fprintf(stderr,
++                 "[validate-bounds] query min=(%.3f %.3f %.3f) max=(%.3f %.3f %.3f)\n",
++                 query_bounds.minimum.x, query_bounds.minimum.y, query_bounds.minimum.z,
++                 query_bounds.maximum.x, query_bounds.maximum.y, query_bounds.maximum.z);
++    for (const auto index : candidates) {
++      const auto& bounds = shapes[index].bounds;
++      std::fprintf(stderr,
++                   "[validate-bounds-shape] index=%zu min=(%.3f %.3f %.3f) "
++                   "max=(%.3f %.3f %.3f)\n", index, bounds.minimum.x, bounds.minimum.y,
++                   bounds.minimum.z, bounds.maximum.x, bounds.maximum.y, bounds.maximum.z);
++    }
++  }
+
+   std::optional<Contact> best;
+   for (std::size_t index : candidates) {
+diff --git a/src/platform/host_input.cpp b/src/platform/host_input.cpp
+index cf04af6..f378578 100644
+--- a/src/platform/host_input.cpp
++++ b/src/platform/host_input.cpp
+@@ -9,6 +9,7 @@
+ #include <chrono>
+ #include <cmath>
+ #include <deque>
++#include <cstdlib>
+ #include <unordered_map>
+
+ #ifdef _WIN32
+@@ -319,6 +320,11 @@ void host_input_update_controller(Object* controller, float dt) {
+     in.drive_steer_analog &= !digital_steering;
+   }
+   in.drive_throttle = axis(28);
++  // Validation-only deterministic drive controls, never set by the product.
++  if (const char* value = std::getenv("SLRR_VALIDATION_THROTTLE"))
++    in.drive_throttle = std::clamp(std::strtof(value, nullptr), 0.f, 1.f);
++  if (const char* value = std::getenv("SLRR_VALIDATION_STEER"))
++    in.drive_steer = std::clamp(std::strtof(value, nullptr), -1.f, 1.f);
+   in.drive_brake = axis(29);
+   in.drive_handbrake = axis(48) > .5f;
+   in.drive_clutch = axis(49);
+diff --git a/src/resources/part_runtime.cpp b/src/resources/part_runtime.cpp
+index b7d02f7..fc1680c 100644
+--- a/src/resources/part_runtime.cpp
++++ b/src/resources/part_runtime.cpp
+@@ -2454,6 +2454,14 @@ PanelContact panel_contact(Record& rec, physics::Vec3 impact) {
+ void damage_chassis(Object* chassis, Record& rec, const physics::VehicleDynamics::Impact& hit,
+                     bool player, std::vector<Object*>& released) {
+   using physics::Vec3;
++  if (std::getenv("SLRR_VALIDATION_TRACE") && hit.speed > .01) {
++    const auto& p = rec.dynamics.body.position;
++    std::fprintf(stderr,
++                 "[validate-contact] speed=%.4f point=(%.3f %.3f %.3f) "
++                 "normal=(%.3f %.3f %.3f) body=(%.3f %.3f %.3f)\n",
++                 hit.speed, hit.point.x, hit.point.y, hit.point.z,
++                 hit.normal.x, hit.normal.y, hit.normal.z, p.x, p.y, p.z);
++  }
+   if (hit.speed < 2) return;
+   const auto& options = host_game_options();
+   const double multiplier = rec.damage_multiplier >= 0 ? rec.damage_multiplier
+@@ -3727,6 +3735,27 @@ void part_pause_engine_audio(bool paused) {
+ void part_physics_advance(double seconds) {
+   if (!std::isfinite(seconds) || seconds < 0)
+     throw std::invalid_argument("invalid vehicle elapsed time");
++  if (std::getenv("SLRR_VALIDATION_TRACE")) {
++    static double trace_elapsed = 0.0;
++    trace_elapsed += seconds;
++    if (trace_elapsed >= 1.0) {
++      trace_elapsed = 0.0;
++      if (auto* chassis = part_controlled_chassis()) {
++        if (auto* rec = record(chassis)) {
++          const auto& p = rec->dynamics.body.position;
++          const auto& input = host_input();
++          std::fprintf(stderr,
++                       "[validate-state] pos=(%.3f %.3f %.3f) speed=%.3f "
++                       "throttle=%.3f brake=%.3f clutch=%.3f gear=%d "
++                       "released=%d engaged=%d\n",
++                       p.x, p.y, p.z, rec->dynamics.body.velocity.length() * 3.6,
++                       input.drive_throttle, input.drive_brake, input.drive_clutch,
++                       rec->dynamics.gear, rec->physics_released ? 1 : 0,
++                       rec->dynamics.drive.engaged ? 1 : 0);
++        }
++      }
++    }
++  }
+   // Hinges also animate while the chassis physics is suspended in the garage.
+   // Advance a normalized phase so reversing mid-motion preserves the pose.
+   const float hinge_step = static_cast<float>(seconds / 0.5);
+diff --git a/src/resources/scene_instances.cpp b/src/resources/scene_instances.cpp
+index 2867b4e..4e07eef 100644
+--- a/src/resources/scene_instances.cpp
++++ b/src/resources/scene_instances.cpp
+@@ -83,6 +83,7 @@ struct GroundPropMap {
+ std::unordered_map<uint32_t, GroundPropMap> g_ground_props;
+
+ struct GroundCollisionWorld {
++  uint32_t id = 0;
+   PartMatrix matrix{};
+   PartMatrix inverse{};
+   const GroundPropMap* source = nullptr;
+@@ -1007,6 +1008,7 @@ void scene_instances_prepare_physics() {
+         if (ground != g_ground_props.end()) {
+           active_ground.insert(n->key);
+           auto& cached = g_ground_collision[n->key];
++          cached.id = id;
+           const bool source_changed = cached.source != &ground->second;
+           cached.source = &ground->second;
+           if (source_changed || cached.matrix != m) {
+@@ -1296,16 +1298,42 @@ bool scene_instances_contact_box(const float frame[16], const float half[3],
+       best_ground = ground;
+     }
+   };
++  const bool trace = std::getenv("SLRR_VALIDATION_TRACE") &&
++      ((std::fabs(moving[12] + 348.940f) < 60.f &&
++        std::fabs(moving[14] + 1481.194f) < 60.f) ||
++       (std::fabs(moving[12] + 497.438f) < 30.f &&
++        std::fabs(moving[14] + 399.552f) < 30.f));
++  if (trace)
++    std::fprintf(stderr, "[validate-query] centre=(%.3f %.3f %.3f) grounds=%zu\n",
++                 moving[12], moving[13], moving[14], g_ground_collision.size());
+   for (const auto& [key, ground] : g_ground_collision) {
+     if (!ground.source) continue;
++    if (trace)
++      std::fprintf(stderr,
++                   "[validate-query-ground] id=0x%x shapes=%zu bounds=%d "
++                   "min=(%.2f %.2f %.2f) max=(%.2f %.2f %.2f)\n",
++                   ground.id, ground.source->collision_shapes.size(), ground.has_bounds ? 1 : 0,
++                   ground.bounds_min[0], ground.bounds_min[1], ground.bounds_min[2],
++                   ground.bounds_max[0], ground.bounds_max[1], ground.bounds_max[2]);
+     bool separated = false;
+     if (ground.has_bounds)
+       for (int axis = 0; axis < 3; ++axis)
+         separated = separated || moving_max[axis] < ground.bounds_min[axis] ||
+                     moving_min[axis] > ground.bounds_max[axis];
+-    if (separated) continue;
++    if (separated) {
++      if (trace) std::fprintf(stderr, "[validate-query-ground] id=0x%x separated\n", ground.id);
++      continue;
++    }
+     const auto local = part_matrix_multiply(ground.inverse, moving);
+-    consider(ground.source->collision_shapes.overlap_box(local, extents, ignore), &ground);
++    collision::QueryStats stats;
++    const auto candidate = ground.source->collision_shapes.overlap_box(
++        local, extents, ignore, &stats);
++    if (trace)
++      std::fprintf(stderr,
++                   "[validate-query-ground] id=0x%x candidates=%zu narrow=%zu hit=%d\n",
++                   ground.id, stats.broadphase_candidates, stats.narrowphase_tests,
++                   candidate ? 1 : 0);
++    consider(candidate, &ground);
+   }
+   consider(g_script_collision_shapes.overlap_box(moving, extents, ignore));
+   if (!best) return false;
+@@ -1859,6 +1887,15 @@ bool ground_prop_config(const RpkIndex& rpk, uint32_t type, PartConfig& out) {
+   for (size_t pos = cfg.find(joined_yaw); pos != std::string::npos;
+        pos = cfg.find(joined_yaw, pos + 6))
+     cfg.replace(pos, joined_yaw.size(), "-1.570");
++  if (std::getenv("SLRR_VALIDATION_TRACE")) {
++    if (const auto* entry = rpk.resolve(type)) {
++      if (entry->alias.find("highway") != std::string::npos ||
++          entry->alias.find("bridge") != std::string::npos ||
++          entry->alias.find("hotel") != std::string::npos)
++        std::printf("[validate-cfg] type=0x%x alias=%s\n%s\n", type,
++                    entry->alias.c_str(), cfg.c_str());
++    }
++  }
+   out = parse_part_config(cfg, &rpk, RpkIndex::pack_from_full(type));
+   out.resource = type;
+   out.native_kind = std::string(subtype);
+@@ -1935,6 +1972,10 @@ const NativeCollisionData& native_collision_data(
+     std::replace(relative.begin(), relative.end(), '\\', '/');
+     const auto source = load_scx_geometry(
+         (std::filesystem::path(rpk.game_root()) / relative).string());
++    if (std::getenv("SLRR_VALIDATION_TRACE"))
++      std::printf("[validate-mesh-body] type=0x%x file=%s ok=%d tris=%zu error=%s\n",
++                  type, relative.c_str(), source.info.ok ? 1 : 0,
++                  source.indices.size() / 3, source.info.error.c_str());
+     if (!source.info.ok || source.indices.empty()) continue;
+     append(source, frame);
+   }
+@@ -2008,6 +2049,37 @@ void scene_instances_add_ground_props(const GroundMapData& map, void* ground) {
+     auto [type, added] = object_types.try_emplace(placement.type);
+     if (added) {
+       ground_prop_config(*g_resources, placement.type, type->second);
++      if (std::getenv("SLRR_VALIDATION_TRACE")) {
++        const auto* entry = g_resources->resolve(placement.type);
++        const std::string alias = entry ? entry->alias : std::string{};
++        std::printf("[validate-type] type=0x%x alias=%s kind=%s bodies=%zu\n",
++                    placement.type, alias.c_str(), type->second.native_kind.c_str(),
++                    type->second.bodies.size());
++        if (alias.find("hotel") != std::string::npos ||
++            alias.find("bridge") != std::string::npos ||
++            alias.find("highway") != std::string::npos ||
++            alias.find("garazs") != std::string::npos)
++          std::printf("[validate-position] type=0x%x alias=%s pos=(%.3f %.3f %.3f) rot=(%.3f %.3f %.3f)\n",
++                      placement.type, alias.c_str(), placement.position[0],
++                      placement.position[1], placement.position[2], placement.rotation[0],
++                      placement.rotation[1], placement.rotation[2]);
++        if (type->second.native_kind == "building") {
++          std::printf("[validate-building] type=0x%x alias=%s bodies=%zu pos=(%.2f %.2f %.2f)\n",
++                      placement.type, alias.c_str(), type->second.bodies.size(),
++                      placement.position[0], placement.position[1], placement.position[2]);
++          for (const auto& body : type->second.bodies)
++            std::printf("[validate-building-body] type=0x%x shape=%d collision=%d mesh=%s\n",
++                        placement.type, static_cast<int>(body.shape), body.collision ? 1 : 0,
++                        body.collision_mesh.c_str());
++        }
++        for (const auto& body : type->second.bodies) {
++          if (body.mass > 0.f)
++            std::printf("[validate-mass] type=0x%x alias=%s kind=%s mass=%.3f shape=%d pos=(%.2f %.2f %.2f)\n",
++                        placement.type, alias.c_str(), type->second.native_kind.c_str(),
++                        body.mass, static_cast<int>(body.shape), placement.position[0],
++                        placement.position[1], placement.position[2]);
++        }
++      }
+       auto& renders = type->second.renders;
+       std::erase_if(renders, [&](const PartRender& render) {
+         return render.variants.empty() ? !is_visible(render.resource)
+@@ -2044,10 +2116,16 @@ void scene_instances_add_ground_props(const GroundMapData& map, void* ground) {
+       props_map.collision_meshes.push_back(bake_static_mesh(*collision.mesh, pose));
+     for (const auto& body : collision.primitives) {
+       const auto frame = part_matrix_multiply(pose, part_pose_matrix(body.pose));
+-      if (body.shape == PartBodyShape::Box)
+-        props_map.collision_shapes.add_box(
++      if (body.shape == PartBodyShape::Box) {
++        const bool added = props_map.collision_shapes.add_box(
+             frame, {body.box_half[0], body.box_half[1], body.box_half[2]});
+-      else if (body.shape == PartBodyShape::Sphere)
++        if (std::getenv("SLRR_VALIDATION_TRACE") && placement.type == 0x430630)
++          std::fprintf(stderr,
++                       "[validate-hotel-box] added=%d centre=(%.3f %.3f %.3f) "
++                       "half=(%.3f %.3f %.3f) dynamic=%d\n", added ? 1 : 0,
++                       frame[12], frame[13], frame[14], body.box_half[0],
++                       body.box_half[1], body.box_half[2], type->second.mass > 0.f ? 1 : 0);
++      } else if (body.shape == PartBodyShape::Sphere)
+         props_map.collision_shapes.add_sphere(frame, body.sphere_radius);
+     }
+     if (type->second.renders.empty()) continue;

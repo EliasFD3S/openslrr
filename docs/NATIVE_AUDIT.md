@@ -1,9 +1,10 @@
 # Native audit and roadmap
 
 Baseline snapshot from 9 November 2026, incrementally updated 12 November.
-`Camera.setFog` is registered. Earlier increments covered the resource and
-vehicle bindings, the Language work described in
-[SCRIPT_COMPILER.md](SCRIPT_COMPILER.md), and the Leftovers classification.
+`Camera.setFog` is registered. The remaining `PhysicsRef` signatures are
+bound, and `GameRef.setActiveCollision` is no longer an explicit no-op.
+Earlier increments covered the resource and vehicle bindings, the Language
+work described in [SCRIPT_COMPILER.md](SCRIPT_COMPILER.md), and the Leftovers classification.
 The Release x64 registry was compared with the
 376 entries in the stock table at `docs/stubs.txt` in the research workspace.
 The same table is pinned in `assets/progress/stock-natives.json`, and
@@ -15,9 +16,9 @@ implementations and following selected calls to their consumers.
 
 | Status | Stock signatures |
 | --- | ---: |
-| Registered with a body | 329 |
-| Registered with the explicit `native_noop` handler | 4 |
-| Absent from the registry | 43 |
+| Registered with a body | 337 |
+| Registered with the explicit `native_noop` handler | 3 |
+| Absent from the registry | 36 |
 | **Total** | **376** |
 
 The first category includes constant responses, inline empty bodies and
@@ -29,13 +30,14 @@ that category. It is not a compatibility score or a complete runtime trace.
 | Owner | Native signatures | Missing effect |
 | --- | --- | --- |
 | `System` | `analyze(Object)`, `analyze(float)`, `analyze(int)` | The original discards the arguments. |
-| `GameRef` | `setActiveCollision()` | Enable collision for a generic world object. |
 
 ## Known mocks and partial implementations
 
 | Native or group | Current behavior |
 | --- | --- |
 | `GameRef.setState` | Sets pose and linear/angular velocities. Cars receive the state in the live solver. Generic GameRefs retain the state but have no general dynamic-body solver yet. |
+| `GameRef.setActiveCollision` | Queues an idempotent activation request. The next physics preparation enables the generic object's CFG-defined collision and clears the queued flag. Existing vehicle and legacy RenderRef collision remain independent. |
+| `PhysicsRef` | `create`, `createBox`, `createSphere`, `setMatrix`, `setStatic`, `getPos`, `getOri`, `getVel` (both overloads) and `getAngVel` are bound. World boxes, spheres and resource CFG bodies join scene collision; OSD click boxes remain separate. `getVel(Vector3)` returns point velocity. Standalone dynamic-body integration is still absent: `setStatic(0)` exposes stored state but does not integrate a free body. |
 | `GameRef.getDetail`, `RenderRef.getDetail` | Read the canonical instance's detail bias; the default is zero. No distance-dependent LOD bias producer is implemented yet. |
 | `Vehicle.getHorn` | Checks the selected horn SFX row on the canonical chassis, using live player horn input or the `sethorn` command. |
 | `Vehicle.hasCrime` | Returns the stored zone speed limit in m/s, or -1 without a zone. Automatic zone enter/leave producers are still missing. |
@@ -103,10 +105,12 @@ There are 38 missing active signatures and 3 missing leftovers, for 41 total.
    driver actions to gameplay, especially nitro activation and consumption.
    Compare acceleration, stopping and suspension against stock telemetry at
    different render rates.
-2. **Unify world collision and damage.** Connect `PhysicsRef`,
-   `GameRef.setActiveCollision` and `GameRef.setState` to the live world.
-   Validate track barriers and contact with props. Connect impact deformation
-   and wear to the parts and the regional HUD display.
+2. **Unify world collision and damage.** Native CFG placements and
+   `PhysicsRef` primitives now share scene collision, and
+   `GameRef.setActiveCollision` activates generic object collision at the
+   physics boundary. Continue with standalone dynamic bodies and validate
+   track barriers and prop contact in game. Connect impact deformation and
+   wear to the parts and the regional HUD display.
 3. **Complete the navigation and race loop.** Read road and route data,
    implement the `GroundRef` route queries, `Navigator.updateNavigator`
    and route rendering. Verify map, rear view and cruise control in a race.

@@ -29,6 +29,8 @@ constexpr int32_t kWorldTreeLeaf = 0x00000040;
 
 constexpr int32_t kEventTime = 0x00000080;
 constexpr int32_t kEventAny = 0x0FFFFFFF;
+// GameRef_queueActiveCollision: consumed by the next physics preparation.
+constexpr int32_t kCollisionQueued = 0x10000000;
 
 enum class GameRefKind : uint8_t {
   Generic = 0,
@@ -38,6 +40,14 @@ enum class GameRefKind : uint8_t {
   Camera = 4,
   Viewport = 5,
   GameType = 6,
+  PhysicsRef = 7,
+};
+
+enum class PhysicsShape : uint8_t {
+  None = 0,
+  Resource = 1,
+  Box = 2,
+  Sphere = 3,
 };
 
 struct GameRefTimer {
@@ -72,6 +82,14 @@ struct GameRefState {
   float ypr[3] = {0, 0, 0};
   float vel[3] = {0, 0, 0};
   float angular_vel[3] = {0, 0, 0};
+  // Script-created PhysicsRef primitive. Box uses half extents; sphere uses
+  // physics_size[0] as its radius. Resource uses type_id's CFG collision bodies.
+  PhysicsShape physics_shape = PhysicsShape::None;
+  float physics_size[3] = {0, 0, 0};
+  bool physics_static = true;
+  bool dynamic_native = false;
+  bool collision_pending = false;
+  bool collision_active = false;
   std::string alias;
   std::string sound_file;
   std::string class_name;
@@ -182,6 +200,21 @@ void gameref_set_parent(void* key, void* parent);
 void gameref_set_flags(void* key, int32_t flags);
 void gameref_clear_flags(void* key, int32_t flags);
 int32_t gameref_get_flags(void* key);
+inline void gameref_queue_collision_state(GameRefState& state) {
+  if (state.collision_pending || state.collision_active) return;
+  state.collision_pending = true;
+  state.flags |= kCollisionQueued;
+}
+inline void gameref_activate_collision_state(GameRefState& state) {
+  if (!state.collision_pending) return;
+  state.collision_pending = false;
+  state.collision_active = true;
+  state.flags &= ~kCollisionQueued;
+}
+void gameref_request_active_collision(void* key);
+// Promote queued collision activation at the physics boundary, never midway
+// through a scene-graph mutation or script callback.
+void gameref_process_collision_requests();
 
 void gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
                         float pitch, float roll);

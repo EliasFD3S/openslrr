@@ -557,7 +557,11 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
         return Value::make_void();
       });
   jvm.natives().register_method(
-      "java.util.resource.GameRef", "setActiveCollision", "()V", native_noop);
+      "java.util.resource.GameRef", "setActiveCollision", "()V",
+      [](Object* self, const std::vector<Value>&) {
+        gameref_request_active_collision(self);
+        return Value::make_void();
+      });
 
   // GameRef.create / create_native — Soft PE @ 0x47D… (declaring: GameRef).
   // Java ctors call create(…) after super(); do not stub GameRef.<init>.

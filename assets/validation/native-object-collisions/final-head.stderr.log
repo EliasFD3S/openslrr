@@ -1,0 +1,129 @@
+[music] scan Garage_Shop: 4 tracks
+[music] scan Roam_ride: 6 tracks
+[music] scan Race_chase: 4 tracks
+[music] scan Main_menu: 1 tracks
+[jvm] invoke depth exceeded java.util.resource.Dummy.<init>
+[part] no compatible free slot child=0x90104 root=0x90006
+[part] no compatible free slot child=0x9010e root=0x90006
+[part] no compatible free slot child=0x9011a root=0x90006
+[part] no compatible free slot child=0x90112 root=0x90006
+[part] no compatible free slot child=0x90111 root=0x90006
+[part] no compatible free slot child=0x90110 root=0x90006
+[part] no compatible free slot child=0x90117 root=0x90006
+[part] no compatible free slot child=0x90116 root=0x90006
+[part] no compatible free slot child=0x90108 root=0x90006
+[part] no compatible free slot child=0x90109 root=0x90006
+[part] no compatible free slot child=0x90114 root=0x90006
+[part] no compatible free slot child=0x90119 root=0x90006
+[part] no compatible free slot child=0x9010f root=0x90006
+[part] no compatible free slot child=0x9010d root=0x90006
+[part] no compatible free slot child=0x9010b root=0x90006
+[part] no compatible free slot child=0x90107 root=0x90006
+[part] no compatible free slot child=0x90118 root=0x90006
+[part] no compatible free slot child=0x90102 root=0x90006
+[part] no compatible free slot child=0x90106 root=0x90006
+[part] no compatible free slot child=0x9011e root=0x90006
+[part] no compatible free slot child=0x90115 root=0x90006
+[part] no compatible free slot child=0x9010a root=0x90006
+[part] no compatible free slot child=0x90103 root=0x90006
+[part] no compatible free slot child=0x90126 root=0x90006
+[part] no compatible free slot child=0x90128 root=0x90006
+[part] no compatible free slot child=0x9010c root=0x90006
+[part] no compatible free slot child=0x90113 root=0x90006
+[part] no compatible free slot child=0x120019 root=0x90006
+[part] no compatible free slot child=0x120019 root=0x90006
+[part] no compatible free slot child=0x120019 root=0x90006
+[part] no compatible free slot child=0x120019 root=0x90006
+[part] no compatible free slot child=0x90105 root=0x90006
+[music] set=0 track=1/4 playing=1 garage maditation v3_3 - hotel sinus.mp3
+[jvm] invoke depth exceeded java.util.resource.Dummy.<init>
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addTrafficN (Ljava.util.resource.GameRef;IFFF)I (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addTrafficN (Ljava.util.resource.GameRef;IFFF)I (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addTrafficN (Ljava.util.resource.GameRef;IFFF)I (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addTrafficN (Ljava.util.resource.GameRef;IFFF)I (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addTrafficN (Ljava.util.resource.GameRef;IFFF)I (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addTrafficN (Ljava.util.resource.GameRef;IFFF)I (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addTrafficN (Ljava.util.resource.GameRef;IFFF)I (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addTrafficN (Ljava.util.resource.GameRef;IFFF)I (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addTrafficN (Ljava.util.resource.GameRef;IFFF)I (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.setWater (Ljava.lang.Vector3;Ljava.lang.Vector3;FF)V (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addWaterLimit (Ljava.lang.Vector3;Ljava.lang.Vector3;)V (from java.util.resource.GroundRef)
+[music] set=1 track=1/6 playing=1 C.D.N. and Dramaties - Ali Ali radio edit masterded - Acti.mp3
+[driver] vin seated
+[ped] city.walk zones=788
+[ped] want=60 active=3 density=0.00120 slider=0.10 area=50225 radius=2.5
+[ped] 3 walkers
+[validate-state] pos=(-83.614 13.428 -558.615) speed=7.177 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-78.746 13.548 -556.375) speed=29.945 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50165 radius=2.5
+[validate-state] pos=(-68.506 13.770 -551.641) speed=49.777 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=59 active=59 density=0.00120 slider=0.10 area=49552 radius=2.5
+[validate-state] pos=(-54.037 13.977 -544.993) speed=62.243 throttle=1.000 brake=0.000 clutch=0.000 gear=2 released=1 engaged=1
+[validate-contact] speed=20.9475 point=(-35.341 14.645 -535.932) normal=(-0.910 0.000 -0.414) body=(-37.046 14.602 -537.246)
+[validate-state] pos=(-37.046 14.602 -537.246) speed=1.497 throttle=1.000 brake=0.000 clutch=0.000 gear=2 released=1 engaged=1
+[validate-contact] speed=2.8343 point=(-35.341 14.645 -535.932) normal=(-0.669 0.000 -0.743) body=(-37.089 14.575 -537.288)
+[validate-contact] speed=0.7790 point=(-35.341 14.645 -535.932) normal=(-0.505 0.000 -0.863) body=(-37.135 14.547 -537.408)
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50298 radius=2.5
+[validate-state] pos=(-38.016 14.423 -537.671) speed=4.125 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-39.289 14.397 -535.505) speed=3.614 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50437 radius=2.5
+[validate-state] pos=(-39.459 14.350 -535.484) speed=0.127 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-39.485 14.349 -535.469) speed=0.149 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50429 radius=2.5
+[validate-state] pos=(-39.513 14.347 -535.459) speed=0.247 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-39.540 14.342 -535.449) speed=0.128 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50440 radius=2.5
+[validate-state] pos=(-39.566 14.343 -535.440) speed=0.306 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-39.594 14.340 -535.429) speed=0.139 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50452 radius=2.5
+[validate-state] pos=(-39.623 14.338 -535.418) speed=0.117 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-39.650 14.339 -535.406) speed=0.378 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50468 radius=2.5
+[validate-state] pos=(-39.678 14.337 -535.397) speed=0.125 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-39.703 14.338 -535.386) speed=0.388 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50472 radius=2.5
+[validate-state] pos=(-39.727 14.334 -535.378) speed=0.222 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-39.752 14.337 -535.369) speed=0.153 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50472 radius=2.5
+[validate-state] pos=(-39.779 14.336 -535.358) speed=0.098 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-39.804 14.335 -535.349) speed=0.366 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50471 radius=2.5
+[validate-state] pos=(-39.829 14.335 -535.339) speed=0.131 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-39.853 14.338 -535.328) speed=0.154 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50471 radius=2.5
+[validate-state] pos=(-39.876 14.330 -535.320) speed=0.599 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-39.902 14.332 -535.312) speed=0.234 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50472 radius=2.5
+[validate-state] pos=(-39.927 14.329 -535.303) speed=0.344 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-39.951 14.327 -535.293) speed=0.124 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50460 radius=2.5
+[validate-state] pos=(-39.978 14.328 -535.282) speed=0.255 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-40.002 14.329 -535.274) speed=0.184 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50460 radius=2.5
+[validate-state] pos=(-40.030 14.328 -535.262) speed=0.098 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-40.055 14.323 -535.254) speed=0.399 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50452 radius=2.5
+[validate-state] pos=(-40.081 14.327 -535.243) speed=0.120 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-40.103 14.322 -535.235) speed=0.081 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50444 radius=2.5
+[validate-state] pos=(-40.128 14.327 -535.225) speed=0.203 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-40.152 14.324 -535.216) speed=0.122 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50444 radius=2.5
+[validate-state] pos=(-40.178 14.323 -535.205) speed=0.194 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-40.201 14.323 -535.196) speed=0.208 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50449 radius=2.5
+[validate-state] pos=(-40.227 14.323 -535.187) speed=0.453 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-40.249 14.319 -535.180) speed=0.192 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50456 radius=2.5
+[validate-state] pos=(-40.270 14.320 -535.171) speed=0.115 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-40.294 14.317 -535.162) speed=0.273 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50445 radius=2.5
+[validate-state] pos=(-40.321 14.316 -535.152) speed=0.364 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-40.344 14.316 -535.143) speed=0.131 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50460 radius=2.5
+[validate-state] pos=(-40.373 14.316 -535.133) speed=0.235 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-40.395 14.314 -535.124) speed=0.140 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50468 radius=2.5
+[validate-state] pos=(-40.421 14.315 -535.114) speed=0.284 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-state] pos=(-40.439 14.317 -535.107) speed=0.290 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[ped] want=60 active=60 density=0.00120 slider=0.10 area=50468 radius=2.5

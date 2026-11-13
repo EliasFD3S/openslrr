@@ -11,6 +11,7 @@
 #include "slrr/jvm.hpp"
 #include "slrr/rpk_index.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/scene_collision.hpp"
 #include "slrr/scx_mesh.hpp"
 #include "slrr/skeleton.hpp"
 #include "slrr/suspension_geometry.hpp"
@@ -2205,7 +2206,6 @@ physics::VehicleDynamics::Impact collide_chassis(Record& rec, physics::Vec3 befo
   using physics::Vec3;
   auto& body = rec.dynamics.body;
   const Vec3 delta = body.position - before;
-  if (delta.dot(delta) < 1e-6) return {};
   const float movement[] = {float(delta.x), float(delta.y), float(delta.z)};
   constexpr float radius = .18f;
   struct SweepContact {
@@ -2232,6 +2232,43 @@ physics::VehicleDynamics::Impact collide_chassis(Record& rec, physics::Vec3 befo
         }
       }
     }
+  // Evaluate primitive contacts independently: a triangle hit elsewhere must
+  // not hide an earlier native box/sphere impact or a thin trunk between probes.
+  PartMatrix frame = body.frame();
+  const Vec3 bounds_center = (body.minimum + body.maximum) * .5;
+  const Vec3 world_center = body.position +
+                            body.orientation.rotate(bounds_center - body.center);
+  frame[12] = static_cast<float>(world_center.x);
+  frame[13] = static_cast<float>(world_center.y);
+  frame[14] = static_cast<float>(world_center.z);
+  const float half[3] = {float((body.maximum.x - body.minimum.x) * .5),
+                         float((body.maximum.y - body.minimum.y) * .5),
+                         float((body.maximum.z - body.minimum.z) * .5)};
+  const int samples = static_cast<int>(
+      std::clamp(std::ceil(delta.length() / .2), 1.0, 8.0));
+  SceneBodyContact primitive;
+  double primitive_fraction = 1.0;
+  bool has_primitive = false;
+  for (int sample = 1; sample <= samples; ++sample) {
+    const double fraction = static_cast<double>(sample) / samples;
+    PartMatrix probe = frame;
+    for (int axis = 0; axis < 3; ++axis)
+      probe[12 + axis] -= static_cast<float>(movement[axis] * (1.0 - fraction));
+    if (!scene_instances_contact_box(probe.data(), half, primitive)) continue;
+    primitive_fraction = fraction;
+    has_primitive = true;
+    break;
+  }
+  if (has_primitive &&
+      (closest.fraction >= 1.f || primitive_fraction < closest.fraction)) {
+    const Vec3 normal{primitive.normal[0], primitive.normal[1], primitive.normal[2]};
+    body.position = before + delta * primitive_fraction +
+                    normal * (primitive.penetration + .002);
+    const Vec3 point{primitive.point[0], primitive.point[1], primitive.point[2]};
+    const double speed = -body.point_velocity(point).dot(normal);
+    body.contact(point, normal, .12, .35);
+    return {point, normal, speed};
+  }
   if (closest.fraction >= 1.f) return {};
   const Vec3 normal{closest.normal[0], closest.normal[1], closest.normal[2]};
   Vec3 arm;
@@ -2271,11 +2308,22 @@ const ScxGeometry& part_collision_mesh(Record& rec) {
     auto& mesh = *rec.collision;
     mesh.position_scale = 1.f;
     for (const auto& body : rec.config->bodies) {
-      if (body.collision_mesh.empty()) continue;
-      const auto path = std::filesystem::path(index->game_root()) / body.collision_mesh;
-      const auto source = load_scx_geometry(path.string());
-      if (!source.info.ok || source.indices.empty()) continue;
+      if (!body.collision) continue;
       const auto frame = part_pose_matrix(body.pose);
+      ScxGeometry source;
+      PartMatrix primitive_frame{};
+      primitive_frame[0] = primitive_frame[5] = primitive_frame[10] = primitive_frame[15] = 1.f;
+      if (body.shape == PartBodyShape::Box)
+        source = collision::make_box_mesh(
+            primitive_frame, {body.box_half[0], body.box_half[1], body.box_half[2]});
+      else if (body.shape == PartBodyShape::Sphere)
+        source = collision::make_sphere_mesh(primitive_frame, body.sphere_radius, 12, 6);
+      else if (body.shape == PartBodyShape::Mesh && !body.collision_mesh.empty())
+        source = load_scx_geometry(
+            (std::filesystem::path(index->game_root()) / body.collision_mesh).string());
+      else
+        continue;
+      if (!source.info.ok || source.indices.empty()) continue;
       const auto first = static_cast<uint32_t>(mesh.positions.size() / 3);
       for (size_t i = 0; i + 2 < source.positions.size(); i += 3) {
         for (int axis = 0; axis < 3; ++axis)
@@ -2641,16 +2689,128 @@ bool collide_loose_with_car(physics::RigidBody& body,
   return true;
 }
 
+}  // namespace
+
+void part_add_dynamic_native(const PartConfig& config,
+                             const std::vector<PartRender>& renders,
+                             const PartMatrix& world, void* parent, int32_t seed) {
+  if (!runtime || !parent || !(config.mass > 0.f)) return;
+  auto* node = runtime->new_object("java.util.resource.RenderRef");
+  if (!node) return;
+  auto& rec = records[node];
+  auto dynamic_config = std::make_shared<PartConfig>(config);
+  dynamic_config->native_kind = "native_dynamic";
+  rec.config = std::move(dynamic_config);
+  rec.state.object = node;
+  rec.state.resource = config.resource;
+  rec.published_frame = world;
+  const auto& physical = part_collision_mesh(rec);
+  if (physical.indices.empty()) {
+    records.erase(node);
+    std::fprintf(stderr, "[part] dynamic native has no collision geometry: %s\n",
+                 config.name.c_str());
+    return;
+  }
+
+  std::vector<PartRender> slots = renders;
+  if (slots.empty()) {
+    PartRender render;
+    render.resource = config.render;
+    render.pose = config.render_pose;
+    slots.push_back(render);
+  }
+  for (const auto& render : slots) {
+    auto* render_node = &render == &slots.front()
+                            ? node
+                            : runtime->new_object("java.util.resource.RenderRef");
+    if (!render_node) continue;
+    rec.renders.push_back(render_node);
+    auto* state = gameref_upsert(render_node, GameRefKind::RenderRef);
+    if (!state) continue;
+    state->dynamic_native = true;
+    state->script = render_node;
+    state->class_name = render_node->class_name;
+    state->alias = config.name.empty() ? "dynamic_native" : config.name;
+    const uint32_t resource = render.variants.empty()
+                                  ? render.resource
+                                  : render.variants[static_cast<size_t>(seed) % render.variants.size()];
+    state->type_id = static_cast<int32_t>(resource);
+    if (!render.colors.empty())
+      state->color = render.colors[static_cast<size_t>(seed) % render.colors.size()];
+    const auto local = part_matrix_multiply(world, part_pose_matrix(render.pose));
+    std::copy(local.begin(), local.end(), state->local_matrix);
+    state->matrix_override = true;
+    state->empty = false;
+    render_node->fields["id"] = Value::make_int(static_cast<int32_t>(resource));
+    gameref_set_parent(render_node, parent);
+  }
+
+  double mass = 0.0;
+  physics::Vec3 center;
+  for (const auto& body : config.bodies) {
+    if (!body.collision || !(body.mass > 0.f)) continue;
+    mass += body.mass;
+    center = center + physics::Vec3{body.pose.position[0], body.pose.position[1],
+                                    body.pose.position[2]} * body.mass;
+  }
+  if (!(mass > 0.0)) {
+    records.erase(node);
+    return;
+  }
+  const physics::Vec3 lo{physical.info.bbox_min[0], physical.info.bbox_min[1],
+                         physical.info.bbox_min[2]};
+  const physics::Vec3 hi{physical.info.bbox_max[0], physical.info.bbox_max[1],
+                         physical.info.bbox_max[2]};
+  auto& loose = loose_panels[node];
+  loose.body.configure(mass, lo, hi, center / mass);
+  loose.vehicle = controlled_vehicle;
+  loose.quiet_ticks = physics::VehicleDynamics::update_frequency / 2;
+  if (auto* chassis = part_controlled_chassis()) {
+    if (auto* vehicle = record(chassis))
+      loose.carrier_frame = vehicle->dynamics.body.frame();
+    else
+      loose.carrier_frame = world;
+  } else {
+    loose.carrier_frame = world;
+  }
+}
+
+namespace {
 void advance_loose_panels() {
   using physics::Vec3;
   for (auto it = loose_panels.begin(); it != loose_panels.end();) {
     auto* part = it->first;
     auto& loose = it->second;
     auto* node = gameref_get(part);
-    auto* owner = gameref_find_live(loose.vehicle);
+    auto* rec = record(part);
+    const bool native_dynamic = rec && rec->config->native_kind == "native_dynamic";
     PartMatrix parent_frame;
-    if (!node || !owner || !node->parent || owner->parent != node->parent ||
-        !scene_instances_script_matrix(node->parent, parent_frame.data())) {
+    if (!node || !node->parent) {
+      it = loose_panels.erase(it);
+      part_destroy(part);
+      continue;
+    }
+    if (!scene_instances_script_matrix(node->parent, parent_frame.data())) {
+      if (native_dynamic) {
+        ++it;
+        continue;
+      }
+      it = loose_panels.erase(it);
+      part_destroy(part);
+      continue;
+    }
+    if (native_dynamic && !scene_instances_ground_frame(node->parent, parent_frame.data())) {
+      ++it;
+      continue;
+    }
+    if (native_dynamic && loose.vehicle != controlled_vehicle)
+      loose.vehicle = controlled_vehicle;
+    auto* owner = gameref_find_live(loose.vehicle);
+    if (native_dynamic && (!owner || owner->parent != node->parent)) {
+      ++it;
+      continue;
+    }
+    if (!owner) {
       it = loose_panels.erase(it);
       part_destroy(part);
       continue;
@@ -2659,11 +2819,17 @@ void advance_loose_panels() {
     auto* chassis = static_cast<Object*>(owner->key);
     auto* vehicle = record(chassis);
     if (!vehicle || !vehicle->physics_ready) continue;
+    if (native_dynamic && !rec->physics_ready) {
+      // The first active tick supplies the real ground-shell transform. The
+      // placement was created before scene_instances_select was guaranteed.
+      loose.body.set_frame(part_matrix_multiply(parent_frame, rec->published_frame));
+      loose.carrier_frame = vehicle->dynamics.body.frame();
+      rec->physics_ready = true;
+    }
     const auto previous_carrier = loose.carrier_frame;
     loose.carrier_frame = vehicle->dynamics.body.frame();
     constexpr unsigned rest_ticks = physics::VehicleDynamics::update_frequency / 2;
     const bool sleeping = loose.quiet_ticks >= rest_ticks;
-    if (sleeping && previous_carrier == loose.carrier_frame) continue;
     auto& body = loose.body;
     const Vec3 before = body.position;
     const auto previous = body.corners();
@@ -2706,7 +2872,13 @@ void advance_loose_panels() {
     loose.quiet_ticks = quiet ? loose.quiet_ticks + 1 : 0;
     if (loose.quiet_ticks >= rest_ticks) body.velocity = body.momentum = {};
     const auto local = part_matrix_multiply(part_matrix_inverse_rigid(parent_frame), body.frame());
-    std::copy(local.begin(), local.end(), node->local_matrix);
+    if (rec && !rec->renders.empty()) {
+      for (auto* render : rec->renders)
+        if (auto* state = gameref_get(render))
+          std::copy(local.begin(), local.end(), state->local_matrix);
+    } else {
+      std::copy(local.begin(), local.end(), node->local_matrix);
+    }
   }
 }
 

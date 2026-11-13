@@ -361,14 +361,37 @@ PartConfig parse_part_config(const std::string &source,
         if (body.mass < 0.f)
           throw std::runtime_error("body mass must be non-negative");
         if (t.size() > 8) {
-          auto extension = std::filesystem::path(t[8]).extension().string();
-          std::transform(extension.begin(), extension.end(), extension.begin(),
+          std::string shape = t[8];
+          std::transform(shape.begin(), shape.end(), shape.begin(),
                          [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-          if (extension == ".scx") body.collision_mesh = t[8];
+          if (shape == "box") {
+            if (t.size() < 12) throw std::runtime_error("box requires three half extents");
+            body.shape = PartBodyShape::Box;
+            for (size_t i = 0; i < 3; ++i) {
+              body.box_half[i] = number(t, 9 + i);
+              if (!(body.box_half[i] > 0.f))
+                throw std::runtime_error("box half extents must be positive");
+            }
+          } else if (shape == "sphere") {
+            if (t.size() < 10) throw std::runtime_error("sphere requires one radius");
+            body.shape = PartBodyShape::Sphere;
+            body.sphere_radius = number(t, 9);
+            if (!(body.sphere_radius > 0.f))
+              throw std::runtime_error("sphere radius must be positive");
+          } else {
+            auto extension = std::filesystem::path(t[8]).extension().string();
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (extension == ".scx") {
+              body.shape = PartBodyShape::Mesh;
+              body.collision_mesh = t[8];
+            }
+          }
         }
         out.bodies.push_back(body);
         out.mass += body.mass;
       } else if (command == "nocollision" && !out.bodies.empty()) {
+        out.bodies.back().collision = false;
         out.bodies.back().collision_mesh.clear();
       } else if (command == "name") {
         open_wheel = -1;

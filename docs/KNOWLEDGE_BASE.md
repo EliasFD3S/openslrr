@@ -279,9 +279,18 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   The `PHYS` chunk is used as map collision; SLRR_rev has not decoded it.
 - Placements (trees, lamps, buildings) become instanced render props in 64 m
   cells (`src/resources/scene_instances.cpp:scene_instances_add_ground_props`).
-  Only the `render` lines of their CFG are kept
-  (`src/resources/scene_instances.cpp:ground_prop_renders`). They are not
-  GameRef nodes and are **not** in the collision index.
+  `ground_prop_config` retains the full native CFG. Box, sphere and SCX bodies
+  are cached per type, transformed by placement/body pose, merged into a
+  spatially indexed collision mesh per map and added to the exact shape index.
+  They are independent of render variant, LOD, visibility and culling.
+- If every collision-enabled body has positive mass, the whole placement becomes
+  a loose native body (`part_add_dynamic_native`) with its full collision mesh,
+  authored mass and mass-weighted body-pose centre. It sleeps until car contact,
+  wakes for equal/opposite car impulses, and publishes every render slot from
+  the ground-shell frame (`scene_instances_ground_frame`). Dynamic placements
+  are excluded from both static ground caches and floor-mesh collection;
+  mixed-mass placements stay static. Standalone dynamic `PhysicsRef` bodies are
+  still a separate unimplemented contract.
 - `scene_instances_prepare_physics` rebuilds the collision index from GameRef
   render nodes once per physics frame. Floor and sweep queries are
   `scene_instances_sample_floor` and `scene_instances_sweep_sphere`.
@@ -365,10 +374,10 @@ Resources and data:
 - The high bit of a RID can be set while scripts hold it as `int32_t`.
   Never serialize a native pointer into a RID or script integer.
 - A CFG `box` body holds half-extents. `PhysicsRef.createBox` takes full
-  sizes. Target rule for world collision: objects without a `body` must not
-  get collision from their render mesh. Today the collision index is still
-  built from GameRef render geometry unless a map supplies a collision
-  override (`src/resources/scene_instances.cpp:scene_instances_prepare_physics`).
+  sizes. Native CFG bodies are authoritative: an object without a `body`, or
+  with `nocollision`, gets no collision from its render mesh. Ground shells
+  and legacy RenderRefs keep their separate collision/override path
+  (`src/resources/scene_instances.cpp:scene_instances_prepare_physics`).
 - A `linked a [b] [parentSlot]` rule: the first matching rule wins; do not
   sort them. LOD renders are alternatives, not layers.
 
@@ -497,17 +506,15 @@ These are entry points, not fixes. Each needs its own reproduction.
   table in `src/render/bgfx_osd.cpp:draw_vehicle_hud`. Speed, gear and
   mileage are drawn left-aligned at their anchor, so centring needs the
   string width. CFG `osd_*` overrides take separate branches.
-- **#16 car drives through trees.** Placement CFG `body` lines are parsed by
-  `parse_part_config` but dropped by `ground_prop_renders`, and props never
-  enter `scene_instances_prepare_physics`. `PartBody` keeps only `.scx`
-  collision paths, so the `box` dimensions of stock tree trunks (half-extents
-  about 0.05 × 3 × 0.05 m) are discarded (`include/slrr/part_config.hpp:PartBody`).
-  A 0.1 m trunk can slip between the four chassis probe spheres, so a fix
-  needs a volume test. The owner also points at the seven missing
-  `PhysicsRef` natives and the `setActiveCollision` no-op. SLRR_rev
-  implements box bodies with a full box-versus-box test
-  (`SLRR_rev:src/engine/map-collision.ts:MapCollision`) and
-  `setActiveCollision`.
+- **#16 car drives through trees (PR #22).** `ground_prop_config` now keeps
+  native CFG bodies. Placements use cached triangle and exact box/sphere
+  collision paths, including a full chassis volume test for thin trunks.
+  `PhysicsRef` has its seven missing signatures, and `setActiveCollision`
+  queues activation at the physics boundary. The oriented-box behavior is
+  based on `SLRR_rev:src/engine/map-collision.ts:MapCollision`. Entirely
+  positive-mass placements also use the loose-body solver with mass-aware car
+  impulses; they sleep until contact and are absent from static caches.
+  Standalone dynamic PhysicsRef bodies remain unimplemented.
 - **#17 "Repair car" does not repair.** Stock `Part.repair()` raises wear and
   tear only up to `repair_max_wear` / `repair_max_tear` (0.95 in the MWM
   `Part.java`), then sends the native command `"repair"`
@@ -564,8 +571,9 @@ Each answer names its evidence.
    60 Hz host ticks with two 120 Hz substeps, at most four ticks per frame.
 7. *Why does a fresh clone fail to configure?* `CMakeLists.txt` needs the
    untracked, gitignored `tools/compile_game_sources.cpp` (§3).
-8. *Why do cars pass through Valo City trees?* Placement bodies are dropped
-   and props are not in the collision index (§11, #16).
+8. *Why did cars pass through Valo City trees?* Placement bodies were dropped
+   and props were not in the collision index. PR #22 retains and indexes those
+   bodies and adds full-chassis contact coverage (§11, #16).
 9. *How does garage repair clear dents without forcing 100% condition?* Stock
    Java applies its repair caps and recursively calls the native `repair`
    command; that command restores local deformation and slot/wheel damage
@@ -575,8 +583,9 @@ Each answer names its evidence.
 11. *Do pedestrians follow a road graph?* No. They walk freely inside the
     `city.walk` sidewalk rows and change rows through gates; the TRC road
     network is parsed by unused code (§5.7).
-12. *Is `GameRef.setActiveCollision` implemented?* No, it is an explicit
-    `native_noop` (`src/natives/natives_gameref.cpp:register_gameref_natives`).
+12. *Is `GameRef.setActiveCollision` implemented?* Yes. PR #22 queues an
+    idempotent request and consumes it at the physics boundary
+    (`src/resources/gameref.cpp:gameref_process_collision_requests`).
 13. *Which tyre model drives the car?* `src/physics/tire_model.cpp:tire_forces`,
     not `sl2_pacejka.cpp`.
 14. *Can SLRR_rev's EXE addresses be used for the MWM binary?* No. They

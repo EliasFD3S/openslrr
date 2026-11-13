@@ -81,6 +81,9 @@ SceneSun scene_instances_light(void* root=nullptr);
 bool scene_instance_transform(void *key, void *root, float *matrix);
 // Active world, unreflected script metres. False for inventory/other worlds.
 bool scene_instances_script_matrix(void *key, float *matrix);
+// Render ground-shell matrix for placements owned by a GroundRef. Unlike the
+// GroundRef's own pose, this is the frame used by static map placements.
+bool scene_instances_ground_frame(void *ground, float *matrix);
 std::shared_ptr<const ScxGeometry> scene_instances_geometry(uint32_t resource);
 // Parse render meshes off the calling thread and publish them before return.
 void scene_instances_preload(const std::vector<uint32_t>& resources);
@@ -105,7 +108,7 @@ struct GroundMapData {
   std::vector<Placement> placements;
 };
 GroundMapData scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id);
-void scene_instances_add_ground_props(const GroundMapData& map);
+void scene_instances_add_ground_props(const GroundMapData& map, void* ground);
 // Drawn instead of the render object's .scx (a ground template is materials).
 void scene_instances_override_mesh(uint32_t id,
                                    std::shared_ptr<const ScxGeometry> geo);
@@ -131,6 +134,17 @@ struct SceneSphereHit {
 bool scene_instances_sweep_sphere(const float start[3], const float delta[3],
                                   float radius, SceneSphereHit &hit,
                                   float max_vertical_normal = 1.f);
+struct SceneBodyContact {
+  float normal[3] = {};
+  float point[3] = {};
+  float penetration = 0.f;
+  void* owner = nullptr;
+};
+// Full oriented chassis bounds against indexed native boxes and spheres.
+// The frame transforms local bounds to script metres; half is XYZ half size.
+bool scene_instances_contact_box(const float frame[16], const float half[3],
+                                 SceneBodyContact& contact,
+                                 const void* ignore = nullptr);
 // Part-local triangle queries. The sweep retains an earlier hit if supplied.
 bool scene_mesh_sweep_sphere(const ScxGeometry& mesh, physics::Vec3 start,
                              physics::Vec3 movement, double radius, SceneSphereHit& hit);

@@ -145,6 +145,16 @@ int32_t gameref_get_flags(void* key) {
   return n ? n->flags : 0;
 }
 
+void gameref_request_active_collision(void* key) {
+  GameRefState* n = gameref_get(key);
+  if (!n) n = gameref_upsert(key);
+  if (n) gameref_queue_collision_state(*n);
+}
+
+void gameref_process_collision_requests() {
+  for (auto& [key, n] : g_refs) gameref_activate_collision_state(n);
+}
+
 void gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
                         float pitch, float roll) {
   GameRefState* n = gameref_get(key);

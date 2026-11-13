@@ -132,6 +132,11 @@ void object_wait(Object* self, Jvm* vm=nullptr);
 void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections);
 void register_lang_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections);
 void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections);
+void register_physicsref_natives(Jvm& jvm);
+// Shared with the OSD createBox registration: no OSD owner means a world body.
+void physicsref_create_box(Object* self, Object* parent, float x, float y,
+                           float z, const std::string& alias);
+void physicsref_set_matrix(Object* self, Object* position, Object* orientation);
 void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections);
 void register_renderref_natives(Jvm& jvm, RpkIndex& rpk,
                                 SectionMachine& sections);

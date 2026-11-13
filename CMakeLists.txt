@@ -47,6 +47,7 @@ add_executable(slrr_host
   src/natives/natives_io.cpp
   src/natives/natives_lang.cpp
   src/natives/natives_osd.cpp
+  src/natives/natives_physicsref.cpp
   src/natives/natives_gameref.cpp
   src/natives/natives_renderref.cpp
   src/natives/natives_resref.cpp
@@ -88,6 +89,7 @@ add_executable(slrr_host
   src/physics/tire_model.cpp
   src/physics/dyno_model.cpp
   src/physics/vehicle_dynamics.cpp
+  src/physics/scene_collision.cpp
   src/physics/deformation_cage.cpp
   src/physics/suspension_geometry.cpp
 )
