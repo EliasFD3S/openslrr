@@ -609,8 +609,21 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
         color = 0xff000000u | (red << 16) | (green << 8);
       }
       const float y = override.defined ? item.position[1] : stock_y(i);
-      draw(*mesh, start, 4, quad, 6, x, y,
-           sy * pixel_aspect, sy, 0, p[0], p[1], color);
+      if (damage) {
+        // The stock font stores the car outline and its damage blips as
+        // separate glyphs in one shared coordinate system. Draw the complete
+        // assembly so the engine, wheels, skirts and body sections are visible.
+        for (const unsigned char part : "AELOTabcdhlpqrtuv") {
+          if (!part) continue;
+          const size_t part_start = size_t(part) * 4;
+          if ((part_start + 4) * 3 > mesh->positions.size()) continue;
+          draw(*mesh, part_start, 4, quad, 6, x, y,
+               sy * pixel_aspect, sy, 0, p[0], p[1], color);
+        }
+      } else {
+        draw(*mesh, start, 4, quad, 6, x, y,
+             sy * pixel_aspect, sy, 0, p[0], p[1], color);
+      }
       continue;
     }
     if (slot == HudSlot::Rpm || slot == HudSlot::Speed ||
