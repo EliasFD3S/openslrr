@@ -47,7 +47,7 @@ All names are fixed directly under the caller-selected run directory:
 | `metrics.json` | Existing metrics snapshot at clean shutdown, or best-effort crash snapshot. |
 | `native-report.json` | Optional native registration/invocation report, present only when `--native-report` is requested; `--log-all` owns this path. |
 | `crash.txt` | Crash kind, code/address, message, identity, and recent diagnostic context/events. Created only for a handled crash. |
-| `crash.dmp` | Windows `MiniDumpNormal` written through dbghelp, with SEH exception information when available. |
+| `crash.dmp` | Windows `MiniDumpNormal` written through dbghelp, with SEH exception information when available. A failed write is retried up to three times. |
 | `manifest.json` | Process/build identity, redacted command line, file names, UTC start/end, and `running`, `normal`, or `abnormal` disposition. |
 
 Starting removes stale `crash.txt`, `crash.dmp`, and `metrics.json`

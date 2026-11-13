@@ -409,7 +409,7 @@ std::string hex_value(std::uint64_t value) {
   return buffer;
 }
 
-bool write_minidump(EXCEPTION_POINTERS* exception) {
+bool write_minidump_once(EXCEPTION_POINTERS* exception) {
   HANDLE file = CreateFileW(g_crash.crash_dump_path, GENERIC_WRITE, FILE_SHARE_READ,
                             nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (file == INVALID_HANDLE_VALUE) return false;
@@ -425,6 +425,18 @@ bool write_minidump(EXCEPTION_POINTERS* exception) {
   const auto size = GetFileSize(file, nullptr);
   CloseHandle(file);
   return result != FALSE && size != INVALID_FILE_SIZE && size != 0;
+}
+
+bool write_minidump(EXCEPTION_POINTERS* exception) {
+  // In-process MiniDumpWriteDump fails intermittently (for example with
+  // ERROR_PARTIAL_COPY while other threads are suspended mid-call). Each
+  // attempt recreates the file, so a later success leaves a complete dump.
+  constexpr int kAttempts = 3;
+  for (int attempt = 0; attempt < kAttempts; ++attempt) {
+    if (write_minidump_once(exception)) return true;
+    Sleep(20);
+  }
+  return false;
 }
 
 void record_crash(std::string_view kind, std::uint64_t code,
