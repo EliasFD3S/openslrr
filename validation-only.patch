@@ -1,8 +1,8 @@
 diff --git a/part_runtime.cpp b/part_runtime.cpp
-index d5f0e92..343bb60 100644
+index d5f0e92..41d4b90 100644
 --- a/part_runtime.cpp
 +++ b/part_runtime.cpp
-@@ -2658,7 +2658,158 @@ bool advance_deformation(Object* part, Record& rec, unsigned steps) {
+@@ -2658,7 +2658,177 @@ bool advance_deformation(Object* part, Record& rec, unsigned steps) {
    });
  }
  
@@ -59,6 +59,20 @@ index d5f0e92..343bb60 100644
 +        std::fprintf(stderr, "[validate] floor z=%5.2f %s\n", z, row.c_str());
 +      }
 +    }
++    if (ticks == delay - 3) {
++      const auto& hull = part_collision_mesh(rec);
++      std::fprintf(stderr, "[validate] chassis collision verts=%zu bbox=[%.3f,%.3f,%.3f]..[%.3f,%.3f,%.3f] bodies=%zu\n",
++                   hull.positions.size() / 3, hull.info.bbox_min[0], hull.info.bbox_min[1],
++                   hull.info.bbox_min[2], hull.info.bbox_max[0], hull.info.bbox_max[1],
++                   hull.info.bbox_max[2], rec.config->bodies.size());
++      for (const auto& b : rec.config->bodies)
++        std::fprintf(stderr, "[validate]   body %s mass=%.1f at %.2f,%.2f,%.2f\n", b.collision_mesh.c_str(), b.mass,
++                     b.pose.position[0], b.pose.position[1], b.pose.position[2]);
++      std::fprintf(stderr, "[validate] body box=[%.3f,%.3f,%.3f]..[%.3f,%.3f,%.3f] com=%.3f,%.3f,%.3f\n",
++                   rec.dynamics.body.minimum.x, rec.dynamics.body.minimum.y, rec.dynamics.body.minimum.z,
++                   rec.dynamics.body.maximum.x, rec.dynamics.body.maximum.y, rec.dynamics.body.maximum.z,
++                   rec.dynamics.body.center.x, rec.dynamics.body.center.y, rec.dynamics.body.center.z);
++    }
 +    if (ticks == delay - 1) {
 +      for (const auto& item : part_installed_tree(chassis)) {
 +        const auto* part = record(item.object);
@@ -113,7 +127,7 @@ index d5f0e92..343bb60 100644
 +                     s.center.x, s.center.y, s.center.z);
 +      }
 +      {
-+        double worst = -1e9;
++        double worst = -1e9, brake_gap = 1e9;
 +        std::string worst_part;
 +        float wp[3] = {};
 +        for (const auto& item : part_installed_tree(chassis)) {
@@ -132,9 +146,13 @@ index d5f0e92..343bb60 100644
 +              const float x = m[0] * px + m[4] * py + m[8] * pz + m[12];
 +              const float y = m[1] * px + m[5] * py + m[9] * pz + m[13];
 +              const float z = m[2] * px + m[6] * py + m[10] * pz + m[14];
-+              if (y > body.position.y) continue;
++              if (y > body.position.y + .3f) continue;
 +              SceneFloorHit hit;
 +              if (!scene_instances_sample_floor(x, z, y + .5f, chassis, hit)) continue;
++              if (part->config->source.find("brake") != std::string::npos &&
++                  std::fabs(x - rec.dynamics.state[std::atoi(corner_env)].center.x) < .5 &&
++                  std::fabs(z - rec.dynamics.state[std::atoi(corner_env)].center.z) < .5)
++                brake_gap = std::min(brake_gap, double(y - hit.height));
 +              if (hit.height - y > worst) {
 +                worst = hit.height - y;
 +                worst_part = part->config->source;
@@ -145,6 +163,7 @@ index d5f0e92..343bb60 100644
 +        }
 +        std::fprintf(stderr, "[validate]   deepest render vertex below floor: %.3f m at %.2f,%.2f,%.2f %s\n",
 +                     worst, wp[0], wp[1], wp[2], worst_part.c_str());
++        std::fprintf(stderr, "[validate]   removed-corner brake render clearance above floor: %.3f m\n", brake_gap);
 +      }
 +      for (const auto& c : body.corners()) {
 +        SceneFloorHit hit;
