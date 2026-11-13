@@ -215,9 +215,10 @@ loading-screen special cases, the fallback clock, mechanic inventory,
 pointer, `render.flush()` and the quit check. Do not move an event delivery
 or add a second pump for the same port.
 
-Inside `src/resources/part_runtime.cpp:part_physics_advance`: hinges, then
-`scene_instances_prepare_physics`, then N chassis ticks, engine audio,
-steering wheels, driver pose and pedestrians.
+Inside `src/resources/part_runtime.cpp:part_physics_advance`:
+`scene_instances_prepare_physics`, then N chassis ticks, engine audio, hinged
+panels (`src/resources/part_runtime.cpp:advance_flaps`), steering wheels,
+driver pose and pedestrians.
 
 Inside `src/render/bgfx_lib_backend.cpp:flush`: camera, `sync_instances`,
 static shadow, car depth, reflections, sky, dynamic world, garage shell,
@@ -279,6 +280,13 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
    `src/resources/part_runtime.cpp:configure_drive`).
 5. Impacts feed `damage_chassis` and the XPBD cage
    (`src/physics/deformation_cage.cpp`). `dynamics_sync` publishes poses.
+6. A part on a CFG `flap` slot (doors, hood, trunk) is a latched hinged plate
+   (`src/physics/flap_hinge.cpp:flap_step`). `Part.flap`/`flap_toggle` drive
+   it, `damage_chassis` hands each impact to
+   `src/resources/part_runtime.cpp:flap_impact`, which can release the latch
+   and swing it, and `advance_flaps` integrates it at 240 Hz on frame time
+   with gravity, the carrier's velocity change and wind, then re-places it
+   through `place_child`. ENGINE_CONTRACT §10 has the contract.
 
 ### 5.6 Maps and world
 
@@ -481,6 +489,7 @@ Process:
 | SFX voices | 32 total, 3 menu, 2 copies per cue, 35 ms coalescing | `src/platform/host_sfx.cpp:host_sfx_play_file` |
 | Ambient start range | 250 m beyond the CFG radius | `src/resources/scene_ambience.cpp:scene_ambience_audible` |
 | Chassis wall probe | four spheres of 0.18 m | `src/resources/part_runtime.cpp:collide_chassis` |
+| Hinged panel step / latch release | 240 Hz / 3.5 m/s local impact speed | `src/resources/part_runtime.cpp:kFlapStep`, `include/slrr/flap_hinge.hpp:FlapTuning` |
 | Prop cell | 64 m | `src/resources/scene_instances.cpp:kPropCellSize` |
 | Shadow maps | 2048² | `src/render/bgfx_lib_backend.hpp:kShadowResolution` |
 | Pedestrian radius / density scale | 400 m / ×4 | `src/resources/part_runtime.cpp:tick_pedestrians` |

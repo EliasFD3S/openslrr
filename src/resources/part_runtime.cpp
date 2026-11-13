@@ -2,6 +2,7 @@
 #include "slrr/part_runtime.hpp"
 #include "slrr/pedestrian_lines.hpp"
 #include "slrr/dyno_model.hpp"
+#include "slrr/flap_hinge.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/host_game_options.hpp"
 #include "slrr/host_input.hpp"
@@ -101,8 +102,17 @@ struct Record {
   };
   std::vector<LinkVisual> links;
   float max_wear = 1.f;
-  int flap = 0;
-  float flap_progress = 0.f;
+  // Hinge of this part on its parent's CFG `flap` slot (flap_hinge.hpp).
+  // The state belongs to one mount; a part moved or taken off starts latched.
+  physics::FlapState flap;
+  physics::FlapGeometry flap_geometry;
+  Object *flap_parent = nullptr;
+  int flap_slot = 0;
+  bool flap_sized = false;
+  // Hit directly this tick: the obstacle, not the carrier, sets its motion.
+  bool flap_struck = false;
+  bool flap_carrier_valid = false;
+  physics::Vec3 flap_carrier_velocity, flap_carrier_omega;
   // Seventh field of the create string, an index into each render's colors.
   bool colour_set = false;
   int colour_index = 0;
@@ -234,6 +244,7 @@ Record *record(Object *object) {
   return found == records.end() ? nullptr : &found->second;
 }
 void repair_part(Object *part, Record &rec);
+physics::FlapGeometry *flap_geometry_for(Object *part, Record &rec);
 Object *object(const std::vector<Value> &args, size_t i) {
   return i < args.size() && args[i].tag == ValueTag::Obj ? args[i].v.o
                                                          : nullptr;
@@ -848,6 +859,33 @@ double wheel_steering_angle(const Record& rec, size_t corner) {
                       : std::atan2(length, radius + x)) * factor;
 }
 
+// The hinge of a parent slot's CFG `flap` line, in the parent frame. It moves
+// with a setSlotPos or damage pose of that slot, like the mount itself.
+bool flap_hinge(const Record &parent, const PartSlot &mount,
+                physics::FlapGeometry &out) {
+  if (!mount.has_flap || corner_gear(mount.type) ||
+      !physics::flap_geometry_from_cfg(mount.flap_pivot, mount.flap_axis,
+                                       mount.flap_dir, mount.flap_lo,
+                                       mount.flap_hi, out))
+    return false;
+  const auto posed = parent.slot_pose.find(mount.id);
+  if (posed == parent.slot_pose.end()) return true;
+  PartMatrix authored, moved;
+  if (!part_slot_matrix(*parent.config, mount, authored) ||
+      !part_slot_matrix(*parent.config, posed_slot(parent, mount), moved))
+    return true;
+  const auto delta = part_matrix_multiply(moved, part_matrix_inverse_rigid(authored));
+  const auto vector = [&](double (&v)[3], double w) {
+    const double x = v[0], y = v[1], z = v[2];
+    for (int r = 0; r < 3; ++r)
+      v[r] = delta[r] * x + delta[4 + r] * y + delta[8 + r] * z + delta[12 + r] * w;
+  };
+  vector(out.pivot, 1);
+  vector(out.axis, 0);
+  vector(out.arm, 0);
+  vector(out.com, 0);
+  return true;
+}
 void place_child(Object *parent, int slot_id, bool refresh_links = true) {
   auto *p = record(parent);
   if (!p)
@@ -889,46 +927,14 @@ void place_child(Object *parent, int slot_id, bool refresh_links = true) {
   auto *node = gameref_get(found->second);
   if (!node)
     return;
-  // Open flap: the hinge lives on the parent slot. Closed is the CFG pose.
-  if (mount->has_flap && c->flap_progress > 0.f) {
-    float ax = mount->flap_axis[0], ay = mount->flap_axis[1],
-          az = mount->flap_axis[2];
-    const float len = std::sqrt(ax * ax + ay * ay + az * az);
-    if (len > 1e-6f) {
-      ax /= len;
-      ay /= len;
-      az /= len;
-      const float t = c->flap_progress;
-      const float eased = t * t * (3.f - 2.f * t);
-      const float angle = mount->flap_hi * eased;
-      const float c0 = std::cos(angle);
-      const float s0 = std::sin(angle);
-      const float t0 = 1.f - c0;
-      PartMatrix rot{};
-      rot[0] = t0 * ax * ax + c0;
-      rot[1] = t0 * ax * ay + s0 * az;
-      rot[2] = t0 * ax * az - s0 * ay;
-      rot[4] = t0 * ax * ay - s0 * az;
-      rot[5] = t0 * ay * ay + c0;
-      rot[6] = t0 * ay * az + s0 * ax;
-      rot[8] = t0 * ax * az + s0 * ay;
-      rot[9] = t0 * ay * az - s0 * ax;
-      rot[10] = t0 * az * az + c0;
-      rot[15] = 1.f;
-      PartMatrix to{};
-      PartMatrix back{};
-      to[0] = to[5] = to[10] = to[15] = 1.f;
-      back[0] = back[5] = back[10] = back[15] = 1.f;
-      to[12] = mount->flap_pivot[0];
-      to[13] = mount->flap_pivot[1];
-      to[14] = mount->flap_pivot[2];
-      back[12] = -to[12];
-      back[13] = -to[13];
-      back[14] = -to[14];
-      transform = part_matrix_multiply(
-          to, part_matrix_multiply(
-                  rot, part_matrix_multiply(back, transform)));
-    }
+  // A part on a `flap` slot turns about that hinge by its simulated angle
+  // (advance_flaps). Closed and latched is the CFG pose.
+  physics::FlapGeometry hinge;
+  if (c->flap.angle != 0 && c->flap_parent == canonical(parent) &&
+      c->flap_slot == slot_id && flap_hinge(*p, *mount, hinge)) {
+    PartMatrix turn;
+    physics::flap_matrix(hinge, c->flap.angle, turn.data());
+    transform = part_matrix_multiply(turn, transform);
   }
   if (p->deformation && !gear && c->config->category == 2)
     transform = p->deformation->carry_frame(transform);
@@ -1584,7 +1590,9 @@ bool part_command(Object *part, const std::string &command) {
     return true;
   }
   if (verb == "flap_toggle") {
-    rec->flap ^= 1;
+    // Mechanic's tuning click. Same hinge as Part.flap(1) and a hit.
+    flap_geometry_for(part, *rec);
+    physics::flap_toggle(rec->flap);
     return true;
   }
   if (verb == "filter") {
@@ -2658,9 +2666,104 @@ PanelContact panel_contact(Record& rec, physics::Vec3 impact) {
   return result;
 }
 
+// Hinge of a part mounted on a `flap` slot, or null. Binds the state to the
+// current mount (a part moved or taken off starts closed and latched) and
+// sizes the plate once per mount from its closed-pose bounds and the mass of
+// its installed subtree.
+physics::FlapGeometry *flap_geometry_for(Object *part, Record &rec) {
+  part = canonical(part);
+  Object *parent = rec.state.parent ? canonical(rec.state.parent) : nullptr;
+  if (parent != rec.flap_parent || rec.state.parent_slot != rec.flap_slot) {
+    rec.flap = {};
+    rec.flap_parent = parent;
+    rec.flap_slot = rec.state.parent_slot;
+    rec.flap_sized = rec.flap_struck = rec.flap_carrier_valid = false;
+  }
+  auto *owner = record(parent);
+  if (!owner) return nullptr;
+  const PartSlot *mount = nullptr, *mate = nullptr;
+  for (const auto &slot : owner->config->slots)
+    if (slot.id == rec.state.parent_slot) mount = &slot;
+  for (const auto &slot : rec.config->slots)
+    if (slot.id == rec.state.own_slot) mate = &slot;
+  if (!mount || !mount->has_flap) return nullptr;
+  if (rec.flap_sized) return &rec.flap_geometry;
+  physics::FlapGeometry geometry;
+  if (!flap_hinge(*owner, *mount, geometry)) return nullptr;
+  PartMatrix parent_frame, child_frame;
+  const auto bounds = panel_contact(rec, {});
+  double mass = 0;
+  for (const auto &item : part_installed_tree(part))
+    if (const auto *installed = record(item.object)) mass += installed->config->mass;
+  if (mate && bounds.distance < 1e4 &&
+      part_slot_matrix(*owner->config, posed_slot(*owner, *mount), parent_frame) &&
+      part_slot_matrix(*rec.config, posed_slot(rec, *mate), child_frame)) {
+    const auto closed = part_matrix_multiply(parent_frame,
+                                             part_matrix_inverse_rigid(child_frame));
+    double corners[8][3];
+    for (int i = 0; i < 8; ++i) {
+      const double p[3] = {i & 1 ? bounds.maximum.x : bounds.minimum.x,
+                           i & 2 ? bounds.maximum.y : bounds.minimum.y,
+                           i & 4 ? bounds.maximum.z : bounds.minimum.z};
+      for (int r = 0; r < 3; ++r)
+        corners[i][r] = closed[r] * p[0] + closed[4 + r] * p[1] +
+                        closed[8 + r] * p[2] + closed[12 + r];
+    }
+    physics::flap_size_from_points(geometry, corners, 8, std::max(2., mass));
+  } else {
+    geometry.mass = std::max(2., mass);
+  }
+  rec.flap_geometry = geometry;
+  rec.flap_sized = true;
+  return &rec.flap_geometry;
+}
+
+// A chassis impact reaching a hinged panel: a strong enough hit releases its
+// latch and swings it (flap_hit). Called from the impact path with the same
+// world-frame impact damage_chassis receives; it is independent of the
+// damage options, which scale deformation, not latches.
+void flap_impact(Object *chassis, Record &rec,
+                 const physics::VehicleDynamics::Impact &hit) {
+  using physics::Vec3;
+  if (!(hit.speed >= 2)) return;
+  const auto &body = rec.dynamics.body;
+  const Vec3 local_hit = body.center + body.orientation.inverse_rotate(hit.point - body.position);
+  const Vec3 normal = body.orientation.inverse_rotate(hit.normal);
+  const auto inverse = part_matrix_inverse_rigid(world_matrix(chassis));
+  for (const auto &installed : part_installed_tree(chassis)) {
+    auto *flap = record(installed.object);
+    if (!flap || flap == &rec || !flap->state.parent) continue;
+    auto *geometry = flap_geometry_for(installed.object, *flap);
+    if (!geometry) continue;
+    // Nearest point of the panel as it hangs now, as damage_chassis measures it.
+    const auto m = part_matrix_multiply(inverse, world_matrix(installed.object));
+    const Vec3 x{m[0], m[1], m[2]}, y{m[4], m[5], m[6]}, z{m[8], m[9], m[10]};
+    const Vec3 offset = local_hit - Vec3{m[12], m[13], m[14]};
+    const auto contact = panel_contact(*flap, {offset.dot(x), offset.dot(y), offset.dot(z)});
+    const double speed = hit.speed * std::clamp(1 - contact.distance / .65, 0., 1.);
+    if (speed < 1) continue;
+    // Into the parent frame: the part's own local matrix carries the point,
+    // the parent's chassis-relative rotation the normal.
+    const auto local = node_local(installed.object);
+    const auto carrier = part_matrix_multiply(inverse, world_matrix(flap->state.parent));
+    const Vec3 q = contact.point;
+    const double point[3] = {
+        local[0] * q.x + local[4] * q.y + local[8] * q.z + local[12],
+        local[1] * q.x + local[5] * q.y + local[9] * q.z + local[13],
+        local[2] * q.x + local[6] * q.y + local[10] * q.z + local[14]};
+    const double push[3] = {
+        carrier[0] * normal.x + carrier[1] * normal.y + carrier[2] * normal.z,
+        carrier[4] * normal.x + carrier[5] * normal.y + carrier[6] * normal.z,
+        carrier[8] * normal.x + carrier[9] * normal.y + carrier[10] * normal.z};
+    if (physics::flap_hit(flap->flap, *geometry, point, push, speed))
+      flap->flap_struck = true;
+  }
+}
+
 void damage_chassis(Object* chassis, Record& rec, const physics::VehicleDynamics::Impact& hit,
                     bool player, std::vector<Object*>& released) {
   using physics::Vec3;
+  flap_impact(chassis, rec, hit);
   if (hit.speed < 2) return;
   const auto& options = host_game_options();
   const double multiplier = rec.damage_multiplier >= 0 ? rec.damage_multiplier
@@ -4159,6 +4262,95 @@ void tick_pedestrians(double seconds) {
   if (wake) ped_sim().cv.notify_one();
 }
 
+// Hinged panels (flap_hinge.hpp) run at a fixed 240 Hz on frame time, so a
+// script open or close also moves in the garage, where the chassis is
+// suspended. A released car carries its free panels: its velocity change over
+// the frame, its wind and gravity act on them in the parent frame. The main
+// physics frame never moves for a panel.
+constexpr double kFlapStep = 1.0 / 240;
+double flap_elapsed = 0;
+
+void advance_flaps(double seconds) {
+  using physics::Vec3;
+  flap_elapsed = std::min(flap_elapsed + std::min(seconds, .1), .1);
+  const int steps = static_cast<int>(flap_elapsed / kFlapStep);
+  flap_elapsed -= steps * kFlapStep;
+  for (auto &[part, rec] : records) {
+    if (!rec.state.parent) {
+      if (rec.flap_parent) flap_geometry_for(part, rec);  // taken off: reset
+      continue;
+    }
+    if (rec.flap.latched && rec.flap.angle == 0) {
+      // Latched panels only need their mount check, which a toggle or a hit
+      // performs before it changes the state.
+      rec.flap_carrier_valid = rec.flap_struck = false;
+      continue;
+    }
+    auto *geometry = flap_geometry_for(part, rec);
+    if (!geometry) continue;
+    PartMatrix frame;
+    if (!scene_instances_script_matrix(rec.state.parent, frame.data())) continue;
+    // World to parent frame (the script frames are rigid).
+    const auto inward = [&](Vec3 v) {
+      return Vec3{frame[0] * v.x + frame[1] * v.y + frame[2] * v.z,
+                  frame[4] * v.x + frame[5] * v.y + frame[6] * v.z,
+                  frame[8] * v.x + frame[9] * v.y + frame[10] * v.z};
+    };
+    const auto outward = [&](const double (&p)[3]) {
+      return Vec3{frame[0] * p[0] + frame[4] * p[1] + frame[8] * p[2] + frame[12],
+                  frame[1] * p[0] + frame[5] * p[1] + frame[9] * p[2] + frame[13],
+                  frame[2] * p[0] + frame[6] * p[1] + frame[10] * p[2] + frame[14]};
+    };
+    physics::FlapLoads loads;
+    const Vec3 gravity = inward({0, -9.81, 0});
+    loads.gravity[0] = gravity.x;
+    loads.gravity[1] = gravity.y;
+    loads.gravity[2] = gravity.z;
+    Object *chassis = car(part);
+    Record *vehicle = chassis ? record(chassis) : nullptr;
+    if (vehicle && vehicle->physics_ready && vehicle->physics_released &&
+        !vehicle->physics_suspended) {
+      const auto &body = vehicle->dynamics.body;
+      const Vec3 pivot = outward(geometry->pivot);
+      const double centre[3] = {geometry->pivot[0] + geometry->com[0],
+                                geometry->pivot[1] + geometry->com[1],
+                                geometry->pivot[2] + geometry->com[2]};
+      const Vec3 velocity = body.point_velocity(pivot), omega = body.omega();
+      const Vec3 air = inward(-body.point_velocity(outward(centre)));
+      loads.air[0] = air.x;
+      loads.air[1] = air.y;
+      loads.air[2] = air.z;
+      if (rec.flap_carrier_valid && !rec.flap_struck) {
+        const Vec3 dv = velocity - rec.flap_carrier_velocity;
+        const Vec3 dw = omega - rec.flap_carrier_omega;
+        // A teleport or a reset is not a push.
+        if (dv.length() < 25 && dw.length() < 15) {
+          const Vec3 local_dv = inward(dv), local_dw = inward(dw);
+          const double v[3] = {local_dv.x, local_dv.y, local_dv.z};
+          const double w[3] = {local_dw.x, local_dw.y, local_dw.z};
+          physics::flap_carrier_impulse(rec.flap, *geometry, v, w);
+        }
+      }
+      rec.flap_carrier_velocity = velocity;
+      rec.flap_carrier_omega = omega;
+      rec.flap_carrier_valid = true;
+    } else {
+      rec.flap_carrier_valid = false;
+    }
+    rec.flap_struck = false;
+    bool moved = false;
+    for (int i = 0; i < steps; ++i)
+      moved = physics::flap_step(rec.flap, *geometry, loads, kFlapStep) || moved;
+    if (!moved) continue;
+    place_child(rec.state.parent, rec.state.parent_slot, false);
+    // Children follow through the render tree; only linked visuals inside the
+    // panel's subtree need their anchors again.
+    for (const auto &item : part_installed_tree(part))
+      if (const auto *installed = record(item.object); installed && !installed->links.empty())
+        relink_one(item.object);
+  }
+}
+
 } // namespace
 
 void part_pause_engine_audio(bool paused) {
@@ -4179,21 +4371,6 @@ void part_physics_advance(double seconds) {
       if (record(part)) relink_one(part);
     repair_relink_pending.clear();
   }
-  // Hinges also animate while the chassis physics is suspended in the garage.
-  // Advance a normalized phase so reversing mid-motion preserves the pose.
-  const float hinge_step = static_cast<float>(seconds / 0.5);
-  for (auto& entry : records) {
-    auto& rec = entry.second;
-    const float target = rec.flap ? 1.f : 0.f;
-    if (!rec.state.parent || rec.flap_progress == target) continue;
-    PartMatrix world;
-    if (!scene_instances_script_matrix(entry.first, world.data())) continue;
-    rec.flap_progress = rec.flap
-                            ? std::min(1.f, rec.flap_progress + hinge_step)
-                            : std::max(0.f, rec.flap_progress - hinge_step);
-    place_child(rec.state.parent, rec.state.parent_slot);
-  }
-
   // Ignore excess time after a long stall so the next frame can still render.
   physics_elapsed += std::min(seconds, kPhysicsTick * kMaxPhysicsTicksPerFrame);
   constexpr double tolerance = kPhysicsTick * 1e-10;
@@ -4208,6 +4385,8 @@ void part_physics_advance(double seconds) {
         update_engine_audio(rec, rec.engine_running);
     }
   }
+  // After the chassis ticks, so the hinges see this frame's carrier motion.
+  advance_flaps(seconds);
   // After the solver, so a flap or a wheel placement cannot put the column back.
   pose_steering_wheels();
   pose_driver();
@@ -5081,14 +5260,16 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
     }
     return Value::make_int(1);
   });
+  // Part.getFlap() is flap(0), toggleFlap() is flap(1). 1 means open: opened
+  // by a script or swung open by a hit (advance_flaps).
   bind("flap", "(I)I", [](Object *s, const std::vector<Value> &a) {
     auto *p = record(s);
     if (!p)
       return Value::make_int(-1);
-    if (number(a, 0) == 1) {
-      p->flap ^= 1;
-    }
-    return Value::make_int(p->flap);
+    flap_geometry_for(canonical(s), *p);
+    if (number(a, 0) == 1)
+      physics::flap_toggle(p->flap);
+    return Value::make_int(p->flap.open ? 1 : 0);
   });
   bind("getLogo", "()I", [](Object *s, const std::vector<Value> &) {
     return Value::make_int(field_int(canonical(s), "manufacturer"));
