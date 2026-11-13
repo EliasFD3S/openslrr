@@ -52,6 +52,14 @@ Rank evidence before acting on it. The order follows
   confirmation: parts of OpenSLRR's dynamics were derived from SLRR_rev
   (see [EXTERNAL_RESEARCH.md](EXTERNAL_RESEARCH.md#1-sources-and-how-far-to-trust-them)).
 
+**SLRR_rev first.** SLRR_rev implements most game mechanics. Before
+implementing a missing native or mechanic, check whether SLRR_rev already
+has it and migrate it into the owning OpenSLRR layer, recording the source
+file and revision. Verify the result against the MWM scripts, and keep
+SLRR_rev's own design choices labelled as such. The procedure and a map of
+current gaps to SLRR_rev code are in
+[EXTERNAL_RESEARCH.md §7](EXTERNAL_RESEARCH.md#7-migrating-mechanics-from-slrr_rev).
+
 ## 2. Project identity and game data
 
 - OpenSLRR is a C++20 reimplementation of the Street Legal Racing: Redline
@@ -475,13 +483,17 @@ These are entry points, not fixes. Each needs its own reproduction.
   about 0.05 × 3 × 0.05 m) are discarded (`include/slrr/part_config.hpp:PartBody`).
   A 0.1 m trunk can slip between the four chassis probe spheres, so a fix
   needs a volume test. The owner also points at the seven missing
-  `PhysicsRef` natives and the `setActiveCollision` no-op.
+  `PhysicsRef` natives and the `setActiveCollision` no-op. SLRR_rev
+  implements box bodies with a full box-versus-box test
+  (`SLRR_rev:src/engine/map-collision.ts:MapCollision`) and
+  `setActiveCollision`.
 - **#17 "Repair car" does not repair.** Stock `Part.repair()` raises wear and
   tear only up to `repair_max_wear` / `repair_max_tear` (0.95 in the MWM
   `Part.java`), then sends the native command `"repair"`
   (`GAME:parts/scripts/src/Part.java:repair`). `part_command` has no
   `repair` verb, and deformation is restored only when tear reaches 1, so
   nothing visual is reset (`src/resources/part_runtime.cpp:part_command`).
+  SLRR_rev implements the verb (`SLRR_rev:src/runtime/part-native.ts:repairDamage`).
 - **#18 city performance.** The reported profile is CPU-bound. Each frame
   collects instances for the main view plus `reflection_faces` cube faces
   (default 1); the map shadow re-collects when the camera moves at least
@@ -497,6 +509,8 @@ These are entry points, not fixes. Each needs its own reproduction.
   transitions through polygons that include the carriageway
   (`src/resources/pedestrian_lines.cpp:constrained_transition`), and heights
   taken from the walk data. The road network parser exists but is unused.
+  Compare the transitions with SLRR_rev's
+  (`SLRR_rev:src/engine/pedestrian-transition.ts`).
   Placement through the stock natives needs the missing
   `pedestrianDistance` and `removePedestrianType`.
 

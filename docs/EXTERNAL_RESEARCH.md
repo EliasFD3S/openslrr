@@ -290,7 +290,67 @@ SLRR_rev WebGL measurements, not native frame rates
   (`SLRR_rev:docs/reports/2026-11-07-collision-cpu-investigation.md`).
 - Physics catch-up can snowball; OpenSLRR caps it at four ticks per frame.
 
-## 7. Draft PR #3: what it contains and what applies to main
+## 7. Migrating mechanics from SLRR_rev
+
+Maintainer guidance (issue #21): SLRR_rev implements most game mechanics.
+Before implementing anything in OpenSLRR, first check whether SLRR_rev has
+it and try to migrate it.
+
+How to look:
+
+1. Search `SLRR_rev:docs/native-status.md` for the native's class and name.
+   It lists implemented handlers, temporary mocks and missing methods per
+   overload.
+2. Search the SLRR_rev source tree for the native name or the mechanic. Its
+   natives are registered with `jvm.natives.register(owner, name, args, …)`
+   in `SLRR_rev:src/runtime/*-native.ts`; mechanics live in
+   `SLRR_rev:src/engine/`, rendering in `SLRR_rev:src/render/` and formats
+   in `SLRR_rev:src/formats/`.
+3. Read the matching SLRR_rev document for the evidence level and the known
+   limits, and its tests (`SLRR_rev:tests/`) for the cases to keep.
+
+How to migrate:
+
+- Port the behaviour into the OpenSLRR layer that owns it
+  ([ENGINE_CONTRACT.md §2](ENGINE_CONTRACT.md#2-compatibility-contract)),
+  in C++. Do not carry over the Three.js, WebGL or async structure.
+- Keep original behaviour apart from SLRR_rev design. Many SLRR_rev values
+  are tuning or invented models (damage cages, traffic driver, pedestrian
+  speeds); label them as such in the code and docs.
+- Check against the MWM scripts and data. SLRR_rev runs build 940, and some
+  of its natives, music sets and addresses do not exist in MWM (§1).
+- Record the SLRR_rev file and revision in the commit and in the
+  documentation, as ENGINE_CONTRACT §18 requires for ported algorithms.
+- SLRR_rev has no license file; both READMEs state that the two projects
+  exchange code. Keep attribution in the notes of each port.
+
+Where OpenSLRR gaps already have an SLRR_rev implementation (revision
+`77b0fb6`):
+
+| OpenSLRR gap | SLRR_rev source | State in SLRR_rev |
+| --- | --- | --- |
+| Map objects without collision (#16) | `SLRR_rev:src/engine/map-collision.ts:MapCollision`, `SLRR_rev:src/engine/rigid-body-3d.ts:orientedBoxContact`, placements in `SLRR_rev:src/engine/map-objects.ts` | CFG `box` bodies as oriented boxes in an 8 m grid, full box-versus-box test, support from top faces. Mesh bodies of map objects are not imported |
+| `GameRef.setActiveCollision` no-op | `SLRR_rev:src/runtime/game-type-native.ts:setActiveCollision`, `SLRR_rev:src/runtime/game-object.ts:requestActiveCollision` | Queues a one-time collision activation that the physics step consumes |
+| `PhysicsRef` world objects | `SLRR_rev:src/runtime/physics-ref-native.ts:PhysicsRefNative` | Script-created static boxes; `setStatic(0)` throws, `getVel`/`getAngVel` return zero. `create` and `createSphere` are absent |
+| Native `repair` command (#17) | `SLRR_rev:src/runtime/part-native.ts:repairDamage` | Implemented: clears deformation, slot damage and wheel damage for the installed subtree |
+| `GroundRef.getNearestCross` | `SLRR_rev:src/runtime/ground-road-native.ts:GroundRoadNative`, `SLRR_rev:src/engine/road-nearest.ts:nearestRoadCrossing`, `SLRR_rev:src/formats/trc.ts` | Implemented with the documented radius semantics |
+| Traffic model natives | `SLRR_rev:src/runtime/traffic-native.ts` | `addTrafficN` and `delTraffic` keep per-ground model weights. `addTrafficCar`, `setWater` and `Navigator.updateNavigator` are mocks in `SLRR_rev:src/runtime/game-boot.ts` |
+| Traffic simulation and signals | `SLRR_rev:src/engine/road-traffic.ts`, `SLRR_rev:src/engine/traffic-stream.ts`, `SLRR_rev:src/engine/traffic-control.ts`, `SLRR_rev:src/engine/bot.ts`, `SLRR_rev:src/render/traffic-lamps.ts` | Host design driven by the TRC graph; not tied to the stock traffic natives yet |
+| Pedestrians on sidewalks (#19) | `SLRR_rev:src/formats/pedestrian.ts`, `SLRR_rev:src/engine/pedestrian-walking.ts`, `SLRR_rev:src/engine/pedestrian-transition.ts`, `SLRR_rev:src/render/pedestrian-crowd.ts`, `SLRR_rev:src/render/character-ragdoll.ts` | OpenSLRR already ported the corridors; compare its transitions and its inner-edge guess with these. The ragdoll is not ported |
+| Engine and drivetrain physics | `SLRR_rev:src/engine/combustion-model.ts:CombustionModel`, `SLRR_rev:src/engine/native-vehicle-physics.ts`, `SLRR_rev:src/engine/mechanical-system.ts` | Recovered from sl-remastered plus fitted host responses; settle the dyno endpoint disagreement first (§4) |
+| City rendering cost (#18) | `SLRR_rev:src/render/map-material-pool.ts`, `SLRR_rev:src/render/building-material-batch.ts`, `SLRR_rev:src/render/map-object-stream.ts`, `SLRR_rev:src/render/map-geometry-chunks.ts`, `SLRR_rev:src/render/map-gpu-occlusion.ts`, `SLRR_rev:src/render/static-map-shadows.ts` | Measured techniques (§6); port the idea, not the WebGL code |
+| CFG `osd_*` gauges | `SLRR_rev:src/osd/java-gauges.ts` | Implemented |
+| Telemetry export for comparison | `SLRR_rev:src/engine/drive-telemetry.ts` | Same record format as the original-game captures |
+| Car damage | `SLRR_rev:src/engine/deformable-panel.ts`, `SLRR_rev:src/engine/vehicle-damage.ts` | SLRR_rev's own model, not original behaviour |
+
+Missing in SLRR_rev too, so these need original research: all `Painter`
+and `ParticleSystem` natives, the `GroundRef` route queries (`findRoute`,
+`getRouteLength`, `getRoutePos`, `getRouteDist`, `alignToRoad`,
+`getStartDirection`), `RenderRef.plotRoute`, `PhysicsRef.create` and
+`createSphere`, dynamic standalone `PhysicsRef` bodies,
+`pedestrianDistance`, `removePedestrianType` and `haltTrafficCross`.
+
+## 8. Draft PR #3: what it contains and what applies to main
 
 PR #3 documents were written against the merge base `77d19e7`. PRs #6
 (instrumentation) and #11 (review of PR #3) were merged **into the PR #3

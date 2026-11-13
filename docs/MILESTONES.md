@@ -7,8 +7,11 @@ item is in [KNOWLEDGE_BASE.md](KNOWLEDGE_BASE.md) and
 [EXTERNAL_RESEARCH.md](EXTERNAL_RESEARCH.md). This is a proposal: order,
 scope and exit criteria are open to the maintainers.
 
-Every milestone ends with the same two checks, reported separately: the
-Release x64 build, and an in-game validation of the named scenario.
+Every item starts by checking whether SLRR_rev already implements it and
+migrating it when it does ([EXTERNAL_RESEARCH.md §7](EXTERNAL_RESEARCH.md#7-migrating-mechanics-from-slrr_rev)
+maps the current gaps). Every milestone ends with the same two checks,
+reported separately: the Release x64 build, and an in-game validation of the
+named scenario.
 
 ## Overview
 

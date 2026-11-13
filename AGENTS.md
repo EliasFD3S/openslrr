@@ -15,6 +15,11 @@ compatibility pitfalls. Then read the specialized documentation for your task:
   [EXTERNAL_RESEARCH.md](docs/EXTERNAL_RESEARCH.md).
 - Proposed roadmap: [MILESTONES.md](docs/MILESTONES.md).
 
+SLRR_rev (https://github.com/nedobylskiy/SLRR_rev) implements most game
+mechanics. Before implementing a missing native or mechanic, check whether
+SLRR_rev already has it and migrate it, following
+[EXTERNAL_RESEARCH.md §7](docs/EXTERNAL_RESEARCH.md#7-migrating-mechanics-from-slrr_rev).
+
 After changing code that the knowledge base cites, run
 `python scripts/check_knowledge_refs.py`.
 
