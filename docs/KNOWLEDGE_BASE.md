@@ -279,6 +279,12 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
    `src/resources/part_runtime.cpp:configure_drive`).
 5. Impacts feed `damage_chassis` and the XPBD cage
    (`src/physics/deformation_cage.cpp`). `dynamics_sync` publishes poses.
+6. After the ticks of a frame, `publish_render_poses` blends each car from
+   its pose before the last tick to the published one, by the unsimulated
+   fraction of a tick (`src/resources/part_runtime.cpp:publish_render_poses`).
+   The renderer, chase and cockpit cameras and car shadows draw that pose;
+   scripts and physics still read the ticked one
+   (`src/resources/scene_instances.cpp:chain_matrix`).
 
 ### 5.6 Maps and world
 

@@ -85,10 +85,14 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root);
 // built only for walkers inside the frustum passed to scene_instances_collect.
 void scene_instances_frame_cache(bool enabled);
 SceneSun scene_instances_light(void* root=nullptr);
-// Rejects missing parents, hidden subtrees and cycles.
+// Rejects missing parents, hidden subtrees and cycles. Draws simulated
+// bodies at their pose interpolated between physics ticks.
 bool scene_instance_transform(void *key, void *root, float *matrix);
 // Active world, unreflected script metres. False for inventory/other worlds.
 bool scene_instances_script_matrix(void *key, float *matrix);
+// The same, at the drawn pose (gameref_render_matrix). Use it for cameras,
+// shadows and anything else that must stay on the drawn car.
+bool scene_instances_render_matrix(void *key, float *matrix);
 // Render ground-shell matrix for placements owned by a GroundRef. Unlike the
 // GroundRef's own pose, this is the frame used by static map placements.
 bool scene_instances_ground_frame(void *ground, float *matrix);

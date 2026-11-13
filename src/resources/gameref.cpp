@@ -47,6 +47,13 @@ float gameref_now() {
   return std::chrono::duration<float>(clock::now() - t0).count();
 }
 
+const float* gameref_render_matrix(const GameRefState& node) {
+  return node.render_pose && node.matrix_override &&
+                 std::equal(node.local_matrix, node.local_matrix + 16, node.render_basis)
+             ? node.render_matrix
+             : nullptr;
+}
+
 void gameref_clear() {
   part_drop_actors();
   character_forget_all();
@@ -341,7 +348,13 @@ void target_point(GameRefState* cam, int32_t id, const float off[3],
   GameRefState* n = gameref_find_live(id);
   if (!n) n = cam->parent ? gameref_get(cam->parent) : nullptr;
   float px = 0.f, py = 0.f, pz = 0.f, yaw = 0.f;
-  if (n) {
+  if (const float* drawn = n ? gameref_render_matrix(*n) : nullptr) {
+    // Aim at the drawn car, which is interpolated between physics ticks.
+    px = drawn[12];
+    py = drawn[13];
+    pz = drawn[14];
+    yaw = std::atan2(drawn[8], drawn[10]);
+  } else if (n) {
     px = n->pos[0];
     py = n->pos[1];
     pz = n->pos[2];
