@@ -43,6 +43,9 @@ bool flap_geometry_from_cfg(const float pivot[3], const float axis[3],
 // (for instance the eight corners of its bounds) and its mass.
 void flap_size_from_points(FlapGeometry &geometry, const double (*points)[3],
                            size_t count, double mass);
+// Moves the hinge by a rigid column-major transform of the parent frame (a
+// setSlotPos or damage pose of its slot). Sizes, limits and mass are kept.
+void flap_transform(FlapGeometry &geometry, const float transform[16]);
 
 struct FlapState {
   double angle = 0, rate = 0;  // radians and rad/s about FlapGeometry::axis
