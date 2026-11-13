@@ -34,7 +34,8 @@ double peak_lateral(const TireParameters& t, double load) {
 // A 1300 kg saloon: four sprung wheels, rear drive, Baiern-like geometry.
 struct Car {
   VehicleDynamics dynamics;
-  explicit Car(bool instant_centers = true, double friction_scale = 1) {
+  explicit Car(bool instant_centers = true, double friction_scale = 1,
+               double side_rise = .1, double side_run = 1.5) {
     dynamics.body.configure(1300, {-.85, .15, -2.2}, {.85, 1.4, 2.2}, {0, .45, .1},
                             {550, 2300, 2200});
     const double x[] = {-.75, .75, -.75, .75}, z[] = {-1.3, -1.3, 1.35, 1.35};
@@ -53,7 +54,7 @@ struct Car {
       const double side = i % 2 ? -1 : 1;
       w.front_instant_center = w.side_instant_center = instant_centers;
       w.front_center_offset = {side * 1.446, -.025, 0};
-      w.side_center_offset = {0, .1, i < 2 ? 1.5 : -1.5};
+      w.side_center_offset = {0, side_rise, i < 2 ? side_run : -side_run};
       auto& d = dynamics.drive.wheels[i];
       d.weight = i < 2 ? 0 : 1;
       d.brake = 2000;
@@ -122,10 +123,12 @@ SLRR_TEST(tyre_stiffness_and_sliction_shape_the_curve) {
                         base.stiffness) < base.stiffness * .02);
   // A fully sliding tyre keeps about sliction of its peak.
   auto t = tyre(205);
-  t.sliction = .7;
-  const double slide = std::abs(tire_forces(3000, 1, 20, 20, 20 * std::tan(1.4), t).lateral) /
-                       std::abs(std::cos(0.0));
-  SLRR_REQUIRE(slide < peak_lateral(t, 3000) * .85);
+  for (double sliction : {.7, .9}) {
+    t.sliction = sliction;
+    const double slide = std::abs(tire_forces(3000, 1, 20, 20, 20 * std::tan(1.4), t).lateral);
+    const double ratio = slide / peak_lateral(t, 3000);
+    SLRR_REQUIRE(std::abs(ratio - sliction) < .06);
+  }
 }
 
 SLRR_TEST(tyre_load_capacity_saturates_grip) {
@@ -192,6 +195,57 @@ SLRR_TEST(more_grip_corners_harder) {
   SLRR_REQUIRE(lateral[1] > lateral[0] * 1.08);
 }
 
+SLRR_TEST(steep_instant_centres_stay_stable_under_hard_braking) {
+  // A side-view centre 0.3 m up and 0.4 m from the wheel with a very grippy
+  // tyre: the lift feeds the tyre load, so an unbounded slope would grow it
+  // every step and make the wheel chatter on and off the road.
+  Car car(true, 1.6, .3, .4);
+  car.run(1, 0, 0, 0);
+  car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -25});
+  for (auto& wheel : car.dynamics.state) wheel.spin = 25 / .31;
+  double worst_vertical = 0, worst_lift = 0;
+  bool always_in_contact = true;
+  for (int i = 0; i < 120; ++i) {
+    const auto before = car.dynamics.body.velocity;
+    car.run(1. / 60, 0, 1, 0);
+    worst_vertical = std::max(worst_vertical, std::abs(car.dynamics.body.velocity.y - before.y) * 60);
+    for (int w = 0; w < 4; ++w) {
+      const auto& s = car.dynamics.state[w];
+      always_in_contact = always_in_contact && s.contact;
+      worst_lift = std::max(worst_lift, std::abs(s.jacking) - s.force);
+    }
+  }
+  SLRR_REQUIRE(always_in_contact);
+  SLRR_REQUIRE(worst_lift <= 1e-6);
+  SLRR_REQUIRE(worst_vertical < 3);
+}
+
+SLRR_TEST(a_brake_stronger_than_the_drive_holds_its_wheels) {
+  // Full throttle against a full service brake: the brakes beat the engine,
+  // so the wheels stay locked and the car does not creep away. Brake torque
+  // as the stock Baiern scripts give it (about 2.9 kN m front, 2.3 rear).
+  Car car;
+  for (int i = 0; i < 4; ++i) car.dynamics.drive.wheels[i].brake = i < 2 ? 2900 : 2300;
+  car.run(1, 0, 0, 0);
+  car.run(3, 1, 1, 0);
+  SLRR_REQUIRE(car.speed() < .3);
+  for (int i = 2; i < 4; ++i)
+    SLRR_REQUIRE(std::abs(car.dynamics.state[i].spin) * .31 < .5);
+}
+
+SLRR_TEST(the_engine_beating_weak_rear_brakes_spins_the_driven_wheels) {
+  // A burnout: throttle with only the front brakes holding the car. The rear
+  // wheels spin far faster than the car moves.
+  Car car;
+  for (int i = 0; i < 2; ++i) car.dynamics.drive.wheels[i].brake = 6000;
+  for (int i = 2; i < 4; ++i) car.dynamics.drive.wheels[i].brake = 150;
+  car.run(1, 0, 0, 0);
+  car.run(3, 1, .6, 0);
+  const double wheel = car.dynamics.state[2].spin * .31;
+  SLRR_REQUIRE(wheel > 5);
+  SLRR_REQUIRE(wheel > car.speed() * 3);
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
       tyre_grip_follows_the_tyre_script,
@@ -202,6 +256,9 @@ int main() {
       full_lock_at_speed_slides_instead_of_rolling_over,
       instant_centres_reduce_body_roll,
       more_grip_corners_harder,
+      steep_instant_centres_stay_stable_under_hard_braking,
+      a_brake_stronger_than_the_drive_holds_its_wheels,
+      the_engine_beating_weak_rear_brakes_spins_the_driven_wheels,
   };
   return slrr::standalone::run("vehicle_dynamics", tests);
 }

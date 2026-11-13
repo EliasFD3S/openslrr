@@ -536,14 +536,17 @@ that centre, so its vertical part lifts or pulls the body at the patch
 instead of compressing the spring (roll centre, anti-dive, anti-squat), and
 the tyre load is the spring force plus that lift. The stock 10000 values mean
 no centre. The centres stay at their static position; their travel with the
-suspension is not modelled.
+suspension is not modelled. The lift feeds the next step's tyre load, so the
+link slope is limited to 0.5 and the lift to the spring's own support, which
+keeps that loop stable for any scripted tyre.
 
 Bearing friction, the service brake and the handbrake act on a wheel's spin
 after the drive impulse and before the tyre force. A brake stronger than the
 drive keeps its wheel locked and the tyre slides; a weaker one lets the drive
-spin it. With the automatic clutch, throttle in first or reverse raises the
-take-up speed even while the service brake is held, like a torque converter at
-stall, so the driven wheels spin when the engine beats their brakes and grip.
+spin it. With the automatic gearbox and clutch, throttle in first or reverse
+raises the take-up speed even while the service brake is held, like a torque
+converter at stall, so the driven wheels spin when the engine beats their
+brakes and grip.
 
 For the dyno, a new configuration must rebuild the matching curve banks,
 including nitro. Do not mix an old nitro bank with a new RPM step or a new
