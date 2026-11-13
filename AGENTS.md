@@ -9,6 +9,14 @@ compatibility pitfalls. Then read the specialized documentation for your task:
 - Script compilation: [SCRIPT_COMPILER.md](docs/SCRIPT_COMPILER.md).
 - Bindings, no-ops, and limitations: [NATIVE_AUDIT.md](docs/NATIVE_AUDIT.md).
 - Building and running: [README.md](README.md).
+- Verified code map, known doc drift, open risks and issue entry points:
+  [KNOWLEDGE_BASE.md](docs/KNOWLEDGE_BASE.md).
+- Formats, mechanics and lessons from SLRR_rev and draft PR #3:
+  [EXTERNAL_RESEARCH.md](docs/EXTERNAL_RESEARCH.md).
+- Proposed roadmap: [MILESTONES.md](docs/MILESTONES.md).
+
+After changing code that the knowledge base cites, run
+`python scripts/check_knowledge_refs.py`.
 
 Check the active code: some audits and comments describe earlier implementations.
 Preserve changes already present in the working tree. Fix general primitives
