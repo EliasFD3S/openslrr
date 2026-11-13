@@ -1682,6 +1682,60 @@ bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
   }
   return true;
 }
+// How far the hardware left on a corner reaches below the wheel centre, in
+// the CFG wheel frame: the parts on its wheel slots (type 101-104, such as an
+// outer dually wheel) and on its hub (201-204: rotor, caliper and what they
+// carry). These follow the hub, so the reach does not depend on the
+// suspension travel. Zero when nothing is mounted there.
+double corner_hardware_reach(Record &rec, size_t corner) {
+  const auto to_wheel =
+      part_matrix_inverse_rigid(part_pose_matrix(rec.config->wheels[corner]));
+  double reach = 0;
+  for (const auto &slot : rec.config->slots) {
+    if (slot.type != 101 + static_cast<int>(corner) &&
+        slot.type != 201 + static_cast<int>(corner))
+      continue;
+    const auto child = rec.children.find(slot.id);
+    auto *hub = child == rec.children.end() ? nullptr : record(child->second);
+    if (!hub)
+      continue;
+    const PartSlot *mate = nullptr;
+    for (const auto &own : hub->config->slots)
+      if (own.id == hub->state.own_slot)
+        mate = &own;
+    PartMatrix mount_frame, mate_frame;
+    if (!mate || !part_slot_matrix(*rec.config, posed_slot(rec, slot), mount_frame) ||
+        !part_slot_matrix(*hub->config, posed_slot(*hub, *mate), mate_frame))
+      continue;
+    // The same rest transform place_child applies before the hub motion.
+    const auto hub_frame = part_matrix_multiply(
+        to_wheel, part_matrix_multiply(mount_frame, part_matrix_inverse_rigid(mate_frame)));
+    const auto from_hub = part_matrix_inverse_rigid(world_matrix(child->second));
+    for (const auto &item : part_installed_tree(child->second)) {
+      const auto *part = record(item.object);
+      if (!part)
+        continue;
+      const auto frame = part_matrix_multiply(
+          hub_frame, part_matrix_multiply(from_hub, world_matrix(item.object)));
+      for (auto *render : part->renders) {
+        const auto *node = gameref_get(render);
+        if (!node || node->empty || node->light_flags)
+          continue;
+        const auto mesh = scene_instances_geometry(static_cast<uint32_t>(node->type_id));
+        if (!mesh)
+          continue;
+        const auto m = part_matrix_multiply(frame, node_local(render));
+        const double scale = mesh->position_scale;
+        for (size_t v = 0; v + 2 < mesh->positions.size(); v += 3) {
+          const double y = (m[1] * mesh->positions[v] + m[5] * mesh->positions[v + 1] +
+                            m[9] * mesh->positions[v + 2]) * scale + m[13];
+          reach = std::max(reach, -y);
+        }
+      }
+    }
+  }
+  return reach;
+}
 void dynamics_wheels(Record &rec) {
   for (size_t i = 0; i < 4; ++i) {
     auto &cfg = rec.dynamics.wheels[i];
@@ -1690,14 +1744,25 @@ void dynamics_wheels(Record &rec) {
     cfg.rigid_contact = false;
     if (i >= rec.config->wheels.size())
       continue;
+    // The scripts size the wheel of the stock rim slot (Chassis.updatevariables
+    // uses partOnSlot(101 + i)). Other wheel-type slots, such as an outer
+    // dually wheel, carry no radius of their own.
+    const int rim_slot = 101 + static_cast<int>(i);
+    bool has_rim_slot = false;
     const PartSlot *mount = nullptr;
     for (const auto &slot : rec.config->slots)
-      if (slot.type == 101 + static_cast<int>(i) &&
-          rec.children.count(slot.id)) {
-        mount = &slot;
-        break;
+      if (slot.type == rim_slot) {
+        has_rim_slot = has_rim_slot || slot.id == rim_slot;
+        if (!mount && rec.children.count(slot.id))
+          mount = &slot;
       }
-    if (!mount)
+    if (has_rim_slot && !rec.children.count(rim_slot))
+      mount = nullptr;
+    // Without its rim the corner keeps a wheel the size of the hardware still
+    // on it, so the car rests on the brake instead of passing through the
+    // floor, or on an outer dually wheel.
+    const double reach = mount ? 0 : corner_hardware_reach(rec, i);
+    if (!mount && !(reach > 0))
       continue;
     const auto fallback = i < rec.config->wheel_springs.size()
                               ? rec.config->wheel_springs[i]
@@ -1722,7 +1787,7 @@ void dynamics_wheels(Record &rec) {
         (physics::wheel_steering(ypr[0]) *
          physics::Quaternion{std::sin(ypr[1] * .5), 0, 0, std::cos(ypr[1] * .5)} *
          physics::Quaternion{0, 0, std::sin(ypr[2] * .5), std::cos(ypr[2] * .5)}).normalized();
-    cfg.radius = live.radius > 0 ? live.radius : fallback.radius;
+    cfg.radius = !mount ? reach : live.radius > 0 ? live.radius : fallback.radius;
     cfg.rest = live.rest;
     cfg.anchor = fallback.base + fallback.travel;
     cfg.minimum = std::max(0.f, live.min_len);
