@@ -287,9 +287,11 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
    the render shell instead (`src/resources/part_runtime.cpp:panel_contact`), so
    the phys bodies are mass and collision, not deformation zones.
 7. A corner whose mount condition reaches zero loses its wheel slots' parts as
-   loose bodies (`src/resources/part_runtime.cpp:damage_wheel_mounts`,
-   `src/resources/part_runtime.cpp:detach_panel`); the refreshed chassis rests
-   that corner on its remaining hub hardware.
+   loose bodies: impact energy at once
+   (`src/resources/part_runtime.cpp:damage_wheel_mounts`), hardpoint travel once
+   the chassis cage has settled (`src/resources/part_runtime.cpp:settle_wheel_mounts`),
+   both detached by `src/resources/part_runtime.cpp:detach_panel`. The refreshed
+   chassis rests that corner on its remaining hub hardware.
 8. A part on a CFG `flap` slot (doors, hood, trunk) is a latched hinged plate
    (`src/physics/flap_hinge.cpp:flap_step`). `Part.flap`/`flap_toggle` drive
    it, `damage_chassis` hands each impact to
