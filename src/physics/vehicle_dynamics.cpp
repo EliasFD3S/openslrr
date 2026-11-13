@@ -307,8 +307,10 @@ double instant_center_lift(const RigidBody& body, const WheelConfig& wheel,
   if (!wheel.front_instant_center && !wheel.side_instant_center) return 0;
   const Vec3 patch = body.orientation.inverse_rotate(state.patch - body.position) + body.center;
   const Vec3 force = body.orientation.inverse_rotate(traction);
-  // A line steeper than 45 degrees would let a small tyre force lift the car.
-  constexpr double steepest = 1;
+  // The lift feeds back into the tyre load on the next step, so the loop
+  // gain is about mu times the slope. Half a metre of rise per metre keeps it
+  // below one for any tyre the scripts write.
+  constexpr double steepest = .5;
   double lift = 0;
   if (wheel.front_instant_center) {
     const Vec3 center = wheel.center + wheel.front_center_offset;
@@ -320,8 +322,11 @@ double instant_center_lift(const RigidBody& body, const WheelConfig& wheel,
     const double run = center.z - patch.z, rise = center.y - patch.y;
     if (std::abs(run) > 1e-3) lift += force.z * std::clamp(rise / run, -steepest, steepest);
   }
-  // The links can unload the tyre, not pull it off the road.
-  return std::max(lift, -state.force);
+  // The links can unload the tyre, not pull it off the road, and add at most
+  // the spring's own support. The spring force does not grow with the lift
+  // (lifting the body unloads the spring), so this bound also closes the
+  // feedback loop through the tyre load.
+  return std::clamp(lift, -state.force, state.force);
 }
 
 // SLRR_rev cf4fd30, native-vehicle-physics.ts engineLimiter.
@@ -464,7 +469,8 @@ void VehicleDynamics::step_drive() {
         std::max(1.0, drive.idle * .5), 0.0, 1.0);
     if (drive.auto_clutch && closed_delta < 0) {
       double engagement_rpm = drive.idle * .85;
-      if ((gear == 1 || gear == 7) && drive.handbrake < .05 && gas > 0) {
+      if (drive.automatic_shift && (gear == 1 || gear == 7) && drive.handbrake < .05 &&
+          gas > 0) {
         // Let the engine build torque through the automatic clutch at launch.
         // The stock Nonus is already above 3000 RPM as first gear takes up.
         // The service brake does not cancel this: throttle against the brake

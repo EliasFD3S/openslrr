@@ -1813,14 +1813,17 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
             case 5:
               r = ai & bi;
               break;  // band
+            // A float operand compares by value, as in do_binop. Reading
+            // floats as integer 0 made every float `!=` false and every
+            // float `==` true on this path.
             case 6:
-              if (a.tag == ValueTag::Obj || b.tag == ValueTag::Obj)
+              if (a.tag == ValueTag::Obj || b.tag == ValueTag::Obj || cmp_f)
                 r = values_equal(a, b) ? 0 : 1;
               else
                 r = ai != bi;
               break;
             case 7:
-              r = ai == bi;
+              r = cmp_f ? (values_equal(a, b) ? 1 : 0) : ai == bi;
               break;
             case 8:
               r = ai >= bi;
