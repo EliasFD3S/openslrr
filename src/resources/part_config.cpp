@@ -289,6 +289,14 @@ PartConfig parse_part_config(const std::string &source,
         open_wheel = -1;
         out.steering = pose(t);
         out.has_steering = true;
+      } else if (command == "seat") {
+        open_wheel = -1;
+        out.seat = pose(t);
+        out.has_seat = true;
+      } else if (command == "pedals" && t.size() >= 4) {
+        open_wheel = -1;
+        for (int i = 0; i < 3; ++i) out.pedals[i] = number(t, 1 + i);
+        out.has_pedals = true;
       } else if (command == "stockpart") {
         open_wheel = -1;
         out.stock.push_back(rid(t.at(1)));
@@ -353,14 +361,46 @@ PartConfig parse_part_config(const std::string &source,
         if (body.mass < 0.f)
           throw std::runtime_error("body mass must be non-negative");
         if (t.size() > 8) {
-          auto extension = std::filesystem::path(t[8]).extension().string();
-          std::transform(extension.begin(), extension.end(), extension.begin(),
+          std::string shape = t[8];
+          std::transform(shape.begin(), shape.end(), shape.begin(),
                          [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-          if (extension == ".scx") body.collision_mesh = t[8];
+          // A malformed shape keeps the body and its mass without collision
+          // geometry, as unknown shapes always have; the line is reported as
+          // unknown rather than as an error, which would invalidate the CFG.
+          const auto positive = [&](size_t index, float& value) {
+            if (index >= t.size()) return false;
+            try {
+              value = number(t, index);
+            } catch (const std::exception&) {
+              return false;
+            }
+            return std::isfinite(value) && value > 0.f;
+          };
+          if (shape == "box") {
+            if (positive(9, body.box_half[0]) && positive(10, body.box_half[1]) &&
+                positive(11, body.box_half[2]))
+              body.shape = PartBodyShape::Box;
+            else
+              out.unknown.push_back(raw);
+          } else if (shape == "sphere") {
+            if (positive(9, body.sphere_radius))
+              body.shape = PartBodyShape::Sphere;
+            else
+              out.unknown.push_back(raw);
+          } else {
+            auto extension = std::filesystem::path(t[8]).extension().string();
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (extension == ".scx") {
+              body.shape = PartBodyShape::Mesh;
+              body.collision_mesh = t[8];
+            }
+          }
         }
         out.bodies.push_back(body);
         out.mass += body.mass;
       } else if (command == "nocollision" && !out.bodies.empty()) {
+        out.bodies.back().collision = false;
         out.bodies.back().collision_mesh.clear();
       } else if (command == "name") {
         open_wheel = -1;

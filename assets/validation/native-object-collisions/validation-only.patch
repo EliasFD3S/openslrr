@@ -1,0 +1,410 @@
+diff --git a/include/slrr/boot.hpp b/include/slrr/boot.hpp
+index 6687fef..c9cf317 100644
+--- a/include/slrr/boot.hpp
++++ b/include/slrr/boot.hpp
+@@ -14,6 +14,7 @@ struct BootOptions {
+   std::string vehicle_osd; // optional standalone gauge CFG for preview
+   bool window = false;
+   bool auto_new = false;
++  bool auto_city = false;  // validation-only: enter stock Valocity after garage setup
+   // After Garage: fire Garage.osdCommand (101 MAINMENU / 109 HITTHESTREET / 0=skip).
+   int32_t auto_cmd = 0;
+   int32_t max_frames = 0;  // 0 = until quit
+diff --git a/src/boot/boot.cpp b/src/boot/boot.cpp
+index fa7334e..6d72db9 100644
+--- a/src/boot/boot.cpp
++++ b/src/boot/boot.cpp
+@@ -26,6 +26,7 @@
+ #include <chrono>
+ #include <cmath>
+ #include <cstdio>
++#include <cstdlib>
+ #include <exception>
+ 
+ #ifdef _WIN32
+@@ -456,6 +457,49 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
+                false);
+   }
+ 
++  if (opt.auto_city) {
++    Object* city = jvm.new_object("java.game.Valocity");
++    if (!city) {
++      std::fprintf(stderr, "[validation] cannot create Valocity\n");
++      if (render.ready()) render.close();
++      return 12;
++    }
++    jvm.invoke("java.game.Valocity", "<init>", "()V",
++               {Value::make_obj(city)}, false);
++    const Value free_ride = jvm.get_static("java.game.GameLogic", "GM_FREERIDE");
++    if (free_ride.tag == ValueTag::Int)
++      jvm.set_static("java.game.GameLogic", "gameMode", free_ride);
++    if (const char* sx = std::getenv("SLRR_VALIDATION_START_X")) {
++      const char* sy = std::getenv("SLRR_VALIDATION_START_Y");
++      const char* sz = std::getenv("SLRR_VALIDATION_START_Z");
++      const char* syaw = std::getenv("SLRR_VALIDATION_START_YAW");
++      if (sy && sz && syaw) {
++        const Value career = jvm.get_static("java.game.GameLogic", "GM_CARREER");
++        if (career.tag == ValueTag::Int)
++          jvm.set_static("java.game.GameLogic", "gameMode", career);
++        auto* position = jvm.new_object("java.lang.Vector3");
++        auto* orientation = jvm.new_object("java.lang.Ypr");
++        if (position && orientation) {
++          position->fields["x"] = Value::make_float(std::strtof(sx, nullptr));
++          position->fields["y"] = Value::make_float(std::strtof(sy, nullptr));
++          position->fields["z"] = Value::make_float(std::strtof(sz, nullptr));
++          orientation->fields["y"] = Value::make_float(std::strtof(syaw, nullptr));
++          auto positions = city->fields.find("posGarage");
++          auto orientations = city->fields.find("oriGarage");
++          if (positions != city->fields.end() && positions->second.tag == ValueTag::Obj &&
++              positions->second.v.o && positions->second.v.o->is_array &&
++              !positions->second.v.o->slots.empty())
++            positions->second.v.o->slots[0] = Value::make_obj(position);
++          if (orientations != city->fields.end() && orientations->second.tag == ValueTag::Obj &&
++              orientations->second.v.o && orientations->second.v.o->is_array &&
++              !orientations->second.v.o->slots.empty())
++            orientations->second.v.o->slots[0] = Value::make_obj(orientation);
++        }
++      }
++    }
++    sections.change_active_section(city);
++  }
++
+   int32_t osd_n = osd_widget_count();
+   Object* garage_obj = sections.garage();
+   if (!garage_obj) garage_obj = sections.actual();
+@@ -537,6 +581,12 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
+     constexpr int kBenchSettle = 2 * kBenchRate;
+     bool bench_map_started = opt.bench_map.empty();
+     int bench_shot = 0;
++    const int validation_frame_ms = [] {
++      const char* value = std::getenv("SLRR_VALIDATION_FRAME_MS");
++      if (!value) return 1;
++      const int parsed = std::atoi(value);
++      return parsed < 1 ? 1 : (parsed > 100 ? 100 : parsed);
++    }();
+     while (until_quit || frames < opt.max_frames) {
+       // Soft PollWindowQuit adjacency — pump before Input/sim like stock
+       // neighbors (Input_tick still inside mainloop_frame).
+@@ -616,10 +666,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
+       }
+       if (until_quit) {
+ #ifdef _WIN32
+-        // Yield the rest of the time slice only. Sleep(1) cost 1.5 ms per
+-        // frame even at 1 ms timer resolution, a quarter of a 160 FPS frame.
+-        // With VSync on, presentation still paces the loop.
+-        SwitchToThread();
++        if (validation_frame_ms > 1) Sleep(validation_frame_ms); else SwitchToThread();
+ #endif
+       }
+     }
+diff --git a/src/boot/mainloop.cpp b/src/boot/mainloop.cpp
+index 1c59dc1..b9b9a0b 100644
+--- a/src/boot/mainloop.cpp
++++ b/src/boot/mainloop.cpp
+@@ -22,6 +22,7 @@
+ #include <chrono>
+ #include <cmath>
+ #include <cstdio>
++#include <cstdlib>
+ #include <string>
+ #ifdef _WIN32
+ #define NOMINMAX
+@@ -386,6 +387,19 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
+     script_threads_tick(jvm);
+   }
+   MainLoopFrameResult out;
++  if (std::getenv("SLRR_VALIDATION_TRACE")) {
++    static double perf_elapsed = 0.0;
++    static unsigned perf_frames = 0;
++    perf_elapsed += dt;
++    ++perf_frames;
++    if (perf_elapsed >= 1.0) {
++      std::fprintf(stderr, "[validate-perf] fps=%.1f floorBuilds=%llu\n",
++                   perf_frames / perf_elapsed,
++                   static_cast<unsigned long long>(scene_instances_floor_builds()));
++      perf_elapsed = 0.0;
++      perf_frames = 0;
++    }
++  }
+   mainloop_adopt_section(jvm, sections);
+   {
+     perf::Scope scope(perf::Zone::Scripts);
+diff --git a/src/main.cpp b/src/main.cpp
+index d4708c9..fc9bdc0 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -95,6 +95,11 @@ int main(int argc, char** argv) {
+       opt.auto_new = true;
+       continue;
+     }
++    if (std::strcmp(a, "--auto-city") == 0) {
++      opt.auto_city = true;
++      opt.auto_new = true;
++      continue;
++    }
+     if(std::strcmp(a,"--spawn-car")==0&&i+1<argc){
+       opt.spawn_car=argv[++i];opt.auto_new=true;continue;
+     }
+diff --git a/src/platform/host_input.cpp b/src/platform/host_input.cpp
+index 78673ee..310d13d 100644
+--- a/src/platform/host_input.cpp
++++ b/src/platform/host_input.cpp
+@@ -9,6 +9,7 @@
+ #include <chrono>
+ #include <cmath>
+ #include <deque>
++#include <cstdlib>
+ #include <unordered_map>
+ 
+ #ifdef _WIN32
+@@ -319,6 +320,11 @@ void host_input_update_controller(Object* controller, float dt) {
+     in.drive_steer_analog &= !digital_steering;
+   }
+   in.drive_throttle = axis(28);
++  // Validation-only deterministic drive controls, never set by the product.
++  if (const char* value = std::getenv("SLRR_VALIDATION_THROTTLE"))
++    in.drive_throttle = std::clamp(std::strtof(value, nullptr), 0.f, 1.f);
++  if (const char* value = std::getenv("SLRR_VALIDATION_STEER"))
++    in.drive_steer = std::clamp(std::strtof(value, nullptr), -1.f, 1.f);
+   in.drive_brake = axis(29);
+   in.drive_handbrake = axis(48) > .5f;
+   in.drive_clutch = axis(49);
+diff --git a/src/resources/part_runtime.cpp b/src/resources/part_runtime.cpp
+index 9c0f941..b8bf1d5 100644
+--- a/src/resources/part_runtime.cpp
++++ b/src/resources/part_runtime.cpp
+@@ -5,6 +5,7 @@
+ #include "slrr/gameref.hpp"
+ #include "slrr/host_game_options.hpp"
+ #include "slrr/host_input.hpp"
++namespace slrr { void physicsref_create_box(Object*, Object*, float, float, float, const std::string&); }
+ #include "slrr/deformation_cage.hpp"
+ #include "slrr/host_sfx.hpp"
+ #include "slrr/osd_registry.hpp"
+@@ -2354,8 +2355,11 @@ physics::VehicleDynamics::Impact collide_chassis(Record& rec, physics::Vec3 befo
+     PartMatrix raised = probe;
+     for (int axis = 0; axis < 3; ++axis) raised[12 + axis] += probe[4 + axis] * wall_lift;
+     SceneBodyContact shape, wall;
+-    const bool shape_hit = scene_instances_contact_box(raised.data(), wall_half, shape);
+-    const bool wall_hit = scene_instances_contact_walls(raised.data(), wall_half, wall);
++    static const bool full_shapes = std::getenv("SLRR_VALIDATION_FULL_SHAPES") != nullptr;
++    const bool shape_hit = full_shapes ? scene_instances_contact_box(probe.data(), half, shape)
++                                       : scene_instances_contact_box(raised.data(), wall_half, shape);
++    const bool wall_hit = !std::getenv("SLRR_VALIDATION_NO_WALLS") &&
++                          scene_instances_contact_walls(raised.data(), wall_half, wall);
+     if (!shape_hit && !wall_hit) return false;
+     out = shape_hit && (!wall_hit || shape.penetration >= wall.penetration) ? shape : wall;
+     return true;
+@@ -2395,6 +2399,10 @@ physics::VehicleDynamics::Impact collide_chassis(Record& rec, physics::Vec3 befo
+   if (has_primitive &&
+       (closest.fraction >= 1.f || primitive_fraction < closest.fraction)) {
+     const Vec3 normal{primitive.normal[0], primitive.normal[1], primitive.normal[2]};
++    if (std::getenv("SLRR_VALIDATION_TRACE"))
++      std::fprintf(stderr, "[validate-box] owner=%p pen=%.3f fraction=%.3f normal=(%.3f %.3f %.3f) point=(%.2f %.2f %.2f)\n",
++                   primitive.owner, primitive.penetration, primitive_fraction, normal.x, normal.y, normal.z,
++                   primitive.point[0], primitive.point[1], primitive.point[2]);
+     body.position = before + delta * primitive_fraction +
+                     normal * (primitive.penetration + .002);
+     const Vec3 point{primitive.point[0], primitive.point[1], primitive.point[2]};
+@@ -2661,6 +2669,14 @@ PanelContact panel_contact(Record& rec, physics::Vec3 impact) {
+ void damage_chassis(Object* chassis, Record& rec, const physics::VehicleDynamics::Impact& hit,
+                     bool player, std::vector<Object*>& released) {
+   using physics::Vec3;
++  if (std::getenv("SLRR_VALIDATION_TRACE") && hit.speed > .01) {
++    const auto& p = rec.dynamics.body.position;
++    std::fprintf(stderr,
++                 "[validate-contact] speed=%.4f point=(%.3f %.3f %.3f) "
++                 "normal=(%.3f %.3f %.3f) body=(%.3f %.3f %.3f)\n",
++                 hit.speed, hit.point.x, hit.point.y, hit.point.z,
++                 hit.normal.x, hit.normal.y, hit.normal.z, p.x, p.y, p.z);
++  }
+   if (hit.speed < 2) return;
+   const auto& options = host_game_options();
+   const double multiplier = rec.damage_multiplier >= 0 ? rec.damage_multiplier
+@@ -3052,7 +3068,11 @@ void advance_loose_panels() {
+                          (car.velocity.length() + body.velocity.length()) * kPhysicsTick * 2.0;
+     const bool near = gap.dot(gap) < reach * reach;
+     if (native_dynamic) {
+-      const bool far = gap.dot(gap) > (reach + kSettleDistance) * (reach + kSettleDistance);
++      static const double settle_distance = [] {
++        const char* value = std::getenv("SLRR_VALIDATION_SETTLE_M");
++        return value ? std::strtod(value, nullptr) : kSettleDistance;
++      }();
++      const bool far = gap.dot(gap) > (reach + settle_distance) * (reach + settle_distance);
+       loose.far_awake_ticks = far && !sleeping ? loose.far_awake_ticks + 1 : 0;
+       if (far && sleeping) {
+         settled.push_back({part, true});
+@@ -3080,6 +3100,13 @@ void advance_loose_panels() {
+       loose.quiet_ticks = quiet ? loose.quiet_ticks + 1 : 0;
+     }
+     if (loose.quiet_ticks >= rest_ticks) body.velocity = body.momentum = {};
++    if (native_dynamic && std::getenv("SLRR_VALIDATION_TRACE")) {
++      static unsigned trace_ticks = 0;
++      if (++trace_ticks % 15 == 0)
++        std::fprintf(stderr, "[validate-dynamic] mass=%.1f pos=(%.3f %.3f %.3f) speed=%.3f quiet=%u\n",
++                     body.mass, body.position.x, body.position.y, body.position.z,
++                     body.velocity.length(), loose.quiet_ticks);
++    }
+     const auto local = part_matrix_multiply(part_matrix_inverse_rigid(parent_frame), body.frame());
+     if (native_dynamic) {
+       for (size_t i = 0; i < rec->renders.size() && i < loose.render_offsets.size(); ++i)
+@@ -3095,7 +3122,11 @@ void advance_loose_panels() {
+     const auto found = loose_panels.find(part);
+     if (found == loose_panels.end()) continue;
+     const auto frame = found->second.body.frame();
+-    scene_instances_settle_dynamic(part, keep_pose ? frame.data() : nullptr);
++    const bool settled_ok = scene_instances_settle_dynamic(part, keep_pose ? frame.data() : nullptr);
++    if (std::getenv("SLRR_VALIDATION_TRACE"))
++      std::fprintf(stderr, "[validate-settle] ok=%d keep=%d pos=(%.3f %.3f %.3f) loose_left=%zu\n",
++                   settled_ok ? 1 : 0, keep_pose ? 1 : 0, frame[12], frame[13], frame[14],
++                   loose_panels.size() - 1);
+     loose_panels.erase(found);
+     part_destroy(part);
+   }
+@@ -3190,6 +3221,36 @@ void publish_free_body(GameRefState& state, FreeBody& free, const PartMatrix& pa
+ // the controlled car, like loose panels. Bodies outside the active world wait.
+ void advance_free_bodies() {
+   using physics::Vec3;
++  // Validation-only: drop a script PhysicsRef box ahead of the car once.
++  static bool spawned = false;
++  if (!spawned && std::getenv("SLRR_VALIDATION_FREE_BOX")) {
++    if (const auto* owner = gameref_find_live(controlled_vehicle)) {
++      auto* car_rec = record(static_cast<Object*>(owner->key));
++      if (car_rec && car_rec->physics_ready && runtime && owner->parent) {
++        spawned = true;
++        auto* box = runtime->new_object("java.util.resource.PhysicsRef");
++        static Object* keep = nullptr;
++        keep = box;
++        physicsref_create_box(box, static_cast<Object*>(owner->parent), 1.f, 1.f, 1.f, "validation box");
++        if (auto* st = gameref_get(box)) {
++          const auto f = car_rec->dynamics.body.frame();
++          PartMatrix parent_frame;
++          scene_instances_script_matrix(owner->parent, parent_frame.data());
++          const auto inv = part_matrix_inverse_rigid(parent_frame);
++          const char* ahead_env = std::getenv("SLRR_VALIDATION_FREE_BOX_AHEAD");
++          const float ahead = ahead_env ? std::strtof(ahead_env, nullptr) : 14.f;
++          // Ahead of the car (its forward is -Z), 3 m up.
++          const float wx = f[12] - f[8] * ahead, wy = f[13] + 3.f, wz = f[14] - f[10] * ahead;
++          for (int a = 0; a < 3; ++a)
++            st->pos[a] = inv[a] * wx + inv[4 + a] * wy + inv[8 + a] * wz + inv[12 + a];
++          st->physics_static = false;
++          gameref_make_live(box);
++          gameref_set_physics_simulated(box, true);
++          std::fprintf(stderr, "[validate-free] spawned at (%.2f %.2f %.2f)\n", wx, wy, wz);
++        }
++      }
++    }
++  }
+   std::unordered_set<void*> live;
+   for (auto* state : gameref_simulated_bodies()) {
+     void* key = state->key;
+@@ -3257,6 +3318,13 @@ void advance_free_bodies() {
+                                               free.quiet_ticks, free.rest_anchor);
+     if (free.quiet_ticks >= rest_ticks) body.velocity = body.momentum = {};
+     publish_free_body(*state, free, parent_frame);
++    if (std::getenv("SLRR_VALIDATION_TRACE")) {
++      static unsigned trace_ticks = 0;
++      if (++trace_ticks % 30 == 0)
++        std::fprintf(stderr, "[validate-free] mass=%.1f pos=(%.3f %.3f %.3f) speed=%.3f car=%d quiet=%u\n",
++                     body.mass, body.position.x, body.position.y, body.position.z,
++                     body.velocity.length(), carrier_contact ? 1 : 0, free.quiet_ticks);
++    }
+   }
+   std::erase_if(free_bodies, [&](const auto& entry) { return !live.contains(entry.first); });
+ }
+@@ -4172,6 +4240,25 @@ void part_pause_engine_audio(bool paused) {
+ void part_physics_advance(double seconds) {
+   if (!std::isfinite(seconds) || seconds < 0)
+     throw std::invalid_argument("invalid vehicle elapsed time");
++  if (std::getenv("SLRR_VALIDATION_TRACE")) {
++    static double trace_elapsed = 0.0;
++    trace_elapsed += seconds;
++    if (trace_elapsed >= 0.25) {
++      trace_elapsed = 0.0;
++      if (auto* chassis = part_controlled_chassis()) {
++        if (auto* rec = record(chassis)) {
++          const auto& p = rec->dynamics.body.position;
++          const auto& input = host_input();
++          std::fprintf(stderr,
++                       "[validate-state] pos=(%.3f %.3f %.3f) speed=%.3f "
++                       "throttle=%.3f brake=%.3f gear=%d loose=%zu free=%zu\n",
++                       p.x, p.y, p.z, rec->dynamics.body.velocity.length() * 3.6,
++                       input.drive_throttle, input.drive_brake, rec->dynamics.gear,
++                       loose_panels.size(), free_bodies.size());
++        }
++      }
++    }
++  }
+   if (!repair_relink_pending.empty()) {
+     // One local relink per repaired part, after the complete stock repair walk.
+     // The empty-set check is the only steady-state cost.
+diff --git a/src/resources/scene_instances.cpp b/src/resources/scene_instances.cpp
+index df280d0..20b1b86 100644
+--- a/src/resources/scene_instances.cpp
++++ b/src/resources/scene_instances.cpp
+@@ -919,6 +919,10 @@ void scene_instances_promote_dynamics() {
+     auto& entry = map->dormant[index];
+     void* node = part_add_dynamic_native(*entry.config, entry.config->renders, entry.pose,
+                                          ground, entry.seed);
++    if (std::getenv("SLRR_VALIDATION_TRACE"))
++      std::fprintf(stderr, "[validate-promote] name=%s mass=%.1f pos=(%.2f %.2f %.2f) ok=%d\n",
++                   entry.config->name.c_str(), entry.config->mass, entry.pose[12],
++                   entry.pose[13], entry.pose[14], node ? 1 : 0);
+     if (!node) {
+       entry.promoted = false;
+       continue;
+diff --git a/src/resources/scene_triggers.cpp b/src/resources/scene_triggers.cpp
+index 978321a..6acc2cf 100644
+--- a/src/resources/scene_triggers.cpp
++++ b/src/resources/scene_triggers.cpp
+@@ -8,6 +8,8 @@
+ 
+ #include <array>
+ #include <cmath>
++#include <cstdio>
++#include <cstdlib>
+ #include <map>
+ #include <string>
+ #include <unordered_map>
+@@ -47,6 +49,18 @@ void scene_triggers_tick(Jvm& jvm) {
+     return;
+   }
+   const auto vehicles = part_vehicle_positions();
++  if (std::getenv("SLRR_VALIDATION_TRACE")) {
++    static size_t last = static_cast<size_t>(-1);
++    if (triggers.size() != last) {
++      last = triggers.size();
++      std::fprintf(stderr, "[validate-triggers] count=%zu cars=%zu\n", triggers.size(), vehicles.size());
++      for (void* key : triggers)
++        if (const auto* st = gameref_get(key))
++          std::fprintf(stderr, "[validate-triggers]   id=%d alias=%s shape=%d size=%.1f pos=(%.2f %.2f %.2f)\n",
++                       st->live_id, st->alias.c_str(), int(st->trigger_shape), st->trigger_size[0],
++                       st->pos[0], st->pos[1], st->pos[2]);
++    }
++  }
+   ++g_tick;
+   std::unordered_map<int32_t, bool> teleported;
+   for (const auto& vehicle : vehicles) {
+@@ -99,9 +113,21 @@ void scene_triggers_tick(Jvm& jvm) {
+     // A handler may destroy a later trigger; skip it once it is gone.
+     if (!gameref_get(event.trigger)) continue;
+     Object* param = jvm.new_string(std::to_string(event.car));
+-    script_event_emit(jvm, event.trigger, nullptr,
++    const int delivered = script_event_emit(jvm, event.trigger, nullptr,
+                       event.inside ? kEventTriggerOn : kEventTriggerOff,
+                       Value::make_obj(param));
++    if (std::getenv("SLRR_VALIDATION_TRACE")) {
++      int active = -1;
++      const Value actual = jvm.get_static("java.game.GameLogic", "actualState");
++      if (actual.tag == ValueTag::Obj && actual.v.o) {
++        const auto f = actual.v.o->fields.find("activeTrigger");
++        if (f != actual.v.o->fields.end() && f->second.tag == ValueTag::Int) active = f->second.v.i;
++      }
++      const auto* st = gameref_get(event.trigger);
++      std::fprintf(stderr, "[validate-trigger] %s trigger=%d alias=%s car=%d delivered=%d activeTrigger=%d\n",
++                   event.inside ? "on" : "off", st ? st->live_id : 0,
++                   st ? st->alias.c_str() : "?", event.car, delivered, active);
++    }
+   }
+ }
+ 

@@ -5,6 +5,7 @@
 #include "slrr/metrics.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/skeleton.hpp"
 #include "slrr/vehicle_dynamics.hpp"
 
 #include <algorithm>
@@ -26,6 +27,9 @@ const bool g_metrics_registered = [] {
                       metrics::Kind::Gauge});
   }) != 0;
 }();
+// Canonical keys of trigger volumes and of free PhysicsRef bodies, so their
+// per-frame and per-tick passes do not scan every GameRef.
+std::unordered_set<void*> g_trigger_refs, g_simulated_refs;
 std::unordered_set<void*> g_lights;
 int32_t g_next_live = 0x70000000;
 int32_t g_fog_color = 0;
@@ -51,7 +55,11 @@ float gameref_now() {
 }
 
 void gameref_clear() {
+  part_drop_actors();
+  character_forget_all();
   g_refs.clear();
+  g_trigger_refs.clear();
+  g_simulated_refs.clear();
   g_lights.clear();
   g_next_live = 0x70000000;
   g_fog = false;
@@ -102,6 +110,9 @@ bool gameref_bind_alias(void* reference,void* target) {
 
 void gameref_remove(void* key) {
   if (!key) return;
+  g_trigger_refs.erase(key);
+  g_simulated_refs.erase(key);
+  character_forget(key);
   script_events_destroy(static_cast<Object*>(key));
   auto own=g_refs.find(key);
   if(own!=g_refs.end()&&own->second.binding){g_refs.erase(own);return;}
@@ -150,6 +161,16 @@ int32_t gameref_get_flags(void* key) {
   return n ? n->flags : 0;
 }
 
+void gameref_request_active_collision(void* key) {
+  GameRefState* n = gameref_get(key);
+  if (!n) n = gameref_upsert(key);
+  if (n) gameref_queue_collision_state(*n);
+}
+
+void gameref_process_collision_requests() {
+  for (auto& [key, n] : g_refs) gameref_activate_collision_state(n);
+}
+
 void gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
                         float pitch, float roll) {
   GameRefState* n = gameref_get(key);
@@ -162,6 +183,8 @@ void gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
   n->ypr[0] = yaw;
   n->ypr[1] = pitch;
   n->ypr[2] = roll;
+  std::fill(std::begin(n->vel), std::end(n->vel), 0.f);
+  std::fill(std::begin(n->angular_vel), std::end(n->angular_vel), 0.f);
 }
 
 void gameref_set_event_mask(void* key, int32_t mask) {
@@ -227,6 +250,51 @@ void gameref_bind_scene_camera(void* key, const std::string& params) {
   st->cam_az_set = false;
   if (fields >= 3)
     gameref_set_matrix(key, p[0], p[1], p[2], p[3], p[4], p[5]);
+}
+
+void gameref_bind_trigger(void* key, const std::string& params) {
+  GameRefState* st = gameref_get(key);
+  if (!st || (st->type_id & 0xFFFF) != 0x34) return;
+  TriggerVolume volume;
+  if (!trigger_volume_parse(params, volume)) return;
+  st->trigger_shape = volume.shape;
+  std::copy(volume.size, volume.size + 3, st->trigger_size);
+  g_trigger_refs.insert(st->key);
+  // Scripts compare trigger handles by id() (ROCTrack, Nevada_Track).
+  gameref_make_live(key);
+  const float* p = volume.pose;
+  gameref_set_matrix(key, p[0], p[1], p[2], p[3], p[4], p[5]);
+}
+
+void gameref_set_physics_simulated(void* key, bool simulated) {
+  GameRefState* st = gameref_get(key);
+  if (!st) return;
+  st->physics_simulated = simulated;
+  if (simulated)
+    g_simulated_refs.insert(st->key);
+  else
+    g_simulated_refs.erase(st->key);
+}
+
+std::vector<GameRefState*> gameref_simulated_bodies() {
+  std::vector<GameRefState*> bodies;
+  for (void* key : g_simulated_refs) {
+    const auto found = g_refs.find(key);
+    if (found != g_refs.end() && found->second.physics_simulated &&
+        found->second.physics_shape != PhysicsShape::None)
+      bodies.push_back(&found->second);
+  }
+  return bodies;
+}
+
+std::vector<void*> gameref_trigger_keys() {
+  std::vector<void*> keys;
+  for (void* key : g_trigger_refs) {
+    const auto found = g_refs.find(key);
+    if (found != g_refs.end() && found->second.trigger_shape != TriggerShape::None)
+      keys.push_back(key);
+  }
+  return keys;
 }
 
 void aim_matrix(GameRefState* cam, const float eye[3], const float at[3]) {
@@ -689,7 +757,7 @@ static bool world_camera_pose(float eye[3], float at[3], float* fov, float* znea
     if (fov) *fov = cockpit ? cam->half_aov : 42.f;
     // Outside the cockpit, reserve more depth precision for close body seams.
     if (znear) *znear = cockpit ? .03f : .20f;
-    if (zfar) *zfar = 2000.f;
+    if (zfar) *zfar = 3000.f;
     return true;
   }
   // SLRR_rev javaSceneCamera (codex/physics-reverse-port @ c65675f): the
@@ -957,6 +1025,14 @@ bool gameref_get_fog(int32_t* color, float* near_z, float* far_z) {
   if (near_z) *near_z = g_fog_near;
   if (far_z) *far_z = g_fog_far;
   return true;
+}
+
+void gameref_camera_set_fog(GameRefState& camera, int32_t color, float near_z,
+                            float far_z) {
+  camera.fog_set = true;
+  camera.fog_color = color;
+  camera.fog_near = near_z;
+  camera.fog_far = far_z > near_z ? far_z : near_z + 1.f;
 }
 
 

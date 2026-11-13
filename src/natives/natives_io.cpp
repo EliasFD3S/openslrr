@@ -12,10 +12,14 @@
 #include "slrr/script_cfg.hpp"
 #include "slrr/slrr_font.hpp"
 #include "slrr/video_fmv.hpp"
+#include "slrr/scene_ambience.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/script_threads.hpp"
+#include "slrr/script_compiler.hpp"
+#include "slrr/resource_loading.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -274,12 +278,20 @@ int32_t sdat_remap_resource(const HostFile& file, uint32_t wired) {
 
 }  // namespace
 
+namespace {
+std::weak_ptr<ResourceLoadingHistory> loading_history;
+}
+void resource_loading_pump() {
+  if (auto history = loading_history.lock()) history->pump();
+}
 void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   struct PackLoading {
     unsigned scans = 0;
     bool high_priority = false;
   };
   const auto loading = std::make_shared<PackLoading>();
+  const auto history = std::make_shared<ResourceLoadingHistory>();
+  loading_history = history;
   jvm.natives().register_method(
       "java.render.Frontend", "setFonts", "()V",
       [&jvm](Object*, const std::vector<Value>&) {
@@ -330,8 +342,10 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         if (!args.empty() && args[0].tag == ValueTag::Float) scale = args[0].v.f;
         if (!args.empty() && args[0].tag == ValueTag::Int) scale = static_cast<float>(args[0].v.i);
         const float previous = jvm.time_warp(scale);
-        if (std::isfinite(scale) && scale >= 0.f && (previous == 0.f) != (scale == 0.f))
+        if (std::isfinite(scale) && scale >= 0.f && (previous == 0.f) != (scale == 0.f)) {
           part_pause_engine_audio(scale == 0.f);
+          scene_ambience_pause(scale == 0.f);
+        }
         return Value::make_float(previous);
       });
   // Compatibility calls in shipped System.java without runtime work.
@@ -344,6 +358,18 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
     jvm.natives().register_method("java.lang.System", "analyze", signature,
                                   native_noop,
                                   NativeImplementation::ExplicitNoop);
+  // All three analyze overloads intentionally discard their argument in PE.
+  jvm.natives().register_method(
+      "java.lang.System", "compileAll", "(Ljava.lang.String;)I",
+      [&jvm](Object*, const std::vector<Value>& args) {
+        const auto directory = !args.empty() && args[0].tag == ValueTag::Obj
+            ? obj_str(args[0].v.o) : std::string(".");
+        const auto report = script_compile_all(jvm.game_root(), directory, [&jvm] {
+          if (script_thread_active(jvm)) script_thread_checkpoint(jvm);
+        });
+        // Original returns the number of source units visited, not class blobs.
+        return Value::make_int(report.attempted);
+      });
   jvm.natives().register_method(
       "java.lang.System", "info", "(I)Ljava.lang.String;",
       [&jvm](Object*, const std::vector<Value>& args) {
@@ -355,15 +381,19 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
       });
   jvm.natives().register_method(
       "java.lang.System", "openLib", "(Ljava.lang.String;)I",
-      [&rpk](Object*, const std::vector<Value>& args) {
+      [&rpk, history](Object*, const std::vector<Value>& args) {
         std::string path;
         if (!args.empty() && args[0].tag == ValueTag::Obj)
           path = obj_str(args[0].v.o);
-        return Value::make_int(rpk.open_lib(path));
+        const auto begin = std::chrono::steady_clock::now();
+        const int id = rpk.open_lib(path);
+        history->record(std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - begin).count());
+        return Value::make_int(id);
       });
   jvm.natives().register_method(
       "java.lang.System", "rpkScan", "(Ljava.lang.String;)I",
-      [&jvm, &rpk, loading](Object*, const std::vector<Value>& args) {
+      [&jvm, &rpk, loading, history](Object*, const std::vector<Value>& args) {
         std::string dir;
         if (!args.empty() && args[0].tag == ValueTag::Obj)
           dir = obj_str(args[0].v.o);
@@ -378,7 +408,10 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         for (const auto& name : names) {
           const auto path = (std::filesystem::path(dir) / name).string();
           const bool was_open = rpk.pack_by_path(path) != nullptr;
+          const auto begin = std::chrono::steady_clock::now();
           rpk.open_lib(path);
+          history->record(std::chrono::duration<double, std::milli>(
+              std::chrono::steady_clock::now() - begin).count());
           ++n;
           if (was_open || n == names.size() || !script_thread_active(jvm))
             continue;
@@ -394,8 +427,8 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
       });
   jvm.natives().register_method(
       "java.lang.System", "isLoading", "()I",
-      [loading](Object*, const std::vector<Value>&) {
-        return Value::make_int(loading->scans != 0);
+      [loading, history](Object*, const std::vector<Value>&) {
+        return Value::make_int(loading->scans != 0 || history->busy());
       });
   jvm.natives().register_method(
       "java.lang.System", "setLdPriority", "(I)V",
@@ -405,8 +438,11 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         return Value::make_void();
       });
   jvm.natives().register_method(
-      "java.lang.System", "isLoadingReset", "()V", native_noop,
-      NativeImplementation::ExplicitNoop);
+      "java.lang.System", "isLoadingReset", "()V",
+      [history](Object*, const std::vector<Value>&) {
+        history->reset();
+        return Value::make_void();
+      });
   // PE System.arraycopy: copy `length` slots. Same array uses a temp so
   // overlapping ranges (Vector.removeElementAt) stay intact.
   jvm.natives().register_method(

@@ -20,6 +20,12 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources);
 Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
                     uint32_t resource, const std::string &alias,
                     const std::string &params = {});
+// Positive-mass native map placement. Uses the loose-part mesh solver and
+// exchanges contact impulses with the controlled car and static scene.
+// Returns the loose body's node, or nullptr when it could not be created.
+Object* part_add_dynamic_native(const PartConfig& config,
+                             const std::vector<PartRender>& renders,
+                             const PartMatrix& world, void* parent, int32_t seed);
 bool part_install(Object *child, Object *root, int own_slot = 0,
                   int parent_slot = 0, const float *hint = nullptr);
 bool part_destroy(Object *part);
@@ -27,6 +33,8 @@ bool part_command(Object *part, const std::string &command);
 // Car setMatrix: loaded springs, contacts on the given point, body asleep.
 // shift is false for reset, which tucks the springs and does not move the body.
 void part_park_chassis(Object *car, bool shift = true);
+// setState supplies world-space linear/angular velocity after setting the pose.
+void part_apply_state(Object *car, const float* velocity, const float* angular_velocity);
 // The point setMatrix consumed to produce the current pose: the midpoint of
 // the static tyre contacts. getPos of a car returns this, so a saved pose
 // placed again does not climb by the ride height.
@@ -44,6 +52,16 @@ bool part_camera_pose(void* car, int camera, float* matrix);
 void *part_shadow_source(void *render, float *frame);
 // Advance only cars belonging to the active world, at a fixed physics step.
 void part_physics_advance(double seconds);
+// GroundRef pedestrian natives. Density is people per square metre after the
+// script's Config factor. Types are the GameRefs Valocity registers.
+void part_set_pedestrian_density(void* ground, float density);
+void part_add_pedestrian_type(void* ground, void* type);
+void part_remove_pedestrian_type(void* ground, void* type);
+// Distance in metres from a point to the nearest live pedestrian of that
+// type id on this ground, or of any type when type_id is 0. -1 when none.
+float part_pedestrian_distance(void* ground, float x, float y, float z, int32_t type_id);
+// Map unload. Drops the seated driver and the walking crowd.
+void part_drop_actors();
 void part_pause_engine_audio(bool paused);
 struct PartPhysicsState {
   bool active = false;
@@ -65,6 +83,16 @@ struct PartPhysicsState {
 };
 bool part_physics_state(Object *car, PartPhysicsState &state);
 Object* part_controlled_chassis();
+// Top-level cars of the active world, for trigger volumes: the chassis key,
+// the id() scripts see for its Vehicle, and the body position in script metres.
+struct PartVehiclePosition {
+  Object* chassis = nullptr;
+  int32_t id = 0;
+  float position[3] = {0.f, 0.f, 0.f};
+};
+std::vector<PartVehiclePosition> part_vehicle_positions();
+// Chassis mesh of a Vehicle. Follows a bound alias, then the chassis field.
+Object* part_chassis(Object* object);
 Object* part_debug_chassis(Object* object);
 struct VehicleHudState {
   const VehicleHudLayout *layout = nullptr;

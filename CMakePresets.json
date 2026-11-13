@@ -12,10 +12,7 @@
       "description": "Visual Studio 2022 x64 build with pinned bgfx",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
-      "binaryDir": "${sourceDir}/build-bgfx-x64",
-      "cacheVariables": {
-        "SLRR_STAGE_BUILD": "OFF"
-      }
+      "binaryDir": "${sourceDir}/build-bgfx-x64"
     }
   ],
   "buildPresets": [

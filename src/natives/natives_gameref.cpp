@@ -25,6 +25,19 @@
 
 namespace slrr {
 
+// A Vehicle is the script handle. When it is not bound to its chassis, the
+// mesh still hangs on the chassis field. Pose and parent that mesh.
+Object* placed_body(Object* self) {
+  Object* body = part_chassis(self);
+  if (!body) return self;
+  GameRefState* self_node = gameref_get(self);
+  GameRefState* body_node = gameref_get(body);
+  if (!body_node || body_node == self_node) return self;
+  body_node->flags &= ~kWorldTreeRoot;
+  body_node->empty = false;
+  return body;
+}
+
 // Resource `script path.class` → instance whose statics (MapName, MapImage)
 // are also instance fields. TrackSelect reads them off the Vector element.
 // The track constructor builds the world; the selector only needs the names.
@@ -344,9 +357,45 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
             getf("r", &roll);
           }
         }
-        gameref_set_matrix(self, px, py, pz, yaw, pitch, roll);
-        part_park_chassis(self);
+        Object* moved = placed_body(self);
+        gameref_set_matrix(moved, px, py, pz, yaw, pitch, roll);
+        part_park_chassis(moved);
         return Value::make_void();
+      });
+  jvm.natives().register_method(
+      "java.util.resource.GameRef", "setState",
+      "(Ljava.lang.Vector3;Ljava.lang.Ypr;Ljava.lang.Vector3;Ljava.lang.Vector3;)V",
+      [](Object* self, const std::vector<Value>& args) {
+        if (!self || args.size() != 4) return Value::make_void();
+        float values[12]{};
+        for (size_t i = 0; i < 4; ++i) {
+          if (args[i].tag != ValueTag::Obj) return Value::make_void();
+          const auto* obj = args[i].v.o;
+          if (!obj) continue;
+          const char* names[3] = {i == 1 ? "y" : "x", i == 1 ? "p" : "y", i == 1 ? "r" : "z"};
+          for (size_t j = 0; j < 3; ++j) {
+            const auto found = obj->fields.find(names[j]);
+            if (found == obj->fields.end()) continue;
+            const auto value = found->second;
+            values[i * 3 + j] = value.tag == ValueTag::Float ? value.v.f :
+                value.tag == ValueTag::Int ? float(value.v.i) : 0.f;
+            if (!std::isfinite(values[i * 3 + j])) return Value::make_void();
+          }
+        }
+        gameref_set_matrix(self, values[0], values[1], values[2],
+                           values[3], values[4], values[5]);
+        if (auto* state = gameref_get(self)) {
+          std::copy(values + 6, values + 9, state->vel);
+          std::copy(values + 9, values + 12, state->angular_vel);
+        }
+        part_apply_state(self, values + 6, values + 9);
+        return Value::make_void();
+      });
+  jvm.natives().register_method(
+      "java.util.resource.GameRef", "getDetail", "()F",
+      [](Object* self, const std::vector<Value>&) {
+        const auto* state = gameref_get(self);
+        return Value::make_float(state && !state->empty ? state->detail : 0.f);
       });
   jvm.natives().register_method(
       "java.util.resource.GameRef", "setParent",
@@ -355,7 +404,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
         Object* p =
             (!args.empty() && args[0].tag == ValueTag::Obj) ? args[0].v.o
                                                             : nullptr;
-        gameref_set_parent(self, p);
+        gameref_set_parent(placed_body(self), p);
         return Value::make_void();
       });
   // Soft PE GameRef lean — Runtime Resources/GameRef_*.
@@ -508,8 +557,11 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
         return Value::make_void();
       });
   jvm.natives().register_method(
-      "java.util.resource.GameRef", "setActiveCollision", "()V", native_noop,
-      NativeImplementation::ExplicitNoop);
+      "java.util.resource.GameRef", "setActiveCollision", "()V",
+      [](Object* self, const std::vector<Value>&) {
+        gameref_request_active_collision(self);
+        return Value::make_void();
+      });
 
   // GameRef.create / create_native — Soft PE @ 0x47D… (declaring: GameRef).
   // Java ctors call create(…) after super(); do not stub GameRef.<init>.
@@ -555,6 +607,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
             (args.size() >= 3 && args[2].tag == ValueTag::Obj) ? args[2].v.o
                                                                : nullptr;
         gameref_bind_scene_camera(self, params ? params->str : std::string{});
+        gameref_bind_trigger(self, params ? params->str : std::string{});
         return Value::make_void();
       });
   jvm.natives().register_method(
@@ -577,6 +630,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
             (args.size() >= 3 && args[2].tag == ValueTag::Obj) ? args[2].v.o
                                                                : nullptr;
         gameref_bind_scene_camera(self, params ? params->str : std::string{});
+        gameref_bind_trigger(self, params ? params->str : std::string{});
         int32_t id = 0;
         if (type) {
           if (GameRefState* ts = gameref_get(type)) id = ts->type_id;

@@ -28,7 +28,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Check native coverage drift
-        run: node scripts/render-native-coverage.js --check
+        run: python scripts/render_native_coverage.py --check
 
       - name: Build tests
         run: |
@@ -94,7 +94,7 @@ jobs:
       - name: Configure ASan build
         run: |
           $cmake = Join-Path $env:GITHUB_WORKSPACE 'tools/cmake-3.31.8-windows-x86_64/bin/cmake.exe'
-          & $cmake -S . -B build-asan -G 'Visual Studio 17 2022' -A x64 -DSLRR_ENABLE_ASAN=ON -DSLRR_STAGE_BUILD=OFF
+          & $cmake -S . -B build-asan -G 'Visual Studio 17 2022' -A x64 -DSLRR_ENABLE_ASAN=ON
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build ASan tests

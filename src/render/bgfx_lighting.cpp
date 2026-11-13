@@ -67,8 +67,9 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
     for (unsigned i = 0; i < 4; ++i) {
       const float sx = i & 1 ? half_x : -half_x;
       const float sy = i & 2 ? -half_y : half_y;
+      // Reversed-Z puts the far plane at 0. The flare sits just in front of it.
       const auto p = bx::mulH({cx + (sx * cos_angle - sy * sin_angle) * aspect,
-                               cy + sx * sin_angle + sy * cos_angle, .9999f}, inverse);
+                               cy + sx * sin_angle + sy * cos_angle, 0.001f}, inverse);
       vertices[base + i] = {p.x, p.y, p.z, 0.f, 0.f, 1.f,
                             u + (i & 1 ? w : 0.f), v + (i & 2 ? h : 0.f)};
     }
@@ -102,7 +103,7 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
   bgfx::setVertexBuffer(0, &vb);
   bgfx::setIndexBuffer(&ib);
   bgfx::setTexture(0, s_tex_, texture);
-  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_LEQUAL |
+  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_GREATER |
                  BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_ONE));
   bgfx::submit(view_id, program_);
 }
@@ -133,20 +134,12 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
     float u[4] = {0.f, 0.f, 1.f, 0.f};
     float xf[4] = {1.f, 1.f, 0.f, 0.f};
     bgfx::TextureHandle lm = white_tex_;
+    (void)tex;
     if (group) u[1] = static_cast<float>(group->base_map.channel);
     if (group && bgfx::isValid(mix))
       u[3] = 1.f + static_cast<float>(group->mix_map.channel);
-    if (group && tex && group->lightmap_index != 0xffff &&
-        group->lightmap_index < tex->size() &&
-        bgfx::isValid((*tex)[group->lightmap_index])) {
-      lm = (*tex)[group->lightmap_index];
-      u[0] = 1.f;
-      u[2] = static_cast<float>(group->lightmap_map.channel);
-      xf[0] = group->lightmap_map.scale_u;
-      xf[1] = group->lightmap_map.scale_v;
-      xf[2] = group->lightmap_map.offset_u;
-      xf[3] = group->lightmap_map.offset_v;
-    }
+    // The stock lightmap already contains the sun and its shadows. Leaving
+    // it on skips the shadow map in the mesh shader.
     bgfx::setUniform(u_lightmap_, u);
     bgfx::setUniform(u_lightmap_uv_, xf);
     bgfx::setTexture(1, s_lightmap_, lm);
@@ -154,7 +147,7 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
     const bool receive = receive_static_shadow && static_shadow_active_ &&
                          debug_overlay_.render_options().map_shadows;
     const float params[4] = {receive ? 1.f : 0.f,
-                             receive ? 1.f / static_shadow_size_ : 0.f, 0.00045f, 0.f};
+                             receive ? 1.f / static_shadow_size_ : 0.f, 0.00012f, 0.f};
     bgfx::setUniform(u_static_shadow_params_, params);
     if (receive) {
       const float eye[4] = {static_shadow_eye_[0], static_shadow_eye_[1],
@@ -162,12 +155,24 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
       bgfx::setUniform(u_static_shadow_eye_, eye);
       bgfx::setUniform(u_static_shadow_mtx_, static_shadow_matrix_.data());
     }
-    bgfx::setTexture(3, s_static_shadow_, receive ? static_shadow_tex_ : white_tex_);
+    constexpr uint32_t shadow_sampler = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
+                                        BGFX_SAMPLER_COMPARE_LEQUAL;
+    const auto shadow_tex = receive ? static_shadow_tex_
+                                    : (bgfx::isValid(depth_white_) ? depth_white_ : static_shadow_tex_);
+    bgfx::setTexture(3, s_static_shadow_,
+                     bgfx::isValid(shadow_tex) ? shadow_tex : white_tex_, shadow_sampler);
     const bool receive_car = receive_static_shadow && car_depth_active_;
     const float car_params[4] = {receive_car ? 1.f : 0.f, 1.f / kShadowResolution, .0006f, 0.f};
     bgfx::setUniform(u_car_depth_params_, car_params);
     if (receive_car) bgfx::setUniform(u_car_depth_mtx_, car_depth_matrix_.data());
     bgfx::setTexture(4, s_car_depth_, receive_car ? car_depth_tex_ : white_tex_);
+    const float fog_color[4] = {fog_color_[0], fog_color_[1], fog_color_[2],
+                                fog_enabled_ ? 1.f : 0.f};
+    const float fog_range[4] = {fog_near_, fog_far_, 0.f, 0.f};
+    const float fog_eye[4] = {fog_eye_[0], fog_eye_[1], fog_eye_[2], 0.f};
+    if (bgfx::isValid(u_fog_color_)) bgfx::setUniform(u_fog_color_, fog_color);
+    if (bgfx::isValid(u_fog_range_)) bgfx::setUniform(u_fog_range_, fog_range);
+    if (bgfx::isValid(u_fog_eye_)) bgfx::setUniform(u_fog_eye_, fog_eye);
   }
   void LibBgfxBackend::draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass)
 {
@@ -214,19 +219,13 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
         // Cabin glass already asks for a generated spheremap. Only the lens
         // keeps the stock alpha, so the housing texture shows through.
         const bool lens = glass && env.idx == white_tex_.idx && !generated;
-        // A missing reflection slot is the global envmap, and the exe
-        // builds its UVs from the reflection vector, not the mesh.
+        // Paint, chrome and glass take the live cubemap, or the sun gradient
+        // until that cubemap is ready. The fixed chassis spheremap stays off.
         const bool enhanced_env = !preview && reflection_scene_ &&
             host_enhanced_graphics().dynamic_reflections && !lens &&
             (generated || painted || chrome || bare_cap || glass || color_mix_env ||
              group.reflection_index != 0xffff);
         const bool live_env = enhanced_env && reflection_ready_;
-        if (!enhanced_env && env.idx == white_tex_.idx &&
-            (painted || generated || chrome || bare_cap || glass)) {
-          auto path = scene_instances_envmap();
-          if(!path.empty()) env = tex_for_osd_icon(path);
-          generated = true;
-        }
         const float kind = glass ? 3.f : color_mix_env ? 5.f : color_mix ? 4.f
                                 : (chrome || bare_cap) ? 2.f : painted ? 1.f : 0.f;
         const bool has_reflection = enhanced_env || env.idx != white_tex_.idx;
@@ -285,17 +284,6 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
         bgfx::TextureHandle bake = white_tex_;
         float bake_u[4] = {0.f, static_cast<float>(group.base_map.channel), 1.f, 0.f};
         float bake_xf[4] = {1.f, 1.f, 0.f, 0.f};
-        if (group.lightmap_index != 0xffff &&
-            group.lightmap_index < part.tex.size() &&
-            bgfx::isValid(part.tex[group.lightmap_index])) {
-          bake = part.tex[group.lightmap_index];
-          bake_u[0] = 1.f;
-          bake_u[2] = static_cast<float>(group.lightmap_map.channel);
-          bake_xf[0] = group.lightmap_map.scale_u;
-          bake_xf[1] = group.lightmap_map.scale_v;
-          bake_xf[2] = group.lightmap_map.offset_u;
-          bake_xf[3] = group.lightmap_map.offset_v;
-        }
         if (transparent && color_mix) bake_u[3] = 1.f;
         // A switched-on lamp is the glow texture, not a surface in shade.
         if (instance.light_flags) bake_u[0] = 1.f;
@@ -319,7 +307,7 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
           bgfx::setUniform(u_reflection_box_max_, high);
         }
         bgfx::setTransform(matrix);bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,group.index_start,group.index_count);
-        uint64_t state=BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_MSAA|BGFX_STATE_DEPTH_TEST_LESS;
+        uint64_t state=BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_MSAA|BGFX_STATE_DEPTH_TEST_GREATER;
         if (glass)
           state |= BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
         else if (transparent || group.diffuse[3] < .99f)
@@ -364,8 +352,19 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
       float tint[4]={((color>>16)&255)/255.f,((color>>8)&255)/255.f,(color&255)/255.f,1};
       if (material_mix)
         for (int i = 0; i < 3; ++i) tint[i] *= group->diffuse[i];
+      const ScxTextureMap identity;
+      const ScxTextureMap& base_uv = group ? group->base_map : identity;
+      const ScxTextureMap& mix_uv = group ? group->mix_map : identity;
+      const float base_xf[4] = {base_uv.scale_u, base_uv.scale_v, base_uv.offset_u, base_uv.offset_v};
+      const float mix_xf[4] = {mix_uv.scale_u, mix_uv.scale_v, mix_uv.offset_u, mix_uv.offset_v};
+      bgfx::setUniform(u_mesh_base_uv_, base_xf);
+      bgfx::setUniform(u_mesh_mix_uv_, mix_xf);
       bgfx::setUniform(u_alpha_test_,settings);bgfx::setUniform(u_color_,tint);bgfx::setTransform(matrix);
-      bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,first,count);
+      const bool skinned = instance.gpu_skin && bgfx::isValid(part.skin_vbh) &&
+          bgfx::isValid(skin_program_) && instance.skin.size() >= 48u * 16u;
+      if (skinned) bgfx::setUniform(u_skin_bones_, instance.skin.data(), 48);
+      bgfx::setVertexBuffer(0, skinned ? part.skin_vbh : part.vbh);
+      bgfx::setIndexBuffer(part.ibh,first,count);
       bgfx::setTexture(0, s_tex_, tex, BGFX_SAMPLER_NONE);
       bgfx::TextureHandle mix = BGFX_INVALID_HANDLE;
       if (group && part.geo.position_scale == 1.f && group->mix_index != 0xffff) {
@@ -373,13 +372,15 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
         if (candidate.idx != white_tex_.idx) mix = candidate;
       }
       const bool world_mesh = !preview && !instance.sky && !blend;
+      // Reflection faces are 256² copies of the city. They keep the sun
+      // and skip the shadow taps.
       const auto& graphics = host_enhanced_graphics();
       const bool procedural_sky = instance.sky && outdoor_lighting_;
       const float sky[4] = {matrix[12], matrix[13], matrix[14],
                             graphics.volumetric_clouds ? 2.f : 1.f};
       const bool scene_light = procedural_sky ||
           (world_mesh && outdoor_lighting_ && graphics.dynamic_lighting);
-      bind_baked_light(group, &part.tex, mix, world_mesh,
+      bind_baked_light(group, &part.tex, mix, world_mesh && view_id < 72,
                       scene_light ? &instance.lighting : nullptr, procedural_sky ? sky : nullptr);
       if (world_mesh) bgfx::setUniform(u_local_light_, local_light_.data());
       uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_MSAA;
@@ -391,16 +392,135 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
             ? std::filesystem::path(part.geo.textures[texture_index]).extension().string() : "";
         std::transform(extension.begin(), extension.end(), extension.begin(),
                        [](unsigned char c) { return std::tolower(c); });
-        state |= BGFX_STATE_DEPTH_TEST_LESS | (extension == ".dds" ? BGFX_STATE_BLEND_ALPHA
+        state |= BGFX_STATE_DEPTH_TEST_GREATER | (extension == ".dds" ? BGFX_STATE_BLEND_ALPHA
             : BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA));
       } else if (!instance.sky) {
-        state |= BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS;
+        state |= BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_GREATER;
       }
       bgfx::setState(state);
-      bgfx::submit(view_id, program_);
+      bgfx::submit(view_id, skinned ? skin_program_ : program_);
     };
     if(part.geo.groups.empty())draw(0,static_cast<uint32_t>(part.geo.indices.size()),0,0,nullptr);
     else for(const auto&g:part.geo.groups)draw(g.index_start,g.index_count,g.texture_index,g.material_flags,&g);
   }
+
+void LibBgfxBackend::draw_prop_batches(uint16_t view_id,
+                                       const std::vector<SceneBatch>& batches,
+                                       bool shadow, bool conservative) {
+  const auto program = shadow ? inst_shadow_program_ : inst_program_;
+  if (!bgfx::isValid(program) || batches.empty()) return;
+  float identity[16];
+  bx::mtxIdentity(identity);
+  const auto& graphics = host_enhanced_graphics();
+  struct PropInstance {
+    float matrix[16];
+    float color[4];
+  };
+  static_assert(sizeof(PropInstance) == 80);
+  for (const auto& batch : batches) {
+    if (batch.instances.empty() || !batch.geometry) continue;
+    const auto found = instance_meshes_.find(batch.geometry.get());
+    if (found == instance_meshes_.end()) continue;
+    const auto& part = found->second;
+    if (!bgfx::isValid(part.vbh) || !bgfx::isValid(part.ibh)) continue;
+    const auto& groups = part.geo.groups;
+    const uint32_t group_count = groups.empty() ? 1u : static_cast<uint32_t>(groups.size());
+    for (size_t base = 0; base < batch.instances.size();) {
+      const auto want = static_cast<uint32_t>(std::min<size_t>(128, batch.instances.size() - base));
+      const auto stride = static_cast<uint16_t>(sizeof(PropInstance));
+      const uint32_t count = bgfx::getAvailInstanceDataBuffer(want, stride);
+      if (!count) break;
+      bgfx::InstanceDataBuffer idb;
+      bgfx::allocInstanceDataBuffer(&idb, count, stride);
+      auto* dst = reinterpret_cast<PropInstance*>(idb.data);
+      for (uint32_t i = 0; i < count; ++i) {
+        const auto& src = batch.instances[base + i];
+        std::memcpy(dst[i].matrix, src.transform.data(), sizeof(dst[i].matrix));
+        dst[i].color[0] = ((src.color >> 16) & 255) / 255.f;
+        dst[i].color[1] = ((src.color >> 8) & 255) / 255.f;
+        dst[i].color[2] = (src.color & 255) / 255.f;
+        dst[i].color[3] = 1.f;
+      }
+      for (uint32_t group_index = 0; group_index < group_count; ++group_index) {
+        const ScxGroup* group = groups.empty() ? nullptr : &groups[group_index];
+        const uint32_t first = group ? group->index_start : 0;
+        const uint32_t index_count = group ? group->index_count
+                                           : static_cast<uint32_t>(part.geo.indices.size());
+        const uint16_t slot = group ? group->texture_index : 0;
+        const uint32_t flags = group ? group->material_flags : 0;
+        const auto tex = slot < part.tex.size() && bgfx::isValid(part.tex[slot])
+                             ? part.tex[slot] : white_tex_;
+        // The same alpha rules as a single placement (draw_instance and the
+        // static shadow pass). Batched meshes have no blended sections.
+        const bool v4 = part.geo.info.version == 4;
+        const bool material_mix = group && v4 && group->material_type == 0x03u;
+        const bool cut = !material_mix && (v4 ? (flags & 0x20000000u) != 0
+                                              : part.geo.info.version != 3 || (flags & 1u) != 0);
+        if (shadow) {
+          const float threshold = !cut || !group ? -1.f
+              : v4 ? group->alpha_reference / 255.f : .5f;
+          const float params[4] = {0.f, threshold,
+                                   group ? static_cast<float>(group->base_map.channel) : 0.f, 0.f};
+          bgfx::setUniform(u_static_shadow_params_, params);
+          bgfx::setTexture(0, s_tex_, tex);
+          bgfx::setTransform(identity);
+          bgfx::setVertexBuffer(0, part.vbh);
+          bgfx::setIndexBuffer(part.ibh, first, index_count);
+          // Like a single caster in update_static_shadow: both faces cast.
+          uint64_t state = BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS;
+          if (conservative) state |= BGFX_STATE_CONSERVATIVE_RASTER;
+          bgfx::setState(state);
+        } else {
+          const float alpha_test = !cut ? 0.f : v4 && group
+              ? -(1.f + group->alpha_reference) / 255.f : 1.f;
+          const bool foliage_coverage = cut && v4 && view_id < 72 &&
+              (reset_flags_ & BGFX_RESET_MSAA_MASK) &&
+              part.geo.info.path.find("fa_tibi") != std::string::npos;
+          const bool vertex_mix = group && group->mix_vertex_color;
+          const float settings[4] = {alpha_test, vertex_mix ? 1.f : 0.f,
+                                     foliage_coverage ? 2.f : 0.f,
+                                     material_mix ? -2.f : vertex_mix ? -1.f : 0.f};
+          bgfx::TextureHandle mix = BGFX_INVALID_HANDLE;
+          if (group && part.geo.position_scale == 1.f && group->mix_index != 0xffff &&
+              group->mix_index < part.tex.size() && bgfx::isValid(part.tex[group->mix_index]) &&
+              part.tex[group->mix_index].idx != white_tex_.idx)
+            mix = part.tex[group->mix_index];
+          const float white[4] = {1.f, 1.f, 1.f, 1.f};
+          const ScxTextureMap identity_uv;
+          const auto& base_uv = group ? group->base_map : identity_uv;
+          const auto& mix_uv = group ? group->mix_map : identity_uv;
+          const float base_xf[4] = {base_uv.scale_u, base_uv.scale_v, base_uv.offset_u, base_uv.offset_v};
+          const float mix_xf[4] = {mix_uv.scale_u, mix_uv.scale_v, mix_uv.offset_u, mix_uv.offset_v};
+          bgfx::setUniform(u_mesh_base_uv_, base_xf);
+          bgfx::setUniform(u_mesh_mix_uv_, mix_xf);
+          bgfx::setUniform(u_alpha_test_, settings);
+          // The placement colour comes per instance; ColorMixTex multiplies
+          // it by the section diffuse in fs_mesh, like draw_instance's tint.
+          const float mix_tint[4] = {group && material_mix ? group->diffuse[0] : 1.f,
+                                     group && material_mix ? group->diffuse[1] : 1.f,
+                                     group && material_mix ? group->diffuse[2] : 1.f, 1.f};
+          bgfx::setUniform(u_color_, material_mix ? mix_tint : white);
+          bgfx::setTransform(identity);
+          bgfx::setVertexBuffer(0, part.vbh);
+          bgfx::setIndexBuffer(part.ibh, first, index_count);
+          bgfx::setTexture(0, s_tex_, tex, BGFX_SAMPLER_NONE);
+          const bool receive = view_id < 72;
+          bind_baked_light(group, &part.tex, mix, receive,
+                           outdoor_lighting_ && graphics.dynamic_lighting ? &batch.lighting : nullptr,
+                           nullptr);
+          if (receive) bgfx::setUniform(u_local_light_, local_light_.data());
+          uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_MSAA |
+                           BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_GREATER;
+          if (foliage_coverage) state |= BGFX_STATE_BLEND_ALPHA_TO_COVERAGE;
+          if (!(flags & 0x02000000u)) state |= BGFX_STATE_CULL_CW;
+          bgfx::setState(state);
+        }
+        bgfx::setInstanceDataBuffer(&idb);
+        bgfx::submit(view_id, program);
+      }
+      base += count;
+    }
+  }
+}
 
 }  // namespace slrr

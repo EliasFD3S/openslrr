@@ -1,7 +1,10 @@
 #include "slrr/gc_roots.hpp"
+#include "slrr/frame_profiler.hpp"
 #include "slrr/mainloop.hpp"
 #include "slrr/script_threads.hpp"
 #include "slrr/script_events.hpp"
+#include "slrr/scene_ambience.hpp"
+#include "slrr/scene_triggers.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/scene_presentation.hpp"
 #include "slrr/natives_boot.hpp"
@@ -10,6 +13,7 @@
 #include "slrr/host_game_options.hpp"
 #include "slrr/diagnostics.hpp"
 #include "slrr/physics_telemetry.hpp"
+#include "slrr/resource_loading.hpp"
 
 #include "slrr/gameref.hpp"
 #include "slrr/part_runtime.hpp"
@@ -365,6 +369,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   const std::uint64_t host_frame = g_host_frame++;
   diagnostics::set_frame(host_frame);
   physics_telemetry::begin_frame(host_frame, dt, jvm.time_warp());
+  resource_loading_pump();
   host_music_update();
   host_game_options_update(jvm);
   const auto game_time = jvm.get_static("java.game.GameLogic", "time");
@@ -382,10 +387,16 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     const float rate = factor.tag == ValueTag::Float ? factor.v.f : 4.f;
     scene_sun_set_time(seconds + clock_elapsed * rate);
   }
-  script_threads_tick(jvm);
+  {
+    perf::Scope scope(perf::Zone::Scripts);
+    script_threads_tick(jvm);
+  }
   MainLoopFrameResult out;
   mainloop_adopt_section(jvm, sections);
-  pump_async_messages(jvm, sections.actual());
+  {
+    perf::Scope scope(perf::Zone::Scripts);
+    pump_async_messages(jvm, sections.actual());
+  }
 
   // --- Input_tick @ 0x54DDA0 (Soft: live axes + garage orbit) ---
   float frame_dt = static_cast<float>(dt);
@@ -406,7 +417,10 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     }
     host_input_check_hotkeys(jvm, controller, focus);
   }
-  script_callbacks_tick(jvm,frame_dt);
+  {
+    perf::Scope scope(perf::Zone::Scripts);
+    script_callbacks_tick(jvm, frame_dt);
+  }
 
   auto& in = host_input();
   const float yaw = host_input_camera_axis(7);
@@ -419,7 +433,10 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   in.look_zoom = 0.f;
 
   // --- SimulateFrame slice: GameType timers (phys/CONTROL OOS lean host) ---
-  dispatch_due_timers(jvm, gameref_now(), &out.timers_fired);
+  {
+    perf::Scope scope(perf::Zone::Scripts);
+    dispatch_due_timers(jvm, gameref_now(), &out.timers_fired);
+  }
 
   // Credits scroll lives on MainMenuDialog (field mmd), not on the
   // section. animate() only while that dialog's credits group is showing.
@@ -758,11 +775,17 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   if(!script_thread_alive(jvm,g_mechanic_thread))apply_mechanic_infoline(jvm, g_spinning_mechanic);
   const double warp = jvm.time_warp();
   const double requested_sim = std::isfinite(dt) && dt > 0 ? dt * warp : 0;
-  const double admitted_sim = jvm.advance_sim_time(dt);
-  physics_telemetry::set_simulation_time(
-      admitted_sim, std::max(0.0, requested_sim - admitted_sim));
-  part_physics_advance(admitted_sim);
+  double sim_seconds = 0.0;
+  {
+    perf::Scope scope(perf::Zone::Physics);
+    sim_seconds = jvm.advance_sim_time(dt);
+    physics_telemetry::set_simulation_time(
+        sim_seconds, std::max(0.0, requested_sim - sim_seconds));
+    part_physics_advance(sim_seconds);
+  }
   physics_telemetry::end_frame();
+  scene_ambience_tick(sim_seconds);
+  scene_triggers_tick(jvm);
 
   // Last write before the view is built. The chase camera must not cover
   // the showroom orbit, and nothing after the earlier spin may put it back.
@@ -776,7 +799,10 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
 
   // --- Present: AltPresentGate (FMV) else PresentFrame ---
   // Soft: backend flush pumps FMV SampleGrabber + Present (libbgfx path).
-  render.flush();
+  {
+    perf::Scope scope(perf::Zone::Flush);
+    render.flush();
+  }
 
   // --- PollWindowQuit @ 0x5522A0 ---
   out.quit = render.quit_requested();

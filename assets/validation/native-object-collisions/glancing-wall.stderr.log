@@ -1,0 +1,80 @@
+[validate-state] pos=(379.987 3.417 423.030) speed=5.297 throttle=0.500 brake=0.000 gear=0 loose=0 free=0
+[validate-state] pos=(379.987 2.522 423.030) speed=15.892 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(380.037 1.956 422.991) speed=0.920 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(379.965 1.959 422.966) speed=2.360 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(379.687 1.959 422.918) speed=5.167 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(379.241 1.960 422.839) speed=7.795 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(378.567 1.961 422.719) speed=10.595 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(377.689 1.963 422.564) speed=13.392 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(376.681 1.964 422.385) speed=16.008 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(375.420 1.967 422.163) speed=18.415 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(374.085 1.969 421.927) speed=20.581 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(372.496 1.972 421.646) speed=22.916 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(370.874 2.028 421.388) speed=23.263 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(369.208 2.108 421.105) speed=24.667 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(367.352 2.097 420.780) speed=26.766 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(365.449 2.111 420.423) speed=28.845 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(363.405 2.120 420.045) speed=30.946 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(361.074 2.138 419.616) speed=33.026 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(358.429 2.135 419.124) speed=35.273 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(356.120 2.135 418.695) speed=37.139 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(353.156 2.135 418.144) speed=39.421 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-box] owner=0000000000000000 pen=0.001 fraction=0.281 normal=(0.446 0.000 -0.895) point=(350.87 2.45 419.10)
+[validate-contact] speed=3.1153 point=(350.868 2.446 419.102) normal=(0.446 0.000 -0.895) body=(351.464 2.135 417.827)
+[validate-box] owner=0000000000000000 pen=0.028 fraction=1.000 normal=(0.446 0.000 -0.895) point=(350.72 2.44 419.03)
+[validate-box] owner=0000000000000000 pen=0.028 fraction=1.000 normal=(0.446 0.000 -0.895) point=(350.57 2.43 418.95)
+[validate-contact] speed=0.3276 point=(350.572 2.428 418.954) normal=(0.446 0.000 -0.895) body=(351.188 2.153 417.640)
+[validate-box] owner=0000000000000000 pen=0.023 fraction=1.000 normal=(0.446 0.000 -0.895) point=(350.43 2.42 418.88)
+[validate-contact] speed=0.1960 point=(350.427 2.419 418.882) normal=(0.446 0.000 -0.895) body=(351.053 2.162 417.551)
+[validate-box] owner=0000000000000000 pen=0.023 fraction=1.000 normal=(0.446 0.000 -0.895) point=(350.28 2.41 418.81)
+[validate-contact] speed=0.1819 point=(350.284 2.411 418.811) normal=(0.446 0.000 -0.895) body=(350.920 2.170 417.464)
+[validate-box] owner=0000000000000000 pen=0.023 fraction=1.000 normal=(0.446 0.000 -0.895) point=(350.14 2.40 418.74)
+[validate-contact] speed=0.1786 point=(350.142 2.402 418.740) normal=(0.446 0.000 -0.895) body=(350.788 2.178 417.377)
+[validate-box] owner=0000000000000000 pen=0.023 fraction=1.000 normal=(0.446 0.000 -0.895) point=(350.00 2.39 418.67)
+[validate-contact] speed=0.1768 point=(350.002 2.394 418.670) normal=(0.446 0.000 -0.895) body=(350.658 2.186 417.290)
+[validate-box] owner=0000000000000000 pen=0.023 fraction=1.000 normal=(0.446 0.000 -0.895) point=(349.85 2.58 418.60)
+[validate-contact] speed=0.0576 point=(349.854 2.576 418.596) normal=(0.446 0.000 -0.895) body=(350.530 2.193 417.204)
+[validate-state] pos=(350.530 2.193 417.204) speed=32.995 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-box] owner=0000000000000000 pen=0.024 fraction=1.000 normal=(0.446 0.000 -0.895) point=(349.72 2.58 418.53)
+[validate-contact] speed=0.1684 point=(349.715 2.583 418.527) normal=(0.446 0.000 -0.895) body=(350.403 2.200 417.119)
+[validate-box] owner=0000000000000000 pen=0.024 fraction=1.000 normal=(0.446 0.000 -0.895) point=(349.58 2.59 418.46)
+[validate-contact] speed=0.1918 point=(349.578 2.589 418.459) normal=(0.446 0.000 -0.895) body=(350.277 2.207 417.035)
+[validate-box] owner=0000000000000000 pen=0.024 fraction=1.000 normal=(0.446 0.000 -0.895) point=(349.44 2.60 418.39)
+[validate-contact] speed=0.1973 point=(349.442 2.595 418.391) normal=(0.446 0.000 -0.895) body=(350.153 2.214 416.952)
+[validate-box] owner=0000000000000000 pen=0.024 fraction=1.000 normal=(0.446 0.000 -0.895) point=(349.31 2.60 418.32)
+[validate-contact] speed=0.1988 point=(349.308 2.602 418.324) normal=(0.446 0.000 -0.895) body=(350.030 2.221 416.869)
+[validate-box] owner=0000000000000000 pen=0.024 fraction=1.000 normal=(0.446 0.000 -0.895) point=(349.18 2.61 418.26)
+[validate-contact] speed=0.1993 point=(349.176 2.609 418.258) normal=(0.446 0.000 -0.895) body=(349.910 2.228 416.787)
+[validate-box] owner=0000000000000000 pen=0.024 fraction=1.000 normal=(0.446 0.000 -0.895) point=(349.05 2.62 418.19)
+[validate-contact] speed=0.1993 point=(349.045 2.615 418.193) normal=(0.446 0.000 -0.895) body=(349.791 2.236 416.707)
+[validate-box] owner=0000000000000000 pen=0.024 fraction=1.000 normal=(0.446 0.000 -0.895) point=(348.92 2.62 418.13)
+[validate-contact] speed=0.1990 point=(348.916 2.622 418.129) normal=(0.446 0.000 -0.895) body=(349.674 2.244 416.627)
+[validate-box] owner=0000000000000000 pen=0.024 fraction=1.000 normal=(0.446 0.000 -0.895) point=(348.79 2.63 418.07)
+[validate-contact] speed=0.1984 point=(348.789 2.629 418.066) normal=(0.446 0.000 -0.895) body=(349.560 2.252 416.547)
+[validate-box] owner=0000000000000000 pen=0.024 fraction=1.000 normal=(0.446 0.000 -0.895) point=(348.66 2.64 418.00)
+[validate-contact] speed=0.1975 point=(348.664 2.635 418.003) normal=(0.446 0.000 -0.895) body=(349.447 2.260 416.469)
+[validate-box] owner=0000000000000000 pen=0.093 fraction=1.000 normal=(0.040 0.000 0.999) point=(349.21 2.64 415.48)
+[validate-contact] speed=3.7060 point=(349.215 2.642 415.480) normal=(0.040 0.000 0.999) body=(349.328 2.268 416.511)
+[validate-contact] speed=3.4543 point=(347.386 2.448 417.422) normal=(0.446 0.000 -0.895) body=(349.329 2.268 416.509)
+[validate-contact] speed=0.3188 point=(347.383 2.450 417.411) normal=(0.446 0.000 -0.895) body=(349.330 2.268 416.507)
+[validate-contact] speed=0.0742 point=(347.380 2.454 417.398) normal=(0.446 0.000 -0.895) body=(349.331 2.268 416.505)
+[validate-contact] speed=0.0251 point=(347.376 2.457 417.384) normal=(0.446 0.000 -0.895) body=(349.332 2.268 416.504)
+[validate-contact] speed=0.0189 point=(347.373 2.460 417.368) normal=(0.446 0.000 -0.895) body=(349.333 2.268 416.502)
+[validate-contact] speed=0.0184 point=(347.352 2.462 417.347) normal=(0.446 0.000 -0.895) body=(349.317 2.267 416.494)
+[validate-state] pos=(349.317 2.267 416.494) speed=18.087 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-box] owner=0000000000000000 pen=0.064 fraction=1.000 normal=(0.446 0.000 -0.895) point=(348.54 2.65 417.94)
+[validate-contact] speed=1.0755 point=(348.540 2.645 417.941) normal=(0.446 0.000 -0.895) body=(349.267 2.262 416.409)
+[validate-box] owner=0000000000000000 pen=0.000 fraction=0.188 normal=(-0.008 -0.000 1.000) point=(349.21 2.64 415.48)
+[validate-contact] speed=2.0897 point=(349.215 2.644 415.480) normal=(-0.008 -0.000 1.000) body=(349.254 2.262 416.404)
+[validate-box] owner=0000000000000000 pen=0.001 fraction=0.875 normal=(0.446 0.000 -0.895) point=(348.45 2.63 417.90)
+[validate-contact] speed=1.8344 point=(348.454 2.632 417.899) normal=(0.446 0.000 -0.895) body=(349.144 2.250 416.388)
+[validate-box] owner=0000000000000000 pen=0.026 fraction=1.000 normal=(-0.038 -0.000 0.999) point=(349.21 2.65 415.48)
+[validate-contact] speed=1.1820 point=(349.215 2.649 415.480) normal=(-0.038 -0.000 0.999) body=(349.049 2.269 416.367)
+[validate-state] pos=(348.651 2.307 416.291) speed=12.095 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-state] pos=(347.456 2.151 415.934) speed=19.317 throttle=0.500 brake=0.000 gear=1 loose=0 free=0
+[validate-box] owner=0000000000000000 pen=0.000 fraction=0.312 normal=(0.446 0.000 -0.895) point=(346.20 2.50 416.78)
+[validate-contact] speed=0.9401 point=(346.202 2.502 416.776) normal=(0.446 0.000 -0.895) body=(346.709 2.116 415.689)
+[validate-box] owner=0000000000000000 pen=0.006 fraction=1.000 normal=(0.446 0.000 -0.895) point=(346.12 2.51 416.73)
+[validate-contact] speed=0.0445 point=(346.117 2.505 416.734) normal=(0.446 0.000 -0.895) body=(346.626 2.119 415.643)
+[validate-box] owner=0000000000000000 pen=0.006 fraction=1.000 normal=(0.446 0.000 -0.895) point=(346.03 2.51 416.69)
+[validate-contact] speed=0.1354 point=(346.032 2.508 416.691) normal=(0.446 0.000 -0.895) body=(346.541 2.122 415.597)

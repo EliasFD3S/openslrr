@@ -1,5 +1,6 @@
 #pragma once
 
+#include "slrr/trigger_volume.hpp"
 #include "slrr/scx_mesh.hpp"
 #include "slrr/scene_sun.hpp"
 
@@ -29,6 +30,8 @@ constexpr int32_t kWorldTreeLeaf = 0x00000040;
 
 constexpr int32_t kEventTime = 0x00000080;
 constexpr int32_t kEventAny = 0x0FFFFFFF;
+// GameRef_queueActiveCollision: consumed by the next physics preparation.
+constexpr int32_t kCollisionQueued = 0x10000000;
 
 enum class GameRefKind : uint8_t {
   Generic = 0,
@@ -38,6 +41,14 @@ enum class GameRefKind : uint8_t {
   Camera = 4,
   Viewport = 5,
   GameType = 6,
+  PhysicsRef = 7,
+};
+
+enum class PhysicsShape : uint8_t {
+  None = 0,
+  Resource = 1,
+  Box = 2,
+  Sphere = 3,
 };
 
 struct GameRefTimer {
@@ -55,6 +66,7 @@ struct GameRefState {
   std::shared_ptr<ScxGeometry> line_geometry;
   std::optional<RenderLinePoint> line_end;
   float line_length = 0.f;
+  float detail = 0.f;
   int32_t deformed_type = 0;
   SceneSun directional_light;
   void* key = nullptr;  // java.util.resource.GameRef* / GameType*
@@ -70,6 +82,22 @@ struct GameRefState {
   float pos[3] = {0, 0, 0};
   float ypr[3] = {0, 0, 0};
   float vel[3] = {0, 0, 0};
+  float angular_vel[3] = {0, 0, 0};
+  // Script-created PhysicsRef primitive. Box uses half extents; sphere uses
+  // physics_size[0] as its radius. Resource uses type_id's CFG collision bodies.
+  PhysicsShape physics_shape = PhysicsShape::None;
+  float physics_size[3] = {0, 0, 0};
+  bool physics_static = true;
+  // setStatic(0): the body falls and is pushed. Created bodies stay fixed;
+  // the stock garage jack, lifts and walls never call setStatic.
+  bool physics_simulated = false;
+  bool dynamic_native = false;
+  // RID_TRIGGER (system:0x34) volume from its creation params; see
+  // trigger_volume.hpp.
+  TriggerShape trigger_shape = TriggerShape::None;
+  float trigger_size[3] = {0, 0, 0};
+  bool collision_pending = false;
+  bool collision_active = false;
   std::string alias;
   std::string sound_file;
   std::string class_name;
@@ -81,6 +109,12 @@ struct GameRefState {
   float half_aov = 45.f;
   float dmin = 0.1f;
   float dmax = 100.f;
+  // Camera.setFog. The driving camera fades into the sky from 1.5 km to 3 km.
+  // GroundRef weather fog stays on the separate globals.
+  bool fog_set = false;
+  int32_t fog_color = 0x0091badb;
+  float fog_near = 1500.f;
+  float fog_far = 3000.f;
   int32_t cam_pri = 0;
   int32_t cam_seq = 0;
   bool cam_active = false;
@@ -175,6 +209,21 @@ void gameref_set_parent(void* key, void* parent);
 void gameref_set_flags(void* key, int32_t flags);
 void gameref_clear_flags(void* key, int32_t flags);
 int32_t gameref_get_flags(void* key);
+inline void gameref_queue_collision_state(GameRefState& state) {
+  if (state.collision_pending || state.collision_active) return;
+  state.collision_pending = true;
+  state.flags |= kCollisionQueued;
+}
+inline void gameref_activate_collision_state(GameRefState& state) {
+  if (!state.collision_pending) return;
+  state.collision_pending = false;
+  state.collision_active = true;
+  state.flags &= ~kCollisionQueued;
+}
+void gameref_request_active_collision(void* key);
+// Promote queued collision activation at the physics boundary, never midway
+// through a scene-graph mutation or script callback.
+void gameref_process_collision_requests();
 
 void gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
                         float pitch, float roll);
@@ -195,6 +244,15 @@ std::vector<GameRefState*> gameref_active_cameras();
 GameRefState* fullscreen_script_camera();
 // system:0x33. Constructor params are "x,y,z,yaw,pitch,roll,...".
 void gameref_bind_scene_camera(void* key, const std::string& params);
+// system:0x34 (GameRef.RID_TRIGGER). Parses the trigger volume from the
+// constructor params, poses the node and gives it a live id; other types are
+// ignored. Trigger keys are listed for the per-tick trigger events.
+void gameref_bind_trigger(void* key, const std::string& params);
+std::vector<void*> gameref_trigger_keys();
+// PhysicsRef.setStatic: a simulated body belongs to the host free-body
+// solver, which visits gameref_simulated_bodies() every physics tick.
+void gameref_set_physics_simulated(void* key, bool simulated);
+std::vector<GameRefState*> gameref_simulated_bodies();
 // render/look/move/zoom/hide on the script camera. A move with no look
 // target slides the pose with Pori; a move plus look orbits.
 bool gameref_scene_command(void* key, const std::string& line);
@@ -215,5 +273,7 @@ std::vector<void*> gameref_world_roots();  // flags & WORLDTREEROOT
 
 void gameref_set_fog(int32_t color, float near_z, float far_z);
 bool gameref_get_fog(int32_t* color, float* near_z, float* far_z);
+void gameref_camera_set_fog(GameRefState& camera, int32_t color, float near_z,
+                            float far_z);
 
 }  // namespace slrr

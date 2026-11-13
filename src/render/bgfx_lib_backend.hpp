@@ -55,6 +55,9 @@ class LibBgfxBackend final : public IRenderBackend {
   static constexpr uint16_t kOsdUnder = 7;
   static constexpr uint16_t kPreview0 = 8;
   static constexpr uint16_t kOsdView = 70;
+  // One view per pyramid level, after the world and the reflection faces.
+  static constexpr uint16_t kHizView = 110;
+  static constexpr int kHizLevels = 16;
 
  public:
   const char* name() const override { return "bgfx"; }
@@ -103,6 +106,10 @@ class LibBgfxBackend final : public IRenderBackend {
   void set_debug_context(Jvm& jvm, const SectionMachine& sections) {
     debug_overlay_.set_context(jvm, sections);
   }
+  void set_debug_startup(bool vsync, bool overlay) {
+    debug_overlay_.render_options().vsync = vsync;
+    debug_overlay_.set_visible(overlay);
+  }
 
 
   void add_scx_geometry(ScxGeometry geo);
@@ -115,9 +122,11 @@ class LibBgfxBackend final : public IRenderBackend {
     ScxGeometry geo;
     std::shared_ptr<const ScxGeometry> source;
     bgfx::VertexBufferHandle vbh = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle skin_vbh = BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle ibh = BGFX_INVALID_HANDLE;
     std::vector<bgfx::TextureHandle> tex;
     std::vector<std::string> shared_texture_paths;
+    uint32_t revision = 0;
   };
   struct SharedMapTexture {
     bgfx::TextureHandle handle;
@@ -143,6 +152,7 @@ class LibBgfxBackend final : public IRenderBackend {
   };
   std::unordered_map<void*, ProjectedShadow> projected_shadows_;
   std::vector<SceneInstance> instances_;
+  std::vector<SceneBatch> prop_batches_;
   std::vector<Preview> previews_;
   std::unordered_map<const ScxGeometry*,ScenePart> instance_meshes_;
   std::unordered_map<void*, const ScxGeometry*> deformed_meshes_;
@@ -161,6 +171,9 @@ class LibBgfxBackend final : public IRenderBackend {
 
 
   void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass);
+  void draw_prop_batches(uint16_t view_id, const std::vector<SceneBatch>& batches,
+                         bool shadow, bool conservative = false);
+  void refresh_distance_fog(const float render_eye[3]);
 
   void draw_sky(uint16_t view_id, const float* view, const float* projection);
   void draw_dynamic_world(uint16_t view_id);
@@ -183,6 +196,10 @@ class LibBgfxBackend final : public IRenderBackend {
 
   void upload_part(ScenePart& part);
   void capture_frame_stats();
+  void upload_skin(ScenePart& part);
+  // Renderer copy only: sections with identical materials become one group
+  // over a reordered index buffer. Meshes with blended sections are kept.
+  static void merge_material_groups(ScxGeometry& geo);
 
 
   static bool is_logo_texture_slot(const ScxGeometry& geo, uint16_t tex_i);
@@ -281,7 +298,14 @@ class LibBgfxBackend final : public IRenderBackend {
   std::vector<ScenePart> parts_;
   bgfx::VertexLayout layout_;
   bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle inst_program_ = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle inst_shadow_program_ = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle skin_program_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_skin_bones_ = BGFX_INVALID_HANDLE;
   bgfx::TextureHandle white_tex_ = BGFX_INVALID_HANDLE;
+  // 1x1 far depth. The mesh shader's shadow sampler is a comparison
+  // sampler, including the draws that do not receive a shadow.
+  bgfx::TextureHandle depth_white_ = BGFX_INVALID_HANDLE;
   bgfx::TextureHandle fmv_tex_ = BGFX_INVALID_HANDLE;
   int32_t fmv_tex_w_ = 0;
   uint64_t fmv_tex_serial_ = 0;
@@ -291,6 +315,8 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::UniformHandle s_mesh_mix_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_lightmap_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_lightmap_uv_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_mesh_base_uv_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_mesh_mix_uv_ = BGFX_INVALID_HANDLE;
   std::unordered_map<std::string, bgfx::TextureHandle> osd_tex_;
   std::unordered_map<void*, bgfx::TextureHandle> font_tex_;
   bgfx::UniformHandle u_alpha_test_ = BGFX_INVALID_HANDLE;
@@ -314,6 +340,14 @@ class LibBgfxBackend final : public IRenderBackend {
   void* static_shadow_world_ = nullptr;
   bgfx::UniformHandle u_cloud_wind_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_cloud_sky_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_fog_color_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_fog_range_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_fog_eye_ = BGFX_INVALID_HANDLE;
+  bool fog_enabled_ = false;
+  float fog_near_ = 1500.f;
+  float fog_far_ = 3000.f;
+  float fog_color_[3] = {0.57f, 0.73f, 0.86f};
+  float fog_eye_[3] = {};
   bool outdoor_lighting_ = false;
   bgfx::UniformHandle u_local_light_ = BGFX_INVALID_HANDLE;
   std::array<float, 4> local_light_{};
@@ -359,6 +393,68 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::FrameBufferHandle shadow_fb_[4] = {
       BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE,
       BGFX_INVALID_HANDLE};
+
+  // World color and depth live off the window so the depth can be read.
+  // The window itself only receives one fullscreen copy.
+  bgfx::ProgramHandle present_program_ = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle hiz_program_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_hiz_params_ = BGFX_INVALID_HANDLE;
+  bgfx::FrameBufferHandle scene_fb_ = BGFX_INVALID_HANDLE;
+  bgfx::TextureHandle scene_color_ = BGFX_INVALID_HANDLE;
+  bgfx::TextureHandle scene_depth_ = BGFX_INVALID_HANDLE;
+  uint16_t scene_w_ = 0;
+  uint16_t scene_h_ = 0;
+  uint64_t scene_msaa_ = 0;
+  bool ensure_scene_target(uint16_t width, uint16_t height);
+  void destroy_scene_target();
+  bgfx::TextureHandle scene_color_texture() const;
+  bgfx::TextureHandle scene_depth_texture() const;
+  void draw_fullscreen(uint16_t view, bgfx::ProgramHandle program,
+                       bgfx::TextureHandle texture, const float* hiz_params);
+  void present_scene(uint16_t view);
+
+  struct HizLevel {
+    bgfx::TextureHandle tex = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle read = BGFX_INVALID_HANDLE;
+    bgfx::FrameBufferHandle fb = BGFX_INVALID_HANDLE;
+    uint16_t w = 0;
+    uint16_t h = 0;
+  };
+  struct HizRead {
+    std::vector<std::vector<float>> levels;
+    std::vector<uint16_t> width;
+    std::vector<uint16_t> height;
+    float view[16]{};
+    float proj[16]{};
+    float eye[3]{};
+    void* world = nullptr;
+    uint16_t full_w = 0;
+    uint16_t full_h = 0;
+    uint32_t ready_at = 0;
+    uint32_t serial = 0;
+    bool pending = false;
+    bool valid = false;
+    bool discard = false;
+    bool garage = false;
+  };
+  std::array<HizLevel, kHizLevels> hiz_gpu_{};
+  HizRead hiz_read_[2]{};
+  int hiz_level_count_ = 0;
+  int hiz_write_ = 0;
+  int hiz_active_ = -1;
+  uint32_t hiz_serial_ = 0;
+  uint16_t hiz_source_w_ = 0;
+  uint16_t hiz_source_h_ = 0;
+  float hiz_eye_[3]{};
+  float cull_view_[16]{};
+  float cull_proj_[16]{};
+  void destroy_hiz();
+  void build_hiz_pyramid(uint16_t width, uint16_t height);
+  void read_hiz_pyramid(const float* view, const float* proj);
+  void promote_hiz(uint32_t frame);
+  bool hiz_usable(const float eye[3]) const;
+  bool hiz_visible(const float center[3], float radius) const;
+  static bool hiz_keep(const float center[3], float radius, void* user);
 
 };
 

@@ -1,37 +1,37 @@
 {
-  "updated": "2026-11-11",
+  "updated": "2026-11-12",
   "total": 376,
-  "scope": "Stock native table (assets/progress/stock-natives.json, pinned slrr-reverse 5c42f3b139aef4c7b9e0b6420c5704e22c0e6cd7), matched against registered class/method/parameter signatures. Explicit native_noop bindings are counted separately. Bodies can be partial implementations or return constants; these are binding counts, not gameplay-completion or validation scores.",
+  "scope": "Stock native table (assets/progress/stock-natives.json), matched against the class/method/parameter signatures registered under src/ by scripts/render_native_coverage.py. Explicit native_noop bindings are counted separately. Bodies can be partial implementations or return constants; these are binding counts, not gameplay-completion or validation scores.",
   "categories": [
     {
       "name": "World",
-      "body": 4,
+      "body": 26,
       "noop": 0,
-      "missing": 50
+      "missing": 28
     },
     {
       "name": "Language",
-      "body": 69,
-      "noop": 4,
-      "missing": 1
+      "body": 68,
+      "noop": 3,
+      "missing": 0
     },
     {
       "name": "Sound & scripts",
-      "body": 13,
+      "body": 15,
       "noop": 0,
-      "missing": 5
+      "missing": 3
     },
     {
       "name": "Resources",
-      "body": 52,
-      "noop": 2,
-      "missing": 6
+      "body": 57,
+      "noop": 0,
+      "missing": 0
     },
     {
       "name": "Rendering",
-      "body": 35,
+      "body": 36,
       "noop": 0,
-      "missing": 1
+      "missing": 0
     },
     {
       "name": "Files & input",
@@ -44,6 +44,12 @@
       "body": 97,
       "noop": 0,
       "missing": 0
+    },
+    {
+      "name": "Leftovers",
+      "body": 3,
+      "noop": 0,
+      "missing": 3
     }
   ]
 }

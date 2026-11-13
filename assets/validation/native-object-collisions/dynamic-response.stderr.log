@@ -1,0 +1,18 @@
+[validate-state] pos=(794.486 2.581 1249.703) speed=1.130 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-dynamic-frame] pos=(794.496 2.688 1249.751) vel=(0.000 0.000 0.000) quiet=30
+[validate-dynamic] name= mass=80.00 pos=(794.493 2.444 1250.013) speed=3.566 quiet=0
+[validate-state] pos=(794.476 2.555 1251.825) speed=19.161 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-dynamic-frame] pos=(794.491 2.256 1250.923) vel=(-0.327 -2.041 2.638) quiet=0
+[validate-dynamic] name= mass=80.00 pos=(794.470 2.377 1251.479) speed=3.876 quiet=0
+[validate-state] pos=(794.461 2.378 1257.244) speed=34.180 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-dynamic] name= mass=80.00 pos=(794.295 2.222 1252.599) speed=0.384 quiet=0
+[validate-dynamic-frame] pos=(794.180 2.047 1253.470) vel=(0.171 -0.205 0.250) quiet=0
+[validate-dynamic] name= mass=80.00 pos=(794.244 2.217 1252.639) speed=0.150 quiet=0
+[validate-state] pos=(794.449 2.305 1265.846) speed=49.611 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-dynamic] name= mass=80.00 pos=(794.195 2.214 1252.666) speed=0.231 quiet=0
+[validate-state] pos=(793.576 2.357 1273.758) speed=12.944 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-dynamic] name= mass=80.00 pos=(794.160 2.213 1252.688) speed=0.098 quiet=0
+[validate-dynamic-frame] pos=(794.218 2.047 1253.536) vel=(0.073 -0.201 0.059) quiet=0
+[validate-dynamic] name= mass=80.00 pos=(794.131 2.213 1252.707) speed=0.088 quiet=0
+[validate-state] pos=(792.996 2.321 1274.206) speed=0.931 throttle=1.000 brake=0.000 clutch=0.000 gear=1 released=1 engaged=1
+[validate-dynamic] name= mass=80.00 pos=(794.102 2.213 1252.726) speed=0.142 quiet=0

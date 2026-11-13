@@ -91,6 +91,12 @@ Vec3 RigidBody::inverse_world_inertia(Vec3 v) const {
                              a.z * inverse_inertia_.z});
 }
 Vec3 RigidBody::omega() const { return inverse_world_inertia(momentum); }
+void RigidBody::set_omega(Vec3 angular_velocity) {
+  const Vec3 local = orientation.inverse_rotate(angular_velocity);
+  momentum = orientation.rotate({local.x / inverse_inertia_.x,
+                                 local.y / inverse_inertia_.y,
+                                 local.z / inverse_inertia_.z});
+}
 Vec3 RigidBody::point_velocity(Vec3 p) const {
   return velocity + omega().cross(p - position);
 }

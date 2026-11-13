@@ -32,13 +32,36 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake/CMakeLists.txt
   message(FATAL_ERROR "Missing third_party/bgfx.cmake. See README.md for setup.")
 endif()
 
+add_library(slrr_script_compiler STATIC
+  third_party/slrrc/classes.cpp third_party/slrrc/classfile.cpp
+  third_party/slrrc/decl.cpp third_party/slrrc/diag.cpp
+  third_party/slrrc/emit.cpp third_party/slrrc/floatlit.cpp
+  third_party/slrrc/install.cpp third_party/slrrc/packs.cpp
+  third_party/slrrc/parser.cpp third_party/slrrc/pool.cpp
+  third_party/slrrc/scanner.cpp third_party/slrrc/slrrc.cpp
+  third_party/slrrc/write.cpp)
+set_target_properties(slrr_script_compiler PROPERTIES CXX_STANDARD 17)
+target_include_directories(slrr_script_compiler PUBLIC third_party/slrrc)
+target_compile_options(slrr_script_compiler PRIVATE /utf-8 /fp:precise)
+
+# tools/ is git-ignored, so a clean checkout (CI) has no driver source.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/compile_game_sources.cpp")
+  add_executable(compile_game_sources tools/compile_game_sources.cpp
+    src/jvm/script_compiler.cpp src/jvm/tufa.cpp)
+  target_link_libraries(compile_game_sources PRIVATE slrr_script_compiler)
+  target_include_directories(compile_game_sources PRIVATE include)
+  target_compile_options(compile_game_sources PRIVATE /utf-8)
+endif()
+
 add_executable(slrr_host
   src/main.cpp
+  src/jvm/script_compiler.cpp
   src/platform/game_root.cpp
   src/platform/diagnostics.cpp
   src/platform/metrics.cpp
   src/platform/platform_telemetry.cpp
   src/platform/crash_logging.cpp
+  src/platform/frame_profiler.cpp
   src/platform/host_input.cpp
   src/platform/host_sfx.cpp
   src/platform/host_music.cpp
@@ -52,6 +75,7 @@ add_executable(slrr_host
   src/natives/natives_io.cpp
   src/natives/natives_lang.cpp
   src/natives/natives_osd.cpp
+  src/natives/natives_physicsref.cpp
   src/natives/natives_gameref.cpp
   src/natives/natives_renderref.cpp
   src/natives/natives_resref.cpp
@@ -66,9 +90,20 @@ add_executable(slrr_host
   src/resources/scene_sun.cpp
   src/resources/part_config.cpp
   src/resources/part_runtime.cpp
+  src/resources/pedestrian_lines.cpp
+  src/formats/walk.cpp
+  src/formats/rest.cpp
+  src/formats/trc.cpp
+  src/formats/skeleton_text.cpp
+  src/formats/matrixdata.cpp
   src/resources/gameref.cpp
   src/resources/scene_instances.cpp
+  src/resources/scene_ambience.cpp
+  src/resources/scene_triggers.cpp
+  src/resources/trigger_volume.cpp
   src/resources/scx_mesh.cpp
+  src/resources/skeleton.cpp
+  src/resources/character.cpp
   src/resources/dds_image.cpp
   src/resources/ptx_image.cpp
   src/jvm/tufa.cpp
@@ -85,6 +120,7 @@ add_executable(slrr_host
   src/physics/dyno_model.cpp
   src/physics/vehicle_dynamics.cpp
   src/physics/physics_telemetry.cpp
+  src/physics/scene_collision.cpp
   src/physics/deformation_cage.cpp
   src/physics/suspension_geometry.cpp
 )
@@ -161,7 +197,7 @@ target_include_directories(slrr_host PRIVATE
 
 bgfx_compile_shaders(
   TYPE VERTEX
-  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow_recv.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow_cast.sc"
+  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh_inst.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_skin.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow_recv.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow_cast.sc"
   VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
   OUTPUT_DIR "${SLRR_SHADER_OUT}"
   INCLUDE_DIRS "${_bgfx_shader_inc}"
@@ -171,7 +207,7 @@ bgfx_compile_shaders(
 )
 bgfx_compile_shaders(
   TYPE FRAGMENT
-  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_white.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_shadow_recv.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_static_shadow.sc"
+  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_white.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_shadow_recv.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_static_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_present.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_hiz.sc"
   VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
   OUTPUT_DIR "${SLRR_SHADER_OUT}"
   INCLUDE_DIRS "${_bgfx_shader_inc}"
@@ -196,7 +232,7 @@ target_include_directories(slrr_host PRIVATE
   "${SLRR_SHADER_OUT}"
   "${BIMG_DIR}/3rdparty"
 )
-target_link_libraries(slrr_host PRIVATE bgfx bx bimg dbghelp)
+target_link_libraries(slrr_host PRIVATE bgfx bx bimg dbghelp slrr_script_compiler)
 target_compile_features(slrr_host PRIVATE cxx_std_20)
 target_compile_definitions(slrr_host PRIVATE SLRR_HAS_LIBBGFX=1 SLRR_BUILD_CONFIGURATION="$<CONFIG>")
 message(STATUS "slrr_host: libbgfx + mesh shaders enabled")
@@ -205,10 +241,4 @@ install(TARGETS slrr_host RUNTIME DESTINATION bin)
 
 if(BUILD_TESTING)
   add_subdirectory(tests)
-endif()
-
-option(SLRR_STAGE_BUILD "Build the host into candidate/ before backup and promotion" OFF)
-if(SLRR_STAGE_BUILD)
-  set_target_properties(slrr_host PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_BINARY_DIR}/candidate")
 endif()

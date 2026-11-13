@@ -2,6 +2,8 @@
 # Build directories
 # ==========================================
 /out/
+/data/
+/site/
 /build/
 /build-bgfx/
 /build-bgfx-x64/
@@ -16,7 +18,8 @@ compile_commands.json
 # ==========================================
 # Third-party dependencies (bgfx)
 # ==========================================
-/third_party/
+/third_party/*
+!/third_party/slrrc/
 
 # ==========================================
 # Compiled binaries

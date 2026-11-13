@@ -1,5 +1,6 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/part_runtime.hpp"
+#include "slrr/pedestrian_lines.hpp"
 #include "slrr/dyno_model.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/host_game_options.hpp"
@@ -10,7 +11,9 @@
 #include "slrr/jvm.hpp"
 #include "slrr/rpk_index.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/scene_collision.hpp"
 #include "slrr/scx_mesh.hpp"
+#include "slrr/skeleton.hpp"
 #include "slrr/suspension_geometry.hpp"
 #include "slrr/vehicle_dynamics.hpp"
 #include "slrr/diagnostics.hpp"
@@ -20,11 +23,16 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
+#include <condition_variable>
 #include <memory>
 #include <optional>
+#include <mutex>
 #include <sstream>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -71,6 +79,7 @@ struct Record {
   float damage_multiplier = -1.f;
   physics::Vec3 cockpit_offset;
   bool horn_down = false;
+  int horn_slot = 0;
   bool engine_running = false;
   InstalledPart state;
   std::shared_ptr<const PartConfig> config;
@@ -83,6 +92,9 @@ struct Record {
     float p[3]{}, y[3]{};
   };
   std::unordered_map<int, PoseOverride> slot_pose;
+  // Latest intentional setSlotPos values, kept separate from damage overlays so
+  // repair can restore a user pose even when both target the same slot.
+  std::unordered_map<int, PoseOverride> slot_script_pose;
   std::vector<Object *> renders;
   struct LinkVisual {
     Object *node = nullptr;
@@ -137,14 +149,79 @@ struct Record {
 };
 std::unordered_map<Object *, std::vector<SfxItem>> sfx_items;
 std::unordered_map<Object *, Record> records;
+// Weak, one-shot repair work consumed by the next part update. Stock Java may
+// repair descendants before their parents, so links must not be relinked early.
+std::unordered_set<Object *> repair_relink_pending;
 struct LoosePanel {
   physics::RigidBody body;
   PartMatrix carrier_frame{};
   int32_t vehicle = 0;
   unsigned quiet_ticks = 0;
+  // Native map placement: each render slot's CFG pose in the object frame,
+  // parallel to Record::renders.
+  std::vector<PartMatrix> render_offsets;
+  physics::Vec3 rest_anchor;  // see map_object_quiet_ticks
+  unsigned far_awake_ticks = 0;  // awake beyond car reach; see advance_loose_panels
 };
 std::unordered_map<Object *, LoosePanel> loose_panels;
+// Script PhysicsRef bodies released by setStatic(0), keyed by their GameRef.
+struct FreeBody {
+  int32_t live_id = 0;  // guards against a reused key
+  physics::RigidBody body;
+  PartMatrix carrier_frame{};
+  unsigned quiet_ticks = 0;
+  physics::Vec3 rest_anchor;  // see map_object_quiet_ticks
+  float pos[3] = {}, ypr[3] = {};  // last published pose; a change is setMatrix
+};
+std::unordered_map<void *, FreeBody> free_bodies;
 int32_t controlled_vehicle = 0;
+
+struct DriverSeat {
+  Object* render = nullptr;
+  // False when the render is the script's player.render. That object stays
+  // alive after the car is released; only a render this host created is removed.
+  bool owned = false;
+  // Other copies of the same driver (the bind-pose Mitch parented to the map)
+  // are hidden while this seat is active, then shown again on release.
+  std::vector<void*> hidden;
+};
+std::unordered_map<Object*, DriverSeat> drivers;
+
+struct PedKind {
+  uint32_t render = 0;
+  uint32_t anim = 0;
+  PartPose pose{};
+  float sole = 0.f;
+  bool ready = false;
+};
+struct PedAgent {
+  Object* render = nullptr;
+  int kind = 0;
+  float x = 0.f, z = 0.f, yaw = 0.f;
+  bool placed = false;
+  uint32_t sim_gen = 0;
+  PedestrianWalker line;
+};
+struct PedCrowd {
+  float density = 0.f;
+  // Map value before the options slider (day 0.003, night 0.0005).
+  float map_density = 0.f;
+  std::vector<void*> types;
+  std::vector<PedKind> kinds;
+  std::vector<PedAgent> agents;
+  bool announced = false;
+  bool preloaded = false;
+  // The whole radius is created once, when the map comes up. Later gaps
+  // refill a few at a time as the car moves.
+  bool stocked = false;
+  int next_kind = 0;
+  double refill_at = 0;
+  double prune_at = 0;
+  double report_at = 0;
+};
+std::unordered_map<void*, PedCrowd> crowds;
+uint32_t ped_rng = 0x51ee5u;
+float ped_backlog = 0.f;
 VehicleHudLayout hud_preview;
 std::string hud_preview_directory;
 constexpr double kPhysicsTick = 1.0 / physics::VehicleDynamics::update_frequency;
@@ -163,6 +240,7 @@ Record *record(Object *object) {
   auto found = records.find(canonical(object));
   return found == records.end() ? nullptr : &found->second;
 }
+void repair_part(Object *part, Record &rec);
 Object *object(const std::vector<Value> &args, size_t i) {
   return i < args.size() && args[i].tag == ValueTag::Obj ? args[i].v.o
                                                          : nullptr;
@@ -1264,10 +1342,30 @@ static void apply_driving_options(Record& rec) {
 }
 
 bool part_command(Object *part, const std::string &command) {
-  part = canonical(part);
+  if (Object* body = as_part(part)) part = body;
+  else part = canonical(part);
   std::istringstream input(command);
   std::string verb;
   input >> verb;
+  if (verb == "sethorn") {
+    auto* rec = record(as_part(part));
+    int slot = 0;
+    if (!rec || !(input >> slot)) return false;
+    slot = (slot % 4 + 4) % 4;
+    if (slot != rec->horn_slot && slot && index) {
+      const auto horn = rec->horns.find(slot);
+      if (horn != rec->horns.end() && horn->second.sfx) {
+        auto path = index->payload_prop(horn->second.sfx, "sourcefile");
+        if (!path.empty()) {
+          std::replace(path.begin(), path.end(), '\\', '/');
+          host_sfx_play_file((std::filesystem::path(index->game_root()) / path).string(),
+                              horn->second.pitch);
+        }
+      }
+    }
+    rec->horn_slot = slot;
+    return true;
+  }
   if (part && part->class_name == "java.io.Controller" &&
       (verb == "controllable" || verb == "leave")) {
     int32_t id = 0;
@@ -1337,7 +1435,8 @@ bool part_command(Object *part, const std::string &command) {
         state->follow_vehicle = gameref_make_live(chassis);
         state->half_aov = 42.f;
         state->dmin = .03f;
-        state->dmax = 2000.f;
+        state->dmax = 3000.f;
+        gameref_camera_set_fog(*state, 0x0091badb, 1500.f, 3000.f);
         gameref_activate_camera(*state, *viewport, 1);
         return true;
       }
@@ -1398,6 +1497,10 @@ bool part_command(Object *part, const std::string &command) {
   auto *rec = record(part);
   if (!rec)
     return false;
+  if (verb == "repair") {
+    repair_part(part, *rec);
+    return true;
+  }
   if (verb == "setsteer" && rec->config->native_kind == "car") {
     float value = 0;
     if (!(input >> value) || !std::isfinite(value))
@@ -1521,7 +1624,11 @@ bool part_destroy(Object *part) {
   auto *rec = record(part);
   if (!rec)
     return false;
+  // A promoted map prop that is removed any other way (world change, lost
+  // ground shell) reappears as scenery where it last rested.
+  if (rec->config->native_kind == "native_dynamic") scene_instances_settle_dynamic(part, nullptr);
   loose_panels.erase(part);
+  repair_relink_pending.erase(part);
   if (auto camera = part->fields.find("_hostCockpitCamera"); camera != part->fields.end())
     gameref_remove(camera->second.v.o);
   auto children = rec->children;
@@ -1624,6 +1731,60 @@ bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
   }
   return true;
 }
+// How far the hardware left on a corner reaches below the wheel centre, in
+// the CFG wheel frame: the parts on its wheel slots (type 101-104, such as an
+// outer dually wheel) and on its hub (201-204: rotor, caliper and what they
+// carry). These follow the hub, so the reach does not depend on the
+// suspension travel. Zero when nothing is mounted there.
+double corner_hardware_reach(Record &rec, size_t corner) {
+  const auto to_wheel =
+      part_matrix_inverse_rigid(part_pose_matrix(rec.config->wheels[corner]));
+  double reach = 0;
+  for (const auto &slot : rec.config->slots) {
+    if (slot.type != 101 + static_cast<int>(corner) &&
+        slot.type != 201 + static_cast<int>(corner))
+      continue;
+    const auto child = rec.children.find(slot.id);
+    auto *hub = child == rec.children.end() ? nullptr : record(child->second);
+    if (!hub)
+      continue;
+    const PartSlot *mate = nullptr;
+    for (const auto &own : hub->config->slots)
+      if (own.id == hub->state.own_slot)
+        mate = &own;
+    PartMatrix mount_frame, mate_frame;
+    if (!mate || !part_slot_matrix(*rec.config, posed_slot(rec, slot), mount_frame) ||
+        !part_slot_matrix(*hub->config, posed_slot(*hub, *mate), mate_frame))
+      continue;
+    // The same rest transform place_child applies before the hub motion.
+    const auto hub_frame = part_matrix_multiply(
+        to_wheel, part_matrix_multiply(mount_frame, part_matrix_inverse_rigid(mate_frame)));
+    const auto from_hub = part_matrix_inverse_rigid(world_matrix(child->second));
+    for (const auto &item : part_installed_tree(child->second)) {
+      const auto *part = record(item.object);
+      if (!part)
+        continue;
+      const auto frame = part_matrix_multiply(
+          hub_frame, part_matrix_multiply(from_hub, world_matrix(item.object)));
+      for (auto *render : part->renders) {
+        const auto *node = gameref_get(render);
+        if (!node || node->empty || node->light_flags)
+          continue;
+        const auto mesh = scene_instances_geometry(static_cast<uint32_t>(node->type_id));
+        if (!mesh)
+          continue;
+        const auto m = part_matrix_multiply(frame, node_local(render));
+        const double scale = mesh->position_scale;
+        for (size_t v = 0; v + 2 < mesh->positions.size(); v += 3) {
+          const double y = (m[1] * mesh->positions[v] + m[5] * mesh->positions[v + 1] +
+                            m[9] * mesh->positions[v + 2]) * scale + m[13];
+          reach = std::max(reach, -y);
+        }
+      }
+    }
+  }
+  return reach;
+}
 void dynamics_wheels(Record &rec) {
   for (size_t i = 0; i < 4; ++i) {
     auto &cfg = rec.dynamics.wheels[i];
@@ -1632,14 +1793,25 @@ void dynamics_wheels(Record &rec) {
     cfg.rigid_contact = false;
     if (i >= rec.config->wheels.size())
       continue;
+    // The scripts size the wheel of the stock rim slot (Chassis.updatevariables
+    // uses partOnSlot(101 + i)). Other wheel-type slots, such as an outer
+    // dually wheel, carry no radius of their own.
+    const int rim_slot = 101 + static_cast<int>(i);
+    bool has_rim_slot = false;
     const PartSlot *mount = nullptr;
     for (const auto &slot : rec.config->slots)
-      if (slot.type == 101 + static_cast<int>(i) &&
-          rec.children.count(slot.id)) {
-        mount = &slot;
-        break;
+      if (slot.type == rim_slot) {
+        has_rim_slot = has_rim_slot || slot.id == rim_slot;
+        if (!mount && rec.children.count(slot.id))
+          mount = &slot;
       }
-    if (!mount)
+    if (has_rim_slot && !rec.children.count(rim_slot))
+      mount = nullptr;
+    // Without its rim the corner keeps a wheel the size of the hardware still
+    // on it, so the car rests on the brake instead of passing through the
+    // floor, or on an outer dually wheel.
+    const double reach = mount ? 0 : corner_hardware_reach(rec, i);
+    if (!mount && !(reach > 0))
       continue;
     const auto fallback = i < rec.config->wheel_springs.size()
                               ? rec.config->wheel_springs[i]
@@ -1664,7 +1836,7 @@ void dynamics_wheels(Record &rec) {
         (physics::wheel_steering(ypr[0]) *
          physics::Quaternion{std::sin(ypr[1] * .5), 0, 0, std::cos(ypr[1] * .5)} *
          physics::Quaternion{0, 0, std::sin(ypr[2] * .5), std::cos(ypr[2] * .5)}).normalized();
-    cfg.radius = live.radius > 0 ? live.radius : fallback.radius;
+    cfg.radius = !mount ? reach : live.radius > 0 ? live.radius : fallback.radius;
     cfg.rest = live.rest;
     cfg.anchor = fallback.base + fallback.travel;
     cfg.minimum = std::max(0.f, live.min_len);
@@ -1933,6 +2105,28 @@ bool script_pos(void *key, float *x, float *y, float *z) {
 }
 } // namespace
 void part_park_chassis(Object *car, bool shift) { park_chassis(car, shift); }
+void part_apply_state(Object *object, const float* velocity, const float* angular) {
+  Object* chassis = as_part(object);
+  auto* rec = record(chassis);
+  auto* node = gameref_get(chassis);
+  if (!rec || !node || rec->config->native_kind != "car") return;
+  // Preserve the setMatrix tyre-contact placement convention, then release
+  // the actual body with the supplied world velocities (SLRR_rev setState).
+  park_chassis(chassis, true);
+  PartMatrix frame;
+  if (!scene_instances_script_matrix(chassis, frame.data()) ||
+      !dynamics_configure(chassis, *rec, frame)) return;
+  rec->dynamics.body.set_frame(frame);
+  rec->dynamics.body.velocity = {velocity[0], velocity[1], velocity[2]};
+  rec->dynamics.body.set_omega({angular[0], angular[1], angular[2]});
+  rec->dynamics.reset_clock();
+  rec->physics_suspended = false;
+  rec->physics_pending_placement = false;
+  rec->physics_released = true;
+  rec->published_frame = node_local(chassis);
+  std::copy(velocity, velocity + 3, node->vel);
+  std::copy(angular, angular + 3, node->angular_vel);
+}
 bool part_car_script_pos(void *key, float *x, float *y, float *z) {
   return script_pos(key, x, y, z);
 }
@@ -2113,7 +2307,6 @@ physics::VehicleDynamics::Impact collide_chassis(Record& rec, physics::Vec3 befo
   using physics::Vec3;
   auto& body = rec.dynamics.body;
   const Vec3 delta = body.position - before;
-  if (delta.dot(delta) < 1e-6) return {};
   const float movement[] = {float(delta.x), float(delta.y), float(delta.z)};
   constexpr float radius = .18f;
   struct SweepContact {
@@ -2140,6 +2333,92 @@ physics::VehicleDynamics::Impact collide_chassis(Record& rec, physics::Vec3 befo
         }
       }
     }
+  // Evaluate primitive contacts independently: a triangle hit elsewhere must
+  // not hide an earlier native box/sphere impact or a thin trunk between probes.
+  PartMatrix frame = body.frame();
+  const Vec3 bounds_center = (body.minimum + body.maximum) * .5;
+  const Vec3 world_center = body.position +
+                            body.orientation.rotate(bounds_center - body.center);
+  frame[12] = static_cast<float>(world_center.x);
+  frame[13] = static_cast<float>(world_center.y);
+  frame[14] = static_cast<float>(world_center.z);
+  const float half[3] = {float((body.maximum.x - body.minimum.x) * .5),
+                         float((body.maximum.y - body.minimum.y) * .5),
+                         float((body.maximum.z - body.minimum.z) * .5)};
+  {
+    // Props that are still plain scenery become loose bodies before the car
+    // reaches them; the margin covers the next tick of travel.
+    const float reach = std::sqrt(half[0] * half[0] + half[1] * half[1] + half[2] * half[2]) +
+                        3.f + static_cast<float>(delta.length()) * 2.f;
+    const float lower[3] = {float(world_center.x) - reach, float(world_center.y) - reach,
+                            float(world_center.z) - reach};
+    const float upper[3] = {float(world_center.x) + reach, float(world_center.y) + reach,
+                            float(world_center.z) + reach};
+    scene_instances_wake_dynamics(lower, upper);
+  }
+  const int samples = static_cast<int>(
+      std::clamp(std::ceil(delta.length() / .2), 1.0, 8.0));
+  // The box above the lowest 30 % of the chassis, the band the corner probes
+  // also start at, so kerbs, steps and road seams do not stop the car.
+  const float wall_half[3] = {half[0], half[1] * .7f, half[2]};
+  const float wall_lift = half[1] * .3f;
+  const auto probe_at = [&](double fraction, SceneBodyContact& out) {
+    PartMatrix probe = frame;
+    for (int axis = 0; axis < 3; ++axis)
+      probe[12 + axis] -= static_cast<float>(movement[axis] * (1.0 - fraction));
+    // Shapes and walls both use the box above the kerb band; a lower obstacle
+    // is support for the wheels, not a wall.
+    PartMatrix raised = probe;
+    for (int axis = 0; axis < 3; ++axis) raised[12 + axis] += probe[4 + axis] * wall_lift;
+    SceneBodyContact shape, wall;
+    const bool shape_hit = scene_instances_contact_box(raised.data(), wall_half, shape);
+    const bool wall_hit = scene_instances_contact_walls(raised.data(), wall_half, wall);
+    if (!shape_hit && !wall_hit) return false;
+    out = shape_hit && (!wall_hit || shape.penetration >= wall.penetration) ? shape : wall;
+    return true;
+  };
+  SceneBodyContact primitive;
+  double primitive_fraction = 1.0;
+  bool has_primitive = false;
+  double clear_fraction = 0.0;
+  for (int sample = 1; sample <= samples; ++sample) {
+    const double fraction = static_cast<double>(sample) / samples;
+    if (!probe_at(fraction, primitive)) {
+      clear_fraction = fraction;
+      continue;
+    }
+    primitive_fraction = fraction;
+    has_primitive = true;
+    break;
+  }
+  // Narrow the first overlap down between the last clear sample and the hit,
+  // so the car is put back close to where it touched instead of up to one
+  // sample spacing deep. A car that starts the tick already overlapping (pushed
+  // out of one wall into another) keeps its first-sample response, so it is
+  // not rewound to a standstill every tick.
+  SceneBodyContact start;
+  if (has_primitive && (clear_fraction > 0.0 || !probe_at(0.0, start))) {
+    for (int step = 0; step < 5 && primitive_fraction - clear_fraction > 1e-3; ++step) {
+      const double middle = (clear_fraction + primitive_fraction) * .5;
+      SceneBodyContact earlier;
+      if (probe_at(middle, earlier)) {
+        primitive_fraction = middle;
+        primitive = earlier;
+      } else {
+        clear_fraction = middle;
+      }
+    }
+  }
+  if (has_primitive &&
+      (closest.fraction >= 1.f || primitive_fraction < closest.fraction)) {
+    const Vec3 normal{primitive.normal[0], primitive.normal[1], primitive.normal[2]};
+    body.position = before + delta * primitive_fraction +
+                    normal * (primitive.penetration + .002);
+    const Vec3 point{primitive.point[0], primitive.point[1], primitive.point[2]};
+    const double speed = -body.point_velocity(point).dot(normal);
+    body.contact(point, normal, .12, .35);
+    return {point, normal, speed};
+  }
   if (closest.fraction >= 1.f) return {};
   const Vec3 normal{closest.normal[0], closest.normal[1], closest.normal[2]};
   Vec3 arm;
@@ -2181,11 +2460,22 @@ const ScxGeometry& part_collision_mesh(Record& rec) {
     auto& mesh = *rec.collision;
     mesh.position_scale = 1.f;
     for (const auto& body : rec.config->bodies) {
-      if (body.collision_mesh.empty()) continue;
-      const auto path = std::filesystem::path(index->game_root()) / body.collision_mesh;
-      const auto source = load_scx_geometry(path.string());
-      if (!source.info.ok || source.indices.empty()) continue;
+      if (!body.collision) continue;
       const auto frame = part_pose_matrix(body.pose);
+      ScxGeometry source;
+      PartMatrix primitive_frame{};
+      primitive_frame[0] = primitive_frame[5] = primitive_frame[10] = primitive_frame[15] = 1.f;
+      if (body.shape == PartBodyShape::Box)
+        source = collision::make_box_mesh(
+            primitive_frame, {body.box_half[0], body.box_half[1], body.box_half[2]});
+      else if (body.shape == PartBodyShape::Sphere)
+        source = collision::make_sphere_mesh(primitive_frame, body.sphere_radius, 12, 6);
+      else if (body.shape == PartBodyShape::Mesh && !body.collision_mesh.empty())
+        source = load_scx_geometry(
+            (std::filesystem::path(index->game_root()) / body.collision_mesh).string());
+      else
+        continue;
+      if (!source.info.ok || source.indices.empty()) continue;
       const auto first = static_cast<uint32_t>(mesh.positions.size() / 3);
       for (size_t i = 0; i + 2 < source.positions.size(); i += 3) {
         for (int axis = 0; axis < 3; ++axis)
@@ -2265,7 +2555,7 @@ void publish_deformation(Object* part, Record& rec) {
 }
 
 void restore_deformation(Object* part, Record& rec) {
-  if (!rec.deformation) return;
+  // Repair must also clear stale render/collision data if the cage is already gone.
   rec.deformation.reset();
   rec.deformed_collision.reset();
   rec.deformation_upload_ticks = 0;
@@ -2274,6 +2564,67 @@ void restore_deformation(Object* part, Record& rec) {
   for (const auto& [slot, child] : rec.children)
     if (const auto* installed = record(child); installed && installed->config->category == 2)
       place_child(part, slot, false);
+}
+
+bool scripted_parts_contain(Object* owner, Object* child) {
+  if (!owner) return false;
+  const auto attached = owner->fields.find("attachedParts");
+  if (attached == owner->fields.end() || attached->second.tag != ValueTag::Obj ||
+      !attached->second.v.o)
+    return false;
+  Object* vector = attached->second.v.o;
+  const auto data = vector->fields.find("elementData");
+  if (data == vector->fields.end() || data->second.tag != ValueTag::Obj ||
+      !data->second.v.o || !data->second.v.o->is_array)
+    return false;
+  const auto& slots = data->second.v.o->slots;
+  const int count = std::clamp(field_int(vector, "elementCount",
+                                         static_cast<int>(slots.size())),
+                               0, static_cast<int>(slots.size()));
+  for (int i = 0; i < count; ++i)
+    if (slots[static_cast<size_t>(i)].tag == ValueTag::Obj &&
+        slots[static_cast<size_t>(i)].v.o &&
+        canonical(slots[static_cast<size_t>(i)].v.o) == canonical(child))
+      return true;
+  return false;
+}
+
+void repair_part(Object* part, Record& rec) {
+  // SLRR_rev 77b0fb6 repairDamage: clear deformation and slot/wheel damage.
+  // Stock Part.repair already visits the installed tree, so keep this reset local.
+  restore_deformation(part, rec);
+  for (const auto& entry : rec.slot_damage) {
+    const int slot_index = entry.first;
+    if (slot_index < 0 || static_cast<size_t>(slot_index) >= rec.config->slots.size())
+      continue;
+    const int slot = rec.config->slots[static_cast<size_t>(slot_index)].id;
+    if (const auto scripted = rec.slot_script_pose.find(slot);
+        scripted != rec.slot_script_pose.end())
+      rec.slot_pose[slot] = scripted->second;
+    else
+      rec.slot_pose.erase(slot);
+    if (rec.state.parent && slot == rec.state.own_slot)
+      place_child(rec.state.parent, rec.state.parent_slot, false);
+    else
+      place_child(part, slot, false);
+  }
+  rec.slot_damage.clear();
+  for (auto& damage : rec.wheel_damage) damage.clear();
+  // Avoid relink_assembly here: stock repair can visit descendants before their
+  // parents. Queue each affected part once and flush after the scripted walk.
+  if (!rec.links.empty()) repair_relink_pending.insert(part);
+
+  // The chassis's attachedParts is flat and covers normal whole-car repair.
+  // A detached non-chassis assembly has no such script list in this host, so
+  // fill only those uncovered children instead of traversing them twice.
+  Object* chassis = car(part);
+  for (const auto& [slot, child] : rec.children) {
+    const bool scripted = scripted_parts_contain(part, child) ||
+        (chassis && chassis != part && scripted_parts_contain(chassis, child));
+    if (!scripted && runtime && record(child))
+      runtime->invoke_by_name(child->class_name, "repair",
+                              {Value::make_obj(child)}, false);
+  }
 }
 
 struct PanelContact {
@@ -2490,16 +2841,207 @@ bool collide_loose_with_car(physics::RigidBody& body,
   return true;
 }
 
+// Static scene response of a loose body after integration: one sphere sweep of
+// its travel against walls, then floor support under its eight corners.
+struct SceneSupport {
+  bool penetrating = false;  // a corner was below the floor and was pushed out
+  bool touching = false;     // a corner is within 1 cm of the floor afterwards
+};
+SceneSupport collide_loose_with_scene(physics::RigidBody& body, physics::Vec3 before,
+                                      void* self) {
+  using physics::Vec3;
+  const Vec3 movement = body.position - before;
+  const Vec3 size = body.maximum - body.minimum;
+  const float radius = static_cast<float>(std::clamp(std::min({size.x, size.y, size.z}) * .5,
+                                                     .03, .2));
+  const float from[] = {float(before.x), float(before.y), float(before.z)};
+  const float delta[] = {float(movement.x), float(movement.y), float(movement.z)};
+  SceneSphereHit wall;
+  if (scene_instances_sweep_sphere(from, delta, radius, wall, .65f)) {
+    const Vec3 normal{wall.normal[0], wall.normal[1], wall.normal[2]};
+    body.position = before + movement * wall.fraction + normal * .002;
+    body.contact(body.position - normal * radius, normal);
+  }
+  double depth = 0;
+  double clearance = std::numeric_limits<double>::infinity();
+  Vec3 correction;
+  for (const auto& point : body.corners()) {
+    SceneFloorHit floor;
+    if (!scene_instances_sample_floor(float(point.x), float(point.z),
+        float(std::max(before.y, body.position.y) + .25), self, floor)) continue;
+    const double overlap = floor.height - point.y;
+    clearance = std::min(clearance, -overlap);
+    if (overlap <= 0) continue;
+    const Vec3 normal{floor.normal[0], floor.normal[1], floor.normal[2]};
+    body.contact(point, normal, .12, .75);
+    if (overlap > depth) {
+      depth = overlap;
+      correction = normal;
+    }
+  }
+  if (depth > 0) body.position += correction * (depth + .001);
+  // The push-out leaves the body 1 mm clear, so it alternates between ticks
+  // in and out of contact while it rests.
+  return {depth > 0, depth > 0 || clearance < .01};
+}
+
+// At the 60 Hz loose-body step gravity alone adds 0.16 m/s per tick, and the
+// single-pass corner contacts leave a resting body jittering, rocking and
+// creeping at 0.1-0.3 m/s. A car panel tolerates it; a map object or a script
+// body would stay awake, and so live, forever. Instead of its instantaneous
+// speed, count the ticks it stays on the ground within 5 cm of where it began
+// to slow down. Returns the updated quiet tick count.
+unsigned map_object_quiet_ticks(const physics::RigidBody& body, bool free, unsigned quiet,
+                                physics::Vec3& anchor) {
+  if (!free || body.velocity.dot(body.velocity) > .25) return 0;
+  if (!quiet) anchor = body.position;
+  const auto drift = body.position - anchor;
+  return drift.dot(drift) < .0025 ? quiet + 1 : 0;
+}
+
+}  // namespace
+
+Object* part_add_dynamic_native(const PartConfig& config,
+                                const std::vector<PartRender>& renders,
+                                const PartMatrix& world, void* parent, int32_t seed) {
+  if (!runtime || !parent) return nullptr;
+  // Mass and centre from the collision bodies; nocollision bodies do not move
+  // the object.
+  double mass = 0.0;
+  physics::Vec3 center;
+  for (const auto& body : config.bodies) {
+    if (!body.collision || !(body.mass > 0.f)) continue;
+    mass += body.mass;
+    center = center + physics::Vec3{body.pose.position[0], body.pose.position[1],
+                                    body.pose.position[2]} * body.mass;
+  }
+  if (!(mass > 0.0)) return nullptr;
+  auto* node = runtime->new_object("java.util.resource.RenderRef");
+  if (!node) return nullptr;
+  auto& rec = records[node];
+  auto dynamic_config = std::make_shared<PartConfig>(config);
+  dynamic_config->native_kind = "native_dynamic";
+  rec.config = std::move(dynamic_config);
+  rec.state.object = node;
+  rec.state.resource = config.resource;
+  rec.published_frame = world;
+  const auto& physical = part_collision_mesh(rec);
+  if (physical.indices.empty()) {
+    records.erase(node);
+    std::fprintf(stderr, "[part] dynamic native has no collision geometry: %s\n",
+                 config.name.c_str());
+    return nullptr;
+  }
+
+  std::vector<PartMatrix> offsets;
+  std::vector<PartRender> slots = renders;
+  if (slots.empty()) {
+    PartRender render;
+    render.resource = config.render;
+    render.pose = config.render_pose;
+    slots.push_back(render);
+  }
+  for (const auto& render : slots) {
+    auto* render_node = &render == &slots.front()
+                            ? node
+                            : runtime->new_object("java.util.resource.RenderRef");
+    if (!render_node) continue;
+    auto* state = gameref_upsert(render_node, GameRefKind::RenderRef);
+    if (!state) continue;
+    rec.renders.push_back(render_node);
+    offsets.push_back(part_pose_matrix(render.pose));
+    state->dynamic_native = true;
+    state->script = render_node;
+    state->class_name = render_node->class_name;
+    state->alias = config.name.empty() ? "dynamic_native" : config.name;
+    const uint32_t resource = render.variants.empty()
+                                  ? render.resource
+                                  : render.variants[static_cast<size_t>(seed) % render.variants.size()];
+    state->type_id = static_cast<int32_t>(resource);
+    if (!render.colors.empty())
+      state->color = render.colors[static_cast<size_t>(seed) % render.colors.size()];
+    const auto local = part_matrix_multiply(world, part_pose_matrix(render.pose));
+    std::copy(local.begin(), local.end(), state->local_matrix);
+    state->matrix_override = true;
+    state->empty = false;
+    render_node->fields["id"] = Value::make_int(static_cast<int32_t>(resource));
+    gameref_set_parent(render_node, parent);
+  }
+
+  // A flat collision body (a sign board) has no extent on one axis; the
+  // rigid body needs some, as detach_panel also pads.
+  const physics::Vec3 padding{.005, .005, .005};
+  const physics::Vec3 lo = physics::Vec3{physical.info.bbox_min[0], physical.info.bbox_min[1],
+                                         physical.info.bbox_min[2]} - padding;
+  const physics::Vec3 hi = physics::Vec3{physical.info.bbox_max[0], physical.info.bbox_max[1],
+                                         physical.info.bbox_max[2]} + padding;
+  if (!lo.finite() || !hi.finite()) {
+    for (auto* render : rec.renders)
+      if (render != node) gameref_remove(render);
+    records.erase(node);
+    gameref_remove(node);
+    return nullptr;
+  }
+  auto& loose = loose_panels[node];
+  loose.body.configure(mass, lo, hi, center / mass);
+  loose.render_offsets = std::move(offsets);
+  loose.vehicle = controlled_vehicle;
+  loose.quiet_ticks = physics::VehicleDynamics::update_frequency / 2;
+  if (auto* chassis = part_controlled_chassis()) {
+    if (auto* vehicle = record(chassis))
+      loose.carrier_frame = vehicle->dynamics.body.frame();
+    else
+      loose.carrier_frame = world;
+  } else {
+    loose.carrier_frame = world;
+  }
+  return node;
+}
+
+namespace {
+// A promoted map prop at rest this far beyond car reach becomes scenery again.
+constexpr double kSettleDistance = 40.0;
+// One that is still moving out there after this long (fell off the map, keeps
+// rolling) goes back to where the map placed it, and so does one below this.
+constexpr unsigned kLostTicks = physics::VehicleDynamics::update_frequency * 10;
+constexpr double kLostHeight = -500.0;
+
 void advance_loose_panels() {
   using physics::Vec3;
+  std::vector<std::pair<Object*, bool>> settled;  // keep the current pose?
   for (auto it = loose_panels.begin(); it != loose_panels.end();) {
     auto* part = it->first;
     auto& loose = it->second;
     auto* node = gameref_get(part);
-    auto* owner = gameref_find_live(loose.vehicle);
+    auto* rec = record(part);
+    const bool native_dynamic = rec && rec->config->native_kind == "native_dynamic";
     PartMatrix parent_frame;
-    if (!node || !owner || !node->parent || owner->parent != node->parent ||
-        !scene_instances_script_matrix(node->parent, parent_frame.data())) {
+    if (!node || !node->parent) {
+      it = loose_panels.erase(it);
+      part_destroy(part);
+      continue;
+    }
+    if (!scene_instances_script_matrix(node->parent, parent_frame.data()) ||
+        (native_dynamic && !scene_instances_ground_frame(node->parent, parent_frame.data()))) {
+      // Its world is no longer the active one (the garage, or a new visit to
+      // the city with a new GroundRef). A map prop becomes scenery again where
+      // it last was, so the instances it replaced are not left hidden.
+      if (native_dynamic && rec->physics_ready) {
+        const auto frame = loose.body.frame();
+        scene_instances_settle_dynamic(part, frame.data());
+      }
+      it = loose_panels.erase(it);
+      part_destroy(part);
+      continue;
+    }
+    if (native_dynamic && loose.vehicle != controlled_vehicle)
+      loose.vehicle = controlled_vehicle;
+    auto* owner = gameref_find_live(loose.vehicle);
+    if (native_dynamic && (!owner || owner->parent != node->parent)) {
+      ++it;
+      continue;
+    }
+    if (!owner) {
       it = loose_panels.erase(it);
       part_destroy(part);
       continue;
@@ -2508,54 +3050,73 @@ void advance_loose_panels() {
     auto* chassis = static_cast<Object*>(owner->key);
     auto* vehicle = record(chassis);
     if (!vehicle || !vehicle->physics_ready) continue;
+    if (native_dynamic && !rec->physics_ready) {
+      // The first active tick supplies the real ground-shell transform. The
+      // placement was created before scene_instances_select was guaranteed.
+      loose.body.set_frame(part_matrix_multiply(parent_frame, rec->published_frame));
+      loose.carrier_frame = vehicle->dynamics.body.frame();
+      rec->physics_ready = true;
+    }
     const auto previous_carrier = loose.carrier_frame;
     loose.carrier_frame = vehicle->dynamics.body.frame();
     constexpr unsigned rest_ticks = physics::VehicleDynamics::update_frequency / 2;
     const bool sleeping = loose.quiet_ticks >= rest_ticks;
-    if (sleeping && previous_carrier == loose.carrier_frame) continue;
     auto& body = loose.body;
+    // The per-part car test is the expensive step. Skip it unless the two
+    // bounding spheres, padded by this tick's travel, can touch.
+    const auto& car = vehicle->dynamics.body;
+    const Vec3 gap = body.position - car.position;
+    const double reach = ((car.maximum - car.minimum).length() +
+                          (body.maximum - body.minimum).length()) * .5 + 1.0 +
+                         (car.velocity.length() + body.velocity.length()) * kPhysicsTick * 2.0;
+    const bool near = gap.dot(gap) < reach * reach;
+    if (native_dynamic) {
+      const bool far = gap.dot(gap) > (reach + kSettleDistance) * (reach + kSettleDistance);
+      loose.far_awake_ticks = far && !sleeping ? loose.far_awake_ticks + 1 : 0;
+      if (far && sleeping) {
+        settled.push_back({part, true});
+        continue;
+      }
+      if (loose.far_awake_ticks > kLostTicks || body.position.y < kLostHeight) {
+        settled.push_back({part, false});
+        continue;
+      }
+    }
+    if (sleeping && !near) continue;
     const Vec3 before = body.position;
     const auto previous = body.corners();
     if (!sleeping) body.integrate(kPhysicsTick);
-    const bool carrier_contact = collide_loose_with_car(
+    const bool carrier_contact = near && collide_loose_with_car(
         body, previous, before, chassis, *vehicle, previous_carrier);
     if (sleeping && !carrier_contact) continue;
-    const Vec3 movement = body.position - before;
-    const Vec3 size = body.maximum - body.minimum;
-    const float radius = static_cast<float>(std::clamp(std::min({size.x, size.y, size.z}) * .5,
-                                                       .03, .2));
-    const float from[] = {float(before.x), float(before.y), float(before.z)};
-    const float delta[] = {float(movement.x), float(movement.y), float(movement.z)};
-    SceneSphereHit wall;
-    if (scene_instances_sweep_sphere(from, delta, radius, wall, .65f)) {
-      const Vec3 normal{wall.normal[0], wall.normal[1], wall.normal[2]};
-      body.position = before + movement * wall.fraction + normal * .002;
-      body.contact(body.position - normal * radius, normal);
+    const auto support = collide_loose_with_scene(body, before, part);
+    if (native_dynamic) {
+      loose.quiet_ticks = map_object_quiet_ticks(body, !carrier_contact && support.touching,
+                                                 loose.quiet_ticks, loose.rest_anchor);
+    } else {
+      const bool quiet = !carrier_contact && support.penetrating &&
+          body.velocity.dot(body.velocity) < .0025 && body.omega().dot(body.omega()) < .01;
+      loose.quiet_ticks = quiet ? loose.quiet_ticks + 1 : 0;
     }
-    double depth = 0;
-    Vec3 correction;
-    for (const auto& point : body.corners()) {
-      SceneFloorHit floor;
-      if (!scene_instances_sample_floor(float(point.x), float(point.z),
-          float(std::max(before.y, body.position.y) + .25), part, floor)) continue;
-      const double overlap = floor.height - point.y;
-      if (overlap <= 0) continue;
-      const Vec3 normal{floor.normal[0], floor.normal[1], floor.normal[2]};
-      body.contact(point, normal, .12, .75);
-      if (overlap > depth) {
-        depth = overlap;
-        correction = normal;
-      }
-    }
-    if (depth > 0) {
-      body.position += correction * (depth + .001);
-    }
-    const bool quiet = !carrier_contact && depth > 0 &&
-        body.velocity.dot(body.velocity) < .0025 && body.omega().dot(body.omega()) < .01;
-    loose.quiet_ticks = quiet ? loose.quiet_ticks + 1 : 0;
     if (loose.quiet_ticks >= rest_ticks) body.velocity = body.momentum = {};
     const auto local = part_matrix_multiply(part_matrix_inverse_rigid(parent_frame), body.frame());
-    std::copy(local.begin(), local.end(), node->local_matrix);
+    if (native_dynamic) {
+      for (size_t i = 0; i < rec->renders.size() && i < loose.render_offsets.size(); ++i)
+        if (auto* state = gameref_get(rec->renders[i])) {
+          const auto slot = part_matrix_multiply(local, loose.render_offsets[i]);
+          std::copy(slot.begin(), slot.end(), state->local_matrix);
+        }
+    } else {
+      std::copy(local.begin(), local.end(), node->local_matrix);
+    }
+  }
+  for (const auto& [part, keep_pose] : settled) {
+    const auto found = loose_panels.find(part);
+    if (found == loose_panels.end()) continue;
+    const auto frame = found->second.body.frame();
+    scene_instances_settle_dynamic(part, keep_pose ? frame.data() : nullptr);
+    loose_panels.erase(found);
+    part_destroy(part);
   }
 }
 
@@ -2580,8 +3141,149 @@ bool advance_deformation(Object* part, Record& rec, unsigned steps) {
   });
 }
 
+namespace {
+// A PhysicsRef primitive has no authored mass; it is given the density of
+// wood. CFG resource bodies use their own mass when they have one.
+constexpr double kFreeBodyDensity = 500.0;
+
+bool configure_free_body(const GameRefState& state, physics::RigidBody& body) {
+  using physics::Vec3;
+  Vec3 lo, hi, center;
+  double mass = 0;
+  const float* size = state.physics_size;
+  if (state.physics_shape == PhysicsShape::Box) {
+    hi = {size[0], size[1], size[2]};
+    lo = hi * -1.0;
+    mass = kFreeBodyDensity * 8.0 * size[0] * size[1] * size[2];
+  } else if (state.physics_shape == PhysicsShape::Sphere) {
+    hi = {size[0], size[0], size[0]};
+    lo = hi * -1.0;
+    mass = kFreeBodyDensity * 4.0 / 3.0 * 3.14159265358979 * size[0] * size[0] * size[0];
+  } else if (state.physics_shape == PhysicsShape::Resource) {
+    std::shared_ptr<const ScxGeometry> mesh;
+    float authored = 0.f, c[3] = {};
+    if (!scene_instances_native_body(static_cast<uint32_t>(state.type_id), mesh, authored, c))
+      return false;
+    const Vec3 padding{.005, .005, .005};
+    lo = Vec3{mesh->info.bbox_min[0], mesh->info.bbox_min[1], mesh->info.bbox_min[2]} - padding;
+    hi = Vec3{mesh->info.bbox_max[0], mesh->info.bbox_max[1], mesh->info.bbox_max[2]} + padding;
+    const Vec3 extent = hi - lo;
+    mass = authored > 0.f ? authored : kFreeBodyDensity * extent.x * extent.y * extent.z;
+    center = authored > 0.f ? Vec3{c[0], c[1], c[2]} : (lo + hi) * .5;
+  } else {
+    return false;
+  }
+  if (!std::isfinite(mass) || !lo.finite() || !hi.finite()) return false;
+  body.configure(std::clamp(mass, 1.0, 50000.0), lo, hi, center);
+  return true;
+}
+
+void publish_free_body(GameRefState& state, FreeBody& free, const PartMatrix& parent_frame) {
+  const auto local = part_matrix_multiply(part_matrix_inverse_rigid(parent_frame),
+                                          free.body.frame());
+  state.matrix_override = false;
+  std::copy(local.begin() + 12, local.begin() + 15, state.pos);
+  // The inverse of local_matrix(): yaw about Y, then pitch, then roll.
+  const double pitch = std::asin(std::clamp(-double(local[9]), -1.0, 1.0));
+  state.ypr[1] = static_cast<float>(pitch);
+  if (std::fabs(std::cos(pitch)) > 1e-6) {
+    state.ypr[0] = std::atan2(local[8], local[10]);
+    state.ypr[2] = std::atan2(local[1], local[5]);
+  } else {
+    state.ypr[0] = std::atan2(-local[2], local[0]);
+    state.ypr[2] = 0;
+  }
+  const auto to_parent = [&](physics::Vec3 v, float out[3]) {
+    for (int axis = 0; axis < 3; ++axis)
+      out[axis] = static_cast<float>(parent_frame[axis * 4] * v.x +
+                                     parent_frame[axis * 4 + 1] * v.y +
+                                     parent_frame[axis * 4 + 2] * v.z);
+  };
+  to_parent(free.body.velocity, state.vel);
+  to_parent(free.body.omega(), state.angular_vel);
+  std::copy(state.pos, state.pos + 3, free.pos);
+  std::copy(state.ypr, state.ypr + 3, free.ypr);
+}
+
+// Free PhysicsRef bodies fall, rest on the scene and exchange impulses with
+// the controlled car, like loose panels. Bodies outside the active world wait.
+void advance_free_bodies() {
+  using physics::Vec3;
+  std::unordered_set<void*> live;
+  for (auto* state : gameref_simulated_bodies()) {
+    void* key = state->key;
+    PartMatrix parent_frame;
+    if (!state->parent || !scene_instances_script_matrix(state->parent, parent_frame.data()))
+      continue;
+    live.insert(key);
+    auto& free = free_bodies[key];
+    const bool moved = !std::equal(free.pos, free.pos + 3, state->pos) ||
+                       !std::equal(free.ypr, free.ypr + 3, state->ypr);
+    if (free.live_id != state->live_id || moved) {
+      // New body, reused key or setMatrix: start at rest at the script pose.
+      if (free.live_id != state->live_id) {
+        free = FreeBody{};
+        free.live_id = state->live_id;
+        if (!configure_free_body(*state, free.body)) {
+          gameref_set_physics_simulated(key, false);
+          continue;
+        }
+      }
+      float local[16];
+      PartMatrix script_local;
+      scene_instances_local_matrix(*state, local);
+      std::copy(local, local + 16, script_local.begin());
+      free.body.set_frame(part_matrix_multiply(parent_frame, script_local));
+      free.body.velocity = free.body.momentum = {};
+      free.quiet_ticks = 0;
+      std::copy(state->pos, state->pos + 3, free.pos);
+      std::copy(state->ypr, state->ypr + 3, free.ypr);
+    }
+    constexpr unsigned rest_ticks = physics::VehicleDynamics::update_frequency / 2;
+    const bool sleeping = free.quiet_ticks >= rest_ticks;
+    auto& body = free.body;
+    Object* chassis = nullptr;
+    Record* vehicle = nullptr;
+    if (const auto* owner = gameref_find_live(controlled_vehicle)) {
+      chassis = static_cast<Object*>(owner->key);
+      vehicle = record(chassis);
+      PartMatrix car_frame;
+      if (!vehicle || !vehicle->physics_ready ||
+          !scene_instances_script_matrix(chassis, car_frame.data()))
+        vehicle = nullptr;
+    }
+    bool near = false;
+    PartMatrix previous_carrier = free.carrier_frame;
+    if (vehicle) {
+      const auto& car = vehicle->dynamics.body;
+      const Vec3 gap = body.position - car.position;
+      const double reach = ((car.maximum - car.minimum).length() +
+                            (body.maximum - body.minimum).length()) * .5 + 1.0 +
+                           (car.velocity.length() + body.velocity.length()) * kPhysicsTick * 2.0;
+      near = gap.dot(gap) < reach * reach;
+      if (!near || free.carrier_frame == PartMatrix{}) previous_carrier = car.frame();
+      free.carrier_frame = car.frame();
+    }
+    if (sleeping && !near) continue;
+    const Vec3 before = body.position;
+    const auto previous = body.corners();
+    if (!sleeping) body.integrate(kPhysicsTick);
+    const bool carrier_contact =
+        near && collide_loose_with_car(body, previous, before, chassis, *vehicle, previous_carrier);
+    if (sleeping && !carrier_contact) continue;
+    const auto support = collide_loose_with_scene(body, before, key);
+    free.quiet_ticks = map_object_quiet_ticks(body, !carrier_contact && support.touching,
+                                              free.quiet_ticks, free.rest_anchor);
+    if (free.quiet_ticks >= rest_ticks) body.velocity = body.momentum = {};
+    publish_free_body(*state, free, parent_frame);
+  }
+  std::erase_if(free_bodies, [&](const auto& entry) { return !live.contains(entry.first); });
+}
+}  // namespace
+
 void advance_chassis_tick() {
   advance_loose_panels();
+  advance_free_bodies();
   std::vector<Object*> released;
   const auto* target = gameref_find_live(controlled_vehicle);
   Object* controlled = target ? as_part(static_cast<Object*>(target->key)) : nullptr;
@@ -2710,6 +3412,8 @@ void advance_chassis_tick() {
       }
     }
   }
+  // After the records loop: creating a loose body inserts into `records`.
+  scene_instances_promote_dynamics();
   for (auto* part : released)
     if (auto* panel = record(part))
       if (auto* chassis = car(part))
@@ -2737,6 +3441,764 @@ std::vector<physics_telemetry::EntityState> telemetry_entities() {
   });
   return entities;
 }
+void transform_point(const PartMatrix& m, float x, float y, float z, float out[3]) {
+  out[0] = m[0] * x + m[4] * y + m[8] * z + m[12];
+  out[1] = m[1] * x + m[5] * y + m[9] * z + m[13];
+  out[2] = m[2] * x + m[6] * y + m[10] * z + m[14];
+}
+
+float ped_unit() {
+  ped_rng = ped_rng * 1664525u + 1013904223u;
+  return (ped_rng >> 8) * (1.f / 16777216.f);
+}
+
+void pose_steering_wheels() {
+  for (auto& entry : records) {
+    auto& rec = entry.second;
+    if (!rec.config || rec.config->native_kind != "car" || !rec.config->has_steering)
+      continue;
+    const PartSlot* mount = nullptr;
+    for (const auto& slot : rec.config->slots)
+      if (slot.type == 11) mount = &slot;
+    if (!mount) continue;
+    const auto child = rec.children.find(mount->id);
+    if (child == rec.children.end()) continue;
+    auto* node = gameref_get(child->second);
+    auto* wheel = record(child->second);
+    if (!node || !wheel) continue;
+    PartMatrix mount_frame;
+    if (!part_slot_matrix(*rec.config, *mount, mount_frame)) continue;
+    PartMatrix own = eye_matrix();
+    for (const auto& slot : wheel->config->slots)
+      if (slot.id == wheel->state.own_slot) {
+        part_slot_matrix(*wheel->config, slot, own);
+        break;
+      }
+    PartMatrix spin = eye_matrix();
+    const float angle = static_cast<float>(chassis_steering_angle(rec));
+    const float c = std::cos(angle), s = std::sin(angle);
+    spin[0] = c;
+    spin[1] = s;
+    spin[4] = -s;
+    spin[5] = c;
+    const PartMatrix posed = part_matrix_multiply(
+        mount_frame, part_matrix_multiply(spin, part_matrix_inverse_rigid(own)));
+    std::copy(posed.begin(), posed.end(), node->local_matrix);
+    node->matrix_override = true;
+  }
+}
+
+float wheel_rim_radius(Object* wheel) {
+  const auto* rec = record(wheel);
+  if (!rec) return 0.15f;
+  float radius = 0.f;
+  for (auto* render : rec->renders) {
+    const auto* node = gameref_get(render);
+    if (!node) continue;
+    const auto mesh = scene_instances_geometry(static_cast<uint32_t>(node->type_id));
+    if (!mesh) continue;
+    const float scale = mesh->position_scale > 0.f ? mesh->position_scale : 0.01f;
+    for (size_t i = 0; i + 1 < mesh->positions.size(); i += 3) {
+      const float x = mesh->positions[i] * scale;
+      const float y = mesh->positions[i + 1] * scale;
+      radius = std::max(radius, std::sqrt(x * x + y * y));
+    }
+  }
+  return radius >= 0.05f && radius <= 0.5f ? radius : 0.15f;
+}
+
+void* chassis_root(Object* chassis);
+
+void release_driver(DriverSeat& seat) {
+  for (void* hidden : seat.hidden)
+    if (auto* node = gameref_get(hidden)) node->empty = false;
+  seat.hidden.clear();
+  if (seat.owned && seat.render && gameref_get(seat.render))
+    gameref_remove(seat.render);
+  seat.render = nullptr;
+  seat.owned = false;
+}
+
+Object* player_render() {
+  if (!runtime) return nullptr;
+  const Value player = runtime->get_static("java.game.GameLogic", "player");
+  if (player.tag != ValueTag::Obj || !player.v.o) return nullptr;
+  Object* render = part_field(player.v.o, "render");
+  const auto* node = gameref_get(render);
+  if (!node || node->kind != GameRefKind::RenderRef || !node->type_id) return nullptr;
+  return render;
+}
+
+void hide_duplicate_drivers(Object* chassis, Object* keep, int32_t type, DriverSeat& seat) {
+  for (void* hidden : seat.hidden)
+    if (auto* node = gameref_get(hidden)) node->empty = false;
+  seat.hidden.clear();
+  std::vector<void*> pending{chassis_root(chassis)};
+  for (size_t i = 0; i < pending.size() && i < 4096; ++i) {
+    auto* node = gameref_get(pending[i]);
+    if (!node) continue;
+    const bool kept = node->key == keep || node->script == keep;
+    if (!kept && node->kind == GameRefKind::RenderRef && node->type_id == type && node->key) {
+      node->empty = true;
+      seat.hidden.push_back(node->key);
+    } else if (kept && node->empty) {
+      node->empty = false;
+    }
+    for (void* child : node->children) pending.push_back(child);
+  }
+}
+
+void pose_driver() {
+  Object* chassis = part_controlled_chassis();
+  for (auto it = drivers.begin(); it != drivers.end();) {
+    if (it->first != chassis) {
+      release_driver(it->second);
+      it = drivers.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  if (!chassis || !runtime || !index) return;
+  auto* rec = record(chassis);
+  if (!rec || !rec->config || !rec->config->has_seat) return;
+  DriverSeat& seat = drivers[chassis];
+  Object* scripted = player_render();
+  if (scripted) {
+    if (seat.render != scripted) {
+      if (seat.owned && seat.render && gameref_get(seat.render))
+        gameref_remove(seat.render);
+      seat.render = scripted;
+      seat.owned = false;
+      std::fprintf(stderr, "[driver] vin seated\n");
+    }
+  } else if (!seat.render) {
+    const RpkPack* pack = index->pack_by_name("humans.rpk");
+    if (!pack || !index->model_for_resource(pack->pack_id, 0x000C).ok) return;
+    Object* render = runtime->new_object("java.util.resource.RenderRef");
+    auto* node = gameref_upsert(render, GameRefKind::RenderRef);
+    node->type_id = static_cast<int32_t>(RpkIndex::make_full_id(pack->pack_id, 0x000C));
+    node->script = render;
+    node->alias = "driver";
+    node->empty = false;
+    gameref_set_parent(render, chassis);
+    node->matrix_override = true;
+    seat.render = render;
+    seat.owned = true;
+    std::fprintf(stderr, "[driver] vin seated\n");
+  }
+  auto* node = gameref_get(seat.render);
+  if (!node) {
+    seat.render = nullptr;
+    seat.owned = false;
+    return;
+  }
+  if (node->parent != chassis) gameref_set_parent(seat.render, chassis);
+  node->empty = false;
+  const PartMatrix seat_m = part_pose_matrix(rec->config->seat);
+  std::copy(seat_m.begin(), seat_m.end(), node->local_matrix);
+  node->matrix_override = true;
+  hide_duplicate_drivers(chassis, seat.render, node->type_id, seat);
+  // Solve from the bind pose every frame. Carrying last frame's joints makes
+  // the measured limb length shrink until the body collapses onto the wheel.
+  character_reset_pose(seat.render);
+  const PartMatrix inv_seat = part_matrix_inverse_rigid(seat_m);
+  const auto to_cm = [&](float x, float y, float z, float out[3]) {
+    float metres[3];
+    transform_point(inv_seat, x, y, z, metres);
+    for (int i = 0; i < 3; ++i) out[i] = metres[i] * 100.f;
+  };
+  const int32_t type = node->type_id;
+  const auto bone = [&](const char* name) {
+    return character_find_bone(seat.render, type, *index, name);
+  };
+  if (!rec->config->cameras.empty()) {
+    const auto& camera = rec->config->cameras[0].position;
+    float target[3];
+    to_cm(camera[0], camera[1], camera[2], target);
+    // The head joint sits ~7 cm above the neck. The neck is what the chain reaches.
+    target[1] -= 7.2f;
+    const int spine = bone("Bip01 Spine");
+    const int spine1 = bone("Bip01 Spine1");
+    const int neck = bone("Bip01 Neck");
+    if (spine >= 0 && spine1 >= 0 && neck >= 0) {
+      // A straight spine cannot shorten by aiming along itself. Bend the
+      // middle of the back toward the seat (+Z), not the chest up into the chin.
+      const float pole[3] = {0.f, 0.f, 1.f};
+      character_solve_limb(seat.render, type, *index, spine, spine1, neck, target, pole);
+    }
+  }
+  const PartSlot* mount = nullptr;
+  for (const auto& slot : rec->config->slots)
+    if (slot.type == 11) mount = &slot;
+  Object* wheel = nullptr;
+  if (mount) {
+    const auto child = rec->children.find(mount->id);
+    if (child != rec->children.end()) wheel = child->second;
+  }
+  if (wheel) {
+    const auto* wheel_node = gameref_get(wheel);
+    if (wheel_node) {
+      PartMatrix wheel_m;
+      std::copy(wheel_node->local_matrix, wheel_node->local_matrix + 16, wheel_m.begin());
+      const float grip_r = std::max(0.04f, wheel_rim_radius(wheel) - 0.015f);
+      const char* sides[2] = {"L", "R"};
+      for (int side = 0; side < 2; ++side) {
+        const float sign = side == 0 ? -1.f : 1.f;
+        const float grip_angle = sign;
+        float chassis_point[3];
+        transform_point(wheel_m, std::sin(grip_angle) * grip_r, std::cos(grip_angle) * grip_r,
+                        0.f, chassis_point);
+        float target[3];
+        to_cm(chassis_point[0], chassis_point[1], chassis_point[2], target);
+        // Closed fist: the wrist joint is ~8 cm behind the palm on the rim,
+        // toward the driver (+Z in the seat frame).
+        target[2] += 7.8f;
+        const std::string prefix = std::string("Bip01 ") + sides[side] + " ";
+        const int upper = bone((prefix + "UpperArm").c_str());
+        const int lower = bone((prefix + "Forearm").c_str());
+        const int hand = bone((prefix + "Hand").c_str());
+        const int clavicle = bone((prefix + "Clavicle").c_str());
+        if (upper < 0 || lower < 0 || hand < 0) continue;
+        if (clavicle >= 0)
+          character_aim_bone(seat.render, type, *index, clavicle, upper, target, 0.8f);
+        const float pole[3] = {sign * 0.5f, -1.f, 0.f};
+        character_solve_limb(seat.render, type, *index, upper, lower, hand, target, pole);
+      }
+    }
+  }
+  if (rec->config->has_pedals) {
+    const char* sides[2] = {"L", "R"};
+    for (int side = 0; side < 2; ++side) {
+      const float sign = side == 0 ? -1.f : 1.f;
+      float target[3];
+      to_cm(rec->config->pedals[0] + sign * 0.1f, rec->config->pedals[1],
+            rec->config->pedals[2], target);
+      const std::string prefix = std::string("Bip01 ") + sides[side] + " ";
+      const int thigh = bone((prefix + "Thigh").c_str());
+      const int calf = bone((prefix + "Calf").c_str());
+      const int foot = bone((prefix + "Foot").c_str());
+      if (thigh < 0 || calf < 0 || foot < 0) continue;
+      const float pole[3] = {0.f, 0.5f, -1.f};
+      character_solve_limb(seat.render, type, *index, thigh, calf, foot, target, pole);
+      // The foot bone's X is the toe. Left on the shin it points along the
+      // leg, out through the pedal. Hang it down in the seat frame.
+      const float down[3] = {0.f, -1.f, 0.f};
+      character_align_axis(seat.render, type, *index, foot, 0, down);
+    }
+  }
+}
+
+std::vector<std::string> cfg_words(std::string line) {
+  const auto cut = line.find_first_of(";#");
+  if (cut != std::string::npos) line.resize(cut);
+  if (!line.empty() && line.back() == '\r') line.pop_back();
+  std::istringstream input(line);
+  std::vector<std::string> words;
+  for (std::string word; input >> word;) words.push_back(std::move(word));
+  return words;
+}
+
+bool parse_ped_kind(uint32_t type_id, PedKind* out) {
+  if (!index || !out) return false;
+  auto bytes = index->read_payload(type_id);
+  std::string text(bytes.begin(), bytes.end());
+  if (text.find("eof") == std::string::npos) {
+    std::string relative = index->payload_prop(type_id, "native");
+    if (relative.rfind("ped ", 0) == 0 || relative.rfind("ped\t", 0) == 0)
+      relative.erase(0, 4);
+    else
+      relative = index->payload_prop(type_id, "sourcefile");
+    while (!relative.empty() && (relative.front() == ' ' || relative.front() == '\t'))
+      relative.erase(relative.begin());
+    if (relative.empty()) return false;
+    std::ifstream file(std::filesystem::path(index->game_root()) / relative, std::ios::binary);
+    if (!file) return false;
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    text = buffer.str();
+  }
+  uint32_t render = 0, anim = 0;
+  PartPose pose{};
+  bool have_pose = false;
+  std::istringstream lines(text);
+  for (std::string line; std::getline(lines, line);) {
+    const auto words = cfg_words(line);
+    if (words.empty()) continue;
+    if (words[0] == "render" && words.size() >= 2 && render == 0) {
+      render = static_cast<uint32_t>(std::strtoul(words[1].c_str(), nullptr, 0));
+      if (words.size() >= 8) {
+        bool ok = true;
+        for (int i = 0; i < 3 && ok; ++i) {
+          char* end = nullptr;
+          pose.position[i] = std::strtof(words[2 + i].c_str(), &end);
+          ok = end && *end == '\0' && std::isfinite(pose.position[i]);
+          pose.rotation[i] = std::strtof(words[5 + i].c_str(), &end);
+          ok = ok && end && *end == '\0' && std::isfinite(pose.rotation[i]);
+        }
+        have_pose = ok;
+      }
+    } else if (words[0] == "anim" && words.size() >= 2 && anim == 0) {
+      anim = static_cast<uint32_t>(std::strtoul(words[1].c_str(), nullptr, 0));
+    }
+  }
+  if (!render) return false;
+  const int pack = RpkIndex::pack_from_full(type_id);
+  auto full = [&](uint32_t local) {
+    const uint32_t resolved = index->resolve_embedded_id(pack, local);
+    return resolved ? resolved : RpkIndex::make_full_id(pack, local);
+  };
+  out->render = full(render);
+  out->anim = anim ? full(anim) : 0;
+  if (!have_pose) pose = {};
+  out->pose = pose;
+  if (const auto mesh = scene_instances_geometry(out->render)) {
+    const float scale = mesh->position_scale > 0.f ? mesh->position_scale : 0.01f;
+    out->sole = mesh->info.bbox_min[1] * scale;
+  }
+  out->ready = index->model_for_resource(RpkIndex::pack_from_full(out->render),
+                                         out->render & 0xffffu)
+                   .ok;
+  return out->ready;
+}
+
+void clear_ped_agents(PedCrowd& crowd) {
+  for (auto& agent : crowd.agents)
+    if (agent.render) gameref_remove(agent.render);
+  crowd.agents.clear();
+  crowd.announced = false;
+}
+
+void* chassis_root(Object* chassis) {
+  void* key = chassis;
+  for (int guard = 0; guard < 64; ++guard) {
+    const auto* node = gameref_get(key);
+    if (!node || !node->parent) return key;
+    key = node->parent;
+  }
+  return key;
+}
+
+PedestrianLines& city_walk() {
+  static PedestrianLines lines;
+  static bool loaded = false;
+  if (!loaded && index) {
+    loaded = true;
+    const std::filesystem::path path =
+        std::filesystem::path(index->game_root()) / "maps" / "city" / "ai" / "city.walk";
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return lines;
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (lines.load(text))
+      std::fprintf(stderr, "[ped] city.walk rows=%d\n", lines.rows());
+  }
+  return lines;
+}
+
+struct PedSlot {
+  void* crowd = nullptr;
+  size_t index = 0;
+  uint32_t gen = 0;
+  PedestrianWalker line;
+};
+
+// Steps walker records only. Render objects and the skeleton stay on the
+// thread that owns them; this one never calls into either.
+struct PedSim {
+  std::mutex mu;
+  std::condition_variable_any cv;
+  bool posted = false;
+  bool ready = false;
+  float dt = 0.f;
+  std::vector<PedestrianCar> cars;
+  PedestrianLines* walk = nullptr;
+  std::vector<PedSlot> in, out;
+  void run(std::stop_token stop);
+  std::jthread thread{[this](std::stop_token stop) { run(stop); }};
+};
+
+void PedSim::run(std::stop_token stop) {
+  std::unique_lock lock(mu);
+  while (!stop.stop_requested()) {
+    cv.wait(lock, stop, [&] { return posted; });
+    if (stop.stop_requested()) return;
+    auto slots = std::move(in);
+    const float step_dt = dt;
+    const std::vector<PedestrianCar> obstacles = cars;
+    PedestrianLines* lines = walk;
+    posted = false;
+    lock.unlock();
+    if (lines && step_dt > 0.f) {
+      // All walkers in one step: they steer around each other.
+      std::vector<PedestrianWalker> walkers;
+      walkers.reserve(slots.size());
+      for (const auto& slot : slots) walkers.push_back(slot.line);
+      lines->step(walkers, step_dt, obstacles.data(), static_cast<int>(obstacles.size()));
+      for (size_t i = 0; i < slots.size(); ++i) slots[i].line = walkers[i];
+    }
+    lock.lock();
+    out = std::move(slots);
+    ready = true;
+  }
+}
+
+PedSim& ped_sim() {
+  static PedSim sim;
+  return sim;
+}
+
+// The chase camera's vertical field, the same angle mtxProj receives.
+// A point outside that cone is the SLRR_rev "hidden" spawn.
+struct PedView {
+  float eye[3]{};
+  float forward[3]{};
+  float right[3]{};
+  float up[3]{};
+  float tan_x = 1.f;
+  float tan_y = 1.f;
+  bool ok = false;
+};
+
+bool ped_point_hidden(float x, float y, float z, void* user) {
+  const auto* view = static_cast<const PedView*>(user);
+  if (!view || !view->ok) return false;
+  const float dx = x - view->eye[0];
+  const float dy = y - view->eye[1];
+  const float dz = z - view->eye[2];
+  const float depth = dx * view->forward[0] + dy * view->forward[1] + dz * view->forward[2];
+  if (depth <= 0.2f) return true;
+  const float side = dx * view->right[0] + dy * view->right[1] + dz * view->right[2];
+  const float lift = dx * view->up[0] + dy * view->up[1] + dz * view->up[2];
+  return std::fabs(side) > depth * view->tan_x || std::fabs(lift) > depth * view->tan_y;
+}
+
+PedView ped_view() {
+  PedView view;
+  float at[3]{}, up[3] = {0.f, 1.f, 0.f}, fov = 42.f;
+  if (!gameref_world_camera(view.eye, at, &fov, nullptr, nullptr, up)) return view;
+  float fx = at[0] - view.eye[0], fy = at[1] - view.eye[1], fz = at[2] - view.eye[2];
+  const float fl = std::sqrt(fx * fx + fy * fy + fz * fz);
+  if (!(fl > 1e-4f)) return view;
+  fx /= fl;
+  fy /= fl;
+  fz /= fl;
+  float rx = up[1] * fz - up[2] * fy;
+  float ry = up[2] * fx - up[0] * fz;
+  float rz = up[0] * fy - up[1] * fx;
+  float rl = std::sqrt(rx * rx + ry * ry + rz * rz);
+  if (!(rl > 1e-4f)) return view;
+  rx /= rl;
+  ry /= rl;
+  rz /= rl;
+  view.forward[0] = fx;
+  view.forward[1] = fy;
+  view.forward[2] = fz;
+  view.right[0] = rx;
+  view.right[1] = ry;
+  view.right[2] = rz;
+  view.up[0] = fy * rz - fz * ry;
+  view.up[1] = fz * rx - fx * rz;
+  view.up[2] = fx * ry - fy * rx;
+  view.tan_y = std::tan(std::clamp(fov, 10.f, 140.f) * 0.5f * 3.14159265f / 180.f);
+  view.tan_x = view.tan_y * (800.f / 600.f);
+  view.ok = true;
+  return view;
+}
+
+void tick_pedestrians(double seconds) {
+  const float dt = static_cast<float>(std::min(seconds, 0.1));
+  for (auto it = crowds.begin(); it != crowds.end();) {
+    if (!gameref_get(it->first)) {
+      clear_ped_agents(it->second);
+      it = crowds.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  Object* chassis = part_controlled_chassis();
+  if (!chassis || !runtime || !index) return;
+  PartMatrix car;
+  if (!scene_instances_script_matrix(chassis, car.data())) return;
+  const float car_x = car[12], car_y = car[13], car_z = car[14];
+  PedView view = ped_view();
+  PedestrianLines& lines = city_walk();
+  {
+    PedSim& sim = ped_sim();
+    std::lock_guard lock(sim.mu);
+    if (sim.ready) {
+      for (const PedSlot& slot : sim.out) {
+        auto found = crowds.find(slot.crowd);
+        if (found == crowds.end() || slot.index >= found->second.agents.size()) continue;
+        PedAgent& agent = found->second.agents[slot.index];
+        if (agent.sim_gen != slot.gen || !agent.line.ok) continue;
+        agent.line = slot.line;
+        // Left through a gate with no row behind it: hide the body.
+        if (!agent.line.ok) {
+          agent.placed = false;
+          ++agent.sim_gen;
+        }
+      }
+      sim.ready = false;
+    }
+  }
+  const bool routed = lines.rows() > 0;
+  void* root = chassis_root(chassis);
+  PartMatrix parent_m;
+  const bool rooted = root && root != chassis &&
+                      scene_instances_script_matrix(root, parent_m.data());
+  const PartMatrix parent_inv = rooted ? part_matrix_inverse_rigid(parent_m) : eye_matrix();
+  static double clock = 0;
+  clock += seconds;
+  for (auto& entry : crowds) {
+    PedCrowd& crowd = entry.second;
+    if (crowd.kinds.size() != crowd.types.size()) crowd.kinds.resize(crowd.types.size());
+    int usable = 0;
+    for (size_t i = 0; i < crowd.types.size(); ++i) {
+      if (crowd.kinds[i].ready) {
+        if (crowd.kinds[i].render) ++usable;
+        continue;
+      }
+      const auto* type = gameref_get(crowd.types[i]);
+      const uint32_t id = type ? static_cast<uint32_t>(type->type_id) : 0;
+      if (!id || !parse_ped_kind(id, &crowd.kinds[i])) {
+        crowd.kinds[i].ready = true;
+        crowd.kinds[i].render = 0;
+        if (id) std::fprintf(stderr, "[ped] type 0x%x has no walk render\n", id);
+        continue;
+      }
+      ++usable;
+    }
+    // Far enough that people are already on the sidewalk before they enter
+    // the view. 150 m clipped them into existence along the street.
+    constexpr float kRadius = 400.f;
+    const float slider = std::max(0.f, host_game_options().pedestrian_density);
+    // The map coefficients are people per square metre of sidewalk. At the
+    // slider maximum that asked for about twenty people inside 150 m.
+    constexpr float kDensityScale = 4.f;
+    crowd.density = crowd.map_density * slider * kDensityScale;
+    float area = 0.f;
+    int want = 0;
+    if (crowd.density > 0.f && usable > 0 && routed) {
+      // StreetLegal stores people per square metre. The tick truncates
+      // density times the walkable area, with no fixed headcount.
+      area = lines.area_within(car_x, car_y, car_z, kRadius);
+      want = static_cast<int>(crowd.density * area);
+    }
+    auto retire = [](PedAgent& agent) {
+      agent.line.ok = false;
+      agent.placed = false;
+      ++agent.sim_gen;
+      if (auto* hidden = gameref_get(agent.render)) hidden->empty = true;
+    };
+    auto make_agent = [&]() -> PedAgent* {
+      PedAgent agent;
+      const int kind_count = static_cast<int>(crowd.kinds.size());
+      agent.kind = -1;
+      for (int step = 0; step < kind_count; ++step) {
+        const int candidate = (crowd.next_kind + step) % kind_count;
+        if (!crowd.kinds[static_cast<size_t>(candidate)].render) continue;
+        agent.kind = candidate;
+        crowd.next_kind = (candidate + 1) % kind_count;
+        break;
+      }
+      if (agent.kind < 0) return nullptr;
+      const PedKind& kind = crowd.kinds[agent.kind];
+      Object* render = runtime->new_object("java.util.resource.RenderRef");
+      auto* node = gameref_upsert(render, GameRefKind::RenderRef);
+      node->type_id = static_cast<int32_t>(kind.render);
+      node->script = render;
+      node->alias = "pedestrian";
+      node->empty = true;
+      node->matrix_override = true;
+      if (rooted) gameref_set_parent(render, root);
+      if (kind.anim) {
+        character_bind_animation(render, render, static_cast<int32_t>(kind.anim), *index);
+        character_play(render, true);
+        const float duration = character_duration(render);
+        if (duration > 0.f) character_seek(render, ped_unit() * duration);
+      }
+      agent.render = render;
+      crowd.agents.push_back(agent);
+      return &crowd.agents.back();
+    };
+    if (!crowd.preloaded && usable > 0 && want > 0) {
+      std::vector<uint32_t> ids;
+      for (const PedKind& kind : crowd.kinds)
+        if (kind.render) ids.push_back(kind.render);
+      scene_instances_preload(ids);
+      crowd.preloaded = true;
+    }
+    int active = 0;
+    PedAgent* spare = nullptr;
+    for (auto& agent : crowd.agents) {
+      if (agent.line.ok) ++active;
+      else if (!spare) spare = &agent;
+    }
+    if (clock >= crowd.prune_at) {
+      std::vector<PedAgent*> order;
+      for (auto& agent : crowd.agents)
+        if (agent.line.ok) order.push_back(&agent);
+      std::sort(order.begin(), order.end(), [&](const PedAgent* a, const PedAgent* b) {
+        const float da = std::hypot(a->line.x - car_x, a->line.z - car_z);
+        const float db = std::hypot(b->line.x - car_x, b->line.z - car_z);
+        return da > db;
+      });
+      int remaining = static_cast<int>(order.size());
+      for (PedAgent* agent : order) {
+        const float away = std::hypot(agent->line.x - car_x, agent->line.z - car_z);
+        if (remaining > want || away > kRadius + 50.f) {
+          retire(*agent);
+          --remaining;
+        }
+      }
+      active = remaining;
+      crowd.prune_at = clock + 0.5;
+    }
+    PedestrianBlock car_block{car_x, car_y, car_z, 2.5f};
+    if (const auto* body = gameref_get(chassis)) {
+      car_block.vx = body->vel[0];
+      car_block.vy = body->vel[1];
+      car_block.vz = body->vel[2];
+      if (auto mesh = scene_instances_geometry(static_cast<uint32_t>(body->type_id))) {
+        const float scale = mesh->position_scale > 0.f ? mesh->position_scale : 0.01f;
+        float extent = 0.f;
+        for (int axis = 0; axis < 3; ++axis) {
+          const float span = (mesh->info.bbox_max[axis] - mesh->info.bbox_min[axis]) * scale;
+          extent += span * span;
+        }
+        const float radius = 0.5f * std::sqrt(extent) + 1.f;
+        // A part resource that is not the body mesh reports a city-sized box
+        // and would reject every sidewalk point after the first spawn.
+        if (radius >= 1.f && radius <= 12.f) car_block.radius = radius;
+      }
+    }
+    if (routed && active < want && clock >= crowd.refill_at) {
+      // A full refill in one tick is the hitch, and it puts people on the
+      // street in front of the camera. A few per frame, off screen, walk in.
+      const int batch = 3;
+      bool stalled = false;
+      for (int made = 0; active < want && made < batch; ++made) {
+        if (!spare) {
+          for (auto& agent : crowd.agents)
+            if (!agent.line.ok) {
+              spare = &agent;
+              break;
+            }
+        }
+        if (!spare) spare = make_agent();
+        if (!spare) {
+          stalled = true;
+          break;
+        }
+        std::vector<PedestrianBlock> taken{car_block};
+        for (const auto& other : crowd.agents)
+          if (&other != spare && other.line.ok)
+            taken.push_back({other.line.x, other.line.y, other.line.z, 2.f});
+        if (!lines.spawn(car_x, car_y, car_z, kRadius, 12.f, ped_rng, spare->line,
+                         taken.data(), static_cast<int>(taken.size()),
+                         &ped_point_hidden, &view)) {
+          stalled = true;
+          break;
+        }
+        spare->x = spare->line.x;
+        spare->z = spare->line.z;
+        spare->yaw = spare->line.yaw;
+        spare->placed = true;
+        ++spare->sim_gen;
+        spare = nullptr;
+        ++active;
+      }
+      if (!crowd.stocked && (active >= want || stalled)) crowd.stocked = true;
+      crowd.refill_at = stalled ? clock + 0.25 : clock;
+    }
+    if (crowd.density > 0.f && clock >= crowd.report_at) {
+      std::fprintf(stderr,
+                   "[ped] want=%d active=%d density=%.5f slider=%.2f area=%.0f radius=%.1f\n",
+                   want, active, crowd.density, slider, area, car_block.radius);
+      crowd.report_at = clock + 2.0;
+    }
+    if (!crowd.announced && active > 0) {
+      std::fprintf(stderr, "[ped] %d walkers\n", active);
+      crowd.announced = true;
+    }
+    for (auto& agent : crowd.agents) {
+      if (!agent.render || !gameref_get(agent.render)) continue;
+      auto* node = gameref_get(agent.render);
+      if (!agent.line.ok) {
+        node->empty = true;
+        continue;
+      }
+      if (routed) {
+        // The walker already turns at the original rate (pi per metre).
+        agent.yaw = agent.line.yaw;
+        agent.x = agent.line.x;
+        agent.z = agent.line.z;
+        agent.placed = true;
+        // The original advances the walk clip by the distance moved plus
+        // half the turn, so one metre walked is one second of clip.
+        character_set_speed(agent.render, agent.line.gait);
+      }
+      const PedKind& kind = crowd.kinds[static_cast<size_t>(agent.kind)];
+      // Feet on the corridor point. The cfg render offset is not part of the
+      // streamed mount; the mesh sole is the skinned bounds minimum.
+      const float ground = routed ? agent.line.y : car_y;
+      PartMatrix world = eye_matrix();
+      const float cy = std::cos(agent.yaw), sy = std::sin(agent.yaw);
+      world[0] = cy;
+      world[2] = -sy;
+      world[8] = sy;
+      world[10] = cy;
+      world[12] = agent.x;
+      world[13] = ground - kind.sole;
+      world[14] = agent.z;
+      const PartMatrix local = rooted ? part_matrix_multiply(parent_inv, world) : world;
+      std::copy(local.begin(), local.end(), node->local_matrix);
+      node->matrix_override = true;
+      // Kept in the scene so the skinned mesh is uploaded once, at spawn,
+      // not on the frame the camera turns toward them. The draw itself
+      // skips anyone behind the camera.
+      node->empty = false;
+    }
+  }
+  bool wake = false;
+  {
+    PedSim& sim = ped_sim();
+    std::lock_guard lock(sim.mu);
+    if (sim.posted) {
+      ped_backlog = std::min(0.1f, ped_backlog + dt);
+    } else {
+      sim.in.clear();
+      for (auto& entry : crowds) {
+        const auto& agents = entry.second.agents;
+        for (size_t i = 0; i < agents.size(); ++i) {
+          if (!agents[i].line.ok) continue;
+          PedSlot slot;
+          slot.crowd = entry.first;
+          slot.index = i;
+          slot.gen = agents[i].sim_gen;
+          slot.line = agents[i].line;
+          sim.in.push_back(std::move(slot));
+        }
+      }
+      if (!sim.in.empty()) {
+        // Frames that passed while the worker was busy still count.
+        sim.dt = std::min(0.1f, dt + ped_backlog);
+        ped_backlog = 0.f;
+        sim.cars.clear();
+        PedestrianCar car{car_x, car_y, car_z, 0.f, 0.f};
+        if (const auto* body = gameref_get(chassis)) {
+          car.vx = body->vel[0];
+          car.vz = body->vel[2];
+        }
+        sim.cars.push_back(car);
+        sim.walk = &lines;
+        sim.posted = true;
+        wake = true;
+      }
+    }
+  }
+  if (wake) ped_sim().cv.notify_one();
+}
+
 } // namespace
 
 void part_pause_engine_audio(bool paused) {
@@ -2752,6 +4214,13 @@ void part_physics_advance(double seconds) {
     throw std::invalid_argument("invalid vehicle elapsed time");
   const double admitted = std::min(seconds, kPhysicsTick * kMaxPhysicsTicksPerFrame);
   physics_telemetry::note_physics_time(admitted, seconds - admitted);
+  if (!repair_relink_pending.empty()) {
+    // One local relink per repaired part, after the complete stock repair walk.
+    // The empty-set check is the only steady-state cost.
+    for (Object* part : repair_relink_pending)
+      if (record(part)) relink_one(part);
+    repair_relink_pending.clear();
+  }
   // Hinges also animate while the chassis physics is suspended in the garage.
   // Advance a normalized phase so reversing mid-motion preserves the pose.
   const float hinge_step = static_cast<float>(seconds / 0.5);
@@ -2770,21 +4239,87 @@ void part_physics_advance(double seconds) {
   // Ignore excess time after a long stall so the next frame can still render.
   physics_elapsed += admitted;
   constexpr double tolerance = kPhysicsTick * 1e-10;
-  if (physics_elapsed + tolerance < kPhysicsTick) return;
+  if (physics_elapsed + tolerance >= kPhysicsTick) {
+    scene_instances_prepare_physics();
+    while (physics_elapsed + tolerance >= kPhysicsTick) {
+      diagnostics::set_tick(physics_ticks);
+      advance_chassis_tick();
+      if (physics_telemetry::enabled())
+        physics_telemetry::record_tick(physics_ticks, kPhysicsTick, telemetry_entities());
+      ++physics_ticks;
+      physics_elapsed = std::max(0.0, physics_elapsed - kPhysicsTick);
+    }
+    for (auto &[key, rec] : records) {
+      if (rec.config->native_kind == "car")
+        update_engine_audio(rec, rec.engine_running);
+    }
+  }
+  // After the solver, so a flap or a wheel placement cannot put the column back.
+  pose_steering_wheels();
+  pose_driver();
+  tick_pedestrians(seconds);
+}
 
-  scene_instances_prepare_physics();
-  while (physics_elapsed + tolerance >= kPhysicsTick) {
-    diagnostics::set_tick(physics_ticks);
-    advance_chassis_tick();
-    if (physics_telemetry::enabled())
-      physics_telemetry::record_tick(physics_ticks, kPhysicsTick, telemetry_entities());
-    ++physics_ticks;
-    physics_elapsed = std::max(0.0, physics_elapsed - kPhysicsTick);
+void part_set_pedestrian_density(void* ground, float density) {
+  if (!ground || !std::isfinite(density)) return;
+  density = std::max(0.f, density);
+  // GroundRef.setPedestrianDensity already multiplied by the slider. Undo that
+  // so a later move of the OptionsDialog control changes the live count.
+  PedCrowd& crowd = crowds[ground];
+  const float slider = host_game_options().pedestrian_density;
+  crowd.map_density = slider > 1e-4f ? density / slider : density;
+  crowd.density = crowd.map_density * std::max(0.f, slider);
+}
+
+void part_add_pedestrian_type(void* ground, void* type) {
+  if (!ground || !type) return;
+  PedCrowd& crowd = crowds[ground];
+  if (std::find(crowd.types.begin(), crowd.types.end(), type) != crowd.types.end())
+    return;
+  crowd.types.push_back(type);
+  crowd.kinds.emplace_back();
+}
+
+void part_remove_pedestrian_type(void* ground, void* type) {
+  if (!ground) return;
+  const auto crowd = crowds.find(ground);
+  if (crowd == crowds.end()) return;
+  const auto found = std::find(crowd->second.types.begin(), crowd->second.types.end(), type);
+  if (found == crowd->second.types.end()) return;
+  const auto index = static_cast<size_t>(found - crowd->second.types.begin());
+  crowd->second.types.erase(found);
+  if (index < crowd->second.kinds.size())
+    crowd->second.kinds.erase(crowd->second.kinds.begin() + static_cast<std::ptrdiff_t>(index));
+  clear_ped_agents(crowd->second);
+}
+
+float part_pedestrian_distance(void* ground, float x, float y, float z, int32_t type_id) {
+  // Pedestrian_distance @ 0x00589BE0 (slrr-reverse): nearest live walker,
+  // filtered by type id unless it is 0; -1 for an empty or unmatched list.
+  if (!ground || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return -1.f;
+  const auto crowd = crowds.find(ground);
+  if (crowd == crowds.end()) return -1.f;
+  float best = -1.f;
+  for (const PedAgent& agent : crowd->second.agents) {
+    if (!agent.line.ok || agent.kind < 0 ||
+        static_cast<size_t>(agent.kind) >= crowd->second.types.size())
+      continue;
+    if (type_id != 0) {
+      const auto* type = gameref_get(crowd->second.types[static_cast<size_t>(agent.kind)]);
+      if (!type || type->type_id != type_id) continue;
+    }
+    const float dx = agent.line.x - x, dy = agent.line.y - y, dz = agent.line.z - z;
+    const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (best < 0.f || d < best) best = d;
   }
-  for (auto &[key, rec] : records) {
-    if (rec.config->native_kind == "car")
-      update_engine_audio(rec, rec.engine_running);
-  }
+  return best;
+}
+
+void part_drop_actors() {
+  for (auto& entry : drivers) release_driver(entry.second);
+  drivers.clear();
+  for (auto& entry : crowds) clear_ped_agents(entry.second);
+  crowds.clear();
 }
 void part_set_hud_preview(const std::string &path) {
   std::ifstream input(path, std::ios::binary);
@@ -2874,6 +4409,32 @@ Object* part_controlled_chassis() {
   const auto* target = gameref_find_live(controlled_vehicle);
   return target ? as_part(static_cast<Object*>(target->key)) : nullptr;
 }
+
+std::vector<PartVehiclePosition> part_vehicle_positions() {
+  std::vector<PartVehiclePosition> out;
+  for (auto& [object, rec] : records) {
+    if (rec.config->native_kind != "car" || rec.state.parent) continue;
+    PartMatrix frame;
+    if (!scene_instances_script_matrix(object, frame.data())) continue;
+    const auto* state = gameref_get(object);
+    if (!state) continue;
+    PartVehiclePosition vehicle;
+    vehicle.chassis = object;
+    vehicle.id = state->live_id ? state->live_id : state->type_id;
+    const auto& body = rec.dynamics.body;
+    if (rec.physics_ready) {
+      vehicle.position[0] = static_cast<float>(body.position.x);
+      vehicle.position[1] = static_cast<float>(body.position.y);
+      vehicle.position[2] = static_cast<float>(body.position.z);
+    } else {
+      std::copy(frame.begin() + 12, frame.begin() + 15, vehicle.position);
+    }
+    out.push_back(vehicle);
+  }
+  return out;
+}
+
+Object* part_chassis(Object* object) { return as_part(object); }
 
 Object* part_debug_chassis(Object* object) {
   return car(as_part(object));
@@ -2977,6 +4538,7 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   runtime = &jvm;
   for (auto &[key, rec] : records) release_side(rec);
   records.clear();
+  repair_relink_pending.clear();
   // Dyno sessions belong to the old world's Java objects. The registry is
   // deliberately weak during GC, so world teardown must release it explicitly.
   dyno_clear_sessions();
@@ -2997,6 +4559,27 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
       return Value::make_float(rec && rec->physics_ready
           ? static_cast<float>(rec->dynamics.body.velocity.dot(rec->dynamics.body.velocity))
           : 0.f);
+    });
+  jvm.natives().register_method("java.game.Vehicle", "getHorn", "()I",
+    [](Object* self, const std::vector<Value>&) {
+      const auto* rec = record(as_part(self));
+      if (!rec) return Value::make_int(0);
+      const int slot = rec->horn_down ? 1 : rec->horn_slot;
+      const auto horn = rec->horns.find(slot);
+      return Value::make_int(horn != rec->horns.end() && horn->second.sfx != 0);
+    });
+  jvm.natives().register_method("java.game.Vehicle", "hasCrime", "()F",
+    [](Object* self, const std::vector<Value>&) {
+      // PE 0x440BF0 returns the active zone speed limit in m/s, or -1.
+      // Zone-event producers are not implemented yet; never invent a limit.
+      Object* chassis = as_part(self);
+      const auto* node = gameref_get(chassis);
+      if (!node || node->empty) return Value::make_float(-1.f);
+      const auto found = chassis->fields.find("crime_speed");
+      if (found == chassis->fields.end()) return Value::make_float(-1.f);
+      const float limit = found->second.tag == ValueTag::Float ? found->second.v.f :
+          found->second.tag == ValueTag::Int ? float(found->second.v.i) : -1.f;
+      return Value::make_float(std::isfinite(limit) && limit >= 0.f ? limit : -1.f);
     });
   const std::string owner = "java.game.parts.Part";
   auto bind = [&](const char *name, const char *signature, NativeFn fn) {
@@ -3481,21 +5064,25 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
          auto *pos = object(a, 1);
          auto *ori = object(a, 2);
          // Both null restores the cfg pose (hoods and doors do this).
-         if (!pos && !ori)
+         if (!pos && !ori) {
            p->slot_pose.erase(slot);
-         else {
+           p->slot_script_pose.erase(slot);
+         } else {
            auto &ov = p->slot_pose[slot];
+           auto &scripted = p->slot_script_pose[slot];
            if (pos) {
              ov.p[0] = comp(pos, "x");
              ov.p[1] = comp(pos, "y");
              ov.p[2] = comp(pos, "z");
-             ov.pos = true;
+             std::copy(ov.p, ov.p + 3, scripted.p);
+             ov.pos = scripted.pos = true;
            }
            if (ori) {
              ov.y[0] = comp(ori, "y");
              ov.y[1] = comp(ori, "p");
              ov.y[2] = comp(ori, "r");
-             ov.ypr = true;
+             std::copy(ov.y, ov.y + 3, scripted.y);
+             ov.ypr = scripted.ypr = true;
            }
          }
          if (p->state.parent && slot == p->state.own_slot)
@@ -4062,5 +5649,11 @@ void part_visit_gc_roots(const GcRootVisitor& visit) {
     for (auto* sfx : r.sfx) visit(sfx);
   }
   for (const auto& entry : sfx_items) visit(entry.first);
+  for (const auto& entry : drivers) visit(entry.second.render);
+  for (const auto& entry : crowds) {
+    visit(static_cast<Object*>(entry.first));
+    for (void* type : entry.second.types) visit(static_cast<Object*>(type));
+    for (const auto& agent : entry.second.agents) visit(agent.render);
+  }
 }
 } // namespace slrr

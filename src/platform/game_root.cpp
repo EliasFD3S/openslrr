@@ -34,6 +34,7 @@ std::string find_game_root(const char* explicit_path) {
 
   static const char* kCandidates[] = {
       ".",
+      "data/game",
       "game",
       "../game",
       "../../game",

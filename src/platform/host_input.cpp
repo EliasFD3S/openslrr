@@ -8,8 +8,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <deque>
+#include <unordered_map>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -378,6 +380,14 @@ void host_input_update_controller(Object* controller, float dt) {
         static_cast<std::int32_t>(diagnostic.fallback), diagnostic.profile_bindings,
         diagnostic.xinput_bindings);
   }
+  if (in.bench_throttle >= 0.f) {
+    in.drive_throttle = in.bench_throttle;
+    in.drive_brake = 0.f;
+    in.drive_steer = 0.f;
+    in.drive_steer_analog = false;
+    in.drive_handbrake = false;
+    in.drive_reverse = false;
+  }
 }
 
 void host_input_create_hotkey(Jvm& jvm, Object* key, Object* handler,
@@ -399,6 +409,22 @@ void host_input_forget(Object* object) {
   });
 }
 
+bool menu_repeat_command(int command) {
+  const unsigned code = static_cast<unsigned>(command) & 0x7fffffffu;
+  return code >= 0x00010000u && code <= 0x00070000u && (code & 0xffffu) == 0;
+}
+
+bool host_input_allow_ui(int id, bool pressed) {
+  if (!pressed) return true;
+  using Clock = std::chrono::steady_clock;
+  static std::unordered_map<int, Clock::time_point> until;
+  const auto now = Clock::now();
+  auto& slot = until[id];
+  if (now < slot) return false;
+  slot = now + std::chrono::milliseconds(250);
+  return true;
+}
+
 void host_input_check_hotkeys(Jvm& jvm, Object* controller, Object* focus) {
   const bool capturing = captures_binding(focus);
   // Record every transition before invoking Java. A callback can display a
@@ -418,6 +444,11 @@ void host_input_check_hotkeys(Jvm& jvm, Object* controller, Object* focus) {
     const Hotkey hk = *it;
     hk.key->fields["state"] = Value::make_int(hk.down ? 1 : 0);
     const auto video_command = hk.key->fields.find("command");
+    if (video_command != hk.key->fields.end() &&
+        video_command->second.tag == ValueTag::Int &&
+        menu_repeat_command(video_command->second.v.i) &&
+        !host_input_allow_ui(video_command->second.v.i, hk.down))
+      continue;
     if (hk.down && video_command != hk.key->fields.end() &&
         video_command->second.tag == ValueTag::Int &&
         host_commit_video_dialog(jvm, hk.handler, video_command->second.v.i))

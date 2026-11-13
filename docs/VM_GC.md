@@ -30,7 +30,7 @@ files, monitors, active sections, mechanic state, hover callbacks,
 notifications, callback registrations and live script threads. Dyno sessions
 are weak native payloads: only an in-flight calculation temporarily roots its
 receiver. Finalization removes the session; world reinitialization clears the
-registry. See `src/physics/dyno_model.cpp` and the focused dyno tests.
+registry. See `src/physics/dyno_model.cpp`.
 Suspended cooperative stacks retain scoped roots for TREE locals/operands,
 pending receivers and arrays, invocation arguments, and constructed objects.
 The scheduler saves/restores VM call-depth state when switching contexts; a

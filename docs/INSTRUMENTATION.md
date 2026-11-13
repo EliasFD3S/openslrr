@@ -368,7 +368,7 @@ Separate ASan configure, complete test build, and full CTest with explicit
 nonzero-status enforcement:
 
 ```powershell
-& $cmake -S . -B build-asan -G 'Visual Studio 17 2022' -A x64 -DSLRR_ENABLE_ASAN=ON -DSLRR_STAGE_BUILD=OFF
+& $cmake -S . -B build-asan -G 'Visual Studio 17 2022' -A x64 -DSLRR_ENABLE_ASAN=ON
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $cmake --build build-asan --config Release --target slrr_tests --parallel
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -660,32 +660,31 @@ derived from `engine/Core/natives_stubs.cpp` in
 [slrr-reverse](https://github.com/EliasFD3S/slrr-reverse) at commit
 `5c42f3b139aef4c7b9e0b6420c5704e22c0e6cd7`, with source SHA-256
 `7a09d8f3dd63079dbf50632efd7400aeecebdaa05a786e4958cfc12ad4c6b9f3`.
-The standalone Node.js generator uses no packages, game data, Python, network,
-or ignored `tools/` files:
+`scripts/render_native_coverage.py` (Python standard library only, no game
+data or network) generates the coverage JSON, SVG and README table from that
+manifest and the `register_method` sites under `src/`:
 
 ```powershell
-# Rebuild JSON and SVG from the versioned manifest and current registration sites.
-node scripts/render-native-coverage.js
+# Rebuild JSON, SVG and the README table from the current registration sites.
+python scripts/render_native_coverage.py
 
-# Hermetic repeat-output checks and read-only drift check.
-node scripts/render-native-coverage.js --self-test
-node scripts/render-native-coverage.js --check
+# Read-only drift check; list the remaining signatures.
+python scripts/render_native_coverage.py --check
+python scripts/render_native_coverage.py --list missing
 ```
 
 The generator matches owner, method, and parameter descriptor types (not return
-types), expands the current registration loops/helper forwarding functions, and
-fails on unresolved registration expressions or incomplete/conflicting sources.
-It does not infer behavioral status. To reimport, supply the exact pinned
-`natives_stubs.cpp` to `--import-stock FILE`; the command refuses any other
-SHA-256 or a row count other than 376. CI and CTest run the drift check because a
-complete pinned source is now available.
+types), expands registration loops and helper forwarding functions, and fails on
+unresolved registration expressions or conflicting sources. It does not infer
+behavioral status. A registration counts as an explicit no-op when its handler
+is `native_noop` or it carries `NativeImplementation::ExplicitNoop`. CI and
+CTest run the drift check.
 
-`tests/native-report-tests.cmake` registers `slrr_native_report_tests`,
-`slrr_native_coverage_generator_tests`, and `slrr_native_coverage_drift` when
-Node.js is available. The C++ lane covers metadata, explicit no-op
-classification, success/error/missing outcomes, aliases, durations/counts,
-section capture, metrics lifecycle, JSON escaping/file output, and bounds. The
-JavaScript lane checks deterministic generation and tracked-output drift.
+`tests/native-report-tests.cmake` registers `slrr_native_report_tests`, and
+`slrr_native_coverage_drift` when a Python 3 interpreter is available. The C++
+lane covers metadata, explicit no-op classification, success/error/missing
+outcomes, aliases, durations/counts, section capture, metrics lifecycle, JSON
+escaping/file output, and bounds. The Python lane checks tracked-output drift.
 
 
 # Stage 7 instrumentation

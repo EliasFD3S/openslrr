@@ -169,6 +169,9 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
   // `this.pic = pic` (op 0x1c + assign): receiver is on top of the value.
   Object* pending_put_recv = nullptr;
   bool have_put_recv = false;
+  // A path such as `local.field = value` also leaves its explicit receiver
+  // above the value, even when the field is declared by the current class.
+  bool put_recv_from_path = false;
   // `elementData[i] = v` — 0x20 then assign.
   Object* pending_arr = nullptr;
   int32_t pending_arr_idx = -1;
@@ -762,6 +765,7 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
     return op == 0x07 || op == 0x08;
   };
   auto commit_assign = [&](bool keep) {
+    put_recv_from_path = false;
     if (pending_arr) {
       Value val = stack.empty() ? Value::make_obj(nullptr) : pop();
       if (pending_arr->is_array && pending_arr_idx >= 0) {
@@ -1147,16 +1151,34 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
                 locals.resize(static_cast<size_t>(prev.imm) + 1);
               locals[prev.imm] = local_value(prev.imm, result);
             } else if ((prev.op == 0x1b || prev.op == 0x1c) && prev.wide) {
-              if (last_ifield_fresh && last_ifield_recv) {
-                last_ifield_recv->fields[last_ifield_name] = result;
-                last_ifield_fresh = false;
-              } else {
-                try {
-                  const auto ref = cls.reference(prev.imm);
+              // `int fee += length * 0.03` is computed in float, then Java
+              // narrows it back to the field. Leaving the float in towCarFee
+              // printed $32.377 and stored that float over player.money.
+              Value stored = result;
+              try {
+                const auto ref = cls.reference(prev.imm);
+                const std::string& desc = ref.descriptor;
+                if ((desc == "I" || desc == "B" || desc == "S" || desc == "C" ||
+                     desc == "Z") &&
+                    stored.tag == ValueTag::Float) {
+                  int32_t n = static_cast<int32_t>(stored.v.f);
+                  if (desc == "Z") n = n != 0 ? 1 : 0;
+                  stored = Value::make_int(n);
+                } else if (desc == "F" && stored.tag == ValueTag::Int) {
+                  stored = Value::make_float(static_cast<float>(stored.v.i));
+                }
+                if (last_ifield_fresh && last_ifield_recv) {
+                  last_ifield_recv->fields[last_ifield_name] = stored;
+                  last_ifield_fresh = false;
+                } else {
                   const std::string owner =
                       ref.owner.empty() ? cls.name() : ref.owner;
-                  host->tree_set_static(owner, ref.name, result);
-                } catch (...) {
+                  host->tree_set_static(owner, ref.name, stored);
+                }
+              } catch (...) {
+                if (last_ifield_fresh && last_ifield_recv) {
+                  last_ifield_recv->fields[last_ifield_name] = result;
+                  last_ifield_fresh = false;
                 }
               }
             } else if (last_arr && last_arr->is_array && last_arr_idx >= 0 &&
@@ -1212,6 +1234,7 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
             // Store paths still evaluate intermediate instance receivers.
             // A later class carrier explicitly selects a static path.
             path_static = false;
+            put_recv_from_path = true;
             break;
           }
         }
@@ -1468,16 +1491,17 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
         const bool is_assign = next_is_assign();
 
         if (is_assign) {
-          // `obj.field = value` pushes the value, then the receiver.
-          // `this.field = value` and `Class.field = value` leave only the
-          // value: store into this, or into the static named by path+class.
+          // `obj.field = value` pushes the value, then the receiver. The
+          // receiver's path, not the field owner's package, distinguishes it
+          // from an object value in `this.field = value`.
           const bool foreign =
               !ref.owner.empty() && ref.owner != cls.name();
-          if (foreign && !saw_class && !stack.empty() &&
+          if ((put_recv_from_path || foreign) && !saw_class && !stack.empty() &&
               stack.back().tag == ValueTag::Obj) {
             pending_put_recv = pop().v.o;
             have_put_recv = true;
           }
+          put_recv_from_path = false;
         } else if (!is_assign) {
           const bool foreign =
               !ref.owner.empty() && ref.owner != cls.name();

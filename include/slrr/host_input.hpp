@@ -118,6 +118,8 @@ struct HostInput {
   float free_camera_x = 0.f, free_camera_y = 0.f, free_camera_z = 0.f;
   bool drive_horn = false;
   bool drive_reverse = false, drive_handbrake = false;
+  // --bench-drive: >= 0 replaces throttle, brake and steering.
+  float bench_throttle = -1.f;
 };
 
 HostInput& host_input();
@@ -144,6 +146,10 @@ void host_input_create_hotkey(Jvm& jvm, Object* key, Object* handler,
 void host_input_delete_hotkey(Object* key);
 void host_input_forget(Object* object);
 void host_input_check_hotkeys(Jvm& jvm, Object* controller, Object* focus);
+// One press in a menu or dialog. The same id is ignored for a short while so
+// it cannot run twice back to back. A key release still passes. Driving axes
+// never come through here.
+bool host_input_allow_ui(int id, bool pressed);
 void host_input_flush_hotkeys(Object* controller);
 
 }  // namespace slrr

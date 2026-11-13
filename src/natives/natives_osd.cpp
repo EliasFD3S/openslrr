@@ -209,6 +209,23 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   jvm.natives().register_method(
       "java.render.Camera", "deactivate", "(Ljava.render.Viewport;)V",
       [](Object* self,const std::vector<Value>& args){if(auto* s=gameref_get(self);s&&(args.empty()||(args[0].tag==ValueTag::Obj&&args[0].v.o==s->viewport)))s->cam_active=false;return Value::make_void();});
+  jvm.natives().register_method(
+      "java.render.Camera", "setFog", "(IFF)V",
+      [](Object* self, const std::vector<Value>& args) {
+        auto* state = gameref_get(self);
+        if (!state) return Value::make_void();
+        auto number = [](const Value& value, float fallback) {
+          if (value.tag == ValueTag::Float) return value.v.f;
+          if (value.tag == ValueTag::Int) return static_cast<float>(value.v.i);
+          return fallback;
+        };
+        const int32_t color = !args.empty() && args[0].tag == ValueTag::Int ? args[0].v.i
+                                                                            : 0x0091badb;
+        const float near_z = args.size() > 1 ? number(args[1], 1500.f) : 1500.f;
+        const float far_z = args.size() > 2 ? number(args[2], 3000.f) : 3000.f;
+        gameref_camera_set_fog(*state, color, near_z, far_z);
+        return Value::make_void();
+      });
   // PhysicsRef PE natives — createButton TREE → createBox hit volumes.
   jvm.natives().register_method(
       "java.util.resource.PhysicsRef", "createBox",
@@ -222,6 +239,7 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         };
         const float sx = args.size() > 1 ? num(args[1], 0.1f) : 0.1f;
         const float sy = args.size() > 2 ? num(args[2], 0.1f) : 0.1f;
+        const float sz = args.size() > 3 ? num(args[3], 0.1f) : 0.1f;
         Object* group =
             (!args.empty() && args[0].tag == ValueTag::Obj) ? args[0].v.o
                                                             : nullptr;
@@ -234,7 +252,14 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         }
         float hw = 0.f, hh = 0.f;
         // World colliders have no OSD owner. Their names are for debugging.
-        if (!osd) return Value::make_void();
+        if (!osd) {
+          const std::string label = args.size() > 4 && args[4].tag == ValueTag::Obj &&
+                                            args[4].v.o
+                                        ? args[4].v.o->str
+                                        : "physics_box";
+          physicsref_create_box(self, group, sx, sy, sz, label);
+          return Value::make_void();
+        }
         osd_mesh_halves(osd, sx, sy, &hw, &hh, nullptr);
         OsdWidget w;
         w.cmd = 0;
@@ -285,8 +310,30 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         auto wit = self->fields.find("_osd_wi");
         if (wit != self->fields.end() && wit->second.tag == ValueTag::Int)
           osd_set_widget_pos(wit->second.v.i, nx, ny);
+        physicsref_set_matrix(self, pos,
+                              args.size() > 1 && args[1].tag == ValueTag::Obj
+                                  ? args[1].v.o
+                                  : nullptr);
         self->fields["pos"] = args[0];
         return Value::make_void();
+      });
+  jvm.natives().register_method(
+      "java.util.resource.PhysicsRef", "getPos", "()Ljava.lang.Vector3;",
+      [&jvm](Object* self, const std::vector<Value>&) {
+        if (self) {
+          const auto stored = self->fields.find("pos");
+          if (stored != self->fields.end() && stored->second.tag == ValueTag::Obj &&
+              stored->second.v.o)
+            return stored->second;
+        }
+        Object* v = jvm.new_object("java.lang.Vector3");
+        if (v) {
+          const GameRefState* st = gameref_get(self);
+          v->fields["x"] = Value::make_float(st ? st->pos[0] : 0.f);
+          v->fields["y"] = Value::make_float(st ? st->pos[1] : 0.f);
+          v->fields["z"] = Value::make_float(st ? st->pos[2] : 0.f);
+        }
+        return Value::make_obj(v);
       });
   // java.render.Text natives — legacy RenderNatives path (SCX+atlas).
   jvm.natives().register_method(
