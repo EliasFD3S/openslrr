@@ -585,8 +585,8 @@ validation and must not be presented as one.
 ### Shipping
 
 State the cause, the files involved, the validation that was actually done,
-the limits, and the patch files required. Do not update native-coverage
-figures from the number of C++ functions that changed.
+the limits, and the patch files required. Do not edit native-coverage
+figures by hand; regenerate them with `python scripts/render_native_coverage.py`.
 Document every new native: class, name, descriptor, parameters, effect,
 lifetime, and any persistence.
 

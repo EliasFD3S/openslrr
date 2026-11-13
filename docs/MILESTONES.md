@@ -32,9 +32,9 @@ regenerated.
 
 - Track `tools/compile_game_sources.cpp` or make its CMake target optional;
   today a clean clone cannot configure (`CMakeLists.txt`, `.gitignore`).
-- Commit the native-coverage generator the README names, with a pinned stock
-  native table, so the 329/4/43 figures can be checked. PR #3 has a design
-  for this.
+- Done: `scripts/render_native_coverage.py` regenerates the 329/4/43 figures,
+  the README chart and table from `src/` and the pinned stock table
+  `assets/progress/stock-natives.json`.
 - Fix the malformed last `.gitignore` line, and correct the stale statements
   listed in [KNOWLEDGE_BASE.md §9](KNOWLEDGE_BASE.md#9-where-the-documentation-disagrees-with-the-code).
 - Decide whether `main` gets a test target and CI again. `main` had a CTest

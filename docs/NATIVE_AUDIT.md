@@ -6,6 +6,9 @@ vehicle bindings, the Language work described in
 [SCRIPT_COMPILER.md](SCRIPT_COMPILER.md), and the Leftovers classification.
 The Release x64 registry was compared with the
 376 entries in the stock table at `docs/stubs.txt` in the research workspace.
+The same table is pinned in `assets/progress/stock-natives.json`, and
+`python scripts/render_native_coverage.py` recomputes the counts below and the
+README chart from the registrations in `src/`.
 Matching uses owner, method and parameter types, including overloads. This
 measures bindings. Behavioral status below comes from reviewing the C++
 implementations and following selected calls to their consumers.
