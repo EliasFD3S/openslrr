@@ -445,6 +445,14 @@ Resources and data:
   (`src/resources/scene_instances.cpp:scene_instances_prepare_physics`).
 - A `linked a [b] [parentSlot]` rule: the first matching rule wins; do not
   sort them. LOD renders are alternatives, not layers.
+- A two-anchor linked render with a skinned bone00/bone01 rig is posed, not
+  scaled: bone00 on anchor `a`, bone01 on anchor `b`
+  (`src/resources/part_runtime.cpp:relink_one`,
+  `src/resources/character.cpp:character_place_bone`). The stock spring and
+  shock absorber renders declare no `skeleton`; their rig is the BON next to
+  the SCX (`src/resources/character.cpp:render_skeleton`). Only a render
+  without that rig, such as a CV shaft, is stretched
+  (`src/resources/part_runtime.cpp:span_between`).
 
 Physics:
 

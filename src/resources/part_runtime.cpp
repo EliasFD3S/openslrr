@@ -103,6 +103,9 @@ struct Record {
     uint32_t resource = 0;
     std::vector<PartLink> rules;
     PartMatrix rest_pose{};
+    // Skinned bone00/bone01 rig of the render type `rig_type`, -1 when absent.
+    int32_t rig_type = 0;
+    int bone_from = -1, bone_to = -1;
   };
   std::vector<LinkVisual> links;
   float max_wear = 1.f;
@@ -749,71 +752,112 @@ bool mesh_span(uint32_t resource, float &min_y, float &max_y, float &cx,
   cz = 0.5f * (found->second.min[2] + found->second.max[2]);
   return true;
 }
-PartMatrix span_between(const PartMatrix &a, const PartMatrix &b, float min_y,
-                        float max_y, float cx, float cz) {
+// Local +Y turned onto the two linked anchors (shortest rotation), origin on
+// the first. Shared by the bone rig and the stretched fallback.
+PartMatrix anchor_axis(const PartMatrix &a, const PartMatrix &b) {
   using physics::Vec3;
   const Vec3 axis{b[12] - a[12], b[13] - a[13], b[14] - a[14]};
-  const double length = axis.length();
-  const Vec3 direction = axis / length;
-  // Shortest rotation of local +Y onto the two linked anchors.
+  const Vec3 direction = axis / axis.length();
   const auto turn = direction.y < -1 + 1e-8
       ? physics::Quaternion{1, 0, 0, 0}
       : physics::Quaternion{direction.z, 0, -direction.x, 1 + direction.y};
-  const auto rotation = physics::corner_matrix({}, turn);
-  PartMatrix scale = eye_matrix(), to = eye_matrix(), center = eye_matrix();
-  scale[5] = static_cast<float>(length / (max_y - min_y));
-  to[12] = a[12];
-  to[13] = a[13];
-  to[14] = a[14];
+  auto frame = physics::corner_matrix({}, turn);
+  frame[12] = a[12];
+  frame[13] = a[13];
+  frame[14] = a[14];
+  return frame;
+}
+// Fallback for a two-anchor render without a bone rig (a CV shaft): the
+// authored +Y bounds are scaled to span the anchors.
+PartMatrix span_between(const PartMatrix &a, const PartMatrix &b, float min_y,
+                        float max_y, float cx, float cz) {
+  const float dx = b[12] - a[12], dy = b[13] - a[13], dz = b[14] - a[14];
+  PartMatrix scale = eye_matrix(), center = eye_matrix();
+  scale[5] = std::sqrt(dx * dx + dy * dy + dz * dz) / (max_y - min_y);
   center[12] = -cx;
   center[13] = -min_y;
   center[14] = -cz;
-  return part_matrix_multiply(
-      to, part_matrix_multiply(rotation, part_matrix_multiply(scale, center)));
+  return part_matrix_multiply(anchor_axis(a, b),
+                              part_matrix_multiply(scale, center));
+}
+// The original add_linked binds bone00 of a linked render to its first
+// anchor and bone01 to its second. Only a skinned mesh with both bones can
+// follow them; the lookup is redone when the render changes type.
+bool link_rig(Record::LinkVisual &vis, const GameRefState &node) {
+  if (vis.rig_type == node.type_id)
+    return vis.bone_from >= 0;
+  vis.rig_type = node.type_id;
+  vis.bone_from = vis.bone_to = -1;
+  if (!index || node.type_id == 0)
+    return false;
+  const auto mesh = scene_instances_geometry(static_cast<uint32_t>(node.type_id));
+  if (!mesh || mesh->skin_weights.empty())
+    return false;
+  const int from = character_find_bone(vis.node, node.type_id, *index, "bone00");
+  const int to = character_find_bone(vis.node, node.type_id, *index, "bone01");
+  if (from < 0 || to < 0 || from == to)
+    return false;
+  vis.bone_from = from;
+  vis.bone_to = to;
+  return true;
 }
 void relink_one(Object *part) {
   auto *rec = record(part);
   if (!rec)
     return;
   const bool mounted = car(part) != nullptr;
-  for (const auto &vis : rec->links) {
+  for (auto &vis : rec->links) {
     auto *node = gameref_get(vis.node);
     if (!node)
       continue;
-    // Linked suspension visuals overwrite the render matrix, not the mesh.
-    // Always start from the authored pose; an inventory part has no chassis
-    // anchors and must not keep its last compressed/tilted matrix.
+    // Always start from the authored pose and the bind skeleton; an
+    // inventory part has no chassis anchors and must not keep its last
+    // compressed/tilted matrix or bone pose.
     std::copy(vis.rest_pose.begin(), vis.rest_pose.end(), node->local_matrix);
     node->matrix_override = true;
-    if (!mounted)
-      continue;
+    const bool rigged = link_rig(vis, *node);
+    bool posed_bones = false;
     const PartLink *rule = nullptr;
-    for (const auto &candidate : vis.rules)
-      if (!candidate.filter || !candidate.parent_slot ||
-          candidate.parent_slot == rec->state.parent_slot) {
-        rule = &candidate;
-        break;
+    if (mounted)
+      for (const auto &candidate : vis.rules)
+        if (!candidate.filter || !candidate.parent_slot ||
+            candidate.parent_slot == rec->state.parent_slot) {
+          rule = &candidate;
+          break;
+        }
+    PartMatrix first{}, second{};
+    if (rule && linked_frame(part, rule->first, first, rule->second != 0)) {
+      PartMatrix pose = first;
+      bool placed = true;
+      if (rule->second) {
+        float min_y = 0, max_y = 0, cx = 0, cz = 0;
+        const bool found = linked_frame(part, rule->second, second);
+        const float dx = second[12] - first[12], dy = second[13] - first[13],
+                    dz = second[14] - first[14];
+        const float length = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (!found || length < 1e-6f) {
+          placed = false;
+        } else if (rigged) {
+          // The rig's frame sits on the first anchor with +Y toward the
+          // second; the skin weights deform the mesh between the bones.
+          pose = anchor_axis(first, second);
+          const float origin[3] = {0, 0, 0}, end[3] = {0, length, 0};
+          posed_bones =
+              character_place_bone(vis.node, node->type_id, *index, vis.bone_from, origin) &&
+              character_place_bone(vis.node, node->type_id, *index, vis.bone_to, end);
+        } else if (mesh_span(vis.resource, min_y, max_y, cx, cz)) {
+          pose = span_between(first, second, min_y, max_y, cx, cz);
+        } else {
+          placed = false;
+        }
       }
-    if (!rule)
-      continue;
-    PartMatrix first;
-    if (!linked_frame(part, rule->first, first, rule->second != 0))
-      continue;
-    PartMatrix pose = first;
-    if (rule->second) {
-      PartMatrix second;
-      float min_y = 0, max_y = 0, cx = 0, cz = 0;
-      if (!linked_frame(part, rule->second, second) ||
-          !mesh_span(vis.resource, min_y, max_y, cx, cz))
-        continue;
-      const float dx = second[12] - first[12], dy = second[13] - first[13],
-                  dz = second[14] - first[14];
-      if (dx * dx + dy * dy + dz * dz < 1e-12f)
-        continue;
-      pose = span_between(first, second, min_y, max_y, cx, cz);
+      if (placed)
+        std::copy(pose.begin(), pose.end(), node->local_matrix);
     }
-    std::copy(pose.begin(), pose.end(), node->local_matrix);
-    node->matrix_override = true;
+    // One anchor moves the whole render (bone00 is its root); a rig left
+    // unposed keeps its bind shape.
+    if (rigged && !posed_bones)
+      character_reset_pose(vis.node);
   }
 }
 void relink_assembly(Object *part) {
