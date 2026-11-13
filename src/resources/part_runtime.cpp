@@ -2410,13 +2410,28 @@ physics::VehicleDynamics::Impact collide_chassis(Record& rec, physics::Vec3 befo
       }
     }
   }
+  // An impact rewinds the body along this tick's movement to where it first
+  // touched, so a fast car cannot pass through. A slow approach (a car held
+  // against a wall by its tyres, or resting on it) is pushed straight out of
+  // the overlap instead, keeping its movement along the surface, and only a
+  // quarter-millimetre off it. Rewinding every tick stalled a car sliding
+  // along a wall, and the old 2 mm gap took two ticks to drive back across,
+  // so a car pushing against a wall shook at half the tick rate.
+  constexpr double resting_speed = 1.0;  // m/s towards the surface
+  const auto standoff = [](double speed) { return speed < resting_speed ? .00025 : .002; };
   if (has_primitive &&
       (closest.fraction >= 1.f || primitive_fraction < closest.fraction)) {
     const Vec3 normal{primitive.normal[0], primitive.normal[1], primitive.normal[2]};
-    body.position = before + delta * primitive_fraction +
-                    normal * (primitive.penetration + .002);
     const Vec3 point{primitive.point[0], primitive.point[1], primitive.point[2]};
     const double speed = -body.point_velocity(point).dot(normal);
+    SceneBodyContact end;
+    if (speed < resting_speed && probe_at(1.0, end)) {
+      const Vec3 out{end.normal[0], end.normal[1], end.normal[2]};
+      body.position += out * (end.penetration + standoff(speed));
+    } else {
+      body.position = before + delta * primitive_fraction +
+                      normal * (primitive.penetration + standoff(speed));
+    }
     body.contact(point, normal, .12, .35);
     return {point, normal, speed};
   }
@@ -2434,9 +2449,16 @@ physics::VehicleDynamics::Impact collide_chassis(Record& rec, physics::Vec3 befo
     }
   }
   arm = simultaneous ? arm / static_cast<double>(simultaneous) : closest_arm;
-  body.position = before + delta * closest.fraction + normal * .002;
+  const Vec3 touch = before + delta * closest.fraction;
+  const double speed = -body.point_velocity(touch + arm - normal * radius).dot(normal);
+  if (speed < resting_speed) {
+    // The part of this tick's movement into the surface after the touch.
+    const double depth = (1.0 - closest.fraction) * std::max(0.0, -delta.dot(normal));
+    body.position = before + delta + normal * (depth + closest.penetration + standoff(speed));
+  } else {
+    body.position = touch + normal * standoff(speed);
+  }
   const Vec3 point = body.position + arm - normal * radius;
-  const double speed = -body.point_velocity(point).dot(normal);
   body.contact(point, normal, .12, .35);
   return {point, normal, speed};
 }
