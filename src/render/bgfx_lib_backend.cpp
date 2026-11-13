@@ -1005,22 +1005,48 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       const auto* position = car && scene_instances_script_matrix(car->key, car_matrix)
           ? car_matrix + 12 : world_cam ? world_eye : nullptr;
       update_car_depth(garage_ ? nullptr : position, video);
-      reflection_scene_ = garage_ || outdoor_lighting_ || (script_camera && script_camera->follow_vehicle);
+      // Every world camera reflects its scene. The car dealers have a map and a
+      // script camera but neither the garage flag nor a followed car, so their
+      // cars used to lose the cubemap and render matte.
+      reflection_scene_ = garage_ || world_cam || (script_camera && script_camera->follow_vehicle);
       float reflection_position[3];
       const float* capture_position = position;
+      // Script-space centre of a vehicle part, lowered by the height that
+      // update_reflections adds back to the probe.
+      const auto part_centre = [](const SceneInstance& part, float* out) {
+        const auto& geometry = *part.geometry;
+        const auto& m = part.transform;
+        const float x = (geometry.info.bbox_min[0] + geometry.info.bbox_max[0]) * .5f * geometry.position_scale;
+        const float y = (geometry.info.bbox_min[1] + geometry.info.bbox_max[1]) * .5f * geometry.position_scale;
+        const float z = -(geometry.info.bbox_min[2] + geometry.info.bbox_max[2]) * .5f * geometry.position_scale;
+        out[0] = m[0]*x + m[4]*y + m[8]*z + m[12];
+        out[1] = m[1]*x + m[5]*y + m[9]*z + m[13] - .8f;
+        out[2] = -(m[2]*x + m[6]*y + m[10]*z + m[14]);
+      };
       if (garage_) {
         const auto body = std::find_if(instances_.begin(), instances_.end(),
             [](const SceneInstance& object) { return object.vehicle_material; });
         if (body != instances_.end()) {
-          const auto& geometry = *body->geometry;
-          const auto& m = body->transform;
-          const float x = (geometry.info.bbox_min[0] + geometry.info.bbox_max[0]) * .5f * geometry.position_scale;
-          const float y = (geometry.info.bbox_min[1] + geometry.info.bbox_max[1]) * .5f * geometry.position_scale;
-          const float z = -(geometry.info.bbox_min[2] + geometry.info.bbox_max[2]) * .5f * geometry.position_scale;
-          reflection_position[0] = m[0]*x + m[4]*y + m[8]*z + m[12];
-          reflection_position[1] = m[1]*x + m[5]*y + m[9]*z + m[13] - .8f;
-          reflection_position[2] = -(m[2]*x + m[6]*y + m[10]*z + m[14]);
+          part_centre(*body, reflection_position);
           capture_position = reflection_position;
+        }
+      } else if (!car && world_cam) {
+        // A showroom camera orbits the car on display. Capture from that car,
+        // not from the camera, so its panels reflect the room around it.
+        float best = 8.f * 8.f;
+        for (const auto& object : instances_) {
+          if (!object.vehicle_material) continue;
+          float centre[3];
+          part_centre(object, centre);
+          const float dx = centre[0] - world_at[0];
+          const float dy = centre[1] + .8f - world_at[1];
+          const float dz = centre[2] - world_at[2];
+          const float distance = dx * dx + dy * dy + dz * dz;
+          if (distance < best) {
+            best = distance;
+            std::copy(centre, centre + 3, reflection_position);
+            capture_position = reflection_position;
+          }
         }
       }
       update_reflections(capture_position);
@@ -1398,6 +1424,9 @@ void LibBgfxBackend::update_reflections(const float* eye) {
       if (outdoor_lighting_ || std::any_of(objects.begin(), objects.end(),
           [](const SceneInstance& object) { return object.sky; }))
         draw_sky(reflection_view, view, proj);
+      // The garage shell is preloaded SCX geometry outside the instance list.
+      // Without it the paint and glass mirror the clear colour, not the room.
+      if (garage_ && !parts_.empty()) draw_scene(reflection_view);
       const float origin_x = reflection_origin_[0];
       const float origin_y = reflection_origin_[1];
       const float origin_z = reflection_origin_[2];

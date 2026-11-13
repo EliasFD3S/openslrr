@@ -527,6 +527,15 @@ These are entry points, not fixes. Each needs its own reproduction.
   and never matched, so script animations were unbound; it now uses the
   dotted form. Open: the car-flee side choice and exact accumulator roles in
   0x00586e40 are only partly decoded, and `city.rest` is still unused.
+- **#38 matte cars at the car dealers.** Paint, chrome and glass read the
+  dynamic cubemap only in a reflection scene. The dealers have a map and a
+  script camera, but no garage flag and no followed car, so they used to
+  render without any reflection. Every world camera is now a reflection
+  scene, and without a followed car the probe sits on the car nearest the
+  camera target (`src/render/bgfx_lib_backend.cpp:flush`). The garage
+  capture also draws the preloaded garage shell; before, the paint and glass
+  mirrored only the props and the clear colour
+  (`src/render/bgfx_lib_backend.cpp:update_reflections`).
 
 ## 12. Self-check
 
