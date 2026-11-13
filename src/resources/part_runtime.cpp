@@ -87,6 +87,9 @@ struct Record {
     float p[3]{}, y[3]{};
   };
   std::unordered_map<int, PoseOverride> slot_pose;
+  // Latest intentional setSlotPos values, kept separate from damage overlays so
+  // repair can restore a user pose even when both target the same slot.
+  std::unordered_map<int, PoseOverride> slot_script_pose;
   std::vector<Object *> renders;
   struct LinkVisual {
     Object *node = nullptr;
@@ -139,6 +142,9 @@ struct Record {
 };
 std::unordered_map<Object *, std::vector<SfxItem>> sfx_items;
 std::unordered_map<Object *, Record> records;
+// Weak, one-shot repair work consumed by the next part update. Stock Java may
+// repair descendants before their parents, so links must not be relinked early.
+std::unordered_set<Object *> repair_relink_pending;
 struct LoosePanel {
   physics::RigidBody body;
   PartMatrix carrier_frame{};
@@ -210,6 +216,7 @@ Record *record(Object *object) {
   auto found = records.find(canonical(object));
   return found == records.end() ? nullptr : &found->second;
 }
+void repair_part(Object *part, Record &rec);
 Object *object(const std::vector<Value> &args, size_t i) {
   return i < args.size() && args[i].tag == ValueTag::Obj ? args[i].v.o
                                                          : nullptr;
@@ -1460,6 +1467,10 @@ bool part_command(Object *part, const std::string &command) {
   auto *rec = record(part);
   if (!rec)
     return false;
+  if (verb == "repair") {
+    repair_part(part, *rec);
+    return true;
+  }
   if (verb == "setsteer" && rec->config->native_kind == "car") {
     float value = 0;
     if (!(input >> value) || !std::isfinite(value))
@@ -1584,6 +1595,7 @@ bool part_destroy(Object *part) {
   if (!rec)
     return false;
   loose_panels.erase(part);
+  repair_relink_pending.erase(part);
   if (auto camera = part->fields.find("_hostCockpitCamera"); camera != part->fields.end())
     gameref_remove(camera->second.v.o);
   auto children = rec->children;
@@ -2343,7 +2355,7 @@ void publish_deformation(Object* part, Record& rec) {
 }
 
 void restore_deformation(Object* part, Record& rec) {
-  if (!rec.deformation) return;
+  // Repair must also clear stale render/collision data if the cage is already gone.
   rec.deformation.reset();
   rec.deformed_collision.reset();
   rec.deformation_upload_ticks = 0;
@@ -2352,6 +2364,67 @@ void restore_deformation(Object* part, Record& rec) {
   for (const auto& [slot, child] : rec.children)
     if (const auto* installed = record(child); installed && installed->config->category == 2)
       place_child(part, slot, false);
+}
+
+bool scripted_parts_contain(Object* owner, Object* child) {
+  if (!owner) return false;
+  const auto attached = owner->fields.find("attachedParts");
+  if (attached == owner->fields.end() || attached->second.tag != ValueTag::Obj ||
+      !attached->second.v.o)
+    return false;
+  Object* vector = attached->second.v.o;
+  const auto data = vector->fields.find("elementData");
+  if (data == vector->fields.end() || data->second.tag != ValueTag::Obj ||
+      !data->second.v.o || !data->second.v.o->is_array)
+    return false;
+  const auto& slots = data->second.v.o->slots;
+  const int count = std::clamp(field_int(vector, "elementCount",
+                                         static_cast<int>(slots.size())),
+                               0, static_cast<int>(slots.size()));
+  for (int i = 0; i < count; ++i)
+    if (slots[static_cast<size_t>(i)].tag == ValueTag::Obj &&
+        slots[static_cast<size_t>(i)].v.o &&
+        canonical(slots[static_cast<size_t>(i)].v.o) == canonical(child))
+      return true;
+  return false;
+}
+
+void repair_part(Object* part, Record& rec) {
+  // SLRR_rev 77b0fb6 repairDamage: clear deformation and slot/wheel damage.
+  // Stock Part.repair already visits the installed tree, so keep this reset local.
+  restore_deformation(part, rec);
+  for (const auto& entry : rec.slot_damage) {
+    const int slot_index = entry.first;
+    if (slot_index < 0 || static_cast<size_t>(slot_index) >= rec.config->slots.size())
+      continue;
+    const int slot = rec.config->slots[static_cast<size_t>(slot_index)].id;
+    if (const auto scripted = rec.slot_script_pose.find(slot);
+        scripted != rec.slot_script_pose.end())
+      rec.slot_pose[slot] = scripted->second;
+    else
+      rec.slot_pose.erase(slot);
+    if (rec.state.parent && slot == rec.state.own_slot)
+      place_child(rec.state.parent, rec.state.parent_slot, false);
+    else
+      place_child(part, slot, false);
+  }
+  rec.slot_damage.clear();
+  for (auto& damage : rec.wheel_damage) damage.clear();
+  // Avoid relink_assembly here: stock repair can visit descendants before their
+  // parents. Queue each affected part once and flush after the scripted walk.
+  if (!rec.links.empty()) repair_relink_pending.insert(part);
+
+  // The chassis's attachedParts is flat and covers normal whole-car repair.
+  // A detached non-chassis assembly has no such script list in this host, so
+  // fill only those uncovered children instead of traversing them twice.
+  Object* chassis = car(part);
+  for (const auto& [slot, child] : rec.children) {
+    const bool scripted = scripted_parts_contain(part, child) ||
+        (chassis && chassis != part && scripted_parts_contain(chassis, child));
+    if (!scripted && runtime && record(child))
+      runtime->invoke_by_name(child->class_name, "repair",
+                              {Value::make_obj(child)}, false);
+  }
 }
 
 struct PanelContact {
@@ -3565,6 +3638,13 @@ void part_pause_engine_audio(bool paused) {
 void part_physics_advance(double seconds) {
   if (!std::isfinite(seconds) || seconds < 0)
     throw std::invalid_argument("invalid vehicle elapsed time");
+  if (!repair_relink_pending.empty()) {
+    // One local relink per repaired part, after the complete stock repair walk.
+    // The empty-set check is the only steady-state cost.
+    for (Object* part : repair_relink_pending)
+      if (record(part)) relink_one(part);
+    repair_relink_pending.clear();
+  }
   // Hinges also animate while the chassis physics is suspended in the garage.
   // Advance a normalized phase so reversing mid-motion preserves the pose.
   const float hinge_step = static_cast<float>(seconds / 0.5);
@@ -3854,6 +3934,7 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   runtime = &jvm;
   for (auto &[key, rec] : records) release_side(rec);
   records.clear();
+  repair_relink_pending.clear();
   // Dyno sessions belong to the old world's Java objects. The registry is
   // deliberately weak during GC, so world teardown must release it explicitly.
   dyno_clear_sessions();
@@ -4377,21 +4458,25 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
          auto *pos = object(a, 1);
          auto *ori = object(a, 2);
          // Both null restores the cfg pose (hoods and doors do this).
-         if (!pos && !ori)
+         if (!pos && !ori) {
            p->slot_pose.erase(slot);
-         else {
+           p->slot_script_pose.erase(slot);
+         } else {
            auto &ov = p->slot_pose[slot];
+           auto &scripted = p->slot_script_pose[slot];
            if (pos) {
              ov.p[0] = comp(pos, "x");
              ov.p[1] = comp(pos, "y");
              ov.p[2] = comp(pos, "z");
-             ov.pos = true;
+             std::copy(ov.p, ov.p + 3, scripted.p);
+             ov.pos = scripted.pos = true;
            }
            if (ori) {
              ov.y[0] = comp(ori, "y");
              ov.y[1] = comp(ori, "p");
              ov.y[2] = comp(ori, "r");
-             ov.ypr = true;
+             std::copy(ov.y, ov.y + 3, scripted.y);
+             ov.ypr = scripted.ypr = true;
            }
          }
          if (p->state.parent && slot == p->state.own_slot)

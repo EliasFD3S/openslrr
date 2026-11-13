@@ -379,9 +379,12 @@ Physics:
 - The physics delta is clamped to 0.1 s and scaled by the time warp
   (`src/jvm/jvm.cpp:advance_sim_time`), and at most four host ticks run per
   frame, so below 15 FPS the simulation slows down.
-- Repairs and resets must restore deformation, slot damage and wheel damage
-  together. Today deformation is restored only when Java sets tear to at
-  least 1 (`src/resources/part_runtime.cpp:restore_deformation`).
+- Repairs must restore deformation, damage-associated slot state and wheel
+  damage together. The native `repair` command does this locally for each part
+  (`src/resources/part_runtime.cpp:repair_part`); stock Java covers the normal
+  tree walk, with a native fallback only for detached assembly children omitted
+  from `attachedParts`. A standalone `setTear` still clears deformation only when
+  Java sets tear to at least 1 (`src/resources/part_runtime.cpp:restore_deformation`).
 
 Rendering and UI:
 
@@ -508,10 +511,13 @@ These are entry points, not fixes. Each needs its own reproduction.
 - **#17 "Repair car" does not repair.** Stock `Part.repair()` raises wear and
   tear only up to `repair_max_wear` / `repair_max_tear` (0.95 in the MWM
   `Part.java`), then sends the native command `"repair"`
-  (`GAME:parts/scripts/src/Part.java:repair`). `part_command` has no
-  `repair` verb, and deformation is restored only when tear reaches 1, so
-  nothing visual is reset (`src/resources/part_runtime.cpp:part_command`).
-  SLRR_rev implements the verb (`SLRR_rev:src/runtime/part-native.ts:repairDamage`).
+  (`GAME:parts/scripts/src/Part.java:repair`). `part_command` now routes that
+  one-shot command to `repair_part`, which restores local deformation and
+  damage-associated slot/wheel state. Normal script-covered children are not
+  traversed again; only detached assembly children missing from `attachedParts`
+  receive the native fallback.
+  SLRR_rev's corresponding implementation is
+  `SLRR_rev:src/runtime/part-native.ts:repairDamage` (revision `77b0fb6`).
 - **#18 city performance.** The reported profile is CPU-bound. Each frame
   collects instances for the main view plus `reflection_faces` cube faces
   (default 1); the map shadow re-collects when the camera moves at least
@@ -551,8 +557,10 @@ Each answer names its evidence.
    untracked, gitignored `tools/compile_game_sources.cpp` (§3).
 8. *Why do cars pass through Valo City trees?* Placement bodies are dropped
    and props are not in the collision index (§11, #16).
-9. *Why does garage repair leave dents?* There is no native `repair` verb
-   and stock repair caps tear at 0.95 (§11, #17).
+9. *How does garage repair clear dents without forcing 100% condition?* Stock
+   Java applies its repair caps and recursively calls the native `repair`
+   command; that command restores local deformation and slot/wheel damage
+   without changing the script-selected wear/tear values (§11, #17).
 10. *Where does the city's frame time go?* Unmeasured. Repeated scene walks
     with chain-matrix allocation are the first suspects (§11, #18).
 11. *Do pedestrians follow a road graph?* No. They walk freely inside the
