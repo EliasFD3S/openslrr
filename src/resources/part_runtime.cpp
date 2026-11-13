@@ -1084,11 +1084,16 @@ part_mass_properties(const std::shared_ptr<const PartConfig> &config) {
       physics::accumulate(sum, body_mass_properties(body));
   return part_masses.emplace(config.get(), CachedMass{config, sum}).first->second.local;
 }
-// Mass distribution of `root`'s installed subtree in root's frame.
+// Mass distribution of `root`'s installed subtree in root's frame. When no
+// installed part has a positive body mass, each body-less part with a CFG
+// mass counts as a point mass at its origin, as the previous point-mass sum
+// did (PartConfig::mass is currently the sum of the body masses, so this
+// only matters if a configuration ever carries a mass of its own).
 physics::MassProperties subtree_mass_properties(Object *root) {
   physics::MassProperties sum;
   const PartMatrix inverse = part_matrix_inverse_rigid(world_matrix(root));
-  for (const auto &part : part_installed_tree(root)) {
+  const auto tree = part_installed_tree(root);
+  for (const auto &part : tree) {
     auto *rec = record(part.object);
     if (!rec)
       continue;
@@ -1098,12 +1103,23 @@ physics::MassProperties subtree_mass_properties(Object *root) {
     physics::accumulate(sum, physics::transformed(
         local, part_matrix_multiply(inverse, world_matrix(part.object))));
   }
+  if (!sum.empty())
+    return sum;
+  for (const auto &part : tree) {
+    auto *rec = record(part.object);
+    if (!rec || !rec->config || !rec->config->bodies.empty() || !(rec->config->mass > 0.f))
+      continue;
+    const PartMatrix frame = part_matrix_multiply(inverse, world_matrix(part.object));
+    physics::accumulate(sum, physics::point_mass(rec->config->mass,
+                                                 {frame[12], frame[13], frame[14]}));
+  }
   return sum;
 }
 // Mass properties of the assembled car in the chassis frame: total mass,
 // centre of mass, and the principal moments about that centre along the
 // chassis axes (kg m^2; the products of inertia are dropped). All zero when
-// no installed part carries a body mass.
+// the installed parts carry no mass at all; a moment is zero (unknown) when
+// the fallback point masses leave that axis without spread.
 void assembly_mass_properties(Object *chassis, float &mass, float com[3],
                               float inertia[3]) {
   const auto sum = subtree_mass_properties(chassis);
