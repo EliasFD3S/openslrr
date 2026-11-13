@@ -359,6 +359,13 @@ struct Lines {
   std::vector<Zone> zones;
   std::unordered_map<int, int> zone_of;
   std::map<std::pair<int, int>, std::vector<Sample>> cells;
+  // One entry per 2 m step of every zone: the step's centre and its
+  // sidewalk area. area_within() runs every frame and only sums these.
+  struct AreaPiece {
+    V sample;
+    float area = 0.f;
+  };
+  std::vector<AreaPiece> area_pieces;
 };
 
 V point_of(const Lines& lines, int zone, float t) {
@@ -442,6 +449,7 @@ void build(Lines& lines) {
   lines.zones.clear();
   lines.zone_of.clear();
   lines.cells.clear();
+  lines.area_pieces.clear();
   for (int i = 0; i < static_cast<int>(lines.rows.size()); ++i)
     lines.row_of.emplace(lines.rows[static_cast<size_t>(i)].id, i);
   for (const Walk& row : lines.rows) {
@@ -513,6 +521,20 @@ void build(Lines& lines) {
         lines.cells[key].push_back({z, t, lateral, position});
       }
   }
+  for (const Zone& zone : lines.zones) {
+    const int steps = std::max(1, static_cast<int>(std::ceil(zone.length / 2.f)));
+    V previous = zone_point(zone, 0.f, 0.5f);
+    float previous_width = flat(sample_boundary(zone.sides[0], 0.f), sample_boundary(zone.sides[1], 0.f));
+    for (int i = 1; i <= steps; ++i) {
+      const float t = static_cast<float>(i) / static_cast<float>(steps);
+      const V middle = zone_point(zone, t, 0.5f);
+      const float width = flat(sample_boundary(zone.sides[0], t), sample_boundary(zone.sides[1], t));
+      lines.area_pieces.push_back({lerp(previous, middle, 0.5f),
+                                   (previous_width + width) * 0.5f * flat(previous, middle)});
+      previous = middle;
+      previous_width = width;
+    }
+  }
 }
 
 Boundary path_boundary(const std::vector<std::array<float, 3>>& path) {
@@ -557,6 +579,7 @@ bool PedestrianLines::load(const std::string& text) {
   data_->rows.clear();
   data_->zones.clear();
   data_->cells.clear();
+  data_->area_pieces.clear();
   data_->row_of.clear();
   data_->zone_of.clear();
   std::vector<WalkRow> parsed;
@@ -566,6 +589,7 @@ bool PedestrianLines::load(const std::string& text) {
     data_->rows.clear();
     data_->zones.clear();
     data_->cells.clear();
+    data_->area_pieces.clear();
     return false;
   }
   for (auto& row : parsed) data_->rows.push_back(Walk(std::move(row)));
@@ -579,21 +603,9 @@ float PedestrianLines::area_within(float x, float y, float z, float radius) cons
   if (radius <= 0.f) return 0.f;
   const V focus{x, y, z};
   float total = 0.f;
-  for (const Zone& zone : data_->zones) {
-    const int steps = std::max(1, static_cast<int>(std::ceil(zone.length / 2.f)));
-    V previous = zone_point(zone, 0.f, 0.5f);
-    float previous_width = flat(sample_boundary(zone.sides[0], 0.f), sample_boundary(zone.sides[1], 0.f));
-    for (int i = 1; i <= steps; ++i) {
-      const float t = static_cast<float>(i) / static_cast<float>(steps);
-      const V middle = zone_point(zone, t, 0.5f);
-      const float width = flat(sample_boundary(zone.sides[0], t), sample_boundary(zone.sides[1], t));
-      const V sample = lerp(previous, middle, 0.5f);
-      if (std::fabs(sample.y - y) <= 20.f && dist(sample, focus) <= radius)
-        total += (previous_width + width) * 0.5f * flat(previous, middle);
-      previous = middle;
-      previous_width = width;
-    }
-  }
+  for (const auto& piece : data_->area_pieces)
+    if (std::fabs(piece.sample.y - y) <= 20.f && dist(piece.sample, focus) <= radius)
+      total += piece.area;
   return total;
 }
 
