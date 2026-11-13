@@ -423,8 +423,13 @@ VM and lifetime:
   per target, silently, and the 4,000,000-step budget fails the method
   (`src/jvm/tree_eval.cpp:tree_eval`). Inside a fiber the step counter
   resets at each 2,048-operation time-slice checkpoint instead.
-- Float `!=` is evaluated as an integer comparison on purpose (an MWM
-  protection workaround). Do not "fix" it without tests.
+- Float `!=` compares by value, the negation of `==`
+  (`src/jvm/tree_eval.cpp:tree_eval`). It used to read both floats as
+  integer 0, which made every float inequality false; `Tyre.SetInflation`
+  then never applied a pressure and every tyre sat at its 0.5 bar floor. The
+  MWM key checks (`Check(key) != Math.sqrt(key)+3.75` in `GameLogic`,
+  `MainMenu` and others) compute the same float on both sides and still
+  pass: boot to the main menu and the garage was checked in game.
 - `System.arraycopy` grows the destination on purpose
   (`src/natives/natives_internal.hpp:native_arraycopy`).
 
