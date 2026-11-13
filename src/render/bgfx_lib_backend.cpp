@@ -1488,6 +1488,7 @@ void LibBgfxBackend::update_reflections(const float* eye) {
       const float origin_z = reflection_origin_[2];
       for (const auto& object : objects) {
         if (object.sky || object.vehicle_material ||
+            (object.gpu_skin && object.skin.empty()) ||
             !instance_meshes_.contains(object.geometry.get()))
           continue;
         // A 256² face does not need a bench that covers two pixels.
@@ -1583,6 +1584,8 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
         if (instance.sky) continue;
         // The mesh stays resident, so a pedestrian walking into view does not
         // upload on that frame. The triangles behind the camera are not sent.
+        // A walker outside the view frustum has no palette this frame.
+        if (instance.gpu_skin && instance.skin.empty()) continue;
         if (instance.gpu_skin) {
           const float x = instance.transform[12];
           const float y = instance.transform[13];
