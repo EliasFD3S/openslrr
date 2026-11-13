@@ -6,6 +6,8 @@
 #include "slrr/host_game_options.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/deformation_cage.hpp"
+#include "slrr/mass_properties.hpp"
+#include "slrr/wheel_mount.hpp"
 #include "slrr/host_sfx.hpp"
 #include "slrr/osd_registry.hpp"
 #include "slrr/jvm.hpp"
@@ -129,6 +131,9 @@ struct Record {
   std::vector<Buck> bucks;
   std::array<WheelPhys, 8> wheels{};
   std::array<std::string, 8> wheel_damage{};
+  // Chassis only: condition of each corner's wheel mount, 1 intact. At zero
+  // the corner's wheels break off (damage_wheel_mounts).
+  std::array<float, 4> wheel_mount{1.f, 1.f, 1.f, 1.f};
   bool dynamic_frames = false;
   bool physics_pending_placement = true;
   // start releases the body. Until then a chassis only settles onto a floor.
@@ -1028,47 +1033,100 @@ bool corner_gear(int type) {
   return (type >= 101 && type <= 104) || (type >= 201 && type <= 204) ||
          (type >= 301 && type <= 304);
 }
-void assembly_mass_center(Object *chassis, float &mass, float com[3]) {
-  mass = 0.f;
-  com[0] = com[1] = com[2] = 0.f;
-  const PartMatrix inv = part_matrix_inverse_rigid(world_matrix(chassis));
-  const auto tree = part_installed_tree(chassis);
-  bool physical = false;
-  for (const auto &part : tree) {
-    auto *rec = record(part.object);
-    if (!rec)
-      continue;
-    for (const auto &body : rec->config->bodies)
-      if (body.mass > 0.f)
-        physical = true;
-  }
-  for (const auto &part : tree) {
-    auto *rec = record(part.object);
-    if (!rec)
-      continue;
-    const PartMatrix frame =
-        part_matrix_multiply(inv, world_matrix(part.object));
-    if (!rec->config->bodies.empty()) {
-      for (const auto &body : rec->config->bodies) {
-        const float b[3] = {body.pose.position[0], body.pose.position[1],
-                            body.pose.position[2]};
-        float p[3];
-        for (int i = 0; i < 3; ++i)
-          p[i] = frame[i] * b[0] + frame[4 + i] * b[1] + frame[8 + i] * b[2] +
-                 frame[12 + i];
-        mass += body.mass;
-        for (int i = 0; i < 3; ++i)
-          com[i] += p[i] * body.mass;
-      }
-    } else if (!physical && rec->config->mass > 0.f) {
-      mass += rec->config->mass;
-      for (int i = 0; i < 3; ++i)
-        com[i] += frame[12 + i] * rec->config->mass;
+// One CFG `body` line as a solid in its part's frame. The line's mass is
+// spread over its own shape: a box or sphere as written, a phys SCX hull
+// when it is a closed surface, else that hull's bounds as a box, else a point.
+// The stock game only sums the masses at the body poses (EXTERNAL_RESEARCH
+// §4); the inertia this yields is the host model of ENGINE_CONTRACT §11.
+physics::MassProperties body_mass_properties(const PartBody &body) {
+  physics::MassProperties shape;
+  if (body.shape == PartBodyShape::Box) {
+    shape = physics::box_mass(body.mass, {},
+                              {body.box_half[0], body.box_half[1], body.box_half[2]});
+  } else if (body.shape == PartBodyShape::Sphere) {
+    shape = physics::sphere_mass(body.mass, {}, body.sphere_radius);
+  } else if (body.shape == PartBodyShape::Mesh && !body.collision_mesh.empty() && index) {
+    const auto mesh = load_scx_geometry(
+        (std::filesystem::path(index->game_root()) / body.collision_mesh).string());
+    if (mesh.info.ok &&
+        !physics::mesh_mass(body.mass, mesh.positions.data(), mesh.positions.size(),
+                            mesh.position_scale, mesh.indices.data(), mesh.indices.size(),
+                            shape)) {
+      const double s = mesh.position_scale;
+      const physics::Vec3 lo{mesh.info.bbox_min[0] * s, mesh.info.bbox_min[1] * s,
+                             mesh.info.bbox_min[2] * s};
+      const physics::Vec3 hi{mesh.info.bbox_max[0] * s, mesh.info.bbox_max[1] * s,
+                             mesh.info.bbox_max[2] * s};
+      if (lo.finite() && hi.finite())
+        shape = physics::box_mass(body.mass, (lo + hi) * .5, (hi - lo) * .5);
     }
   }
-  if (mass > 0.f)
-    for (int i = 0; i < 3; ++i)
-      com[i] /= mass;
+  if (shape.empty())
+    shape = physics::point_mass(body.mass, {});
+  return physics::transformed(shape, part_pose_matrix(body.pose));
+}
+// A part's own mass distribution in its frame, from its bodies only. Cached
+// per configuration; the entry keeps the configuration alive so its address
+// cannot be reused by another one.
+struct CachedMass {
+  std::shared_ptr<const PartConfig> config;
+  physics::MassProperties local;
+};
+std::unordered_map<const PartConfig *, CachedMass> part_masses;
+const physics::MassProperties &
+part_mass_properties(const std::shared_ptr<const PartConfig> &config) {
+  static const physics::MassProperties none;
+  if (!config)
+    return none;
+  const auto found = part_masses.find(config.get());
+  if (found != part_masses.end())
+    return found->second.local;
+  physics::MassProperties sum;
+  for (const auto &body : config->bodies)
+    if (body.mass > 0.f)
+      physics::accumulate(sum, body_mass_properties(body));
+  return part_masses.emplace(config.get(), CachedMass{config, sum}).first->second.local;
+}
+// Mass distribution of `root`'s installed subtree in root's frame.
+physics::MassProperties subtree_mass_properties(Object *root) {
+  physics::MassProperties sum;
+  const PartMatrix inverse = part_matrix_inverse_rigid(world_matrix(root));
+  for (const auto &part : part_installed_tree(root)) {
+    auto *rec = record(part.object);
+    if (!rec)
+      continue;
+    const auto &local = part_mass_properties(rec->config);
+    if (local.empty())
+      continue;
+    physics::accumulate(sum, physics::transformed(
+        local, part_matrix_multiply(inverse, world_matrix(part.object))));
+  }
+  return sum;
+}
+// Mass properties of the assembled car in the chassis frame: total mass,
+// centre of mass, and the principal moments about that centre along the
+// chassis axes (kg m^2; the products of inertia are dropped). All zero when
+// no installed part carries a body mass.
+void assembly_mass_properties(Object *chassis, float &mass, float com[3],
+                              float inertia[3]) {
+  const auto sum = subtree_mass_properties(chassis);
+  const auto moments = sum.moments();
+  mass = static_cast<float>(sum.mass);
+  com[0] = static_cast<float>(sum.center.x);
+  com[1] = static_cast<float>(sum.center.y);
+  com[2] = static_cast<float>(sum.center.z);
+  inertia[0] = static_cast<float>(moments.x);
+  inertia[1] = static_cast<float>(moments.y);
+  inertia[2] = static_cast<float>(moments.z);
+  if (!(mass > 0.f)) {
+    mass = 0.f;
+    com[0] = com[1] = com[2] = 0.f;
+    inertia[0] = inertia[1] = inertia[2] = 0.f;
+  }
+}
+void assembly_mass_center(Object *chassis, float &mass, float com[3]) {
+  float inertia[3];
+  assembly_mass_properties(chassis, mass, com, inertia);
 }
 // The exe calls Chassis.updatevariables from forceUpdate when the script
 // has not set suspend_update. That walk is what fills dynodata and runs
@@ -1270,6 +1328,9 @@ bool part_install(Object *child, Object *root, int own, int target,
   c->state.parent_slot = selected.mount->id;
   c->state.own_slot = selected.mate->id;
   p->children[selected.mount->id] = child;
+  // A wheel fitted to a corner whose mount failed starts on a sound mount.
+  if (selected.mount->type >= 101 && selected.mount->type <= 104)
+    p->wheel_mount[static_cast<size_t>(selected.mount->type - 101)] = 1.f;
   loose_panels.erase(child);
   if (runtime)
     if (auto *chassis = car(child)) {
@@ -2631,6 +2692,7 @@ void repair_part(Object* part, Record& rec) {
   }
   rec.slot_damage.clear();
   for (auto& damage : rec.wheel_damage) damage.clear();
+  rec.wheel_mount.fill(1.f);
   // Avoid relink_assembly here: stock repair can visit descendants before their
   // parents. Queue each affected part once and flush after the scripted walk.
   if (!rec.links.empty()) repair_relink_pending.insert(part);
@@ -2653,6 +2715,11 @@ struct PanelContact {
   double distance = 1e9;
 };
 
+// The crush zone of a part is its visible shell: the cage bounds and the
+// impact distance come from the render vertices, as SLRR_rev 77b0fb6 builds
+// its cages over render samples (vehicle-3d.ts register, viewer.ts
+// localPositions). The phys SCX bodies carry the mass and the collision, not
+// the crush zone; only a part with no render geometry falls back to them.
 PanelContact panel_contact(Record& rec, physics::Vec3 impact) {
   using physics::Vec3;
   PanelContact result;
@@ -2664,17 +2731,10 @@ PanelContact panel_contact(Record& rec, physics::Vec3 impact) {
     result.maximum = {std::max(result.maximum.x, p.x), std::max(result.maximum.y, p.y),
                       std::max(result.maximum.z, p.z)};
   };
-  const auto& physical = part_collision_mesh(rec);
-  if (!physical.indices.empty()) {
-    result.distance = scene_mesh_nearest(physical, impact, result.point);
-    const auto& box = physical.info;
-    grow({box.bbox_min[0], box.bbox_min[1], box.bbox_min[2]});
-    grow({box.bbox_max[0], box.bbox_max[1], box.bbox_max[2]});
-    return result;
-  }
+  bool shell = false;
   for (auto* render : rec.renders) {
     const auto* node = gameref_get(render);
-    if (!node || node->light_flags) continue;
+    if (!node || node->light_flags || node->empty) continue;
     const auto mesh = node->deformed_geometry && node->deformed_type == node->type_id
                           ? node->deformed_geometry
                           : scene_instances_geometry(static_cast<uint32_t>(node->type_id));
@@ -2686,6 +2746,7 @@ PanelContact panel_contact(Record& rec, physics::Vec3 impact) {
       const Vec3 p = origin + (x * mesh->positions[i] + y * mesh->positions[i + 1] +
                                z * mesh->positions[i + 2]) * mesh->position_scale;
       grow(p);
+      shell = true;
       const Vec3 difference = p - impact;
       const double distance = difference.dot(difference);
       if (distance < result.distance) {
@@ -2694,8 +2755,57 @@ PanelContact panel_contact(Record& rec, physics::Vec3 impact) {
       }
     }
   }
-  result.distance = std::sqrt(result.distance);
+  if (shell) {
+    result.distance = std::sqrt(result.distance);
+    return result;
+  }
+  const auto& physical = part_collision_mesh(rec);
+  if (!physical.indices.empty()) {
+    result.distance = scene_mesh_nearest(physical, impact, result.point);
+    const auto& box = physical.info;
+    grow({box.bbox_min[0], box.bbox_min[1], box.bbox_min[2]});
+    grow({box.bbox_max[0], box.bbox_max[1], box.bbox_max[2]});
+  }
   return result;
+}
+
+// SLRR_rev 77b0fb6 wheel release (physics::wheel_mount_condition): a corner
+// loses its wheel when the chassis cage has pushed its wheel centre or strut
+// top 0.3 m, or when the impact energy reaching the corner hardware adds up to
+// 55 kJ. The impulse is the one that stops the closing speed through the
+// effective mass at the contact (restitution 0.12, as collide_chassis). A
+// floor contact below 8 m/s is routine chassis support (kerbs, bottoming out)
+// and, as in SLRR_rev, does not load the mounts.
+void damage_wheel_mounts(Record& rec, const physics::VehicleDynamics::Impact& hit,
+                         physics::Vec3 local_hit, double internal,
+                         std::vector<Object*>& released) {
+  using physics::Vec3;
+  const double energy = internal > 0 && (hit.normal.y <= .65 || hit.speed >= 8)
+      ? physics::contact_impulse_energy(rec.dynamics.body, hit.point, hit.normal, hit.speed) * internal
+      : 0.0;
+  for (size_t corner = 0; corner < 4 && corner < rec.config->wheels.size(); ++corner) {
+    auto& condition = rec.wheel_mount[corner];
+    const auto& position = rec.config->wheels[corner].position;
+    const Vec3 center{position[0], position[1], position[2]};
+    double shift = 0;
+    if (rec.deformation) {
+      // The strut top: the CFG spring base plus travel above the wheel centre.
+      const auto& wheel = rec.dynamics.wheels[corner];
+      const Vec3 up = wheel.down.length() > .5 ? -wheel.down.normalized() : Vec3{0, 1, 0};
+      const Vec3 hardpoint = center + up * (wheel.anchor_length() > 0 ? wheel.anchor_length() : .39);
+      shift = std::max(rec.deformation->displacement(center).length(),
+                       rec.deformation->displacement(hardpoint).length());
+    }
+    condition = physics::wheel_mount_condition(
+        condition, shift, energy, std::hypot(local_hit.x - center.x, local_hit.z - center.z));
+    if (condition > 0) continue;
+    // The rim slot and any other wheel slot of the corner (an outer dually
+    // wheel); each subtree breaks off with what it carries (the tyre).
+    for (const auto& slot : rec.config->slots)
+      if (slot.type == 101 + static_cast<int>(corner))
+        if (const auto child = rec.children.find(slot.id); child != rec.children.end())
+          released.push_back(child->second);
+  }
 }
 
 void damage_chassis(Object* chassis, Record& rec, const physics::VehicleDynamics::Impact& hit,
@@ -2712,9 +2822,11 @@ void damage_chassis(Object* chassis, Record& rec, const physics::VehicleDynamics
   const Vec3 local_hit = body.center + body.orientation.inverse_rotate(hit.point - body.position);
   const Vec3 normal = body.orientation.inverse_rotate(hit.normal);
   if (deformation > 0) {
+    // The chassis shell's own CFG mass, not the assembly's (SLRR_rev
+    // vehicle-3d.ts register: mass(root)).
     if (!rec.deformation)
       rec.deformation = std::make_unique<physics::DeformationCage>(
-          body.minimum, body.maximum, body.mass * .08);
+          body.minimum, body.maximum, rec.config->mass);
     rec.deformation->impact(local_hit, normal, hit.speed * deformation, .85);
   }
   rec.state.tear = std::max(0.f, rec.state.tear - float((hit.speed - 2) * .014 * internal));
@@ -2763,6 +2875,42 @@ void damage_chassis(Object* chassis, Record& rec, const physics::VehicleDynamics
     part->deformation->impact(contact.point, {normal.dot(x), normal.dot(y), normal.dot(z)},
                               speed * deformation, .65);
   }
+  damage_wheel_mounts(rec, hit, local_hit, internal, released);
+}
+
+// Bounds of the visible shells of `root`'s installed subtree, in root's frame.
+bool subtree_shell_bounds(Object* root, physics::Vec3& lo, physics::Vec3& hi) {
+  using physics::Vec3;
+  lo = {1e30, 1e30, 1e30};
+  hi = -lo;
+  bool any = false;
+  const auto inverse = part_matrix_inverse_rigid(world_matrix(root));
+  for (const auto& item : part_installed_tree(root)) {
+    const auto* part = record(item.object);
+    if (!part) continue;
+    const auto relative = part_matrix_multiply(inverse, world_matrix(item.object));
+    for (auto* render : part->renders) {
+      const auto* node = gameref_get(render);
+      if (!node || node->light_flags || node->empty) continue;
+      const auto mesh = node->deformed_geometry && node->deformed_type == node->type_id
+                            ? node->deformed_geometry
+                            : scene_instances_geometry(static_cast<uint32_t>(node->type_id));
+      if (!mesh) continue;
+      const auto m = part_matrix_multiply(relative, node_local(render));
+      const double scale = mesh->position_scale;
+      for (size_t i = 0; i + 2 < mesh->positions.size(); i += 3) {
+        const double px = mesh->positions[i] * scale, py = mesh->positions[i + 1] * scale,
+                     pz = mesh->positions[i + 2] * scale;
+        const Vec3 p{m[0] * px + m[4] * py + m[8] * pz + m[12],
+                     m[1] * px + m[5] * py + m[9] * pz + m[13],
+                     m[2] * px + m[6] * py + m[10] * pz + m[14]};
+        lo = {std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)};
+        hi = {std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z)};
+        any = true;
+      }
+    }
+  }
+  return any && lo.finite() && hi.finite();
 }
 
 void detach_panel(Object* part, Record& rec, Object* chassis, Record& vehicle) {
@@ -2774,28 +2922,50 @@ void detach_panel(Object* part, Record& rec, Object* chassis, Record& vehicle) {
       !scene_instances_script_matrix(part, frame.data()) ||
       !scene_instances_script_matrix(chassis_node->parent, parent_frame.data()))
     return;
-  const auto bounds = panel_contact(rec, {});
-  if (bounds.distance > 1e4) return;
+  // The loose body spans the whole subtree that breaks off (a rim carries its
+  // tyre) and keeps that subtree's own mass distribution.
+  Vec3 lo, hi;
+  if (!subtree_shell_bounds(part, lo, hi)) {
+    const auto bounds = panel_contact(rec, {});
+    if (bounds.distance > 1e4) return;
+    lo = bounds.minimum;
+    hi = bounds.maximum;
+  }
+  bool wheel = false;
+  if (const auto* parent = record(rec.state.parent))
+    for (const auto& slot : parent->config->slots)
+      if (slot.id == rec.state.parent_slot)
+        wheel = slot.type >= 101 && slot.type <= 104;
+  const auto distribution = subtree_mass_properties(part);
+  // SLRR_rev 77b0fb6 vehiclePartMass: a part on a wheel slot weighs at least
+  // 14 kg (stock rims and tyres carry no body). Other parts keep the 2 kg floor.
+  const double mass = std::max(wheel ? 14. : 2., distribution.mass);
+  const Vec3 padding{.005, .005, .005};
+  Vec3 center = (lo + hi) * .5, moments;
+  if (!distribution.empty()) {
+    const Vec3 c = distribution.center;
+    center = {std::clamp(c.x, lo.x, hi.x), std::clamp(c.y, lo.y, hi.y),
+              std::clamp(c.z, lo.z, hi.z)};
+    moments = distribution.moments() * (mass / distribution.mass);
+    // Point-like bodies (a 0.1 m sphere on a large part) would leave the loose
+    // body spinning on every contact; keep the box of the visible bounds then.
+    const Vec3 s = hi - lo;
+    if (moments.x < .05 * mass * (s.y * s.y + s.z * s.z) / 12 ||
+        moments.y < .05 * mass * (s.x * s.x + s.z * s.z) / 12 ||
+        moments.z < .05 * mass * (s.x * s.x + s.y * s.y) / 12)
+      moments = {};
+  }
   void* const world_parent = chassis_node->parent;
   auto& loose = loose_panels[part];
   loose.vehicle = gameref_make_live(chassis);
   auto& body = loose.body;
-  double mass = 0;
-  for (const auto& item : part_installed_tree(part)) mass += record(item.object)->config->mass;
-  const Vec3 padding{.005, .005, .005};
-  body.configure(std::max(2., mass), bounds.minimum - padding, bounds.maximum + padding,
-                 (bounds.minimum + bounds.maximum) * .5);
+  // Zero moments (no shaped body) keep the box of the bounds.
+  body.configure(mass, lo - padding, hi + padding, center, moments);
   body.set_frame(frame);
   const auto& carrier = vehicle.dynamics.body;
   loose.carrier_frame = carrier.frame();
   body.velocity = carrier.point_velocity(body.position);
-  const Vec3 angular_velocity = carrier.omega();
-  const Vec3 size = body.maximum - body.minimum;
-  const Vec3 angular = body.orientation.inverse_rotate(angular_velocity);
-  body.momentum = body.orientation.rotate(Vec3{
-      angular.x * (size.y * size.y + size.z * size.z),
-      angular.y * (size.x * size.x + size.z * size.z),
-      angular.z * (size.x * size.x + size.y * size.y)} * (body.mass / 12));
+  body.set_omega(carrier.omega());
   if (runtime)
     for (const auto& descendant : part_installed_tree(part))
       runtime->invoke_by_name(chassis->class_name, "rempart",
@@ -4543,6 +4713,7 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   physics_elapsed = 0;
   sfx_items.clear();
   configurations.clear();
+  part_masses.clear();
   slot_aliases.clear();
   index = &resources;
   jvm.natives().register_method("java.game.Vehicle", "getSpeedSquare", "()F",

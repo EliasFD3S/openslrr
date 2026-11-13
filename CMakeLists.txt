@@ -94,6 +94,8 @@ add_executable(slrr_host
   src/physics/vehicle_dynamics.cpp
   src/physics/scene_collision.cpp
   src/physics/deformation_cage.cpp
+  src/physics/mass_properties.cpp
+  src/physics/wheel_mount.cpp
   src/physics/suspension_geometry.cpp
 )
 
