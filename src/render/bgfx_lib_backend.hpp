@@ -106,6 +106,10 @@ class LibBgfxBackend final : public IRenderBackend {
   void set_debug_context(Jvm& jvm, const SectionMachine& sections) {
     debug_overlay_.set_context(jvm, sections);
   }
+  void set_debug_startup(bool vsync, bool overlay) {
+    debug_overlay_.render_options().vsync = vsync;
+    debug_overlay_.set_visible(overlay);
+  }
 
 
   void add_scx_geometry(ScxGeometry geo);

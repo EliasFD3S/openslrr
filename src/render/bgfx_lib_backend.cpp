@@ -4,6 +4,7 @@
 #include "slrr/gameref.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/scene_sun.hpp"
+#include "slrr/frame_profiler.hpp"
 
 #include "slrr/dds_image.hpp"
 #include "slrr/host_cursor.hpp"
@@ -896,7 +897,10 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
     // Back to the menu closes that movie before the next one is ready.
     // A retired splash still counts as a widget but is not drawn, so the
     // frame was only the clear color. Keep the previous image instead.
-    if (!covered) sync_instances(view, proj);
+    if (!covered) {
+      perf::Scope scope(perf::Zone::Collect);
+      sync_instances(view, proj);
+    }
     auto is_opening = [](const std::string& path) {
       std::string low = path;
       for (char& c : low)
@@ -1033,6 +1037,7 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
     if (!covered && !video_fmv_block_osd()) draw_previews();
 
     if (show_debug) {
+      perf::Scope scope(perf::Zone::Osd);
       std::vector<Object*> vehicles;
       std::unordered_set<Object*> seen;
       const auto add = [&](Object* vehicle) {
@@ -1060,7 +1065,26 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       osd_set_hover_at(-100.f, -100.f);
     }
     input.debug_mouse_capture = capture;
-    bgfx::frame();
+    {
+      perf::Scope scope(perf::Zone::Present);
+      bgfx::frame();
+    }
+    if (perf::enabled()) {
+      // bgfx reports the frame its render thread finished last.
+      const auto* stats = bgfx::getStats();
+      const auto ms = [](int64_t ticks, int64_t frequency) {
+        return frequency > 0 ? static_cast<double>(ticks) * 1000. / static_cast<double>(frequency) : 0.;
+      };
+      perf::RenderSample sample;
+      sample.render_thread_ms = ms(stats->cpuTimeEnd - stats->cpuTimeBegin, stats->cpuTimerFreq);
+      sample.gpu_ms = ms(stats->gpuTimeEnd - stats->gpuTimeBegin, stats->gpuTimerFreq);
+      sample.wait_render_ms = ms(stats->waitRender, stats->cpuTimerFreq);
+      sample.draws = stats->numDraw;
+      for (const auto& instance : instances_) sample.instances += instance.sky ? 0u : 1u;
+      for (const auto& batch : prop_batches_)
+        sample.batch_instances += static_cast<uint32_t>(batch.instances.size());
+      perf::set_render_sample(sample);
+    }
     // The swap chain is filled while the window is hidden. Showing it first
     // presented one clear (0x1a2230) before the movie or the splash plate.
     const bool reveal = video_fmv_frame_ready() || garage_ || osd_overlay_ || show_debug;
@@ -1285,6 +1309,7 @@ void LibBgfxBackend::destroy_reflections() {
 }
 
 void LibBgfxBackend::update_reflections(const float* eye) {
+    perf::Scope perf_scope(perf::Zone::Reflections);
     if (!eye || !reflection_scene_ || !host_enhanced_graphics().dynamic_reflections) {
       reflection_world_ = nullptr;
       reflection_face_ = 0;
@@ -1423,6 +1448,7 @@ void LibBgfxBackend::update_reflections(const float* eye) {
 }
 
 void LibBgfxBackend::draw_sky(uint16_t view_id, const float* view, const float* projection) {
+    perf::Scope perf_scope(perf::Zone::World);
     if (bgfx::getAvailTransientVertexBuffer(6, layout_) < 6) return;
     bgfx::TransientVertexBuffer vertices;
     bgfx::allocTransientVertexBuffer(&vertices, 6, layout_);
@@ -1479,6 +1505,7 @@ void LibBgfxBackend::refresh_distance_fog(const float render_eye[3]) {
 }
 
 void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
+    perf::Scope perf_scope(perf::Zone::World);
     draw_prop_batches(view_id, prop_batches_, false);
     for (int pass = 0; pass < 2; ++pass)
       for (const auto& instance : instances_) {
@@ -1498,6 +1525,7 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
   }
   void LibBgfxBackend::draw_previews()
 {
+    perf::Scope perf_scope(perf::Zone::World);
     uint16_t id = kPreview0;
     for(const auto&p:previews_) {
       if(id>=64)break;
@@ -1734,6 +1762,7 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
   }
   void LibBgfxBackend::draw_scene(uint16_t view_id)
 {
+    perf::Scope perf_scope(perf::Zone::World);
     float mtx[16];
     bx::mtxIdentity(mtx);
     // Stock map faces are two-sided. Culling either winding hid a side of
@@ -2212,6 +2241,10 @@ bool bgfx_osd_draw_enabled(IRenderBackend& render) {
 void bgfx_set_debug_context(IRenderBackend& render, Jvm& jvm,
                             const SectionMachine& sections) {
   if (auto* backend = as_lib(render)) backend->set_debug_context(jvm, sections);
+}
+
+void bgfx_set_debug_startup(IRenderBackend& render, bool vsync, bool overlay) {
+  if (auto* backend = as_lib(render)) backend->set_debug_startup(vsync, overlay);
 }
 
 }  // namespace slrr

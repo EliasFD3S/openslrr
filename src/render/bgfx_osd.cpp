@@ -1,5 +1,6 @@
 // Menu, garage and FMV overlay.
 #include "bgfx_lib_backend.hpp"
+#include "slrr/frame_profiler.hpp"
 
 #include "slrr/part_runtime.hpp"
 #include "slrr/dds_image.hpp"
@@ -684,6 +685,7 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
 
   void LibBgfxBackend::draw_osd()
 {
+    perf::Scope perf_scope(perf::Zone::Osd);
     osd_sync_button_pictures();
     const auto& widgets = osd_widgets();
     const auto& texts = slrr_osd_texts();

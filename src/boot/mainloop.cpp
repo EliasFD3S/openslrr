@@ -1,4 +1,5 @@
 #include "slrr/gc_roots.hpp"
+#include "slrr/frame_profiler.hpp"
 #include "slrr/mainloop.hpp"
 #include "slrr/script_threads.hpp"
 #include "slrr/script_events.hpp"
@@ -378,10 +379,16 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     const float rate = factor.tag == ValueTag::Float ? factor.v.f : 4.f;
     scene_sun_set_time(seconds + clock_elapsed * rate);
   }
-  script_threads_tick(jvm);
+  {
+    perf::Scope scope(perf::Zone::Scripts);
+    script_threads_tick(jvm);
+  }
   MainLoopFrameResult out;
   mainloop_adopt_section(jvm, sections);
-  pump_async_messages(jvm, sections.actual());
+  {
+    perf::Scope scope(perf::Zone::Scripts);
+    pump_async_messages(jvm, sections.actual());
+  }
 
   // --- Input_tick @ 0x54DDA0 (Soft: live axes + garage orbit) ---
   float frame_dt = static_cast<float>(dt);
@@ -402,7 +409,10 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     }
     host_input_check_hotkeys(jvm, controller, focus);
   }
-  script_callbacks_tick(jvm,frame_dt);
+  {
+    perf::Scope scope(perf::Zone::Scripts);
+    script_callbacks_tick(jvm, frame_dt);
+  }
 
   auto& in = host_input();
   const float yaw = host_input_camera_axis(7);
@@ -415,7 +425,10 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   in.look_zoom = 0.f;
 
   // --- SimulateFrame slice: GameType timers (phys/CONTROL OOS lean host) ---
-  dispatch_due_timers(jvm, gameref_now(), &out.timers_fired);
+  {
+    perf::Scope scope(perf::Zone::Scripts);
+    dispatch_due_timers(jvm, gameref_now(), &out.timers_fired);
+  }
 
   // Credits scroll lives on MainMenuDialog (field mmd), not on the
   // section. animate() only while that dialog's credits group is showing.
@@ -752,7 +765,10 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
 
   spin_mechanic_inventory(jvm, frame_dt);
   if(!script_thread_alive(jvm,g_mechanic_thread))apply_mechanic_infoline(jvm, g_spinning_mechanic);
-  part_physics_advance(jvm.advance_sim_time(dt));
+  {
+    perf::Scope scope(perf::Zone::Physics);
+    part_physics_advance(jvm.advance_sim_time(dt));
+  }
 
   // Last write before the view is built. The chase camera must not cover
   // the showroom orbit, and nothing after the earlier spin may put it back.
@@ -766,7 +782,10 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
 
   // --- Present: AltPresentGate (FMV) else PresentFrame ---
   // Soft: backend flush pumps FMV SampleGrabber + Present (libbgfx path).
-  render.flush();
+  {
+    perf::Scope scope(perf::Zone::Flush);
+    render.flush();
+  }
 
   // --- PollWindowQuit @ 0x5522A0 ---
   out.quit = render.quit_requested();

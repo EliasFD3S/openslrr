@@ -70,5 +70,7 @@ void bgfx_set_osd_overlay(IRenderBackend& render, bool enabled);
 bool bgfx_osd_draw_enabled(IRenderBackend& render);
 void bgfx_set_debug_context(IRenderBackend& render, Jvm& jvm,
                             const SectionMachine& sections);
+// Development flags: initial VSync state and Ctrl+F12 panel visibility.
+void bgfx_set_debug_startup(IRenderBackend& render, bool vsync, bool overlay);
 
 }  // namespace slrr
