@@ -1,18 +1,19 @@
-[validate-state] pos=(719.784 2.817 1277.903) speed=5.297 throttle=1.000 brake=0.000 gear=0 loose=0
+[validate-promote] name= mass=100.0 pos=(722.81 0.56 1279.63)
+[validate-state] pos=(719.784 2.817 1277.903) speed=5.297 throttle=1.000 brake=0.000 gear=0 loose=1
 [validate-contact] speed=0.3998 point=(721.034 2.589 1276.526) normal=(0.939 0.144 -0.311) body=(719.786 2.574 1277.902)
 [validate-contact] speed=0.5157 point=(721.047 2.559 1276.523) normal=(0.892 0.352 -0.284) body=(719.788 2.575 1277.901)
 [validate-contact] speed=0.8530 point=(721.117 2.438 1276.540) normal=(0.752 0.594 -0.286) body=(719.812 2.431 1277.893)
 [validate-contact] speed=0.1032 point=(721.147 2.452 1276.551) normal=(0.711 0.648 -0.275) body=(719.824 2.382 1277.888)
-[validate-state] pos=(719.847 2.268 1277.879) speed=12.985 throttle=1.000 brake=0.000 gear=1 loose=0
 [validate-contact] speed=0.2273 point=(721.169 2.472 1276.576) normal=(0.785 0.545 -0.294) body=(719.849 2.269 1277.878)
+[validate-state] pos=(719.862 2.207 1277.872) speed=13.839 throttle=1.000 brake=0.000 gear=1 loose=1
 [validate-contact] speed=0.3944 point=(721.195 2.483 1276.592) normal=(0.734 0.618 -0.281) body=(719.863 2.209 1277.872)
 [validate-contact] speed=0.2842 point=(721.194 2.582 1276.609) normal=(0.739 0.638 -0.216) body=(719.867 2.211 1277.871)
 [validate-contact] speed=0.8451 point=(721.212 2.580 1276.675) normal=(0.793 0.560 -0.239) body=(719.931 1.925 1277.841)
 [validate-contact] speed=8.7962 point=(718.499 0.460 1279.056) normal=(-0.012 1.000 0.004) body=(719.975 1.825 1277.820)
 [validate-contact] speed=0.3729 point=(721.454 2.536 1277.292) normal=(-0.897 -0.305 0.320) body=(719.576 1.603 1277.971)
 [validate-contact] speed=1.0009 point=(721.466 1.924 1277.328) normal=(-0.947 -0.000 0.321) body=(719.456 1.557 1278.016)
-[validate-state] pos=(719.456 1.557 1278.016) speed=9.964 throttle=1.000 brake=0.000 gear=1 loose=0
-[validate-state] pos=(719.306 1.093 1278.100) speed=1.418 throttle=1.000 brake=0.000 gear=1 loose=0
+[validate-state] pos=(719.438 1.513 1278.026) speed=10.495 throttle=1.000 brake=0.000 gear=1 loose=1
+[validate-state] pos=(719.316 1.089 1278.088) speed=2.104 throttle=1.000 brake=0.000 gear=1 loose=1
 [validate-contact] speed=0.8572 point=(721.474 1.478 1277.352) normal=(-0.947 -0.000 0.321) body=(719.347 1.094 1278.054)
 [validate-contact] speed=0.1468 point=(721.469 1.480 1277.337) normal=(-0.947 -0.000 0.321) body=(719.342 1.096 1278.042)
 [validate-contact] speed=0.1668 point=(721.467 1.481 1277.331) normal=(-0.947 -0.000 0.321) body=(719.340 1.097 1278.037)
@@ -21,8 +22,8 @@
 [validate-contact] speed=0.1387 point=(721.461 1.482 1277.314) normal=(-0.947 -0.000 0.321) body=(719.334 1.098 1278.022)
 [validate-contact] speed=0.1423 point=(721.459 1.482 1277.309) normal=(-0.947 -0.000 0.321) body=(719.332 1.098 1278.016)
 [validate-contact] speed=0.1494 point=(721.458 1.482 1277.304) normal=(-0.947 -0.000 0.321) body=(719.330 1.098 1278.012)
-[validate-state] pos=(719.330 1.098 1278.006) speed=1.194 throttle=1.000 brake=0.000 gear=1 loose=0
 [validate-contact] speed=0.2801 point=(721.454 1.482 1277.294) normal=(-0.947 -0.000 0.321) body=(719.326 1.098 1278.002)
+[validate-state] pos=(719.326 1.098 1277.997) speed=1.169 throttle=1.000 brake=0.000 gear=1 loose=1
 [validate-contact] speed=0.2712 point=(721.451 1.483 1277.284) normal=(-0.947 -0.000 0.321) body=(719.322 1.099 1277.992)
 [validate-contact] speed=0.2777 point=(721.448 1.483 1277.275) normal=(-0.947 -0.000 0.321) body=(719.319 1.099 1277.983)
 [validate-contact] speed=0.2781 point=(721.445 1.484 1277.265) normal=(-0.947 -0.000 0.321) body=(719.315 1.100 1277.974)
@@ -31,10 +32,29 @@
 [validate-contact] speed=0.2847 point=(721.439 1.484 1277.248) normal=(-0.947 -0.000 0.321) body=(719.309 1.100 1277.957)
 [validate-contact] speed=0.2720 point=(721.436 1.485 1277.239) normal=(-0.947 -0.000 0.321) body=(719.305 1.101 1277.948)
 [validate-contact] speed=0.2745 point=(721.433 1.485 1277.231) normal=(-0.947 -0.000 0.321) body=(719.302 1.101 1277.939)
-[validate-state] pos=(719.303 1.101 1277.935) speed=1.063 throttle=1.000 brake=0.000 gear=1 loose=0
 [validate-contact] speed=0.2809 point=(721.430 1.486 1277.222) normal=(-0.947 -0.000 0.321) body=(719.299 1.102 1277.931)
 [validate-contact] speed=0.2769 point=(721.427 1.486 1277.214) normal=(-0.947 -0.000 0.321) body=(719.296 1.102 1277.923)
+[validate-state] pos=(719.296 1.102 1277.923) speed=0.902 throttle=1.000 brake=0.000 gear=1 loose=1
 [validate-contact] speed=0.2756 point=(721.424 1.486 1277.205) normal=(-0.947 -0.000 0.321) body=(719.293 1.102 1277.914)
 [validate-contact] speed=0.2804 point=(721.421 1.487 1277.197) normal=(-0.947 -0.000 0.321) body=(719.290 1.103 1277.906)
 [validate-contact] speed=0.2761 point=(721.419 1.487 1277.189) normal=(-0.947 -0.000 0.321) body=(719.287 1.103 1277.898)
 [validate-contact] speed=0.2749 point=(721.416 1.487 1277.181) normal=(-0.947 -0.000 0.321) body=(719.284 1.103 1277.889)
+[validate-contact] speed=0.2797 point=(721.413 1.488 1277.172) normal=(-0.947 -0.000 0.321) body=(719.281 1.104 1277.881)
+[validate-contact] speed=0.2755 point=(721.410 1.488 1277.165) normal=(-0.947 -0.000 0.321) body=(719.278 1.104 1277.873)
+[validate-contact] speed=0.2744 point=(721.408 1.488 1277.156) normal=(-0.947 -0.000 0.321) body=(719.275 1.104 1277.865)
+[validate-contact] speed=0.2791 point=(721.405 1.488 1277.148) normal=(-0.947 -0.000 0.321) body=(719.273 1.104 1277.857)
+[validate-state] pos=(719.273 1.104 1277.857) speed=0.856 throttle=1.000 brake=0.000 gear=1 loose=1
+[validate-contact] speed=0.2750 point=(721.402 1.489 1277.141) normal=(-0.947 -0.000 0.321) body=(719.270 1.105 1277.850)
+[validate-contact] speed=0.2740 point=(721.400 1.489 1277.133) normal=(-0.947 -0.000 0.321) body=(719.267 1.105 1277.842)
+[validate-contact] speed=0.2785 point=(721.397 1.489 1277.125) normal=(-0.947 -0.000 0.321) body=(719.264 1.105 1277.834)
+[validate-contact] speed=0.2745 point=(721.394 1.489 1277.118) normal=(-0.947 -0.000 0.321) body=(719.262 1.105 1277.826)
+[validate-contact] speed=0.2734 point=(721.392 1.489 1277.110) normal=(-0.947 -0.000 0.321) body=(719.259 1.105 1277.819)
+[validate-contact] speed=0.2779 point=(721.389 1.490 1277.102) normal=(-0.947 -0.000 0.321) body=(719.256 1.106 1277.811)
+[validate-contact] speed=0.2740 point=(721.387 1.490 1277.095) normal=(-0.947 -0.000 0.321) body=(719.254 1.106 1277.804)
+[validate-state] pos=(719.254 1.106 1277.799) speed=0.960 throttle=1.000 brake=0.000 gear=1 loose=1
+[validate-contact] speed=0.2729 point=(721.384 1.490 1277.087) normal=(-0.947 -0.000 0.321) body=(719.251 1.106 1277.796)
+[validate-contact] speed=0.2774 point=(721.382 1.490 1277.080) normal=(-0.947 -0.000 0.321) body=(719.249 1.106 1277.789)
+[validate-contact] speed=0.2735 point=(721.379 1.490 1277.073) normal=(-0.947 -0.000 0.321) body=(719.246 1.106 1277.781)
+[validate-contact] speed=0.2724 point=(721.377 1.490 1277.066) normal=(-0.947 -0.000 0.321) body=(719.244 1.106 1277.774)
+[validate-contact] speed=0.2769 point=(721.374 1.490 1277.058) normal=(-0.947 -0.000 0.321) body=(719.241 1.106 1277.767)
+[validate-contact] speed=0.2718 point=(721.372 1.490 1277.051) normal=(-0.947 -0.000 0.321) body=(719.239 1.106 1277.759)

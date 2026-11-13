@@ -5,10 +5,11 @@ Validation target: PR #22. See the branch head for the exact final revision.
 ## Build and automated checks
 
 - Visual Studio 2022 / CMake Release x64 host linked successfully.
-- All 21 standalone tests passed with the Linux host compiler: 3 CFG parser,
-  4 PhysicsRef/activation, 12 collision-kernel, and 2 mass-response regressions.
-- The 12 collision-kernel tests also passed ASan/UBSan/leak detection.
-- `python3 scripts/check_knowledge_refs.py`: 190 references checked, 0 errors.
+- All 24 standalone tests passed with the Linux host compiler: 3 CFG parser,
+  4 PhysicsRef/activation, 15 collision-kernel (including box-triangle SAT), and
+  2 mass-response regressions.
+- The 15 collision-kernel tests also passed ASan/UBSan/leak detection.
+- `python3 scripts/check_knowledge_refs.py`: 212 references checked, 0 errors.
 
 ## Live Valo City runs
 
@@ -33,11 +34,24 @@ The PR was rebased onto main 60b143e and rebuilt with Visual Studio 2022 x64 Rel
 - Several row-shop types (`09x6_shop`, `12x6_uveges`, `08p5x4_shop`, `18x6_haromboltiv`, `22x4_pub`, `14x6_ketszintajtos`, ...) are authored as a single thin facade body (0.1-0.9 m deep) over a 4-8 m deep render. Their side/back/roof volumes have no authored body in the CFG, so only the street face is solid. This is the stock data, not a loading failure.
 - In-game, a car at full throttle (19.4 m/s on approach) stopped at a thin box facade (`09x6_shop`, **8.06 m/s** contact, `storefront-box.stderr.log`) and at a thin SCX-mesh facade (`18x6_haromboltiv`, **8.32 m/s** contact, `storefront-mesh.stderr.log`). Suburban mesh houses (`krthaz11`, **5.20 m/s**) and the hotel boxes also block the car.
 
+## Merge of PR #29, performance and wall contact (594e4b2)
+
+PR #29 (city frame-rate fixes, `f73698d`) and main `1462d3c` were merged into the branch (`205bb16`).
+
+- **Regression found:** with every positive-mass map prop (about 4,000 bins, boards, crates in Valo City) created as a live loose body at load, `205bb16` ran PR #29's benchmark drive at about 2.4 FPS with about 400 ms of physics per frame (`perf-205bb16.csv`).
+- **Fix:** those placements now stay ordinary instanced props until the car's padded chassis bounds reach them, and sleeping loose bodies skip the per-part car test unless their bounding spheres can touch.
+- **Benchmark** (PR #29's drive, VSync off, 1280×720, RTX 4060 Laptop GPU, i9-13905H, Windows 11): three alternating runs each of the PR #29 head `f73698d` and this branch's clean `594e4b2` (no validation hooks), `perf-f73698d-*.csv` and `perf-594e4b2-*.csv`. Over the first 8 simulated seconds, while both cars drive the same street: `f73698d` 190–287 FPS, 0.82–1.27 ms physics, 0.82–1.23 ms collection; `594e4b2` 191–267 FPS, 0.72–0.95 ms physics, 0.92–1.31 ms collection. GPU time is 3.0–3.3 ms in both. At about 9 s this branch's car stops at a tree trunk that `f73698d` drives through (`bench-*-t10.png`), so later seconds show different views. The opening frames (`bench-*-t00.png`) show the same scene and props; this branch also carries main's later changes, such as restored shadows, so the captures and draw counts are not identical.
+- **Dormant props still move:** spawning on the stored 80 kg bin promoted it and three neighbours (`[validate-promote]`); the 80 kg bin and the 10 kg lid were pushed at up to 5.5 m/s and 4.9 m/s while the car accelerated (`prop-push.stderr.log`).
+- **Chassis box against walls:** the four corner sphere probes leave a 1.1 m gap across the bumper. The chassis box is now also tested against the wall triangles of every static mesh. On the same build, the validation-only `SLRR_VALIDATION_NO_WALLS` toggle disables that test:
+  - House corner at 45° (`krthaz11`): without the test the corner ended 1.45 m ahead of the car centre, about 0.6 m inside the bonnet; with it the car stopped after a 6.89 m/s contact with the corner at the front of the chassis box, 2.06 m ahead (`corner-nowalls.stderr.log`, `corner-walls.stderr.log`).
+  - Picket fence (map collision): without the test the car slid 8 m along with the fence through its body (`fence-before.png`); with it the car stopped at the fence (`fence-after.png`, `fence-*.stderr.log`).
+  - These four runs used `594e4b2` plus `validation-only.patch`, whose only behavioural hook is the wall toggle.
+
 ## Reproducibility and cleanup
 
-`validation-only.patch` documents the isolated validation-only startup, throttle, frame-cap, and tracing hooks. They are not part of the product change. The patch entered the stock `Valocity` section directly because synthetic menu input was unreliable; physics and native-object collision code came from the PR revision.
+`validation-only.patch` documents the isolated validation-only startup, throttle, frame-cap, tracing and wall-toggle hooks. They are not part of the product change. The patch entered the stock `Valocity` section directly because synthetic menu input was unreliable; physics and native-object collision code came from the PR revision.
 
-Each host was closed after its run. The original options, controls, career, and temporary save directories were restored from the pre-run backup and compared byte-for-byte.
+Each host was closed after its run. For the earlier runs, the options, controls, career and temporary save directories were restored from the pre-run backup and compared byte-for-byte. The later runs left `save/game/options` and controls identical to that backup; other save folders now also hold careers created outside these runs, so they were not reset.
 
 Sphere overlap is covered by the kernel tests, including exterior and inside contacts. The stock garage marker uses a `GameRef` trigger, and `SCRIPT_RUNTIME.md` explicitly notes that trigger-event producers are still missing; garage trigger activation is therefore outside this PR's validated scope.
 
