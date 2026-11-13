@@ -15,10 +15,12 @@
 </p>
 
 <p align="center">
-  <a href="#progress">Progress</a> · <a href="#build">Build</a> · <a href="#run">Run</a> · <a href="#sources-and-credits">Sources and credits</a>
+  <a href="https://eliasfd3s.github.io/openslrr/"><strong>Documentation</strong></a> · <a href="#progress">Progress</a> · <a href="#build">Build</a> · <a href="#run">Run</a> · <a href="#sources-and-credits">Sources and credits</a>
 </p>
 
 ---
+
+The modder documentation — natives, engine objects, and how to write a class, a scene, or an OSD — is published at **[eliasfd3s.github.io/openslrr](https://eliasfd3s.github.io/openslrr/)**.
 
 Open SLRR brings the game's scripts, cars, and resources into a new engine. The project reimplements resource loading, script execution, rendering, the interface, and the native functions those scripts use.
 
