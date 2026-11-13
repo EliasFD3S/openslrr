@@ -53,6 +53,9 @@ struct WheelPhys {
   float force = 0, damp_bound = 0, damp_rebound = 0;
   float rest = 0, min_len = 0, max_len = 0;
   float ic[6]{};
+  // Raw setInstantCenter arguments: offsets from the wheel centre. 10000 is
+  // the stock "no instant centre" value Chassis.updatevariables writes.
+  float ic_offset[6] = {10000, 10000, 10000, 10000, 10000, 10000};
   float brake = 0, hbrake = 0;
   int opp = -1;
   float arm[7]{}, hub[10]{};
@@ -1842,6 +1845,15 @@ void dynamics_wheels(Record &rec) {
           cfg.hub[static_cast<size_t>(k)] = live.hub[k];
       }
     }
+    // Suspension.setRollCenter writes the front-view centre into the first
+    // three values (x, y) and the side-view centre into the last three (y, z).
+    const auto finite_center = [](float a, float b) {
+      return std::isfinite(a) && std::isfinite(b) && std::abs(a) < 100.f && std::abs(b) < 100.f;
+    };
+    cfg.front_instant_center = finite_center(live.ic_offset[0], live.ic_offset[1]);
+    cfg.front_center_offset = {live.ic_offset[0], live.ic_offset[1], 0};
+    cfg.side_instant_center = finite_center(live.ic_offset[4], live.ic_offset[5]);
+    cfg.side_center_offset = {0, live.ic_offset[4], live.ic_offset[5]};
     cfg.enabled = cfg.radius > 0;
     cfg.rigid_contact = cfg.enabled &&
                         !(cfg.rest > 0 && cfg.maximum > cfg.minimum &&
@@ -2246,9 +2258,15 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
     out.brake = std::max(0.f, wheel.brake);
     out.handbrake = std::max(0.f, wheel.hbrake);
     out.bearing = std::max(0.f, wheel.bearing);
-    out.rolling_resistance = std::max(0., wheel.roll_res - .003625);
-    out.tyre = {wheel.friction, wheel.stiffness, wheel.sliction,
-                wheel.max_load, wheel.frictn_x, wheel.load_smooth};
+    out.rolling_resistance = std::max(0.f, wheel.roll_res);
+    out.tyre.friction = wheel.friction;
+    out.tyre.stiffness = wheel.stiffness;
+    out.tyre.sliction = wheel.sliction;
+    out.tyre.maximum_load = wheel.max_load;
+    out.tyre.load_smoothing = wheel.load_smooth;
+    out.tyre.longitudinal_grip = wheel.frictn_x;
+    // setCPatch stores the sine of the scripted patch angle.
+    out.tyre.patch_angle = std::asin(std::clamp(wheel.cpatch_ang, 0.f, 1.f));
   }
 }
 
@@ -5561,8 +5579,10 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   wheel("setInstantCenter", "(FFFFFF)V",
         [put](Object *s, const std::vector<Value> &a) {
           return put(s, [&](WheelPhys &w) {
-            for (int i = 0; i < 6; ++i)
-              w.ic[i] = scalar(a, static_cast<size_t>(i), 0) + w.pos[i % 3];
+            for (int i = 0; i < 6; ++i) {
+              w.ic_offset[i] = scalar(a, static_cast<size_t>(i), 0);
+              w.ic[i] = w.ic_offset[i] + w.pos[i % 3];
+            }
           });
         });
   wheel("setBrake", "(F)V", [put](Object *s, const std::vector<Value> &a) {

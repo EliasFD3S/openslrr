@@ -481,6 +481,7 @@ Process:
 | SFX voices | 32 total, 3 menu, 2 copies per cue, 35 ms coalescing | `src/platform/host_sfx.cpp:host_sfx_play_file` |
 | Ambient start range | 250 m beyond the CFG radius | `src/resources/scene_ambience.cpp:scene_ambience_audible` |
 | Chassis wall probe | four spheres of 0.18 m | `src/resources/part_runtime.cpp:collide_chassis` |
+| Tyre friction units | script friction / 1.68 = peak mu | `include/slrr/tire_model.hpp:kFrictionUnits` |
 | Prop cell | 64 m | `src/resources/scene_instances.cpp:kPropCellSize` |
 | Shadow maps | 2048² | `src/render/bgfx_lib_backend.hpp:kShadowResolution` |
 | Pedestrian radius / density scale | 400 m / ×4 | `src/resources/part_runtime.cpp:tick_pedestrians` |
@@ -640,7 +641,10 @@ Each answer names its evidence.
     idempotent request and consumes it at the physics boundary
     (`src/resources/gameref.cpp:gameref_process_collision_requests`).
 13. *Which tyre model drives the car?* `src/physics/tire_model.cpp:tire_forces`,
-    not `sl2_pacejka.cpp`.
+    not `sl2_pacejka.cpp`. Its curve comes from the tyre script's `WheelRef`
+    values (friction, stiffness, sliction, load capacity, `frictn_x`, patch
+    angle); `configure_drive` copies them each tick
+    (`src/resources/part_runtime.cpp:configure_drive`).
 14. *Can SLRR_rev's EXE addresses be used for the MWM binary?* No. They
     belong to Steam build 940. SLRR_rev documents three EXE hashes, and the
     MWM binary is a fourth.

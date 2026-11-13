@@ -469,6 +469,36 @@ The active tire code is in `tire_model.cpp`, integrated in
 `vehicle_dynamics.cpp`. The presence of `sl2_pacejka.cpp` in the repository
 does not mean the whole driving model uses that older model.
 
+The tyre curve is built from the values the tyre script writes through
+`WheelRef` (stock `Tyre.java`), not from a fixed reference tyre: peak friction
+is `setFriction / kFrictionUnits` (1.68, so the stock 205 sport tyre peaks
+near 1.05), the slope at zero slip is `setStiffness` per unit slip and per
+newton, the sliding force is `setSliction` of the peak, `setMaxLoad` and
+`setLoadSmooth` saturate the load with the SL2 arctangent blend,
+`setFrictn_x` scales the longitudinal force, `setRollRes` is the rolling
+resistance and the `setCPatch` angle is the camber the full patch tolerates.
+Width, compound, profile and inflation therefore reach the road only through
+the numbers the script derives from them. Slip is combined: wheelspin or a
+locked wheel uses up cornering grip. A host-side impulse bound keeps the
+explicit step from reversing a slide within one tick, longitudinally per
+wheel and sideways shared by the tyres in contact.
+
+`WheelRef.setInstantCenter` (`Suspension.setRollCenter`) gives each corner a
+front-view and a side-view instant centre, relative to the wheel centre.
+The links carry the tyre force along the line from the contact patch through
+that centre, so its vertical part lifts or pulls the body at the patch
+instead of compressing the spring (roll centre, anti-dive, anti-squat), and
+the tyre load is the spring force plus that lift. The stock 10000 values mean
+no centre. The centres stay at their static position; their travel with the
+suspension is not modelled.
+
+Bearing friction, the service brake and the handbrake act on a wheel's spin
+after the drive impulse and before the tyre force. A brake stronger than the
+drive keeps its wheel locked and the tyre slides; a weaker one lets the drive
+spin it. With the automatic clutch, throttle in first or reverse raises the
+take-up speed even while the service brake is held, like a torque converter at
+stall, so the driven wheels spin when the engine beats their brakes and grip.
+
 For the dyno, a new configuration must rebuild the matching curve banks,
 including nitro. Do not mix an old nitro bank with a new RPM step or a new
 geometry. Bound indices before the integer conversion. The last exact sample
