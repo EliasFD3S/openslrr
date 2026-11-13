@@ -97,6 +97,7 @@ add_executable(slrr_host
   src/physics/mass_properties.cpp
   src/physics/wheel_mount.cpp
   src/physics/suspension_geometry.cpp
+  src/physics/flap_hinge.cpp
 )
 
 if(WIN32)

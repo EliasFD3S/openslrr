@@ -419,9 +419,37 @@ and its bind skeleton. When it is installed again, recompute from the new
 configuration. Do not confuse that geometric adaptation with persistent
 damage.
 
-Openable panels use the CFG pivots, axes, and limits, with interpolation.
-They must follow the car's transforms and assembly changes without moving
-the main physics frame.
+Openable panels use the CFG pivots, axes, and limits. They must follow the
+car's transforms and assembly changes without moving the main physics frame.
+
+A `flap px py pz ax ay az dx dy dz lo hi` line belongs to the slot before
+it. Pivot, axis and `dir` (hinge towards the free edge) are in the parent
+part's frame and follow a `setSlotPos`/damage pose of that slot. 0 is the CFG
+pose, which is closed; the open stop is the limit farther from 0, so
+`0 1.134` (Baiern doors) and `-0.960 0` (Erbilac trunk) both open. A part on
+such a slot is a one-degree-of-freedom hinged plate
+(`include/slrr/flap_hinge.hpp`), the same for every car and in the garage:
+
+- Closed, it is latched and does not move.
+- `Part.flap(1)` and the `flap_toggle` command (Mechanic's tuning click)
+  drive it open to the stop, where a strut holds it against gravity, or shut,
+  where it latches. A load that forces a held panel well back from the stop
+  beats the strut, so a door left open swings shut when the car pulls away.
+  `flap(0)` returns 1 while it is open, by script or by a hit.
+- A chassis impact reaching the panel (`damage_chassis` hands it on) releases
+  the latch above 3.5 m/s local speed, independently of the damage options.
+  The obstacle's push swings a free panel, and the closed stop returns an
+  inward push.
+- A free panel reacts to gravity, to the carrier's velocity change at the
+  hinge and its rotation, and to the relative wind, with damped end stops.
+  It latches again when it slams shut. A part moved to another slot or taken
+  off starts closed and latched. The hinge state is not saved: a loaded car
+  starts with every panel closed and latched.
+
+The panel has no collision of its own: an open door can pass through a wall,
+and only chassis contacts reach it, measured against the panel as it hangs.
+Its constants are an OpenSLRR design; the original flap solver is not
+recovered and SLRR_rev has no `flap` native.
 
 ## 11. Physics and damage
 
@@ -554,7 +582,9 @@ hardpoints. Repair, or fitting a wheel to that corner, restores the mount.
 Deformation and detached parts need consistency between the impact, the local
 frame, the deformed mesh, the part state, and collision. Check separately:
 vibration at rest, permanent deformation, a panel opening, and an attachment
-breaking. A visual filter does not fix an unstable solver.
+breaking. A visual filter does not fix an unstable solver. A hinged panel
+opening from a hit is the hinge of §10, not deformation: the impact releases
+its latch and the hinge, not the cage, moves it.
 
 Stock `Part.repair()` owns the wear/tear repair caps and recursively visits the
 installed tree. Its native `repair` command performs a one-shot local reset of
