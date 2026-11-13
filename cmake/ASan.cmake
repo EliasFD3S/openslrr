@@ -16,6 +16,11 @@ function(slrr_enable_asan target_name)
     return()
   endif()
   target_compile_options("${target_name}" PRIVATE /fsanitize=address /Zi)
+  # bgfx/bimg and the script compiler are not instrumented. Without these, the
+  # STL container annotations differ between objects and the link fails with
+  # LNK2038 'annotate_string'/'annotate_vector' mismatches.
+  target_compile_definitions("${target_name}" PRIVATE
+    _DISABLE_STRING_ANNOTATION _DISABLE_VECTOR_ANNOTATION)
   if(NOT target_type STREQUAL "STATIC_LIBRARY")
     # cl.exe embeds the ASan runtime linker directives from the compile flag.
     target_link_options("${target_name}" PRIVATE /INCREMENTAL:NO)

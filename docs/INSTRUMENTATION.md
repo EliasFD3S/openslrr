@@ -335,8 +335,10 @@ malformed input, and actual file/report output.
 configuration and the pinned bgfx configuration are unchanged. ASan uses a
 separate build directory and target-scoped `/fsanitize=address` compile/link
 options for `slrr_host`, `slrr_test_support`, and every test executable. Third-party
-bgfx libraries are not rebuilt with ASan by this option. No global package or
-CMake installation is needed.
+bgfx libraries and `slrr_script_compiler` are not rebuilt with ASan by this
+option, so instrumented targets also define `_DISABLE_STRING_ANNOTATION` and
+`_DISABLE_VECTOR_ANNOTATION` to keep MSVC STL annotations link-compatible with
+them. No global package or CMake installation is needed.
 
 Prerequisites are Visual Studio 2022 with the MSVC x64 compiler, the **C++
 AddressSanitizer** individual component, and a Windows SDK. Run executables from
