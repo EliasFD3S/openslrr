@@ -35,14 +35,20 @@ struct Quaternion {
 };
 using Matrix = std::array<float, 16>;
 
-// Adapted contracts: SLRR_rev a2ee10de, rigid-body-3d.ts. Box inertia is the
-// upstream approximation; it is not the original game's compound inertia.
+// Adapted contracts: SLRR_rev a2ee10de, rigid-body-3d.ts. Without explicit
+// moments the inertia is a solid box of the bounds (the upstream
+// approximation); it is not the original game's compound inertia.
 class RigidBody {
 public:
   double mass = 1;
   Vec3 position, velocity, momentum, center, minimum, maximum;
   Quaternion orientation;
   void configure(double kilograms, Vec3 bounds_min, Vec3 bounds_max, Vec3 com);
+  // Principal moments about `com` along the body axes, in kg m². A component
+  // that is not positive and finite keeps the solid-box value for that axis.
+  void configure(double kilograms, Vec3 bounds_min, Vec3 bounds_max, Vec3 com,
+                 Vec3 principal_inertia);
+  Vec3 inertia() const;
   void set_frame(const Matrix &frame);
   Matrix frame() const;
   Vec3 inverse_world_inertia(Vec3 v) const;
