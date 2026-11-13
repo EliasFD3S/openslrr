@@ -1,7 +1,7 @@
 {
   "updated": "2026-11-12",
   "total": 376,
-  "scope": "Stock native table (docs/stubs.txt in the research workspace), matched against registered class/method/parameter signatures. Explicit native_noop bindings are counted separately. Bodies can be partial implementations or return constants; these are binding counts, not gameplay-completion or validation scores. Incremental update 2026-11-12: Camera.setFog counted as a body. It keeps the script distances and replaces the script color with the sky color. GroundRef.setFog only stores values the renderer does not read. Earlier: setState/getDetail and Vehicle getters registered; Welder and networking classified as leftovers.",
+  "scope": "Stock native table (assets/progress/stock-natives.json), matched against the class/method/parameter signatures registered under src/ by scripts/render_native_coverage.py. Explicit native_noop bindings are counted separately. Bodies can be partial implementations or return constants; these are binding counts, not gameplay-completion or validation scores.",
   "categories": [
     {
       "name": "World",

@@ -412,6 +412,8 @@ Process:
 From [NATIVE_AUDIT.md](NATIVE_AUDIT.md) and
 `assets/progress/native-coverage.json` (12 November 2026): of 376 stock
 signatures, 329 have a body, 4 are explicit no-ops and 43 are missing.
+`scripts/render_native_coverage.py` recomputes these counts from `src/`;
+`--list missing` prints the missing signatures.
 
 | Missing family | Count | Blocks |
 | --- | ---: | --- |
@@ -442,7 +444,6 @@ reads, and `Part.setSfxLoopParams` stores values without applying them.
 | NATIVE_AUDIT: `GfxEngine` exposes one fixed 800×600 mode and an empty change call | Modes are enumerated with `EnumDisplaySettingsW` and applied (`src/natives/natives_script.cpp:display_modes`) |
 | HOST_NATIVE_UTILITIES: engine-loop audio not yet implemented | `update_engine_audio` runs every physics frame |
 | Issue #19: Animation natives are not bound | They are registered and drive the host crowd (`src/natives/natives_renderref.cpp:register_renderref_natives`) |
-| README: `python tools/render-native-coverage.py` | `tools/` is gitignored; the script is not in the repository |
 | `.gitignore` last line `*.md !README.md` | A single malformed pattern that matches nothing; Markdown files are not ignored |
 | Stale comments: "no green-thread budget yet" in `src/boot/mainloop.cpp`, "240 Hz tick" in `src/resources/scene_instances.cpp`, "WGL until libbgfx is linked" in `include/slrr/render_backend.hpp` | Fibers have budgets, physics is 120/60 Hz, libbgfx is always linked |
 

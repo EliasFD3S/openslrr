@@ -1,0 +1,2267 @@
+{
+  "source": {
+    "repository": "https://github.com/EliasFD3S/slrr-reverse",
+    "commit": "5c42f3b139aef4c7b9e0b6420c5704e22c0e6cd7",
+    "url": "https://raw.githubusercontent.com/EliasFD3S/slrr-reverse/5c42f3b139aef4c7b9e0b6420c5704e22c0e6cd7/engine/Core/natives_stubs.cpp",
+    "sha256": "7a09d8f3dd63079dbf50632efd7400aeecebdaa05a786e4958cfc12ad4c6b9f3"
+  },
+  "count": 376,
+  "signatures": [
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "getTorque",
+      "typed_signature": "float getTorque(float RPM, float boost)",
+      "descriptor": "(FF)"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "setTorque",
+      "typed_signature": "void setTorque(float t)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "setAckermann",
+      "typed_signature": "void setAckermann(float a)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "getMass",
+      "typed_signature": "float getMass()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "getCM",
+      "typed_signature": "Vector3 getCM()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "getMin",
+      "typed_signature": "Vector3 getMin()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "getMax",
+      "typed_signature": "Vector3 getMax()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "getWheelPos",
+      "typed_signature": "Vector3 getWheelPos(int n)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "forceUpdate",
+      "typed_signature": "void forceUpdate()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "getWheelDamage",
+      "typed_signature": "String getWheelDamage(int index)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "setWheelDamage",
+      "typed_signature": "void setWheelDamage(int index, String data)",
+      "descriptor": "(ILjava.lang.String;)"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "setCooling",
+      "typed_signature": "void setCooling(float min, float max, float spd)",
+      "descriptor": "(FFF)"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "getSfxTable",
+      "typed_signature": "SfxTable getSfxTable(int id)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "setSfxExhaustMinVol",
+      "typed_signature": "void setSfxExhaustMinVol(float f)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "setSteerWheelRadius",
+      "typed_signature": "void setSteerWheelRadius(float f)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "setSteerWheel",
+      "typed_signature": "void setSteerWheel(float r, float z)",
+      "descriptor": "(FF)"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "setHornSFX",
+      "typed_signature": "void setHornSFX(ResourceRef sfx, float pitch, int index)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;FI)"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "setNitroSFX",
+      "typed_signature": "void setNitroSFX(ResourceRef sfx, float pitch)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;F)"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "getMileage",
+      "typed_signature": "float getMileage()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "setMileage",
+      "typed_signature": "void setMileage(float m)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "setBuck",
+      "typed_signature": "void setBuck(int partID, int buckid, float freq, float prob, float rpmdep, float amp)",
+      "descriptor": "(IIFFFF)"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "getWheels",
+      "typed_signature": "int getWheels()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.bodypart.Chassis",
+      "method": "getWheel",
+      "typed_signature": "WheelRef getWheel(int id)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.game.parts.DynoData",
+      "method": "newNative",
+      "typed_signature": "void newNative()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.DynoData",
+      "method": "deleteNative",
+      "typed_signature": "void deleteNative()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.DynoData",
+      "method": "calcDyno",
+      "typed_signature": "float calcDyno(float tablesize)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.DynoData",
+      "method": "getTorque",
+      "typed_signature": "float getTorque(float RPM, float nitro)",
+      "descriptor": "(FF)"
+    },
+    {
+      "class": "java.game.parts.DynoData",
+      "method": "getHP",
+      "typed_signature": "float getHP(float RPM, float nitro)",
+      "descriptor": "(FF)"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "getWear",
+      "typed_signature": "float getWear()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "setWear",
+      "typed_signature": "float setWear(float value)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "setMaxWear",
+      "typed_signature": "void setMaxWear(float value)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "getTear",
+      "typed_signature": "float getTear()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "setTear",
+      "typed_signature": "float setTear(float value)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "getTexture",
+      "typed_signature": "int getTexture()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "setTexture",
+      "typed_signature": "int setTexture(int ID)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "getMesh",
+      "typed_signature": "int getMesh()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "setMesh",
+      "typed_signature": "int setMesh(int ID)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "getRenderType",
+      "typed_signature": "int getRenderType()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "setRenderType",
+      "typed_signature": "int setRenderType(int ID)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "install_OK",
+      "typed_signature": "int[] install_OK(GameRef dest, int slot, GameRef part, int slot2, Vector3 pos)",
+      "descriptor": "(Ljava.util.resource.GameRef;ILjava.util.resource.GameRef;ILjava.lang.Vector3;)"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "flap",
+      "typed_signature": "int flap(int mode)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "getCar",
+      "typed_signature": "int getCar()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "getWheelID",
+      "typed_signature": "int getWheelID()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "disableSlot",
+      "typed_signature": "void disableSlot(int slotID, int status)",
+      "descriptor": "(II)"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "getSlotDamage",
+      "typed_signature": "String getSlotDamage(int slotIndex)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "setSlotDamage",
+      "typed_signature": "void setSlotDamage(int slotIndex, String data)",
+      "descriptor": "(ILjava.lang.String;)"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "setSlotPos",
+      "typed_signature": "void setSlotPos(int slotID, Vector3 pos, Ypr ypr)",
+      "descriptor": "(ILjava.lang.Vector3;Ljava.lang.Ypr;)"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "getSlots",
+      "typed_signature": "int getSlots()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "getSlotID",
+      "typed_signature": "int getSlotID(int slotIndex)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "getSlotIndex",
+      "typed_signature": "int getSlotIndex(int slotID)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "isSlotDisabled",
+      "typed_signature": "int isSlotDisabled(int slotID)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "getLogo",
+      "typed_signature": "int getLogo()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "getMass",
+      "typed_signature": "float getMass()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "setSfxLoopParams",
+      "typed_signature": "int setSfxLoopParams(float a, float b)",
+      "descriptor": "(FF)"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "partOnSlot",
+      "typed_signature": "Part partOnSlot(int slotID)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "slotIDOnSlot",
+      "typed_signature": "int slotIDOnSlot(int slotID)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.game.parts.Part",
+      "method": "getCarRef",
+      "typed_signature": "Part getCarRef()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.SfxTable",
+      "method": "finalize",
+      "typed_signature": "void finalize()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.SfxTable",
+      "method": "getItems",
+      "typed_signature": "int getItems()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.SfxTable",
+      "method": "clear",
+      "typed_signature": "void clear()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.SfxTable",
+      "method": "addItem",
+      "typed_signature": "void addItem(ResourceRef sfx, float pitch, float pmin, float pmax, float vmin, float vmax)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;FFFFF)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "finalize",
+      "typed_signature": "void finalize()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "getPos",
+      "typed_signature": "Vector3 getPos()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "getYpr",
+      "typed_signature": "Ypr getYpr()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "getDrive",
+      "typed_signature": "float getDrive()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "getSteer",
+      "typed_signature": "float getSteer()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "getRadius",
+      "typed_signature": "float getRadius()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setPos",
+      "typed_signature": "void setPos(Vector3 val)",
+      "descriptor": "(Ljava.lang.Vector3;)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setYpr",
+      "typed_signature": "void setYpr(Ypr val)",
+      "descriptor": "(Ljava.lang.Ypr;)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setDrive",
+      "typed_signature": "void setDrive(float val)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setSteer",
+      "typed_signature": "void setSteer(float val)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setRadius",
+      "typed_signature": "void setRadius(float val)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setWidth",
+      "typed_signature": "void setWidth(float val)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setCPatch",
+      "typed_signature": "void setCPatch(float halfwidth, float angle, float offset)",
+      "descriptor": "(FFF)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setFriction",
+      "typed_signature": "void setFriction(float val)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setFrictn_x",
+      "typed_signature": "void setFrictn_x(float val)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setSliction",
+      "typed_signature": "void setSliction(float val)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setStiffness",
+      "typed_signature": "void setStiffness(float val)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setRollRes",
+      "typed_signature": "void setRollRes(float val)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setBearing",
+      "typed_signature": "void setBearing(float val)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setMaxLoad",
+      "typed_signature": "void setMaxLoad(float val)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setLoadSmooth",
+      "typed_signature": "void setLoadSmooth(float val)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setPacejka",
+      "typed_signature": "void setPacejka(int i, float val)",
+      "descriptor": "(IF)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setForce",
+      "typed_signature": "void setForce(float val)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setDamping",
+      "typed_signature": "void setDamping(float val)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setDamping",
+      "typed_signature": "void setDamping(float bound, float rebound)",
+      "descriptor": "(FF)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setRestLen",
+      "typed_signature": "void setRestLen(float val)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setMinLen",
+      "typed_signature": "void setMinLen(float val)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setMaxLen",
+      "typed_signature": "void setMaxLen(float val)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setInstantCenter",
+      "typed_signature": "void setInstantCenter(float Hx, float Hy, float Hz, float Lx, float Ly, float Lz)",
+      "descriptor": "(FFFFFF)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setBrake",
+      "typed_signature": "void setBrake(float val)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setHBrake",
+      "typed_signature": "void setHBrake(float val)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "getBrake",
+      "typed_signature": "float getBrake()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "getHBrake",
+      "typed_signature": "float getHBrake()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setOppWheel",
+      "typed_signature": "void setOppWheel(int id)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setArm",
+      "typed_signature": "void setArm(float len, float px, float py, float pz, float nx, float ny, float nz)",
+      "descriptor": "(FFFFFFF)"
+    },
+    {
+      "class": "java.game.parts.WheelRef",
+      "method": "setHub",
+      "typed_signature": "void setHub(float len, float p1x, float p1y, float p1z, float p2x, float p2y, float p2z, float pcx, float pcy, float pcz)",
+      "descriptor": "(FFFFFFFFFF)"
+    },
+    {
+      "class": "java.game.GameLogic",
+      "method": "kismajomCheck",
+      "typed_signature": "int kismajomCheck(String[] kismajomArray)",
+      "descriptor": "([Ljava.lang.String;)"
+    },
+    {
+      "class": "java.game.Navigator",
+      "method": "updateNavigator",
+      "typed_signature": "void updateNavigator(GameRef car, int mode)",
+      "descriptor": "(Ljava.util.resource.GameRef;I)"
+    },
+    {
+      "class": "java.game.Painter",
+      "method": "doPaint",
+      "typed_signature": "void doPaint(GameRef cursor, int color, int brush, int temp, float rot, float size, int flip)",
+      "descriptor": "(Ljava.util.resource.GameRef;IIIFFI)"
+    },
+    {
+      "class": "java.game.Painter",
+      "method": "paintPart",
+      "typed_signature": "void paintPart(GameRef cursor, int color)",
+      "descriptor": "(Ljava.util.resource.GameRef;I)"
+    },
+    {
+      "class": "java.game.Painter",
+      "method": "xPaint",
+      "typed_signature": "void xPaint(GameRef part)",
+      "descriptor": "(Ljava.util.resource.GameRef;)"
+    },
+    {
+      "class": "java.game.Vehicle",
+      "method": "getSpeedSquare",
+      "typed_signature": "float getSpeedSquare()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.Vehicle",
+      "method": "getHorn",
+      "typed_signature": "int getHorn()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.game.Vehicle",
+      "method": "hasCrime",
+      "typed_signature": "float hasCrime()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.io.Controller",
+      "method": "user_Add",
+      "typed_signature": "int user_Add(int vaxis, int device, int paxis, float a, float b, float c, float d)",
+      "descriptor": "(IIIFFFF)"
+    },
+    {
+      "class": "java.io.Controller",
+      "method": "user_Del",
+      "typed_signature": "int user_Del(int vaxis, int device, int paxis)",
+      "descriptor": "(III)"
+    },
+    {
+      "class": "java.io.Controller",
+      "method": "user_SetAxisSmooth",
+      "typed_signature": "int user_SetAxisSmooth(int vaxis, float a, float b, float c, float d, float e)",
+      "descriptor": "(IFFFFF)"
+    },
+    {
+      "class": "java.io.Controller",
+      "method": "user_SetAxisSpeed",
+      "typed_signature": "void user_SetAxisSpeed(int vaxis, float a)",
+      "descriptor": "(IF)"
+    },
+    {
+      "class": "java.io.Controller",
+      "method": "user_GetAxisVal",
+      "typed_signature": "float user_GetAxisVal(int vaxis)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.io.Controller",
+      "method": "user_SetAxisForce",
+      "typed_signature": "void user_SetAxisForce(int vaxis, float c, float f)",
+      "descriptor": "(IFF)"
+    },
+    {
+      "class": "java.io.Controller",
+      "method": "user_Reset",
+      "typed_signature": "void user_Reset()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.io.File",
+      "method": "open",
+      "typed_signature": "int open(int mode)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.io.File",
+      "method": "close",
+      "typed_signature": "void close()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.io.File",
+      "method": "write",
+      "typed_signature": "int write(int value)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.io.File",
+      "method": "write",
+      "typed_signature": "int write(float value)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.io.File",
+      "method": "write",
+      "typed_signature": "int write(ResourceRef value)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;)"
+    },
+    {
+      "class": "java.io.File",
+      "method": "write",
+      "typed_signature": "int write(String value)",
+      "descriptor": "(Ljava.lang.String;)"
+    },
+    {
+      "class": "java.io.File",
+      "method": "readInt",
+      "typed_signature": "int readInt()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.io.File",
+      "method": "readFloat",
+      "typed_signature": "float readFloat()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.io.File",
+      "method": "readResID",
+      "typed_signature": "int readResID()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.io.File",
+      "method": "readString",
+      "typed_signature": "String readString()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.io.File",
+      "method": "delete",
+      "typed_signature": "int delete(String f)",
+      "descriptor": "(Ljava.lang.String;)"
+    },
+    {
+      "class": "java.io.File",
+      "method": "copy",
+      "typed_signature": "int copy(String original, String copy)",
+      "descriptor": "(Ljava.lang.String;Ljava.lang.String;)"
+    },
+    {
+      "class": "java.io.File",
+      "method": "move",
+      "typed_signature": "int move(String original, String renamed)",
+      "descriptor": "(Ljava.lang.String;Ljava.lang.String;)"
+    },
+    {
+      "class": "java.io.File",
+      "method": "exists",
+      "typed_signature": "int exists(String f)",
+      "descriptor": "(Ljava.lang.String;)"
+    },
+    {
+      "class": "java.io.FindFile",
+      "method": "first",
+      "typed_signature": "String first(String path, int flags)",
+      "descriptor": "(Ljava.lang.String;I)"
+    },
+    {
+      "class": "java.io.FindFile",
+      "method": "next",
+      "typed_signature": "String next()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.io.FindFile",
+      "method": "close",
+      "typed_signature": "void close()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.io.Input",
+      "method": "getAxis",
+      "typed_signature": "float getAxis(int device, int axis)",
+      "descriptor": "(II)"
+    },
+    {
+      "class": "java.io.Input",
+      "method": "getDeviceName",
+      "typed_signature": "String getDeviceName(int i)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.io.Input",
+      "method": "mapAxis",
+      "typed_signature": "void mapAxis(GameRef inst, int l_axis, int device, int i_axis, float i_from, float i_to, float l_from, float l_to)",
+      "descriptor": "(Ljava.util.resource.GameRef;IIIFFFF)"
+    },
+    {
+      "class": "java.io.Input",
+      "method": "setAxisSmooth",
+      "typed_signature": "void setAxisSmooth(GameRef inst, int l_axis, float a, float b, float c, float d)",
+      "descriptor": "(Ljava.util.resource.GameRef;IFFFF)"
+    },
+    {
+      "class": "java.io.Input",
+      "method": "activeAxis",
+      "typed_signature": "int activeAxis(int device)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.io.Input",
+      "method": "axisName",
+      "typed_signature": "String axisName(int device, int axis)",
+      "descriptor": "(II)"
+    },
+    {
+      "class": "java.io.Input",
+      "method": "lastKey",
+      "typed_signature": "int lastKey()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.io.Input",
+      "method": "createHotkey",
+      "typed_signature": "void createHotkey(int axis, int flags, Hotkey hk, GameRef handler, Osd owner, int eventFilter)",
+      "descriptor": "(IILjava.io.Hotkey;Ljava.util.resource.GameRef;Ljava.render.Osd;I)"
+    },
+    {
+      "class": "java.io.Input",
+      "method": "deleteHotkey",
+      "typed_signature": "void deleteHotkey(Hotkey hk)",
+      "descriptor": "(Ljava.io.Hotkey;)"
+    },
+    {
+      "class": "java.io.Input",
+      "method": "checkHotkeys",
+      "typed_signature": "void checkHotkeys(GameRef inst, Osd infocus)",
+      "descriptor": "(Ljava.util.resource.GameRef;Ljava.render.Osd;)"
+    },
+    {
+      "class": "java.io.Input",
+      "method": "flushHotkeys",
+      "typed_signature": "void flushHotkeys()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.io.MouseCursor",
+      "method": "getPos",
+      "typed_signature": "Vector3 getPos()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.io.MouseCursor",
+      "method": "getPickedPos",
+      "typed_signature": "Vector3 getPickedPos()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.Float",
+      "method": "toString",
+      "typed_signature": "String toString(float f, String fmt)",
+      "descriptor": "(FLjava.lang.String;)"
+    },
+    {
+      "class": "java.lang.GameType",
+      "method": "remNotification",
+      "typed_signature": "void remNotification(GameRef ref, int etype)",
+      "descriptor": "(Ljava.util.resource.GameRef;I)"
+    },
+    {
+      "class": "java.lang.GameType",
+      "method": "addNotification",
+      "typed_signature": "void addNotification(GameRef ref, int etype, int ealias, String custmsg)",
+      "descriptor": "(Ljava.util.resource.GameRef;IILjava.lang.String;)"
+    },
+    {
+      "class": "java.lang.GameType",
+      "method": "addNotification",
+      "typed_signature": "void addNotification(GameRef ref, int etype, int ealias, String custmsg, String custmethod)",
+      "descriptor": "(Ljava.util.resource.GameRef;IILjava.lang.String;Ljava.lang.String;)"
+    },
+    {
+      "class": "java.lang.GameType",
+      "method": "addTimer",
+      "typed_signature": "void addTimer(float deadline, int timerid)",
+      "descriptor": "(FI)"
+    },
+    {
+      "class": "java.lang.GameType",
+      "method": "removeAllTimers",
+      "typed_signature": "void removeAllTimers()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.GameType",
+      "method": "setEventMask",
+      "typed_signature": "void setEventMask(int eventmask)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.lang.GameType",
+      "method": "clearEventMask",
+      "typed_signature": "void clearEventMask(int eventmask)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.lang.GameType",
+      "method": "registerCallback",
+      "typed_signature": "void registerCallback(int mode)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.lang.GameType",
+      "method": "unregisterCallback",
+      "typed_signature": "void unregisterCallback(int mode)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.lang.GameType",
+      "method": "unregisterCallbacks",
+      "typed_signature": "void unregisterCallbacks()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.GameType",
+      "method": "createNativeInstance",
+      "typed_signature": "void createNativeInstance(GameRef parent, int typeID, String params, String alias)",
+      "descriptor": "(Ljava.util.resource.GameRef;ILjava.lang.String;Ljava.lang.String;)"
+    },
+    {
+      "class": "java.lang.Integer",
+      "method": "toString",
+      "typed_signature": "String toString(int i)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.lang.Integer",
+      "method": "toHexString",
+      "typed_signature": "String toHexString(int i)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.lang.Math",
+      "method": "random",
+      "typed_signature": "float random()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.Math",
+      "method": "sqrt",
+      "typed_signature": "float sqrt(float a)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.lang.Math",
+      "method": "randomize",
+      "typed_signature": "void randomize()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.Math",
+      "method": "setrandseed",
+      "typed_signature": "void setrandseed(int seed)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.lang.Object",
+      "method": "wait",
+      "typed_signature": "void wait()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.Object",
+      "method": "notify",
+      "typed_signature": "void notify()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.Object",
+      "method": "notifyAll",
+      "typed_signature": "void notifyAll()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.Object",
+      "method": "toString",
+      "typed_signature": "String toString()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.Object",
+      "method": "hashCode",
+      "typed_signature": "int hashCode()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.Object",
+      "method": "enableGC",
+      "typed_signature": "void enableGC()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.Object",
+      "method": "disableGC",
+      "typed_signature": "void disableGC()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.String",
+      "method": "finalize",
+      "typed_signature": "void finalize()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.String",
+      "method": "token",
+      "typed_signature": "String token(int n, String delimiters)",
+      "descriptor": "(ILjava.lang.String;)"
+    },
+    {
+      "class": "java.lang.String",
+      "method": "intValue",
+      "typed_signature": "int intValue()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.String",
+      "method": "floatValue",
+      "typed_signature": "float floatValue()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.String",
+      "method": "append",
+      "typed_signature": "String append(int ascii)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.lang.String",
+      "method": "length",
+      "typed_signature": "int length()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "exit",
+      "typed_signature": "void exit()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "exit",
+      "typed_signature": "void exit(String s)",
+      "descriptor": "(Ljava.lang.String;)"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "log",
+      "typed_signature": "void log(String s)",
+      "descriptor": "(Ljava.lang.String;)"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "info",
+      "typed_signature": "String info(int i)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "buildNumber",
+      "typed_signature": "int buildNumber()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "gc",
+      "typed_signature": "int gc()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "runFinalization",
+      "typed_signature": "int runFinalization()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "compileAll",
+      "typed_signature": "int compileAll(String path)",
+      "descriptor": "(Ljava.lang.String;)"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "analyze",
+      "typed_signature": "void analyze(Object o)",
+      "descriptor": "(Ljava.lang.Object;)"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "analyze",
+      "typed_signature": "void analyze(float f)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "analyze",
+      "typed_signature": "void analyze(int i)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "arraycopy",
+      "typed_signature": "void arraycopy(Object src, int src_position, Object dst, int dst_position, int length)",
+      "descriptor": "(Ljava.lang.Object;ILjava.lang.Object;II)"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "currentTime",
+      "typed_signature": "float currentTime()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "simTime",
+      "typed_signature": "float simTime()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "timeWarp",
+      "typed_signature": "float timeWarp(float m)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "syncGameTime",
+      "typed_signature": "void syncGameTime(float t)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "setMeasure",
+      "typed_signature": "void setMeasure(float m)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "getConfigOptions",
+      "typed_signature": "void getConfigOptions()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "netHost",
+      "typed_signature": "int netHost()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "netJoin",
+      "typed_signature": "int netJoin()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "netLeave",
+      "typed_signature": "int netLeave()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "openLib",
+      "typed_signature": "int openLib(String libName)",
+      "descriptor": "(Ljava.lang.String;)"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "isLoadingReset",
+      "typed_signature": "void isLoadingReset()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "isLoading",
+      "typed_signature": "int isLoading()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.System",
+      "method": "setLdPriority",
+      "typed_signature": "void setLdPriority(int pri)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.lang.Thread",
+      "method": "getPriority",
+      "typed_signature": "int getPriority()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.Thread",
+      "method": "setPriority",
+      "typed_signature": "void setPriority(int newPriority)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.lang.Thread",
+      "method": "setDaemon",
+      "typed_signature": "void setDaemon(int daemon)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.lang.Thread",
+      "method": "init",
+      "typed_signature": "void init(String name)",
+      "descriptor": "(Ljava.lang.String;)"
+    },
+    {
+      "class": "java.lang.Thread",
+      "method": "start",
+      "typed_signature": "void start()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.Thread",
+      "method": "stop",
+      "typed_signature": "void stop()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.Thread",
+      "method": "isAlive",
+      "typed_signature": "int isAlive()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.Thread",
+      "method": "sleep",
+      "typed_signature": "void sleep(float millisec)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.lang.Thread",
+      "method": "suspend",
+      "typed_signature": "void suspend()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.Thread",
+      "method": "resume",
+      "typed_signature": "void resume()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.Vector3",
+      "method": "length",
+      "typed_signature": "float length()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.Vector3",
+      "method": "distance",
+      "typed_signature": "float distance(Vector3 v)",
+      "descriptor": "(Ljava.lang.Vector3;)"
+    },
+    {
+      "class": "java.lang.Vector3",
+      "method": "normalize",
+      "typed_signature": "void normalize()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.lang.Vector3",
+      "method": "rotate",
+      "typed_signature": "void rotate(Ypr ypr)",
+      "descriptor": "(Ljava.lang.Ypr;)"
+    },
+    {
+      "class": "java.lang.Vector3",
+      "method": "rotate",
+      "typed_signature": "void rotate(Vector3 amikorul, float amennyivel)",
+      "descriptor": "(Ljava.lang.Vector3;F)"
+    },
+    {
+      "class": "java.lang.Vector3",
+      "method": "<init>",
+      "typed_signature": "void <init>(Ypr ypr)",
+      "descriptor": "(Ljava.lang.Ypr;)"
+    },
+    {
+      "class": "java.lang.Ypr",
+      "method": "mul",
+      "typed_signature": "void mul(Ypr v)",
+      "descriptor": "(Ljava.lang.Ypr;)"
+    },
+    {
+      "class": "java.lang.Ypr",
+      "method": "<init>",
+      "typed_signature": "void <init>(Vector3 v)",
+      "descriptor": "(Ljava.lang.Vector3;)"
+    },
+    {
+      "class": "java.render.Camera",
+      "method": "create",
+      "typed_signature": "void create(ResourceRef parent, Viewport vp, int pri, float aov, float dmin, float dmax, float lodBias, float lodAmp, int oc, int pt)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;Ljava.render.Viewport;IFFFFFII)"
+    },
+    {
+      "class": "java.render.Camera",
+      "method": "destroy",
+      "typed_signature": "void destroy()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.render.Camera",
+      "method": "activate",
+      "typed_signature": "void activate(Viewport vp, int pri)",
+      "descriptor": "(Ljava.render.Viewport;I)"
+    },
+    {
+      "class": "java.render.Camera",
+      "method": "deactivate",
+      "typed_signature": "void deactivate(Viewport vp)",
+      "descriptor": "(Ljava.render.Viewport;)"
+    },
+    {
+      "class": "java.render.Camera",
+      "method": "setFog",
+      "typed_signature": "void setFog(int color, float near, float far)",
+      "descriptor": "(IFF)"
+    },
+    {
+      "class": "java.render.GfxEngine",
+      "method": "forceRendering",
+      "typed_signature": "void forceRendering()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.render.GfxEngine",
+      "method": "setGlobalEnvmap",
+      "typed_signature": "void setGlobalEnvmap(ResourceRef texture)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;)"
+    },
+    {
+      "class": "java.render.GfxEngine",
+      "method": "numDisplayModes",
+      "typed_signature": "int numDisplayModes()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.render.GfxEngine",
+      "method": "currDisplayMode",
+      "typed_signature": "int currDisplayMode()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.render.GfxEngine",
+      "method": "displayModeName",
+      "typed_signature": "String displayModeName(int i)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.render.GfxEngine",
+      "method": "changeVideoMode",
+      "typed_signature": "void changeVideoMode(int width, int height, int depth)",
+      "descriptor": "(III)"
+    },
+    {
+      "class": "java.render.GfxEngine",
+      "method": "printScreen",
+      "typed_signature": "void printScreen(String filename)",
+      "descriptor": "(Ljava.lang.String;)"
+    },
+    {
+      "class": "java.render.GfxEngine",
+      "method": "flush",
+      "typed_signature": "void flush()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.render.GfxEngine",
+      "method": "openVideo",
+      "typed_signature": "int openVideo(String filename, int non_exclusive, int loop)",
+      "descriptor": "(Ljava.lang.String;II)"
+    },
+    {
+      "class": "java.render.GfxEngine",
+      "method": "closeVideo",
+      "typed_signature": "void closeVideo()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.render.GfxEngine",
+      "method": "isPlayingVideo",
+      "typed_signature": "int isPlayingVideo()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.render.Text",
+      "method": "setDefaultColor",
+      "typed_signature": "void setDefaultColor(int color)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.render.Text",
+      "method": "getDefaultColor",
+      "typed_signature": "int getDefaultColor()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.render.Text",
+      "method": "create",
+      "typed_signature": "void create(ResourceRef parent, ResourceRef charset, float x, float z)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;Ljava.util.resource.ResourceRef;FF)"
+    },
+    {
+      "class": "java.render.Text",
+      "method": "changeColor",
+      "typed_signature": "void changeColor(int color)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.render.Text",
+      "method": "changeAlign",
+      "typed_signature": "void changeAlign(int align)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.render.Text",
+      "method": "setPos",
+      "typed_signature": "void setPos(float x, float z)",
+      "descriptor": "(FF)"
+    },
+    {
+      "class": "java.render.Text",
+      "method": "getPos",
+      "typed_signature": "Vector3 getPos()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.render.Text",
+      "method": "update",
+      "typed_signature": "void update()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.render.Text",
+      "method": "getWidthPixels",
+      "typed_signature": "float getWidthPixels(String str, ResourceRef font)",
+      "descriptor": "(Ljava.lang.String;Ljava.util.resource.ResourceRef;)"
+    },
+    {
+      "class": "java.render.Viewport",
+      "method": "create",
+      "typed_signature": "void create(int pri, float x, float y, float w, float h)",
+      "descriptor": "(IFFFF)"
+    },
+    {
+      "class": "java.render.Viewport",
+      "method": "destroy",
+      "typed_signature": "void destroy()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.render.Viewport",
+      "method": "activate",
+      "typed_signature": "void activate(int renderflags)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.render.Viewport",
+      "method": "deactivate",
+      "typed_signature": "void deactivate()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.render.Viewport",
+      "method": "getAspect",
+      "typed_signature": "float getAspect()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.render.Viewport",
+      "method": "getWidth",
+      "typed_signature": "float getWidth()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.render.Viewport",
+      "method": "getHeight",
+      "typed_signature": "float getHeight()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.render.Viewport",
+      "method": "getTop",
+      "typed_signature": "float getTop()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.render.Viewport",
+      "method": "getLeft",
+      "typed_signature": "float getLeft()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.render.Viewport",
+      "method": "resize",
+      "typed_signature": "void resize(float x, float y, float w, float h)",
+      "descriptor": "(FFFF)"
+    },
+    {
+      "class": "java.render.Viewport",
+      "method": "unproject",
+      "typed_signature": "Vector3 unproject(Vector3 v, int cameraId)",
+      "descriptor": "(Ljava.lang.Vector3;I)"
+    },
+    {
+      "class": "java.sound.Sound",
+      "method": "changeMusicSet",
+      "typed_signature": "void changeMusicSet(int type)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.sound.Sound",
+      "method": "nextTrack",
+      "typed_signature": "void nextTrack()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.sound.Sound",
+      "method": "prevTrack",
+      "typed_signature": "void prevTrack()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.sound.Sound",
+      "method": "getMode",
+      "typed_signature": "int getMode()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.sound.Sound",
+      "method": "setMode",
+      "typed_signature": "int setMode(int mode)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.sound.Sound",
+      "method": "setVolume",
+      "typed_signature": "void setVolume(int channel, float volume)",
+      "descriptor": "(IF)"
+    },
+    {
+      "class": "java.sound.Sound",
+      "method": "getVolume",
+      "typed_signature": "float getVolume(int channel)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.sound.Sound",
+      "method": "has3DHardware",
+      "typed_signature": "int has3DHardware()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.sound.Sound",
+      "method": "hasMixHardware",
+      "typed_signature": "int hasMixHardware()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.sound.Sound",
+      "method": "enableDebugDump",
+      "typed_signature": "int enableDebugDump(ResourceRef display)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;)"
+    },
+    {
+      "class": "java.util.resource.Animation",
+      "method": "<init>",
+      "typed_signature": "void <init>(RenderRef render, ResourceRef type)",
+      "descriptor": "(Ljava.util.resource.RenderRef;Ljava.util.resource.ResourceRef;)"
+    },
+    {
+      "class": "java.util.resource.Animation",
+      "method": "finalize",
+      "typed_signature": "void finalize()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.Animation",
+      "method": "setSpeed",
+      "typed_signature": "void setSpeed(float speed)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.util.resource.Animation",
+      "method": "setFade",
+      "typed_signature": "void setFade(float fade)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.util.resource.Animation",
+      "method": "play",
+      "typed_signature": "void play()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.Animation",
+      "method": "loopPlay",
+      "typed_signature": "void loopPlay()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.Animation",
+      "method": "pause",
+      "typed_signature": "void pause()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.Animation",
+      "method": "seek",
+      "typed_signature": "void seek(float position)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.util.resource.Animation",
+      "method": "getPos",
+      "typed_signature": "float getPos()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "create",
+      "typed_signature": "GameType create(GameRef parent, GameRef type, String params, String alias)",
+      "descriptor": "(Ljava.util.resource.GameRef;Ljava.util.resource.GameRef;Ljava.lang.String;Ljava.lang.String;)"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "create_native",
+      "typed_signature": "void create_native(GameRef parent, GameRef type, String params, String alias)",
+      "descriptor": "(Ljava.util.resource.GameRef;Ljava.util.resource.GameRef;Ljava.lang.String;Ljava.lang.String;)"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "getFlags",
+      "typed_signature": "int getFlags()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "setFlags",
+      "typed_signature": "void setFlags(int flags)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "clearFlags",
+      "typed_signature": "void clearFlags(int flags)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "getOri",
+      "typed_signature": "Ypr getOri()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "getPos",
+      "typed_signature": "Vector3 getPos()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "getVel",
+      "typed_signature": "Vector3 getVel()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "setPos",
+      "typed_signature": "void setPos(Vector3 v)",
+      "descriptor": "(Ljava.lang.Vector3;)"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "setMatrix",
+      "typed_signature": "void setMatrix(Vector3 p, Ypr o)",
+      "descriptor": "(Ljava.lang.Vector3;Ljava.lang.Ypr;)"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "setParent",
+      "typed_signature": "void setParent(ResourceRef newparent)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;)"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "setState",
+      "typed_signature": "void setState(Vector3 p, Ypr o, Vector3 l,Vector3 a)",
+      "descriptor": "(Ljava.lang.Vector3;Ljava.lang.Ypr;Ljava.lang.Vector3;Ljava.lang.Vector3;)"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "isEmpty",
+      "typed_signature": "int isEmpty()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "isScripted",
+      "typed_signature": "int isScripted(String clazzname)",
+      "descriptor": "(Ljava.lang.String;)"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "getScriptInstance",
+      "typed_signature": "Object getScriptInstance()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "getInfo",
+      "typed_signature": "int getInfo(int query, int subquery)",
+      "descriptor": "(II)"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "getInfo",
+      "typed_signature": "int getInfo(int query, String subquery)",
+      "descriptor": "(ILjava.lang.String;)"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "queueEvent",
+      "typed_signature": "void queueEvent(ResourceRef ro, int type, String param)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;ILjava.lang.String;)"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "setActiveCollision",
+      "typed_signature": "void setActiveCollision()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.GameRef",
+      "method": "getDetail",
+      "typed_signature": "float getDetail()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "setWater",
+      "typed_signature": "void setWater(float level, float density, float viscosity)",
+      "descriptor": "(FFF)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "setWater",
+      "typed_signature": "void setWater(Vector3 point, Vector3 normal, float density, float viscosity)",
+      "descriptor": "(Ljava.lang.Vector3;Ljava.lang.Vector3;FF)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "addWaterLimit",
+      "typed_signature": "void addWaterLimit(Vector3 point, Vector3 normal)",
+      "descriptor": "(Ljava.lang.Vector3;Ljava.lang.Vector3;)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "setFog",
+      "typed_signature": "void setFog(int color, float near, float far)",
+      "descriptor": "(IFF)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "addTrafficCar",
+      "typed_signature": "int addTrafficCar(GameRef instance, Vector3 pos)",
+      "descriptor": "(Ljava.util.resource.GameRef;Ljava.lang.Vector3;)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "remTrafficCar",
+      "typed_signature": "void remTrafficCar(int id)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "notifyTrafficCar",
+      "typed_signature": "int notifyTrafficCar(int id, int state)",
+      "descriptor": "(II)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "addTrafficN",
+      "typed_signature": "int addTrafficN(GameRef type, int n, float lenBegin, float lenEnd, float wheelBase)",
+      "descriptor": "(Ljava.util.resource.GameRef;IFFF)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "addTrafficP",
+      "typed_signature": "int addTrafficP(GameRef type, Vector3 pos, int n, float lenBegin, float lenEnd, float wheelBase)",
+      "descriptor": "(Ljava.util.resource.GameRef;Ljava.lang.Vector3;IFFF)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "delTraffic",
+      "typed_signature": "void delTraffic()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "setTrafficCarBehaviour",
+      "typed_signature": "void setTrafficCarBehaviour(int id, int mode)",
+      "descriptor": "(II)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "haltTrafficCross",
+      "typed_signature": "void haltTrafficCross(Vector3 pos, float time)",
+      "descriptor": "(Ljava.lang.Vector3;F)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "haltTrafficPath",
+      "typed_signature": "void haltTrafficPath(Vector3 p1, Vector3 p2)",
+      "descriptor": "(Ljava.lang.Vector3;Ljava.lang.Vector3;)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "getNearestCross",
+      "typed_signature": "Vector3 getNearestCross(Vector3 approx, float distance)",
+      "descriptor": "(Ljava.lang.Vector3;F)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "getStartDirection",
+      "typed_signature": "Vector3 getStartDirection(Vector3 from, Vector3 to)",
+      "descriptor": "(Ljava.lang.Vector3;Ljava.lang.Vector3;)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "findRoute",
+      "typed_signature": "float findRoute(Vector3 p1, Vector3 p2)",
+      "descriptor": "(Ljava.lang.Vector3;Ljava.lang.Vector3;)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "getRouteLength",
+      "typed_signature": "float getRouteLength(Vector3 p1, Vector3 p2)",
+      "descriptor": "(Ljava.lang.Vector3;Ljava.lang.Vector3;)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "getRouteLength",
+      "typed_signature": "float getRouteLength()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "getRoutePos",
+      "typed_signature": "Vector3 getRoutePos(float t)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "getRouteDist",
+      "typed_signature": "float getRouteDist(Vector3 pos)",
+      "descriptor": "(Ljava.lang.Vector3;)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "alignToRoad",
+      "typed_signature": "Vector3[] alignToRoad(Vector3 rp)",
+      "descriptor": "(Ljava.lang.Vector3;)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "setPedestrianDensityN",
+      "typed_signature": "void setPedestrianDensityN(float d)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "addPedestrianType",
+      "typed_signature": "void addPedestrianType(GameRef g)",
+      "descriptor": "(Ljava.util.resource.GameRef;)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "remPedestrianType",
+      "typed_signature": "void remPedestrianType(GameRef g)",
+      "descriptor": "(Ljava.util.resource.GameRef;)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "removePedestrianType",
+      "typed_signature": "void removePedestrianType(GameRef g)",
+      "descriptor": "(Ljava.util.resource.GameRef;)"
+    },
+    {
+      "class": "java.util.resource.GroundRef",
+      "method": "pedestrianDistance",
+      "typed_signature": "float pedestrianDistance(Vector3 pos, int typeID)",
+      "descriptor": "(Ljava.lang.Vector3;I)"
+    },
+    {
+      "class": "java.util.resource.ParticleSystem",
+      "method": "init",
+      "typed_signature": "void init(ResourceRef parent, RenderRef type, String alias)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;Ljava.util.resource.RenderRef;Ljava.lang.String;)"
+    },
+    {
+      "class": "java.util.resource.ParticleSystem",
+      "method": "stop",
+      "typed_signature": "void stop()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.ParticleSystem",
+      "method": "setFreq",
+      "typed_signature": "void setFreq(float freq)",
+      "descriptor": "(F)"
+    },
+    {
+      "class": "java.util.resource.ParticleSystem",
+      "method": "setDirectSource",
+      "typed_signature": "void setDirectSource(String alias, Vector3 pos, float rmin, float rmax, Vector3 vel, float vmin, float vmax, float num, String bone)",
+      "descriptor": "(Ljava.lang.String;Ljava.lang.Vector3;FFLjava.lang.Vector3;FFFLjava.lang.String;)"
+    },
+    {
+      "class": "java.util.resource.ParticleSystem",
+      "method": "setSource",
+      "typed_signature": "void setSource(String alias, Vector3 pos, float rmin, float rmax, Vector3 vel, float vmin, float vmax, float freq, String bone)",
+      "descriptor": "(Ljava.lang.String;Ljava.lang.Vector3;FFLjava.lang.Vector3;FFFLjava.lang.String;)"
+    },
+    {
+      "class": "java.util.resource.ParticleSystem",
+      "method": "setCounter",
+      "typed_signature": "void setCounter(String alias, Vector3 pos, float r)",
+      "descriptor": "(Ljava.lang.String;Ljava.lang.Vector3;F)"
+    },
+    {
+      "class": "java.util.resource.ParticleSystem",
+      "method": "getCounter",
+      "typed_signature": "int getCounter(String alias)",
+      "descriptor": "(Ljava.lang.String;)"
+    },
+    {
+      "class": "java.util.resource.ParticleSystem",
+      "method": "delAction",
+      "typed_signature": "void delAction(String alias)",
+      "descriptor": "(Ljava.lang.String;)"
+    },
+    {
+      "class": "java.util.resource.ParticleSystem",
+      "method": "modePermanent",
+      "typed_signature": "void modePermanent(int permanent)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.util.resource.PhysicsRef",
+      "method": "create",
+      "typed_signature": "void create(ResourceRef parent, int typeRid, String alias)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;ILjava.lang.String;)"
+    },
+    {
+      "class": "java.util.resource.PhysicsRef",
+      "method": "createBox",
+      "typed_signature": "void createBox(ResourceRef parent, float x, float y, float z, String alias)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;FFFLjava.lang.String;)"
+    },
+    {
+      "class": "java.util.resource.PhysicsRef",
+      "method": "createSphere",
+      "typed_signature": "void createSphere(ResourceRef parent, float r, String alias)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;FLjava.lang.String;)"
+    },
+    {
+      "class": "java.util.resource.PhysicsRef",
+      "method": "setMatrix",
+      "typed_signature": "void setMatrix(Vector3 pos, Ypr ori)",
+      "descriptor": "(Ljava.lang.Vector3;Ljava.lang.Ypr;)"
+    },
+    {
+      "class": "java.util.resource.PhysicsRef",
+      "method": "setStatic",
+      "typed_signature": "void setStatic(int mode)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.util.resource.PhysicsRef",
+      "method": "getPos",
+      "typed_signature": "Vector3 getPos()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.PhysicsRef",
+      "method": "getVel",
+      "typed_signature": "Vector3 getVel()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.PhysicsRef",
+      "method": "getVel",
+      "typed_signature": "Vector3 getVel(Vector3 pos)",
+      "descriptor": "(Ljava.lang.Vector3;)"
+    },
+    {
+      "class": "java.util.resource.PhysicsRef",
+      "method": "getAngVel",
+      "typed_signature": "Vector3 getAngVel()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.PhysicsRef",
+      "method": "getOri",
+      "typed_signature": "Ypr getOri()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.RenderRef",
+      "method": "create",
+      "typed_signature": "void create(ResourceRef parent, RenderRef type, String alias)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;Ljava.util.resource.RenderRef;Ljava.lang.String;)"
+    },
+    {
+      "class": "java.util.resource.RenderRef",
+      "method": "getBoneId",
+      "typed_signature": "int getBoneId(String alias)",
+      "descriptor": "(Ljava.lang.String;)"
+    },
+    {
+      "class": "java.util.resource.RenderRef",
+      "method": "setMatrix",
+      "typed_signature": "void setMatrix(int bone_id, ResourceRef bone_ref, Vector3 pos, Ypr ori)",
+      "descriptor": "(ILjava.util.resource.ResourceRef;Ljava.lang.Vector3;Ljava.lang.Ypr;)"
+    },
+    {
+      "class": "java.util.resource.RenderRef",
+      "method": "setMatrix",
+      "typed_signature": "void setMatrix(Vector3 pos, Ypr ori)",
+      "descriptor": "(Ljava.lang.Vector3;Ljava.lang.Ypr;)"
+    },
+    {
+      "class": "java.util.resource.RenderRef",
+      "method": "getPos",
+      "typed_signature": "Vector3 getPos()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.RenderRef",
+      "method": "getDetail",
+      "typed_signature": "float getDetail()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.RenderRef",
+      "method": "changeResource",
+      "typed_signature": "void changeResource(ResourceRef oldtexture, ResourceRef newtexture)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;Ljava.util.resource.ResourceRef;)"
+    },
+    {
+      "class": "java.util.resource.RenderRef",
+      "method": "setColor",
+      "typed_signature": "void setColor(int color)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.util.resource.RenderRef",
+      "method": "setLight",
+      "typed_signature": "void setLight(int diffuse, int ambient, int specular)",
+      "descriptor": "(III)"
+    },
+    {
+      "class": "java.util.resource.RenderRef",
+      "method": "setFlare",
+      "typed_signature": "void setFlare(ResourceRef glowtexture, int glowColor, float glowMinSize, float glowMaxSize, int flareCount, int rayCount)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;IFFII)"
+    },
+    {
+      "class": "java.util.resource.RenderRef",
+      "method": "setType",
+      "typed_signature": "void setType(ResourceRef type)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;)"
+    },
+    {
+      "class": "java.util.resource.RenderRef",
+      "method": "getTypeID",
+      "typed_signature": "int getTypeID()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.RenderRef",
+      "method": "lineCreate",
+      "typed_signature": "int lineCreate(ResourceRef parent, ResourceRef type)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;Ljava.util.resource.ResourceRef;)"
+    },
+    {
+      "class": "java.util.resource.RenderRef",
+      "method": "lineAdd",
+      "typed_signature": "void lineAdd(Vector3 pos, Vector3 normal, int color, float width)",
+      "descriptor": "(Ljava.lang.Vector3;Ljava.lang.Vector3;IF)"
+    },
+    {
+      "class": "java.util.resource.RenderRef",
+      "method": "plotRoute",
+      "typed_signature": "int plotRoute(ResourceRef parent, ResourceRef type, int color, float step, Vector3 scale)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;Ljava.util.resource.ResourceRef;IFLjava.lang.Vector3;)"
+    },
+    {
+      "class": "java.util.resource.RenderRef",
+      "method": "addPoints",
+      "typed_signature": "void addPoints(Vector3[] v, float width, Vector3 normal)",
+      "descriptor": "([Ljava.lang.Vector3;FLjava.lang.Vector3;)"
+    },
+    {
+      "class": "java.util.resource.RenderRef",
+      "method": "weld",
+      "typed_signature": "int weld(Vector3 point, Vector3 line, float power)",
+      "descriptor": "(Ljava.lang.Vector3;Ljava.lang.Vector3;F)"
+    },
+    {
+      "class": "java.util.resource.RenderRef",
+      "method": "progress",
+      "typed_signature": "float progress()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "newNative",
+      "typed_signature": "void newNative()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "deleteNative",
+      "typed_signature": "void deleteNative()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "load",
+      "typed_signature": "void load()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "unload",
+      "typed_signature": "void unload()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "cache",
+      "typed_signature": "void cache()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "precache",
+      "typed_signature": "void precache()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "destroy",
+      "typed_signature": "void destroy()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "set",
+      "typed_signature": "void set(int ID)",
+      "descriptor": "(I)"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "set",
+      "typed_signature": "void set(ResourceRef ref)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;)"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "type",
+      "typed_signature": "int type()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "id",
+      "typed_signature": "int id()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "getParentID",
+      "typed_signature": "int getParentID()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "getParent",
+      "typed_signature": "ResourceRef getParent()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "getFirstChild",
+      "typed_signature": "ResourceRef getFirstChild()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "getNextChild",
+      "typed_signature": "ResourceRef getNextChild()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "getWTRoot",
+      "typed_signature": "ResourceRef getWTRoot()",
+      "descriptor": "()"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "makeTexture",
+      "typed_signature": "void makeTexture(ResourceRef parent, String filename)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;Ljava.lang.String;)"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "makeSound",
+      "typed_signature": "void makeSound(ResourceRef parent, String filename)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;Ljava.lang.String;)"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "scaleMesh",
+      "typed_signature": "void scaleMesh(float x, float y, float z)",
+      "descriptor": "(FFF)"
+    },
+    {
+      "class": "java.util.resource.ResourceRef",
+      "method": "duplicate",
+      "typed_signature": "void duplicate(ResourceRef src)",
+      "descriptor": "(Ljava.util.resource.ResourceRef;)"
+    },
+    {
+      "class": "java.util.resource.SfxRef",
+      "method": "nplay",
+      "typed_signature": "int nplay(Vector3 pos, float radius, float pitch, float volume, int flags, int instance)",
+      "descriptor": "(Ljava.lang.Vector3;FFFII)"
+    },
+    {
+      "class": "java.util.resource.SfxRef",
+      "method": "stop",
+      "typed_signature": "void stop(int instance)",
+      "descriptor": "(I)"
+    }
+  ]
+}
