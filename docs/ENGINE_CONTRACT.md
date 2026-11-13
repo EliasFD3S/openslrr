@@ -400,10 +400,24 @@ that association.
 
 ### Derived state
 
-An installed suspension can deform or stretch its render to meet its
-anchors. When it is removed to the inventory, the part must return to its
-rest pose. When it is installed again, recompute from the new configuration.
-Do not confuse that geometric adaptation with persistent damage.
+An installed suspension poses its linked renders on their anchors, and
+the anchors on a wheel carrier move with the suspension at every published
+physics tick. A two-anchor render (`linked a b`) is bound like the original
+`add_linked`: bone00 on anchor `a`, bone01 on anchor `b`. Its frame sits on
+`a` with local +Y toward `b`, and the SCX skin weights deform the mesh
+between the two bones, so a spring's coils close up and a shock absorber
+telescopes instead of the whole mesh scaling. A render descriptor without a
+`skeleton` property binds the BON next to its skinned SCX
+(`parts/running_gear/meshes/spring.bon`, `shock_absorber.bon`). A two-anchor
+render with no such rig, such as a CV shaft, falls back to stretching its
+authored +Y bounds between the anchors. A one-anchor render, such as a
+control arm, moves whole onto its anchor frame: travel without steering when
+that anchor is on a wheel carrier, fixed when it is on the chassis.
+
+When it is removed to the inventory, the part must return to its rest pose
+and its bind skeleton. When it is installed again, recompute from the new
+configuration. Do not confuse that geometric adaptation with persistent
+damage.
 
 Openable panels use the CFG pivots, axes, and limits, with interpolation.
 They must follow the car's transforms and assembly changes without moving
