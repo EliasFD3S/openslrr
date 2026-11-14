@@ -38,3 +38,21 @@ CoupeSport 2.5 (`--spawn-car cars/racers/Baiern.rpk:0x6`), fixed 1/60 s step
 
 The street-tyre launch is slower because that tyre now loses grip under full
 throttle in first gear; the old model gave both tyres the same launch.
+
+## Follow-up: wear gauge, engine break-off, open panels
+
+| Image | Scenario | Before | After |
+| --- | --- | --- | --- |
+| `cmp-hud-crash.png` | Valo City bench crash into a tree, HUD damage gauge enlarged 3× | 51e65b2 | 4ecde29 |
+| `bones-hud-gauge-before-after.png` | Drag_Track, scripted damage: tear 0.15 on the front panels, wear 0.55 on the engine block, wear 0.6 on the rear-left panels, hood and front-left wheel removed | ccbf3eb | 7ffc363 |
+| `cmp-engine.png`, `after-engine-bay.png` | Valo City bench, 95 km/h frontal pole hit | ccbf3eb | 97cb44c |
+| `cmp-door-tree.png`, `cmp-door-tree-later.png` | Valo City, front-left door opened at 32 km/h, driving past a tree | ccbf3eb | f1149ec |
+| `chart-door-closes.png` | Valo City, front-left door opened at 1 s, then throttle 0.3 | ccbf3eb | f1149ec |
+
+| Check | Before | After |
+| --- | --- | --- |
+| Damage gauge after a crash | The whole silhouette is one colour, from the worst panel | Each blip shows its own part (wear × tear, as `Part.getConditionNoAttach`); lost parts have no blip; the outline is neutral |
+| 95 km/h pole hit | The engine stays in the car | The engine mount fails (408 kJ at 0.76 m); the block and the 19 parts on it (177 kg) are thrown out at 26.4 m/s. The car is 1297 kg afterwards |
+| 73 km/h tree hit | — | The engine stays (mount 0.43, then 0.37 after a second hit) |
+| Open door against a tree trunk | Passes through and stays on | Torn off at the trunk; the car drives on without it |
+| Open door while pulling away at throttle 0.3 | Stays at 65° | Swings shut and latches at about 17 km/h |
