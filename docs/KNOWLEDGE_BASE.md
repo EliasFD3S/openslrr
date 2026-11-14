@@ -272,9 +272,10 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
    (`include/slrr/vehicle_dynamics.hpp:VehicleDynamics`). At most four host
    ticks run per frame; excess time is dropped.
 4. Wall contact is `collide_chassis`: four 0.18 m spheres against the static
-   index. It runs only for a released chassis whose `drive.torque` is set,
-   and `configure_drive` sets it only for the player-controlled car with
-   gear ratios, a dyno and a positive maximum RPM. Other cars get no wall
+   index. It runs only for a released chassis whose `drive.torque` is set
+   or whose engine flew out (`engine_lost`), and `configure_drive` sets the
+   torque only for the player-controlled car with gear ratios, a dyno and a
+   positive maximum RPM. Other cars get no wall
    collision, impact damage or mileage
    (`src/resources/part_runtime.cpp:advance_chassis_tick`,
    `src/resources/part_runtime.cpp:configure_drive`).
@@ -292,6 +293,11 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
    the chassis cage has settled (`src/resources/part_runtime.cpp:settle_wheel_mounts`),
    both detached by `src/resources/part_runtime.cpp:detach_panel`. The refreshed
    chassis rests that corner on its remaining hub hardware.
+8. A big impact near the engine frees the `dynodata` child and everything on it
+   as one loose body with its pre-impact velocity
+   (`src/resources/part_runtime.cpp:damage_engine_mount`,
+   `src/physics/wheel_mount.cpp:pre_contact_velocity`). Without a dyno the car
+   has no drive torque; `engine_lost` keeps `collide_chassis` running for it.
 8. A part on a CFG `flap` slot (doors, hood, trunk) is a latched hinged plate
    (`src/physics/flap_hinge.cpp:flap_step`). `Part.flap`/`flap_toggle` drive
    it, `damage_chassis` hands each impact to

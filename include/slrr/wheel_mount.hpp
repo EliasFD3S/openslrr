@@ -26,6 +26,19 @@ struct WheelMountTuning {
 double contact_impulse_energy(const RigidBody& body, Vec3 point, Vec3 normal,
                               double closing_speed, double restitution = .12);
 
+// The engine mount, SLRR_rev 77b0fb6 damageImpact for the engine: the load
+// reaches 1.1 m, the body shields the engine (weight 0.5 exp(-(d / 1.1 m)^2))
+// and the block fails at 120 kJ of weighted energy, i.e. 240 kJ at the engine
+// itself. No hardpoint travel criterion.
+inline constexpr WheelMountTuning kEngineMountTuning{0.0, 240000.0, 1.1};
+
+// Velocity of `point` just before the contact that stopped `closing_speed`
+// along `normal` at `contact` (world frame, restitution as in
+// contact_impulse_energy): the body's current point velocity with that
+// normal impulse taken back out. Friction is not undone.
+Vec3 pre_contact_velocity(const RigidBody& body, Vec3 contact, Vec3 normal,
+                          double closing_speed, Vec3 point, double restitution = .12);
+
 // Condition after one update. `shift` is the settled chassis-cage
 // displacement of the hardpoint beyond its value when the wheel was fitted
 // (m), `energy` the impact energy (J) and `distance` the horizontal distance
