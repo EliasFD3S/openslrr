@@ -3,6 +3,7 @@
 #include "slrr/scene_collision.hpp"
 #include <limits>
 #include "slrr/gameref.hpp"
+#include "slrr/metrics.hpp"
 #include "slrr/part_config.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/rpk_index.hpp"
@@ -43,6 +44,21 @@ std::unordered_map<uint32_t, std::shared_ptr<const ScxGeometry>> g_meshes;
 std::unordered_map<uint32_t, std::shared_ptr<const ScxGeometry>> g_overrides;
 std::unordered_map<uint32_t, std::shared_ptr<const ScxGeometry>> g_collision_overrides;
 std::unordered_map<uint32_t, std::string> g_texture_paths;
+struct TriangleKey {
+  std::array<std::uint32_t, 3> vertices{};
+  bool operator==(const TriangleKey&) const = default;
+};
+struct TriangleKeyHash {
+  std::size_t operator()(const TriangleKey& key) const noexcept {
+    std::uint64_t hash = 1469598103934665603ull;
+    for (const auto value : key.vertices) {
+      hash ^= value;
+      hash *= 1099511628211ull;
+    }
+    return static_cast<std::size_t>(hash);
+  }
+};
+
 struct StaticMesh {
   std::vector<float> positions;
   std::vector<uint32_t> indices;
@@ -50,9 +66,22 @@ struct StaticMesh {
   float cell_size = 2.f;
   std::unordered_map<uint64_t, std::vector<uint32_t>> cells;
   std::vector<uint32_t> large_triangles;
+  std::unordered_map<TriangleKey, std::uint32_t, TriangleKeyHash> triangle_indices;
+  std::vector<std::optional<std::uint32_t>> materials;
 };
 std::vector<StaticMesh> g_static;
 bool g_static_enabled = true;
+const bool g_metrics_registered = [] {
+  return metrics::register_provider([](void*, std::vector<metrics::Value>& values) {
+    const auto stats = scene_instances_cache_stats();
+    values.push_back({"scene.meshes_cached", static_cast<std::int64_t>(stats.meshes), metrics::Kind::Gauge});
+    values.push_back({"scene.mesh_overrides", static_cast<std::int64_t>(stats.mesh_overrides), metrics::Kind::Gauge});
+    values.push_back({"scene.collision_overrides", static_cast<std::int64_t>(stats.collision_overrides), metrics::Kind::Gauge});
+    values.push_back({"scene.texture_paths_cached", static_cast<std::int64_t>(stats.texture_paths), metrics::Kind::Gauge});
+    values.push_back({"scene.ground_prop_maps", static_cast<std::int64_t>(stats.ground_prop_maps), metrics::Kind::Gauge});
+    values.push_back({"scene.static_meshes", static_cast<std::int64_t>(stats.static_meshes), metrics::Kind::Gauge});
+  }) != 0;
+}();
 uint64_t floor_cell(int32_t x, int32_t z) {
   return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) |
          static_cast<uint32_t>(z);
@@ -158,6 +187,7 @@ int32_t cell_coordinate(double position, const StaticMesh& mesh) {
 struct FloorMesh {
   std::shared_ptr<const ScxGeometry> source;
   std::array<float, 16> matrix{};
+  physics::ContactIdentity identity;
   StaticMesh mesh;
   std::vector<void *> ancestors;
 };
@@ -166,6 +196,13 @@ bool g_floor_prepared = false;
 uint64_t g_floor_builds = 0;
 uint64_t g_floor_revision = 1;
 void index_floor(StaticMesh &mesh) {
+  mesh.triangle_indices.clear();
+  for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+    const TriangleKey key{{mesh.indices[i], mesh.indices[i + 1], mesh.indices[i + 2]}};
+    const auto triangle = static_cast<std::uint32_t>(i / 3);
+    auto [it, inserted] = mesh.triangle_indices.emplace(key, triangle);
+    if (!inserted && it->second != triangle) it->second = UINT32_MAX;
+  }
   // Static garage triangles are indexed once in script space. Physics asks
   // for several support samples per 240 Hz tick; rescanning the whole shell
   // for every wheel/corner is unnecessary.
@@ -213,11 +250,39 @@ void index_floor(StaticMesh &mesh) {
   }
 }
 
+std::optional<std::uint32_t> original_triangle(
+    const StaticMesh& mesh, const std::vector<std::uint32_t>& indices, std::size_t offset) {
+  if (offset + 2 >= indices.size()) return std::nullopt;
+  const auto found = mesh.triangle_indices.find(
+      TriangleKey{{indices[offset], indices[offset + 1], indices[offset + 2]}});
+  if (found == mesh.triangle_indices.end() || found->second == UINT32_MAX)
+    return std::nullopt;
+  return found->second;
+}
+
+physics::ContactIdentity contact_identity(
+    const StaticMesh& mesh, const std::vector<std::uint32_t>& indices,
+    std::size_t offset, const physics::ContactIdentity& base) {
+  auto result = base;
+  result.triangle = original_triangle(mesh, indices, offset);
+  if (result.triangle && *result.triangle < mesh.materials.size())
+    result.material = mesh.materials[*result.triangle];
+  return result;
+}
+
+std::vector<std::optional<std::uint32_t>> material_identities(const ScxGeometry& geometry) {
+  std::vector<std::optional<std::uint32_t>> result(geometry.indices.size() / 3);
+  for (std::size_t i = 0; i < result.size(); ++i)
+    result[i] = scene_mesh_material(geometry, static_cast<std::uint32_t>(i));
+  return result;
+}
+
 StaticMesh bake_static_mesh(const ScxGeometry& geo, const PartMatrix& matrix) {
   StaticMesh mesh;
   mesh.scale = 1.f;
   if (geo.indices.size() > 100000) mesh.cell_size = 8.f;
   mesh.indices = geo.indices;
+  mesh.materials = material_identities(geo);
   mesh.positions.resize(geo.positions.size());
   for (size_t i = 0; i + 2 < geo.positions.size(); i += 3) {
     const float x = geo.positions[i] * geo.position_scale;
@@ -236,6 +301,7 @@ StaticMesh transform_static_mesh(const StaticMesh& source, const PartMatrix& mat
   mesh.scale = 1.f;
   mesh.cell_size = source.cell_size;
   mesh.indices = source.indices;
+  mesh.materials = source.materials;
   mesh.positions.resize(source.positions.size());
   for (size_t i = 0; i + 2 < source.positions.size(); i += 3) {
     const float x = source.positions[i] * source.scale;
@@ -260,6 +326,11 @@ void merge_static_meshes(std::vector<StaticMesh>& meshes) {
       combined.positions.push_back(value * source.scale);
     combined.indices.reserve(combined.indices.size() + source.indices.size());
     for (uint32_t index : source.indices) combined.indices.push_back(first + index);
+    // Keep one material slot per source triangle so identities stay aligned.
+    const std::size_t triangles = source.indices.size() / 3;
+    for (std::size_t i = 0; i < triangles; ++i)
+      combined.materials.push_back(i < source.materials.size() ? source.materials[i]
+                                                               : std::nullopt);
   }
   if (combined.indices.size() > 100000) combined.cell_size = 8.f;
   index_floor(combined);
@@ -1035,10 +1106,11 @@ std::vector<GameRefState*> render_nodes_in_world(void* root, bool physics = fals
   return nodes;
 }
 
-void floor_triangles(const float *m, const std::vector<float> &pos,
+void floor_triangles(const StaticMesh& mesh, const float *m,
+                     const std::vector<float> &pos,
                      const std::vector<uint32_t> &idx, float scale, float x,
                      float z, float below, float &best, bool &hit,
-                     float *normal) {
+                     SceneFloorHit& sample, const physics::ContactIdentity& base) {
   if (!m || idx.size() < 3 || pos.size() < 9)
     return;
   for (size_t t = 0; t + 2 < idx.size(); t += 3) {
@@ -1085,19 +1157,18 @@ void floor_triangles(const float *m, const std::vector<float> &pos,
     if (!hit || y > best) {
       best = y;
       hit = true;
-      if (normal) {
-        const float ax = v[1][0] - v[0][0], ay = v[1][1] - v[0][1],
-                    az = v[1][2] - v[0][2];
-        const float bx = v[2][0] - v[0][0], by = v[2][1] - v[0][1],
-                    bz = v[2][2] - v[0][2];
-        float nx = ay * bz - az * by, ny = az * bx - ax * bz,
-              nz = ax * by - ay * bx;
-        const float size = std::sqrt(nx * nx + ny * ny + nz * nz);
-        const float sign = ny < 0 ? -1.f : 1.f;
-        normal[0] = nx / size * sign;
-        normal[1] = ny / size * sign;
-        normal[2] = nz / size * sign;
-      }
+      const float ax = v[1][0] - v[0][0], ay = v[1][1] - v[0][1],
+                  az = v[1][2] - v[0][2];
+      const float bx = v[2][0] - v[0][0], by = v[2][1] - v[0][1],
+                  bz = v[2][2] - v[0][2];
+      float nx = ay * bz - az * by, ny = az * bx - ax * bz,
+            nz = ax * by - ay * bx;
+      const float size = std::sqrt(nx * nx + ny * ny + nz * nz);
+      const float sign = ny < 0 ? -1.f : 1.f;
+      sample.normal[0] = nx / size * sign;
+      sample.normal[1] = ny / size * sign;
+      sample.normal[2] = nz / size * sign;
+      sample.identity = contact_identity(mesh, idx, t, base);
     }
   }
 }
@@ -1261,6 +1332,8 @@ void scene_instances_prepare_physics() {
         }
       }
       std::shared_ptr<const ScxGeometry> geo;
+      // Only the render mesh of the placement itself identifies an authored mesh.
+      std::optional<std::uint32_t> source_mesh;
       if (n->physics_shape == PhysicsShape::Box ||
           n->physics_shape == PhysicsShape::Sphere) {
         geo = primitive_geometry(*n);
@@ -1286,11 +1359,14 @@ void scene_instances_prepare_physics() {
       } else {
         const auto collision = g_collision_overrides.find(id);
         geo = collision != g_collision_overrides.end() ? collision->second : geometry(id);
+        if (collision == g_collision_overrides.end()) source_mesh = id;
       }
       if (!geo || !geo->skin_weights.empty())
         continue;
       active.insert(n->key);
       auto &cached = g_floor_meshes[n->key];
+      cached.identity.resource = id;
+      cached.identity.mesh = source_mesh;
       if (cached.source != geo || cached.matrix != m) {
         cached.source = geo;
         cached.matrix = m;
@@ -1372,7 +1448,9 @@ bool triangle_vertices(const std::vector<float>& positions,
 void sweep_triangles(const std::vector<float>& positions, double scale,
                      const std::vector<uint32_t> &indices,
                      Vec3 start, Vec3 delta, double radius, SceneSphereHit &hit,
-                     float max_vertical_normal) {
+                     float max_vertical_normal, const StaticMesh* indexed,
+                     const ScxGeometry* source,
+                     const physics::ContactIdentity& base) {
   const Vec3 end = start + delta;
   for (size_t i = 0; i + 2 < indices.size(); i += 3) {
     Vec3 v[3];
@@ -1387,7 +1465,8 @@ void sweep_triangles(const std::vector<float>& positions, double scale,
     // Conservative advancement against the face, edges and vertices.
     for (int step = 0; step < 12 && t < hit.fraction; ++step) {
       const Vec3 p = start + delta * t;
-      const Vec3 offset = p - closest_on_triangle(p, v, n);
+      const Vec3 closest_point = closest_on_triangle(p, v, n);
+      const Vec3 offset = p - closest_point;
       const double distance = offset.length();
       const Vec3 normal = distance > 1e-8 ? offset / distance
                                          : (delta.dot(n) > 0.0 ? -n : n);
@@ -1400,6 +1479,16 @@ void sweep_triangles(const std::vector<float>& positions, double scale,
         hit.normal[1] = static_cast<float>(normal.y);
         hit.normal[2] = static_cast<float>(normal.z);
         hit.penetration = static_cast<float>(std::max(0., radius - distance));
+        hit.point[0] = static_cast<float>(closest_point.x);
+        hit.point[1] = static_cast<float>(closest_point.y);
+        hit.point[2] = static_cast<float>(closest_point.z);
+        if (indexed) {
+          hit.identity = contact_identity(*indexed, indices, i, base);
+        } else {
+          hit.identity = base;
+          hit.identity.triangle = static_cast<std::uint32_t>(i / 3);
+          if (source) hit.identity.material = scene_mesh_material(*source, hit.identity.triangle);
+        }
         break;
       }
       t += (distance - radius) / closing;
@@ -1418,7 +1507,7 @@ bool scene_mesh_sweep_sphere(const ScxGeometry& mesh, Vec3 start, Vec3 movement,
       return false;
   const auto fraction = hit.fraction;
   sweep_triangles(mesh.positions, mesh.position_scale, mesh.indices, start, movement,
-                  radius, hit, 1.f);
+                  radius, hit, 1.f, nullptr, &mesh, {});
   return hit.fraction < fraction;
 }
 
@@ -1450,7 +1539,8 @@ bool scene_instances_sweep_sphere(const float start[3], const float delta[3],
   if (!g_floor_prepared) scene_instances_prepare_physics();
   hit = {};
   const Vec3 to = from + movement;
-  const auto sweep_mesh = [&](const StaticMesh &mesh) {
+  const auto sweep_mesh = [&](const StaticMesh &mesh,
+                              const physics::ContactIdentity& identity) {
     const int32_t x0 = cell_coordinate(std::min(from.x, to.x) - radius, mesh);
     const int32_t x1 = cell_coordinate(std::max(from.x, to.x) + radius, mesh);
     const int32_t z0 = cell_coordinate(std::min(from.z, to.z) - radius, mesh);
@@ -1460,16 +1550,17 @@ bool scene_instances_sweep_sphere(const float start[3], const float delta[3],
         const auto cell = mesh.cells.find(floor_cell(x, z));
         if (cell != mesh.cells.end())
           sweep_triangles(mesh.positions, mesh.scale, cell->second, from, movement, radius, hit,
-                          max_vertical_normal);
+                          max_vertical_normal, &mesh, nullptr, identity);
       }
     sweep_triangles(mesh.positions, mesh.scale, mesh.large_triangles, from, movement, radius, hit,
-                    max_vertical_normal);
+                    max_vertical_normal, &mesh, nullptr, identity);
   };
   if (g_static_enabled)
-    for (const auto &mesh : g_static) sweep_mesh(mesh);
+    for (const auto &mesh : g_static) sweep_mesh(mesh, {});
   for (const auto& [key, ground] : g_ground_collision)
-    for (const auto& mesh : ground.meshes) sweep_mesh(mesh);
-  for (const auto &entry : g_floor_meshes) sweep_mesh(entry.second.mesh);
+    for (const auto& mesh : ground.meshes) sweep_mesh(mesh, {});
+  for (const auto &entry : g_floor_meshes)
+    sweep_mesh(entry.second.mesh, entry.second.identity);
   return hit.fraction < 1.f;
 }
 
@@ -1631,20 +1722,20 @@ bool scene_instances_sample_floor(float x, float z, float below, void *ignore,
       const auto cell =
           mesh.cells.find(floor_cell(cell_coordinate(x, mesh), cell_coordinate(z, mesh)));
       if (cell != mesh.cells.end())
-        floor_triangles(eye, mesh.positions, cell->second, mesh.scale, x, z,
-                        below, best, hit, sample.normal);
-      floor_triangles(eye, mesh.positions, mesh.large_triangles, mesh.scale, x,
-                      z, below, best, hit, sample.normal);
+        floor_triangles(mesh, eye, mesh.positions, cell->second, mesh.scale, x, z,
+                        below, best, hit, sample, {});
+      floor_triangles(mesh, eye, mesh.positions, mesh.large_triangles, mesh.scale, x,
+                      z, below, best, hit, sample, {});
     }
   for (const auto& [key, ground] : g_ground_collision) {
     for (const auto& mesh : ground.meshes) {
       const auto cell = mesh.cells.find(floor_cell(cell_coordinate(x, mesh),
                                                    cell_coordinate(z, mesh)));
       if (cell != mesh.cells.end())
-        floor_triangles(eye, mesh.positions, cell->second, mesh.scale, x, z,
-                        below, best, hit, sample.normal);
-      floor_triangles(eye, mesh.positions, mesh.large_triangles, mesh.scale, x,
-                      z, below, best, hit, sample.normal);
+        floor_triangles(mesh, eye, mesh.positions, cell->second, mesh.scale, x, z,
+                        below, best, hit, sample, {});
+      floor_triangles(mesh, eye, mesh.positions, mesh.large_triangles, mesh.scale, x,
+                      z, below, best, hit, sample, {});
     }
   }
   for (const auto &entry : g_floor_meshes) {
@@ -1656,10 +1747,10 @@ bool scene_instances_sample_floor(float x, float z, float below, void *ignore,
     auto cell =
         mesh.cells.find(floor_cell(cell_coordinate(x, mesh), cell_coordinate(z, mesh)));
     if (cell != mesh.cells.end())
-      floor_triangles(eye, mesh.positions, cell->second, mesh.scale, x, z,
-                      below, best, hit, sample.normal);
-    floor_triangles(eye, mesh.positions, mesh.large_triangles, mesh.scale, x, z,
-                    below, best, hit, sample.normal);
+      floor_triangles(mesh, eye, mesh.positions, cell->second, mesh.scale, x, z,
+                      below, best, hit, sample, cached.identity);
+    floor_triangles(mesh, eye, mesh.positions, mesh.large_triangles, mesh.scale, x, z,
+                    below, best, hit, sample, cached.identity);
   }
   if (!hit)
     return false;
@@ -2108,6 +2199,7 @@ void scene_instances_add_static_mesh(const ScxGeometry &geo) {
   StaticMesh mesh;
   mesh.positions = geo.positions;
   mesh.indices = geo.indices;
+  mesh.materials = material_identities(geo);
   mesh.scale = geo.position_scale;
   index_floor(mesh);
   ++g_floor_revision;
@@ -2709,5 +2801,9 @@ void *scene_instances_pick(const float origin[3], const float direction[3], floa
 
 void scene_visit_gc_roots(const GcRootVisitor& visit) {
   visit(g_world); visit(g_sky);
+}
+SceneInstanceCacheStats scene_instances_cache_stats() {
+  return {g_meshes.size(), g_overrides.size(), g_collision_overrides.size(),
+          g_texture_paths.size(), g_ground_props.size(), g_static.size()};
 }
 } // namespace slrr

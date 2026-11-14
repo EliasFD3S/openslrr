@@ -27,6 +27,63 @@ struct ControllerInput {
   std::unordered_map<int, float> forced_axes;
 };
 
+enum class InputBindingSource : std::int32_t {
+  MissingController = 0,
+  Unbound = 1,
+  Forced = 2,
+  Profile = 3,
+  XInputFallback = 4,
+  ProfileAndXInputFallback = 5,
+};
+enum class InputFallbackStatus : std::int32_t {
+  NotEligible = 0,
+  Available = 1,
+  SuppressedByXInputProfile = 2,
+  Overridden = 3,
+};
+struct InputAxisBindingDiagnostics {
+  std::int32_t axis = 0;
+  InputBindingSource source = InputBindingSource::MissingController;
+  InputFallbackStatus fallback = InputFallbackStatus::NotEligible;
+  std::int32_t profile_bindings = 0, xinput_bindings = 0;
+  bool smoothed = false;
+};
+
+// Pure binding inspection: it does not read keys, text history, or axis values.
+inline InputAxisBindingDiagnostics input_axis_binding_diagnostics(
+    const ControllerInput* input, std::int32_t axis) {
+  InputAxisBindingDiagnostics out;
+  out.axis = axis;
+  if (!input) return out;
+  out.smoothed = input->smoothing.contains(axis);
+  const bool forced = input->forced_axes.contains(axis);
+  bool any_xinput = false;
+  for (const auto& binding : input->bindings) {
+    any_xinput |= binding.device == 2;
+    if (binding.from == binding.to) continue;
+    if (binding.axis != axis) continue;
+    ++out.profile_bindings;
+    out.xinput_bindings += binding.device == 2;
+  }
+  const bool eligible = axis == 1 || axis == 28 || axis == 29 || axis == 48;
+  out.fallback = forced ? InputFallbackStatus::Overridden
+      : !eligible ? InputFallbackStatus::NotEligible
+      : any_xinput ? InputFallbackStatus::SuppressedByXInputProfile
+      : InputFallbackStatus::Available;
+  out.source = forced ? InputBindingSource::Forced
+      : out.profile_bindings == 0
+          ? (out.fallback == InputFallbackStatus::Available
+                 ? InputBindingSource::XInputFallback : InputBindingSource::Unbound)
+          : (out.fallback == InputFallbackStatus::Available
+                 ? InputBindingSource::ProfileAndXInputFallback : InputBindingSource::Profile);
+  return out;
+}
+
+const char* input_binding_source_name(InputBindingSource source);
+const char* input_fallback_status_name(InputFallbackStatus status);
+InputAxisBindingDiagnostics host_input_controller_axis_diagnostics(
+    const Object* controller, std::int32_t axis);
+
 // Shared Win32 → script and camera orbit input.
 struct HostInput {
   // Instantaneous look axes (consumed / decayed each tick).

@@ -1,8 +1,27 @@
 cmake_minimum_required(VERSION 3.21)
 project(slrr_host LANGUAGES CXX)
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+option(SLRR_ENABLE_ASAN "Instrument slrr_host and test targets with MSVC AddressSanitizer" OFF)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/ASan.cmake")
+if(SLRR_ENABLE_ASAN AND NOT MSVC)
+  message(FATAL_ERROR "SLRR_ENABLE_ASAN currently supports MSVC only")
+endif()
+if(SLRR_ENABLE_ASAN)
+  include(CheckCXXSourceCompiles)
+  set(CMAKE_REQUIRED_FLAGS "/fsanitize=address")
+  check_cxx_source_compiles("int main() { return 0; }" SLRR_MSVC_ASAN_LINKS)
+  unset(CMAKE_REQUIRED_FLAGS)
+  if(NOT SLRR_MSVC_ASAN_LINKS)
+    message(FATAL_ERROR
+      "MSVC x64 AddressSanitizer compile/link probe failed. Install the Visual "
+      "Studio C++ AddressSanitizer component for the active x64 toolset.")
+  endif()
+endif()
 
 if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR
    (MSVC AND NOT CMAKE_CXX_COMPILER_ARCHITECTURE_ID STREQUAL "x64"))
@@ -25,16 +44,23 @@ set_target_properties(slrr_script_compiler PROPERTIES CXX_STANDARD 17)
 target_include_directories(slrr_script_compiler PUBLIC third_party/slrrc)
 target_compile_options(slrr_script_compiler PRIVATE /utf-8 /fp:precise)
 
-add_executable(compile_game_sources tools/compile_game_sources.cpp
-  src/jvm/script_compiler.cpp src/jvm/tufa.cpp)
-target_link_libraries(compile_game_sources PRIVATE slrr_script_compiler)
-target_include_directories(compile_game_sources PRIVATE include)
-target_compile_options(compile_game_sources PRIVATE /utf-8)
+# tools/ is git-ignored, so a clean checkout (CI) has no driver source.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/compile_game_sources.cpp")
+  add_executable(compile_game_sources tools/compile_game_sources.cpp
+    src/jvm/script_compiler.cpp src/jvm/tufa.cpp)
+  target_link_libraries(compile_game_sources PRIVATE slrr_script_compiler)
+  target_include_directories(compile_game_sources PRIVATE include)
+  target_compile_options(compile_game_sources PRIVATE /utf-8)
+endif()
 
 add_executable(slrr_host
   src/main.cpp
   src/jvm/script_compiler.cpp
   src/platform/game_root.cpp
+  src/platform/diagnostics.cpp
+  src/platform/metrics.cpp
+  src/platform/platform_telemetry.cpp
+  src/platform/crash_logging.cpp
   src/platform/frame_profiler.cpp
   src/platform/host_input.cpp
   src/platform/host_sfx.cpp
@@ -44,6 +70,7 @@ add_executable(slrr_host
   src/platform/video_fmv.cpp
   src/platform/video_fmv_vlc.cpp
   src/natives/native_registry.cpp
+  src/natives/file_faults.cpp
   src/natives/natives_boot.cpp
   src/natives/natives_io.cpp
   src/natives/natives_lang.cpp
@@ -92,6 +119,7 @@ add_executable(slrr_host
   src/physics/tire_model.cpp
   src/physics/dyno_model.cpp
   src/physics/vehicle_dynamics.cpp
+  src/physics/physics_telemetry.cpp
   src/physics/scene_collision.cpp
   src/physics/deformation_cage.cpp
   src/physics/suspension_geometry.cpp
@@ -117,6 +145,7 @@ execute_process(
           -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/write_version.cmake)
 
 target_include_directories(slrr_host PRIVATE include "${CMAKE_BINARY_DIR}/generated")
+slrr_enable_asan(slrr_host)
 
 if(MSVC)
   target_compile_options(slrr_host PRIVATE /W3 /utf-8)
@@ -203,9 +232,13 @@ target_include_directories(slrr_host PRIVATE
   "${SLRR_SHADER_OUT}"
   "${BIMG_DIR}/3rdparty"
 )
-target_link_libraries(slrr_host PRIVATE bgfx bx bimg slrr_script_compiler)
+target_link_libraries(slrr_host PRIVATE bgfx bx bimg dbghelp slrr_script_compiler)
 target_compile_features(slrr_host PRIVATE cxx_std_20)
-target_compile_definitions(slrr_host PRIVATE SLRR_HAS_LIBBGFX=1)
+target_compile_definitions(slrr_host PRIVATE SLRR_HAS_LIBBGFX=1 SLRR_BUILD_CONFIGURATION="$<CONFIG>")
 message(STATUS "slrr_host: libbgfx + mesh shaders enabled")
 
 install(TARGETS slrr_host RUNTIME DESTINATION bin)
+
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

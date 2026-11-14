@@ -195,6 +195,7 @@ class LibBgfxBackend final : public IRenderBackend {
 
 
   void upload_part(ScenePart& part);
+  void capture_frame_stats();
   void upload_skin(ScenePart& part);
   // Renderer copy only: sections with identical materials become one group
   // over a reordered index buffer. Meshes with blended sections are kept.
@@ -291,6 +292,7 @@ class LibBgfxBackend final : public IRenderBackend {
   int32_t width_ = 0;
   int32_t height_ = 0;
   int32_t frames_ = 0;
+  std::uint64_t renderer_generation_ = 0;
   float mesh_min_[3] = {0, 0, 0};
   float mesh_max_[3] = {0, 0, 0};
   std::vector<ScenePart> parts_;

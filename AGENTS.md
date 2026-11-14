@@ -14,6 +14,9 @@ compatibility pitfalls. Then read the specialized documentation for your task:
 - Formats, mechanics and lessons from SLRR_rev and draft PR #3:
   [EXTERNAL_RESEARCH.md](docs/EXTERNAL_RESEARCH.md).
 - Proposed roadmap: [MILESTONES.md](docs/MILESTONES.md).
+- Tests, diagnostics and crash logging: [INSTRUMENTATION.md](docs/INSTRUMENTATION.md)
+  and [CRASH_LOGGING.md](docs/CRASH_LOGGING.md).
+- Worktree-per-agent workflow: [MULTIAGENT.md](docs/MULTIAGENT.md).
 
 SLRR_rev (https://github.com/nedobylskiy/SLRR_rev) implements most game
 mechanics. Before implementing a missing native or mechanic, check whether
@@ -29,6 +32,13 @@ rather than adding VM exceptions for a specific car or screen. Java changes
 must remain within the scope authorized by the user and must be included in
 the distributed patch when needed.
 
+Shared CTest infrastructure lives in `tests/`: configure, build the
+`slrr_tests` target, then run
+`ctest --test-dir build-bgfx-x64 -C Release --output-on-failure --no-tests=error`.
+Add focused regression tests with fixes, especially for parsers, VM semantics,
+scheduler/GC behavior and deterministic physics. Use a separate build
+directory for every worktree and never run concurrent builds in one directory.
+
 Update the relevant documentation whenever a contract or responsibility changes.
-Report compilation and in-game validation separately; neither result alone
-establishes complete compatibility.
+Report compilation, automated tests, and in-game validation separately; none
+of these results alone establishes complete compatibility.

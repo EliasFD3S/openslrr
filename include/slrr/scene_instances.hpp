@@ -2,16 +2,32 @@
 
 #include "slrr/scx_mesh.hpp"
 #include "slrr/scene_sun.hpp"
+#include "slrr/vehicle_dynamics.hpp"
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
 namespace slrr {
 class RpkIndex;
 struct GameRefState;
-namespace physics { struct Vec3; }
+
+// Resolve an authored SCX group material for an original mesh triangle. Missing
+// triangle/group coverage is unknown, never a synthesized material identity.
+inline std::optional<std::uint32_t> scene_mesh_material(
+    const ScxGeometry& geometry, std::optional<std::uint32_t> triangle) {
+  if (!triangle || *triangle > (UINT32_MAX - 2) / 3) return std::nullopt;
+  const std::uint32_t first = *triangle * 3;
+  for (const auto& group : geometry.groups) {
+    if (first < group.index_start) continue;
+    const auto offset = first - group.index_start;
+    if (offset < group.index_count) return group.material_type;
+  }
+  return std::nullopt;
+}
 
 struct SceneInstance {
   SceneSun lighting;
@@ -56,6 +72,16 @@ struct SceneShadowDecal {
   float uv[4] = {0.f, 0.f, 1.f, 1.f};
   std::string texture;
 };
+
+struct SceneInstanceCacheStats {
+  std::size_t meshes = 0;
+  std::size_t mesh_overrides = 0;
+  std::size_t collision_overrides = 0;
+  std::size_t texture_paths = 0;
+  std::size_t ground_prop_maps = 0;
+  std::size_t static_meshes = 0;
+};
+SceneInstanceCacheStats scene_instances_cache_stats();
 
 void scene_instances_set_resources(const RpkIndex *resources);
 void scene_instances_set_envmap(uint32_t resource);
@@ -154,7 +180,9 @@ void scene_instances_prepare_physics();
 struct SceneSphereHit {
   float fraction = 1.f;
   float normal[3] = {};
+  float point[3] = {};
   float penetration = 0.f;
+  physics::ContactIdentity identity;
 };
 // Sweep through the indexed static scene in script metres.
 bool scene_instances_sweep_sphere(const float start[3], const float delta[3],
@@ -189,6 +217,7 @@ uint64_t scene_instances_floor_revision();
 struct SceneFloorHit {
   float height = 0;
   float normal[3] = {0, 1, 0};
+  physics::ContactIdentity identity;
 };
 // Renderer-space projection onto the sampled receiver, along the scene light.
 bool scene_shadow_projection(const float *script_frame,

@@ -468,10 +468,15 @@ def host_registrations() -> dict[tuple[str, str, str], str]:
                     raise SystemExit(
                         f"native coverage: {relative}:{line}: {error}; extend "
                         "scripts/render_native_coverage.py or use a literal registration")
-                handler = ",".join(args[3:]).strip()
+                rest = [arg.strip() for arg in args[3:]]
+                # An optional trailing NativeImplementation tag is not the handler.
+                tagged_noop = False
+                if len(rest) > 1 and rest[-1].startswith("NativeImplementation::"):
+                    tagged_noop = rest.pop() == "NativeImplementation::ExplicitNoop"
+                handler = ",".join(rest).strip()
                 moved = re.fullmatch(r"std::move\((\w+)\)", handler)
                 handler = params.get(moved.group(1) if moved else handler, handler).strip()
-                kind = "noop" if handler == "native_noop" else "body"
+                kind = "noop" if tagged_noop or handler == "native_noop" else "body"
                 if found.get(key, kind) != kind:
                     raise SystemExit(f"native coverage: conflicting registrations for {key}")
                 found[key] = kind

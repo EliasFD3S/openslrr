@@ -1,0 +1,29 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-x64-release",
+      "displayName": "Windows x64 Release",
+      "description": "Visual Studio 2022 x64 build with pinned bgfx",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build-bgfx-x64"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-x64-release",
+      "displayName": "Build slrr_host Release",
+      "configurePreset": "windows-x64-release",
+      "configuration": "Release",
+      "targets": [
+        "slrr_host"
+      ]
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 #include "slrr/host_sfx.hpp"
+#include "slrr/metrics.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cctype>
@@ -127,6 +128,15 @@ bool read_wave(const std::string &path, std::vector<uint8_t> &format,
              format.size();
 }
 #endif
+const bool g_metrics_registered = [] {
+  return metrics::register_provider([](void*, std::vector<metrics::Value>& values) {
+    const auto stats = host_sfx_stats();
+    values.push_back({"sfx.voices_active", static_cast<std::int64_t>(stats.active),
+                      metrics::Kind::Gauge});
+    values.push_back({"sfx.voices_coalesced",
+                      static_cast<std::int64_t>(stats.coalesced), metrics::Kind::Counter});
+  }) != 0;
+}();
 } // namespace
 void host_sfx_set_game_root(const std::string &path) {
   root = path;

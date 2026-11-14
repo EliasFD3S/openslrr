@@ -5,9 +5,11 @@ Baseline snapshot from 9 November 2026, incrementally updated 12 November.
 bound, and `GameRef.setActiveCollision` is no longer an explicit no-op.
 Earlier increments covered the resource and vehicle bindings, the Language
 work described in [SCRIPT_COMPILER.md](SCRIPT_COMPILER.md), and the Leftovers classification.
-The Release x64 registry was compared with the
-376 entries in the stock table at `docs/stubs.txt` in the research workspace.
-The same table is pinned in `assets/progress/stock-natives.json`, and
+The registry is compared with the 376 entries in
+`assets/progress/stock-natives.json`, derived from
+[slrr-reverse](https://github.com/EliasFD3S/slrr-reverse) commit
+`5c42f3b139aef4c7b9e0b6420c5704e22c0e6cd7`; the exact upstream file and its
+SHA-256 are recorded in [INSTRUMENTATION.md](INSTRUMENTATION.md).
 `python scripts/render_native_coverage.py` recomputes the counts below and the
 README chart from the registrations in `src/`.
 Matching uses owner, method and parameter types, including overloads. This
@@ -16,14 +18,55 @@ implementations and following selected calls to their consumers.
 
 | Status | Stock signatures |
 | --- | ---: |
-| Registered with a body | 337 |
+| Registered with a body | 339 |
 | Registered with the explicit `native_noop` handler | 3 |
-| Absent from the registry | 36 |
+| Absent from the registry | 34 |
 | **Total** | **376** |
 
 The first category includes constant responses, inline empty bodies and
 partial implementations. The mock table calls out known behavioral gaps in
 that category. It is not a compatibility score or a complete runtime trace.
+
+## Reproducible static audit
+
+Regenerate the JSON, SVG and README table without game/reference data or an
+ignored research workspace:
+
+```powershell
+python scripts/render_native_coverage.py
+python scripts/render_native_coverage.py --check
+```
+
+The generator fails on unresolved registration expressions or conflicting
+registrations. CI and CTest enforce the drift check. See
+[INSTRUMENTATION.md](INSTRUMENTATION.md) for the stock source SHA-256 and
+generator semantics.
+
+## Runtime reachability versus static coverage
+
+`--native-report PATH` writes bounded runtime metadata and invocation statistics
+on normal and early-return paths without requiring `--trace` or `--metrics`.
+With `--log-all DIR`, the run directory takes precedence and the file is
+`DIR/native-report.json`. The version-1 schema distinguishes registered
+bindings, distinct called signatures, successful/error/missing invocation
+totals, and explicit no-op registrations. Per-signature counts, total duration,
+and last available section are included; argument values, script locals and
+object addresses are not.
+
+The three stock explicit no-ops below are classified by explicit registration
+metadata. The two additional host-only `native_noop` registrations,
+`java.game.Player.<init>` and `java.render.LoadingScreen.<init>`, also count as
+runtime no-ops but are outside the 376-stock-signature denominator. A
+`body` classification means only that a callable exists. It never means
+`behaviorally verified`, even for fixed, partial, or fully reviewed
+implementations. Behavioral claims require separate evidence and targeted
+validation.
+
+Missing runtime records are capped at 128 signatures and 512 bytes per
+class/method/descriptor component. `missing` still counts every failed lookup;
+`untracked_missing_invocations` reports calls omitted from those records.
+`called` counts distinct retained records only. These bounds prevent arbitrary
+script signatures from growing the report without limit.
 
 ## Explicit no-ops
 
@@ -51,7 +94,7 @@ that category. It is not a compatibility score or a complete runtime trace.
 | `System.simTime`, `timeWarp` | The simulation clock follows the warp factor, and setting it returns the previous factor. Physics uses the scaled elapsed time. UI clocks, sleeps and host timer dispatch use real time. |
 | `System.setMeasure`, `getConfigOptions` | The measure setting controls digital vehicle instruments. The options refresh reads gameplay settings and schedules a save when they change. |
 | `RenderRef.setFlare`, `Navigator.updateNavigator`, `GroundRef.getNearestCross` | Directional flares use the scene's texture and an approximate sprite layout. The GPS camera and markers follow scene objects. The crossing query returns null until the road index is available. |
-| `GfxEngine.numDisplayModes`, `currDisplayMode`, `displayModeName`, `changeVideoMode` | One fixed mode is exposed, 800×600×32 at index zero. The change call is empty. Startup window settings are a separate path. |
+| `GfxEngine.numDisplayModes`, `currDisplayMode`, `displayModeName`, `changeVideoMode` | Enumerates host display modes and calls the live video-mode path. Mode switching, resize behavior and persistence still need interactive validation. |
 | `Camera.setFog` | Stores the color and the near and far distances on the driving camera. The fade uses those distances. The color argument is replaced by the day and twilight sky color before the shader reads it. |
 | `GroundRef.setFog` | Stores a global color and near and far distances. Nothing in the renderer reads them. |
 | `RenderRef.plotRoute` | Always returns zero. Route line construction is missing. |

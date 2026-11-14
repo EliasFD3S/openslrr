@@ -84,6 +84,9 @@ class Reader {
 std::vector<TufaConstant> parse_constants(const std::vector<uint8_t>& bytes) {
   Reader r(bytes.data(), bytes.size(), "CONS");
   const uint32_t n = r.u32();
+  // The smallest constant (Class) still needs kind + one u32 payload.
+  if (n > r.left() / 8)
+    throw std::runtime_error("CONS: constant count exceeds remaining data");
   std::vector<TufaConstant> out;
   out.reserve(n);
   for (uint32_t i = 0; i < n; ++i) {
@@ -135,6 +138,10 @@ void parse_members(const std::vector<uint8_t>* bytes, bool methods,
   Reader r(bytes->data(), bytes->size(), methods ? "MTHD" : "FILD");
   auto read_part = [&](std::vector<TufaMember>* dest) {
     const uint32_t n = r.u32();
+    const size_t record_size = methods ? 20 : 16;
+    if (n > r.left() / record_size)
+      throw std::runtime_error(std::string(methods ? "MTHD" : "FILD") +
+                               ": member count exceeds remaining data");
     dest->reserve(n);
     for (uint32_t i = 0; i < n; ++i) {
       TufaMember m;
@@ -154,10 +161,15 @@ void parse_members(const std::vector<uint8_t>* bytes, bool methods,
 std::vector<std::vector<TufaNode>> parse_trees(const std::vector<uint8_t>& bytes) {
   Reader r(bytes.data(), bytes.size(), "TREE");
   const uint32_t n = r.u32();
+  if (n > r.left() / 4)
+    throw std::runtime_error("TREE: tree count exceeds remaining data");
   std::vector<std::vector<TufaNode>> trees;
   trees.reserve(n);
   for (uint32_t i = 0; i < n; ++i) {
     const uint32_t len = r.u32();
+    // Every node carries at least opcode + u16 line, before optional immediates.
+    if (len > r.left() / 3)
+      throw std::runtime_error("TREE: node count exceeds remaining data");
     std::vector<TufaNode> nodes;
     nodes.reserve(len);
     for (uint32_t j = 0; j < len; ++j) {
@@ -219,6 +231,8 @@ TufaClass parse_one_blob(Reader& file) {
   cls.name_index = c.u32();
   cls.super_index = c.u32();
   const uint32_t ni = c.u32();
+  if (ni > c.left() / 4)
+    throw std::runtime_error("CLSS: interface count exceeds remaining data");
   cls.interfaces.reserve(ni);
   for (uint32_t i = 0; i < ni; ++i) cls.interfaces.push_back(c.u32());
   c.done();

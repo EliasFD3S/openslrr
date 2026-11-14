@@ -12,6 +12,7 @@
 #include "slrr/host_sfx.hpp"
 #include "slrr/osd_registry.hpp"
 #include "slrr/ptx_image.hpp"
+#include "slrr/platform_telemetry.hpp"
 #include "slrr/slrr_font.hpp"
 #include "slrr/video_fmv.hpp"
 
@@ -308,6 +309,8 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     bgfx::setViewClear(kWorldView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL,
                        0x1c1814ff, 0.f, 0);
     ready_ = true;
+    renderer_generation_ = platform_telemetry::next_renderer_generation();
+    platform_telemetry::renderer_open(renderer_generation_);
     quit_ = false;
     video_fmv_set_hwnd(hwnd_);
     std::printf("[bgfx] open %dx%d GPU=libbgfx renderer=%s\n", width_, height_,
@@ -447,6 +450,8 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     }
 #endif
     ready_ = false;
+    platform_telemetry::renderer_close(renderer_generation_);
+    renderer_generation_ = 0;
   }
   void LibBgfxBackend::pump(int32_t /*ms*/)
 {
@@ -1110,6 +1115,7 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       perf::Scope scope(perf::Zone::Present);
       bgfx::frame();
     }
+    capture_frame_stats();
     if (perf::enabled()) {
       // bgfx reports the frame its render thread finished last.
       const auto* stats = bgfx::getStats();
@@ -1133,6 +1139,48 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       ShowWindow(hwnd_, SW_SHOW);
       shown_ = true;
     }
+  }
+
+  void LibBgfxBackend::capture_frame_stats()
+{
+    const bgfx::Stats* stats = bgfx::getStats();
+    if (!stats || !renderer_generation_) return;
+    platform_telemetry::RendererFrameStats out;
+    out.gpu_frame = stats->gpuFrameNum;
+    out.cpu_frame = stats->cpuTimeFrame;
+    out.cpu_begin = stats->cpuTimeBegin;
+    out.cpu_end = stats->cpuTimeEnd;
+    out.cpu_frequency = stats->cpuTimerFreq;
+    out.gpu_begin = stats->gpuTimeBegin;
+    out.gpu_end = stats->gpuTimeEnd;
+    out.gpu_frequency = stats->gpuTimerFreq;
+    out.draw_calls = stats->numDraw;
+    out.compute_calls = stats->numCompute;
+    out.blit_calls = stats->numBlit;
+    out.vertex_buffers = stats->numVertexBuffers;
+    out.index_buffers = stats->numIndexBuffers;
+    out.textures = stats->numTextures;
+    out.dynamic_vertex_buffers = stats->numDynamicVertexBuffers;
+    out.dynamic_index_buffers = stats->numDynamicIndexBuffers;
+    out.frame_buffers = stats->numFrameBuffers;
+    out.programs = stats->numPrograms;
+    out.shaders = stats->numShaders;
+    out.view_count = stats->numViews;
+    out.copied_views = stats->viewStats
+        ? std::min<std::size_t>(out.views.size(), stats->numViews) : 0;
+    for (std::size_t i = 0; i < out.copied_views; ++i) {
+      const auto& source = stats->viewStats[i];
+      auto& target = out.views[i];
+      target.view = source.view;
+      target.cpu_begin = source.cpuTimeBegin;
+      target.cpu_end = source.cpuTimeEnd;
+      target.gpu_begin = source.gpuTimeBegin;
+      target.gpu_end = source.gpuTimeEnd;
+      target.gpu_frame = source.gpuFrameNum;
+    }
+    platform_telemetry::renderer_frame(
+        renderer_generation_, out,
+        bgfx::isValid(fmv_tex_) && fmv_tex_serial_ != 0 && video_fmv_frame_ready());
   }
   void LibBgfxBackend::set_scx_smoke(const std::string& path)
 {

@@ -1,5 +1,7 @@
 #include "slrr/host_input.hpp"
 #include "slrr/host_game_options.hpp"
+#include "slrr/physics_telemetry.hpp"
+#include "slrr/platform_telemetry.hpp"
 
 #include "slrr/jvm.hpp"
 #include "slrr/osd_registry.hpp"
@@ -138,15 +140,21 @@ void host_input_clear_history() { history.clear(); }
 
 void host_input_key(int scan, bool down) {
   if (scan <= 0 || scan >= static_cast<int>(keys.size())) return;
+  const bool changed = keys[scan] != down;
   if (down && !keys[scan]) {
     pressed[scan] = true;
     if (key_presses.size() == 64) key_presses.pop_front();
     key_presses.push_back(scan);
   }
   keys[scan] = down;
+  if (changed && physics_telemetry::enabled())
+    physics_telemetry::record_input(0, scan, down ? 1.0 : 0.0);
 }
 
 void host_input_clear_keys() {
+  if (physics_telemetry::enabled())
+    for (std::size_t i = 0; i < keys.size(); ++i)
+      if (keys[i]) physics_telemetry::record_input(0, static_cast<int>(i), 0.0);
   keys.fill(false);
   pressed.fill(false);
   frame_pressed.fill(false);
@@ -197,6 +205,7 @@ void host_input_poll_keys() {
   };
   constexpr int left = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
   constexpr int right = XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE;
+  const auto previous_pad = pad;
   pad = {stick(-lx, left), stick(lx, left), stick(ly, left), stick(-ly, left),
          stick(-rx, right), stick(rx, right), stick(ry, right), stick(-ry, right),
          trigger(state.bLeftTrigger), trigger(state.bRightTrigger)};
@@ -209,6 +218,10 @@ void host_input_poll_keys() {
       XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_X, XINPUT_GAMEPAD_Y};
   for (size_t i = 0; i < std::size(buttons); ++i)
     pad[10 + i] = (state.wButtons & buttons[i]) ? 1.f : 0.f;
+  if (physics_telemetry::enabled())
+    for (size_t i = 0; i < pad.size(); ++i)
+      if (pad[i] != previous_pad[i])
+        physics_telemetry::record_input(kPad, static_cast<int>(i), pad[i]);
 #endif
 }
 
@@ -274,6 +287,34 @@ float host_input_camera_axis(int axis) {
   }
 }
 
+const char* input_binding_source_name(InputBindingSource source) {
+  switch (source) {
+    case InputBindingSource::MissingController: return "missing controller";
+    case InputBindingSource::Unbound: return "unbound";
+    case InputBindingSource::Forced: return "forced";
+    case InputBindingSource::Profile: return "profile";
+    case InputBindingSource::XInputFallback: return "XInput fallback";
+    case InputBindingSource::ProfileAndXInputFallback: return "profile + XInput fallback";
+  }
+  return "unknown";
+}
+
+const char* input_fallback_status_name(InputFallbackStatus status) {
+  switch (status) {
+    case InputFallbackStatus::NotEligible: return "not eligible";
+    case InputFallbackStatus::Available: return "available";
+    case InputFallbackStatus::SuppressedByXInputProfile: return "suppressed by XInput profile";
+    case InputFallbackStatus::Overridden: return "overridden";
+  }
+  return "unknown";
+}
+
+InputAxisBindingDiagnostics host_input_controller_axis_diagnostics(
+    const Object* controller, std::int32_t axis) {
+  return input_axis_binding_diagnostics(
+      controller && controller->input ? controller->input.get() : nullptr, axis);
+}
+
 float host_input_controller_axis(const Object* controller, int axis) {
   if (!controller || !controller->input) return 0.f;
   const auto& input = *controller->input;
@@ -331,6 +372,14 @@ void host_input_update_controller(Object* controller, float dt) {
       std::any_of(controller->input->bindings.begin(), controller->input->bindings.end(),
                   [](const InputBinding& b) { return b.device == kPad && b.physical == 23; });
   in.drive_reverse = keys[0x13] || (!pad_y_mapped && pad[23] > .5f);
+  static constexpr int observed_axes[] = {1, 4, 5, 6, 28, 29, 48, 49, 50, 54};
+  for (const int id : observed_axes) {
+    const auto diagnostic = host_input_controller_axis_diagnostics(controller, id);
+    platform_telemetry::input_axis(
+        id, static_cast<std::int32_t>(diagnostic.source),
+        static_cast<std::int32_t>(diagnostic.fallback), diagnostic.profile_bindings,
+        diagnostic.xinput_bindings);
+  }
   if (in.bench_throttle >= 0.f) {
     in.drive_throttle = in.bench_throttle;
     in.drive_brake = 0.f;
