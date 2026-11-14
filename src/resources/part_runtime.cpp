@@ -2420,13 +2420,15 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   for (size_t i = 0; i < drive.wheels.size(); ++i)
     drive.wheels[i].steer = wheel_steering_angle(rec, i);
   auto *ratios = part_field(chassis, "ratio");
-  if (!ratios || ratios->slots.size() < 8 || field_int(chassis, "gears") < 1)
-    return;
   Object *dyno = nullptr;
   for (const auto &[slot, child] : rec.children) {
     if ((dyno = part_field(child, "dynodata"))) break;
   }
-  if (!dyno || comp(chassis, "maxRPM") <= 0) return;
+  const bool engine = ratios && ratios->slots.size() >= 8 &&
+                      field_int(chassis, "gears") >= 1 && dyno && comp(chassis, "maxRPM") > 0;
+  // A car whose engine was torn off still rolls on its tyres and brakes;
+  // without a drive it would get the parked-tyre friction that stops it.
+  if (!engine && !rec.engine_lost) return;
   const auto &in = host_input();
   drive.throttle = controls ? in.drive_throttle : 0.f;
   drive.brake = controls ? in.drive_brake : 0.f;
@@ -2438,14 +2440,20 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   drive.idle = std::max(400.f, comp(chassis, "engine_rpm_idle"));
   drive.limit = std::max(drive.idle + 100.0, double(comp(chassis, "RPM_limit")));
   drive.inertia = .28 + .01 * std::max(0.f, comp(chassis, "engine_inertia"));
-  drive.torque = [dyno](double rpm) { return dyno_sample(dyno, float(rpm), 0, false); };
+  if (engine)
+    drive.torque = [dyno](double rpm) { return dyno_sample(dyno, float(rpm), 0, false); };
+  else {
+    drive.torque = [](double) { return 0.0; };
+    rec.dynamics.engine_running = false;
+    rec.dynamics.engine_omega = 0;
+  }
   drive.engaged = rec.physics_released;
   drive.reverse = controls && in.drive_reverse;
   drive.shift = !controls ? 0 : in.drive_shift > .5f ? 1 : in.drive_shift < -.5f ? -1 : 0;
   drive.automatic_shift = rec.transmission == 1;
   drive.automatic_first = rec.transmission == 5;
   drive.auto_clutch = rec.transmission != 2;
-  drive.starter = std::max(0.f, comp(chassis, "starter_torque"));
+  drive.starter = engine ? std::max(0.f, comp(chassis, "starter_torque")) : 0.f;
   const double brake_inertia = std::max(.01f, rec.config->brake_inertia);
   drive.bearing_scale = .1 / brake_inertia;
   // DiscBrake supplies torque. Normalize the CFG gains before using the
@@ -2453,10 +2461,11 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   const double inertia_gain = 50 / brake_inertia;
   drive.brake_scale = inertia_gain * std::max(0.f, rec.config->brake_power) / 1000;
   drive.handbrake_scale = inertia_gain * std::max(0.f, rec.config->handbrake_power) / 2000;
-  drive.gears = std::clamp(field_int(chassis, "gears"), 1, 6);
+  // Without an engine there is no gearbox either: neutral, wheels roll free.
+  drive.gears = engine ? std::clamp(field_int(chassis, "gears"), 1, 6) : 0;
   const double final_drive = comp(chassis, "rearend_ratio");
-  drive.ratios[0] = 0;
-  for (int i = 1; i < 8; ++i)
+  drive.ratios = {};
+  for (int i = 1; engine && i < 8; ++i)
     drive.ratios[i] = scalar(ratios->slots, i, 0) * final_drive;
   const bool horn = controls && in.drive_horn;
   if (horn && !rec.horn_down && index) {
