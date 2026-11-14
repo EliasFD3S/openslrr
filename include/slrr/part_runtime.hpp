@@ -1,5 +1,6 @@
 #pragma once
 #include "slrr/part_config.hpp"
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -94,15 +95,29 @@ std::vector<PartVehiclePosition> part_vehicle_positions();
 // Chassis mesh of a Vehicle. Follows a bound alias, then the chassis field.
 Object* part_chassis(Object* object);
 Object* part_debug_chassis(Object* object);
+// One installed part as the damage gauge (osd_damage) sees it. `x` and `z`
+// are the centre of its drawn meshes seen from above, normalised to the
+// car's top-down extent: -1 is the left / front edge, +1 the right / rear.
+struct VehicleHudPart {
+  enum class Kind : uint8_t { Engine, Body, Wheel };
+  Kind kind = Kind::Body;
+  int8_t corner = -1;   // Wheel: the corner of its chassis slot (101 + corner)
+  float x = 0, z = 0;
+  float condition = 1;  // Stock Part.getConditionNoAttach: wear * tear
+};
 struct VehicleHudState {
   const VehicleHudLayout *layout = nullptr;
   const std::string *preview_directory = nullptr;
   Object *owner = nullptr;
   double rpm = 0, speed = 0, mileage = 0;
   float unit_scale = 1.f;
-  float condition = 1, nitro = 0, turbo = 0;
+  float nitro = 0, turbo = 0;
   int gear = 0;
   bool handbrake = false;
+  // Engine (category 1), body (category 2) and wheel parts of the car. A
+  // part absent from the tree is absent here, so its gauge blip goes away.
+  std::array<VehicleHudPart, 192> parts{};
+  size_t part_count = 0;
 };
 void part_set_hud_preview(const std::string &path);
 bool part_vehicle_hud(VehicleHudState &state);

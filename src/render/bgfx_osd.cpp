@@ -15,11 +15,13 @@
 #include <bx/math.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <unordered_set>
 #include <utility>
 
@@ -602,24 +604,93 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       const float sy = (damage ? (override.defined ? .00014f : .00036f) : .00032f) * stock_scale;
       const float x = override.defined && damage && item.position[0] < 0.f
           ? -item.position[0] : item.position[0];
-      uint32_t color = item.color;
-      if (damage) {
-        const float condition = std::clamp(hud.condition, 0.f, 1.f);
-        const auto red = static_cast<uint32_t>(255.f * std::min(1.f, 2.f * (1.f - condition)));
-        const auto green = static_cast<uint32_t>(255.f * std::min(1.f, 2.f * condition));
-        color = 0xff000000u | (red << 16) | (green << 8);
-      }
+      const uint32_t color = item.color;
       const float y = override.defined ? item.position[1] : stock_y(i);
       if (damage) {
-        // The stock font stores the car outline and its damage blips as
-        // separate glyphs in one shared coordinate system. Draw the complete
-        // assembly so the engine, wheels, skirts and body sections are visible.
-        for (const unsigned char part : "AELOTabcdhlpqrtuv") {
-          if (!part) continue;
-          const size_t part_start = size_t(part) * 4;
-          if ((part_start + 4) * 3 > mesh->positions.size()) continue;
-          draw(*mesh, part_start, 4, quad, 6, x, y,
-               sy * pixel_aspect, sy, 0, p[0], p[1], color);
+        // The stock font stores the car outline ('A') and one blip per car
+        // region as separate glyphs in one shared coordinate system, front
+        // up and the car's left on the left. Each blip takes the worst
+        // condition of the installed parts that fall in its quad; a blip
+        // with no part is not drawn. Drivetrain blips (E, L, T) take engine
+        // parts, body blips take body panels, and the four wheel blips take
+        // the wheel of their corner.
+        using Kind = VehicleHudPart::Kind;
+        struct Blip {
+          unsigned char glyph;
+          Kind kind;
+          float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+          bool present = false;
+          float condition = 1;
+        };
+        const auto bounds = [&](unsigned char glyph, Blip &out) {
+          const size_t first = size_t(glyph) * 4;
+          if ((first + 4) * 3 > mesh->positions.size()) return false;
+          const float *corner = mesh->positions.data() + first * 3;
+          out.x0 = out.x1 = corner[0];
+          out.y0 = out.y1 = corner[1];
+          for (int k = 1; k < 4; ++k) {
+            out.x0 = std::min(out.x0, corner[k * 3]);
+            out.x1 = std::max(out.x1, corner[k * 3]);
+            out.y0 = std::min(out.y0, corner[k * 3 + 1]);
+            out.y1 = std::max(out.y1, corner[k * 3 + 1]);
+          }
+          return out.x1 > out.x0 && out.y1 > out.y0;
+        };
+        Blip outline{'A', Kind::Body};
+        if (!bounds('A', outline)) continue;
+        std::array<Blip, 16> blips{};
+        size_t blip_count = 0;
+        const auto add = [&](const char *glyphs, Kind kind) {
+          for (const char *g = glyphs; *g; ++g) {
+            Blip blip{static_cast<unsigned char>(*g), kind};
+            if (bounds(blip.glyph, blip)) blips[blip_count++] = blip;
+          }
+        };
+        add("ELT", Kind::Engine);
+        add("Ohlpqrtuv", Kind::Body);
+        add("abcd", Kind::Wheel);
+        const float centre_x = .5f * (outline.x0 + outline.x1);
+        const float centre_y = .5f * (outline.y0 + outline.y1);
+        for (size_t k = 0; k < hud.part_count; ++k) {
+          const auto &part = hud.parts[k];
+          const float gx = outline.x0 + (part.x + 1.f) * .5f * (outline.x1 - outline.x0);
+          const float gy = outline.y0 + (part.z + 1.f) * .5f * (outline.y1 - outline.y0);
+          Blip *best = nullptr;
+          float best_area = std::numeric_limits<float>::max();
+          for (size_t b = 0; b < blip_count; ++b) {
+            Blip &blip = blips[b];
+            if (blip.kind != part.kind) continue;
+            if (part.kind == Kind::Wheel) {
+              const bool left = .5f * (blip.x0 + blip.x1) < centre_x;
+              const bool front = .5f * (blip.y0 + blip.y1) < centre_y;
+              if ((front ? 0 : 2) + (left ? 0 : 1) == part.corner) best = &blip;
+              continue;
+            }
+            // Overlapping quads (the hood spans the fenders): the smallest
+            // quad that holds the part's centre is the most specific region.
+            const float area = (blip.x1 - blip.x0) * (blip.y1 - blip.y0);
+            if (gx >= blip.x0 && gx <= blip.x1 && gy >= blip.y0 && gy <= blip.y1 &&
+                area < best_area) {
+              best = &blip;
+              best_area = area;
+            }
+          }
+          if (!best) continue;
+          best->present = true;
+          best->condition = std::min(best->condition, part.condition);
+        }
+        const float scale_x = sy * pixel_aspect;
+        // The outline stands for the whole car; keep it neutral.
+        draw(*mesh, size_t('A') * 4, 4, quad, 6, x, y, scale_x, sy, 0, p[0], p[1],
+             0xffc8c8c8u);
+        for (size_t b = 0; b < blip_count; ++b) {
+          const Blip &blip = blips[b];
+          if (!blip.present) continue;
+          const float condition = std::clamp(blip.condition, 0.f, 1.f);
+          const auto red = static_cast<uint32_t>(255.f * std::min(1.f, 2.f * (1.f - condition)));
+          const auto green = static_cast<uint32_t>(255.f * std::min(1.f, 2.f * condition));
+          draw(*mesh, size_t(blip.glyph) * 4, 4, quad, 6, x, y, scale_x, sy, 0, p[0], p[1],
+               0xff000000u | (red << 16) | (green << 8));
         }
       } else {
         draw(*mesh, start, 4, quad, 6, x, y,
