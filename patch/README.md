@@ -18,8 +18,18 @@ The **Video Options** menu applies the resolution and the Enhanced settings in g
 | 2 | Volumetric clouds | 0 off, any non-zero value on |
 | 3 | Scenery sunlight | 0 off, any non-zero value on |
 | 4 | Local lights | 0 off, any non-zero value on |
+| 5 | Framerate adaptive behaviour | 0 Classic (60 Hz), any non-zero value Adaptive |
 
-The menu and ImGui share these values. They reset on the next launch. Resolution, the global shadow toggle, and flares use the game's existing configuration.
+The menu and ImGui share options 0–4. They reset on the next launch. Resolution, the global shadow toggle, and flares use the game's existing configuration.
+
+## Framerate adaptive behaviour
+
+**Advanced Game Options → Framerate Adaptive Behaviour** selects how cars are drawn between the game's fixed 60 Hz physics steps:
+
+- **Classic (60 Hz)** draws each car at its last physics step, as before. When the frame rate is not exactly 60 FPS, car motion and turns appear stepped.
+- **Adaptive**, the default, draws each car between its last two physics steps, so it moves smoothly at any frame rate. The drawn car is up to one physics step (16.7 ms) behind the simulation.
+
+The physics is the same in both modes. The choice is saved in `save/game/openslrr_options`.
 
 ## Pedestrians
 

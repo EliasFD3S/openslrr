@@ -66,6 +66,7 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           case 2: return Value::make_int(graphics.volumetric_clouds);
           case 3: return Value::make_int(graphics.dynamic_lighting);
           case 4: return Value::make_int(graphics.local_lights);
+          case 5: return Value::make_int(static_cast<int>(host_framerate_mode()));
           default: return Value::make_int(0);
         }
       });
@@ -79,6 +80,9 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           case 2: graphics.volumetric_clouds = value != 0; break;
           case 3: graphics.dynamic_lighting = value != 0; break;
           case 4: graphics.local_lights = value != 0; break;
+          case 5:
+            host_set_framerate_mode(value ? FramerateMode::Adaptive : FramerateMode::Classic);
+            break;
         }
         return Value::make_void();
       });

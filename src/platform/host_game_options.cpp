@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
+#include <string>
 
 namespace slrr {
 namespace {
@@ -12,6 +14,30 @@ bool loaded = false, dirty = false;
 Clock::time_point changed, next_sample;
 GameOptions current;
 uint64_t driving_revision = 0;
+FramerateMode framerate_mode = FramerateMode::Adaptive;
+std::string host_options_path;
+
+// Host-only settings live beside the stock options. Config has a fixed
+// binary layout, so a new field there would need a patched Config class.
+void load_host_options(const std::string& root) {
+  host_options_path = root;
+  if (!host_options_path.empty() && host_options_path.back() != '\\' &&
+      host_options_path.back() != '/')
+    host_options_path.push_back('\\');
+  host_options_path += "save\\game\\openslrr_options";
+  std::ifstream in(host_options_path);
+  for (std::string line; std::getline(in, line);)
+    if (line == "framerate_mode=classic") framerate_mode = FramerateMode::Classic;
+    else if (line == "framerate_mode=adaptive") framerate_mode = FramerateMode::Adaptive;
+}
+
+void save_host_options() {
+  if (host_options_path.empty()) return;
+  std::ofstream out(host_options_path, std::ios::trunc);
+  out << "framerate_mode="
+      << (framerate_mode == FramerateMode::Classic ? "classic" : "adaptive") << '\n';
+  if (!out) std::fprintf(stderr, "[options] could not save %s\n", host_options_path.c_str());
+}
 
 void write_video_mode(Jvm& jvm, const VideoMode& mode) {
   for (const auto* config : {"java.util.Config", "java.game.Config"}) {
@@ -68,6 +94,12 @@ EnhancedGraphics& host_enhanced_graphics() {
   return graphics;
 }
 const GameOptions& host_game_options() { return current; }
+FramerateMode host_framerate_mode() { return framerate_mode; }
+void host_set_framerate_mode(FramerateMode mode) {
+  if (mode == framerate_mode) return;
+  framerate_mode = mode;
+  save_host_options();
+}
 uint64_t host_driving_options_revision() { return driving_revision; }
 
 void host_game_options_load(Jvm& jvm) {
@@ -78,6 +110,7 @@ void host_game_options_load(Jvm& jvm) {
   jvm.invoke_by_name(options->class_name,"<init>",
                      {Value::make_obj(options),Value::make_int(0)},false);
   current = read_options(jvm);
+  load_host_options(jvm.game_root());
   ++driving_revision;
   next_sample = Clock::now();
   loaded=true;

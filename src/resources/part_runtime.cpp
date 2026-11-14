@@ -3416,16 +3416,18 @@ void advance_chassis_tick() {
 
 // Physics runs at a fixed 60 Hz, but frames come at the display rate. Drawing
 // the last tick made turns and motion step whenever a frame ran zero or two
-// ticks. Draw each car between its last two ticks instead, by the fraction of
-// a tick that is still unsimulated. Scripts and physics keep the ticked pose.
+// ticks. In the Adaptive framerate mode, draw each car between its last two
+// ticks instead, by the fraction of a tick that is still unsimulated. Classic
+// keeps drawing the last tick. Scripts and physics keep the ticked pose.
 void publish_render_poses(double alpha) {
   alpha = std::clamp(alpha, 0., 1.);
+  const bool adaptive = host_framerate_mode() == FramerateMode::Adaptive;
   for (auto& [chassis, rec] : records) {
     if (rec.config->native_kind != "car") continue;
     auto* node = gameref_get(chassis);
     if (!node) continue;
     node->render_pose = false;
-    if (!rec.render_blend || !node->matrix_override) continue;
+    if (!adaptive || !rec.render_blend || !node->matrix_override) continue;
     const auto& body = rec.dynamics.body;
     auto from = rec.render_from_orientation;
     const auto& to = body.orientation;

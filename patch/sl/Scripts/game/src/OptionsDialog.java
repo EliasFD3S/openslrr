@@ -28,6 +28,8 @@ public class OptionsDialog extends Dialog
 	final static int OPENSLRR_LIVE_VIDEO = 1;
 	final static int CMD_RENDERER_FIRST = 500;
 	final static int CMD_ENHANCED_SHADOWS = 505;
+	final static int CMD_FRAMERATE_MODE = 506;
+	final static int RENDERER_FRAMERATE_MODE = 5;
 	public static native int getRendererOption(int option);
 	public static native void setRendererOption(int option, int value);
 
@@ -96,6 +98,7 @@ public class OptionsDialog extends Dialog
 	static String[] detailTextOO;
 	static String[] metricSystemText;
 	static String[] gpsText = new String[4];
+	static String[] framerateText;
 	static int[]	ResX_list, ResY_list;
 	
 	final static float	aspectX, aspectY;
@@ -297,6 +300,10 @@ public class OptionsDialog extends Dialog
 		gpsText[1] = "FOLLOW CAR, CAR RELATIVE";
 		gpsText[2] = "FOLLOW CAMERA, MAP RELATIVE";
 		gpsText[3] = "FOLLOW CAMERA, CAMERA RELATIVE";
+
+		framerateText = new String[2];
+		framerateText[0] = "Classic (60 Hz)";
+		framerateText[1] = "Adaptive";
 	}
 
 	public void show()
@@ -724,6 +731,8 @@ public class OptionsDialog extends Dialog
 		m.addItem( "DRIVER MOVEMENT/ACCELERATION", CMD_HMF_3, Config.head_move_acc, 0.0, 2.0, 0, "HOW THE CARS ACCELERATION AFFECTS THE DRIVERS MOVEMENT"  );
 		m.addSeparator();
 		m.addItem( "TRAFFIC DENSITY", CMD_TRAFFICDENSITY, Config.trafficDensity, 0.0, 1.5, 0, null );
+		m.addSeparator();
+		m.addItem( "FRAMERATE ADAPTIVE BEHAVIOUR", CMD_FRAMERATE_MODE, getRendererOption(RENDERER_FRAMERATE_MODE), framerateText, "CLASSIC: CARS MOVE IN 60 HZ STEPS. ADAPTIVE: SMOOTH AT ANY FRAME RATE" );
 
 		m = osd.createMenu( butt2, 0.98, 0.85, 0 );
 		m.addItem( "BACK", CMD_GAME_OPTIONS_DONE );
@@ -972,6 +981,9 @@ public class OptionsDialog extends Dialog
 		else
 		if (command >= CMD_RENDERER_FIRST && command < CMD_ENHANCED_SHADOWS)
 			setRendererOption(command - CMD_RENDERER_FIRST, osd.multiValue);
+		else
+		if (command == CMD_FRAMERATE_MODE)
+			setRendererOption(RENDERER_FRAMERATE_MODE, osd.multiValue);
 		else
 		if (command == CMD_ENHANCED_SHADOWS)
 		{
