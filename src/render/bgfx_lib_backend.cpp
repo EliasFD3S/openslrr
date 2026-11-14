@@ -1010,7 +1010,7 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       const auto* car = script_camera && script_camera->follow_vehicle
           ? gameref_find_live(script_camera->follow_vehicle) : nullptr;
       float car_matrix[16];
-      const auto* position = car && scene_instances_script_matrix(car->key, car_matrix)
+      const auto* position = car && scene_instances_render_matrix(car->key, car_matrix)
           ? car_matrix + 12 : world_cam ? world_eye : nullptr;
       update_car_depth(garage_ ? nullptr : position, video);
       // Every world camera reflects its scene. The car dealers have a map and a

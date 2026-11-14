@@ -183,6 +183,11 @@ struct GameRefState {
   uint32_t light_flags = 0;
   bool matrix_override = false;
   float local_matrix[16]{};
+  // Drawn pose of a simulated body between two fixed physics ticks. It holds
+  // only while local_matrix still equals render_basis, so a script move wins.
+  bool render_pose = false;
+  float render_matrix[16]{};
+  float render_basis[16]{};
   ScxGeometry mesh;
   // Native object script (.cfg): render mesh, collision sphere, click volume.
   bool script_parsed = false;
@@ -195,6 +200,9 @@ struct GameRefState {
 };
 
 float gameref_now();  // steady seconds since first call (timers / animate)
+
+// The interpolated parent-local matrix to draw, or null to draw local_matrix.
+const float* gameref_render_matrix(const GameRefState& node);
 
 void gameref_clear();
 GameRefState* gameref_upsert(void* key, GameRefKind kind = GameRefKind::Generic);

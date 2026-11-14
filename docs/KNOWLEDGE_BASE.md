@@ -310,6 +310,15 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
    `src/physics/flap_hinge.cpp:flap_contact`): it is swung out of the way or,
    from 4.5 m/s, torn off through `detach_panel` after the loop.
    ENGINE_CONTRACT §10 has the contract.
+9. After the ticks of a frame, in the Adaptive framerate mode
+   (`src/platform/host_game_options.cpp:host_framerate_mode`), `publish_render_poses`
+   blends each car from its pose before the last tick to the published one, by
+   the unsimulated fraction of a tick
+   (`src/resources/part_runtime.cpp:publish_render_poses`). Classic (60 Hz)
+   draws the last tick.
+   The renderer, chase and cockpit cameras and car shadows draw that pose;
+   scripts and physics still read the ticked one
+   (`src/resources/scene_instances.cpp:chain_matrix`).
 
 ### 5.6 Maps and world
 

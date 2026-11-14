@@ -783,7 +783,8 @@ void scene_instances_select(void *world, void *skydome, bool preview_lamps) {
     sky->sky_render = true;
 }
 
-bool chain_matrix(void *key, void *root, float *matrix, bool reflect) {
+bool chain_matrix(void *key, void *root, float *matrix, bool reflect,
+                  bool drawn = false) {
   if (!key || !root || !matrix)
     return false;
   identity(matrix);
@@ -801,7 +802,9 @@ bool chain_matrix(void *key, void *root, float *matrix, bool reflect) {
     if (current != root && (n->flags & kWorldTreeRoot))
       return false;
     float local[16];
-    if (n->matrix_override)
+    if (const float *pose = drawn ? gameref_render_matrix(*n) : nullptr)
+      std::copy(pose, pose + 16, local);
+    else if (n->matrix_override)
       std::copy(n->local_matrix, n->local_matrix + 16, local);
     else
       local_matrix(*n, local);
@@ -830,10 +833,13 @@ bool chain_matrix(void *key, void *root, float *matrix, bool reflect) {
   return false;
 }
 bool scene_instance_transform(void *key, void *root, float *matrix) {
-  return chain_matrix(key, root, matrix, true);
+  return chain_matrix(key, root, matrix, true, true);
 }
 bool scene_instances_script_matrix(void *key, float *matrix) {
   return g_world && chain_matrix(key, g_world, matrix, false);
+}
+bool scene_instances_render_matrix(void *key, float *matrix) {
+  return g_world && chain_matrix(key, g_world, matrix, false, true);
 }
 
 namespace {
