@@ -191,6 +191,9 @@ struct LoosePanel {
   std::vector<PartMatrix> render_offsets;
   physics::Vec3 rest_anchor;  // see map_object_quiet_ticks
   unsigned far_awake_ticks = 0;  // awake beyond car reach; see advance_loose_panels
+  // Ticks left during which a body released from inside the car (the engine)
+  // skips the car contacts while it leaves; see leaving_carrier.
+  unsigned exit_ticks = 0;
 };
 std::unordered_map<Object *, LoosePanel> loose_panels;
 // Wheel parts whose corner mount failed when a chassis cage settled during
@@ -1896,8 +1899,11 @@ bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
   physics::Vec3 hi{geometry.info.bbox_max[0] * scale,
                    geometry.info.bbox_max[1] * scale,
                    geometry.info.bbox_max[2] * scale};
-  const auto velocity = rec.dynamics.body.velocity,
-             momentum = rec.dynamics.body.momentum;
+  // A changed assembly (a part broke off) keeps the body's velocity and spin,
+  // not its angular momentum, as SLRR_rev 77b0fb6 does after a detach
+  // (vehicle-3d.ts advance: setMass, then setAngularVelocity(omega)).
+  const auto velocity = rec.dynamics.body.velocity;
+  const auto omega = rec.dynamics.body.omega();
   // The installed parts' own mass distribution. A few point masses (a car
   // whose parts lack body shapes) can leave an axis nearly free, so no axis
   // drops below 30 % of the solid box of the chassis render bounds, which also
@@ -1915,7 +1921,7 @@ bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
   rec.dynamics.body.set_frame(frame);
   if (held) {
     rec.dynamics.body.velocity = velocity;
-    rec.dynamics.body.momentum = momentum;
+    rec.dynamics.body.set_omega(omega);
   } else {
     rec.dynamics.release_wheels();
     rec.dynamics.reset_clock();
@@ -3244,6 +3250,7 @@ void detach_panel(Object* part, Record& rec, Object* chassis, Record& vehicle) {
       body.velocity = vehicle.engine_release_velocity;
     vehicle.engine_release = nullptr;
     vehicle.engine_lost = true;
+    loose.exit_ticks = physics::VehicleDynamics::update_frequency;
   }
   if (runtime)
     for (const auto& descendant : part_installed_tree(part))
@@ -3476,6 +3483,20 @@ constexpr double kSettleDistance = 40.0;
 constexpr unsigned kLostTicks = physics::VehicleDynamics::update_frequency * 10;
 constexpr double kLostHeight = -500.0;
 
+// A body released from deep inside the car starts overlapping its collision
+// shell, where the corner sweeps cannot separate it cleanly: the engine would
+// shove the car with its whole momentum. It skips the car contacts while any
+// of its corners is still inside the car's bounds, for at most one second.
+bool leaving_carrier(const physics::RigidBody& body, const physics::RigidBody& car) {
+  for (const auto& corner : body.corners()) {
+    const auto p = car.center + car.orientation.inverse_rotate(corner - car.position);
+    if (p.x > car.minimum.x && p.x < car.maximum.x && p.y > car.minimum.y &&
+        p.y < car.maximum.y && p.z > car.minimum.z && p.z < car.maximum.z)
+      return true;
+  }
+  return false;
+}
+
 void advance_loose_panels() {
   using physics::Vec3;
   std::vector<std::pair<Object*, bool>> settled;  // keep the current pose?
@@ -3556,7 +3577,9 @@ void advance_loose_panels() {
     const Vec3 before = body.position;
     const auto previous = body.corners();
     if (!sleeping) body.integrate(kPhysicsTick);
-    const bool carrier_contact = near && collide_loose_with_car(
+    if (loose.exit_ticks && !leaving_carrier(body, vehicle->dynamics.body)) loose.exit_ticks = 0;
+    if (loose.exit_ticks) --loose.exit_ticks;
+    const bool carrier_contact = near && !loose.exit_ticks && collide_loose_with_car(
         body, previous, before, chassis, *vehicle, previous_carrier);
     if (sleeping && !carrier_contact) continue;
     const auto support = collide_loose_with_scene(body, before, part);
