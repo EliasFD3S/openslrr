@@ -4798,6 +4798,100 @@ void part_set_hud_preview(const std::string &path) {
   hud_preview_directory = std::filesystem::absolute(path).parent_path().string();
 }
 
+namespace {
+// Top-down (x, z) box of drawn meshes in the car frame.
+struct TopBox {
+  float x0 = std::numeric_limits<float>::max(), x1 = -std::numeric_limits<float>::max();
+  float z0 = std::numeric_limits<float>::max(), z1 = -std::numeric_limits<float>::max();
+  bool valid() const { return x1 > x0 && z1 > z0; }
+  bool any() const { return x1 >= x0 && z1 >= z0; }
+};
+void add_render_box(const PartMatrix &part_frame, Object *render, TopBox &box) {
+  const auto *node = gameref_get(render);
+  if (!node || node->empty || node->light_flags || !node->type_id) return;
+  const auto mesh = scene_instances_geometry(static_cast<uint32_t>(node->type_id));
+  if (!mesh || !mesh->info.ok) return;
+  const auto m = part_matrix_multiply(part_frame, node_local(render));
+  const float s = mesh->position_scale;
+  const auto &lo = mesh->info.bbox_min, &hi = mesh->info.bbox_max;
+  for (int corner = 0; corner < 8; ++corner) {
+    const float p[3] = {(corner & 1 ? hi[0] : lo[0]) * s, (corner & 2 ? hi[1] : lo[1]) * s,
+                        (corner & 4 ? hi[2] : lo[2]) * s};
+    const float x = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12];
+    const float z = m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14];
+    box.x0 = std::min(box.x0, x);
+    box.x1 = std::max(box.x1, x);
+    box.z0 = std::min(box.z0, z);
+    box.z1 = std::max(box.z1, z);
+  }
+}
+// Engine, body and wheel parts for the damage gauge, placed from above in
+// the chassis frame and normalised to the extent of the chassis renders and
+// body panels: the car the gauge outline stands for. Wheels keep their corner
+// from the chassis slot (type 101 + corner) they hang from.
+void hud_damage_parts(const Record &rec, VehicleHudState &state) {
+  struct Placed {
+    VehicleHudPart part;
+    float x, z;
+  };
+  std::array<Placed, std::tuple_size_v<decltype(state.parts)>> placed;
+  size_t count = 0;
+  TopBox car;
+  for (Object *render : rec.renders) add_render_box(eye_matrix(), render, car);
+  const auto visit = [&](auto &&visit, Object *part, const PartMatrix &frame,
+                         int corner, int depth) -> void {
+    const auto *child = record(part);
+    if (!child || depth > 16) return;
+    // Running gear and interior (category 3 and others) have no blip.
+    const int category = child->config->category;
+    const bool shown = corner >= 0 || category == 1 || category == 2;
+    const auto kind = corner >= 0 ? VehicleHudPart::Kind::Wheel
+        : category == 1 ? VehicleHudPart::Kind::Engine : VehicleHudPart::Kind::Body;
+    TopBox box;
+    for (Object *render : child->renders) add_render_box(frame, render, box);
+    if (category == 2 && corner < 0 && box.any()) {
+      car.x0 = std::min(car.x0, box.x0);
+      car.x1 = std::max(car.x1, box.x1);
+      car.z0 = std::min(car.z0, box.z0);
+      car.z1 = std::max(car.z1, box.z1);
+    }
+    if (shown && box.any() && count < placed.size()) {
+      auto &entry = placed[count++];
+      entry.part.kind = kind;
+      entry.part.corner = static_cast<int8_t>(corner);
+      entry.part.condition = std::clamp(child->state.wear * child->state.tear, 0.f, 1.f);
+      entry.x = .5f * (box.x0 + box.x1);
+      entry.z = .5f * (box.z0 + box.z1);
+    }
+    for (const auto &[slot, grandchild] : child->children)
+      visit(visit, grandchild, part_matrix_multiply(frame, node_local(grandchild)), corner,
+            depth + 1);
+  };
+  for (const auto &[slot_id, child] : rec.children) {
+    int corner = -1;
+    for (const auto &slot : rec.config->slots)
+      if (slot.id == slot_id && slot.type >= 101 && slot.type <= 104) corner = slot.type - 101;
+    visit(visit, child, node_local(child), corner, 0);
+  }
+  if (!car.valid()) {
+    // No chassis mesh or panel: fall back to the extent of the parts.
+    for (size_t i = 0; i < count; ++i) {
+      car.x0 = std::min(car.x0, placed[i].x);
+      car.x1 = std::max(car.x1, placed[i].x);
+      car.z0 = std::min(car.z0, placed[i].z);
+      car.z1 = std::max(car.z1, placed[i].z);
+    }
+    if (!car.valid()) return;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    auto part = placed[i].part;
+    part.x = 2.f * (placed[i].x - car.x0) / (car.x1 - car.x0) - 1.f;
+    part.z = 2.f * (placed[i].z - car.z0) / (car.z1 - car.z0) - 1.f;
+    state.parts[state.part_count++] = part;
+  }
+}
+}  // namespace
+
 bool part_vehicle_hud(VehicleHudState &state) {
   if (!runtime) return false;
   const Value player = runtime->get_static("java.game.GameLogic", "player");
@@ -4816,12 +4910,9 @@ bool part_vehicle_hud(VehicleHudState &state) {
   state.speed = rec->dynamics.body.velocity.length() * 3.6;
   state.mileage = rec->mileage * .01;
   state.unit_scale = 1000.f / host_game_options().unit_meters;
-  state.condition = std::min(rec->state.wear, rec->state.tear);
   state.nitro = comp(as_part(static_cast<Object *>(target->key)), "tank_nitro") > 0 ? 1.f : 0.f;
+  hud_damage_parts(*rec, state);
   for (const auto &[slot, child] : rec->children) {
-    const auto *body = record(child);
-    if (body && body->config->category == 2)
-      state.condition = std::min({state.condition, body->state.wear, body->state.tear});
     if (rec->engine_running)
       if (Object *dyno = part_field(child, "dynodata"))
         state.turbo = dyno_boost_fraction(dyno, static_cast<float>(state.rpm)) *
