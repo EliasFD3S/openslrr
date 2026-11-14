@@ -246,6 +246,32 @@ SLRR_TEST(the_engine_beating_weak_rear_brakes_spins_the_driven_wheels) {
   SLRR_REQUIRE(wheel > car.speed() * 3);
 }
 
+SLRR_TEST(a_car_without_an_engine_coasts_and_still_brakes) {
+  // The drive configure_drive gives a car whose engine was torn off: a
+  // zero-torque engine that never starts and no gears.
+  const auto engineless = [](Car& car) {
+    auto& drive = car.dynamics.drive;
+    drive.torque = [](double) { return 0.0; };
+    drive.gears = 0;
+    drive.ratios = {};
+    drive.starter = 0;
+    car.dynamics.engine_running = false;
+    car.dynamics.engine_omega = 0;
+  };
+  Car coasting, braking;
+  for (Car* car : {&coasting, &braking}) {
+    engineless(*car);
+    car->run(1, 0, 0, 0);
+    car->dynamics.body.velocity = car->dynamics.body.orientation.rotate({0, 0, -20});
+    for (auto& wheel : car->dynamics.state) wheel.spin = 20 / .31;
+  }
+  coasting.run(2, 1, 0, 0);
+  braking.run(2, 0, 1, 0);
+  SLRR_REQUIRE(coasting.speed() > 18);  // rolls on, no parked-tyre friction
+  SLRR_REQUIRE(braking.speed() < 8);    // the brakes still stop it
+  SLRR_REQUIRE(!coasting.dynamics.engine_running);
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
       tyre_grip_follows_the_tyre_script,
@@ -259,6 +285,7 @@ int main() {
       steep_instant_centres_stay_stable_under_hard_braking,
       a_brake_stronger_than_the_drive_holds_its_wheels,
       the_engine_beating_weak_rear_brakes_spins_the_driven_wheels,
+      a_car_without_an_engine_coasts_and_still_brakes,
   };
   return slrr::standalone::run("vehicle_dynamics", tests);
 }
