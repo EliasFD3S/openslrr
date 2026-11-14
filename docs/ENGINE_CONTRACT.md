@@ -603,7 +603,10 @@ breaks off, the reconfigured chassis keeps its velocity and angular velocity, as
 SLRR_rev does, not its angular momentum: with less inertia the same momentum
 would spin it up (a car that lost its engine pitched over).
 The car then has no dyno, so no drive torque, engine audio or rpm, and it keeps
-its wall collision and damage although drive torque normally gates them. Repair
+its wall collision and damage although drive torque normally gates them.
+`configure_drive` gives it a drive in neutral with a zero-torque engine that
+never starts, so it coasts on its tyres and its brakes still work, instead of
+the parked-tyre friction that stops a car without a drive. Repair
 restores the mount but not the engine; fitting an engine again clears the
 state.
 
