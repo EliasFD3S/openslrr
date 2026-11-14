@@ -596,7 +596,12 @@ its block release; not stock values). On the Baiern a 74 km/h frontal tree hit
 leaves it at about a third; a hit near 95 km/h or more breaks it. The engine is
 the chassis child that carries the `dynodata` (the stock `Block`), found as
 `configure_drive` finds it, and everything installed on it goes too. It leaves
-as one loose body with its pre-impact velocity, so it carries on out of the car.
+as one loose body with its pre-impact velocity, so it carries on out of the car;
+as it starts inside the car's collision shell, it skips the car contacts until
+none of its corners is inside the car's bounds (at most 1 s). Whenever a part
+breaks off, the reconfigured chassis keeps its velocity and angular velocity, as
+SLRR_rev does, not its angular momentum: with less inertia the same momentum
+would spin it up (a car that lost its engine pitched over).
 The car then has no dyno, so no drive torque, engine audio or rpm, and it keeps
 its wall collision and damage although drive torque normally gates them. Repair
 restores the mount but not the engine; fitting an engine again clears the
