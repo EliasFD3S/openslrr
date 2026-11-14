@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <string>
 #include <thread>
@@ -249,11 +250,18 @@ SLRR_TEST(crash_logging_terminate_child_captures_exception_what) {
 }
 
 SLRR_TEST(crash_logging_seh_child_records_text_and_real_dump) {
+#if defined(__SANITIZE_ADDRESS__)
+  // AddressSanitizer installs its own access-violation handler, which reports
+  // and terminates the instrumented child before (or instead of) the crash
+  // logger's unhandled-exception filter. The normal lane covers this path.
+  std::printf("skipped under AddressSanitizer\n");
+#else
   slrr::test::TemporaryDirectory temporary("crash-logging-seh");
   const auto child = run_fixture("seh", temporary.path());
   require_abnormal(child, temporary.path(), "windows_seh");
   const auto crash = slrr::test::read_text_file(temporary.path() / "crash.txt");
   SLRR_REQUIRE(crash.find("code: 0xc0000005") != std::string::npos);
+#endif
 }
 
 SLRR_TEST(crash_logging_crt_termination_children_record_causes) {

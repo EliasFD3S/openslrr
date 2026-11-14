@@ -101,6 +101,9 @@ first handled crash writes text, attempts a dump, writes an abnormal manifest,
 and attempts to flush structured diagnostics/metrics. CRT termination paths exit
 with status 3 after recording; the SEH filter requests abnormal process
 termination. Clean shutdown restores the prior process handlers and error mode.
+In an AddressSanitizer build, ASan's own handler owns access violations and can
+terminate the process before the SEH filter runs, so the SEH regression test is
+skipped in the ASan lane and covered by the normal lane.
 
 **No complete-log guarantee exists.** These handlers are not promised to be
 async-signal-safe. They can allocate, take diagnostics locks, call the CRT, and
