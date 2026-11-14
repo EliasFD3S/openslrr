@@ -152,6 +152,14 @@ struct Record {
   // Settled cage displacement of each corner's hardpoints when its wheel was
   // fitted; only crush beyond it counts against the mount.
   std::array<double, 4> wheel_shift_base{};
+  // Chassis only: the engine mount against impact energy
+  // (damage_engine_mount). At zero the engine breaks off as a loose body,
+  // thrown with `engine_release_velocity`. `engine_lost` keeps the chassis
+  // colliding after its engine (and so its drive torque) is gone.
+  float engine_mount = 1.f;
+  Object *engine_release = nullptr;
+  physics::Vec3 engine_release_velocity;
+  bool engine_lost = false;
   bool dynamic_frames = false;
   bool physics_pending_placement = true;
   // start releases the body. Until then a chassis only settles onto a floor.
@@ -1224,6 +1232,17 @@ void corner_wheel_parts(const Record &rec, size_t corner, std::vector<Object *> 
       if (const auto child = rec.children.find(slot.id); child != rec.children.end())
         out.push_back(child->second);
 }
+// The chassis's engine: the direct child carrying the DynoData, as
+// configure_drive finds it (stock Chassis.updatevariables takes the child that
+// is a Block). Everything installed on it goes with it.
+Object *chassis_engine(const Record &rec) {
+  for (const auto &[slot, child] : rec.children) {
+    const auto dyno = child->fields.find("dynodata");
+    if (dyno != child->fields.end() && dyno->second.tag == ValueTag::Obj && dyno->second.v.o)
+      return child;
+  }
+  return nullptr;
+}
 // The chassis cage has settled after an impact, so its node positions are the
 // plastic shape rather than the transient crush peak. SLRR_rev 77b0fb6 ends a
 // mount at 0.3 m of hardpoint travel (vehicle-3d.ts moveMounts,
@@ -1445,6 +1464,11 @@ bool part_install(Object *child, Object *root, int own, int target,
     const auto corner = static_cast<size_t>(selected.mount->type - 101);
     p->wheel_mount[corner] = p->wheel_strut[corner] = 1.f;
     p->wheel_shift_base[corner] = corner_hardpoint_shift(*p, corner);
+  }
+  // An engine fitted again starts on a sound mount.
+  if (p->config->native_kind == "car" && chassis_engine(*p) == child) {
+    p->engine_mount = 1.f;
+    p->engine_lost = false;
   }
   loose_panels.erase(child);
   if (runtime)
@@ -2824,6 +2848,7 @@ void repair_part(Object* part, Record& rec) {
   rec.wheel_mount.fill(1.f);
   rec.wheel_strut.fill(1.f);
   rec.wheel_shift_base.fill(0.0);
+  rec.engine_mount = 1.f;
   // Avoid relink_assembly here: stock repair can visit descendants before their
   // parents. Queue each affected part once and flush after the scripted walk.
   if (!rec.links.empty()) repair_relink_pending.insert(part);
@@ -3024,6 +3049,35 @@ void flap_impact(Object *chassis, Record &rec,
   }
 }
 
+// The engine flies out on a big impact near it, as SLRR_rev 77b0fb6 frees the
+// block at zero condition (vehicle-3d.ts damageImpact, the rigid-part loop):
+// the impact energy weighted by 0.5 exp(-(d / 1.1 m)^2) of the horizontal
+// distance to the engine adds up against 120 kJ (physics::kEngineMountTuning).
+// SLRR_rev tuning, not stock behaviour. As there, the engine leaves with the
+// velocity it had before the contact, so it carries on out of the car. Floor
+// contacts below 8 m/s do not count.
+void damage_engine_mount(Object* chassis, Record& rec, const physics::VehicleDynamics::Impact& hit,
+                         physics::Vec3 local_hit, double internal,
+                         std::vector<Object*>& released) {
+  Object* engine = chassis_engine(rec);
+  if (!engine || !(internal > 0) || (hit.normal.y > .65 && hit.speed < 8)) return;
+  const auto& body = rec.dynamics.body;
+  const double energy =
+      physics::contact_impulse_energy(body, hit.point, hit.normal, hit.speed) * internal;
+  const auto frame = part_matrix_multiply(part_matrix_inverse_rigid(world_matrix(chassis)),
+                                          world_matrix(engine));
+  rec.engine_mount = physics::wheel_mount_condition(
+      rec.engine_mount, 0, energy, std::hypot(local_hit.x - frame[12], local_hit.z - frame[14]),
+      physics::kEngineMountTuning);
+  if (rec.engine_mount > 0) return;
+  const physics::Vec3 at = body.position + body.orientation.rotate(
+      physics::Vec3{frame[12], frame[13], frame[14]} - body.center);
+  rec.engine_release = engine;
+  rec.engine_release_velocity =
+      physics::pre_contact_velocity(body, hit.point, hit.normal, hit.speed, at);
+  released.push_back(engine);
+}
+
 void damage_chassis(Object* chassis, Record& rec, const physics::VehicleDynamics::Impact& hit,
                     bool player, std::vector<Object*>& released) {
   using physics::Vec3;
@@ -3093,6 +3147,7 @@ void damage_chassis(Object* chassis, Record& rec, const physics::VehicleDynamics
                               speed * deformation, .65);
   }
   damage_wheel_mounts(rec, hit, local_hit, internal, released);
+  damage_engine_mount(chassis, rec, hit, local_hit, internal, released);
 }
 
 // Bounds of the visible shells of `root`'s installed subtree, in root's frame.
@@ -3183,6 +3238,13 @@ void detach_panel(Object* part, Record& rec, Object* chassis, Record& vehicle) {
   loose.carrier_frame = carrier.frame();
   body.velocity = carrier.point_velocity(body.position);
   body.set_omega(carrier.omega());
+  if (part == vehicle.engine_release) {
+    // A failed engine mount: the engine keeps its pre-impact velocity.
+    if (vehicle.engine_release_velocity.finite())
+      body.velocity = vehicle.engine_release_velocity;
+    vehicle.engine_release = nullptr;
+    vehicle.engine_lost = true;
+  }
   if (runtime)
     for (const auto& descendant : part_installed_tree(part))
       runtime->invoke_by_name(chassis->class_name, "rempart",
@@ -3763,7 +3825,8 @@ void advance_chassis_tick() {
     const auto before = rec.dynamics.body.position;
     const auto velocity_before = rec.dynamics.body.velocity;
     const auto steps = rec.dynamics.advance(kPhysicsTick, terrain);
-    if (rec.physics_released && rec.dynamics.drive.torque) {
+    // A car whose engine flew out has no drive torque but still hits walls.
+    if (rec.physics_released && (rec.dynamics.drive.torque || rec.engine_lost)) {
       const auto wall = collide_chassis(rec, before);
       const auto& ground = rec.dynamics.ground_impact;
       damage_chassis(chassis, rec, wall.speed >= ground.speed ? wall : ground,

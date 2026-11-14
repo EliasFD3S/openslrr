@@ -18,6 +18,22 @@ double contact_impulse_energy(const RigidBody& body, Vec3 point, Vec3 normal,
   return impulse * impulse / (2 * body.mass);
 }
 
+Vec3 pre_contact_velocity(const RigidBody& body, Vec3 contact, Vec3 normal,
+                          double closing_speed, Vec3 point, double restitution) {
+  const Vec3 current = body.point_velocity(point);
+  if (!(closing_speed > 0) || !(body.mass > 0) || !contact.finite() || !normal.finite() ||
+      !point.finite())
+    return current;
+  const Vec3 n = normal.normalized();
+  const Vec3 r = contact - body.position;
+  const double inverse_mass =
+      1 / body.mass + n.dot(body.inverse_world_inertia(r.cross(n)).cross(r));
+  if (!(inverse_mass > 0) || !std::isfinite(inverse_mass)) return current;
+  const Vec3 impulse = n * ((1 + restitution) * closing_speed / inverse_mass);
+  const Vec3 spin = body.inverse_world_inertia(r.cross(impulse));
+  return current - impulse / body.mass - spin.cross(point - body.position);
+}
+
 float wheel_mount_condition(float condition, double shift, double energy, double distance,
                             const WheelMountTuning& tuning) {
   double result = condition;

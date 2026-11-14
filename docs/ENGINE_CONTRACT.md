@@ -589,6 +589,19 @@ mount: a corner that is still dented keeps its current dent as the baseline,
 so the new wheel only falls off after a further 0.3 m of settled crush or 55 kJ
 of new impact energy. Repair clears the dent, the baseline and the mount.
 
+The engine breaks off on a much bigger impact. Its mount takes the same impact
+energy weighted by 0.5 exp(-(d/1.1 m)²) of the horizontal distance to the engine
+and fails at 120 kJ, so 240 kJ at the engine itself (SLRR_rev `damageImpact` and
+its block release; not stock values). On the Baiern a 74 km/h frontal tree hit
+leaves it at about a third; a hit near 95 km/h or more breaks it. The engine is
+the chassis child that carries the `dynodata` (the stock `Block`), found as
+`configure_drive` finds it, and everything installed on it goes too. It leaves
+as one loose body with its pre-impact velocity, so it carries on out of the car.
+The car then has no dyno, so no drive torque, engine audio or rpm, and it keeps
+its wall collision and damage although drive torque normally gates them. Repair
+restores the mount but not the engine; fitting an engine again clears the
+state.
+
 Deformation and detached parts need consistency between the impact, the local
 frame, the deformed mesh, the part state, and collision. Check separately:
 vibration at rest, permanent deformation, a panel opening, and an attachment
