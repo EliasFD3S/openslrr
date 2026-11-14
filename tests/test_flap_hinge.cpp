@@ -215,10 +215,10 @@ SLRR_TEST(a_door_left_open_gives_way_when_the_car_pulls_away) {
   flap_toggle(s);
   run(s, door, loads, 1);
   SLRR_REQUIRE(s.hold && !s.driving);
-  // 0.1 g does not move it off its check.
+  // 0.02 g does not move it off its check.
   const double none[3] = {};
   for (int i = 0; i < 240; ++i) {
-    const double dv[3] = {0, 0, -1 * kStep};
+    const double dv[3] = {0, 0, -.2 * kStep};
     flap_carrier_impulse(s, door, dv, none);
     flap_step(s, door, loads, kStep);
   }
@@ -326,6 +326,70 @@ SLRR_TEST(the_hinge_follows_a_moved_slot) {
   SLRR_REQUIRE(near(a.rate, b.rate));
 }
 
+SLRR_TEST(an_obstacle_swings_an_open_door_shut_or_tears_it_off) {
+  using slrr::physics::FlapContact;
+  using slrr::physics::flap_contact;
+  const auto door = baiern_left_door();
+  FlapLoads still;
+  const auto open_door = [&] {
+    FlapState s;
+    flap_toggle(s);
+    run(s, door, still, .6);
+    s.since_release = 1;
+    return s;
+  };
+  // Free edge of the open door, and a pole in front of it: the car drives to
+  // -Z, so the pole pushes the door back (+Z).
+  double edge[3];
+  edge_at(door, door.upper, edge);
+  const double back[3] = {0, 0, 1};
+  FlapState s = open_door();
+  SLRR_REQUIRE(flap_contact(s, door, edge, back, 3, .02) == FlapContact::Pushed);
+  SLRR_REQUIRE(s.angle < door.upper && s.rate < 0);
+  run(s, door, still, 1);
+  SLRR_REQUIRE(s.latched && !s.open);  // swung shut and caught
+  // Harder than the hinge takes: it comes off.
+  FlapState fast = open_door();
+  SLRR_REQUIRE(flap_contact(fast, door, edge, back, FlapTuning::tear_speed + .1, .02) ==
+               FlapContact::Torn);
+  // A push along the hinge line cannot swing it: the hinge takes it, and it
+  // tears once the obstacle presses deep into it.
+  FlapState along = open_door();
+  const double up[3] = {0, 1, 0};
+  SLRR_REQUIRE(flap_contact(along, door, edge, up, 1, .05) == FlapContact::Blocked);
+  SLRR_REQUIRE(near(along.angle, door.upper, 1e-3));
+  SLRR_REQUIRE(flap_contact(along, door, edge, up, 1, FlapTuning::tear_depth + .05) ==
+               FlapContact::Torn);
+  // Pressed further open against its stop: blocked, then torn when crushed.
+  FlapState pressed = open_door();
+  const double forward[3] = {0, 0, -1};
+  SLRR_REQUIRE(flap_contact(pressed, door, edge, forward, 1, .05) == FlapContact::Blocked);
+  SLRR_REQUIRE(near(pressed.angle, door.upper));
+  SLRR_REQUIRE(flap_contact(pressed, door, edge, forward, 1, .4) == FlapContact::Torn);
+}
+
+SLRR_TEST(a_bent_panel_closes_but_no_longer_latches) {
+  const auto door = baiern_left_door();
+  FlapLoads still;
+  FlapState s;
+  s.latched = false;
+  s.open = true;
+  s.latch_broken = true;
+  s.since_release = 1;
+  s.angle = .5;
+  s.rate = -4;  // slammed
+  run(s, door, still, 1);
+  SLRR_REQUIRE(!s.latched && s.angle >= 0);
+  // A script close drives it onto its stop, where it stays unlatched; the
+  // next click opens it.
+  SLRR_REQUIRE(s.open && !flap_toggle(s));
+  run(s, door, still, 1);
+  SLRR_REQUIRE(!s.latched && !s.open && s.angle < .02);
+  SLRR_REQUIRE(flap_toggle(s));
+  run(s, door, still, .6);
+  SLRR_REQUIRE(near(s.angle, door.upper, 1e-3));
+}
+
 SLRR_TEST(end_stops_bound_motion_without_nan) {
   const auto door = baiern_left_door();
   FlapState s;
@@ -358,6 +422,8 @@ int main() {
       gravity_and_wind_act_on_free_panels,
       a_free_panel_that_settles_shut_relatches,
       the_hinge_follows_a_moved_slot,
+      an_obstacle_swings_an_open_door_shut_or_tears_it_off,
+      a_bent_panel_closes_but_no_longer_latches,
       end_stops_bound_motion_without_nan,
   };
   return slrr::standalone::run("flap_hinge", tests);

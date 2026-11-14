@@ -121,6 +121,12 @@ struct Record {
   bool flap_struck = false;
   bool flap_carrier_valid = false;
   physics::Vec3 flap_carrier_velocity, flap_carrier_omega;
+  // Part-local bounds of the panel, its world collision box (flap_world_contact).
+  bool flap_box = false;
+  physics::Vec3 flap_box_min, flap_box_max;
+  // Last world centre of that box, so a fast pass is swept, not stepped.
+  bool flap_world_valid = false;
+  physics::Vec3 flap_world_centre;
   // Seventh field of the create string, an index into each render's colors.
   bool colour_set = false;
   int colour_index = 0;
@@ -2939,6 +2945,7 @@ bool flap_geometry_for(Object *part, Record &rec, physics::FlapGeometry *out) {
     rec.flap_parent = parent;
     rec.flap_slot = rec.state.parent_slot;
     rec.flap_sized = rec.flap_struck = rec.flap_carrier_valid = false;
+    rec.flap_box = rec.flap_world_valid = false;
   }
   auto *owner = record(parent);
   if (!owner) return false;
@@ -2968,6 +2975,11 @@ bool flap_geometry_for(Object *part, Record &rec, physics::FlapGeometry *out) {
                           closed[8 + r] * p[2] + closed[12 + r];
       }
       physics::flap_size_from_points(geometry, corners, 8, 0);
+    }
+    if (bounds.distance < 1e4) {
+      rec.flap_box = true;
+      rec.flap_box_min = bounds.minimum;
+      rec.flap_box_max = bounds.maximum;
     }
     rec.flap_geometry = geometry;
     rec.flap_sized = true;
@@ -4602,11 +4614,77 @@ void tick_pedestrians(double seconds) {
 constexpr double kFlapStep = 1.0 / 240;
 double flap_elapsed = 0;
 
+// An unlatched panel of a moving car against the static scene and native
+// objects, with the oriented box of its bounds in its current pose: the same
+// box/sphere and wall-triangle queries collide_chassis uses. The box is swept
+// from the last frame's centre so a fast pass cannot step over a trunk. A hit
+// turns the panel out of the obstacle, swings it shut or tears it off
+// (flap_contact); the car itself does not feel the panel's contacts.
+// Returns false without a contact.
+bool flap_world_contact(Object *part, Record &rec, const physics::FlapGeometry &geometry,
+                        const PartMatrix &parent_world, const physics::RigidBody &body,
+                        physics::FlapContact &outcome) {
+  using physics::Vec3;
+  const auto world = part_matrix_multiply(parent_world, node_local(part));
+  const Vec3 lo = rec.flap_box_min, hi = rec.flap_box_max, mid = (lo + hi) * .5;
+  const float half[3] = {std::max(float(hi.x - lo.x) * .5f, .02f),
+                         std::max(float(hi.y - lo.y) * .5f, .02f),
+                         std::max(float(hi.z - lo.z) * .5f, .02f)};
+  PartMatrix box = world;
+  const Vec3 centre{world[0] * mid.x + world[4] * mid.y + world[8] * mid.z + world[12],
+                    world[1] * mid.x + world[5] * mid.y + world[9] * mid.z + world[13],
+                    world[2] * mid.x + world[6] * mid.y + world[10] * mid.z + world[14]};
+  const Vec3 from = rec.flap_world_valid ? rec.flap_world_centre : centre;
+  rec.flap_world_centre = centre;
+  rec.flap_world_valid = true;
+  const Vec3 path = centre - from;
+  // A teleport is not a sweep.
+  const int samples = path.length() > 5 ? 1
+      : static_cast<int>(std::clamp(std::ceil(path.length() / .15), 1.0, 6.0));
+  SceneBodyContact hit;
+  bool found = false;
+  for (int sample = 1; sample <= samples && !found; ++sample) {
+    const Vec3 at = path.length() > 5 ? centre : from + path * (double(sample) / samples);
+    box[12] = float(at.x);
+    box[13] = float(at.y);
+    box[14] = float(at.z);
+    SceneBodyContact shape, wall;
+    const bool shape_hit = scene_instances_contact_box(box.data(), half, shape);
+    const bool wall_hit = scene_instances_contact_walls(box.data(), half, wall);
+    if (!shape_hit && !wall_hit) continue;
+    hit = shape_hit && (!wall_hit || shape.penetration >= wall.penetration) ? shape : wall;
+    found = true;
+  }
+  if (!found) return false;
+  // Into the parent frame.
+  const Vec3 point{hit.point[0] - parent_world[12], hit.point[1] - parent_world[13],
+                   hit.point[2] - parent_world[14]};
+  const auto inward = [&](Vec3 v) {
+    return Vec3{parent_world[0] * v.x + parent_world[1] * v.y + parent_world[2] * v.z,
+                parent_world[4] * v.x + parent_world[5] * v.y + parent_world[6] * v.z,
+                parent_world[8] * v.x + parent_world[9] * v.y + parent_world[10] * v.z};
+  };
+  const Vec3 local_point = inward(point);
+  const Vec3 local_normal = inward({hit.normal[0], hit.normal[1], hit.normal[2]});
+  // The panel point's velocity: the car at that point plus the swing.
+  const Vec3 axis{geometry.axis[0], geometry.axis[1], geometry.axis[2]};
+  const Vec3 arm = local_point - Vec3{geometry.pivot[0], geometry.pivot[1], geometry.pivot[2]};
+  const Vec3 swing = axis.cross(arm - axis * arm.dot(axis)) * rec.flap.rate;
+  const Vec3 velocity =
+      inward(body.point_velocity({hit.point[0], hit.point[1], hit.point[2]})) + swing;
+  const double p[3] = {local_point.x, local_point.y, local_point.z};
+  const double n[3] = {local_normal.x, local_normal.y, local_normal.z};
+  outcome = physics::flap_contact(rec.flap, geometry, p, n, -velocity.dot(local_normal),
+                                  hit.penetration);
+  return true;
+}
+
 void advance_flaps(double seconds) {
   using physics::Vec3;
   flap_elapsed = std::min(flap_elapsed + std::min(seconds, .1), .1);
   const int steps = static_cast<int>(flap_elapsed / kFlapStep);
   flap_elapsed -= steps * kFlapStep;
+  std::vector<Object *> torn;
   for (auto &[part, rec] : records) {
     if (!rec.state.parent) {
       if (rec.flap_parent) flap_geometry_for(part, rec);  // taken off: reset
@@ -4640,8 +4718,12 @@ void advance_flaps(double seconds) {
     loads.gravity[2] = gravity.z;
     Object *chassis = car(part);
     Record *vehicle = chassis ? record(chassis) : nullptr;
-    if (vehicle && vehicle->physics_ready && vehicle->physics_released &&
-        !vehicle->physics_suspended) {
+    // A panel bent beyond its closed pose no longer latches (2% RMS strain
+    // halves the cage condition).
+    rec.flap.latch_broken = rec.deformation && rec.deformation->condition() < .5f;
+    const bool carried = vehicle && vehicle->physics_ready && vehicle->physics_released &&
+                         !vehicle->physics_suspended;
+    if (carried) {
       const auto &body = vehicle->dynamics.body;
       const Vec3 pivot = outward(geometry.pivot);
       const double centre[3] = {geometry.pivot[0] + geometry.com[0],
@@ -4673,14 +4755,36 @@ void advance_flaps(double seconds) {
     bool moved = false;
     for (int i = 0; i < steps; ++i)
       moved = physics::flap_step(rec.flap, geometry, loads, kFlapStep) || moved;
+    if (moved) place_child(rec.state.parent, rec.state.parent_slot, false);
+    // An open panel of a driven car meets the world in the pose just drawn.
+    // Not in the garage, where the car is suspended and a door may open into
+    // the lift.
+    physics::FlapContact contact = physics::FlapContact::Blocked;
+    if (carried && !rec.flap.latched && rec.flap_box &&
+        flap_world_contact(part, rec, geometry, frame, vehicle->dynamics.body, contact)) {
+      if (contact == physics::FlapContact::Torn) {
+        torn.push_back(part);
+        continue;
+      }
+      // A push turns it; a stop it was pressed onto may have moved it too.
+      place_child(rec.state.parent, rec.state.parent_slot, false);
+      moved = true;
+    } else if (!carried || rec.flap.latched) {
+      rec.flap_world_valid = false;
+    }
     if (!moved) continue;
-    place_child(rec.state.parent, rec.state.parent_slot, false);
     // Children follow through the render tree; only linked visuals inside the
     // panel's subtree need their anchors again.
     for (const auto &item : part_installed_tree(part))
       if (const auto *installed = record(item.object); installed && !installed->links.empty())
         relink_one(item.object);
   }
+  // After the loop: tearing off changes the assembly. detach_panel makes the
+  // panel a loose body with the car's velocity at its pose.
+  for (Object *part : torn)
+    if (auto *panel = record(part))
+      if (auto *chassis = car(part))
+        if (auto *vehicle = record(chassis)) detach_panel(part, *panel, chassis, *vehicle);
 }
 
 } // namespace

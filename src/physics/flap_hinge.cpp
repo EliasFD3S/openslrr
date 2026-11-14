@@ -207,6 +207,48 @@ bool flap_hit(FlapState &state, const FlapGeometry &g, const double point[3],
   return true;
 }
 
+FlapContact flap_contact(FlapState &state, const FlapGeometry &g,
+                         const double point[3], const double normal[3],
+                         double speed, double depth) {
+  if (!finite3(point) || !finite3(normal) || !std::isfinite(speed) ||
+      !std::isfinite(depth))
+    return FlapContact::Blocked;
+  // Harder than the hinge pins and the door check can take.
+  if (speed >= T::tear_speed) return FlapContact::Torn;
+  const double r[3] = {point[0] - g.pivot[0], point[1] - g.pivot[1],
+                       point[2] - g.pivot[2]};
+  double radial[3], tangent[3];
+  normal_part(r, g.axis, radial);
+  const double distance = std::sqrt(dot(radial, radial));
+  // Share of the push that turns the panel about its hinge.
+  double along = 0;
+  if (distance > 1e-3) {
+    cross(g.axis, radial, tangent);
+    along = dot(normal, tangent) / distance;
+  }
+  const double crush = std::max(depth, 0.);
+  if (std::fabs(along) < .2)
+    return crush > T::tear_depth ? FlapContact::Torn : FlapContact::Blocked;
+  // Turn out of the overlap, as far as the stops let it.
+  const double wanted = state.angle + std::clamp(crush / (distance * along), -.3, .3);
+  const double reached = std::clamp(wanted, g.lower, g.upper);
+  const double left = std::fabs(wanted - reached) * distance * std::fabs(along);
+  state.angle = reached;
+  // Lose the approach speed, with a little bounce.
+  if (speed > 0) {
+    const double change = (1 + T::contact_restitution) * speed / (distance * along);
+    state.rate = std::clamp(state.rate + change, -T::max_rate, T::max_rate);
+  }
+  if (reached != wanted) {
+    // Pressed onto a stop: what the swing could not clear stays an overlap.
+    if ((reached <= g.lower && state.rate < 0) || (reached >= g.upper && state.rate > 0))
+      state.rate = 0;
+    if (left > T::tear_depth) return FlapContact::Torn;
+    return FlapContact::Blocked;
+  }
+  return FlapContact::Pushed;
+}
+
 bool flap_step(FlapState &state, const FlapGeometry &g, const FlapLoads &loads,
                double seconds) {
   if (!(seconds > 0) || !std::isfinite(seconds)) return false;
@@ -271,8 +313,9 @@ bool flap_step(FlapState &state, const FlapGeometry &g, const FlapLoads &loads,
   }
   // The script opening ends at the stop, or just short of it where a heavy
   // panel settles against the drive.
-  if (state.driving && state.open && state.angle > g.upper - .05 &&
-      std::fabs(state.rate) < .2)
+  if (state.driving && state.open && std::fabs(state.rate) < .05 &&
+      (state.angle >= g.upper - .005 ||
+       (state.angle > g.upper - .05 && std::fabs(state.rate) < .02)))
     state.driving = false;
   const bool driven = !state.open && state.driving;
   if (state.angle <= 0 && (before > 0 || driven)) {
@@ -280,7 +323,10 @@ bool flap_step(FlapState &state, const FlapGeometry &g, const FlapLoads &loads,
     // latches when it slams shut after the release has settled.
     const bool slam = before > 0 && -state.rate * edge(g) >= T::latch_speed &&
                       state.since_release >= T::latch_delay;
-    if (driven || slam) {
+    if (state.latch_broken) {
+      // A bent panel does not catch. A script close keeps pressing it onto
+      // its stop, unlatched; a free one bounces off it.
+    } else if (driven || slam) {
       latch(state);
       return before != 0;
     }
@@ -293,8 +339,8 @@ bool flap_step(FlapState &state, const FlapGeometry &g, const FlapLoads &loads,
   }
   // A free panel that settled shut too gently to slam the latch still
   // catches once it rests in the closed pose.
-  if (!state.hold && std::fabs(state.angle) < 1e-3 && std::fabs(state.rate) < .05 &&
-      state.since_release >= T::latch_delay) {
+  if (!state.hold && !state.latch_broken && std::fabs(state.angle) < 1e-3 &&
+      std::fabs(state.rate) < .05 && state.since_release >= T::latch_delay) {
     latch(state);
     return before != 0;
   }

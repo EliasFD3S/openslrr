@@ -442,16 +442,31 @@ such a slot is a one-degree-of-freedom hinged plate
   inward push.
 - A free panel reacts to gravity, to the carrier's velocity change at the
   hinge and its rotation, and to the relative wind, with damped end stops.
-  It latches again when it slams shut or comes to rest closed. The simulated
-  hinge follows the current slot pose and installed mass, like the drawn one.
-  A part moved to another slot or taken off starts closed and latched. The
-  hinge state is not saved: a loaded car starts with every panel closed and
-  latched.
+  It latches again when it slams shut or comes to rest closed, unless the
+  panel is bent (its own deformation cage below half condition): then it
+  closes onto its stop but stays unlatched. The simulated hinge follows the
+  current slot pose and installed mass, like the drawn one. A part moved to
+  another slot or taken off starts closed and latched. The hinge state is not
+  saved: a loaded car starts with every panel closed and latched.
+- An unlatched panel of a released, moving car collides with the static
+  scene and native objects: the oriented box of its bounds, in its current
+  pose and swept from the last frame, goes through the same native box/sphere
+  and wall-triangle queries as the chassis
+  (`scene_instances_contact_box`, `scene_instances_contact_walls`). The panel
+  turns out of the obstacle and loses its approach speed along its swing, so
+  an obstacle in front of an open door swings it shut, where it latches if it
+  can. At 4.5 m/s or more of contact speed (the car's motion at that point
+  plus the swing), or when an obstacle it cannot swing away from presses more
+  than 0.15 m into it, the hinge gives way: the panel comes off through
+  `detach_panel` and becomes a loose body. Driving forward also blows an open
+  door shut through the wind and the car's acceleration.
 
-The panel has no collision of its own: an open door can pass through a wall,
-and only chassis contacts reach it, measured against the panel as it hangs.
-Its constants are an OpenSLRR design; the original flap solver is not
-recovered and SLRR_rev has no `flap` native.
+The car does not feel its panels' contacts, and the panels do not collide
+with each other, loose bodies, other cars or the ground (floor triangles are
+left out, as for the chassis walls). In the garage, where the car is
+suspended, a panel opens without world contacts. Its constants are an
+OpenSLRR design; the original flap solver is not recovered and SLRR_rev has
+no `flap` native.
 
 ## 11. Physics and damage
 
