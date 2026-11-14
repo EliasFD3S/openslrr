@@ -56,6 +56,9 @@ struct FlapState {
   bool hold = false;
   // A script open or close is still under way.
   bool driving = false;
+  // Bent too far (panel deformation) for the latch to catch: it closes onto
+  // its stop but stays unlatched.
+  bool latch_broken = false;
   double since_release = 0;  // seconds since the latch last let go
 };
 
@@ -78,6 +81,23 @@ void flap_carrier_impulse(FlapState &state, const FlapGeometry &geometry,
 // Returns true when the panel was released or its motion changed.
 bool flap_hit(FlapState &state, const FlapGeometry &geometry,
               const double point[3], const double normal[3], double speed);
+// What a world contact did to an open panel.
+enum class FlapContact {
+  Pushed,   // turned out of the obstacle along its swing
+  Blocked,  // the obstacle pushes along the hinge or into a stop
+  Torn,     // the hinge gives way: the panel comes off
+};
+// A world contact on the swinging panel, in the parent frame and current
+// pose: the obstacle pushes the panel along unit `normal` at `point`, `speed`
+// is the panel point's speed into the obstacle (m/s, the carrier's motion
+// included) and `depth` the overlap in metres. Above FlapTuning::tear_speed,
+// or when an obstacle it cannot swing away from presses more than
+// FlapTuning::tear_depth into it, the panel tears off. Otherwise it turns out
+// of the overlap and loses its approach speed where the hinge lets it; an
+// obstacle in front of an open door therefore swings it shut.
+FlapContact flap_contact(FlapState &state, const FlapGeometry &geometry,
+                         const double point[3], const double normal[3],
+                         double speed, double depth);
 // Advances one step. Returns true when the angle changed.
 bool flap_step(FlapState &state, const FlapGeometry &geometry,
                const FlapLoads &loads, double seconds);
@@ -96,11 +116,14 @@ struct FlapTuning {
   static constexpr double drive_frequency = 9;   // script drive, rad/s (critically damped)
   static constexpr double drive_limit = 60;      // rad/s^2
   static constexpr double hold_margin = .35;     // drive target past the stop, rad
-  static constexpr double hold_detent = 3;       // strut floor, rad/s^2
+  static constexpr double hold_detent = .5;      // strut floor (a door check), rad/s^2
   static constexpr double hold_giveway = .35;    // forced this far off the stop, it lets go (rad)
   static constexpr double air_density = 1.225;
   static constexpr double drag = 1;              // flat-plate normal force coefficient
   static constexpr double max_rate = 20;         // rad/s
+  static constexpr double tear_speed = 4.5;      // contact speed that rips an open panel off, m/s
+  static constexpr double tear_depth = .15;      // overlap it cannot swing out of, m
+  static constexpr double contact_restitution = .2;
 };
 
 }  // namespace slrr::physics
