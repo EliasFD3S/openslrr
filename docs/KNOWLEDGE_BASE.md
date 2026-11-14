@@ -405,7 +405,17 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   layout from a hard-coded table, scaled by `stock_scale = 0.5625 / (h/w)`.
   CFG `osd_*` lines (`include/slrr/part_config.hpp:HudSlot`) override it.
 - HUD values come from `src/resources/part_runtime.cpp:part_vehicle_hud`:
-  RPM, km/h, mileage, condition = min(wear, tear), nitro, turbo, gear.
+  RPM, km/h, mileage, nitro, turbo, gear, and the damage gauge's parts.
+- Damage gauge (`osd_damage`, stock font `cars\meshes\osdfont.scx`): glyph
+  `A` is the car outline, `E`/`L`/`T` the drivetrain, `O h l r p q t u v` the
+  body and `a b c d` the wheels, in one coordinate system with the front up.
+  `src/resources/part_runtime.cpp:hud_damage_parts` lists the installed
+  engine, body and wheel parts with their top-down centre, normalised to the
+  chassis renders, and their condition `wear × tear`
+  (`GAME:parts/scripts/src/Part.java:getConditionNoAttach`). The renderer
+  gives each part to the smallest blip quad of its kind holding that centre
+  (wheels by corner) and draws a blip in its worst part's colour, or not at
+  all when it holds no part (`src/render/bgfx_osd.cpp:draw_vehicle_hud`).
 
 ### 5.9 Options and saves
 

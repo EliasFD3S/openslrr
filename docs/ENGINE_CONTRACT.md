@@ -705,6 +705,15 @@ turbo. Preserve the expected size, aspect, and coordinates. A reference image
 that looks offset at a high resolution can reflect stock behavior that is
 kept on purpose, not an element to recenter automatically.
 
+The damage gauge is a map of the car, not one colour. The stock font holds
+a neutral car outline and one blip per region in one coordinate system,
+front up. Each blip shows the worst condition (stock `wear × tear`) of the
+installed parts it covers and is not drawn when no such part is installed:
+engine parts (category 1) light the drivetrain blips, body panels
+(category 2) the body blips, each placed by where its meshes sit on the car
+seen from above, and the parts on a corner's wheel slot (type 101 + corner)
+light that corner's wheel blip. Do not key this on car or part names.
+
 `host_game_options` centralizes driving, video, and gameplay options.
 The stock store is `save/game/options`. Applying a resolution live must
 synchronize Config, the host mode, framebuffer dimensions, the viewport, and
