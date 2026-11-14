@@ -304,7 +304,12 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
    `src/resources/part_runtime.cpp:flap_impact`, which can release the latch
    and swing it, and `advance_flaps` integrates it at 240 Hz on frame time
    with gravity, the carrier's velocity change and wind, then re-places it
-   through `place_child`. ENGINE_CONTRACT §10 has the contract.
+   through `place_child`. On a moving car an unlatched panel's box meets the
+   static scene and native objects
+   (`src/resources/part_runtime.cpp:flap_world_contact`, response in
+   `src/physics/flap_hinge.cpp:flap_contact`): it is swung out of the way or,
+   from 4.5 m/s, torn off through `detach_panel` after the loop.
+   ENGINE_CONTRACT §10 has the contract.
 
 ### 5.6 Maps and world
 
@@ -525,7 +530,7 @@ Process:
 | Ambient start range | 250 m beyond the CFG radius | `src/resources/scene_ambience.cpp:scene_ambience_audible` |
 | Chassis wall probe | four spheres of 0.18 m | `src/resources/part_runtime.cpp:collide_chassis` |
 | Tyre friction units | script friction / 1.68 = peak mu | `include/slrr/tire_model.hpp:kFrictionUnits` |
-| Hinged panel step / latch release | 240 Hz / 3.5 m/s local impact speed | `src/resources/part_runtime.cpp:kFlapStep`, `include/slrr/flap_hinge.hpp:FlapTuning` |
+| Hinged panel step / latch release / tear-off | 240 Hz / 3.5 m/s local impact speed / 4.5 m/s contact speed or 0.15 m blocked overlap | `src/resources/part_runtime.cpp:kFlapStep`, `include/slrr/flap_hinge.hpp:FlapTuning` |
 | Prop cell | 64 m | `src/resources/scene_instances.cpp:kPropCellSize` |
 | Shadow maps | 2048² | `src/render/bgfx_lib_backend.hpp:kShadowResolution` |
 | Pedestrian radius / density scale | 400 m / ×4 | `src/resources/part_runtime.cpp:tick_pedestrians` |
