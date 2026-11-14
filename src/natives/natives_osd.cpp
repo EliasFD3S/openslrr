@@ -23,6 +23,25 @@
 
 namespace slrr {
 
+namespace {
+// A fresh Vector3 with the same coordinates. Scripts mutate the vectors they
+// are handed (sub, add, mul), so a native getter must not return its own.
+Object* copy_vector3(Jvm& jvm, const Object* source) {
+  Object* copy = jvm.new_object("java.lang.Vector3");
+  if (!copy) return nullptr;
+  for (const char* axis : {"x", "y", "z"}) {
+    float value = 0.f;
+    const auto it = source->fields.find(axis);
+    if (it != source->fields.end()) {
+      if (it->second.tag == ValueTag::Float) value = it->second.v.f;
+      else if (it->second.tag == ValueTag::Int) value = static_cast<float>(it->second.v.i);
+    }
+    copy->fields[axis] = Value::make_float(value);
+  }
+  return copy;
+}
+}  // namespace
+
 void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   jvm.natives().register_method("java.render.Text","getFontSize","(Ljava.util.resource.ResourceRef;)I",
     [](Object*,const std::vector<Value>& args){
@@ -323,8 +342,12 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         if (self) {
           const auto stored = self->fields.find("pos");
           if (stored != self->fields.end() && stored->second.tag == ValueTag::Obj &&
-              stored->second.v.o)
-            return stored->second;
+              stored->second.v.o) {
+            // The caller owns the result. Osd.moveFocus does
+            // gad.getHotSpot().sub(cur), so returning the stored vector let
+            // the arrow keys shift the button's own Rectangle position.
+            return Value::make_obj(copy_vector3(jvm, stored->second.v.o));
+          }
         }
         Object* v = jvm.new_object("java.lang.Vector3");
         if (v) {
