@@ -47,6 +47,19 @@ void RigidBody::configure(double kilograms, Vec3 lo, Vec3 hi, Vec3 com) {
                       12 / (mass * (s.x * s.x + s.z * s.z)),
                       12 / (mass * (s.x * s.x + s.y * s.y))};
 }
+void RigidBody::configure(double kilograms, Vec3 lo, Vec3 hi, Vec3 com,
+                          Vec3 moments) {
+  configure(kilograms, lo, hi, com);
+  const auto use = [](double moment, double& inverse) {
+    if (std::isfinite(moment) && moment > 0) inverse = 1 / moment;
+  };
+  use(moments.x, inverse_inertia_.x);
+  use(moments.y, inverse_inertia_.y);
+  use(moments.z, inverse_inertia_.z);
+}
+Vec3 RigidBody::inertia() const {
+  return {1 / inverse_inertia_.x, 1 / inverse_inertia_.y, 1 / inverse_inertia_.z};
+}
 void RigidBody::set_frame(const Matrix &m) {
   for (float v : m)
     if (!std::isfinite(v))
@@ -282,6 +295,40 @@ Vec3 wheel_forward(const RigidBody& body, double steer, Quaternion hub = {}) {
   return body.orientation.rotate((hub * wheel_steering(steer)).rotate({0, 0, -1}));
 }
 
+// The vertical force the suspension links add at the contact patch when the
+// tyre pushes along the road. A swing arm about an instant centre carries the
+// tyre force along the line from the patch through that centre; its vertical
+// part bypasses the spring. Front view: lateral force, roll-centre jacking.
+// Side view: longitudinal force, anti-dive and anti-squat. The centres are
+// fixed to the static wheel position; their travel with the suspension is
+// not modelled.
+double instant_center_lift(const RigidBody& body, const WheelConfig& wheel,
+                           const WheelState& state, Vec3 traction) {
+  if (!wheel.front_instant_center && !wheel.side_instant_center) return 0;
+  const Vec3 patch = body.orientation.inverse_rotate(state.patch - body.position) + body.center;
+  const Vec3 force = body.orientation.inverse_rotate(traction);
+  // The lift feeds back into the tyre load on the next step, so the loop
+  // gain is about mu times the slope. Half a metre of rise per metre keeps it
+  // below one for any tyre the scripts write.
+  constexpr double steepest = .5;
+  double lift = 0;
+  if (wheel.front_instant_center) {
+    const Vec3 center = wheel.center + wheel.front_center_offset;
+    const double run = center.x - patch.x, rise = center.y - patch.y;
+    if (std::abs(run) > 1e-3) lift += force.x * std::clamp(rise / run, -steepest, steepest);
+  }
+  if (wheel.side_instant_center) {
+    const Vec3 center = wheel.center + wheel.side_center_offset;
+    const double run = center.z - patch.z, rise = center.y - patch.y;
+    if (std::abs(run) > 1e-3) lift += force.z * std::clamp(rise / run, -steepest, steepest);
+  }
+  // The links can unload the tyre, not pull it off the road, and add at most
+  // the spring's own support. The spring force does not grow with the lift
+  // (lifting the body unloads the spring), so this bound also closes the
+  // feedback loop through the tyre load.
+  return std::clamp(lift, -state.force, state.force);
+}
+
 // SLRR_rev cf4fd30, native-vehicle-physics.ts engineLimiter.
 double limiter_factor(double rpm, double previous, double limit) {
   const double predicted = 2 * rpm - previous;
@@ -422,10 +469,13 @@ void VehicleDynamics::step_drive() {
         std::max(1.0, drive.idle * .5), 0.0, 1.0);
     if (drive.auto_clutch && closed_delta < 0) {
       double engagement_rpm = drive.idle * .85;
-      if (drive.automatic_shift && (gear == 1 || gear == 7) && drive.brake < .05 &&
-          drive.handbrake < .05 && gas > 0) {
+      if (drive.automatic_shift && (gear == 1 || gear == 7) && drive.handbrake < .05 &&
+          gas > 0) {
         // Let the engine build torque through the automatic clutch at launch.
         // The stock Nonus is already above 3000 RPM as first gear takes up.
+        // The service brake does not cancel this: throttle against the brake
+        // revs the engine like a torque converter at stall, so the driven
+        // wheels spin when the engine beats their brakes (a burnout).
         engagement_rpm = std::lerp(engagement_rpm, std::max(engagement_rpm, drive.limit * .4), gas);
       }
       grip = std::min(grip, std::max(0.0, engine_omega - engagement_rpm / rpm_per_rad) /
@@ -476,27 +526,56 @@ void VehicleDynamics::step_drive() {
     starter_remaining_ = 0;
   }
 
+  double contacts = 0;
+  for (size_t i = 0; i < wheels.size(); ++i)
+    contacts += wheels[i].enabled && state[i].contact && state[i].force > 0;
   for (size_t i = 0; i < wheels.size(); ++i) {
     const auto &wheel = wheels[i];
     const auto &cfg = drive.wheels[i];
     auto &s = state[i];
     if (!wheel.enabled) continue;
-    double road_speed = 0;
-    if (!s.contact || s.force <= 0) {
+    const bool grounded = s.contact && s.force > 0;
+    Vec3 forward, side;
+    double road = 0, lateral = 0;
+    if (grounded) {
+      const Vec3 heading = wheel_forward(body, cfg.steer, s.hub_rotation);
+      forward = (heading - s.normal * heading.dot(s.normal)).normalized();
+      side = forward.cross(s.normal);
+      const Vec3 speed = body.point_velocity(s.patch);
+      road = speed.dot(forward);
+      lateral = speed.dot(side);
+    }
+    // Bearing, service brake and handbrake act on the spin the drive left,
+    // before the tyre responds. A brake that is stronger than the drive then
+    // keeps its wheel locked, and the tyre slides, instead of the tyre pushing
+    // with the driven spin and the brake only removing it afterwards.
+    const double brake_step = 500 * timestep;
+    const auto brake = [](double speed, double amount) {
+      return std::copysign(std::max(0.0, std::abs(speed) - amount), speed);
+    };
+    const double free_spin = brake(s.spin, brake_step * cfg.bearing * drive.bearing_scale);
+    const double torque_step = timestep / wheel_inertia;
+    double braked = brake(free_spin, torque_step * service_brake_ *
+                                      cfg.brake * drive.brake_scale);
+    if (grounded && std::abs(road) >= 3 && free_spin * road > 0) {
+      const double minimum = std::abs(road) / std::max(.01, wheel.radius) * .85;
+      const double allowed = std::max(0.0, std::abs(free_spin) - minimum);
+      const double released = std::max(0.0, std::abs(free_spin - braked) - allowed);
+      braked += std::copysign(released * drive.abs_strength, road);
+    }
+    s.spin = brake(braked, torque_step * drive.handbrake * cfg.handbrake * drive.handbrake_scale);
+    if (!grounded) {
+      s.jacking = 0;
       s.spin *= 1 - .25 * timestep / wheel_inertia;
     } else {
-      const Vec3 heading = wheel_forward(body, cfg.steer, s.hub_rotation);
-      const Vec3 forward = (heading - s.normal * heading.dot(s.normal)).normalized();
-      const Vec3 side = forward.cross(s.normal);
-      const Vec3 speed = body.point_velocity(s.patch);
-      const double road = speed.dot(forward), lateral = speed.dot(side);
-      road_speed = road;
       s.slip_speed = s.spin * wheel.radius - road;
       s.lateral_speed = lateral;
       const double tilt = body.orientation.rotate(s.hub_rotation.rotate({0, -1, 0})).dot(s.normal);
-      const double alignment = std::max(.25, tilt * tilt);
-      auto force = tire_forces(s.force, alignment, s.spin * wheel.radius,
-                               road, lateral, cfg.tyre);
+      const double camber = std::acos(std::clamp(std::abs(tilt), 0.0, 1.0));
+      // The tyre carries the spring support plus what the links add.
+      const double load = std::max(0.0, s.force + s.jacking);
+      auto force = tire_forces(load, tire_camber_factor(camber, cfg.tyre),
+                               s.spin * wheel.radius, road, lateral, cfg.tyre);
       // At 120 Hz the curve can reverse small slip within one explicit step.
       // Bound the exchange by the impulse needed to match the two velocities.
       const Vec3 arm = s.patch - body.position;
@@ -506,28 +585,24 @@ void VehicleDynamics::step_drive() {
       const double limit = std::abs(s.slip_speed) /
                            (timestep * (inverse_mass + inverse_spin));
       force.longitudinal = std::clamp(force.longitudinal, -limit, limit);
+      // Same bound sideways. The tyres in contact share the stopping impulse,
+      // so together they cannot reverse the slide within one step (which
+      // would buzz at the step rate instead of settling).
+      const double inverse_side = 1 / body.mass +
+          side.dot(body.inverse_world_inertia(arm.cross(side)).cross(arm));
+      const double side_limit = std::abs(lateral) / (timestep * inverse_side * contacts);
+      force.lateral = std::clamp(force.lateral, -side_limit, side_limit);
       s.tire_force = force;
-      body.add_force(forward * force.longitudinal + side * force.lateral, s.patch);
+      const Vec3 traction = forward * force.longitudinal + side * force.lateral;
+      body.add_force(traction, s.patch);
+      // Used as part of the tyre load on the next step.
+      s.jacking = instant_center_lift(body, wheel, s, traction);
+      if (s.jacking != 0) body.add_force(s.normal * s.jacking, s.patch);
       const double rolling_torque = s.spin == 0 ? 0 :
-          std::copysign(s.force * wheel.radius * cfg.rolling_resistance, s.spin);
+          std::copysign(load * wheel.radius * cfg.rolling_resistance, s.spin);
       s.spin -= (force.longitudinal * wheel.radius + rolling_torque + s.spin * .15) *
                 timestep / wheel_inertia;
     }
-    const double brake_step = 500 * timestep;
-    const auto brake = [](double speed, double amount) {
-      return std::copysign(std::max(0.0, std::abs(speed) - amount), speed);
-    };
-    const double free_spin = brake(s.spin, brake_step * cfg.bearing * drive.bearing_scale);
-    const double torque_step = timestep / wheel_inertia;
-    double braked = brake(free_spin, torque_step * service_brake_ *
-                                      cfg.brake * drive.brake_scale);
-    if (s.contact && std::abs(road_speed) >= 3 && free_spin * road_speed > 0) {
-      const double minimum = std::abs(road_speed) / std::max(.01, wheel.radius) * .85;
-      const double allowed = std::max(0.0, std::abs(free_spin) - minimum);
-      const double released = std::max(0.0, std::abs(free_spin - braked) - allowed);
-      braked += std::copysign(released * drive.abs_strength, road_speed);
-    }
-    s.spin = brake(braked, torque_step * drive.handbrake * cfg.handbrake * drive.handbrake_scale);
     s.rotation = std::remainder(s.rotation + s.spin * timestep, 6.283185307179586);
   }
 }

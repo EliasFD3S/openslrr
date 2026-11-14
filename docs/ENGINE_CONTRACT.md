@@ -400,14 +400,73 @@ that association.
 
 ### Derived state
 
-An installed suspension can deform or stretch its render to meet its
-anchors. When it is removed to the inventory, the part must return to its
-rest pose. When it is installed again, recompute from the new configuration.
-Do not confuse that geometric adaptation with persistent damage.
+An installed suspension poses its linked renders on their anchors, and
+the anchors on a wheel carrier move with the suspension at every published
+physics tick. A two-anchor render (`linked a b`) is bound like the original
+`add_linked`: bone00 on anchor `a`, bone01 on anchor `b`. Its frame sits on
+`a` with local +Y toward `b`, and the SCX skin weights deform the mesh
+between the two bones, so a spring's coils close up and a shock absorber
+telescopes instead of the whole mesh scaling. A render descriptor without a
+`skeleton` property binds the BON next to its skinned SCX
+(`parts/running_gear/meshes/spring.bon`, `shock_absorber.bon`). A two-anchor
+render with no such rig, such as a CV shaft, falls back to stretching its
+authored +Y bounds between the anchors. A one-anchor render, such as a
+control arm, moves whole onto its anchor frame: travel without steering when
+that anchor is on a wheel carrier, fixed when it is on the chassis.
 
-Openable panels use the CFG pivots, axes, and limits, with interpolation.
-They must follow the car's transforms and assembly changes without moving
-the main physics frame.
+When it is removed to the inventory, the part must return to its rest pose
+and its bind skeleton. When it is installed again, recompute from the new
+configuration. Do not confuse that geometric adaptation with persistent
+damage.
+
+Openable panels use the CFG pivots, axes, and limits. They must follow the
+car's transforms and assembly changes without moving the main physics frame.
+
+A `flap px py pz ax ay az dx dy dz lo hi` line belongs to the slot before
+it. Pivot, axis and `dir` (hinge towards the free edge) are in the parent
+part's frame and follow a `setSlotPos`/damage pose of that slot. 0 is the CFG
+pose, which is closed; the open stop is the limit farther from 0, so
+`0 1.134` (Baiern doors) and `-0.960 0` (Erbilac trunk) both open. A part on
+such a slot is a one-degree-of-freedom hinged plate
+(`include/slrr/flap_hinge.hpp`), the same for every car and in the garage:
+
+- Closed, it is latched and does not move.
+- `Part.flap(1)` and the `flap_toggle` command (Mechanic's tuning click)
+  drive it open to the stop, where a strut holds it against gravity, or shut,
+  where it latches. A load that forces a held panel well back from the stop
+  beats the strut, so a door left open swings shut when the car pulls away.
+  `flap(0)` returns 1 while it is open, by script or by a hit.
+- A chassis impact reaching the panel (`damage_chassis` hands it on) releases
+  the latch above 3.5 m/s local speed, independently of the damage options.
+  The obstacle's push swings a free panel, and the closed stop returns an
+  inward push.
+- A free panel reacts to gravity, to the carrier's velocity change at the
+  hinge and its rotation, and to the relative wind, with damped end stops.
+  It latches again when it slams shut or comes to rest closed, unless the
+  panel is bent (its own deformation cage below half condition): then it
+  closes onto its stop but stays unlatched. The simulated hinge follows the
+  current slot pose and installed mass, like the drawn one. A part moved to
+  another slot or taken off starts closed and latched. The hinge state is not
+  saved: a loaded car starts with every panel closed and latched.
+- An unlatched panel of a released, moving car collides with the static
+  scene and native objects: the oriented box of its bounds, in its current
+  pose and swept from the last frame, goes through the same native box/sphere
+  and wall-triangle queries as the chassis
+  (`scene_instances_contact_box`, `scene_instances_contact_walls`). The panel
+  turns out of the obstacle and loses its approach speed along its swing, so
+  an obstacle in front of an open door swings it shut, where it latches if it
+  can. At 4.5 m/s or more of contact speed (the car's motion at that point
+  plus the swing), or when an obstacle it cannot swing away from presses more
+  than 0.15 m into it, the hinge gives way: the panel comes off through
+  `detach_panel` and becomes a loose body. Driving forward also blows an open
+  door shut through the wind and the car's acceleration.
+
+The car does not feel its panels' contacts, and the panels do not collide
+with each other, loose bodies, other cars or the ground (floor triangles are
+left out, as for the chassis walls). In the garage, where the car is
+suspended, a panel opens without world contacts. Its constants are an
+OpenSLRR design; the original flap solver is not recovered and SLRR_rev has
+no `flap` native.
 
 ## 11. Physics and damage
 
@@ -427,7 +486,11 @@ uses the bounds centre (not necessarily the centre of mass), samples longer
 movements up to 8 times, then, when the tick began clear, bisects between the
 last clear sample and the first overlap so the car is put back near the moment
 of contact, and feeds
-the contact normal into the existing impact response. The oriented-shape
+the contact normal into the existing impact response. A slow approach (under
+1 m/s, such as a car held against a wall by its tyres) is instead pushed
+straight out of the overlap, a quarter-millimetre off the surface, keeping its
+movement along it; a larger gap made such a car touch only every other tick
+and shake. The oriented-shape
 query is still discrete, not a general continuous manifold solver; keep the
 triangle sweep path for terrain and tunneling protection.
 Positive-mass native placements do not enter static mesh or analytic collision
@@ -469,15 +532,105 @@ The active tire code is in `tire_model.cpp`, integrated in
 `vehicle_dynamics.cpp`. The presence of `sl2_pacejka.cpp` in the repository
 does not mean the whole driving model uses that older model.
 
+The tyre curve is built from the values the tyre script writes through
+`WheelRef` (stock `Tyre.java`), not from a fixed reference tyre: peak friction
+is `setFriction / kFrictionUnits` (1.68, so the stock 205 sport tyre peaks
+near 1.05), the slope at zero slip is `setStiffness` per unit slip and per
+newton, the sliding force is `setSliction` of the peak, `setMaxLoad` and
+`setLoadSmooth` saturate the load with the SL2 arctangent blend,
+`setFrictn_x` scales the longitudinal force, `setRollRes` is the rolling
+resistance and the `setCPatch` angle is the camber the full patch tolerates.
+Width, compound, profile and inflation therefore reach the road only through
+the numbers the script derives from them. Slip is combined: wheelspin or a
+locked wheel uses up cornering grip. A host-side impulse bound keeps the
+explicit step from reversing a slide within one tick, longitudinally per
+wheel and sideways shared by the tyres in contact.
+
+`WheelRef.setInstantCenter` (`Suspension.setRollCenter`) gives each corner a
+front-view and a side-view instant centre, relative to the wheel centre.
+The links carry the tyre force along the line from the contact patch through
+that centre, so its vertical part lifts or pulls the body at the patch
+instead of compressing the spring (roll centre, anti-dive, anti-squat), and
+the tyre load is the spring force plus that lift. The stock 10000 values mean
+no centre. The centres stay at their static position; their travel with the
+suspension is not modelled. The lift feeds the next step's tyre load, so the
+link slope is limited to 0.5 and the lift to the spring's own support, which
+keeps that loop stable for any scripted tyre.
+
+Bearing friction, the service brake and the handbrake act on a wheel's spin
+after the drive impulse and before the tyre force. A brake stronger than the
+drive keeps its wheel locked and the tyre slides; a weaker one lets the drive
+spin it. With the automatic gearbox and clutch, throttle in first or reverse
+raises the take-up speed even while the service brake is held, like a torque
+converter at stall, so the driven wheels spin when the engine beats their
+brakes and grip.
+
 For the dyno, a new configuration must rebuild the matching curve banks,
 including nitro. Do not mix an old nitro bank with a new RPM step or a new
 geometry. Bound indices before the integer conversion. The last exact sample
 must remain reachable.
 
+Mass distribution and crush zones are separate models. The car's mass,
+centre of mass and inertia come from the installed parts' CFG `body` lines
+(`assembly_mass_properties`): each line's mass is spread over its own shape (a
+box, a sphere, or its phys SCX hull when that is a closed surface, else the
+hull's bounds), and the pieces are summed in the chassis frame with the
+parallel-axis theorem. The stock game only sums point masses and has no
+authored centre; this is a host model, and the products of inertia are dropped
+because the rigid body takes principal moments along the chassis axes
+(`dynamics_configure` passes them to `RigidBody::configure`; no axis drops
+below 30 % of the solid box of the chassis render bounds, which stays the
+fallback). Parts
+without bodies (stock running gear, rims and tyres) add no mass. Crush zones
+are not those meshes: a deformation cage is generated over the part's visible
+render shell, as SLRR_rev (77b0fb6, `vehicle-3d.ts`) does, and its cage mass is
+the part's own CFG mass (the chassis shell's own, not the assembly's). The phys
+mesh stays the part's collider and follows the cage.
+
+A corner loses its wheels when either of two independent conditions reaches
+zero: its strut, once the impact energy |J|²/2M weighted by exp(-(d/0.65 m)²) of
+the horizontal distance to the corner has added up to 55 kJ, or its mount, once
+the chassis cage, settled after an impact, holds the wheel centre or strut top
+0.3 m from where they were when the wheel was fitted. The transient crush peak right after an impact does
+not count, only the settled (plastic) shape. These are SLRR_rev values
+(`releaseFailedWheels`, `suspension-3d.ts` `deform`, `damageImpact`), not stock
+ones; floor contacts below 8 m/s do not count. Every part on a wheel slot of
+that corner (the rim with its tyre, an outer dually wheel) then breaks off like
+a panel and becomes a loose body of at least 14 kg. The chassis is refreshed,
+so the corner rests on the hardware still on its hub or, with none, on the
+chassis box. The hub hardware stays, and the dented chassis does not move the
+remaining wheels' hardpoints. Fitting a wheel to that corner restores a sound
+mount: a corner that is still dented keeps its current dent as the baseline,
+so the new wheel only falls off after a further 0.3 m of settled crush or 55 kJ
+of new impact energy. Repair clears the dent, the baseline and the mount.
+
+The engine breaks off on a much bigger impact. Its mount takes the same impact
+energy weighted by 0.5 exp(-(d/1.1 m)²) of the horizontal distance to the engine
+and fails at 120 kJ, so 240 kJ at the engine itself (SLRR_rev `damageImpact` and
+its block release; not stock values). On the Baiern a 74 km/h frontal tree hit
+leaves it at about a third; a hit near 95 km/h or more breaks it. The engine is
+the chassis child that carries the `dynodata` (the stock `Block`), found as
+`configure_drive` finds it, and everything installed on it goes too. It leaves
+as one loose body with its pre-impact velocity, so it carries on out of the car;
+as it starts inside the car's collision shell, it skips the car contacts until
+none of its corners is inside the car's bounds (at most 1 s). Whenever a part
+breaks off, the reconfigured chassis keeps its velocity and angular velocity, as
+SLRR_rev does, not its angular momentum: with less inertia the same momentum
+would spin it up (a car that lost its engine pitched over).
+The car then has no dyno, so no drive torque, engine audio or rpm, and it keeps
+its wall collision and damage although drive torque normally gates them.
+`configure_drive` gives it a drive in neutral with a zero-torque engine that
+never starts, so it coasts on its tyres and its brakes still work, instead of
+the parked-tyre friction that stops a car without a drive. Repair
+restores the mount but not the engine; fitting an engine again clears the
+state.
+
 Deformation and detached parts need consistency between the impact, the local
 frame, the deformed mesh, the part state, and collision. Check separately:
 vibration at rest, permanent deformation, a panel opening, and an attachment
-breaking. A visual filter does not fix an unstable solver.
+breaking. A visual filter does not fix an unstable solver. A hinged panel
+opening from a hit is the hinge of §10, not deformation: the impact releases
+its latch and the hinge, not the cage, moves it.
 
 Stock `Part.repair()` owns the wear/tear repair caps and recursively visits the
 installed tree. Its native `repair` command performs a one-shot local reset of
@@ -587,6 +740,15 @@ covers, among other things, gauges, needles, odometer, damage, nitro, and
 turbo. Preserve the expected size, aspect, and coordinates. A reference image
 that looks offset at a high resolution can reflect stock behavior that is
 kept on purpose, not an element to recenter automatically.
+
+The damage gauge is a map of the car, not one colour. The stock font holds
+a neutral car outline and one blip per region in one coordinate system,
+front up. Each blip shows the worst condition (stock `wear × tear`) of the
+installed parts it covers and is not drawn when no such part is installed:
+engine parts (category 1) light the drivetrain blips, body panels
+(category 2) the body blips, each placed by where its meshes sit on the car
+seen from above, and the parts on a corner's wheel slot (type 101 + corner)
+light that corner's wheel blip. Do not key this on car or part names.
 
 `host_game_options` centralizes driving, video, and gameplay options.
 The stock store is `save/game/options`. Applying a resolution live must

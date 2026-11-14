@@ -14,8 +14,10 @@ struct ScxGeometry;
 class RpkIndex;
 
 // BON and SKL share this text record. Positions stay in file centimetres.
-// The render's declared SKL is the skin bind. A clip's sibling BON only
-// supplies the bone length used to scale a matrixdata direction.
+// The render's declared SKL is the skin bind. A render that declares none
+// binds the BON next to its SCX (stock spring/shock absorber rigs). A clip's
+// sibling BON only supplies the bone length used to scale a matrixdata
+// direction.
 struct SkeletonBone {
   std::string name;
   int parent = -1;
@@ -43,6 +45,9 @@ inline bool clip_parse(const uint8_t* data, size_t size, Clip* out, std::string*
 // Column-major 4x4 locals and worlds, centimetres, one bone per 16 floats.
 void skeleton_local_bind(const Skeleton& skeleton, float* locals);
 void skeleton_world(const Skeleton& skeleton, const float* locals, float* worlds);
+// One bone's bind-pose world matrix, without scratch buffers. False when
+// `bone` is out of range.
+bool skeleton_bind_world(const Skeleton& skeleton, int bone, float* out);
 
 // Replaces the local matrix of each bone that has a track. Other bones are
 // left as the caller wrote them. Translation is direction * bone length,
@@ -96,6 +101,12 @@ bool character_align_axis(void* key, int32_t type_id, const RpkIndex& packs,
 bool character_solve_limb(void* key, int32_t type_id, const RpkIndex& packs,
                           int upper, int lower, int end, const float target_cm[3],
                           const float pole[3]);
+// Put `bone`'s origin at `position_m` (render-local metres) with its bind
+// orientation. A child bone is solved against its parent's current pose.
+// False when the render has no such bone. Linked suspension renders use it
+// to pin bone00/bone01 on their two anchors.
+bool character_place_bone(void* key, int32_t type_id, const RpkIndex& packs, int bone,
+                          const float position_m[3]);
 // Drop bone overrides so the next aim starts from the bind pose. A limb solved
 // from last frame's result shrinks, because the measured bone length drifts.
 void character_reset_pose(void* key);

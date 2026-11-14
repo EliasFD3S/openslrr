@@ -246,6 +246,24 @@ void skeleton_local_bind(const Skeleton& skeleton, float* locals) {
   }
 }
 
+bool skeleton_bind_world(const Skeleton& skeleton, int bone, float* out) {
+  const int count = static_cast<int>(skeleton.bones.size());
+  if (!out || bone < 0 || bone >= count) return false;
+  const SkeletonBone& own = skeleton.bones[static_cast<size_t>(bone)];
+  matrix_from_rows(out, own.rotation, own.position[0], own.position[1], own.position[2]);
+  // Parent locals premultiply, as in skeleton_world. The guard stops a cycle.
+  int parent = own.parent;
+  for (int step = 0; parent >= 0 && parent < count && step < count; ++step) {
+    const SkeletonBone& above = skeleton.bones[static_cast<size_t>(parent)];
+    float local[16];
+    matrix_from_rows(local, above.rotation, above.position[0], above.position[1],
+                     above.position[2]);
+    multiply(out, local, out);
+    parent = above.parent;
+  }
+  return true;
+}
+
 void skeleton_world(const Skeleton& skeleton, const float* locals, float* worlds) {
   if (!locals || !worlds) return;
   const std::vector<int>& order = skeleton.order;

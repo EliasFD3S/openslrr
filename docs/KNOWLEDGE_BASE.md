@@ -164,7 +164,7 @@ current gaps to SLRR_rev code are in
 | Scene | `src/resources/scene_instances.cpp:scene_instances_collect`, `src/resources/scene_instances.cpp:scene_instances_ground_map` | Render instances, maps, placements, collision index |
 | Part CFG | `src/resources/part_config.cpp:parse_part_config` | Slots, wheels, renders, bodies, HUD `osd_*` lines |
 | Parts and cars | `src/resources/part_runtime.cpp:part_create`, `src/resources/part_runtime.cpp:part_command`, `src/resources/part_runtime.cpp:part_physics_advance` | Part/Chassis/Vehicle natives, assembly, damage, pedestrians, HUD state (about 4,900 lines) |
-| Physics | `src/physics/vehicle_dynamics.cpp`, `src/physics/tire_model.cpp`, `src/physics/dyno_model.cpp`, `src/physics/deformation_cage.cpp` | Rigid body, tyres, dyno, deformation |
+| Physics | `src/physics/vehicle_dynamics.cpp`, `src/physics/tire_model.cpp`, `src/physics/dyno_model.cpp`, `src/physics/deformation_cage.cpp`, `src/physics/mass_properties.cpp`, `src/physics/wheel_mount.cpp` | Rigid body, tyres, dyno, deformation, assembled mass properties, wheel mount failure |
 | Pedestrians | `src/resources/pedestrian_lines.cpp`, `src/formats/walk.cpp` | Walkers in the `city.walk` sidewalk rows, after the original engine |
 | Characters | `src/resources/character.cpp`, `src/resources/skeleton.cpp`, `src/formats/matrixdata.cpp` | Skeletons, clips, skinning, Animation |
 | Renderer | `src/render/bgfx_lib_backend.cpp:flush`, `src/render/bgfx_lighting.cpp:draw_instance`, `src/render/bgfx_shadows.cpp`, `src/render/bgfx_osd.cpp:draw_osd` | Frame, materials, shadows, OSD and HUD |
@@ -215,9 +215,10 @@ loading-screen special cases, the fallback clock, mechanic inventory,
 pointer, `render.flush()` and the quit check. Do not move an event delivery
 or add a second pump for the same port.
 
-Inside `src/resources/part_runtime.cpp:part_physics_advance`: hinges, then
-`scene_instances_prepare_physics`, then N chassis ticks, engine audio,
-steering wheels, driver pose and pedestrians.
+Inside `src/resources/part_runtime.cpp:part_physics_advance`:
+`scene_instances_prepare_physics`, then N chassis ticks, engine audio, hinged
+panels (`src/resources/part_runtime.cpp:advance_flaps`), steering wheels,
+driver pose and pedestrians.
 
 Inside `src/render/bgfx_lib_backend.cpp:flush`: camera, `sync_instances`,
 static shadow, car depth, reflections, sky, dynamic world, garage shell,
@@ -271,14 +272,44 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
    (`include/slrr/vehicle_dynamics.hpp:VehicleDynamics`). At most four host
    ticks run per frame; excess time is dropped.
 4. Wall contact is `collide_chassis`: four 0.18 m spheres against the static
-   index. It runs only for a released chassis whose `drive.torque` is set,
-   and `configure_drive` sets it only for the player-controlled car with
-   gear ratios, a dyno and a positive maximum RPM. Other cars get no wall
+   index. It runs only for a released chassis whose `drive.torque` is set
+   or whose engine flew out (`engine_lost`), and `configure_drive` sets the
+   torque only for the player-controlled car with gear ratios, a dyno and a
+   positive maximum RPM. Other cars get no wall
    collision, impact damage or mileage
    (`src/resources/part_runtime.cpp:advance_chassis_tick`,
    `src/resources/part_runtime.cpp:configure_drive`).
 5. Impacts feed `damage_chassis` and the XPBD cage
    (`src/physics/deformation_cage.cpp`). `dynamics_sync` publishes poses.
+6. Mass, centre of mass and inertia come from the installed parts' CFG bodies,
+   each spread over its own box, sphere or closed phys hull
+   (`src/resources/part_runtime.cpp:assembly_mass_properties`,
+   `src/physics/mass_properties.cpp:mesh_mass`). Crush cages are generated over
+   the render shell instead (`src/resources/part_runtime.cpp:panel_contact`), so
+   the phys bodies are mass and collision, not deformation zones.
+7. A corner whose mount condition reaches zero loses its wheel slots' parts as
+   loose bodies: impact energy at once
+   (`src/resources/part_runtime.cpp:damage_wheel_mounts`), hardpoint travel once
+   the chassis cage has settled (`src/resources/part_runtime.cpp:settle_wheel_mounts`),
+   both detached by `src/resources/part_runtime.cpp:detach_panel`. The refreshed
+   chassis rests that corner on its remaining hub hardware.
+8. A big impact near the engine frees the `dynodata` child and everything on it
+   as one loose body with its pre-impact velocity
+   (`src/resources/part_runtime.cpp:damage_engine_mount`,
+   `src/physics/wheel_mount.cpp:pre_contact_velocity`). Without a dyno the car
+   has no drive torque; `engine_lost` keeps `collide_chassis` running for it.
+8. A part on a CFG `flap` slot (doors, hood, trunk) is a latched hinged plate
+   (`src/physics/flap_hinge.cpp:flap_step`). `Part.flap`/`flap_toggle` drive
+   it, `damage_chassis` hands each impact to
+   `src/resources/part_runtime.cpp:flap_impact`, which can release the latch
+   and swing it, and `advance_flaps` integrates it at 240 Hz on frame time
+   with gravity, the carrier's velocity change and wind, then re-places it
+   through `place_child`. On a moving car an unlatched panel's box meets the
+   static scene and native objects
+   (`src/resources/part_runtime.cpp:flap_world_contact`, response in
+   `src/physics/flap_hinge.cpp:flap_contact`): it is swung out of the way or,
+   from 4.5 m/s, torn off through `detach_panel` after the loop.
+   ENGINE_CONTRACT §10 has the contract.
 
 ### 5.6 Maps and world
 
@@ -385,7 +416,17 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   layout from a hard-coded table, scaled by `stock_scale = 0.5625 / (h/w)`.
   CFG `osd_*` lines (`include/slrr/part_config.hpp:HudSlot`) override it.
 - HUD values come from `src/resources/part_runtime.cpp:part_vehicle_hud`:
-  RPM, km/h, mileage, condition = min(wear, tear), nitro, turbo, gear.
+  RPM, km/h, mileage, nitro, turbo, gear, and the damage gauge's parts.
+- Damage gauge (`osd_damage`, stock font `cars\meshes\osdfont.scx`): glyph
+  `A` is the car outline, `E`/`L`/`T` the drivetrain, `O h l r p q t u v` the
+  body and `a b c d` the wheels, in one coordinate system with the front up.
+  `src/resources/part_runtime.cpp:hud_damage_parts` lists the installed
+  engine, body and wheel parts with their top-down centre, normalised to the
+  chassis renders, and their condition `wear × tear`
+  (`GAME:parts/scripts/src/Part.java:getConditionNoAttach`). The renderer
+  gives each part to the smallest blip quad of its kind holding that centre
+  (wheels by corner) and draws a blip in its worst part's colour, or not at
+  all when it holds no part (`src/render/bgfx_osd.cpp:draw_vehicle_hud`).
 
 ### 5.9 Options and saves
 
@@ -413,8 +454,13 @@ VM and lifetime:
   per target, silently, and the 4,000,000-step budget fails the method
   (`src/jvm/tree_eval.cpp:tree_eval`). Inside a fiber the step counter
   resets at each 2,048-operation time-slice checkpoint instead.
-- Float `!=` is evaluated as an integer comparison on purpose (an MWM
-  protection workaround). Do not "fix" it without tests.
+- Float `!=` compares by value, the negation of `==`
+  (`src/jvm/tree_eval.cpp:tree_eval`). It used to read both floats as
+  integer 0, which made every float inequality false; `Tyre.SetInflation`
+  then never applied a pressure and every tyre sat at its 0.5 bar floor. The
+  MWM key checks (`Check(key) != Math.sqrt(key)+3.75` in `GameLogic`,
+  `MainMenu` and others) compute the same float on both sides and still
+  pass: boot to the main menu and the garage was checked in game.
 - `System.arraycopy` grows the destination on purpose
   (`src/natives/natives_internal.hpp:native_arraycopy`).
 
@@ -430,6 +476,14 @@ Resources and data:
   (`src/resources/scene_instances.cpp:scene_instances_prepare_physics`).
 - A `linked a [b] [parentSlot]` rule: the first matching rule wins; do not
   sort them. LOD renders are alternatives, not layers.
+- A two-anchor linked render with a skinned bone00/bone01 rig is posed, not
+  scaled: bone00 on anchor `a`, bone01 on anchor `b`
+  (`src/resources/part_runtime.cpp:relink_one`,
+  `src/resources/character.cpp:character_place_bone`). The stock spring and
+  shock absorber renders declare no `skeleton`; their rig is the BON next to
+  the SCX (`src/resources/character.cpp:render_skeleton`). Only a render
+  without that rig, such as a CV shaft, is stretched
+  (`src/resources/part_runtime.cpp:span_between`).
 
 Physics:
 
@@ -438,6 +492,10 @@ Physics:
 - The physics delta is clamped to 0.1 s and scaled by the time warp
   (`src/jvm/jvm.cpp:advance_sim_time`), and at most four host ticks run per
   frame, so below 15 FPS the simulation slows down.
+- A CFG `body` line is mass and collision; it is not a crush zone. Do not size
+  a deformation cage from the phys SCX bodies, and do not take inertia from the
+  render bounds: 815 of the 818 stock racer phys hulls with mass are closed
+  solids, and the mass properties integrate them.
 - Repairs must restore deformation, damage-associated slot state and wheel
   damage together. The native `repair` command does this locally for each part
   (`src/resources/part_runtime.cpp:repair_part`); stock Java covers the normal
@@ -481,6 +539,8 @@ Process:
 | SFX voices | 32 total, 3 menu, 2 copies per cue, 35 ms coalescing | `src/platform/host_sfx.cpp:host_sfx_play_file` |
 | Ambient start range | 250 m beyond the CFG radius | `src/resources/scene_ambience.cpp:scene_ambience_audible` |
 | Chassis wall probe | four spheres of 0.18 m | `src/resources/part_runtime.cpp:collide_chassis` |
+| Tyre friction units | script friction / 1.68 = peak mu | `include/slrr/tire_model.hpp:kFrictionUnits` |
+| Hinged panel step / latch release / tear-off | 240 Hz / 3.5 m/s local impact speed / 4.5 m/s contact speed or 0.15 m blocked overlap | `src/resources/part_runtime.cpp:kFlapStep`, `include/slrr/flap_hinge.hpp:FlapTuning` |
 | Prop cell | 64 m | `src/resources/scene_instances.cpp:kPropCellSize` |
 | Shadow maps | 2048² | `src/render/bgfx_lib_backend.hpp:kShadowResolution` |
 | Pedestrian radius / density scale | 400 m / ×4 | `src/resources/part_runtime.cpp:tick_pedestrians` |
@@ -640,7 +700,10 @@ Each answer names its evidence.
     idempotent request and consumes it at the physics boundary
     (`src/resources/gameref.cpp:gameref_process_collision_requests`).
 13. *Which tyre model drives the car?* `src/physics/tire_model.cpp:tire_forces`,
-    not `sl2_pacejka.cpp`.
+    not `sl2_pacejka.cpp`. Its curve comes from the tyre script's `WheelRef`
+    values (friction, stiffness, sliction, load capacity, `frictn_x`, patch
+    angle); `configure_drive` copies them each tick
+    (`src/resources/part_runtime.cpp:configure_drive`).
 14. *Can SLRR_rev's EXE addresses be used for the MWM binary?* No. They
     belong to Steam build 940. SLRR_rev documents three EXE hashes, and the
     MWM binary is a fourth.
