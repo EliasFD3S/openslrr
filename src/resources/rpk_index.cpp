@@ -124,12 +124,12 @@ bool RpkIndex::parse_rpak(const std::string& disk, RpkPack& pack) const {
   if (!in) return false;
 
   if (sz < 16 || std::memcmp(buf.data(), "RPAK", 4) != 0) {
-    std::printf("[rpk] not RPAK: %s\n", disk.c_str());
+    jobs_printf("[rpk] not RPAK: %s\n", disk.c_str());
     return false;
   }
   const uint32_t version = rd_u32(buf.data() + 4);
   if (version != 0x200) {
-    std::printf("[rpk] bad version 0x%x %s\n", version, disk.c_str());
+    jobs_printf("[rpk] bad version 0x%x %s\n", version, disk.c_str());
     return false;
   }
   pack.version = version;
@@ -165,7 +165,7 @@ bool RpkIndex::parse_rpak(const std::string& disk, RpkPack& pack) const {
   pack.entries.reserve(count);
   for (uint32_t i = 0; i < count; ++i) {
     if (off + 23 > table_end) {
-      std::printf("[rpk] TOC overrun entry %u %s\n", i, disk.c_str());
+      jobs_printf("[rpk] TOC overrun entry %u %s\n", i, disk.c_str());
       break;
     }
     const uint8_t* e = buf.data() + off;
@@ -195,7 +195,7 @@ bool RpkIndex::parse_rpak(const std::string& disk, RpkPack& pack) const {
     pack.entries.push_back(std::move(ent));
   }
 
-  std::printf("[rpk] parsed %s pack=%d deps=%zu entries=%zu\n",
+  jobs_printf("[rpk] parsed %s pack=%d deps=%zu entries=%zu\n",
               pack.path.c_str(), pack.pack_id, pack.deps.size(),
               pack.entries.size());
   return true;
@@ -639,7 +639,7 @@ std::vector<std::string> RpkIndex::textures_for_scx(
 
       std::vector<std::string> paths = resolve_tex_paths(pack_id, tex_refs);
       if (!paths.empty()) {
-        std::printf("[rpk] textures_for_scx %s -> %zu slots (pack %d entry "
+        jobs_printf("[rpk] textures_for_scx %s -> %zu slots (pack %d entry "
                     "0x%x)\n",
                     scx_path.c_str(), paths.size(), pack_id, ent.type_id);
         return paths;
@@ -711,7 +711,7 @@ RpkIndex::ModelRef RpkIndex::model_for_resource(int32_t pack_id,
   out.source = src;
   out.textures = resolve_tex(tex_refs);
   out.ok = true;
-  std::printf("[rpk] model 0x%x '%s' src=%s tex=%zu\n", out.type_id,
+  jobs_printf("[rpk] model 0x%x '%s' src=%s tex=%zu\n", out.type_id,
               out.alias.c_str(), out.source.c_str(), out.textures.size());
   return out;
 }

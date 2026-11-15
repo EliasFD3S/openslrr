@@ -4,6 +4,7 @@
 #include <atomic>
 #include <bit>
 #include <condition_variable>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <exception>
@@ -31,6 +32,8 @@ namespace {
 // Set on workers, and on the calling thread while it runs bodies, so a
 // nested call runs serially instead of waiting for itself.
 thread_local bool t_in_job = false;
+// Output of the job body running on this thread, or null outside a batch.
+thread_local std::string* t_log = nullptr;
 
 struct Batch {
   size_t count = 0;
@@ -39,7 +42,20 @@ struct Batch {
   std::atomic_size_t finished{0};
   std::mutex error_mu;
   std::exception_ptr error;
+  std::vector<std::string> logs;  // jobs_printf output, one per index
 };
+
+// Prints the batch's job output in index order, as a serial loop would, or
+// hands it to the caller's own capture.
+void flush_logs(Batch& batch) {
+  for (const std::string& log : batch.logs) {
+    if (log.empty()) continue;
+    if (t_log)
+      t_log->append(log);
+    else
+      std::fwrite(log.data(), 1, log.size(), stdout);
+  }
+}
 
 size_t logical_processors() {
   size_t count = std::max(1u, std::thread::hardware_concurrency());
@@ -71,12 +87,15 @@ void name_worker(size_t index) {
 
 void drain(Batch& batch, std::mutex& mu, std::condition_variable& done) {
   for (size_t i = batch.next.fetch_add(1); i < batch.count; i = batch.next.fetch_add(1)) {
+    std::string* const outer = t_log;
+    t_log = &batch.logs[i];
     try {
       (*batch.body)(i);
     } catch (...) {
       std::lock_guard lock(batch.error_mu);
       if (!batch.error) batch.error = std::current_exception();
     }
+    t_log = outer;
     if (batch.finished.fetch_add(1) + 1 == batch.count) {
       // Under the lock, so the caller cannot miss it between its check and
       // its wait.
@@ -117,6 +136,7 @@ class Pool {
     auto batch = std::make_shared<Batch>();
     batch->count = count;
     batch->body = &body;
+    batch->logs.resize(count);
     {
       std::lock_guard lock(mu_);
       batch_ = batch;
@@ -133,6 +153,7 @@ class Pool {
       done_.wait(lock, [&] { return batch->finished.load() == count; });
       batch_.reset();
     }
+    flush_logs(*batch);
     if (batch->error) std::rethrow_exception(batch->error);
   }
 
@@ -204,6 +225,33 @@ Pool& pool() {
 }  // namespace
 
 size_t jobs_concurrency() { return pool().concurrency(); }
+
+bool jobs_inside() { return t_in_job; }
+
+JobLogCapture::JobLogCapture(std::string& out) : previous_(t_log) { t_log = &out; }
+
+JobLogCapture::~JobLogCapture() { t_log = previous_; }
+
+void jobs_printf(const char* format, ...) {
+  va_list args;
+  va_start(args, format);
+  if (!t_log) {
+    std::vfprintf(stdout, format, args);
+    va_end(args);
+    return;
+  }
+  va_list copy;
+  va_copy(copy, args);
+  const int size = std::vsnprintf(nullptr, 0, format, copy);
+  va_end(copy);
+  if (size > 0) {
+    const size_t at = t_log->size();
+    t_log->resize(at + static_cast<size_t>(size) + 1);
+    std::vsnprintf(t_log->data() + at, static_cast<size_t>(size) + 1, format, args);
+    t_log->resize(at + static_cast<size_t>(size));
+  }
+  va_end(args);
+}
 
 void jobs_parallel_for(size_t count, const std::function<void(size_t)>& body) {
   pool().run(count, body);

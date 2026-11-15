@@ -217,23 +217,31 @@ the host thread. `jobs_parallel_for` spreads the indices over the workers
 and the calling thread and returns when all are done; a nested call runs
 serially. Its users are pack indexing at startup, mesh loading for a map's
 props and for the render objects new in a frame, a map's object types (CFG
-and collision meshes), the placement collision bakes and prop batching,
-static collision that appeared or moved (`scene_instances_prepare_physics`),
-and decoding the texture files of the meshes new in a frame.
+and collision meshes), the placement collision bakes, their merge and prop
+batching, static collision that appeared or moved
+(`scene_instances_prepare_physics`), the floor index of meshes of 32k
+triangles or more (`index_floor`), and decoding the texture files of the
+meshes new in a frame. An exterior map (Valo City's `city2`, named by `city`)
+is parsed on a `std::async` thread as soon as its parent map is accepted,
+while the parent's props load on the pool.
 
 A job writes only its own slot of a result that the caller prepared, such
 as a cache entry the caller reserved before the batch. It may read the
 `RpkIndex`, game files and data no one modifies during the batch; it must
 not touch the VM, script objects, GameRef state, other cache entries or
 bgfx. The caller publishes the results on the host thread, in the same order as a serial load, so pack numbers and cache
-contents do not depend on the thread count; only per-file log lines can
-interleave. Steady per-frame work stays serial: it takes a few milliseconds
-and reads state that the frame mutates.
+contents do not depend on the thread count. Code that can run as a job logs
+with `jobs_printf`: its lines are held per index and printed in index order
+when the batch ends, so the log reads as a serial run's. A task outside the
+pool holds its lines with `JobLogCapture` for its caller to print. Steady
+per-frame work stays serial: it takes a few milliseconds and reads state that
+the frame mutates; [MILESTONES.md M7](MILESTONES.md#m7--multicore-frame) plans
+how to spread it.
 
 Map loading used to spend most of its time on the host thread: about 13 s
 of a warm Valo City start, mostly a merge of the placement collision that
-grew its buffer by one mesh at a time. `merge_static_meshes` now reserves
-once; keep such accumulations linear.
+grew its buffer by one mesh at a time. `merge_static_meshes` now sizes its
+buffers once; keep such accumulations linear.
 
 GameType notifications and callbacks are separate registries.
 The documented modes 8, 9, and 28 concern `control(float)`, `drive()`, and

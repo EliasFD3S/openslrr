@@ -24,6 +24,7 @@ named scenario.
 | M4 | Navigation, traffic and pedestrians | #19; `GroundRef` ×21, `Navigator`, `plotRoute` | M2, M3 |
 | M5 | Garage and career loop | `Painter` ×3, `ParticleSystem` ×9, save/load | M1, M2 |
 | M6 | Robustness and platform | Open review risks, display modes, controllers | Parallel |
+| M7 | Multicore frame | #56 follow-up: the frame loop runs on the host thread | M3; physics step after PR #48 |
 
 ## M0 — Reproducible build and verification baseline
 
@@ -165,6 +166,68 @@ installation. Can run alongside the others.
 
 Done when: each listed risk is fixed or explicitly accepted, with a note in
 the knowledge base.
+
+## M7 — Multicore frame
+
+Goal: when the host thread limits the frame rate, the work of one frame is
+spread over the cores. Script semantics, simulation results and the drawn
+image must not change.
+
+State after #56: loading uses every core (ENGINE_CONTRACT §6), and the frame
+loop still runs on the host thread. In the Valo City drive the host thread
+spends about 4–7 ms per frame: scene collection 1–2 ms, physics 1–1.5 ms,
+scripts under 1 ms, and draw submission 1.5–2 ms for the world, shadow,
+reflection and OSD views. On the 20-thread development machine the GPU took
+3–12 ms per frame in the same runs, so splitting this work would not show
+there. Each step below is its own PR, with `--perf-log` Before/After rows and
+the fixed-step drive.
+
+1. **Measure where the CPU limits.** Run the benchmark with the process
+   restricted to 2 and 4 cores (`run.ps1 -Affinity`, or `start /affinity`)
+   and on a low-end CPU. Find which zone stops scaling. Also isolate the
+   20–60 ms `part_physics_advance` frames that occur every few seconds in the
+   drive. They are the visible stutter, and threading is not their known
+   cause.
+2. **Scene collection in parallel.** `scene_instances_collect` and
+   `scene_instances_collect_batches` cull the 64 m prop cells. Split the cells
+   over the pool; each job culls its cells and builds its own instance and
+   batch lists, and the lists are appended in cell order so draw order stays
+   the same. Prerequisites:
+   - `geometry()` must not insert during the batch. Load missing meshes
+     before the batch with the existing `preload_meshes` and leave lookups
+     read-only.
+   - The HiZ test (`LibBgfxBackend::hiz_visible`) only reads members set
+     before collection, so jobs can call it.
+   - Pedestrian palettes (`complete_skin`) are per walker; build them in a
+     second batch once the visible walkers are known.
+3. **Draw submission from several threads.** bgfx records draws from worker
+   threads through encoders (`bgfx::begin`/`bgfx::end`, up to
+   `Init::limits.maxEncoders`, default 8). Record the shadow cascades, the
+   reflection faces and the world view from separate jobs. To do this,
+   change the draw helpers in `bgfx_lighting.cpp`, `bgfx_shadows.cpp` and
+   `bgfx_osd.cpp` from the global `bgfx::` calls to an `Encoder*`, and set
+   uniforms per encoder. View sort modes keep the order within each view.
+   The OSD stays on the host thread because it reads script widgets.
+4. **Physics, after PR #48 settles the vehicle model.** Per tick, advance
+   each car (`advance_chassis_tick`) and each awake loose body in parallel
+   against the read-only static scene. Then exchange contact impulses in a
+   serial phase, in a fixed order, so results do not depend on the thread
+   count. This only pays off with several simulated cars (traffic, M4).
+5. **Pipelined frames (optional, needs maintainer approval).** Prepare frame N
+   for rendering (collection and submission) on a second thread while
+   scripts and physics run frame N+1. Build it from a snapshot of the
+   render-visible state: instances, cameras, lights and OSD. This changes
+   module responsibilities, because GameRef state would be read off the host
+   thread, so it needs agreement before code.
+
+Not planned: running script threads in parallel. Stock scripts rely on
+cooperative scheduling, and parallel Java would break them (ENGINE_CONTRACT
+§6).
+
+Done when: with the process limited to 4 cores, the city drive's host-thread
+time per frame drops by an agreed amount. The fixed-step drive must keep the
+same draw counts and matching window captures, and the knowledge base must
+document each new parallel stage.
 
 ## Questions for the maintainers
 

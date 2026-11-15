@@ -1,4 +1,5 @@
 #include "slrr/scx_mesh.hpp"
+#include "slrr/job_system.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -528,13 +529,13 @@ ScxGeometry load_scx_geometry(const std::string& path) {
     geo.info.error = "unsupported version";
   }
   if (geo.info.ok) {
-    std::printf("[scx] geometry %s v=%u verts=%zu tris=%zu groups=%zu uvs=%zu\n",
+    jobs_printf("[scx] geometry %s v=%u verts=%zu tris=%zu groups=%zu uvs=%zu\n",
                 path.c_str(), geo.info.version, geo.positions.size() / 3,
                 geo.indices.size() / 3, geo.groups.size(),
                 geo.uvs.size() / 2);
     for (size_t i = 0; i < geo.groups.size() && i < 12; ++i) {
       const ScxGroup& g = geo.groups[i];
-      std::printf("[scx]   group[%zu] tex=%u idx=%u..+%u '%s'\n", i,
+      jobs_printf("[scx]   group[%zu] tex=%u idx=%u..+%u '%s'\n", i,
                   g.texture_index, g.index_start, g.index_count,
                   g.name.c_str());
     }

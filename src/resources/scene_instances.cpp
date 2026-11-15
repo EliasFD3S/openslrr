@@ -164,11 +164,11 @@ std::unordered_map<void *, FloorMesh> g_floor_meshes;
 bool g_floor_prepared = false;
 uint64_t g_floor_builds = 0;
 uint64_t g_floor_revision = 1;
-void index_floor(StaticMesh &mesh) {
-  // Static garage triangles are indexed once in script space. Physics asks
-  // for several support samples per 240 Hz tick; rescanning the whole shell
-  // for every wheel/corner is unnecessary.
-  for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+using FloorCells = std::unordered_map<uint64_t, std::vector<uint32_t>>;
+// Indexes triangles [first, last) of the mesh into cells and large.
+void index_triangles(const StaticMesh& mesh, size_t first, size_t last, FloorCells& cells,
+                     std::vector<uint32_t>& large) {
+  for (size_t i = first * 3; i + 2 < mesh.indices.size() && i < last * 3; i += 3) {
     float min_x = 0, max_x = 0, min_z = 0, max_z = 0;
     bool valid = true;
     for (int k = 0; k < 3; ++k) {
@@ -198,21 +198,62 @@ void index_floor(StaticMesh &mesh) {
     const int32_t x0 = cell_coordinate(min_x, mesh), x1 = cell_coordinate(max_x, mesh);
     const int32_t z0 = cell_coordinate(min_z, mesh), z1 = cell_coordinate(max_z, mesh);
     if ((int64_t(x1) - x0 + 1) * (int64_t(z1) - z0 + 1) > 4096) {
-      mesh.large_triangles.insert(mesh.large_triangles.end(),
-                                  mesh.indices.begin() + i,
-                                  mesh.indices.begin() + i + 3);
+      large.insert(large.end(), mesh.indices.begin() + i, mesh.indices.begin() + i + 3);
       continue;
     }
     for (int32_t x = x0; x <= x1; ++x)
       for (int32_t z = z0; z <= z1; ++z) {
-        auto &cell = mesh.cells[floor_cell(x, z)];
+        auto &cell = cells[floor_cell(x, z)];
         cell.insert(cell.end(), mesh.indices.begin() + i,
                     mesh.indices.begin() + i + 3);
       }
   }
 }
 
-StaticMesh bake_static_mesh(const ScxGeometry& geo, const PartMatrix& matrix) {
+// From this size a mesh is indexed on the job pool (a map's merged
+// collision has hundreds of thousands of triangles).
+constexpr size_t kPoolFloorTriangles = 32768;
+
+bool pool_floor_index(const StaticMesh& mesh) {
+  return mesh.indices.size() / 3 >= kPoolFloorTriangles;
+}
+
+void index_floor(StaticMesh &mesh) {
+  // Static garage triangles are indexed once in script space. Physics asks
+  // for several support samples per 240 Hz tick; rescanning the whole shell
+  // for every wheel/corner is unnecessary.
+  const size_t triangles = mesh.indices.size() / 3;
+  const size_t workers = pool_floor_index(mesh) && !jobs_inside() ? jobs_concurrency() : 1;
+  if (workers < 2) {
+    index_triangles(mesh, 0, triangles, mesh.cells, mesh.large_triangles);
+    return;
+  }
+  // Each job indexes a contiguous run of triangles. Appending the runs in
+  // order gives every cell the triangle order of a serial pass.
+  struct Run {
+    FloorCells cells;
+    std::vector<uint32_t> large;
+  };
+  std::vector<Run> runs(std::min(workers * 2, triangles / 4096 + 1));
+  jobs_parallel_for(runs.size(), [&](size_t r) {
+    index_triangles(mesh, triangles * r / runs.size(), triangles * (r + 1) / runs.size(),
+                    runs[r].cells, runs[r].large);
+  });
+  for (auto& run : runs) {
+    for (auto& [key, list] : run.cells) {
+      auto& cell = mesh.cells[key];
+      if (cell.empty())
+        cell = std::move(list);
+      else
+        cell.insert(cell.end(), list.begin(), list.end());
+    }
+    mesh.large_triangles.insert(mesh.large_triangles.end(), run.large.begin(), run.large.end());
+  }
+}
+
+// index = false leaves the cells empty, for a caller that indexes later.
+StaticMesh bake_static_mesh(const ScxGeometry& geo, const PartMatrix& matrix,
+                            bool index = true) {
   StaticMesh mesh;
   mesh.scale = 1.f;
   if (geo.indices.size() > 100000) mesh.cell_size = 8.f;
@@ -226,11 +267,12 @@ StaticMesh bake_static_mesh(const ScxGeometry& geo, const PartMatrix& matrix) {
     mesh.positions[i + 1] = matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13];
     mesh.positions[i + 2] = matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14];
   }
-  index_floor(mesh);
+  if (index) index_floor(mesh);
   return mesh;
 }
 
-StaticMesh transform_static_mesh(const StaticMesh& source, const PartMatrix& matrix) {
+StaticMesh transform_static_mesh(const StaticMesh& source, const PartMatrix& matrix,
+                                 bool index = true) {
   StaticMesh mesh;
   mesh.scale = 1.f;
   mesh.cell_size = source.cell_size;
@@ -244,7 +286,7 @@ StaticMesh transform_static_mesh(const StaticMesh& source, const PartMatrix& mat
     mesh.positions[i + 1] = matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13];
     mesh.positions[i + 2] = matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14];
   }
-  index_floor(mesh);
+  if (index) index_floor(mesh);
   return mesh;
 }
 
@@ -252,21 +294,26 @@ void merge_static_meshes(std::vector<StaticMesh>& meshes) {
   if (meshes.size() < 2) return;
   StaticMesh combined;
   combined.scale = 1.f;
-  // Reserve once. Growing by each mesh's exact size copied the whole buffer
-  // per placement: 12.5 s of a Valo City load.
-  size_t positions = 0, indices = 0;
-  for (const auto& source : meshes) {
-    positions += source.positions.size();
-    indices += source.indices.size();
+  // Size the buffers once (growing them by one mesh at a time copied the
+  // whole buffer per placement: 12.5 s of a Valo City load), then copy each
+  // mesh to its own range on the job pool.
+  std::vector<size_t> position_at(meshes.size() + 1), index_at(meshes.size() + 1);
+  for (size_t m = 0; m < meshes.size(); ++m) {
+    position_at[m + 1] = position_at[m] + meshes[m].positions.size();
+    index_at[m + 1] = index_at[m] + meshes[m].indices.size();
   }
-  combined.positions.reserve(positions);
-  combined.indices.reserve(indices);
-  for (const auto& source : meshes) {
-    const auto first = static_cast<uint32_t>(combined.positions.size() / 3);
-    for (float value : source.positions)
-      combined.positions.push_back(value * source.scale);
-    for (uint32_t index : source.indices) combined.indices.push_back(first + index);
-  }
+  combined.positions.resize(position_at.back());
+  combined.indices.resize(index_at.back());
+  jobs_parallel_for(meshes.size(), [&](size_t m) {
+    const auto& source = meshes[m];
+    const auto first = static_cast<uint32_t>(position_at[m] / 3);
+    std::transform(source.positions.begin(), source.positions.end(),
+                   combined.positions.begin() + static_cast<std::ptrdiff_t>(position_at[m]),
+                   [scale = source.scale](float value) { return value * scale; });
+    std::transform(source.indices.begin(), source.indices.end(),
+                   combined.indices.begin() + static_cast<std::ptrdiff_t>(index_at[m]),
+                   [first](uint32_t index) { return first + index; });
+  });
   if (combined.indices.size() > 100000) combined.cell_size = 8.f;
   index_floor(combined);
   meshes.clear();
@@ -370,7 +417,7 @@ std::shared_ptr<const ScxGeometry> load_geometry(const RpkIndex& resources, uint
         mesh->textures = std::move(model.textures);
         scx_resolve_baked_lightmaps(*mesh);
         result = std::move(mesh);
-        std::printf("[scene] resource=0x%x source=%s vertices=%d\n", id,
+        jobs_printf("[scene] resource=0x%x source=%s vertices=%d\n", id,
                     path.string().c_str(), result->info.vertices);
       }
     }
@@ -1279,9 +1326,13 @@ void scene_instances_prepare_physics() {
     }
   jobs_parallel_for(rebuilds.size(), [&](size_t i) {
     const auto& task = rebuilds[i];
-    *task.out = task.geometry ? bake_static_mesh(*task.geometry, *task.matrix)
-                              : transform_static_mesh(*task.source, *task.matrix);
+    *task.out = task.geometry ? bake_static_mesh(*task.geometry, *task.matrix, false)
+                              : transform_static_mesh(*task.source, *task.matrix, false);
+    if (!pool_floor_index(*task.out)) index_floor(*task.out);
   });
+  // A large mesh is indexed after the batch, one at a time across the pool.
+  for (const auto& task : rebuilds)
+    if (pool_floor_index(*task.out)) index_floor(*task.out);
   for (const auto& [rebuilt, source] : rebuilt_grounds) {
     auto& cached = *rebuilt;
     const auto& m = cached.matrix;
@@ -2274,7 +2325,7 @@ GroundMapData scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id
   geo->info.groups = static_cast<int32_t>(geo->groups.size());
   if (geo->indices.empty())
     return map;
-  std::printf("[scene] ground poly 0x%x tris=%d materials=%zu\n", map.render_id,
+  jobs_printf("[scene] ground poly 0x%x tris=%d materials=%zu\n", map.render_id,
               geo->info.triangles, mats.size());
   map.poly = std::move(geo);
   return map;

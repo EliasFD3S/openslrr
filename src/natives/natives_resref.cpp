@@ -2,6 +2,7 @@
 #include "natives_internal.hpp"
 
 #include "slrr/gameref.hpp"
+#include "slrr/job_system.hpp"
 #include "slrr/scene_ambience.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/part_runtime.hpp"
@@ -16,6 +17,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <future>
+#include <system_error>
+#include <unordered_map>
 #include <unordered_set>
 #include <cstdint>
 #include <cstdio>
@@ -39,10 +43,28 @@ void spawn_ground_shell(Jvm& jvm, const RpkIndex& rpk, Object* ground) {
   const auto primary = static_cast<uint32_t>(st->type_id);
   std::vector<uint32_t> pending{primary};
   std::unordered_set<uint32_t> visited;
+  // A map names the next one (Valo City: city, then city2), so the files
+  // cannot be parsed together up front. Each exterior map is parsed on its
+  // own thread as soon as its parent is accepted, while the parent's props
+  // load on the job pool.
+  struct Parsed {
+    GroundMapData map;
+    std::string log;
+  };
+  std::unordered_map<uint32_t, std::future<Parsed>> prefetched;
   for (size_t i = 0; i < pending.size(); ++i) {
     const auto id = pending[i];
     if (!visited.insert(id).second) continue;
-    auto map = scene_instances_ground_map(rpk, id);
+    GroundMapData map;
+    if (auto found = prefetched.find(id); found != prefetched.end()) {
+      Parsed parsed = found->second.get();
+      prefetched.erase(found);
+      // Its log lines, where a serial parse would have printed them.
+      std::fwrite(parsed.log.data(), 1, parsed.log.size(), stdout);
+      map = std::move(parsed.map);
+    } else {
+      map = scene_instances_ground_map(rpk, id);
+    }
     const uint32_t full = map.render_id;
     if (!full) continue;
     const bool already_attached = std::any_of(st->children.begin(), st->children.end(),
@@ -60,6 +82,19 @@ void spawn_ground_shell(Jvm& jvm, const RpkIndex& rpk, Object* ground) {
       if (src.find("garage") != std::string::npos) continue;
     } else if (!map.poly) {
       continue;
+    }
+    for (const uint32_t next : map.exterior_maps) {
+      if (visited.contains(next) || prefetched.contains(next)) continue;
+      try {
+        prefetched.emplace(next, std::async(std::launch::async, [&rpk, next] {
+          Parsed parsed;
+          JobLogCapture capture(parsed.log);
+          parsed.map = scene_instances_ground_map(rpk, next);
+          return parsed;
+        }));
+      } catch (const std::system_error&) {
+        // No thread: the loop parses it when it gets there.
+      }
     }
     scene_instances_override_mesh(full, map.poly);
     scene_instances_override_collision(full, map.collision);

@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <string>
 
 namespace slrr {
 
@@ -26,6 +27,33 @@ size_t jobs_concurrency();
 // rethrown here. A call made from inside a body, or while another thread's
 // call is running, runs serially on its own thread.
 void jobs_parallel_for(size_t count, const std::function<void(size_t)>& body);
+
+// True on a worker, and on the calling thread while it runs a job body. A
+// caller can then pick a serial algorithm instead of a nested batch.
+bool jobs_inside();
+
+// printf to stdout for code that may run as a job. Inside a batch the text
+// is held per index and printed in index order when the batch ends, so the
+// log reads the same as a serial run. Elsewhere it is plain printf.
+void jobs_printf(const char* format, ...)
+#if defined(__GNUC__)
+    __attribute__((format(printf, 1, 2)))
+#endif
+    ;
+
+// Holds the current thread's jobs_printf output in out while it lives. For a
+// task that runs outside jobs_parallel_for (std::async) and whose caller
+// prints the text later, at the place a serial run would.
+class JobLogCapture {
+ public:
+  explicit JobLogCapture(std::string& out);
+  ~JobLogCapture();
+  JobLogCapture(const JobLogCapture&) = delete;
+  JobLogCapture& operator=(const JobLogCapture&) = delete;
+
+ private:
+  std::string* previous_;
+};
 
 // Stops and joins the workers. Later calls run serially.
 void jobs_shutdown();

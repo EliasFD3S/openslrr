@@ -4,11 +4,25 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
+#include <fstream>
+#include <iterator>
 #include <mutex>
 #include <set>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#include <io.h>
+#define dup _dup
+#define dup2 _dup2
+#define fileno _fileno
+#define close _close
+#else
+#include <unistd.h>
+#endif
 
 using slrr::jobs_concurrency;
 using slrr::jobs_parallel_for;
@@ -84,6 +98,67 @@ SLRR_TEST(concurrent_callers_both_complete) {
   SLRR_REQUIRE(b.load() == 5000);
 }
 
+SLRR_TEST(jobs_know_they_are_inside_a_batch) {
+  SLRR_REQUIRE(!slrr::jobs_inside());
+  std::atomic_int inside{0};
+  jobs_parallel_for(64, [&](size_t) {
+    if (slrr::jobs_inside()) inside.fetch_add(1);
+  });
+  SLRR_REQUIRE(inside.load() == 64);
+  SLRR_REQUIRE(!slrr::jobs_inside());
+}
+
+// Captures what fn writes to stdout.
+template <class Fn>
+std::string capture_stdout(Fn&& fn) {
+  const char* path = "test_job_system.stdout.tmp";
+  std::fflush(stdout);
+  const int saved = dup(fileno(stdout));
+  SLRR_REQUIRE(std::freopen(path, "w", stdout) != nullptr);
+  fn();
+  std::fflush(stdout);
+  dup2(saved, fileno(stdout));
+  close(saved);
+  std::ifstream in(path, std::ios::binary);
+  std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  in.close();
+  std::remove(path);
+  return text;
+}
+
+SLRR_TEST(job_output_prints_in_index_order) {
+  const std::string text = capture_stdout([] {
+    jobs_parallel_for(40, [](size_t i) {
+      // Later indices finish first.
+      std::this_thread::sleep_for(std::chrono::microseconds(200 * (40 - i)));
+      slrr::jobs_printf("job %zu\n", i);
+      jobs_parallel_for(2, [i](size_t j) { slrr::jobs_printf("job %zu.%zu\n", i, j); });
+    });
+    slrr::jobs_printf("after\n");
+  });
+  std::string expected;
+  for (size_t i = 0; i < 40; ++i)
+    expected += "job " + std::to_string(i) + "\njob " + std::to_string(i) + ".0\njob " +
+                std::to_string(i) + ".1\n";
+  expected += "after\n";
+  SLRR_REQUIRE(text == expected);
+}
+
+SLRR_TEST(captured_task_output_waits_for_its_caller) {
+  std::string held;
+  const std::string text = capture_stdout([&] {
+    std::thread task([&] {
+      slrr::JobLogCapture capture(held);
+      slrr::jobs_printf("task %d\n", 1);
+      jobs_parallel_for(3, [](size_t i) { slrr::jobs_printf("task job %zu\n", i); });
+    });
+    task.join();
+    slrr::jobs_printf("caller\n");
+  });
+  SLRR_REQUIRE(text == "caller\n");
+  SLRR_REQUIRE(held == "task 1\ntask job 0\ntask job 1\ntask job 2\n");
+}
+
 SLRR_TEST(shutdown_falls_back_to_the_calling_thread) {
   slrr::jobs_shutdown();
   const auto caller = std::this_thread::get_id();
@@ -103,6 +178,9 @@ int main() {
       nested_calls_run_serially_without_deadlock,
       first_exception_reaches_the_caller_after_every_index,
       concurrent_callers_both_complete,
+      jobs_know_they_are_inside_a_batch,
+      job_output_prints_in_index_order,
+      captured_task_output_waits_for_its_caller,
       shutdown_falls_back_to_the_calling_thread,
   };
   return slrr::standalone::run("job_system", tests);

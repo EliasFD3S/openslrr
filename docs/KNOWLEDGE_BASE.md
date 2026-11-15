@@ -419,14 +419,20 @@ VM and lifetime:
   loading (`src/resources/scene_instances.cpp:preload_meshes`, also called
   by `collect_root` for the meshes new in a frame), a map's object types
   (`src/resources/scene_instances.cpp:build_native_collision`), placement
-  collision bakes, prop batching, static collision that appeared or moved
-  (`src/resources/scene_instances.cpp:scene_instances_prepare_physics`), and
-  texture decoding
-  (`src/render/bgfx_lib_backend.cpp:prefetch_part_textures`). A job writes
-  only its own slot of a result the caller prepared and never touches the
-  VM, GameRef state, other cache entries or bgfx; the host thread publishes
-  the results. A nested call runs serially. Steady per-frame work stays on
-  the host thread.
+  collision bakes and their merge, prop batching, static collision that
+  appeared or moved
+  (`src/resources/scene_instances.cpp:scene_instances_prepare_physics`), the
+  floor index of large meshes (`src/resources/scene_instances.cpp:index_floor`)
+  and texture decoding
+  (`src/render/bgfx_lib_backend.cpp:prefetch_part_textures`). Exterior maps
+  are parsed on a `std::async` thread while the parent map's props load
+  (`src/natives/natives_resref.cpp:spawn_ground_shell`). A job writes only
+  its own slot of a result the caller prepared and never touches the VM,
+  GameRef state, other cache entries or bgfx; the host thread publishes the
+  results. A nested call runs serially. Job code logs with `jobs_printf`
+  (`src/platform/job_system.cpp:jobs_printf`), which keeps the serial line
+  order. Steady per-frame work stays on the host thread; `docs/MILESTONES.md`
+  (M7) plans the next steps.
 - An `Object*` held in C++ is not a root. Use `Jvm::RootScope`
   (`include/slrr/jvm.hpp:RootScope`) across yields, or register a root
   provider for a native registry.
@@ -637,9 +643,10 @@ These are entry points, not fixes. Each needs its own reproduction.
   about 1–2 s warm and 5 s on a first launch, with up to 20 threads busy on
   a 20-thread CPU.
   The VM, physics, scene collection and bgfx submission stay on the host
-  thread by contract; in the drive they cost about 4–7 ms per frame. Still
-  serial: `scene_instances_ground_map` (about 0.1 s per map file) and
-  `index_floor` on each merged collision mesh.
+  thread by contract; in the drive they cost about 4–7 ms per frame. A
+  follow-up overlapped the chained `city2` parse with `city`'s props, indexed
+  large collision meshes on the pool and kept the log order serial: the warm
+  load is now under 1 s.
 
 ## 12. Self-check
 
