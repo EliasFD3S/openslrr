@@ -3,6 +3,7 @@
 // Internal to the libbgfx renderer. The public surface stays
 // slrr/render_backend.hpp. Method bodies live in the sibling cpp files.
 
+#include "slrr/dds_image.hpp"
 #include "slrr/render_backend.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/gameref.hpp"
@@ -18,6 +19,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -215,6 +217,17 @@ class LibBgfxBackend final : public IRenderBackend {
 
 
   void load_part_textures(ScenePart& part, bool share_map_textures = false);
+  // A mesh's texture files, one per slot ("" for a slot without a file).
+  static std::vector<std::string> part_texture_paths(const ScxGeometry& geo);
+  // Decodes, on the job pool, the files that load_part_textures will read for
+  // these new meshes (geometry, shares map textures). It then takes each
+  // image from here instead of reading the file on the host thread.
+  void prefetch_part_textures(const std::vector<std::pair<const ScxGeometry*, bool>>& meshes);
+  struct PrefetchedTexture {
+    DdsImage image;
+    size_t uses = 0;  // meshes still to load it; the image is freed at zero
+  };
+  std::unordered_map<std::string, PrefetchedTexture> prefetched_textures_;
 
 
 #ifdef _WIN32

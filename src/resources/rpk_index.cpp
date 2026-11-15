@@ -1,4 +1,5 @@
 #include "slrr/rpk_index.hpp"
+#include "slrr/job_system.hpp"
 
 #include <cctype>
 #include <cstdio>
@@ -7,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <unordered_set>
 #include <vector>
 
 #ifdef _WIN32
@@ -204,6 +206,7 @@ int32_t RpkIndex::open_all() {
   std::error_code ec;
   if (root_.empty() || !fs::exists(root_, ec)) return 0;
   int32_t n = 0;
+  std::vector<std::string> paths;
   const fs::directory_options opt =
       fs::directory_options::skip_permission_denied;
   for (fs::recursive_directory_iterator it(fs::path(root_), opt, ec), end;
@@ -219,8 +222,33 @@ int32_t RpkIndex::open_all() {
     if (ext != ".rpk") continue;
     std::error_code rel_ec;
     fs::path rel = fs::relative(it->path(), fs::path(root_), rel_ec);
-    open_lib(rel_ec ? it->path().string() : rel.string());
+    paths.push_back(rel_ec ? it->path().string() : rel.string());
     ++n;
+  }
+  // Indexing reads each whole pack. Read them on the job pool, then number
+  // them in directory order as open_lib would.
+  std::vector<std::string> fresh;
+  std::unordered_set<std::string> keys;
+  for (const auto& path : paths) {
+    const std::string key = norm_key(path);
+    if (!by_path_.contains(key) && keys.insert(key).second) fresh.push_back(path);
+  }
+  std::vector<RpkPack> parsed(fresh.size());
+  std::vector<char> indexed(fresh.size());
+  for (size_t i = 0; i < fresh.size(); ++i) {
+    parsed[i].pack_id = next_id_ + static_cast<int32_t>(i);
+    parsed[i].path = fresh[i];
+  }
+  jobs_parallel_for(fresh.size(), [&](size_t i) {
+    indexed[i] = parse_rpak(resolve_disk_path(fresh[i]), parsed[i]);
+  });
+  for (size_t i = 0; i < fresh.size(); ++i) {
+    const int32_t id = next_id_++;
+    by_path_[norm_key(fresh[i])] = id;
+    if (static_cast<size_t>(id) >= packs_.size()) packs_.resize(id + 1);
+    packs_[static_cast<size_t>(id)] = std::move(parsed[i]);
+    std::printf(indexed[i] ? "[rpk] openLib %s -> %d\n" : "[rpk] openLib %s -> %d (no TOC)\n",
+                fresh[i].c_str(), id);
   }
   rpk_set_active(this);
   std::printf("[rpk] open_all %d files, packs=%d entries=%d\n", n, pack_count(),

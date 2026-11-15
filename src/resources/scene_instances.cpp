@@ -3,6 +3,7 @@
 #include "slrr/scene_collision.hpp"
 #include <limits>
 #include "slrr/gameref.hpp"
+#include "slrr/job_system.hpp"
 #include "slrr/part_config.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/rpk_index.hpp"
@@ -11,7 +12,6 @@
 #include "slrr/vehicle_dynamics.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <charconv>
 #include <cctype>
 #include <cmath>
@@ -21,7 +21,6 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -253,12 +252,19 @@ void merge_static_meshes(std::vector<StaticMesh>& meshes) {
   if (meshes.size() < 2) return;
   StaticMesh combined;
   combined.scale = 1.f;
+  // Reserve once. Growing by each mesh's exact size copied the whole buffer
+  // per placement: 12.5 s of a Valo City load.
+  size_t positions = 0, indices = 0;
+  for (const auto& source : meshes) {
+    positions += source.positions.size();
+    indices += source.indices.size();
+  }
+  combined.positions.reserve(positions);
+  combined.indices.reserve(indices);
   for (const auto& source : meshes) {
     const auto first = static_cast<uint32_t>(combined.positions.size() / 3);
-    combined.positions.reserve(combined.positions.size() + source.positions.size());
     for (float value : source.positions)
       combined.positions.push_back(value * source.scale);
-    combined.indices.reserve(combined.indices.size() + source.indices.size());
     for (uint32_t index : source.indices) combined.indices.push_back(first + index);
   }
   if (combined.indices.size() > 100000) combined.cell_size = 8.f;
@@ -380,31 +386,17 @@ std::shared_ptr<const ScxGeometry> geometry(uint32_t id) {
   return mesh;
 }
 
-void preload_ground_meshes(const std::vector<uint32_t>& resources) {
+void preload_meshes(const std::vector<uint32_t>& resources) {
   std::vector<uint32_t> missing;
   for (const auto id : resources)
     if (!g_meshes.contains(id) && !g_overrides.contains(id)) missing.push_back(id);
   if (missing.empty()) return;
   std::vector<std::shared_ptr<const ScxGeometry>> decoded(missing.size());
-  std::atomic_size_t next{0};
   const auto& index = *g_resources;
-  const auto parse = [&] {
-    for (size_t job = next.fetch_add(1); job < missing.size(); job = next.fetch_add(1))
-      decoded[job] = load_geometry(index, missing[job]);
-  };
   // Workers only read assets. Publish the completed cache on the host thread,
   // while the loading screen is still up.
-  {
-    std::vector<std::jthread> workers;
-    const auto count = std::min<size_t>({missing.size(), 4u,
-        std::max(1u, std::thread::hardware_concurrency())});
-    try {
-      for (size_t i = 1; i < count; ++i) workers.emplace_back(parse);
-    } catch (const std::system_error&) {
-      // The calling thread can finish the queue if a worker cannot start.
-    }
-    parse();
-  }
+  jobs_parallel_for(missing.size(),
+                    [&](size_t job) { decoded[job] = load_geometry(index, missing[job]); });
   for (size_t i = 0; i < missing.size(); ++i)
     g_meshes.emplace(missing[i], std::move(decoded[i]));
 }
@@ -729,7 +721,7 @@ read_ground_materials(const std::filesystem::path &path) {
 
 void scene_instances_preload(const std::vector<uint32_t>& resources) {
   if (!g_resources || resources.empty()) return;
-  preload_ground_meshes(resources);
+  preload_meshes(resources);
 }
 
 void scene_instances_set_resources(const RpkIndex *resources) {
@@ -1197,6 +1189,16 @@ void scene_instances_prepare_physics() {
   g_script_collision_shapes.clear();
   std::unordered_set<void *> active;
   std::unordered_set<void *> active_ground;
+  // Moved or new collision is rebuilt after the walk, on the job pool: each
+  // rebuild only reads its source mesh and writes its own cache slot.
+  struct MeshRebuild {
+    StaticMesh* out;
+    const StaticMesh* source;    // a map's merged prop collision, or
+    const ScxGeometry* geometry; // a render node's mesh
+    const PartMatrix* matrix;
+  };
+  std::vector<MeshRebuild> rebuilds;
+  std::vector<std::pair<GroundCollisionWorld*, const GroundPropMap*>> rebuilt_grounds;
   if (g_world)
     for (auto *n : render_nodes_in_world(g_world, true)) {
       if (!n || n->empty || n->sky_render || n->vehicle_material || n->line_geometry ||
@@ -1219,48 +1221,11 @@ void scene_instances_prepare_physics() {
           if (source_changed || cached.matrix != m) {
             cached.matrix = m;
             cached.inverse = part_matrix_inverse_rigid(m);
-            cached.meshes.clear();
-            cached.meshes.reserve(ground->second.collision_meshes.size());
-            for (const auto& mesh : ground->second.collision_meshes)
-              cached.meshes.push_back(transform_static_mesh(mesh, m));
-            cached.has_bounds = false;
-            for (const auto& mesh : cached.meshes) {
-              for (size_t i = 0; i + 2 < mesh.positions.size(); i += 3) {
-                for (int axis = 0; axis < 3; ++axis) {
-                  const float value = mesh.positions[i + axis] * mesh.scale;
-                  if (!cached.has_bounds) {
-                    cached.bounds_min[axis] = cached.bounds_max[axis] = value;
-                  } else {
-                    cached.bounds_min[axis] = std::min(cached.bounds_min[axis], value);
-                    cached.bounds_max[axis] = std::max(cached.bounds_max[axis], value);
-                  }
-                }
-                cached.has_bounds = true;
-              }
-            }
-            // Coarse sphere meshes can be smaller than their analytic shape.
-            // Union exact primitive bounds before using the shell AABB as a
-            // conservative rejection test.
-            if (const auto analytic = ground->second.collision_shapes.bounds()) {
-              for (unsigned corners = 0; corners < 8; ++corners) {
-                const double x = (corners & 1) ? analytic->maximum.x : analytic->minimum.x;
-                const double y = (corners & 2) ? analytic->maximum.y : analytic->minimum.y;
-                const double z = (corners & 4) ? analytic->maximum.z : analytic->minimum.z;
-                const float world[3] = {
-                    static_cast<float>(m[0] * x + m[4] * y + m[8] * z + m[12]),
-                    static_cast<float>(m[1] * x + m[5] * y + m[9] * z + m[13]),
-                    static_cast<float>(m[2] * x + m[6] * y + m[10] * z + m[14])};
-                for (int axis = 0; axis < 3; ++axis) {
-                  if (!cached.has_bounds) {
-                    cached.bounds_min[axis] = cached.bounds_max[axis] = world[axis];
-                  } else {
-                    cached.bounds_min[axis] = std::min(cached.bounds_min[axis], world[axis]);
-                    cached.bounds_max[axis] = std::max(cached.bounds_max[axis], world[axis]);
-                  }
-                }
-                cached.has_bounds = true;
-              }
-            }
+            cached.meshes.assign(ground->second.collision_meshes.size(), {});
+            for (size_t k = 0; k < cached.meshes.size(); ++k)
+              rebuilds.push_back({&cached.meshes[k], &ground->second.collision_meshes[k],
+                                  nullptr, &cached.matrix});
+            rebuilt_grounds.emplace_back(&cached, &ground->second);
             ++g_floor_builds;
             ++g_floor_revision;
           }
@@ -1300,7 +1265,7 @@ void scene_instances_prepare_physics() {
       if (cached.source != geo || cached.matrix != m) {
         cached.source = geo;
         cached.matrix = m;
-        cached.mesh = bake_static_mesh(*geo, m);
+        rebuilds.push_back({&cached.mesh, nullptr, geo.get(), &cached.matrix});
         ++g_floor_builds;
         ++g_floor_revision;
       }
@@ -1312,6 +1277,53 @@ void scene_instances_prepare_physics() {
         parent = node ? node->parent : nullptr;
       }
     }
+  jobs_parallel_for(rebuilds.size(), [&](size_t i) {
+    const auto& task = rebuilds[i];
+    *task.out = task.geometry ? bake_static_mesh(*task.geometry, *task.matrix)
+                              : transform_static_mesh(*task.source, *task.matrix);
+  });
+  for (const auto& [rebuilt, source] : rebuilt_grounds) {
+    auto& cached = *rebuilt;
+    const auto& m = cached.matrix;
+    cached.has_bounds = false;
+    for (const auto& mesh : cached.meshes) {
+      for (size_t i = 0; i + 2 < mesh.positions.size(); i += 3) {
+        for (int axis = 0; axis < 3; ++axis) {
+          const float value = mesh.positions[i + axis] * mesh.scale;
+          if (!cached.has_bounds) {
+            cached.bounds_min[axis] = cached.bounds_max[axis] = value;
+          } else {
+            cached.bounds_min[axis] = std::min(cached.bounds_min[axis], value);
+            cached.bounds_max[axis] = std::max(cached.bounds_max[axis], value);
+          }
+        }
+        cached.has_bounds = true;
+      }
+    }
+    // Coarse sphere meshes can be smaller than their analytic shape.
+    // Union exact primitive bounds before using the shell AABB as a
+    // conservative rejection test.
+    if (const auto analytic = source->collision_shapes.bounds()) {
+      for (unsigned corners = 0; corners < 8; ++corners) {
+        const double x = (corners & 1) ? analytic->maximum.x : analytic->minimum.x;
+        const double y = (corners & 2) ? analytic->maximum.y : analytic->minimum.y;
+        const double z = (corners & 4) ? analytic->maximum.z : analytic->minimum.z;
+        const float world[3] = {
+            static_cast<float>(m[0] * x + m[4] * y + m[8] * z + m[12]),
+            static_cast<float>(m[1] * x + m[5] * y + m[9] * z + m[13]),
+            static_cast<float>(m[2] * x + m[6] * y + m[10] * z + m[14])};
+        for (int axis = 0; axis < 3; ++axis) {
+          if (!cached.has_bounds) {
+            cached.bounds_min[axis] = cached.bounds_max[axis] = world[axis];
+          } else {
+            cached.bounds_min[axis] = std::min(cached.bounds_min[axis], world[axis]);
+            cached.bounds_max[axis] = std::max(cached.bounds_max[axis], world[axis]);
+          }
+        }
+        cached.has_bounds = true;
+      }
+    }
+  }
   for (auto it = g_floor_meshes.begin(); it != g_floor_meshes.end();)
     if (!active.count(it->first)) {
       ++g_floor_revision;
@@ -1781,7 +1793,26 @@ std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
   if (!g_resources || !root)
     return out;
   const auto lighting=scene_instances_light(root);
-  for (auto *n : render_nodes_in_world(root)) {
+  const auto nodes = render_nodes_in_world(root);
+  {
+    // A new car or scene brings many meshes at once: read them on the job
+    // pool instead of one by one in the loop below. Lamp renders keep their
+    // lazy load, as they are only drawn while lit.
+    std::vector<uint32_t> missing;
+    for (const auto* n : nodes) {
+      if ((n->sky_render && n->key != g_sky) || n->light_flags || n->line_geometry ||
+          (n->deformed_geometry && n->deformed_type == n->type_id))
+        continue;
+      const auto id = static_cast<uint32_t>(n->type_id);
+      if (!g_meshes.contains(id) && !g_overrides.contains(id)) missing.push_back(id);
+    }
+    if (missing.size() > 1) {
+      std::sort(missing.begin(), missing.end());
+      missing.erase(std::unique(missing.begin(), missing.end()), missing.end());
+      preload_meshes(missing);
+    }
+  }
+  for (auto *n : nodes) {
     // Source scripts replace Scene.skydome; a superseded handle may remain
     // alive until script cleanup. Never render it as ordinary foreground.
     if (n->sky_render && n->key != g_sky)
@@ -2270,18 +2301,9 @@ bool ground_prop_config(const RpkIndex& rpk, uint32_t type, PartConfig& out) {
   return true;
 }
 
-const NativeCollisionData& native_collision_data(
-    const RpkIndex& rpk, uint32_t type, const PartConfig* parsed) {
-  static const NativeCollisionData empty;
-  if (!type) return empty;
-  auto [cached, added] = g_native_collision.try_emplace(type);
-  if (!added) return cached->second;
-  PartConfig loaded;
-  if (!parsed) {
-    if (!ground_prop_config(rpk, type, loaded)) return cached->second;
-    parsed = &loaded;
-  }
-
+// Reads files only, so map loading builds several types on the job pool.
+NativeCollisionData build_native_collision(const RpkIndex& rpk, const PartConfig& parsed) {
+  NativeCollisionData data;
   auto mesh = std::make_shared<ScxGeometry>();
   mesh->position_scale = 1.f;
   mesh->info.ok = true;
@@ -2309,36 +2331,36 @@ const NativeCollisionData& native_collision_data(
   PartMatrix identity_frame{};
   identity_frame[0] = identity_frame[5] = identity_frame[10] = identity_frame[15] = 1.f;
   bool positive_mass = false, zero_mass = false;
-  for (const auto& body : parsed->bodies) {
+  for (const auto& body : parsed.bodies) {
     if (!body.collision) continue;
     if (body.mass > 0.f) {
       positive_mass = true;
-      cached->second.mass += body.mass;
+      data.mass += body.mass;
       for (int axis = 0; axis < 3; ++axis)
-        cached->second.center[axis] += body.pose.position[axis] * body.mass;
+        data.center[axis] += body.pose.position[axis] * body.mass;
     } else {
       zero_mass = true;
     }
   }
-  if (cached->second.mass > 0.f)
-    for (auto& value : cached->second.center) value /= cached->second.mass;
+  if (data.mass > 0.f)
+    for (auto& value : data.center) value /= data.mass;
   // Promote only an entirely positive-mass placement. A mixed placement keeps
   // every body static instead of moving one while baking another. A dynamic
   // type still builds its geometry: map loading uses its bounds to find the
   // dormant placement, and only static placements enter the ground caches.
-  cached->second.dynamic = positive_mass && !zero_mass;
-  for (const auto& body : parsed->bodies) {
+  data.dynamic = positive_mass && !zero_mass;
+  for (const auto& body : parsed.bodies) {
     if (!body.collision) continue;
     const auto frame = part_pose_matrix(body.pose);
     if (body.shape == PartBodyShape::Box) {
-      cached->second.primitives.push_back(body);
+      data.primitives.push_back(body);
       append(collision::make_box_mesh(
                  frame, {body.box_half[0], body.box_half[1], body.box_half[2]}),
              identity_frame);
       continue;
     }
     if (body.shape == PartBodyShape::Sphere) {
-      cached->second.primitives.push_back(body);
+      data.primitives.push_back(body);
       append(collision::make_sphere_mesh(frame, body.sphere_radius, 12, 6),
              identity_frame);
       continue;
@@ -2353,7 +2375,22 @@ const NativeCollisionData& native_collision_data(
   }
   mesh->info.vertices = static_cast<int32_t>(mesh->positions.size() / 3);
   mesh->info.triangles = static_cast<int32_t>(mesh->indices.size() / 3);
-  if (mesh->info.triangles) cached->second.mesh = std::move(mesh);
+  if (mesh->info.triangles) data.mesh = std::move(mesh);
+  return data;
+}
+
+const NativeCollisionData& native_collision_data(
+    const RpkIndex& rpk, uint32_t type, const PartConfig* parsed) {
+  static const NativeCollisionData empty;
+  if (!type) return empty;
+  auto [cached, added] = g_native_collision.try_emplace(type);
+  if (!added) return cached->second;
+  PartConfig loaded;
+  if (!parsed) {
+    if (!ground_prop_config(rpk, type, loaded)) return cached->second;
+    parsed = &loaded;
+  }
+  cached->second = build_native_collision(rpk, *parsed);
   return cached->second;
 }
 
@@ -2419,11 +2456,24 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
   };
   size_t props = 0;
   std::unordered_set<uint32_t> used_resources;
-  for (const auto& placement : map.placements) {
-    auto [type, added] = object_types.try_emplace(placement.type);
-    if (added) {
-      ground_prop_config(*g_resources, placement.type, type->second);
-      auto& renders = type->second.renders;
+  {
+    // A type's CFG and collision meshes only read packs and files. Prepare
+    // the map's types on the job pool, then place them in map order.
+    std::vector<uint32_t> types;
+    for (const auto& placement : map.placements)
+      if (object_types.try_emplace(placement.type).second) types.push_back(placement.type);
+    std::vector<PartConfig> configs(types.size());
+    std::vector<NativeCollisionData> collisions(types.size());
+    std::vector<char> build(types.size());
+    for (size_t i = 0; i < types.size(); ++i)
+      build[i] = types[i] && !g_native_collision.contains(types[i]);
+    jobs_parallel_for(types.size(), [&](size_t i) {
+      ground_prop_config(*g_resources, types[i], configs[i]);
+      if (build[i]) collisions[i] = build_native_collision(*g_resources, configs[i]);
+    });
+    for (size_t i = 0; i < types.size(); ++i) {
+      if (build[i]) g_native_collision.emplace(types[i], std::move(collisions[i]));
+      auto& renders = (object_types[types[i]] = std::move(configs[i])).renders;
       std::erase_if(renders, [&](const PartRender& render) {
         return render.variants.empty() ? !is_visible(render.resource)
             : std::none_of(render.variants.begin(), render.variants.end(), is_visible);
@@ -2435,11 +2485,20 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
           [&](const PartRender& a, const PartRender& b) { return score(a) < score(b); });
       if (best != renders.end() && best->lod_level >= 0) {
         const auto best_index = static_cast<size_t>(best - renders.begin());
-        for (size_t i = renders.size(); i-- > 0;)
-          if (i != best_index && renders[i].lod_level >= 0)
-            renders.erase(renders.begin() + i);
+        for (size_t r = renders.size(); r-- > 0;)
+          if (r != best_index && renders[r].lod_level >= 0)
+            renders.erase(renders.begin() + r);
       }
     }
+  }
+  // Static collision meshes in placement order, baked on the job pool below.
+  struct CollisionBake {
+    const ScxGeometry* mesh;
+    PartMatrix pose;
+  };
+  std::vector<CollisionBake> bakes;
+  for (const auto& placement : map.placements) {
+    const auto type = object_types.find(placement.type);
     const auto pose = part_pose_matrix({placement.position, placement.rotation});
     const auto& collision = native_collision_data(*g_resources, placement.type,
                                                   &type->second);
@@ -2473,7 +2532,7 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
         props_map.dormant.push_back(std::move(entry));
       }
     } else if (collision.mesh) {
-      props_map.collision_meshes.push_back(bake_static_mesh(*collision.mesh, pose));
+      bakes.push_back({collision.mesh.get(), pose});
     }
     if (!collision.dynamic)
       for (const auto& body : collision.primitives) {
@@ -2498,8 +2557,15 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
       ++props;
     }
   }
+  {
+    const size_t first = props_map.collision_meshes.size();
+    props_map.collision_meshes.resize(first + bakes.size());
+    jobs_parallel_for(bakes.size(), [&](size_t i) {
+      props_map.collision_meshes[first + i] = bake_static_mesh(*bakes[i].mesh, bakes[i].pose);
+    });
+  }
   props_map.resources.assign(used_resources.begin(), used_resources.end());
-  preload_ground_meshes(props_map.resources);
+  preload_meshes(props_map.resources);
   for (auto& [key, cell] : cells) {
     std::array<float, 3> lower, upper;
     lower.fill(std::numeric_limits<float>::infinity());
@@ -2536,21 +2602,7 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
   jobs.reserve(cells.size());
   for (auto& [key, cell] : cells)
     if (!cell.props.empty()) jobs.push_back(&cell);
-  std::atomic_size_t next{0};
-  const auto group = [&] {
-    for (size_t job = next.fetch_add(1); job < jobs.size(); job = next.fetch_add(1))
-      build_prop_batches(*jobs[job], batchable);
-  };
-  {
-    std::vector<std::jthread> workers;
-    const auto count = std::min<size_t>({jobs.size(), 4u,
-        std::max<size_t>(1u, std::thread::hardware_concurrency())});
-    try {
-      for (size_t i = 1; i < count; ++i) workers.emplace_back(group);
-    } catch (const std::system_error&) {
-    }
-    group();
-  }
+  jobs_parallel_for(jobs.size(), [&](size_t job) { build_prop_batches(*jobs[job], batchable); });
   std::erase_if(cells, [](const auto& entry) { return entry.second.props.empty(); });
   merge_static_meshes(props_map.collision_meshes);
   if (!props_map.collision_meshes.empty() || props_map.collision_shapes.size()) {

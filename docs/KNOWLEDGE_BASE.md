@@ -171,6 +171,7 @@ current gaps to SLRR_rev code are in
 | UI | `src/ui/osd_registry.cpp:osd_add_widget`, `src/ui/osd_registry.cpp:osd_on_field_write` | OSD widgets, hit-testing, modal state |
 | Map ambience | `src/resources/scene_ambience.cpp:scene_ambience_attach`, `src/resources/scene_ambience.cpp:scene_ambience_tick` | `sfx_loop`/`sfx_random` lines of map placements |
 | Platform | `src/platform/host_input.cpp`, `src/platform/host_sfx.cpp`, `src/platform/host_music.cpp`, `src/platform/video_fmv.cpp`, `src/platform/host_game_options.cpp` | Input, audio, FMV, options |
+| Worker pool | `src/platform/job_system.cpp:jobs_parallel_for` | One worker per logical processor for loading work off the host thread (§6) |
 
 Code that exists but is not used:
 
@@ -195,8 +196,9 @@ Code that exists but is not used:
    native family through `src/natives/natives_boot.cpp:register_boot_natives`,
    loads options through the engine-owned `java.util.Config`
    (`src/platform/host_game_options.cpp:host_game_options_load`), scans every
-   `.rpk` under the root (`src/resources/rpk_index.cpp:open_all`), checks the
-   build number, opens the window and plays the intros.
+   `.rpk` under the root (`src/resources/rpk_index.cpp:open_all`, which reads
+   the packs on the worker pool and numbers them in directory order), checks
+   the build number, opens the window and plays the intros.
 3. `src/boot/boot.cpp:start_init` runs `Init.<init>(I)` with halting on the
    first unbound native.
 4. The main loop repeats: window pump, section render sync,
@@ -412,6 +414,18 @@ VM and lifetime:
 
 - Script threads are cooperative fibers on the host thread, never parallel
   workers. Native C++ work inside a fiber is not preempted.
+- Loading work that only reads files runs on the worker pool
+  (`src/platform/job_system.cpp:jobs_parallel_for`): pack indexing, mesh
+  loading (`src/resources/scene_instances.cpp:preload_meshes`, also called
+  by `collect_root` for the meshes new in a frame), a map's object types
+  (`src/resources/scene_instances.cpp:build_native_collision`), placement
+  collision bakes, prop batching, static collision that appeared or moved
+  (`src/resources/scene_instances.cpp:scene_instances_prepare_physics`), and
+  texture decoding
+  (`src/render/bgfx_lib_backend.cpp:prefetch_part_textures`). A job fills a
+  slot of a caller-owned result and never touches the VM, GameRef state,
+  scene caches or bgfx; the host thread publishes the results. A nested call
+  runs serially. Steady per-frame work stays on the host thread.
 - An `Object*` held in C++ is not a root. Use `Jvm::RootScope`
   (`include/slrr/jvm.hpp:RootScope`) across yields, or register a root
   provider for a native registry.
@@ -611,6 +625,20 @@ These are entry points, not fixes. Each needs its own reproduction.
   capture also draws the preloaded garage shell; before, the paint and glass
   mirrored only the props and the clear colour
   (`src/render/bgfx_lib_backend.cpp:update_reflections`).
+- **#56 single-threaded game.** Checked with the city benchmark (§3) and
+  per-thread CPU sampling. Before, the host thread did nearly all the work:
+  about 20 of 29 s of process CPU in a run, with at most four threads busy at
+  once. A warm Valo City load took about 13 s on that thread, 12.5 s of it in
+  `src/resources/scene_instances.cpp:merge_static_meshes`, which grew its
+  buffer by one placement's mesh at a time. On a first launch over freshly
+  copied files, serial texture decoding added about 14 s. Loading work now
+  runs on the worker pool (§6) and the merge reserves once: the load takes
+  about 1–2 s warm and 5 s on a first launch, with up to 20 threads busy on
+  a 20-thread CPU.
+  The VM, physics, scene collection and bgfx submission stay on the host
+  thread by contract; in the drive they cost about 4–7 ms per frame. Still
+  serial: `scene_instances_ground_map` (about 0.1 s per map file) and
+  `index_floor` on each merged collision mesh.
 
 ## 12. Self-check
 

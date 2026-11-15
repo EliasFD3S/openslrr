@@ -75,7 +75,7 @@ The chart, the counts above and [native-coverage.json](assets/progress/native-co
 | Scripts | ✅ TUFA classes and TREE programs, inheritance, Java and native calls; embedded C++ compileAll supports multiple classes per source container. See [SCRIPT_COMPILER.md](docs/SCRIPT_COMPILER.md) |
 | Script scheduling | ✅ Cooperative Windows fiber stacks; real run/sleep/wait, isAlive, stop, suspend/resume, and frame budgets. GameType callback lists and notification routing. See [SCRIPT_RUNTIME.md](docs/SCRIPT_RUNTIME.md) |
 | VM memory | ✅ Mark/sweep garbage collection, pin/unpin and finalizers; conservative native roots. See [VM_GC.md](docs/VM_GC.md) |
-| Resources | ✅ RPK packs, SCX models, DDS mipmaps, PTX textures and CFG configurations |
+| Resources | ✅ RPK packs, SCX models, DDS mipmaps, PTX textures and CFG configurations. Packs, meshes, map objects and textures load on every CPU core |
 | Rendering | ✅ bgfx/D3D11, skydomes, sun flares, environment reflections, projected car shadows and multilayer track materials |
 | Interface | ✅ Menus, career dialogs, catalog, car showroom, track selection, and paint inventory |
 | Cars | ✅ Assembly from scripts and CFG files; reference Baiern with 76 parts. Showroom camera orbit, vehicle information, powertrain layout, gear ratios and dyno calculations |

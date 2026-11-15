@@ -204,6 +204,36 @@ for a notification. `stop` must let scopes unwind before the stack is
 released. A long C++ job inside a native does not become preemptive just
 because the caller is a fiber.
 
+### Host threads and the worker pool
+
+The host thread runs the VM, the frame pump, physics, scene collection and
+bgfx submission. bgfx presents from its own render thread, pedestrians step
+on their own worker (`PedSim` in `part_runtime.cpp`), and audio and video
+decoders keep their library threads.
+
+Loading work that only reads files goes to the shared worker pool in
+`src/platform/job_system.cpp`: one worker per logical processor besides
+the host thread. `jobs_parallel_for` spreads the indices over the workers
+and the calling thread and returns when all are done; a nested call runs
+serially. Its users are pack indexing at startup, mesh loading for a map's
+props and for the render objects new in a frame, a map's object types (CFG
+and collision meshes), the placement collision bakes and prop batching,
+static collision that appeared or moved (`scene_instances_prepare_physics`),
+and decoding the texture files of the meshes new in a frame.
+
+A job fills its own slot of a result owned by the caller. It may read the
+`RpkIndex` and game files; it must not touch the VM, script objects, GameRef
+state, the scene caches or bgfx. The caller publishes the results on the
+host thread, in the same order as a serial load, so pack numbers and cache
+contents do not depend on the thread count; only per-file log lines can
+interleave. Steady per-frame work stays serial: it takes a few milliseconds
+and reads state that the frame mutates.
+
+Map loading used to spend most of its time on the host thread: about 13 s
+of a warm Valo City start, mostly a merge of the placement collision that
+grew its buffer by one mesh at a time. `merge_static_meshes` now reserves
+once; keep such accumulations linear.
+
 GameType notifications and callbacks are separate registries.
 The documented modes 8, 9, and 28 concern `control(float)`, `drive()`, and
 `animate()`. Iteration must tolerate an unregister or a reregister during the

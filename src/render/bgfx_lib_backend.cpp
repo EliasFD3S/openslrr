@@ -5,6 +5,7 @@
 #include "slrr/part_runtime.hpp"
 #include "slrr/scene_sun.hpp"
 #include "slrr/frame_profiler.hpp"
+#include "slrr/job_system.hpp"
 
 #include "slrr/dds_image.hpp"
 #include "slrr/host_cursor.hpp"
@@ -1364,6 +1365,25 @@ SceneFrustum LibBgfxBackend::view_frustum(const float* view, const float* projec
       part.revision = source->revision;
       instance_meshes_.emplace(key, std::move(part));
     };
+    // A map or a car brings many new meshes in one frame. Decode all of their
+    // texture files together on the job pool; cache() then creates them.
+    std::vector<std::pair<const ScxGeometry*, bool>> fresh;
+    std::unordered_set<const ScxGeometry*> queued;
+    auto prefetch = [&](const std::shared_ptr<const ScxGeometry>& source, void* owner,
+                        bool map_prop = false) {
+      const auto* key = source.get();
+      if (!key || instance_meshes_.contains(key) || !queued.insert(key).second) return;
+      // A redeformed mesh usually keeps its previous textures.
+      const auto* node = owner ? gameref_get(owner) : nullptr;
+      if (node && node->deformed_geometry.get() == key && deformed_meshes_.contains(owner)) return;
+      fresh.emplace_back(key, map_prop);
+    };
+    for (const auto& mesh : resident_props) prefetch(mesh, nullptr, true);
+    for (const auto& instance : instances_)
+      if (!instance.sky) prefetch(instance.geometry, instance.key);
+    for (const auto& preview : previews_)
+      for (const auto& instance : preview.instances) prefetch(instance.geometry, instance.key);
+    if (!fresh.empty()) prefetch_part_textures(fresh);
     // Resident map models are shared by their placements. Camera culling only
     // affects draw submission; leaving the map releases the GPU resources.
     for (const auto& mesh : resident_props) cache(mesh, nullptr, true);
@@ -1371,6 +1391,7 @@ SceneFrustum LibBgfxBackend::view_frustum(const float* view, const float* projec
       if (!instance.sky) cache(instance.geometry, instance.key);
     for (const auto& preview : previews_)
       for (const auto& instance : preview.instances) cache(instance.geometry, instance.key);
+    prefetched_textures_.clear();
     auto ensure_skin = [&](const SceneInstance& instance) {
       if (!instance.gpu_skin || !instance.geometry) return;
       auto found = instance_meshes_.find(instance.geometry.get());
@@ -1933,11 +1954,20 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
       }
     }
   }
-  void LibBgfxBackend::load_part_textures(ScenePart& part, bool share_map_textures)
+namespace {
+std::string map_texture_key(std::string path) {
+#ifdef _WIN32
+  for (char& c : path) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+#endif
+  return path;
+}
+}  // namespace
+
+  std::vector<std::string> LibBgfxBackend::part_texture_paths(const ScxGeometry& geo)
 {
-    std::vector<std::string> paths = part.geo.textures;
-    if (paths.empty() && !part.geo.info.path.empty()) {
-      std::string dir = part.geo.info.path;
+    std::vector<std::string> paths = geo.textures;
+    if (paths.empty() && !geo.info.path.empty()) {
+      std::string dir = geo.info.path;
       for (char& c : dir)
         if (c == '/') c = '\\';
       const auto slash = dir.find_last_of('\\');
@@ -1955,16 +1985,11 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
 #endif
       std::sort(paths.begin(), paths.end());
     }
-
-    part.tex.assign(paths.size(), BGFX_INVALID_HANDLE);
-    if (share_map_textures) part.shared_texture_paths.resize(paths.size());
-    int loaded = 0;
-    for (size_t i = 0; i < paths.size(); ++i) {
-      std::string path = paths[i];
+    for (std::string& path : paths) {
       for (char& c : path)
         if (c == '/') c = '\\';
       if (path.size() > 1 && path[1] != ':') {
-        std::string base = part.geo.info.path;
+        std::string base = geo.info.path;
         for (char& c : base)
           if (c == '/') c = '\\';
         const auto gpos = base.find("\\game\\");
@@ -1976,14 +2001,54 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
             path = base.substr(0, misc + 1) + path;
         }
       }
+    }
+    return paths;
+  }
+
+  void LibBgfxBackend::prefetch_part_textures(
+      const std::vector<std::pair<const ScxGeometry*, bool>>& meshes)
+{
+    prefetched_textures_.clear();
+    std::vector<std::string> files;
+    std::unordered_set<std::string> shared_once;
+    for (const auto& [geo, share_map_textures] : meshes) {
+      std::unordered_set<std::string> slots;
+      for (std::string& path : part_texture_paths(*geo)) {
+        // A shared map texture that already exists is not read again, and the
+        // first map mesh to load a new one creates it for the others.
+        if (path.empty() || (share_map_textures && map_textures_.contains(map_texture_key(path))))
+          continue;
+        auto [entry, added] = prefetched_textures_.try_emplace(path);
+        if (added) files.push_back(path);
+        if (slots.insert(path).second && (!share_map_textures || shared_once.insert(path).second))
+          ++entry->second.uses;
+      }
+    }
+    // A single file is read by load_part_textures itself, as before.
+    if (files.size() < 2) {
+      prefetched_textures_.clear();
+      return;
+    }
+    std::vector<DdsImage> images(files.size());
+    jobs_parallel_for(files.size(), [&](size_t i) { images[i] = load_texture_file(files[i]); });
+    for (size_t i = 0; i < files.size(); ++i)
+      prefetched_textures_[files[i]].image = std::move(images[i]);
+  }
+
+  void LibBgfxBackend::load_part_textures(ScenePart& part, bool share_map_textures)
+{
+    const std::vector<std::string> paths = part_texture_paths(part.geo);
+    part.tex.assign(paths.size(), BGFX_INVALID_HANDLE);
+    if (share_map_textures) part.shared_texture_paths.resize(paths.size());
+    int loaded = 0;
+    // A prefetched image is released after the last of its meshes loads it.
+    std::vector<std::string> prefetched_used;
+    for (size_t i = 0; i < paths.size(); ++i) {
+      const std::string& path = paths[i];
       if (path.empty()) continue;
       std::string shared_key;
       if (share_map_textures) {
-        shared_key = path;
-#ifdef _WIN32
-        for (char& c : shared_key)
-          c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-#endif
+        shared_key = map_texture_key(path);
         if (auto shared = map_textures_.find(shared_key); shared != map_textures_.end()) {
           part.tex[i] = shared->second.handle;
           part.shared_texture_paths[i] = std::move(shared_key);
@@ -2010,7 +2075,14 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
         return g > 140 && r > 100 && bl < 40 && g >= r;
       };
 
-      DdsImage img = load_texture_file(path);
+      DdsImage read;
+      const auto prefetched = prefetched_textures_.find(path);
+      if (prefetched != prefetched_textures_.end() &&
+          std::find(prefetched_used.begin(), prefetched_used.end(), path) == prefetched_used.end())
+        prefetched_used.push_back(path);
+      const DdsImage& img = prefetched != prefetched_textures_.end()
+                                ? prefetched->second.image
+                                : (read = load_texture_file(path));
       if (!img.ok) {
         std::printf("[bgfx] DDS miss slot %zu %s\n", i, path.c_str());
         continue;
@@ -2049,6 +2121,14 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
         }
         ++loaded;
       }
+    }
+    for (const std::string& path : prefetched_used) {
+      const auto prefetched = prefetched_textures_.find(path);
+      if (prefetched == prefetched_textures_.end()) continue;
+      if (prefetched->second.uses > 1)
+        --prefetched->second.uses;
+      else
+        prefetched_textures_.erase(prefetched);
     }
     std::printf("[bgfx] DDS GPU uploaded %d / %zu\n", loaded, paths.size());
   }
