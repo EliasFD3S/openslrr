@@ -221,10 +221,11 @@ and collision meshes), the placement collision bakes and prop batching,
 static collision that appeared or moved (`scene_instances_prepare_physics`),
 and decoding the texture files of the meshes new in a frame.
 
-A job fills its own slot of a result owned by the caller. It may read the
-`RpkIndex` and game files; it must not touch the VM, script objects, GameRef
-state, the scene caches or bgfx. The caller publishes the results on the
-host thread, in the same order as a serial load, so pack numbers and cache
+A job writes only its own slot of a result that the caller prepared, such
+as a cache entry the caller reserved before the batch. It may read the
+`RpkIndex`, game files and data no one modifies during the batch; it must
+not touch the VM, script objects, GameRef state, other cache entries or
+bgfx. The caller publishes the results on the host thread, in the same order as a serial load, so pack numbers and cache
 contents do not depend on the thread count; only per-file log lines can
 interleave. Steady per-frame work stays serial: it takes a few milliseconds
 and reads state that the frame mutates.

@@ -422,10 +422,11 @@ VM and lifetime:
   collision bakes, prop batching, static collision that appeared or moved
   (`src/resources/scene_instances.cpp:scene_instances_prepare_physics`), and
   texture decoding
-  (`src/render/bgfx_lib_backend.cpp:prefetch_part_textures`). A job fills a
-  slot of a caller-owned result and never touches the VM, GameRef state,
-  scene caches or bgfx; the host thread publishes the results. A nested call
-  runs serially. Steady per-frame work stays on the host thread.
+  (`src/render/bgfx_lib_backend.cpp:prefetch_part_textures`). A job writes
+  only its own slot of a result the caller prepared and never touches the
+  VM, GameRef state, other cache entries or bgfx; the host thread publishes
+  the results. A nested call runs serially. Steady per-frame work stays on
+  the host thread.
 - An `Object*` held in C++ is not a root. Use `Jvm::RootScope`
   (`include/slrr/jvm.hpp:RootScope`) across yields, or register a root
   provider for a native registry.
