@@ -707,3 +707,26 @@ Run `./scripts/run_save_io_tests.ps1 -Suite garage_shell` (requires game assets)
 and add `-BaselineRef a61b1ba` for reproduction. No saves or game files changed.
 Release x64 rebuilt successfully. Full visual/collision validation in G3 and
 ROC remains pending; the test checks scene attachment, not GPU output.
+
+
+## 14. Asset bounds checks (#91, #92)
+
+SCX v3 validates all three face indices against the current material group's
+vertex count before appending indices. Validation also runs for metadata reads;
+an index referencing vertices in a later group is invalid even when the final
+mesh would contain that index. Invalid geometry is marked not-ok with an error.
+
+matrixdata_read checks declared keys against remaining bytes (eight floats per
+key) before resizing times or track channels. This prevents allocation driven
+by an unsupported key declaration. Existing quaternion/time/name checks remain.
+These are parser corrections, not changes to deformation or animation behavior.
+
+Release x64 build passes. Five deterministic fixtures exercise valid multi-group
+SCX, an out-of-range local index, an index into a later group, truncated keys
+with no channel allocation, and a valid named animation. Main 933cf0a: 2 pass /
+3 fail; corrected: 5 pass / 0 fail. Evidence: assets/validation/asset-bounds.
+Run `./scripts/run_save_io_tests.ps1 -Suite asset_bounds`; add
+`-BaselineRef 933cf0a` to reproduce. Generated fixtures do not alter game assets
+or saves. Knowledge-reference check: 219 references, zero errors.
+In-game visual regression testing remains pending; these fixes are most directly
+validated with malformed fixtures, not normal driving.

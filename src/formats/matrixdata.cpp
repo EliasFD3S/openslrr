@@ -45,6 +45,12 @@ bool matrixdata_read(const uint8_t* data, size_t size, Clip* out, std::string* e
       fail(error, "Invalid matrixdata key count");
       return false;
     }
+    // Each key occupies eight floats. Bound the declaration by bytes still
+    // present before resizing times or either per-track channel.
+    if (declared > size / (8 * sizeof(float))) {
+      fail(error, "Truncated matrixdata keys");
+      return false;
+    }
     if (bone == 0) {
       keys = declared;
       out->times.resize(keys);

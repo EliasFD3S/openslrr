@@ -134,6 +134,16 @@ bool parse_v3(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
       info.error = "v3 index overrun";
       return false;
     }
+    // Validate local indices even for metadata-only reads. An index into a
+    // later group's vertices is still invalid for this material group.
+    for (uint32_t t = 0; t < face_count; ++t) {
+      const uint8_t* ix = buf.data() + off + static_cast<size_t>(t) * 12;
+      if (rd_u32(ix) >= vcount || rd_u32(ix + 4) >= vcount ||
+          rd_u32(ix + 8) >= vcount) {
+        info.error = "v3 face vertex index out of range";
+        return false;
+      }
+    }
     if (want_geo) {
       group.index_start = static_cast<uint32_t>(geo.indices.size());
       group.index_count = face_count * 3;
