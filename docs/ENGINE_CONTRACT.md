@@ -433,7 +433,9 @@ physics tick. A two-anchor render (`linked a b`) is bound like the original
 between the two bones, so a spring's coils close up and a shock absorber
 telescopes instead of the whole mesh scaling. A render descriptor without a
 `skeleton` property binds the BON next to its skinned SCX
-(`parts/running_gear/meshes/spring.bon`, `shock_absorber.bon`). A two-anchor
+(`parts/running_gear/meshes/spring.bon`, `shock_absorber.bon`) only when that
+BON is a link rig, naming bone00 and bone01; the BONs next to human meshes
+are not. A two-anchor
 render with no such rig, such as a CV shaft, falls back to stretching its
 authored +Y bounds between the anchors. A one-anchor render, such as a
 control arm, moves whole onto its anchor frame: travel without steering when

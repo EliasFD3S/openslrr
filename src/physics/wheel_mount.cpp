@@ -37,7 +37,8 @@ Vec3 pre_contact_velocity(const RigidBody& body, Vec3 contact, Vec3 normal,
 float wheel_mount_condition(float condition, double shift, double energy, double distance,
                             const WheelMountTuning& tuning) {
   double result = condition;
-  if (std::isfinite(shift) && shift > 0)
+  // A tuning without a travel criterion (the engine mount) ignores shift.
+  if (std::isfinite(shift) && shift > 0 && tuning.travel > 0)
     result = std::min(result, 1 - shift / tuning.travel);
   if (std::isfinite(energy) && energy > 0 && std::isfinite(distance))
     result -= energy * std::exp(-(distance * distance) / (tuning.reach * tuning.reach)) /

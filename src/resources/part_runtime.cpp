@@ -5075,6 +5075,7 @@ void add_render_box(const PartMatrix &part_frame, Object *render, TopBox &box) {
 // body panels: the car the gauge outline stands for. Wheels keep their corner
 // from the chassis slot (type 101 + corner) they hang from.
 void hud_damage_parts(const Record &rec, VehicleHudState &state) {
+  state.part_count = 0;
   struct Placed {
     VehicleHudPart part;
     float x, z;

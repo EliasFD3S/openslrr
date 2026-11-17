@@ -163,7 +163,7 @@ current gaps to SLRR_rev code are in
 | Meshes and textures | `src/resources/scx_mesh.cpp:load_scx_geometry`, `src/resources/ptx_image.cpp:load_texture_file`, `src/resources/dds_image.cpp` | SCX v3/v4, PTX, DDS, PNG/TGA |
 | Scene | `src/resources/scene_instances.cpp:scene_instances_collect`, `src/resources/scene_instances.cpp:scene_instances_ground_map` | Render instances, maps, placements, collision index |
 | Part CFG | `src/resources/part_config.cpp:parse_part_config` | Slots, wheels, renders, bodies, HUD `osd_*` lines |
-| Parts and cars | `src/resources/part_runtime.cpp:part_create`, `src/resources/part_runtime.cpp:part_command`, `src/resources/part_runtime.cpp:part_physics_advance` | Part/Chassis/Vehicle natives, assembly, damage, pedestrians, HUD state (about 4,900 lines) |
+| Parts and cars | `src/resources/part_runtime.cpp:part_create`, `src/resources/part_runtime.cpp:part_command`, `src/resources/part_runtime.cpp:part_physics_advance` | Part/Chassis/Vehicle natives, assembly, damage, pedestrians, HUD state (about 6,500 lines) |
 | Physics | `src/physics/vehicle_dynamics.cpp`, `src/physics/tire_model.cpp`, `src/physics/dyno_model.cpp`, `src/physics/deformation_cage.cpp`, `src/physics/mass_properties.cpp`, `src/physics/wheel_mount.cpp` | Rigid body, tyres, dyno, deformation, assembled mass properties, wheel mount failure |
 | Pedestrians | `src/resources/pedestrian_lines.cpp`, `src/formats/walk.cpp` | Walkers in the `city.walk` sidewalk rows, after the original engine |
 | Characters | `src/resources/character.cpp`, `src/resources/skeleton.cpp`, `src/formats/matrixdata.cpp` | Skeletons, clips, skinning, Animation |
@@ -298,7 +298,7 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
    (`src/resources/part_runtime.cpp:damage_engine_mount`,
    `src/physics/wheel_mount.cpp:pre_contact_velocity`). Without a dyno the car
    has no drive torque; `engine_lost` keeps `collide_chassis` running for it.
-8. A part on a CFG `flap` slot (doors, hood, trunk) is a latched hinged plate
+9. A part on a CFG `flap` slot (doors, hood, trunk) is a latched hinged plate
    (`src/physics/flap_hinge.cpp:flap_step`). `Part.flap`/`flap_toggle` drive
    it, `damage_chassis` hands each impact to
    `src/resources/part_runtime.cpp:flap_impact`, which can release the latch
@@ -310,7 +310,7 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
    `src/physics/flap_hinge.cpp:flap_contact`): it is swung out of the way or,
    from 4.5 m/s, torn off through `detach_panel` after the loop.
    ENGINE_CONTRACT §10 has the contract.
-9. After the ticks of a frame, in the Adaptive framerate mode
+10. After the ticks of a frame, in the Adaptive framerate mode
    (`src/platform/host_game_options.cpp:host_framerate_mode`), `publish_render_poses`
    blends each car from its pose before the last tick to the published one, by
    the unsimulated fraction of a tick
@@ -490,7 +490,8 @@ Resources and data:
   (`src/resources/part_runtime.cpp:relink_one`,
   `src/resources/character.cpp:character_place_bone`). The stock spring and
   shock absorber renders declare no `skeleton`; their rig is the BON next to
-  the SCX (`src/resources/character.cpp:render_skeleton`). Only a render
+  the SCX, taken only when it names bone00 and bone01
+  (`src/resources/character.cpp:render_skeleton`). Only a render
   without that rig, such as a CV shaft, is stretched
   (`src/resources/part_runtime.cpp:span_between`).
 

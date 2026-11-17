@@ -154,8 +154,10 @@ bool has_extension(const std::string& path, const char* extension) {
 // shock absorber renders (and mods derived from them, such as MW_Mod's
 // Pneumatic_SA) declare none: their skinned SCX sits next to a BON of the
 // same name, the two-bone rig the original `add_linked` binds as bone00 and
-// bone01. A mesh without skin weights ignores a skeleton, so the fallback is
-// harmless for any other render that happens to have a sibling BON.
+// bone01. Human meshes also sit next to BONs (their clips' bone lengths), so
+// a sibling BON is only taken as the skin bind when it is such a link rig:
+// it names both bone00 and bone01. Any other render without `skeleton` gets
+// none, as before.
 std::string render_skeleton(const RpkIndex& packs, int32_t type_id) {
   const auto full = static_cast<uint32_t>(type_id);
   std::string declared = packs.payload_prop(full, "skeleton");
@@ -164,7 +166,20 @@ std::string render_skeleton(const RpkIndex& packs, int32_t type_id) {
   if (!model.ok || !has_extension(model.source, ".scx")) return {};
   std::string bon = sibling_bon(model.source);
   std::error_code error;
-  return std::filesystem::is_regular_file(disk_path(packs, bon), error) ? bon : std::string{};
+  if (!std::filesystem::is_regular_file(disk_path(packs, bon), error)) return {};
+  const auto rig = load_skeleton(packs, bon);
+  if (!rig) return {};
+  const auto named = [&](const char* wanted) {
+    for (const auto& bone : rig->bones) {
+      if (bone.name.size() != std::strlen(wanted)) continue;
+      bool same = true;
+      for (size_t i = 0; same && i < bone.name.size(); ++i)
+        same = std::tolower(static_cast<unsigned char>(bone.name[i])) == wanted[i];
+      if (same) return true;
+    }
+    return false;
+  };
+  return named("bone00") && named("bone01") ? bon : std::string{};
 }
 
 void identity(float* m) {
@@ -748,7 +763,9 @@ bool character_place_bone(void* key, int32_t type_id, const RpkIndex& packs, int
   for (int i = 0; i < 3; ++i)
     if (!std::isfinite(position_m[i])) return false;
   // Bind orientation in render space, with the requested origin. This runs
-  // for every rigged link at each physics tick, so it allocates nothing.
+  // for every rigged link at each physics tick. A root bone (bone00 and
+  // bone01 of every stock link rig) allocates nothing; a child bone rebuilds
+  // the pose below to read its parent.
   float world[16];
   if (!skeleton_bind_world(*character->bind, bone, world)) return false;
   for (int i = 0; i < 3; ++i) world[12 + i] = position_m[i] * 100.f;
@@ -759,7 +776,7 @@ bool character_place_bone(void* key, int32_t type_id, const RpkIndex& packs, int
   } else {
     // Relative to the parent as it is posed now, so a parent placed first
     // keeps its child where it was asked to go.
-    rebuild(*character, gameref_now());
+    rebuild(*character, g_character_sim_time);
     if (character->worlds.size() < static_cast<size_t>(count) * 16) return false;
     float inverse[16];
     rigid_inverse(character->worlds.data() + parent * 16, inverse);

@@ -90,6 +90,14 @@ SLRR_TEST(engine_mount_needs_a_clearly_bigger_hit_than_a_wheel) {
   SLRR_REQUIRE(slrr::physics::wheel_mount_condition(1.f, 0, 0, 0, engine) == 1.f);
 }
 
+SLRR_TEST(a_tuning_without_travel_ignores_hardpoint_shift) {
+  // The engine mount has no travel criterion; a shift must not end it.
+  const auto& engine = slrr::physics::kEngineMountTuning;
+  const float condition = slrr::physics::wheel_mount_condition(0.8f, 0.5, 0, 0, engine);
+  SLRR_REQUIRE(std::isfinite(condition));
+  SLRR_REQUIRE(std::abs(condition - 0.8f) < 1e-6f);
+}
+
 int main() {
   constexpr slrr::standalone::Test tests[] = {
       central_impact_charges_the_whole_mass,
@@ -98,6 +106,7 @@ int main() {
       moderate_corner_crash_keeps_the_wheel_heavy_one_breaks_it,
       pre_contact_velocity_undoes_the_contact_impulse,
       engine_mount_needs_a_clearly_bigger_hit_than_a_wheel,
+      a_tuning_without_travel_ignores_hardpoint_shift,
   };
   return slrr::standalone::run("wheel_mount", tests);
 }
