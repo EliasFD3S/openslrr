@@ -39,7 +39,7 @@ struct ScxGroup {
   ScxTextureMap emission_map;
   // SCX4 COLOR_EMISSIVE (property 2), independent of an emission mask.
   float emission_color[3] = {0.f, 0.f, 0.f};
-  uint32_t material_flags = 0;  // bit0 = alphaOpacity (scx.md)
+  uint32_t material_flags = 0;  // SCX3 bit0 alphaOpacity; SCX4 render/coverage flags
   uint8_t alpha_reference = 0x38;
   float diffuse[4] = {0.6f, 0.65f, 0.7f, 1.f};
   // v4 color 1 and 0x01000000. Paint and chrome use a tight power (~21),
@@ -48,6 +48,40 @@ struct ScxGroup {
   float shininess = 1.f;
   std::string name;
 };
+
+// Function words select colour operations; the SCX4 render flags independently
+// select surface coverage. ColorMixTex must never override authored holes.
+struct ScxSurface {
+  bool blend = false;
+  bool cutout = false;
+  bool color_mix = false;
+};
+inline ScxSurface scx_surface(int version, const ScxGroup& group) {
+  ScxSurface surface;
+  const auto flags = group.material_flags;
+  if (version == 4) {
+    surface.blend = (flags & 0x40000000u) != 0;
+    surface.cutout = !surface.blend && (flags & 0x20000000u) != 0;
+    surface.color_mix = group.material_type == 0x03u && !surface.blend && !surface.cutout;
+  } else if (version == 3) {
+    surface.blend = (flags & 0x101u) == 0x101u;
+    surface.cutout = !surface.blend && (flags & 1u) != 0;
+  }
+  return surface;
+}
+
+// Blended SCX4 surfaces still carry material opacity. A deliberately absent
+// diffuse map uses COLOR_DIFFUSE, not an opaque white fallback. Textured Tex
+// families may have black COLOR_DIFFUSE and must keep their sampled RGB.
+inline void scx_modulate_blend(int version, const ScxGroup& group, float (&tint)[4],
+                               bool premultiplied = false) {
+  if (version != 4 || !scx_surface(version, group).blend) return;
+  tint[3] *= group.diffuse[3];
+  if (group.texture_index == 0xffff)
+    for (int i = 0; i < 3; ++i) tint[i] *= group.diffuse[i];
+  if (premultiplied)
+    for (int i = 0; i < 3; ++i) tint[i] *= group.diffuse[3];
+}
 
 // CPU mesh for GPU upload. Positions/normals/uv in original SCX units
 // (CFG world uses ×0.01 → meters — apply at draw).

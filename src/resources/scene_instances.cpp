@@ -2404,9 +2404,7 @@ bool prop_mesh_batchable(const ScxGeometry& mesh) {
   const bool v3 = mesh.info.version == 3;
   if (mesh.groups.empty() || mesh.ground_polygons || (!v4 && !v3)) return false;
   for (const auto& group : mesh.groups) {
-    const auto flags = group.material_flags;
-    const bool glass = v4 && (flags & 0x40000000u) && (group.material_type & 0x04u);
-    const bool blend = glass || (v3 && (flags & 0x101u) == 0x101u);
+    const bool blend = scx_surface(mesh.info.version, group).blend;
     // Blended sections are drawn after the opaque world, one by one.
     // Alpha-tested foliage, vertex-coloured walls and ColorMixTex facades
     // (fs_mesh mixes the instance colour under the texture) draw instanced.

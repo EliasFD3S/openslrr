@@ -2,7 +2,7 @@ param(
   [string]$BuildDir = "build",
   [string]$BaselineRef = "",
   [switch]$CorpusOnly,
-  [ValidateSet("save_io", "save_persistence", "scx_skin", "physics_position", "garage_shell", "map_props", "asset_bounds", "ped_crossing", "time_format", "night_props", "sun_cycle", "tree_numbers", "ui_lifetime", "resource_cache", "tufa_validation", "rpk_validation", "audio_recovery", "vm_lookup", "script_safety", "video_safety", "options_retry", "live_lookup", "driver_mask", "driver_selector", "pad_fallback", "class_lifetime", "static_increment", "inventory_transition", "map_views")]
+  [ValidateSet("save_io", "save_persistence", "scx_skin", "physics_position", "garage_shell", "map_props", "asset_bounds", "ped_crossing", "time_format", "night_props", "sun_cycle", "tree_numbers", "ui_lifetime", "resource_cache", "tufa_validation", "rpk_validation", "audio_recovery", "vm_lookup", "script_safety", "video_safety", "options_retry", "live_lookup", "driver_mask", "driver_selector", "pad_fallback", "class_lifetime", "static_increment", "inventory_transition", "map_views", "map_alpha")]
   [string]$Suite = "save_io"
 )
 $ErrorActionPreference = "Stop"

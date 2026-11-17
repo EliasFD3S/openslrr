@@ -340,23 +340,28 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
           (!group || (group->emission_index == 0xffff &&
            group->emission_color[0] == 0.f && group->emission_color[1] == 0.f &&
            group->emission_color[2] == 0.f))) return;
-      // SCX3 alpha-blended sprites, including map markers, belong above
-      // the opaque tiles. Their JPEG/PNG alpha is already premultiplied.
-      // SCX4 glass requests texture alpha in the material word. The
-      // transparent function bit alone also appears on opaque rail frames.
-      const bool glass = group && !preview && part.geo.info.version == 4 &&
-          (flags & 0x40000000u) && (group->material_type & 0x04u);
-      const bool blend = !instance.sky && (instance.emissive_overlay || glass ||
-          (part.geo.info.version == 3 && (flags & 0x101u) == 0x101u));
+      // Colour function and alpha coverage are independent. In particular,
+      // type-0 rail panels still blend, and type-3 bridge trusses still cut out.
+      const auto surface = group ? scx_surface(part.geo.info.version, *group) : ScxSurface{};
+      const bool blend = !instance.sky && (instance.emissive_overlay ||
+          (!preview && surface.blend) ||
+          (part.geo.info.version == 3 && surface.blend));
       if (pass != int(blend)) return;
       const auto tex = texture(texture_index);
+      std::string extension = blend && texture_index < part.geo.textures.size()
+          ? std::filesystem::path(part.geo.textures[texture_index]).extension().string() : "";
+      std::transform(extension.begin(), extension.end(), extension.begin(),
+                     [](unsigned char c) { return std::tolower(c); });
+      // Decoded images are premultiplied; DDS and an absent diffuse map are
+      // straight alpha. A white fallback for untextured glass is not an image.
+      const bool premultiplied = texture_index != 0xffff && extension != ".dds";
       // SCX4 storefronts use texture alpha to mix their paint colour with
       // the detail texture. Low-alpha texels are solid wall, not holes.
       const bool material_mix = group && instance.cull_backfaces &&
-          part.geo.info.version == 4 && group->material_type == 0x03u;
+          part.geo.info.version == 4 && surface.color_mix;
       const bool authored_alpha = instance.cull_backfaces && part.geo.info.version == 4;
       const bool cut = !material_mix && !blend && !preview && !instance.sky &&
-          (authored_alpha ? (flags & 0x20000000u) != 0
+          (authored_alpha ? surface.cutout
                           : part.geo.info.version != 3 || (flags & 1));
       // V4 map foliage specifies GREATER with an 8-bit reference (default 0x38).
       const float alpha_test = !cut ? 0.f : authored_alpha && group
@@ -374,6 +379,8 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
       float tint[4]={((color>>16)&255)/255.f,((color>>8)&255)/255.f,(color&255)/255.f,1};
       if (material_mix)
         for (int i = 0; i < 3; ++i) tint[i] *= group->diffuse[i];
+      if (blend && !instance.emissive_overlay && group)
+        scx_modulate_blend(part.geo.info.version, *group, tint, premultiplied);
       if (instance.emissive_overlay && group && group->emission_index == 0xffff)
         for (int c = 0; c < 3; ++c) tint[c] *= group->emission_color[c];
       const ScxTextureMap identity;
@@ -429,12 +436,9 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
         state |= BGFX_STATE_DEPTH_TEST_GEQUAL |
                  BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_ONE);
       } else if (blend) {
-        std::string extension = texture_index < part.geo.textures.size()
-            ? std::filesystem::path(part.geo.textures[texture_index]).extension().string() : "";
-        std::transform(extension.begin(), extension.end(), extension.begin(),
-                       [](unsigned char c) { return std::tolower(c); });
-        state |= BGFX_STATE_DEPTH_TEST_GREATER | (extension == ".dds" ? BGFX_STATE_BLEND_ALPHA
-            : BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA));
+        state |= BGFX_STATE_DEPTH_TEST_GREATER | (premultiplied
+            ? BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA)
+            : BGFX_STATE_BLEND_ALPHA);
       } else if (!instance.sky) {
         state |= BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_GREATER;
       }
@@ -494,9 +498,9 @@ void LibBgfxBackend::draw_prop_batches(uint16_t view_id,
         // The same alpha rules as a single placement (draw_instance and the
         // static shadow pass). Batched meshes have no blended sections.
         const bool v4 = part.geo.info.version == 4;
-        const bool material_mix = group && v4 && group->material_type == 0x03u;
-        const bool cut = !material_mix && (v4 ? (flags & 0x20000000u) != 0
-                                              : part.geo.info.version != 3 || (flags & 1u) != 0);
+        const auto surface = group ? scx_surface(part.geo.info.version, *group) : ScxSurface{};
+        const bool material_mix = surface.color_mix;
+        const bool cut = surface.cutout || (part.geo.info.version != 3 && !v4);
         if (shadow) {
           const float threshold = !cut || !group ? -1.f
               : v4 ? group->alpha_reference / 255.f : .5f;

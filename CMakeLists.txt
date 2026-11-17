@@ -104,20 +104,20 @@ if(WIN32)
   target_sources(slrr_host PRIVATE slrr_host.rc)
 endif()
 
+# Refresh Git metadata before any host source compiles on every generator.
+# write_version.cmake preserves the header timestamp when its content is unchanged.
 set(SLRR_VERSION_H "${CMAKE_BINARY_DIR}/generated/slrr_version.h")
-file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/generated")
-add_custom_command(
-  TARGET slrr_host PRE_BUILD
-  COMMAND ${CMAKE_COMMAND}
-          -DSRC=${CMAKE_CURRENT_SOURCE_DIR}
-          -DOUT=${SLRR_VERSION_H}
-          -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/write_version.cmake
+add_custom_target(slrr_version ALL
+  BYPRODUCTS "${SLRR_VERSION_H}"
+  COMMAND "${CMAKE_COMMAND}"
+          "-DSRC=${CMAKE_CURRENT_SOURCE_DIR}"
+          "-DOUT=${SLRR_VERSION_H}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/write_version.cmake"
   VERBATIM)
-execute_process(
-  COMMAND ${CMAKE_COMMAND}
-          -DSRC=${CMAKE_CURRENT_SOURCE_DIR}
-          -DOUT=${SLRR_VERSION_H}
-          -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/write_version.cmake)
+add_dependencies(slrr_host slrr_version)
+# Rebuild the window-title consumer in the same invocation when Git metadata changes.
+set_property(SOURCE src/boot/boot.cpp APPEND PROPERTY
+  OBJECT_DEPENDS "${SLRR_VERSION_H}")
 
 target_include_directories(slrr_host PRIVATE include "${CMAKE_BINARY_DIR}/generated")
 

@@ -1,0 +1,6 @@
+Read-only storefront material diagnostic before modulation fix
+WINDOW game/objects/meshes/12x6_uveges/12x6_uveges_uveg.scx Material #1 flags=c0000000 kind=8 tex=0 env=1 rgba=0.000 0.000 0.000 0.498 strength=1.000
+WINDOW game/objects/meshes/12x6_uveges_uveg/12x6_uveges_uveg.scx 1 flags=c0000000 kind=33 tex=65535 env=0 rgba=0.435 0.545 0.471 0.247 strength=1.000
+WINDOW game/objects/meshes/15x9_shop/15x9_shop_uveg.scx Material #1 flags=c0000000 kind=8 tex=0 env=1 rgba=0.000 0.000 0.000 0.498 strength=1.000
+WINDOW game/objects/meshes/23x5_shop/23x5_shop_uveg.scx atlatszo flags=c0000000 kind=c tex=0 env=1 rgba=0.000 0.000 0.000 0.498 strength=1.000
+WINDOW game/objects/meshes/06x5_shop_uveg/06x5_shop_uveg.scx 7 - Default flags=c0000000 kind=32 tex=65535 env=0 rgba=0.396 0.396 0.529 0.247 strength=1.000

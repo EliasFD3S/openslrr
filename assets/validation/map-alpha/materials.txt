@@ -1,0 +1,37 @@
+Read-only diagnostic of local stock material data (before the renderer fix)
+GROUP name=korlat flags=c0000000 type=0 ref=56 slot=0 texture=misc\dealer\textures\korlat.dds
+TARGET objects/meshes/roadtest26_egyedi/roadtest26_egyedi.scx Material #314 flags=a0000000 type=3 ref=56 texture=maps\textures\fuggo_sodrony.dds
+TARGET objects/meshes/roadtest26_egyedi/roadtest26_egyedi.scx RCenter1 flags=00000000 type=1 ref=56 texture=maps\textures\cross.dds
+TARGET objects/meshes/roadtest26_egyedi/roadtest26_egyedi.scx Material #312 flags=a0000000 type=3 ref=56 texture=maps\textures\BridgeRacsW.dds
+TARGET objects/meshes/roadtest26_egyedi/roadtest26_egyedi.scx Material #315 flags=80000000 type=0 ref=56 texture=maps\textures\conc02.dds
+TARGET objects/meshes/roadtest26_egyedi/roadtest26_egyedi.scx Material #311 flags=a0000000 type=3 ref=56 texture=maps\textures\BridgeRacsIv.dds
+TARGET objects/meshes/roadtest26_egyedi/roadtest26_egyedi.scx Material #309 flags=a0000000 type=3 ref=56 texture=maps\textures\BridgeRacsN.dds
+TARGET objects/meshes/roadtest26_egyedi/roadtest26_egyedi.scx Material #310 flags=a0000000 type=3 ref=56 texture=maps\textures\BridgeRacsA.dds
+TARGET objects/meshes/area_200_egyedi/area_200_egyedi.scx 23 - Default flags=80000000 type=0 ref=56 texture=maps\textures\letrarakas.dds
+TARGET objects/meshes/area_200_egyedi/area_200_egyedi.scx 1 - Default flags=80000000 type=0 ref=56 texture=maps\textures\kavicsok_256.dds
+TARGET objects/meshes/area_200_egyedi/area_200_egyedi.scx Material #622 flags=a0000000 type=3 ref=25 texture=maps\textures\darukotel2a.dds
+TARGET objects/meshes/area_200_egyedi/area_200_egyedi.scx sargaracs flags=a0000000 type=0 ref=25 texture=maps\textures\craneX.dds
+TARGET objects/meshes/area_200_egyedi/area_200_egyedi.scx sarga flags=80000000 type=0 ref=56 texture=maps\textures\craneYellow.dds
+TARGET objects/meshes/area_200_egyedi/area_200_egyedi.scx beton flags=80000000 type=0 ref=56 texture=maps\textures\beton2.dds
+TARGET objects/meshes/area_200_egyedi/area_200_egyedi.scx sargaracskeret flags=a0000000 type=0 ref=25 texture=maps\textures\craneFrame.dds
+TARGET objects/meshes/area_200_egyedi/area_200_egyedi.scx Material #25 flags=80000000 type=0 ref=56 texture=maps\textures\daru.dds
+TARGET objects/meshes/area_200_egyedi/area_200_egyedi.scx Material #621 flags=80000000 type=0 ref=56 texture=maps\textures\fapallo2_256x128.dds
+TARGET objects/meshes/area_200_egyedi/area_200_egyedi.scx Material #620 flags=a0000000 type=0 ref=25 texture=maps\textures\letra.dds
+TARGET objects/meshes/area_200_egyedi/area_200_egyedi.scx 20 - Default flags=a0000000 type=3 ref=25 texture=maps\textures\foracs1.dds
+TARGET objects/meshes/area_200_egyedi/area_200_egyedi.scx Material #617 flags=80000000 type=0 ref=56 texture=maps\textures\metal_gerenda.png
+TARGET objects/meshes/area_200_egyedi/area_200_egyedi.scx Material #616 flags=80000000 type=0 ref=56 texture=maps\textures\epitkezes_fal.dds
+TARGET objects/meshes/area_200_egyedi/area_200_egyedi.scx Material #615 flags=80000000 type=0 ref=56 texture=unknown
+TARGET objects/meshes/area_19_egyedi/area_19_egyedi.scx Material #621 flags=80000000 type=0 ref=56 texture=maps\textures\fapallo2_256x128.dds
+TARGET objects/meshes/area_19_egyedi/area_19_egyedi.scx Material #620 flags=a0000000 type=0 ref=56 texture=maps\textures\letra.dds
+TARGET objects/meshes/area_19_egyedi/area_19_egyedi.scx 20 - Default flags=a0000000 type=3 ref=56 texture=maps\textures\foracs1.dds
+TARGET objects/meshes/area_19_egyedi/area_19_egyedi.scx 22 - Default flags=80000000 type=0 ref=56 texture=maps\textures\metal_gerenda.png
+TARGET objects/meshes/area_19_egyedi/area_19_egyedi.scx sarga flags=80000000 type=0 ref=56 texture=maps\textures\craneYellow.dds
+TARGET objects/meshes/area_19_egyedi/area_19_egyedi.scx Material #622 flags=a0000000 type=3 ref=56 texture=maps\textures\darukotel2a.dds
+TARGET objects/meshes/area_19_egyedi/area_19_egyedi.scx Material #623 flags=80000000 type=0 ref=56 texture=maps\textures\darusin.dds
+TARGET objects/meshes/area_19_egyedi/area_19_egyedi.scx beton flags=80000000 type=0 ref=56 texture=maps\textures\20mx20m_beton.dds
+TARGET objects/meshes/area_19_egyedi/area_19_egyedi.scx sargaracskeret flags=a0000000 type=0 ref=56 texture=maps\textures\craneFrame.dds
+TARGET objects/meshes/area_19_egyedi/area_19_egyedi.scx Material #25 flags=80000000 type=0 ref=56 texture=maps\textures\daru.dds
+TARGET objects/meshes/area_19_egyedi/area_19_egyedi.scx Material #617 flags=80000000 type=0 ref=56 texture=maps\textures\metal_gerenda.png
+TARGET objects/meshes/area_19_egyedi/area_19_egyedi.scx Material #618 flags=80000000 type=0 ref=56 texture=maps\textures\20mx20m_beton.dds
+TARGET objects/meshes/area_19_egyedi/area_19_egyedi.scx Material #616 flags=80000000 type=0 ref=56 texture=maps\textures\epitkezes_fal.dds
+TARGET objects/meshes/area_19_egyedi/area_19_egyedi.scx Material #615 flags=80000000 type=0 ref=56 texture=maps\textures\20mx20m_beton.dds

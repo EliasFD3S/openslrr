@@ -1,0 +1,12 @@
+Baseline 9df8920; expected regression failure with Ninja
+PASS Ninja: clean initial build -> boot r1-543a010
+Traceback (most recent call last):
+  File "C:\Users\Elias\Desktop\openslrr\tests\test_version_build.py", line 126, in <module>
+    fixture = run_case(generator, cmake, env, rule_source)
+  File "C:\Users\Elias\Desktop\openslrr\tests\test_version_build.py", line 99, in run_case
+    build_check("dirty metadata first rebuild", True)
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Elias\Desktop\openslrr\tests\test_version_build.py", line 94, in build_check
+    assert actual == expected, f"{generator} {label}: binary reports {actual}, expected {expected}"
+           ^^^^^^^^^^^^^^^^^^
+AssertionError: Ninja dirty metadata first rebuild: binary reports r1-543a010, expected r1-543a010+
