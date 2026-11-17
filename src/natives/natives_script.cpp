@@ -60,7 +60,7 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
   jvm.natives().register_method("java.game.OptionsDialog", "getRendererOption", "(I)I",
       [](Object*, const std::vector<Value>& args) {
         const auto& graphics = host_enhanced_graphics();
-        switch (args[0].v.i) {
+        switch (native_arg_integer(args, 0, -1)) {
           case 0: return Value::make_int(graphics.msaa);
           case 1: return Value::make_int(graphics.dynamic_reflections);
           case 2: return Value::make_int(graphics.volumetric_clouds);
@@ -73,8 +73,12 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
   jvm.natives().register_method("java.game.OptionsDialog", "setRendererOption", "(II)V",
       [](Object*, const std::vector<Value>& args) {
         auto& graphics = host_enhanced_graphics();
-        const int value = args[1].v.i;
-        switch (args[0].v.i) {
+        if (args.size() < 2 ||
+            (args[0].tag != ValueTag::Int && args[0].tag != ValueTag::Float) ||
+            (args[1].tag != ValueTag::Int && args[1].tag != ValueTag::Float))
+          return Value::make_void();
+        const int value = native_arg_integer(args, 1);
+        switch (native_arg_integer(args, 0, -1)) {
           case 0: graphics.msaa = std::clamp(value, 0, 3); break;
           case 1: graphics.dynamic_reflections = value != 0; break;
           case 2: graphics.volumetric_clouds = value != 0; break;
@@ -82,8 +86,10 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           case 4: graphics.local_lights = value != 0; break;
           case 5:
             host_set_framerate_mode(value ? FramerateMode::Adaptive : FramerateMode::Classic);
-            break;
+            return Value::make_void();
+          default: return Value::make_void();
         }
+        host_save_graphics_options();
         return Value::make_void();
       });
   jvm.natives().register_method("java.lang.System", "getConfigOptions", "()V",
@@ -267,7 +273,7 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
   jvm.natives().register_method(
       "java.render.GfxEngine", "displayModeName", "(I)Ljava.lang.String;",
       [&jvm, modes](Object*, const std::vector<Value>& args) {
-        const int i = args.empty() ? -1 : args[0].v.i;
+        const int i = native_arg_integer(args, 0, -1);
         if (i < 0 || static_cast<size_t>(i) >= modes.size()) return Value::make_obj(nullptr);
         const auto& mode = modes[i];
         return Value::make_obj(jvm.new_string(std::to_string(mode.width) + " " +
@@ -278,7 +284,7 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
       [&jvm](Object*, const std::vector<Value>& args) {
         if (args.size() == 3) {
           const auto windowed = jvm.get_static("java.util.Config", "video_windowed");
-          host_set_video_mode(jvm, {args[0].v.i, args[1].v.i, args[2].v.i,
+          host_set_video_mode(jvm, {native_arg_integer(args, 0), native_arg_integer(args, 1), native_arg_integer(args, 2),
                                    windowed.tag != ValueTag::Int || windowed.v.i != 0});
         }
         return Value::make_void();

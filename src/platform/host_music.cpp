@@ -24,6 +24,7 @@ std::array<Playlist,4> sets;
 int active=-1;
 bool opened=false;
 float volume=1.f;
+uint64_t track_attempts=0,track_failures=0;
 #ifdef _WIN32
 struct Chunk { std::vector<BYTE> bytes; std::atomic<bool> busy{false}; };
 struct Callback : IXAudio2VoiceCallback {
@@ -99,11 +100,10 @@ void close_track() {
 #endif
   opened=false;
 }
-void play_track() {
+bool try_track(Playlist& p) {
   close_track();
-  if(active<0||sets[active].tracks.empty())return;
-  auto& p=sets[active];const int count=static_cast<int>(p.tracks.size());
-  p.index=(p.index%count+count)%count;
+  ++track_attempts;
+  const int count=static_cast<int>(p.tracks.size());
 #ifdef _WIN32
   HRESULT hr=stream.init();
   const auto path=std::filesystem::absolute(p.tracks[p.index]).wstring();
@@ -128,10 +128,23 @@ void play_track() {
   if(!opened){std::fprintf(stderr,"[music] playback failed HRESULT=0x%08lx\n",static_cast<unsigned long>(hr));close_track();}
   std::fprintf(stderr,"[music] set=%d track=%d/%d playing=%d %s\n",active,p.index+1,count,opened?1:0,p.tracks[p.index].filename().string().c_str());
 #endif
+  if (!opened) ++track_failures;
+  return opened;
+}
+void play_track(int direction=1) {
+  close_track();
+  if(active<0||sets[active].tracks.empty())return;
+  auto& p=sets[active];const int count=static_cast<int>(p.tracks.size());
+  p.index=(p.index%count+count)%count;
+  // At most one pass. An all-broken set stays stopped instead of spinning.
+  for(int attempt=0;attempt<count;++attempt) {
+    if(try_track(p))return;
+    p.index=(p.index+(direction<0?count-1:1))%count;
+  }
 }
 }
 void host_music_set_root(const std::string& root) {
-  host_music_stop();
+  host_music_stop();track_attempts=track_failures=0;
   const char* folders[4]={"Garage_Shop","Roam_ride","Race_chase","Main_menu"};
   for(size_t i=0;i<sets.size();++i){
     sets[i]=Playlist{};std::error_code ec;
@@ -150,7 +163,7 @@ void host_music_change_set(int type) {
   if(next==active&&(opened||next<0))return;
   active=next;play_track();
 }
-void host_music_next(int direction){if(active<0)return;sets[active].index+=direction<0?-1:1;play_track();}
+void host_music_next(int direction){if(active<0)return;sets[active].index+=direction<0?-1:1;play_track(direction);}
 int host_music_mode(){return active<0?-1:sets[active].mode;}
 int host_music_set_mode(int mode){if(active<0)return mode;if(mode>=0&&mode<=3)sets[active].mode=mode;return sets[active].mode;}
 void host_music_set_volume(float value){
@@ -163,12 +176,13 @@ void host_music_update(){
 #ifdef _WIN32
   if(!opened)return;
   const HRESULT hr=stream.fill();
-  if(FAILED(hr)){std::fprintf(stderr,"[music] stream failed HRESULT=0x%08lx\n",static_cast<unsigned long>(hr));close_track();return;}
+  if(FAILED(hr)){std::fprintf(stderr,"[music] stream failed HRESULT=0x%08lx\n",static_cast<unsigned long>(hr));host_music_next();return;}
   XAUDIO2_VOICE_STATE state{};stream.voice->GetState(&state,XAUDIO2_VOICE_NOSAMPLESPLAYED);
   if(stream.ended&&!state.BuffersQueued)host_music_next();
 #endif
 }
 void host_music_stop(){close_track();active=-1;}
 bool host_music_playing(){return opened;}
+HostMusicStats host_music_stats(){return {track_attempts,track_failures,active<0?-1:sets[active].index};}
 int host_music_track_count(int set){return set>=0&&set<4?static_cast<int>(sets[set].tracks.size()):0;}
 }

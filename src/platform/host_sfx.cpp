@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <memory>
 #include <vector>
+#include <unordered_map>
 #ifdef _WIN32
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -19,10 +20,16 @@ namespace slrr {
 namespace {
 std::string root;
 #ifdef _WIN32
+struct WaveData { std::vector<uint8_t> format, samples; };
+struct CachedWave { std::shared_ptr<const WaveData> data; uint64_t used=0; };
+std::unordered_map<std::string,CachedWave> wave_cache;
+size_t wave_cache_bytes=0;
+uint64_t wave_clock=0,wave_reads=0,wave_hits=0,rejected=0;
+constexpr size_t kVoiceLimit=32,kLoopLimit=24,kWaveCacheBytes=16*1024*1024,kWaveCacheEntries=64;
 struct Voice {
   int32_t id = 0;
   IXAudio2SourceVoice *source = nullptr;
-  std::vector<uint8_t> data;
+  std::shared_ptr<const WaveData> data;
   std::string cue;
   float gain = 1.f;
   bool loop = false;
@@ -126,6 +133,23 @@ bool read_wave(const std::string &path, std::vector<uint8_t> &format,
                      ->cbSize <=
              format.size();
 }
+std::shared_ptr<const WaveData> wave_data(const std::string& path,const std::string& cue) {
+  if (auto it=wave_cache.find(cue);it!=wave_cache.end()) {
+    it->second.used=++wave_clock;++wave_hits;return it->second.data;
+  }
+  auto data=std::make_shared<WaveData>();++wave_reads;
+  if (!read_wave(path,data->format,data->samples)) return {};
+  const size_t bytes=data->format.size()+data->samples.size();
+  if (bytes<=kWaveCacheBytes) {
+    while (!wave_cache.empty() && (wave_cache_bytes+bytes>kWaveCacheBytes || wave_cache.size()>=kWaveCacheEntries)) {
+      auto oldest=std::min_element(wave_cache.begin(),wave_cache.end(),[](const auto& a,const auto& b){return a.second.used<b.second.used;});
+      wave_cache_bytes-=oldest->second.data->format.size()+oldest->second.data->samples.size();
+      wave_cache.erase(oldest);
+    }
+    wave_cache.emplace(cue,CachedWave{data,++wave_clock});wave_cache_bytes+=bytes;
+  }
+  return data;
+}
 #endif
 } // namespace
 void host_sfx_set_game_root(const std::string &path) {
@@ -133,6 +157,7 @@ void host_sfx_set_game_root(const std::string &path) {
 #ifdef _WIN32
   audio.voices.clear();
   audio.coalesced = 0;
+  wave_cache.clear();wave_cache_bytes=0;wave_clock=wave_reads=wave_hits=rejected=0;
 #endif
 }
 void host_sfx_play(HostSfx id) {
@@ -186,19 +211,30 @@ int32_t host_sfx_play_file(const std::string &path, float pitch, float volume,
       return latest->id;
     }
   }
+  // Admit requests before disk reads or source allocation. Loops cannot
+  // occupy the eight slots reserved for clicks, impacts and other one-shots.
+  if (loop && std::count_if(audio.voices.begin(),audio.voices.end(),[](const auto& v){return v->loop;})>=kLoopLimit) {
+    ++rejected;return 0;
+  }
+  int32_t victim_id=0;
+  if (audio.voices.size()>=kVoiceLimit) {
+    auto victim=std::find_if(audio.voices.begin(),audio.voices.end(),[](const auto& v){return !v->loop;});
+    if (victim==audio.voices.end()) {++rejected;return 0;}
+    victim_id=(*victim)->id;
+  }
   auto v = std::make_unique<Voice>();
-  v->cue = std::move(cue);
+  v->cue = cue;
   v->loop = loop;
   v->menu = menu;
   v->last_request = now;
   v->gain = std::isfinite(volume) ? std::clamp(volume, 0.f, 1.f) : 1.f;
-  std::vector<uint8_t> fmt;
-  if (!read_wave(path, fmt, v->data) || !audio.init()) {
+  v->data=wave_data(path,cue);
+  if (!v->data || !audio.init()) {
     printf("[sfx] cannot load/play %s\n", path.c_str());
     return 0;
   }
   auto hr = audio.engine->CreateSourceVoice(
-      &v->source, reinterpret_cast<const WAVEFORMATEX *>(fmt.data()), 0,
+      &v->source, reinterpret_cast<const WAVEFORMATEX *>(v->data->format.data()), 0,
       XAUDIO2_MAX_FREQ_RATIO);
   if (FAILED(hr)) {
     printf("[sfx] unsupported %s hr=%lx\n", path.c_str(), hr);
@@ -210,18 +246,13 @@ int32_t host_sfx_play_file(const std::string &path, float pitch, float volume,
           : 1.f);
   XAUDIO2_BUFFER b{};
   b.Flags = XAUDIO2_END_OF_STREAM;
-  b.AudioBytes = static_cast<UINT32>(v->data.size());
-  b.pAudioData = v->data.data();
+  b.AudioBytes = static_cast<UINT32>(v->data->samples.size());
+  b.pAudioData = v->data->samples.data();
   if (loop)
     b.LoopCount = XAUDIO2_LOOP_INFINITE;
   if (FAILED(v->source->SubmitSourceBuffer(&b)))
     return 0;
-  if (audio.voices.size() >= 32) {
-    auto victim = std::find_if(audio.voices.begin(), audio.voices.end(),
-                               [](const auto& playing) { return !playing->loop; });
-    if (victim == audio.voices.end()) return 0;
-    audio.voices.erase(victim);
-  }
+  if (victim_id) host_sfx_stop(victim_id); // Retire only once replacement is ready.
   while (host_sfx_is_playing(audio.next))
     audio.next = audio.next == INT32_MAX ? 1 : audio.next + 1;
   v->id = audio.next;
@@ -264,10 +295,10 @@ void host_sfx_update_loop(int32_t id, float pitch, float volume) {
 #ifdef _WIN32
   for (const auto &voice : audio.voices) {
     if (voice->id != id || !voice->loop) continue;
-    voice->gain = std::clamp(volume, 0.f, 1.f);
+    voice->gain = std::isfinite(volume)?std::clamp(volume,0.f,1.f):1.f;
     voice->source->SetVolume(voice->gain);
     voice->source->SetFrequencyRatio(
-        std::clamp(pitch, XAUDIO2_MIN_FREQ_RATIO, XAUDIO2_MAX_FREQ_RATIO));
+        std::isfinite(pitch)?std::clamp(pitch,XAUDIO2_MIN_FREQ_RATIO,XAUDIO2_MAX_FREQ_RATIO):1.f);
     break;
   }
 #endif
@@ -293,7 +324,8 @@ void host_sfx_set_volume(float volume) {
 HostSfxStats host_sfx_stats() {
 #ifdef _WIN32
   audio.reap();
-  return {static_cast<uint32_t>(audio.voices.size()), audio.coalesced};
+  return {static_cast<uint32_t>(audio.voices.size()), audio.coalesced, rejected, wave_reads, wave_hits,
+          static_cast<uint32_t>(wave_cache.size()),wave_cache_bytes};
 #else
   return {};
 #endif

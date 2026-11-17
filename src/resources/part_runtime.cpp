@@ -184,7 +184,7 @@ struct DriverSeat {
   bool owned = false;
   // Other copies of the same driver (the bind-pose Mitch parented to the map)
   // are hidden while this seat is active, then shown again on release.
-  std::vector<void*> hidden;
+  GameRefRenderMask duplicate_mask;
 };
 std::unordered_map<Object*, DriverSeat> drivers;
 
@@ -240,6 +240,7 @@ Record *record(Object *object) {
   return found == records.end() ? nullptr : &found->second;
 }
 void repair_part(Object *part, Record &rec);
+void pose_wheels(Object *chassis, Record &rec);
 Object *object(const std::vector<Value> &args, size_t i) {
   return i < args.size() && args[i].tag == ValueTag::Obj ? args[i].v.o
                                                          : nullptr;
@@ -446,7 +447,7 @@ void render_part(Jvm &jvm, Object *self, Record &rec) {
       return;
     Object *render = jvm.new_object("java.util.resource.RenderRef");
     auto *node = gameref_upsert(render, GameRefKind::RenderRef);
-    node->type_id = static_cast<int32_t>(resource);
+    gameref_set_type(*node, static_cast<int32_t>(resource));
     node->script = render;
     node->alias = "part render";
     node->paint_source = rec.config->texture;
@@ -630,7 +631,7 @@ void retarget(Record &rec, uint32_t id) {
   auto *n = gameref_get(rec.renders[0]);
   if (!n)
     return;
-  n->type_id = static_cast<int32_t>(id);
+  gameref_set_type(*n, static_cast<int32_t>(id));
   n->empty = id == 0;
 }
 PartSlot posed_slot(const Record &rec, const PartSlot &slot) {
@@ -1203,7 +1204,7 @@ Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
   }
   records.emplace(part, std::move(rec));
   auto *node = gameref_upsert(part, GameRefKind::GameType);
-  node->type_id = resource;
+  gameref_set_type(*node, resource);
   node->script = part;
   node->class_name = class_name;
   node->alias = alias;
@@ -1218,7 +1219,7 @@ Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
   jvm.invoke_by_name(class_name, "<init>",
                      {Value::make_obj(part), Value::make_int(id)}, false);
   node = gameref_get(part);
-  node->type_id = resource;
+  gameref_set_type(*node, resource);
   node->script = part;
   node->flags &= ~kWorldTreeRoot;
   node->empty = false;
@@ -1501,6 +1502,12 @@ bool part_command(Object *part, const std::string &command) {
     rec->steering_input = std::clamp(value, -1.f, 1.f);
     rec->steering_request = rec->steering_input;
     rec->steering_correction = 0.f;
+    if (rec->dynamic_frames) {
+      // A parked chassis already has suspension/hub frames. Rebuild them
+      // with the new steering before placing parts, not at the next repair.
+      pose_wheels(part, *rec);
+      return true;
+    }
     for (const auto &slot : rec->config->slots)
       if (slot.type >= 101 && slot.type <= 304)
         place_child(part, slot.id, false);
@@ -2944,7 +2951,7 @@ Object* part_add_dynamic_native(const PartConfig& config,
     const uint32_t resource = render.variants.empty()
                                   ? render.resource
                                   : render.variants[static_cast<size_t>(seed) % render.variants.size()];
-    state->type_id = static_cast<int32_t>(resource);
+    gameref_set_type(*state, static_cast<int32_t>(resource));
     if (!render.colors.empty())
       state->color = render.colors[static_cast<size_t>(seed) % render.colors.size()];
     const auto local = part_matrix_multiply(world, part_pose_matrix(render.pose));
@@ -3196,6 +3203,16 @@ void publish_free_body(GameRefState& state, FreeBody& free, const PartMatrix& pa
 // the controlled car, like loose panels. Bodies outside the active world wait.
 void advance_free_bodies() {
   using physics::Vec3;
+  // Controlled vehicle and its script frame are invariant across this pass.
+  Object* chassis = nullptr;
+  Record* vehicle = nullptr;
+  if (const auto* owner = gameref_find_live(controlled_vehicle)) {
+    chassis = static_cast<Object*>(owner->key);
+    vehicle = record(chassis);
+    PartMatrix car_frame;
+    if (!vehicle || !vehicle->physics_ready ||
+        !scene_instances_script_matrix(chassis, car_frame.data())) vehicle = nullptr;
+  }
   std::unordered_set<void*> live;
   for (auto* state : gameref_simulated_bodies()) {
     void* key = state->key;
@@ -3229,16 +3246,6 @@ void advance_free_bodies() {
     constexpr unsigned rest_ticks = physics::VehicleDynamics::update_frequency / 2;
     const bool sleeping = free.quiet_ticks >= rest_ticks;
     auto& body = free.body;
-    Object* chassis = nullptr;
-    Record* vehicle = nullptr;
-    if (const auto* owner = gameref_find_live(controlled_vehicle)) {
-      chassis = static_cast<Object*>(owner->key);
-      vehicle = record(chassis);
-      PartMatrix car_frame;
-      if (!vehicle || !vehicle->physics_ready ||
-          !scene_instances_script_matrix(chassis, car_frame.data()))
-        vehicle = nullptr;
-    }
     bool near = false;
     PartMatrix previous_carrier = free.carrier_frame;
     if (vehicle) {
@@ -3518,9 +3525,7 @@ float wheel_rim_radius(Object* wheel) {
 void* chassis_root(Object* chassis);
 
 void release_driver(DriverSeat& seat) {
-  for (void* hidden : seat.hidden)
-    if (auto* node = gameref_get(hidden)) node->empty = false;
-  seat.hidden.clear();
+  gameref_release_render_mask(seat.duplicate_mask);
   if (seat.owned && seat.render && gameref_get(seat.render))
     gameref_remove(seat.render);
   seat.render = nullptr;
@@ -3538,22 +3543,7 @@ Object* player_render() {
 }
 
 void hide_duplicate_drivers(Object* chassis, Object* keep, int32_t type, DriverSeat& seat) {
-  for (void* hidden : seat.hidden)
-    if (auto* node = gameref_get(hidden)) node->empty = false;
-  seat.hidden.clear();
-  std::vector<void*> pending{chassis_root(chassis)};
-  for (size_t i = 0; i < pending.size() && i < 4096; ++i) {
-    auto* node = gameref_get(pending[i]);
-    if (!node) continue;
-    const bool kept = node->key == keep || node->script == keep;
-    if (!kept && node->kind == GameRefKind::RenderRef && node->type_id == type && node->key) {
-      node->empty = true;
-      seat.hidden.push_back(node->key);
-    } else if (kept && node->empty) {
-      node->empty = false;
-    }
-    for (void* child : node->children) pending.push_back(child);
-  }
+  gameref_mask_duplicate_renders(seat.duplicate_mask, chassis_root(chassis), keep, type);
 }
 
 void pose_driver() {
@@ -3584,7 +3574,7 @@ void pose_driver() {
     if (!pack || !index->model_for_resource(pack->pack_id, 0x000C).ok) return;
     Object* render = runtime->new_object("java.util.resource.RenderRef");
     auto* node = gameref_upsert(render, GameRefKind::RenderRef);
-    node->type_id = static_cast<int32_t>(RpkIndex::make_full_id(pack->pack_id, 0x000C));
+    gameref_set_type(*node, static_cast<int32_t>(RpkIndex::make_full_id(pack->pack_id, 0x000C)));
     node->script = render;
     node->alias = "driver";
     node->empty = false;
@@ -3833,7 +3823,8 @@ void PedSim::run(std::stop_token stop) {
     const float step_dt = dt;
     const std::vector<PedestrianCar> obstacles = cars;
     PedestrianLines* lines = walk;
-    posted = false;
+    // Keep the job busy until its result is published. Otherwise the main
+    // thread can submit another snapshot from before this step completed.
     lock.unlock();
     if (lines && step_dt > 0.f) {
       // All walkers in one step: they steer around each other.
@@ -3845,6 +3836,7 @@ void PedSim::run(std::stop_token stop) {
     }
     lock.lock();
     out = std::move(slots);
+    posted = false;
     ready = true;
   }
 }
@@ -4012,7 +4004,7 @@ void tick_pedestrians(double seconds) {
       const PedKind& kind = crowd.kinds[agent.kind];
       Object* render = runtime->new_object("java.util.resource.RenderRef");
       auto* node = gameref_upsert(render, GameRefKind::RenderRef);
-      node->type_id = static_cast<int32_t>(kind.render);
+      gameref_set_type(*node, static_cast<int32_t>(kind.render));
       node->script = render;
       node->alias = "pedestrian";
       node->empty = true;
@@ -4167,11 +4159,16 @@ void tick_pedestrians(double seconds) {
       node->empty = false;
     }
   }
+  // Pause still consumes a finished job and publishes render poses above,
+  // but must not submit zero-duration snapshots with the previous gait.
+  if (dt <= 0.f) return;
   bool wake = false;
   {
     PedSim& sim = ped_sim();
     std::lock_guard lock(sim.mu);
-    if (sim.posted) {
+    // ready may become true between the result-consumption lock above and
+    // this lock. Do not enqueue stale agent positions over an unread result.
+    if (sim.posted || sim.ready) {
       ped_backlog = std::min(0.1f, ped_backlog + dt);
     } else {
       sim.in.clear();
@@ -5020,13 +5017,13 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
        [&jvm](Object *s, const std::vector<Value> &a) {
          auto *p = record(s);
          const int i = number(a, 0);
-         std::string text;
-         if (p && i >= 0 && static_cast<size_t>(i) < p->config->slots.size()) {
-           auto it = p->slot_damage.find(i);
-           if (it != p->slot_damage.end())
-             text = it->second;
-         }
-         return Value::make_obj(jvm.new_string(text));
+         if (!p || i < 0 || static_cast<size_t>(i) >= p->config->slots.size())
+           return Value::make_obj(nullptr);
+         const auto damage = p->slot_damage.find(i);
+         // Part.save emits a record only for a non-null damage string or an
+         // attachment. Undamaged slots must not masquerade as empty strings.
+         return Value::make_obj(damage == p->slot_damage.end()
+             ? nullptr : jvm.new_string(damage->second));
        });
   bind("setSlotDamage", "(ILjava.lang.String;)V",
        [](Object *s, const std::vector<Value> &a) {

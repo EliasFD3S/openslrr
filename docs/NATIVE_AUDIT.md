@@ -1,6 +1,6 @@
 # Native audit and roadmap
 
-Baseline snapshot from 9 November 2026, incrementally updated 12 November.
+Baseline snapshot from 9 November 2026, incrementally updated 17 November 2026.
 `Camera.setFog` is registered. The remaining `PhysicsRef` signatures are
 bound, and `GameRef.setActiveCollision` is no longer an explicit no-op.
 Earlier increments covered the resource and vehicle bindings, the Language
@@ -10,15 +10,18 @@ The Release x64 registry was compared with the
 The same table is pinned in `assets/progress/stock-natives.json`, and
 `python scripts/render_native_coverage.py` recomputes the counts below and the
 README chart from the registrations in `src/`.
-Matching uses owner, method and parameter types, including overloads. This
+Matching uses owner, method and the full descriptor, including the return
+type derived from the pinned typed signature. Only an omitted void return is
+accepted as a runtime alias. Slash-form descriptors and registered parameter
+matches with no expected return descriptor fail the audit. This
 measures bindings. Behavioral status below comes from reviewing the C++
 implementations and following selected calls to their consumers.
 
 | Status | Stock signatures |
 | --- | ---: |
-| Registered with a body | 337 |
+| Registered with a body | 339 |
 | Registered with the explicit `native_noop` handler | 3 |
-| Absent from the registry | 36 |
+| Absent from the registry | 34 |
 | **Total** | **376** |
 
 The first category includes constant responses, inline empty bodies and
@@ -44,14 +47,18 @@ that category. It is not a compatibility score or a complete runtime trace.
 | `System.isLoading`, `isLoadingReset`, `setLdPriority` | Track active RPK scans and measured pack-work history; reset seeds the 32-sample ring without clearing ongoing scans. Priority changes scan cadence. Mesh/texture streaming has no corresponding queue. |
 | `System.compileAll` | Embedded C++ compiler writes validated TUFA containers for source units, including multiple classes per file. Existing loaded classes require a restart. See SCRIPT_COMPILER.md. |
 | `System.info` | Selector 5 returns the live host VM heap count. Other selectors return an empty string. |
+| `ResourceRef.makeTexture` | Resolves the filename under the game root and exposes a file-backed texture path. `RenderRef.changeResource` consumes it for per-instance materials; standalone dynamic texture ID queries are still incomplete. |
+| `ResourceRef.duplicate`, `RenderRef.create` | Copy both RPK and file-backed texture replacements by value. Later skin selections do not mutate previously created render instances or shared geometry. |
+| `RenderRef.changeResource` | Supports RPK texture replacements and file paths from `makeTexture`, matching the original texture resource to the mesh material slot. A new selection replaces the previous file override for that source; an RPK replacement clears it. |
+| `Viewport.activate`, `deactivate`, `destroy`; camera selection | Active cameras with a viewport are eligible only while that viewport exists and is active. Hiding an OSD stops its preview without requiring scripts to destroy all scene objects. Reactivation restores eligibility; null-viewport camera behavior is unchanged. |
 | `Animation` | The constructor is registered with the dotted TUFA descriptor; the earlier slash form never matched, so script `Animation`s stayed unbound. It binds a `.matrixdata` clip to the render named by the constructor. `play` / `loopPlay` / `pause` / `seek` / `getPos` / `setSpeed` sample it on the skeleton declared by that render. `setFade` blends the clip in from the bind pose. Each render keeps its own pose. |
 | `RenderRef.getBoneId` | Case-insensitive lookup in that skeleton. An unknown name, or a render with no skeleton, returns 0. |
 | `RenderRef.setMatrix(int, ResourceRef, Vector3, Ypr)` | Writes that bone's local pose. With another render as `bone_ref`, this render is parented on that bone. Script positions are metres. |
 | `Thread.setDaemon` | Sets and clears the per-thread flag. Shutdown still cancels every fiber. |
 | `System.simTime`, `timeWarp` | The simulation clock follows the warp factor, and setting it returns the previous factor. Physics uses the scaled elapsed time. UI clocks, sleeps and host timer dispatch use real time. |
-| `System.setMeasure`, `getConfigOptions` | The measure setting controls digital vehicle instruments. The options refresh reads gameplay settings and schedules a save when they change. |
+| `System.setMeasure`, `getConfigOptions` | The measure setting controls digital vehicle instruments. The options refresh reads gameplay settings and schedules a debounced save when they change. Failed saves suspend automatic retries until another change; forced shutdown saves can retry. Enhanced graphics are stored separately in save/game/openslrr_options. |
 | `RenderRef.setFlare`, `Navigator.updateNavigator`, `GroundRef.getNearestCross` | Directional flares use the scene's texture and an approximate sprite layout. The GPS camera and markers follow scene objects. The crossing query returns null until the road index is available. |
-| `GfxEngine.numDisplayModes`, `currDisplayMode`, `displayModeName`, `changeVideoMode` | One fixed mode is exposed, 800×600×32 at index zero. The change call is empty. Startup window settings are a separate path. |
+| `GfxEngine.numDisplayModes`, `currDisplayMode`, `displayModeName`, `changeVideoMode` | Enumerate available Win32 32-bit display modes with an 800×600 fallback, identify the current resolution, and apply validated mode changes through the host options path. |
 | `Camera.setFog` | Stores the color and the near and far distances on the driving camera. The fade uses those distances. The color argument is replaced by the day and twilight sky color before the shader reads it. |
 | `GroundRef.setFog` | Stores a global color and near and far distances. Nothing in the renderer reads them. |
 | `RenderRef.plotRoute` | Always returns zero. Route line construction is missing. |
@@ -63,7 +70,7 @@ that category. It is not a compatibility score or a complete runtime trace.
 | `Chassis.setHornSFX` | Stores all indexed sounds. The current player input plays the index 1 sample once per press. |
 | `GameRef.getInfo`, `queueEvent` | Implement selected queries and commands. `repair` performs the native per-part deformation, damage-associated slot/wheel and CFG mount/base-mesh reset; stock Java owns the installed-tree recursion and wear/tear caps, with a native fallback only for detached assembly children omitted from `attachedParts`. Unhandled queries return zero. Other command paths still need coverage as new sections are exercised. |
 | `GameType.registerCallback`, notifications | Control, drive and animate callbacks run. Notifications have event routing and GC roots. Other callback modes and event producers still need verification. |
-| `Input.getAxis`, `activeAxis`, `Controller.user_SetAxisSmooth` | Keyboard, mouse and one logical XInput pad are wired. Pointer movement is excluded from rebinding. Negative mouse axis requests reset deltas, while their sensitivity argument remains unused. Smoothing uses a host time-based approximation. |
+| `Input.getAxis`, `activeAxis`, `Controller.user_SetAxisSmooth` | Keyboard, mouse and one logical XInput pad are wired. Pointer movement is excluded from rebinding. Negative mouse axis requests reset deltas, while their sensitivity argument remains unused. Default pad driving controls are retained per axis unless explicitly overridden or their physical channel is assigned elsewhere. Steering fallback and analog classification share that policy. Smoothing uses a host time-based approximation. |
 | `Controller.user_SetAxisSpeed`, `user_SetAxisForce` | Scale software smoothing and override the logical axis value. The force coefficient and hardware feedback are unimplemented. |
 | `Sound.has3DHardware`, `hasMixHardware`, `enableDebugDump` | Fixed capability responses. Zero reports the lack of legacy hardware mixing support and keeps the legacy debug overlay disabled. |
 | `System.runFinalization`, `WheelRef.finalize` | Compatibility bodies. VM finalizers run during collection. Wheel references borrow their state from the chassis. |
@@ -92,11 +99,11 @@ being replaced by success-returning mocks.
 | System | Count | Methods |
 | --- | ---: | --- |
 | `GroundRef` | 19 | `setWater` (2 overloads), `addWaterLimit`, `addTrafficCar`, `remTrafficCar`, `notifyTrafficCar`, `addTrafficN`, `addTrafficP`, `delTraffic`, `setTrafficCarBehaviour`, `haltTrafficCross`, `haltTrafficPath`, `getStartDirection`, `findRoute`, `getRouteLength` (2 overloads), `getRoutePos`, `getRouteDist`, `alignToRoad` |
-| `PhysicsRef` | 7 | `create`, `createSphere`, `setStatic`, `getVel` (2 overloads), `getAngVel`, `getOri` |
 | `ParticleSystem` | 9 | `init`, `stop`, `setFreq`, `setDirectSource`, `setSource`, `setCounter`, `getCounter`, `delAction`, `modePermanent` |
 | `Painter` | 3 | `doPaint`, `paintPart`, `xPaint` |
 
-There are 38 missing active signatures and 3 missing leftovers, for 41 total.
+There are 31 missing active signatures and 3 missing leftovers, for 34 total.
+No PhysicsRef signature remains absent from the stock table.
 
 ## Roadmap
 
@@ -127,3 +134,26 @@ synthetic keyboard input in the Release x64 host. Each test applied a new
 binding, read the logical axis and saved and reloaded an isolated profile.
 Physical gamepad input, driving on track and the race-only handlers still
 need in-game validation.
+
+
+## Verification on 17 November 2026
+
+`python scripts/render_native_coverage.py` and its `--check` mode confirm the
+stock-manifest counts above and the generated JSON/SVG/README outputs. These
+counts describe registration coverage, not full compatibility. The #115
+check now preserves exact return types and dotted object names, permits only
+the omitted-void alias, and keeps exact registrations ahead of aliases.
+Intentional additional return overloads remain allowed when the expected
+descriptor is also registered. Run `python -m unittest discover -s tests -p
+test_native_coverage.py` for the nine descriptor/scanner/CLI regressions.
+
+The driver fixes introduce no new native signature and no production Java
+change. `driver_mask` exercises cache invalidation, visibility restoration and
+large scene traversal. `driver_selector` follows the registered
+makeTexture/changeResource/duplicate/create chain into a collected humans.rpk
+material slot and checks viewport deactivate/reactivate/destroy. Its synthetic
+paths do not validate image decoding. The user additionally validated seated
+driver behavior, skin changes and return to the menu in game for PR #155
+(#112 and #156). Evidence logs live in assets/validation/driver-mask and
+assets/validation/driver-selector; see KNOWLEDGE_BASE.md for implementation
+entry points and remaining limits.

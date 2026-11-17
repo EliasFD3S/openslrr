@@ -139,11 +139,11 @@ namespace slrr {
   bgfx::TextureHandle LibBgfxBackend::tex_for_font(void* font_key)
 {
     if (!font_key) return white_tex_;
-    auto it = font_tex_.find(font_key);
-    if (it != font_tex_.end()) return it->second;
     const SlrrFont* font = slrr_font_get(font_key);
     if (!font || font->rgba.empty() || font->atlas_w <= 0 || font->atlas_h <= 0)
       return white_tex_;
+    auto it = font_tex_.find(font->cache_key);
+    if (it != font_tex_.end()) return it->second;
     const bgfx::Memory* mem = bgfx::copy(
         font->rgba.data(),
         static_cast<uint32_t>(font->rgba.size()));
@@ -156,7 +156,7 @@ namespace slrr {
             BGFX_SAMPLER_MIP_POINT,
         mem);
     if (!bgfx::isValid(th)) return white_tex_;
-    font_tex_[font_key] = th;
+    font_tex_[font->cache_key] = th;
     return th;
   }
 #endif

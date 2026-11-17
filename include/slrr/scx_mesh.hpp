@@ -35,6 +35,10 @@ struct ScxGroup {
   uint32_t material_type = 0;
   float reflection_strength = .5f;
   ScxTextureMap base_map, mix_map, reflection_map, lightmap_map, illumination_map;
+  uint16_t emission_index = 0xffff;
+  ScxTextureMap emission_map;
+  // SCX4 COLOR_EMISSIVE (property 2), independent of an emission mask.
+  float emission_color[3] = {0.f, 0.f, 0.f};
   uint32_t material_flags = 0;  // bit0 = alphaOpacity (scx.md)
   uint8_t alpha_reference = 0x38;
   float diffuse[4] = {0.6f, 0.65f, 0.7f, 1.f};

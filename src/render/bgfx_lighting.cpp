@@ -112,11 +112,20 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
                         const std::vector<bgfx::TextureHandle>* tex, bgfx::TextureHandle mix,
                         bool receive_static_shadow, const SceneSun* sun, const float* sky)
 {
+    // UI draws must not inherit atlas transforms from the last world mesh.
+    if (!group) {
+      const float identity_uv[4]={1.f,1.f,0.f,0.f};
+      bgfx::setUniform(u_mesh_base_uv_,identity_uv);
+      bgfx::setUniform(u_mesh_mix_uv_,identity_uv);
+    }
     const float no_sky[4]{};
     bgfx::setUniform(u_local_light_, no_sky);
     bgfx::setUniform(u_cloud_sky_, sky ? sky : no_sky);
     if (sky) {
-      const float wind[4] = {scene_sun_time() * 2.3f, scene_sun_time() * .85f, 0.f, 0.f};
+      // Noon is the reference field from the early procedural sky.
+      // Keep animation without starting every day kilometres downwind.
+      const float cloud_time = scene_sun_time() - 12.f * 3600.f;
+      const float wind[4] = {cloud_time * 1.5f, cloud_time * .55f, 0.f, 0.f};
       bgfx::setUniform(u_cloud_wind_, wind);
     }
     float direction[4]{};
@@ -294,7 +303,10 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
         // material UV transforms need the scene's wrapping sampler here.
         bgfx::setTexture(2, s_env_, env, BGFX_SAMPLER_NONE);
         bgfx::setTexture(3,s_bake_,bake);
-        const float reflection[4] = {live_env ? 1.f : enhanced_env ? 2.f : 0.f, 0.f, 0.f, 0.f};
+        const bool two_sided = part.geo.info.version != 4 ||
+            (group.material_flags & 0x02000000u) != 0;
+        const float reflection[4] = {live_env ? 1.f : enhanced_env ? 2.f : 0.f,
+                                     two_sided ? 1.f : 0.f, 0.f, 0.f};
         bgfx::setUniform(u_dynamic_reflection_, reflection);
         if (live_env) {
           bgfx::setTexture(4, s_reflection_cube_, reflection_cubes_[reflection_write_ ^ 1]);
@@ -308,6 +320,9 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
         }
         bgfx::setTransform(matrix);bgfx::setVertexBuffer(0,part.vbh);bgfx::setIndexBuffer(part.ibh,group.index_start,group.index_count);
         uint64_t state=BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_MSAA|BGFX_STATE_DEPTH_TEST_GREATER;
+        // Like map SCX4, vehicle materials cull unless explicitly two-sided.
+        // Interior backs can protrude through thin outer panels when drawn.
+        if (!two_sided) state |= BGFX_STATE_CULL_CW;
         if (glass)
           state |= BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
         else if (transparent || group.diffuse[3] < .99f)
@@ -319,13 +334,19 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
       return;
     }
     auto draw=[&](uint32_t first,uint32_t count,uint16_t texture_index,uint32_t flags,const ScxGroup* group){
+      // Night meshes duplicate ordinary facade sections. Only sections with
+      // an authored emission mask or colour contribute emissive light.
+      if (instance.emissive_overlay &&
+          (!group || (group->emission_index == 0xffff &&
+           group->emission_color[0] == 0.f && group->emission_color[1] == 0.f &&
+           group->emission_color[2] == 0.f))) return;
       // SCX3 alpha-blended sprites, including map markers, belong above
       // the opaque tiles. Their JPEG/PNG alpha is already premultiplied.
       // SCX4 glass requests texture alpha in the material word. The
       // transparent function bit alone also appears on opaque rail frames.
       const bool glass = group && !preview && part.geo.info.version == 4 &&
           (flags & 0x40000000u) && (group->material_type & 0x04u);
-      const bool blend = !instance.sky && (glass ||
+      const bool blend = !instance.sky && (instance.emissive_overlay || glass ||
           (part.geo.info.version == 3 && (flags & 0x101u) == 0x101u));
       if (pass != int(blend)) return;
       const auto tex = texture(texture_index);
@@ -340,11 +361,12 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
       // V4 map foliage specifies GREATER with an 8-bit reference (default 0x38).
       const float alpha_test = !cut ? 0.f : authored_alpha && group
           ? -(1.f + group->alpha_reference) / 255.f : 1.f;
+      // Authored two-sided cutouts, independent of asset directory names.
       const bool foliage_coverage = cut && authored_alpha && view_id < 72 &&
           (reset_flags_ & BGFX_RESET_MSAA_MASK) &&
-          part.geo.info.path.find("fa_tibi") != std::string::npos;
+          (flags & 0x02000000u) != 0;
       const bool vertex_mix = group && group->mix_vertex_color;
-      const float settings[4] = {alpha_test, instance.sky || blend || vertex_mix ? 1.f : preview ? .5f : 0.f,
+      const float settings[4] = {alpha_test, instance.emissive_overlay ? 2.f : instance.sky || blend || vertex_mix ? 1.f : preview ? .5f : 0.f,
                                  foliage_coverage ? 2.f : blend ? 1.f : 0.f, material_mix ? -2.f : vertex_mix ? -1.f :
                                  outdoor_lighting_ && !preview && part.geo.ground_polygons ? -3.f :
                                  !blend && preview && tex.idx != white_tex_.idx ? 1.f : 0.f};
@@ -352,6 +374,8 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
       float tint[4]={((color>>16)&255)/255.f,((color>>8)&255)/255.f,(color&255)/255.f,1};
       if (material_mix)
         for (int i = 0; i < 3; ++i) tint[i] *= group->diffuse[i];
+      if (instance.emissive_overlay && group && group->emission_index == 0xffff)
+        for (int c = 0; c < 3; ++c) tint[c] *= group->emission_color[c];
       const ScxTextureMap identity;
       const ScxTextureMap& base_uv = group ? group->base_map : identity;
       const ScxTextureMap& mix_uv = group ? group->mix_map : identity;
@@ -382,12 +406,29 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
           (world_mesh && outdoor_lighting_ && graphics.dynamic_lighting);
       bind_baked_light(group, &part.tex, mix, world_mesh && view_id < 72,
                       scene_light ? &instance.lighting : nullptr, procedural_sky ? sky : nullptr);
+      if (instance.emissive_overlay && group && group->emission_index != 0xffff) {
+        const auto& uv = group->emission_map;
+        const float channels[4] = {0.f, static_cast<float>(group->base_map.channel),
+                                   static_cast<float>(uv.channel), 0.f};
+        const float transform[4] = {uv.scale_u, uv.scale_v, uv.offset_u, uv.offset_v};
+        bgfx::setUniform(u_lightmap_, channels);
+        bgfx::setUniform(u_lightmap_uv_, transform);
+        // Missing masks are black, never a full-bright wall fallback.
+        const auto mask = texture(group->emission_index);
+        if (mask.idx == white_tex_.idx) return;
+        bgfx::setTexture(1, s_lightmap_, mask);
+      }
       if (world_mesh) bgfx::setUniform(u_local_light_, local_light_.data());
       uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_MSAA;
       if (foliage_coverage) state |= BGFX_STATE_BLEND_ALPHA_TO_COVERAGE;
       if (instance.cull_backfaces && !(flags & 0x02000000u))
         state |= BGFX_STATE_CULL_CW;
-      if (blend) {
+      if (instance.emissive_overlay) {
+        // Authored self-illumination is coplanar with the daytime facade.
+        // Reverse-Z equality keeps it visible; never replace the opaque depth.
+        state |= BGFX_STATE_DEPTH_TEST_GEQUAL |
+                 BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_ONE);
+      } else if (blend) {
         std::string extension = texture_index < part.geo.textures.size()
             ? std::filesystem::path(part.geo.textures[texture_index]).extension().string() : "";
         std::transform(extension.begin(), extension.end(), extension.begin(),
@@ -475,7 +516,7 @@ void LibBgfxBackend::draw_prop_batches(uint16_t view_id,
               ? -(1.f + group->alpha_reference) / 255.f : 1.f;
           const bool foliage_coverage = cut && v4 && view_id < 72 &&
               (reset_flags_ & BGFX_RESET_MSAA_MASK) &&
-              part.geo.info.path.find("fa_tibi") != std::string::npos;
+              (flags & 0x02000000u) != 0;
           const bool vertex_mix = group && group->mix_vertex_color;
           const float settings[4] = {alpha_test, vertex_mix ? 1.f : 0.f,
                                      foliage_coverage ? 2.f : 0.f,

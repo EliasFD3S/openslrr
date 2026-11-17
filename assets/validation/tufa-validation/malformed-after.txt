@@ -1,0 +1,17 @@
+[jvm] TUFA load failed C:\Users\Elias\Desktop\openslrr\build\save-io-fixtures\test-17876-1\broken.class: expected UTF8 constant
+[jvm] load_class: classpath not ready
+[compiler] attempted=1 succeeded=1 failed=0 classes=2 (restart for loaded classes)
+PASS reject CONS: CONS: count exceeds remaining bytes
+PASS reject FILD: members: count exceeds remaining bytes
+PASS reject MTHD: members: count exceeds remaining bytes
+PASS reject TREE: TREE: count exceeds remaining bytes
+PASS reject interfaces: CLSS: interface count exceeds remaining bytes
+PASS reject node count: TREE: node count exceeds remaining bytes
+PASS reject method locals: method local count out of range
+PASS reject declare slot: TREE: local slot out of range
+PASS reject declare slot: TREE: local slot out of range
+PASS reject declare slot: TREE: local slot out of range
+PASS reject static string constant: expected UTF8 constant
+PASS reject static RID constant: expected resource constant
+PASS reject invalid trailing blob (atomic container): TUFA: truncated at 0x252
+PASS valid concatenated classes, clean VM rejection and runtime local guard

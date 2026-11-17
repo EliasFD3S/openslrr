@@ -12,6 +12,7 @@ struct Object;
 // OSD widgets registered by Osd.createButton / createRectangle (TREE → native).
 // Coordinates are stock OSD text-space ≈ fullscreen NDC (y+ down, y=-1 top).
 struct OsdWidget {
+  int32_t id = -1; // Stable native handle, independent of vector compaction.
   int32_t cmd = 0;  // may be 0 (Mechanic.CMD_SCROLL_UP) — not a miss sentinel
   float x = 0.f;
   float y = 0.f;
@@ -73,7 +74,10 @@ bool osd_widget_is_slider(const OsdWidget& widget);
 // Hide one widget (ResourceRef.destroy of a rectangle instance).
 void osd_hide_widget(int32_t index);
 OsdWidget* osd_widget_mut(int32_t index);
-void osd_add_widget(OsdWidget w);
+int32_t osd_add_widget(OsdWidget w);
+void osd_destroy_owner(Object* owner);
+void osd_forget(Object* object);
+void osd_compact_widgets();
 // Dialog.show sets Osd.OF_MODAL. That plate has to cover the catalog.
 bool osd_owner_modal(Object* owner);
 bool osd_has_modal();

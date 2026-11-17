@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
@@ -45,24 +46,37 @@ std::string file_name_of(Object* file) {
   return it->second.v.o->str;
 }
 
-// Game-relative path. Rejects anything that climbs out of the game root.
+// Game-relative descendant path. Parent components and resolved escapes are
+// rejected, but legal file names containing two dots are not traversal.
 std::filesystem::path under_game(const std::string& root, std::string rel) {
   namespace fs = std::filesystem;
-  if (root.empty() || rel.empty()) return {};
+  if (root.empty() || rel.empty() || rel.find('\0') != std::string::npos)
+    return {};
   for (char& c : rel)
     if (c == '/') c = '\\';
-  if (rel.find("..") != std::string::npos) return {};
-  if (rel.size() > 1 && rel[1] == ':') return {};
+  // Drive names and NTFS alternate streams are not game-relative files.
+  if (rel.find(':') != std::string::npos) return {};
   while (!rel.empty() && (rel.front() == '\\' || rel.front() == '/'))
     rel.erase(rel.begin());
+  if (rel.empty()) return {};
+  const fs::path relative(rel);
+  for (const auto& component : relative)
+    if (component == "..") return {};
   std::error_code ec;
   const fs::path base = fs::weakly_canonical(fs::path(root), ec);
   if (ec) return {};
-  const fs::path full = fs::weakly_canonical(base / rel, ec);
-  const fs::path check = ec ? (base / rel).lexically_normal() : full;
-  const std::string bs = base.string();
-  const std::string cs = check.string();
-  if (cs.size() < bs.size() || cs.compare(0, bs.size(), bs) != 0) return {};
+  const fs::path check = fs::weakly_canonical(base / relative, ec);
+  if (ec) return {};
+  // Compare complete components, not a string prefix (game-other is not
+  // under game). Canonicalization resolves junctions/symlinks first.
+  auto parent = base.begin();
+  auto child = check.begin();
+  for (; parent != base.end(); ++parent, ++child) {
+    if (child == check.end() || _wcsicmp(parent->c_str(), child->c_str()) != 0)
+      return {};
+  }
+  // In particular, File.delete(".") must never address the game root.
+  if (child == check.end()) return {};
   return check;
 }
 

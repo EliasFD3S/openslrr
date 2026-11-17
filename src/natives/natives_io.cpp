@@ -29,6 +29,10 @@
 #include <memory>
 #include <string>
 
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+
 namespace slrr {
 namespace {
 // StreetLegal can hold save/temp/CopyCar open. The selector's back-to-first
@@ -40,6 +44,71 @@ std::string save_key(const std::filesystem::path& path) {
   std::error_code ec;
   const auto canon = std::filesystem::weakly_canonical(path, ec);
   return (ec ? path : canon).lexically_normal().string();
+}
+// Publish a fully written sibling file. Never truncate the destination before
+// all bytes are written, flushed to the OS and the handle has closed.
+bool publish_save(const std::filesystem::path& destination,
+                  const std::vector<uint8_t>& bytes, DWORD& error) {
+  namespace fs = std::filesystem;
+  error = ERROR_SUCCESS;
+  std::error_code ec;
+  fs::create_directories(destination.parent_path(), ec);
+  if (ec) { error = static_cast<DWORD>(ec.value()); return false; }
+  static uint64_t serial = 0;
+  fs::path staging;
+  HANDLE handle = INVALID_HANDLE_VALUE;
+  for (unsigned attempt = 0; attempt < 16; ++attempt) {
+    staging = destination;
+    staging += L".openslrr-save." + std::to_wstring(GetCurrentProcessId()) +
+               L"." + std::to_wstring(++serial) + L".tmp";
+    handle = CreateFileW(staging.c_str(), GENERIC_WRITE, 0, nullptr,
+                         CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle != INVALID_HANDLE_VALUE) break;
+    error = GetLastError();
+    if (error != ERROR_FILE_EXISTS && error != ERROR_ALREADY_EXISTS) return false;
+  }
+  if (handle == INVALID_HANDLE_VALUE) return false;
+  error = ERROR_SUCCESS;
+  size_t offset = 0;
+  while (offset < bytes.size()) {
+    const DWORD count = static_cast<DWORD>(std::min<size_t>(bytes.size() - offset, MAXDWORD));
+    DWORD written = 0;
+    if (!WriteFile(handle, bytes.data() + offset, count, &written, nullptr)) {
+      error = GetLastError(); break;
+    }
+    if (!written) { error = ERROR_WRITE_FAULT; break; }
+    offset += written;
+  }
+  if (error == ERROR_SUCCESS && !FlushFileBuffers(handle)) error = GetLastError();
+  if (!CloseHandle(handle) && error == ERROR_SUCCESS) error = GetLastError();
+  if (error == ERROR_SUCCESS &&
+      !MoveFileExW(staging.c_str(), destination.c_str(),
+                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    error = GetLastError();
+  if (error != ERROR_SUCCESS) DeleteFileW(staging.c_str());
+  return error == ERROR_SUCCESS;
+}
+
+// The newest in-memory save wins over an older disk copy after publication
+// failed (for example while the original game holds CopyCar without sharing
+// deletion). Copy/move must see the same bytes as File.open and File.exists.
+int transfer_pending_save(const std::filesystem::path& src,
+                          const std::filesystem::path& dst, bool move) {
+  namespace fs = std::filesystem;
+  const auto source_key = save_key(src), destination_key = save_key(dst);
+  const auto pending = g_unflushed_saves.find(source_key);
+  if (pending == g_unflushed_saves.end()) return 1; // use the normal disk path
+  if (source_key == destination_key) return move ? 0 : -1;
+  DWORD error = ERROR_SUCCESS;
+  if (!publish_save(dst, pending->second, error)) return -1;
+  g_unflushed_saves.erase(destination_key);
+  if (move) {
+    std::error_code ec;
+    fs::remove(src, ec);
+    if (ec) return -1; // destination is valid; preserve source and its buffer
+    g_unflushed_saves.erase(source_key);
+  }
+  return 0;
 }
 }  // namespace
 
@@ -309,7 +378,7 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
       "java.lang.System", "exit", "(Ljava.lang.String;)V",
       [&jvm](Object*, const std::vector<Value>& args) {
         std::printf("[native] System.exit(%s)\n",
-                    args.empty() ? "" : obj_str(args[0].v.o).c_str());
+                    obj_str(native_arg_object(args, 0)).c_str());
         jvm.set_static("java.lang.System", "_hostQuit", Value::make_int(1));
         return Value::make_void();
       });
@@ -518,7 +587,9 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
           g_unflushed_saves.erase(save_key(p));
           return Value::make_int(1);
         }
-        fs::remove_all(p, ec);
+        // Stock Java deletes contents explicitly before deleting a directory.
+        // Refuse nonempty directories instead of recursively erasing a tree.
+        fs::remove(p, ec);
         if (!ec) g_unflushed_saves.erase(save_key(p));
         std::printf("[native] File.delete %s ok=%d\n", rel.c_str(), ec ? 0 : 1);
         return Value::make_int(ec ? 0 : 1);
@@ -531,7 +602,8 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
           rel = args[0].v.o->str;
         const auto p = under_game(jvm.game_root(), rel);
         std::error_code ec;
-        const bool ok = !p.empty() && std::filesystem::exists(p, ec);
+        const bool ok = !p.empty() &&
+            (g_unflushed_saves.count(save_key(p)) != 0 || std::filesystem::exists(p, ec));
         return Value::make_int(ok ? 1 : 0);
       });
   // PE File.copy / File.move: 0 on success, -1 on failure. Paths are
@@ -553,9 +625,12 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         namespace fs = std::filesystem;
         fs::path src, dst;
         if (!two_paths(args, &src, &dst)) return Value::make_int(-1);
+        const int pending = transfer_pending_save(src, dst, false);
+        if (pending != 1) return Value::make_int(pending);
         std::error_code ec;
         fs::create_directories(dst.parent_path(), ec);
         fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
+        if (!ec) g_unflushed_saves.erase(save_key(dst));
         return Value::make_int(ec ? -1 : 0);
       });
   jvm.natives().register_method(
@@ -564,9 +639,12 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         namespace fs = std::filesystem;
         fs::path src, dst;
         if (!two_paths(args, &src, &dst)) return Value::make_int(-1);
+        const int pending = transfer_pending_save(src, dst, true);
+        if (pending != 1) return Value::make_int(pending);
         std::error_code ec;
         fs::create_directories(dst.parent_path(), ec);
         fs::rename(src, dst, ec);
+        if (!ec) g_unflushed_saves.erase(save_key(dst));
         return Value::make_int(ec ? -1 : 0);
       });
   jvm.natives().register_method(
@@ -610,32 +688,23 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         auto it = g_host_files.find(self);
         if (it != g_host_files.end() && it->second.writing &&
             !it->second.path.empty()) {
-          namespace fs = std::filesystem;
-          std::error_code ec;
-          fs::create_directories(it->second.path.parent_path(), ec);
-          // Mode replaces the ofstream default. Without out, MSVC does not
-          // open the file and the career buffer never reaches disk.
-          std::ofstream out(it->second.path, std::ios::out | std::ios::binary |
-                                                 std::ios::trunc);
           const std::vector<uint8_t> framed =
               it->second.sdat ? sdat_frame(it->second.bytes, it->second.sdat_packs,
                                            it->second.sdat_blobs)
                               : it->second.bytes;
-          const bool wrote = static_cast<bool>(out);
-          if (wrote && !framed.empty())
-            out.write(reinterpret_cast<const char*>(framed.data()),
-                      static_cast<std::streamsize>(framed.size()));
+          DWORD publish_error = ERROR_SUCCESS;
+          const bool wrote = publish_save(it->second.path, framed, publish_error);
           const std::string key = save_key(it->second.path);
-          if (wrote && out)
+          if (wrote)
             g_unflushed_saves.erase(key);
           else
             g_unflushed_saves[key] = framed;
           std::printf(
-              "[native] File.close %s %zu bytes ok=%d kept=%d sdat=%d packs=%zu\n",
+              "[native] File.close %s %zu bytes ok=%d kept=%d sdat=%d packs=%zu degraded_resources=%u error=%lu\n",
               it->second.path.string().c_str(), framed.size(),
-              wrote && static_cast<bool>(out) ? 1 : 0,
+              wrote ? 1 : 0,
               g_unflushed_saves.count(key) ? 1 : 0, it->second.sdat ? 1 : 0,
-              it->second.sdat_packs.size());
+              it->second.sdat_packs.size(), it->second.degraded_resources, publish_error);
         }
         g_host_files.erase(self);
         return Value::make_void();
@@ -681,14 +750,18 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
             restype = type->second.v.i;
         }
         int32_t wired = id;
-        if (it->second.sdat &&
-            !sdat_wire_resource(rpk, it->second, id, restype, &wired)) {
-          std::printf("[sdat] resource 0x%08x has no pack\n",
+        const bool degraded = it->second.sdat &&
+            !sdat_wire_resource(rpk, it->second, id, restype, &wired);
+        if (degraded) {
+          // readResID always consumes four bytes and stock callers often
+          // ignore write's return value. A null is safer than a shifted save.
+          wired = 0;
+          ++it->second.degraded_resources;
+          std::printf("[sdat] resource 0x%08x has no pack; writing null placeholder\n",
                       static_cast<uint32_t>(id));
-          return Value::make_int(0);
         }
         if (!file_push(self, &wired, 4)) return Value::make_int(0);
-        return Value::make_int(4);
+        return Value::make_int(degraded ? 0 : 4);
       });
   jvm.natives().register_method(
       "java.io.File", "write", "(Ljava.lang.String;)I",
@@ -696,7 +769,8 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         Object* s =
             (!args.empty() && args[0].tag == ValueTag::Obj) ? args[0].v.o
                                                             : nullptr;
-        const char* c = (s && !s->str.empty()) ? s->str.c_str() : nullptr;
+        // A non-null empty string is length 1 plus its NUL. Length 0 is null.
+        const char* c = s ? s->str.c_str() : nullptr;
         const int32_t len = c ? static_cast<int32_t>(std::strlen(c) + 1) : 0;
         if (!file_push(self, &len, 4)) return Value::make_int(0);
         if (len <= 0) return Value::make_int(0);

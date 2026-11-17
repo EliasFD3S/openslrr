@@ -1,0 +1,5 @@
+hour=12 total=1 night=0
+hour=22 total=1 night=0
+hour=6 total=1 night=0
+hour=18 total=1 night=0
+hour=12 total=1 night=0

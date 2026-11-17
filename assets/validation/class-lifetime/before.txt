@@ -1,0 +1,16 @@
+[class_lifetime] test 1 failed: f.vm.get_static("probe.Persistent","value").v.i==42 at tests/test_class_lifetime.cpp:26
+[jvm] load_class: classpath not ready
+[jvm] invoke depth exceeded probe.Chain.<init>
+[class_lifetime] test 2 failed: count.tag==ValueTag::Int && count.v.i==expected at tests/test_class_lifetime.cpp:73
+[jvm] invoke depth exceeded java.util.resource.Dummy.<init>
+[class_lifetime] test 3 failed: node && node->alias=="dummy" && node->live_id>=0x70000000 at tests/test_class_lifetime.cpp:98
+[class_lifetime] 0 passed, 3 failed
+[compiler] attempted=1 succeeded=1 failed=0 classes=2 (restart for loaded classes)
+[compiler] attempted=1 succeeded=1 failed=0 classes=1 (restart for loaded classes)
+constructor expected=1 actual=-1 tag=0
+[rpk] parsed system.rpk pack=1 deps=0 entries=28
+[rpk] openLib system.rpk -> 1
+[jvm] classpath ready (29 roots) under C:\Users\Elias\Desktop\openslrr\game
+[rpk] resource pack miss 'frontend.rpk' local=0x2a
+[rpk] resource pack miss 'frontend.rpk' local=0x24
+[rpk] resource pack miss 'frontend.rpk' local=0x2b

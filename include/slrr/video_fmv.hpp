@@ -38,8 +38,9 @@ void video_fmv_letterbox(int32_t screen_w, int32_t screen_h, float* out_left,
                          float* out_top, float* out_w, float* out_h);
 
 // Engine_boot intros: Activision → Invictus (StreetLegal optional).
-// pump: pump+flush each wait tick; max_frames_each 0 = until end/ESC.
+// pump returns false to cancel all intros, including ESC-release waits.
+// max_frames_each 0 = until end/ESC.
 int32_t video_fmv_play_boot_intros(int32_t max_frames_each,
-                                   const std::function<void()>& pump);
+                                   const std::function<bool()>& pump);
 
 }  // namespace slrr

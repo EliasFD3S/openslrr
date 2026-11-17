@@ -5,17 +5,14 @@
 namespace slrr {
 namespace {
 
-// Soft TUFA may omit void return ("(…)V" vs bare "(…)").
-bool descriptor_match(const std::string& a, const std::string& b) {
-  if (a == b) return true;
-  auto norm = [](std::string s) {
-    if (s.empty() || s[0] != '(') return s;
-    const auto rp = s.find(')');
-    if (rp == std::string::npos) return s;
-    if (rp + 1 >= s.size()) s.push_back('V');
-    return s;
-  };
-  return norm(a) == norm(b);
+// Only the omitted void return is an alias; keep exact registrations first.
+std::string alternate_descriptor(const std::string& sig) {
+  if (sig.empty() || sig.front() != '(') return {};
+  const auto rp = sig.find(')');
+  if (rp == std::string::npos) return {};
+  if (rp + 1 == sig.size()) return sig + "V";
+  if (rp + 2 == sig.size() && sig.back() == 'V') return sig.substr(0, rp + 1);
+  return {};
 }
 
 }  // namespace
@@ -38,12 +35,8 @@ void NativeRegistry::register_method(const std::string& class_fqn,
 bool NativeRegistry::has(const std::string& class_fqn, const std::string& method,
                          const std::string& java_sig) const {
   if (methods_.count(key(class_fqn, method, java_sig)) != 0) return true;
-  const std::string prefix = class_fqn + "#" + method + "#";
-  for (const auto& kv : methods_) {
-    if (kv.first.compare(0, prefix.size(), prefix) != 0) continue;
-    if (descriptor_match(kv.first.substr(prefix.size()), java_sig)) return true;
-  }
-  return false;
+  const auto alternate = alternate_descriptor(java_sig);
+  return !alternate.empty() && methods_.count(key(class_fqn, method, alternate)) != 0;
 }
 
 Value NativeRegistry::invoke(const std::string& class_fqn,
@@ -52,14 +45,8 @@ Value NativeRegistry::invoke(const std::string& class_fqn,
                              const std::vector<Value>& args) const {
   auto it = methods_.find(key(class_fqn, method, java_sig));
   if (it == methods_.end()) {
-    const std::string prefix = class_fqn + "#" + method + "#";
-    for (auto jt = methods_.begin(); jt != methods_.end(); ++jt) {
-      if (jt->first.compare(0, prefix.size(), prefix) != 0) continue;
-      if (descriptor_match(jt->first.substr(prefix.size()), java_sig)) {
-        it = jt;
-        break;
-      }
-    }
+    const auto alternate = alternate_descriptor(java_sig);
+    if (!alternate.empty()) it = methods_.find(key(class_fqn, method, alternate));
   }
   if (it == methods_.end())
     throw std::runtime_error("Missing native: " + class_fqn + "#" + method +

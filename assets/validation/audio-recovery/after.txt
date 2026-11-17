@@ -1,0 +1,18 @@
+[music] scan Garage_Shop: 2 tracks
+[music] scan Roam_ride: 2 tracks
+[music] scan Race_chase: 0 tracks
+[music] scan Main_menu: 0 tracks
+[music] playback failed HRESULT=0xc00d3e84
+[music] set=0 track=1/2 playing=0 00bad.wav
+[music] set=0 track=2/2 playing=1 01good.wav
+[music] playback failed HRESULT=0xc00d3e84
+[music] set=0 track=1/2 playing=0 00bad.wav
+[music] set=0 track=2/2 playing=1 01good.wav
+[music] playback failed HRESULT=0xc00d3e84
+[music] set=1 track=1/2 playing=0 00bad.wav
+[music] playback failed HRESULT=0xc00d3e84
+[music] set=1 track=2/2 playing=0 01bad.wav
+PASS loop budget before I/O, shared PCM and reserved one-shot capacity
+PASS bounded LRU cache and playing buffer survives eviction
+PASS unreadable music skipped in both directions; all-broken set stops after one pass
+All test samples contain digital silence; playback was muted.

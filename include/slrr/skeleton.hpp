@@ -62,6 +62,8 @@ int skeleton_skin_palette(const Skeleton& skeleton, const float* worlds,
 
 // Per-render pose. Keys are the script objects, not GameRefState addresses.
 void character_forget(void* key);
+// Main-loop simulation clock, frozen by pause/timeWarp(0).
+void character_set_sim_time(double seconds);
 void character_forget_all();
 
 // Posed mesh while a clip or a bone override is active. Null keeps the

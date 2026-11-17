@@ -1,0 +1,54 @@
+[compiler] probe/src/Numbers.java:20:40: warning W_UNVERIFIED: operator %= (no shipped source uses it)
+[jvm] load_class: classpath not ready
+[compiler] attempted=1 succeeded=1 failed=0 classes=1 (restart for loaded classes)
+FAIL add expected=16777217 actual=16777216 tag=1
+FAIL sub expected=16777217 actual=16777218 tag=1
+FAIL mul expected=16777221 actual=16777220 tag=1
+PASS add expected=-2147483648 actual=-2147483648 tag=1
+[jvm] load_class: classpath not ready
+FAIL sub expected=2147483647 actual=-2147483648 tag=1
+FAIL mul expected=-2 actual=-2147483648 tag=1
+PASS neg expected=-2147483648 actual=-2147483648 tag=1
+PASS inc expected=-2147483648 actual=-2147483648 tag=1
+PASS dec expected=2147483647 actual=2147483647 tag=1
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+FAIL charge expected=16777217 actual=16777216 tag=1
+PASS charge expected=0 actual=0 tag=1
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+FAIL cmul expected=16777221 actual=16777220 tag=1
+FAIL cdiv expected=16777217 actual=16777216 tag=1
+FAIL cmod expected=1 actual=0 tag=1
+FAIL cadd expected=16777217 actual=16777216 tag=1
+PASS fractional expected=67 actual=67 tag=1
+FAIL cast expected=0 actual=0 tag=0
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+FAIL cast expected=2147483647 actual=0 tag=0
+FAIL cast expected=-2147483648 actual=0 tag=0
+[jvm] TREE fail probe.Numbers.cast(F)I: value without eq/binop
+[jvm] load_class: classpath not ready
+[jvm] TREE fail probe.Numbers.cast(F)I: value without eq/binop
+[jvm] load_class: classpath not ready
+[jvm] TREE fail probe.Numbers.cast(F)I: value without eq/binop
+[jvm] load_class: classpath not ready
+[jvm] TREE fail probe.Numbers.cast(F)I: value without eq/binop
+FAIL cast expected=-3 actual=0 tag=0
+PASS div expected=0 actual=0 tag=1
+PASS mod expected=-1 actual=-1 tag=1
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+PASS neq expected=0 actual=0 tag=1
+[jvm] load_class: classpath not ready

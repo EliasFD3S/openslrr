@@ -440,6 +440,10 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
       if(bgfx::isValid(*handle)) bgfx::destroy(*handle);
       *handle = BGFX_INVALID_HANDLE;
     }
+    if (bgfx::isValid(fmv_tex_)) bgfx::destroy(fmv_tex_);
+    fmv_tex_ = BGFX_INVALID_HANDLE;
+    fmv_tex_w_ = fmv_tex_h_ = 0;
+    fmv_tex_serial_ = 0;
     if (ready_) bgfx::shutdown();
 #ifdef _WIN32
     if (hwnd_) {
@@ -833,6 +837,12 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
   void LibBgfxBackend::flush()
 {
     ++frames_;
+    for (auto it=font_tex_.begin();it!=font_tex_.end();) {
+      if (!slrr_font_asset_live(it->first)) {
+        if (bgfx::isValid(it->second)) bgfx::destroy(it->second);
+        it=font_tex_.erase(it);
+      } else ++it;
+    }
     if (!ready_) return;
     struct FrameCache {
       FrameCache() { scene_instances_frame_cache(true); }
@@ -1219,6 +1229,8 @@ bool same_material(const ScxGroup& a, const ScxGroup& b) {
   return a.texture_index == b.texture_index && a.mix_index == b.mix_index &&
          a.reflection_index == b.reflection_index && a.lightmap_index == b.lightmap_index &&
          a.illumination_index == b.illumination_index &&
+         a.emission_index == b.emission_index && same_map(a.emission_map, b.emission_map) &&
+         std::equal(std::begin(a.emission_color), std::end(a.emission_color), std::begin(b.emission_color)) &&
          a.mix_vertex_color == b.mix_vertex_color && a.material_type == b.material_type &&
          a.reflection_strength == b.reflection_strength && same_map(a.base_map, b.base_map) &&
          same_map(a.mix_map, b.mix_map) && same_map(a.reflection_map, b.reflection_map) &&
@@ -1356,9 +1368,10 @@ SceneFrustum LibBgfxBackend::view_frustum(const float* view, const float* projec
         if (previous != deformed_meshes_.end()) {
           auto old = instance_meshes_.find(previous->second);
           if (old != instance_meshes_.end() && old->second.geo.textures == part.geo.textures &&
-              old->second.geo.info.path == part.geo.info.path)
+              old->second.geo.info.path == part.geo.info.path) {
             part.tex = std::move(old->second.tex);
             part.shared_texture_paths = std::move(old->second.shared_texture_paths);
+          }
         }
       }
       if (part.tex.empty()) load_part_textures(part, map_prop);
@@ -2360,7 +2373,6 @@ std::string map_texture_key(std::string path) {
     }
     if (msg == WM_CLOSE) {
       if (self) self->quit_ = true;
-      DestroyWindow(hwnd);
       return 0;
     }
     if (msg == WM_DESTROY) {

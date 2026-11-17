@@ -1,0 +1,2 @@
+REJECT game\system\Scripts\render\osd\Dialog.class: CONS: unknown kind 2
+CORPUS files=1501 accepted_classes=1546 rejected_files=1 max_static_locals=9

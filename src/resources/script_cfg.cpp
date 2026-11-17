@@ -135,9 +135,21 @@ ScriptCfg parse_script_text(const std::string& text) {
   return cfg;
 }
 
+const RpkIndex* g_frontend_index=nullptr;
+uint64_t g_frontend_generation=0;
+int32_t g_frontend_id=0;
+bool g_frontend_found=false,g_frontend_built=false;
+std::unordered_map<uint32_t,ScriptCfg> g_frontend_scripts;
+void frontend_cache(const RpkIndex& rpk) {
+  if (g_frontend_index==&rpk && g_frontend_generation==rpk.generation()) return;
+  g_frontend_index=&rpk;g_frontend_generation=rpk.generation();
+  g_frontend_id=0;g_frontend_found=g_frontend_built=false;g_frontend_scripts.clear();
+}
+
 int32_t frontend_pack_id(const RpkIndex& rpk) {
-  static int32_t id = 0;
-  static bool found = false;
+  frontend_cache(rpk);
+  auto& id=g_frontend_id;
+  auto& found=g_frontend_found;
   if (found) return id;
   if (rpk.pack_count() <= 0) return 0;
   found = true;
@@ -157,8 +169,9 @@ int32_t frontend_pack_id(const RpkIndex& rpk) {
 
 const std::unordered_map<uint32_t, ScriptCfg>& frontend_scripts(
     const RpkIndex& rpk) {
-  static std::unordered_map<uint32_t, ScriptCfg> map;
-  static bool built = false;
+  frontend_cache(rpk);
+  auto& map=g_frontend_scripts;
+  auto& built=g_frontend_built;
   if (built) return map;
   if (rpk.game_root().empty()) return map;
   built = true;

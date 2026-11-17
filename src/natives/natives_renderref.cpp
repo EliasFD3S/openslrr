@@ -261,13 +261,14 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
           if (GameRefState* ts = gameref_get(type)) {
             tid = ts->type_id;
             st->texture_replacements = ts->texture_replacements;
+            st->texture_file_replacements = ts->texture_file_replacements;
           }
           if (tid == 0) {
             auto it = type->fields.find("id");
             if (it != type->fields.end() && it->second.tag == ValueTag::Int)
               tid = it->second.v.i;
           }
-          st->type_id = tid;
+          gameref_set_type(*st, tid);
           self->fields["id"] = Value::make_int(tid);
         }
         if (alias && !alias->str.empty()) st->alias = alias->str;
@@ -296,8 +297,10 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
         auto getf = [](Object* o, const char* n, float* out) {
           if (!o) return;
           auto it = o->fields.find(n);
-          if (it != o->fields.end() && it->second.tag == ValueTag::Float)
-            *out = it->second.v.f;
+          if (it != o->fields.end()) {
+            if (it->second.tag == ValueTag::Float && std::isfinite(it->second.v.f)) *out = it->second.v.f;
+            else if (it->second.tag == ValueTag::Int) *out = static_cast<float>(it->second.v.i);
+          }
         };
         if (!args.empty() && args[0].tag == ValueTag::Obj)
           getf(args[0].v.o, "x", &px), getf(args[0].v.o, "y", &py),
@@ -363,7 +366,7 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
           if (osd) osd_world_to_ndc(osd, px, py, &nx, &ny);
           auto already = self->fields.find("_osd_wi");
           if (already != self->fields.end() &&
-              already->second.tag == ValueTag::Int) {
+              already->second.tag == ValueTag::Int && osd_widget_mut(already->second.v.i)) {
             osd_set_widget_pos(already->second.v.i, nx, ny);
             if (tid != 0 || !texpath.empty())
               osd_set_widget_icon(
@@ -401,9 +404,8 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
               if (git != group->fields.end() && git->second.tag == ValueTag::Int)
                 w.group = git->second.v.i;
             }
-            const int32_t wi = static_cast<int32_t>(osd_widgets().size());
+            const int32_t wi = osd_add_widget(std::move(w));
             self->fields["_osd_wi"] = Value::make_int(wi);
-            osd_add_widget(std::move(w));
             osd_attach_button_picture(self);
           }
         }
@@ -425,7 +427,7 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
           if (it != type->fields.end() && it->second.tag == ValueTag::Int)
             tid = it->second.v.i;
         }
-        st->type_id = tid;
+        gameref_set_type(*st, tid);
         self->fields["id"] = Value::make_int(tid);
         return Value::make_void();
       });
@@ -500,6 +502,16 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
           id = kept->second.v.i;
         if (id != 0) self->fields["_tid"] = Value::make_int(id);
         const uint32_t from = args[0].tag == ValueTag::Obj ? resource_id_of(args[0].v.o) : 0;
+        const auto file = neu->fields.find("_texpath");
+        if (from && file != neu->fields.end() && file->second.tag == ValueTag::Obj &&
+            file->second.v.o && !file->second.v.o->str.empty()) {
+          auto& paths = gameref_upsert(self, GameRefKind::RenderRef)->texture_file_replacements;
+          std::erase_if(paths, [from](const auto& entry) { return entry.first == from; });
+          paths.emplace_back(from, file->second.v.o->str);
+        } else if (from && id) {
+          if (auto* state = gameref_get(self))
+            std::erase_if(state->texture_file_replacements, [from](const auto& entry) { return entry.first == from; });
+        }
         if (from && id && from != uint32_t(id)) {
           const auto image = [&rpk](uint32_t resource) {
             auto ext = std::filesystem::path(rpk.texture_path_for_id(resource)).extension().string();
@@ -610,7 +622,7 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
             args[0].v.o == self) return Value::make_int(0);
         auto* line = gameref_upsert(self, GameRefKind::RenderRef);
         line->binding = nullptr;
-        line->type_id = 0;
+        gameref_set_type(*line, 0);
         line->line_end.reset();
         line->line_length = 0.f;
         line->line_geometry = std::make_shared<ScxGeometry>();

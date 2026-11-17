@@ -10,6 +10,7 @@ namespace slrr {
 // Spec aligned with repos/SLRR-JVM-decompiler/src/tufa.ts (Build 940 OP_FLAGS).
 
 constexpr uint32_t kTufaNone = 0xffffffffu;
+constexpr uint32_t kTufaMaxLocals = 65536u;
 
 // TREE opcode width table: (flags >> 12) != 0 ⇒ node carries u32 immediate.
 extern const uint16_t kTreeOpFlags[48];

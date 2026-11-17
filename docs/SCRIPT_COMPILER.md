@@ -48,6 +48,10 @@ validation; successful compilation does not establish runtime equivalence.
   and initial declaration indexing remain synchronous C++ work.
 - Existing VM classes are not replaced or reinitialized while executing.
   Restart the game to use regenerated code already loaded by the current VM.
+  This also applies to direct `.class` paths: successful file loads are cached,
+  and another container cannot overwrite a loaded class with the same exact
+  name. New classes in a newly loaded concatenated container are still accepted.
+  Failed loads can be retried after fixing the file.
 - This implements explicit compileAll. Automatic recompilation on every
   missing/stale class lookup is not implemented by this change.
 

@@ -1,0 +1,4 @@
+[scene] ground props 0x3a0014 placements=1413 renders=1435 collisionMeshes=1 collisionShapes=1181
+maps/test_track.rpk placements=1413 exterior=0 registered=1 PASS
+[scene] ground props 0x37001e placements=1791 renders=1791 collisionMeshes=1 collisionShapes=318
+maps/ROC_track.rpk placements=1791 exterior=0 registered=1 PASS

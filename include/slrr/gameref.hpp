@@ -69,6 +69,7 @@ struct GameRefState {
   float detail = 0.f;
   int32_t deformed_type = 0;
   SceneSun directional_light;
+  uint64_t incarnation = 0;  // unique across removals, key reuse and clear
   void* key = nullptr;  // java.util.resource.GameRef* / GameType*
   void* binding = nullptr; // reference handle alias; never another scene node
   int32_t live_id = 0; // independent from the RPK type ID
@@ -177,6 +178,8 @@ struct GameRefState {
   uint32_t color = 0xffffff;
   uint32_t paint_source = 0, paint_texture = 0;
   std::vector<std::pair<uint32_t, uint32_t>> texture_replacements;
+  // Per-instance makeTexture files, independent of temporary resource wrappers.
+  std::vector<std::pair<uint32_t, std::string>> texture_file_replacements;
   bool vehicle_material = false;
   // Cfg light bits (1 brake, 2 reverse, 4 city, 16 indicator). Drawn only
   // while that light is on.
@@ -211,6 +214,19 @@ GameRefState* gameref_find_live(int32_t id);
 int32_t gameref_make_live(void* key);
 bool gameref_bind_alias(void* reference, void* target);
 void gameref_remove(void* key);
+
+// Cache for temporarily masking matching renders while keeping one actor.
+// Scene metadata changes must go through upsert/set_type/set_parent/bind/remove.
+struct GameRefRenderMask {
+  uint64_t revision = 0;
+  void* root = nullptr;
+  void* keep = nullptr;
+  int32_t type = 0;
+  std::vector<std::pair<void*, uint64_t>> hidden;
+};
+void gameref_set_type(GameRefState& node, int32_t type);
+bool gameref_mask_duplicate_renders(GameRefRenderMask& mask, void* root, void* keep, int32_t type);
+void gameref_release_render_mask(GameRefRenderMask& mask);
 
 void gameref_set_parent(void* key, void* parent);
 void gameref_set_flags(void* key, int32_t flags);

@@ -1,0 +1,2 @@
+PASS 100000 indexed live lookups / 8000 nodes: 2712293 us (informational)
+PASS live IDs, hash rehash stability, alias detach/removal, canonical removal, key reuse and clear

@@ -1,0 +1,2 @@
+[rpk] open_all 80 files, packs=81 entries=11367
+CORPUS packs=80 accepted_entries=11367 rejected_packs=0

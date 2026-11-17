@@ -157,7 +157,7 @@ current gaps to SLRR_rev code are in
 | Threads | `src/jvm/script_threads.cpp:script_threads_tick` | Cooperative Windows fibers |
 | GC | `src/jvm/gc.cpp:collect_garbage`, `src/jvm/gc.cpp:gc_safe_point` | Mark/sweep heap, root providers |
 | Script compiler | `src/jvm/script_compiler.cpp:script_compile_all`, `third_party/slrrc` | `System.compileAll` |
-| Native registry | `src/natives/native_registry.cpp:descriptor_match`, `src/natives/natives_internal.hpp:native_noop` | `class#method#descriptor` table |
+| Native registry | `src/natives/native_registry.cpp:alternate_descriptor`, `src/natives/natives_internal.hpp:native_noop` | `class#method#descriptor` table |
 | Natives | `src/natives/natives_boot.cpp:register_boot_natives` and the `natives_*.cpp` files | Script API adapters |
 | Resources | `src/resources/rpk_index.cpp:resolve_embedded_id`, `src/resources/rpk_index.cpp:model_for_resource` | RPK packs, RIDs, RSD properties |
 | Meshes and textures | `src/resources/scx_mesh.cpp:load_scx_geometry`, `src/resources/ptx_image.cpp:load_texture_file`, `src/resources/dds_image.cpp` | SCX v3/v4, PTX, DDS, PNG/TGA |
@@ -230,7 +230,7 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
 - Natives are registered as `register_method("java.pkg.Class", "name",
   "(args)Ret", fn)`. Descriptors use dotted class names. A duplicate
   registration throws. `descriptor_match` treats a missing return type as
-  `V` (`src/natives/native_registry.cpp:descriptor_match`).
+  `V` (`src/natives/native_registry.cpp:alternate_descriptor`).
 - `Jvm::invoke` finds the most specific method up the class chain. For a
   native or empty method it looks up a host leaf with `native_has_alias`.
   A registered host leaf also overrides a Java body (`src/jvm/jvm.cpp:invoke`).
@@ -563,15 +563,11 @@ run time.
 
 | Risk | Where |
 | --- | --- |
-| DirectShow frame copy trusts `width × height × 4` against the sample size | `src/platform/video_fmv.cpp` (`grab_frame`) |
-| TUFA and RPK readers reserve declared counts before checking the remaining bytes | `src/jvm/tufa.cpp:parse_constants`, `src/resources/rpk_index.cpp:parse_rpak` |
-| File confinement is a string-prefix check; `FindFile` bypasses it; `File.delete` can `remove_all` the root | `src/natives/natives_boot.cpp`, `src/natives/natives_io.cpp` |
-| TREE integer overflow is undefined behaviour; the value dispatcher has no remainder case; `do_binop` computes integer arithmetic through float, losing precision above 2^24 | `src/jvm/tree_eval.cpp:tree_eval`, `src/jvm/tree_eval.cpp:do_binop` |
+| DirectShow dynamic media-format renegotiation is not supported; malformed/short RGB32 frames are rejected | `src/platform/video_fmv.cpp` (`grab_frame`) |
+| `FindFile` still bypasses shared path confinement. The File native path validator now checks canonical components, rejects the root and accepts dots within names; File.delete is nonrecursive (#68, #71). Invalid SDAT resource writes preserve field alignment with a null placeholder (#70); see [SAVE_IO_FIXES.md](SAVE_IO_FIXES.md) | `src/natives/natives_boot.cpp:under_game`, `src/natives/natives_io.cpp:register_io_natives` |
 | Boot enters the Splash section again after Java already entered it | `src/boot/boot.cpp:boot_game` (`change_active_section` instead of `adopt_actual`) |
 | Wall collision, impact damage and mileage run only for the player-controlled car with an engine | `src/resources/part_runtime.cpp:advance_chassis_tick` |
-| Retired OSD widgets stay in the list and stay rooted | `src/ui/osd_registry.cpp:osd_visit_gc_roots` |
-| Any pad binding disables every XInput fallback axis | `src/platform/host_input.cpp` |
-| Root-scoped caches survive a game-root change | `src/resources/script_cfg.cpp:frontend_scripts`, `src/resources/scene_instances.cpp` |
+| Gamepad fallback is now per driving axis and unclaimed physical channel; hardware validation remains separate | `src/platform/host_input.cpp`, `src/platform/host_input_mapping.hpp` |
 | `shaders/varying.def.sc` declares `v_worldPos` twice | `shaders/varying.def.sc` |
 | The `present` and `hiz` programs never link: `fs_present` and `fs_hiz` read only `v_texcoord0` but are paired with `vs_mesh`, so the offscreen scene target and the HiZ pyramid are skipped. Startup logs `[bgfx] program … failed to link` | `src/render/bgfx_lib_backend.cpp:LibBgfxBackend::open` |
 
@@ -639,7 +635,7 @@ These are entry points, not fixes. Each needs its own reproduction.
   `src/resources/scene_instances.cpp:merge_static_meshes`, which grew its
   buffer by one placement's mesh at a time. On a first launch over freshly
   copied files, serial texture decoding added about 14 s. Loading work now
-  runs on the worker pool (§6) and the merge reserves once: the load takes
+  runs on the worker pool (§6) and the merge sizes its buffers once: the load takes
   about 1–2 s warm and 5 s on a first launch, with up to 20 threads busy on
   a 20-thread CPU.
   The VM, physics, scene collection and bgfx submission stay on the host
@@ -705,3 +701,999 @@ Each answer names its evidence.
 - When a contract changes, update [ENGINE_CONTRACT.md](ENGINE_CONTRACT.md)
   first, then this summary.
 - Move items out of §9 and §10 when they are fixed, in the same change.
+
+
+## 14. Garage lifetime correction (#122)
+
+Boot no longer loads G1 meshes unconditionally into the renderer's permanent
+ScenePart list and the global static collision cache. Garage.java selects its
+GroundRef and stuff RenderRef from garageIndex; the normal resource/scene path
+owns their lifetime. The boot copy had no world owner and was drawn whenever
+the garage viewport was active, including G2/G3/ROC, and entered reflection
+captures as well. Its collision triangles also survived garage changes.
+
+The patch removes this duplicate preload rather than adding garage-name checks
+or deleting cached resources still owned by a live scene. Resource decoding
+continues through natives_resref and scene_instances. No Java changes.
+Release x64 compiles and knowledge reference validation passes (219 references).
+No in-game validation is claimed yet. Test initial G1, then use fastpromotion
+for club garages and letmeroc for the ROC garage; inspect walls, floor/lift,
+props and reflections for old G1 geometry. Confirm the car remains supported
+by each active garage's collision geometry and that returning to G1 works.
+Issue #93 / PR #121 remains independent and unmerged.
+
+
+### Garage shell follow-up: obsolete exclusion removed
+
+User testing of #122 exposed missing garage shells after removing boot G1.
+spawn_ground_shell still explicitly skipped model paths containing "garage",
+assuming the boot preload owned them. Remove that exclusion: the selected
+GroundRef now owns its POLY/render shell and collision override, like other
+maps. Keep the boot preload removed. The user reports improved city shadows
+with that removal; the causal rendering mechanism has not been isolated.
+
+Read-only integration test against local game/misc/garage.rpk: G1 (0x7a),
+G2 (0x06), G3 (0xc7), ROC (0x2f) each attach and collect one shell; repeated
+spawn does not duplicate it. Before a61b1ba: 0/4 pass; corrected: 4/4 pass.
+Run `./scripts/run_save_io_tests.ps1 -Suite garage_shell` (requires game assets),
+and add `-BaselineRef a61b1ba` for reproduction. No saves or game files changed.
+Release x64 rebuilt successfully. Full visual/collision validation in G3 and
+ROC remains pending; the test checks scene attachment, not GPU output.
+
+
+## 14. Standalone map placements (#134)
+
+spawn_ground_shell previously registered native placements only for secondary
+grounds or primary grounds with exterior-map references. This silently excluded
+standalone TestTrack and ROC, despite their placement tables being parsed.
+Register placements for every attached ground shell; exterior references still
+control traversal of additional maps. Existing render-id cache and attached-shell
+checks prevent duplication. No Java edits or per-track special cases.
+
+Read-only integration tests use local game assets and the production resource
+index, ground decoder, shell attachment and scene collection. TestTrack reports
+1413 placements / 1435 render instances; ROC 1791 / 1791. Before 933cf0a neither
+registered its props (0/2 passing); corrected both register and supply resident
+meshes (2/2 passing). Repeated attachment keeps the shell count unchanged.
+Evidence: assets/validation/map-props. Run
+`./scripts/run_save_io_tests.ps1 -Suite map_props`, optionally with
+`-BaselineRef 933cf0a`. These tests require game assets; no saves are modified.
+Release x64 compiled; knowledge references 219 checked, zero errors.
+In-game validation remains pending: inspect poles/objects in TestTrack and ROC,
+reenter the maps, and verify frame time and collisions now that props exist.
+The scripted trigger/race progression issues are separate.
+
+
+### Track structures casting shadows (follow-up to #134)
+
+User confirms standalone native placements appear. The tower/stairs remain
+unshadowed because they belong to the ground POLY itself, excluded wholesale
+from the static shadow caster pass. Ground POLY now casts as well as receives;
+vehicle, sky, skinned and light exclusions remain. Fragment receiver bias now
+uses the depth gradient in shadow UV coordinates over the PCF footprint rather
+than derivatives measured in screen pixels. This is intended to avoid terrain
+self-shadow grids when including the ground; the cap is 0.004 normalized depth.
+Potential tradeoff: excess bias can detach fine contact shadows, especially at
+shallow angles. Visual validation is required before merge.
+
+Release x64 and embedded DXBC/GLSL shaders compile. Knowledge references: 219
+checked, zero errors. No GPU visual test was performed by the agent. Retest
+TestTrack tower/stairs and adjacent apron for shadows/acne, then Valo buildings
+and roads. These rendering checks are separate from placement integration tests.
+
+## 14. Asset bounds checks (#91, #92)
+
+SCX v3 validates all three face indices against the current material group's
+vertex count before appending indices. Validation also runs for metadata reads;
+an index referencing vertices in a later group is invalid even when the final
+mesh would contain that index. Invalid geometry is marked not-ok with an error.
+
+matrixdata_read checks declared keys against remaining bytes (eight floats per
+key) before resizing times or track channels. This prevents allocation driven
+by an unsupported key declaration. Existing quaternion/time/name checks remain.
+These are parser corrections, not changes to deformation or animation behavior.
+
+Release x64 build passes. Five deterministic fixtures exercise valid multi-group
+SCX, an out-of-range local index, an index into a later group, truncated keys
+with no channel allocation, and a valid named animation. Main 933cf0a: 2 pass /
+3 fail; corrected: 5 pass / 0 fail. Evidence: assets/validation/asset-bounds.
+Run `./scripts/run_save_io_tests.ps1 -Suite asset_bounds`; add
+`-BaselineRef 933cf0a` to reproduce. Generated fixtures do not alter game assets
+or saves. Knowledge-reference check: 219 references, zero errors.
+In-game visual regression testing remains pending; these fixes are most directly
+validated with malformed fixtures, not normal driving.
+
+
+### Character animation pause (#128)
+
+Character pose rebuilds used gameref_now (wall time), while pedestrians moved
+with the JVM simulation clock. With timeWarp(0), their world position stopped
+but skinning continued. The main loop now publishes jvm.sim_time to character
+animation immediately after advance_sim_time; all six character pose/bone/palette
+read paths sample that clock. Pause and time scaling therefore match physics,
+without adding the paused wall interval on resume. UI timers/orbit clocks are
+unchanged. No Java changes. This applies to character animations, not FMVs.
+
+Release x64 compiled; source audit confirms no remaining gameref_now calls in
+character.cpp. Knowledge references: 219 checked, zero errors. No automated
+animation playback or agent in-game validation is claimed. Manual check: in
+Valo face a walking pedestrian, pause for several seconds, confirm limbs are
+frozen, resume without pose catch-up, then repeat. Also check mechanic/driver
+animations during normal play. Save/section changes should remain functional.
+
+
+### Pedestrian worker after pause (PR #136 follow-up)
+
+User reports walkers blocking each other after pause, near the first garage.
+Direct deterministic crossing checks pass without changing avoidance forces.
+Inspection found the worker cleared posted before calculating a step, allowing
+another pre-result snapshot to be queued. A result can also become ready between
+the main thread's consume and submit locks. Keep posted through calculation,
+clear it only on result publication, and defer submission while posted OR ready.
+Zero-duration (pause) ticks consume results/update poses but submit no new job.
+This prevents stale snapshots and zero-time jobs from rolling back movement.
+
+Release x64 rebuilt. Twenty head-on crossings on real city.walk corridors pass;
+these are avoidance regression checks, not proof of the worker race fix or the
+specific first-garage encounter. No adjustment to avoidance weights, density or
+freecam range. In-game retest remains necessary: watch first-garage pedestrians,
+pause/resume repeatedly, then watch opposing pairs pass. Freecam behavior was
+explicitly deferred by the user. Knowledge check: 219 references, zero errors.
+
+
+### Initial garage steering (#125)
+
+The setsteer command updated steering_input/request but placed attached parts
+using the existing dynamic hub matrices. The steering wheel read the new scalar
+while the wheels kept the prior pose until another operation recomputed it.
+When dynamic_frames are already available, setsteer now calls pose_wheels,
+which rebuilds steered/rolling frames from the current suspension state and
+places/relinks the assembly. It does not integrate physics, change chassis pose,
+repark the car or reset wheel spin. Before dynamic frame initialization the
+existing rest placement path is preserved; later parking reads the saved steer.
+
+Release x64 compiles; knowledge references 219 checked, zero errors. Source
+trace: Garage.java sends setsteer -0.7 on entry and mechanic-mode changes.
+No automated assembled-vehicle regression or agent in-game validation claimed.
+Manual check: enter/load the garage and inspect wheel braquage before touching
+any part; change mechanic modes and return from catalog/dealer, then confirm
+normal driving steering still works. Notes stay in KNOWLEDGE_BASE.md.
+
+
+### Three-decimal elapsed time (#131)
+
+format_game_time used %g for seconds, producing variable decimal counts.
+Displays with seconds now discard fractional milliseconds before splitting
+hours/minutes and emit exactly three decimals. The issue's 1:19.8356 example
+becomes 1:19.835 (truncation, not rounding up). Formats hiding seconds keep the
+original minute boundary and US am/pm behavior. Physics and stored times are
+unchanged; no Java edits. Existing separators remain as before.
+
+Release x64 compiles. Twelve formatting tests cover the reported value, zero,
+trailing zeros, minute/hour boundaries, no-seconds clocks, am/pm, no-minutes
+and NaN input. Baseline 896e9bd: 4 pass / 8 fail; corrected: 12/12 pass.
+Run `./scripts/run_save_io_tests.ps1 -Suite time_format`, optionally with
+`-BaselineRef 896e9bd`. Evidence: assets/validation/time-format.
+Knowledge reference check: 219 checked, zero errors. In-game check pending:
+TestTrack/ROC timer should show exactly three fractional digits; garage clock
+should retain its ordinary display.
+
+
+### Native building night overlays (#133)
+
+Ground placement loading previously rejected every standalone `night` word in
+render aliases. Stock objects.rpk object 0x1a1 (krthaz02) includes a second render
+0x4ba (krthaz02_night) in its ICFG, flagged 4; this is authored night geometry,
+not a missing alternative texture filename. Retain the render, mark the placement
+night-only by alias word boundaries, and filter at collection time in both
+individual and instanced paths. Base facades stay present. All required meshes
+stay resident so time changes need no map reload and reflection collection uses
+the same visibility. Collision bodies are unchanged.
+
+Enhanced policy currently shows night overlays 18:00 inclusive to 06:00
+exclusive, from scene_sun_time with 24-hour wrapping. These thresholds are a
+host policy, not a newly proven original-engine rule. The old blanket exclusion
+advice in EXTERNAL_RESEARCH section 7 is superseded by this runtime filter;
+flags=4 alone still cannot classify arbitrary daytime renders.
+
+Release x64 compiles. Read-only stock-asset integration test instantiates
+krthaz02 and checks collected props/batches at noon, 22h, 6h, 18h and noon again:
+corrected totals 1/2/1/2/1, night counts 0/1/0/1/0; baseline c15a839 is always
+1 with zero night overlays. Run `./scripts/run_save_io_tests.ps1 -Suite night_props`,
+optionally `-BaselineRef c15a839`. Evidence: assets/validation/night-props.
+Source provenance: actual objects.rpk ICFG/render aliases; current SLRR_rev
+map-object-stream/category sources were checked for an applicable night policy
+but none was adopted. Knowledge reference check: 219 checked, zero errors.
+Visual validation pending: Valo facade windows at midday/night and after moving
+time back; check no daytime overlays, duplicate flicker, or reflection mismatch.
+
+
+### Night facade illumination follow-up (PR #139)
+
+User reports registered overlays still look unlit, and requests lights start
+at 18:30. Visibility now starts at 18.5h (off at 06:00 as before). Night meshes
+under _krthaz_selfillum are marked emissive_overlay in SceneInstance, kept out
+of opaque instance batches and drawn in the blended pass after facades. They
+use reverse-Z GEQUAL, no depth write and SRC_ALPHA/ONE additive blending for
+coplanar lit detail. The shader ignores sun/ambient/shadow attenuation for these
+layers; ordinary geometry lighting is unchanged. Emissive overlays do not cast
+solid shadows. Reflection draws reuse the same instance flags.
+
+Release x64 and embedded shaders compile. The real-asset test now checks just
+before 18:30, exactly 18:30, noon/night/dawn/noon again and verifies emissive
+metadata on the collected night mesh. Checks pass; they do not prove GPU output.
+User must retest illumination, coplanar flicker and overly bright wall regions.
+This supersedes the 18:00 threshold documented above. Knowledge check: 219
+references, zero errors. No simulation, Java or physical light-source changes.
+
+
+### Night emission masks and coplanar signs (PR #139)
+
+User confirms night detail appears but the entire house was too bright; signs
+were correctly lit with slight depth fighting. Actual krthaz02_night.scx has
+five material groups: one window material carries 0x06000005 (EmissionMaskMap),
+four wall/roof/door sections do not. The property was ignored by the SCX reader.
+CarBuilder scxWrite.ts documents selfIllumMap as TEX2D_EMISSIONMASK 0x06000005;
+the matching property is present in the shipped SCX.
+
+Parse and retain emission texture slot plus UV mapping; include both in material
+merge equality. In a night overlay, skip sections without a mask and sample the
+mask RGB to modulate the additive emissive contribution. Missing masks do not
+fall back to white/full-bright. Preserve normal lighting on base facades. The
+night detail vertex path uses a 0.002 m normal offset to reduce coplanar depth
+fighting, without depth writes or distance-dependent clip bias. Onset remains
+18:30. Signs only emit through their authored masks as well.
+
+Release x64 and DXBC/GLSL shaders compile. Stock integration test verifies one
+masked and four unmasked sections, valid mask slot and hour transitions. This
+establishes parser/scene metadata only, not final pixel output. Retest windows,
+wall/roof darkness, illuminated signs and flicker. Knowledge references: 219,
+zero errors. No Java edits or physical-light changes.
+
+
+### Night signs: SCX4 emission colour (PR #139 follow-up)
+
+Stock `_uvw/night_reklam1naa.SCX` and `night_vreklam3aa.SCX` declare
+COLOR_EMISSIVE (property 2) as white without TEX2D_EMISSIONMASK; their
+daytime counterparts have no emission colour. ScxGroup now retains that
+colour, and material merging compares it. Night overlay drawing accepts
+either an authored mask (windows) or a nonzero emission colour (signs).
+Colour-only signs use the white mask binding and multiply the base texture
+by the emission colour; non-emissive facade groups remain excluded. Missing
+authored mask textures still do not fall back to a full-bright facade.
+The 2 mm overlay offset and 18:30 onset remain unchanged.
+
+Validation: Release host build succeeded; `night_props` passed against game
+assets, checking night/day sign emission and window mask presence. Actual
+GPU appearance of signs still requires user validation; windows were
+confirmed working by the user before this follow-up.
+
+
+### Issue #129: foliage alpha-to-coverage erosion
+
+Valo tree ICFGs use detailed `fa_tibi` renders at LOD 2; the prop selector
+already chooses those over LOD 0–1 billboards. The leaf material `lomb`
+uses SCX4 flags 0xa2000000 (alpha test and two-sided), reference 0x38,
+and Lomb3/Lomb4 BC3 textures. Their authored mip chains are already
+completed by the DDS loader; this change does not replace assets or LODs.
+
+`shaders/fs_mesh.sc` previously discarded alpha below the cutoff and then
+used a one-sided smoothstep from cutoff to cutoff + fwidth. This eroded
+small leaves, increasingly with minification. MSAA alpha-to-coverage now
+uses a linear pixel footprint centred on the authored cutoff, computes
+derivatives before any clipping in that mode, and preserves zero coverage
+for fully transparent texels. Non-MSAA cutout, shadow and reflection-face
+thresholds are unchanged. `src/render/bgfx_lighting.cpp` enables this path
+for authored two-sided SCX4 cutouts, in ordinary and batched draws, rather
+than matching the `fa_tibi` filename. Other two-sided cutouts can benefit
+as well; inspect fences along with trees when validating.
+
+Validation: Release host and DXBC/GLSL mesh shaders compile.
+`scripts/analyze_foliage_coverage.py` decodes stock BC3 alpha and estimates
+quad derivatives on the texel grid; output is recorded in
+`assets/validation/tree-foliage/coverage.csv`. For Lomb3 mip 0, hard-cutout
+coverage is 14.4%, old estimated coverage 7.8%, centred coverage 13.5%;
+at mip 5 those estimates are 20.3%, 2.2%, and 19.0%. These are CPU
+diagnostics, not measured GPU output or in-game validation. Compare the
+park trees near the first garage using MSAA 2x/4x/8x, then AA off/FXAA,
+and check fences, tree shadows and reflections for regressions.
+`SLRR_rev:src/formats/scx.ts` and `SLRR_rev:src/render/map-material-pool.ts` were
+consulted; neither provides this bgfx alpha-to-coverage correction.
+
+
+Issue #129 in-game follow-up: the user confirmed the foliage fix works on
+16 November 2026 and supplied `assets/validation/tree-foliage/in-game-after.png`.
+This confirms the reported Valo foliage appearance; separate validation of
+every AA mode and other two-sided cutout assets has not been claimed.
+
+
+### Issue #141: separated clouds and stronger daylight
+
+Reference: the user supplied r72-29ee74f video frames and current screenshots,
+kept in `assets/validation/clouds-daylight/`. Git comparison with `29ee74f`
+showed the original density shape was still present; later wind moved the
+field by about 100 km at noon and the increased sun energy also affected
+cloud brightness. This is visual tuning toward the reference, not a byte-for-byte
+rollback of the old shader or removal of the dynamic sky.
+
+`shaders/fs_mesh.sc` now samples smaller puffs (noise scale 0.0019/0.0032/0.0019),
+separates formations with a 0.52–0.72 density threshold, and reduces extinction
+from 0.009 to 0.006. All 48 ray steps span the cloud layer instead of being
+capped at 85 m and truncating oblique views. Cloud scattering bounds the
+sun peak separately from world direct irradiance, so raising sun energy
+does not turn formations into a saturated white blanket. Sky day/night
+colours, stars, cloud movement and reflection capture remain procedural.
+`src/render/bgfx_lighting.cpp` anchors wind to noon with a slower 1.5/0.55 m
+per game-second drift; main views and cubemap faces share it. Time scrubbing
+continues to move clouds; this does not change the game's time wrapping policy.
+
+`src/resources/scene_sun.cpp` raises the daylight luminance target from 1.15
+to 1.45 and its dark-palette gain cap from 2.8 to 4.0. Direct diffuse and
+specular are stronger, not ambient exposure. Night ambient and the sunset
+ramp are unchanged; garage lights do not use this outdoor day-cycle change.
+
+Validation: Release host plus DXBC/GLSL mesh shaders compile. The new
+`sun_cycle` suite in `scripts/run_save_io_tests.ps1` passes daylight energy,
+noon direction, zero direct sun at night, unchanged night ambient, a warm
+fading sunset, finite nonnegative values and 24-hour repetition. Running
+the same suite with `-BaselineRef origin/main` fails only the stronger
+daylight assertion, as expected. Logs are in the validation directory.
+Cloud aesthetics, brightness and performance still require user testing
+in game, including noon, late afternoon, sunset, night and car reflections.
+
+
+### Issues #132 / #116: vehicle material backface culling
+
+`src/render/bgfx_lighting.cpp` previously drew all vehicle sections without
+culling, unlike the map SCX4 path. SCX4 material flag 0x02000000 explicitly
+requests two-sided drawing; an unset flag should cull clockwise faces in
+the renderer's reflected-Z vertex convention. The stock Enula trunk and
+MC chassis materials do not request two-sided drawing. Their raw indices
+and unit normals are consistent, but a top-view CPU depth diagnostic finds
+frontmost downward faces in these meshes (1,069/52,397 covered pixels for
+the trunk, 2,699/48,180 for the chassis at the diagnostic's 256-square grid).
+This supports the backface explanation for the dark body-panel patches.
+It does not by itself prove the exact cause of the under-car spike in #116.
+
+Vehicle drawing now honours that material flag in the main view, previews
+and reflection captures. SCX3 retains its existing behaviour. Glass that
+now draws once uses the authored opacity/reflection once; the previous
+half-reflection and two-face opacity compensation remain only for explicit
+two-sided materials. The shared u_dynamicReflection.y component carries
+this flag to `shaders/fs_vehicle.sc`; x retains its reflection mode.
+No triangles are deleted, no game files edited and no deformation filtered.
+Shadows retain their intentional two-sided caster handling.
+
+Validation: Release host and DXBC/GLSL vehicle shaders compile.
+`scripts/analyze_vehicle_backfaces.py` is a reproducible CPU geometry
+diagnostic limited to rigid SCX4 position/normal/UV layouts; results and
+original issue captures are in `assets/validation/vehicle-polygons/`. It is
+not an in-game rendering test. SLRR_rev vehicle-material.ts/scx.ts were
+consulted; the local CarBuilder scxWrite.ts documents the same 0x02000000
+Backface-cull-off bit. User validation is required separately for the MC
+roof/cabin, Enula trunk, and the #116 under-car spike, plus glass opacity
+and reflections. Do not claim #116 confirmed from the trunk diagnostic.
+
+
+### Issues #72 / #126: exact TREE integers and integer balances
+
+`src/jvm/tree_eval.cpp:arithmetic` now handles integer operands without
+converting through float. Addition, subtraction and multiplication wrap
+explicitly at 32 bits; division handles INT_MIN / -1 without a host trap
+and remainder handles that pair as zero. The existing divide/remainder
+by zero -> zero policy is retained. Both expression dispatchers and
+compound arithmetic use the same operation; unary negation and increment/
+decrement also avoid signed overflow. Mixed operands still promote to float.
+The deliberate MWM float-inequality behaviour remains unchanged.
+
+`src/jvm/tree_eval.cpp:java_f2i` defines NaN -> zero, saturation at integer
+limits and truncation otherwise for TREE conversions (locals, casts, fields,
+array lengths and indices). Primitive casts clear the completed expression
+and class carrier, avoiding the previous value-without-binop failure.
+Integer field/local narrowing on mixed compound assignment is preserved.
+These are general VM rules: no special case for Racer.money or the ROC.
+Stock Racer.money and GameLogic.ROC_ENTRYFEE are both int; the fee is
+100000. The tests confirm exact fee subtraction even for odd balances above
+2^24, and integer storage after a fractional fee. They do not prove why a
+particular historical ROC session went negative. A script spending more
+than the balance still gets a negative integer; this change adds no clamp
+or entry-eligibility rule. Keep that part of #126 subject to game validation.
+
+Validation: Release host builds; `tree_numbers` compiles a Java fixture to
+TUFA, loads it in the VM and checks exact arithmetic, compound operators,
+wrapping, casts including infinities/NaN, fee storage and mixed floats.
+Handcrafted TREE ordering additionally exercises the value dispatcher for
+all five arithmetic tags. The INT_MIN divide/remainder cases run after
+other checks pass. The same suite against pre-fix origin/main fails the
+precision/fee/compound/cast cases; dangerous division cases are skipped
+when earlier assertions fail. The existing save_io suite also passes. Logs
+are in `assets/validation/tree-numbers/`. No production Java is modified;
+the generated test Java lives only in an isolated temporary fixture.
+SLRR_rev's source tree and slrr-reverse TREE evaluator sources were
+consulted; no third-party numeric implementation was copied.
+
+Previous vehicle follow-up: the user validated the #132/#116 correction and
+authorized merging PR #143; it is merged and both issues are closed.
+
+
+### Issues #127 / #101 / #77: OSD state and resource lifetime
+
+`src/render/bgfx_lighting.cpp:LibBgfxBackend::bind_baked_light` resets mesh
+base/mix UV transforms to identity for groupless draws, including OSD quads
+and font glyphs. Previously these could inherit the final world material's
+atlas transform and sample a transparent region of a UI texture. This is a
+source-backed candidate for #127; the intermittent city HUD disappearance
+still needs user confirmation in game. It does not change UI layering or
+blend mode.
+
+Widgets now have monotonic native handles independent of vector slots.
+`osd_add_widget` returns the handle stored in _osd_wi; setter/binding APIs
+resolve it through an index. Retiring a widget immediately clears its Java
+pointers and marks it dead. A destroyed Viewport retires its owner's widgets
+and removes its text states, while deactivate/hide only suppress visibility.
+GC compacts retired entries before marking, remaps hover/string focus, and
+uses forget hooks when sweeping. Registry clears never reuse old handles.
+Hidden live pages remain rooted and can be reopened. The root snapshot makes
+the widget sweep hook a constant-time miss for unrelated garbage objects.
+
+Fonts share immutable CPU data by root plus normalized font name. ResourceRef
+aliases are weak VM payloads; live texts and current frontend font slots
+continue to root their font references. Sweeping an alias removes its mapping
+and expires the last CPU asset owner. GPU font textures use the same asset
+key instead of ResourceRef addresses; the next renderer flush destroys cached
+font textures whose CPU assets no longer have owners. Alias cleanup only
+checks its own asset, not the whole cache for every swept VM object.
+
+Validation: Release host compiles. The ui_lifetime suite checks hidden-page
+roots, immediate destruction release, stable IDs after compaction/clear,
+hover and text-input focus across compaction, 200 retirement cycles without
+vector growth, two refs sharing one real slii24 atlas, live-text retention,
+collection of the unused alias, and final CPU asset expiration after owner
+destruction. Log: `assets/validation/ui-lifetime/after.txt`. Existing
+tree_numbers and save_io suites pass. GPU reclamation and the HUD visual
+fix are compiled but not measured/validated in game. SLRR_rev
+`SLRR_rev:src/runtime/osd-text-native.ts` and `SLRR_rev:src/osd/osd-layer.ts`
+were consulted for text/layer disposal; their browser ownership model is not
+a replacement for the VM's mark/sweep and no implementation was copied.
+
+Before merging, test city driving, garage/city re-entry, repeated options and
+catalog dialogs, hidden pages reopening, typing/slider focus, and a resolution
+change that changes frontend font size. No production Java was modified.
+
+
+### Issues #107 / #94: RPK reads and index-scoped cache lifetime
+
+`src/resources/rpk_index.cpp:RpkIndex::read_payload` reuses a lazily opened
+file stream per pack under a mutex. Text/ICFG descriptors are cached by
+canonical full RID; large binary map payloads are not retained as another
+resident copy. `payload_props` parses all text keys once under its own lock
+and caches ordered repeated values, including negative key lookups. Empty
+read failures are retried. Unscoped ids retain last-pack-wins resolution.
+TOC lookups hash the low 16-bit local id directly (first matching TOC entry),
+removing the linear fallback for misses. Dependency slots and host pack ids
+remain separate. Cached descriptors are snapshots for the index lifetime;
+editing a pack on disk requires rebuilding/rebinding the index.
+
+`RpkIndex::set_root` clears packs, descriptor caches and open streams when
+the root changes. A monotonic generation changes on root/pack registration
+and distinguishes even index objects recreated at the same address.
+`src/resources/script_cfg.cpp:frontend_cache` keys frontend pack/CFG state
+by index identity and generation. `scene_instances_set_resources` also
+clears shadow metadata, and `character_forget_all` clears skeleton/clip
+caches as well as live characters. The active RPK pointer is cleared when
+its owning index is destroyed; destroying another index does not clear it.
+Root/index mutation must occur at a quiescent point after stopping preload
+readers, followed by scene rebinding. Concurrent readers are supported;
+concurrent root replacement and live-world RID migration are not added.
+
+Validation: Release host compiles. The resource_cache suite creates two
+isolated miniature RPAKs and frontend CFGs. Eight readers execute 1,600
+property queries: instrumentation reports one payload disk read and one RSD
+parse. Tests also verify key case/comments, repeated texture order, local/
+qualified ids and misses, root-switch invalidation with reused RID values,
+frontend cache rebuild with a different pack-id assignment, shadow metadata
+rebinding, and active-index cleanup on destruction. Log:
+`assets/validation/resource-cache/after.txt`. Existing map_props (Test Track
+and ROC placements), night_props (window/sign data), ui_lifetime and save_io
+suites pass. These checks do not measure full city load-time improvement.
+SLRR_rev `SLRR_rev:docs/formats/rpk.md` and `SLRR_rev:src/formats/rpk.ts` were
+consulted for RPAK structure and text/binary payload distinction; no parser
+implementation was copied.
+
+PR #145 was validated and merged at the user's request; #127/#101/#77 are
+closed. For this resource wave, in-game menu/garage/city/track loading still
+requires user confirmation before merge. No production Java is modified.
+
+
+### Issues #88 / #89 / #74: reject malformed TUFA before execution
+
+`src/jvm/tufa.cpp` bounds collection counts by remaining bytes before
+reserving storage: constants >=8 bytes, field/method records 16/20, trees
+4, nodes 3, interfaces 4. File sizing, allocation and reads are inside the
+load exception boundary; failed tellg is rejected. Parser failure clears
+all previously parsed blobs, so a malformed tail cannot publish a valid
+prefix from a concatenated class container. Null nonempty input is rejected.
+
+`parse_one_blob` validates pool links and the constant-bearing TREE opcodes
+before the VM seeds static fields. UTF8, Class, Resource and reference
+carriers must match the operation, while reference() still accepts the
+existing bare UTF8/NameAndType compatibility forms. This prevents malformed
+string/RID initializers and lazy RID fixups from encountering bad constants
+after class publication. Static enrichment also catches TREE exceptions.
+No unsupported constant kinds or new opcode semantics are introduced.
+
+`kTufaMaxLocals` is 65536: method local counts and local load/declaration
+slots are checked by the parser. TREE evaluation additionally bounds method
+locals/arguments and declarations before allocating or indexing; size_t
+arithmetic avoids imm+1 wrapping. These runtime checks also protect
+in-memory TREE callers that bypass file parsing.
+
+Validation: Release host compiles. The tufa_validation suite compiles a
+valid two-class TUFA container, mutates collection counts, method-local
+counts, three extreme declaration slots, static string/RID constants and
+the concatenated tail, and checks clean parser/VM rejection. It also checks
+the runtime declaration/local-count guards directly and executes the valid
+fixture after a rejected file. No production Java is modified.
+
+`-Suite tufa_validation -CorpusOnly` scans actual game classes; with
+`-BaselineRef origin/main` it substitutes only the baseline parser. Both
+parsers accept 1546 classes from the same 1501 files, rejecting only the
+pre-existing `game/system/Scripts/render/osd/Dialog.class` (CONS kind 2).
+This wave adds no new corpus rejection. Corpus comparison deliberately
+does not run huge-count malformed fixtures against the unsafe parser.
+Logs: `assets/validation/tufa-validation/`. Existing tree_numbers and
+save_io suites pass. SLRR_rev `SLRR_rev:docs/formats/tufa.md` and
+`SLRR_rev:src/formats/tufa.ts` were consulted for container/record contracts;
+validation is implemented locally, without copied code.
+
+PR #146 was validated and merged at the user's request; #107/#94 are closed.
+For this wave, confirm menu/options, career loading, garage/city and catalog
+behaviour in game before merge; parser corpus compatibility is separate
+from gameplay validation. RPK TOC count validation remains a separate risk.
+
+
+### Issues #80 / #95: RPAK ranges and bounded ground-node traversal
+
+`src/resources/rpk_index.cpp:RpkIndex::parse_rpak` checks file sizing,
+64-bit dependency-count sums, dependency/table spans, record count versus
+minimum TOC record size, alias/bounds spans, and 64-bit offset+size against
+the file snapshot before publishing entries. It parses into a temporary
+pack: a bad record rejects the TOC instead of leaving a usable prefix.
+File loading and allocations are inside an exception boundary. An open
+pack with a rejected TOC retains its assigned id/path but has no entries.
+
+`RpkPack::file_size` records the validated snapshot. Uncached read_payload
+checks both that snapshot and the current stream length before allocating
+the payload, and contains allocation/read exceptions for preload callers.
+Descriptor cache hits remain immutable snapshots as described in #107;
+this does not add hot pack editing. A file truncated after TOC parsing is
+rejected by an uncached payload read before allocation.
+
+`src/resources/scene_instances.cpp:walk_ground_node` visits each in-range
+file offset once per GroundWalk. Cycles and repeated child pointers no
+longer cause exponential recursion or duplicate placements/geometry. The
+existing depth and byte-range guards remain; chunk iteration uses remaining
+byte counts. Repeated node data is consumed once in first traversal order,
+not interpreted as a new placement on each graph edge.
+
+Validation: Release host compiles. rpk_validation covers huge TOC counts,
+dependency addition overflow, huge payload sizes, offset+size overflow,
+truncated aliases/bounds, oversized table ranges, a file truncated after
+indexing, a two-edge self-cycle, and two children sharing a placement node.
+All 80 actual RPK files / 11367 TOC entries are accepted. Actual Test Track
+and ROC placement counts remain 1413 and 1791 respectively, matching the
+previous wave's logs. Existing resource_cache suite passes. Evidence is in
+`assets/validation/rpk-map-validation/`. No unsafe baseline cyclic walk or
+huge reserve is deliberately executed. No game Java/data is modified.
+SLRR_rev `SLRR_rev:docs/formats/rpk.md` and `SLRR_rev:src/formats/rpk.ts` were
+consulted for RPAK spans and record contracts; no external code copied.
+
+PR #147 was validated and merged at the user's request; #88/#89/#74 are
+closed. In-game loading of garage, city and tracks remains the validation
+step before merging this resource-validation wave.
+
+
+### Issues #108 / #97: audio admission, PCM reuse and playlist recovery
+
+`src/platform/host_sfx.cpp` admits requests before WAV reads/source creation.
+At most 24 of 32 voices may be loops, leaving capacity for one-shots. At full
+capacity an existing one-shot is selected for replacement before decoding,
+but retired only when the replacement buffer is ready. Existing menu/burst
+coalescing is retained. Rejected loop requests increment diagnostics without
+reading their WAV. This is a common loop budget, not new engine-vs-ambient
+priority; a 25th loop can still be denied until another loop stops.
+
+Decoded immutable WAV format/PCM is shared between voices and held in a
+16 MiB / 64-entry LRU cache. Playing voices retain their buffer even after
+cache eviction; root reset stops voices and clears cached data/counters.
+Oversized valid WAVs can play but are not added to that cache. Loop pitch
+and gain updates now reject non-finite inputs via the same finite defaults
+as play_file. HostSfxStats exposes rejection/read/hit/cache diagnostics.
+
+`src/platform/host_music.cpp` tries at most one playlist pass when opening
+a track fails, preserving next/previous direction. A fill() failure advances
+through the same bounded recovery path. A wholly unreadable set remains
+stopped; update does not continuously retry it. Explicit change/next can
+retry later. HostMusicStats exposes attempts/failures/current track for
+diagnostics. No Java native or music-set/mode contract is added.
+
+Validation: Release host compiles. audio_recovery creates only digital-silence
+PCM WAVs in an isolated fixture and mutes playback. Actual XAudio2/Media
+Foundation checks pass: 24 loops share one disk read; the next loop is
+rejected before I/O; nine distinct one-shots are admitted with 32 total
+voices while existing loops remain; NaN loop updates do not interrupt the
+voice; 65 new cues exercise the 64-entry limit while an evicted playing
+buffer stays valid. Root reset releases voices/cache. An unreadable music
+file is skipped to a valid WAV in both directions; an all-broken two-track
+set makes two attempts then stays stopped through 100 updates. Mid-stream
+fill-error recovery is implemented but not fault-injected by this fixture.
+Log: `assets/validation/audio-recovery/after.txt`. resource_cache regression
+also passes. These silent tests do not validate perceived sound balance or
+engine/ambient priorities in gameplay; listen in menus, garage and city
+before merging. SLRR_rev `SLRR_rev:docs/music.md` consulted for set contracts;
+no external implementation copied. No production Java/game assets modified.
+
+PR #148 was validated and merged at the user's request; #80/#95 are closed.
+
+
+### VM lookup costs (#81, #111)
+
+`NativeRegistry::has` and `NativeRegistry::invoke` perform an exact hash lookup,
+then at most one alternate lookup for the omitted void return (`(...)` /
+`(...)V`). They no longer scan all registered natives on a miss. Exact
+registrations retain priority when both spellings are registered; duplicate
+exact signatures still throw. Return types and class aliases are not widened.
+Late registrations work without negative-cache invalidation.
+
+`Jvm::seed_static_fields` records eligible short-tree RID initializer metadata
+once per class load in `static_rids_`. `Jvm::get_static` consults this index
+instead of rescanning fields and trees for every small integer. Values remain
+mutable; an unresolved local RID is retried against the active resource index,
+and loaded definitions and metadata stay immutable until restart (see #73/#66 below).
+
+Validation: Release build; `vm_lookup` before/after compatibility tests cover
+void aliases, exact priority, missing/duplicate natives, late registration,
+mutable statics, unresolved-to-resolved RIDs and recompile/restart separation. The isolated
+100,000-miss / 4,000-registration benchmark measured about 1.43 s before and
+7 ms after on this machine; this is not an in-game FPS claim. `tree_numbers`
+passes. TUFA corpus remains 1,501 files / 1,546 accepted classes, with the same
+pre-existing Dialog.class kind-2 rejection. Evidence:
+`assets/validation/vm-lookup/before.txt` and
+`assets/validation/vm-lookup/after.txt`. No production Java or native API added.
+
+
+### Script input safety (#87, #90)
+
+Native adapters now use checked `native_arg_number`, `native_arg_integer` and
+`native_arg_object` helpers (`src/natives/natives_internal.hpp`). Missing or
+mistagged values use explicit fallbacks; numeric arguments accept Int/Float,
+non-finite floats use the fallback, and float-to-int conversions saturate.
+Options getter/setter, display-mode lookup/change, camera priority, time strings
+and System.exit(String) no longer read unchecked argument slots/union members.
+Incomplete or object-valued renderer-option setters leave settings unchanged.
+Text.setPos and RenderRef.setMatrix accept integer coordinates as well as floats.
+No native signatures or production Java changed.
+
+TREE direct and compound array writes share `store_array_slot`
+(`src/jvm/tree_eval.cpp:store_array_slot`). Existing auto-growth is preserved
+below 1,048,576 slots, matching the new-array cap. Negative indices and indices
+at or above that limit are ignored, leaving slots/length unchanged; the first
+rejection is logged once per process. Compound growth now synchronizes length
+as direct growth already did. This is a compatibility limit, not Java bounds
+exception semantics. System.arraycopy keeps its separately documented policy;
+this limit does not establish a total VM memory budget.
+
+Validation: Release build and `script_safety`, `tree_numbers`, `save_io` suites
+pass. The new suite compiles a Java fixture and exercises direct/compound
+stores, the last allowed slot, negative/cap/INT32_MAX indices, mutable options,
+short/mistagged native calls, Float camera priorities and time flags, Int text
+and matrix coordinates, and System.exit with an Int argument. Unsafe old array
+behavior was not executed with huge indices. Evidence:
+`assets/validation/script-safety/after.txt`. In-game validation remains separate.
+
+
+### Video frame bounds and shutdown (#78, #102)
+
+The DirectShow Sample Grabber accepts only a complete VIDEOINFOHEADER describing
+packed RGB32 (one plane, BI_RGB). Width/height validation rejects zero, negative
+width, INT32_MIN height and byte counts beyond the signed 32-bit sample API.
+`video_rgb32_bytes` and `video_copy_rgb32` in `include/slrr/video_frame.hpp`
+validate the actual returned sample span before copying. The second
+GetCurrentBuffer result, not scratch capacity or the initial query, determines
+the valid bytes. Short samples never publish a new frame or copy stale rows.
+Negative-height images retain top-down order; positive heights are flipped.
+Dynamic media-format renegotiation is not implemented by this change.
+
+WM_CLOSE only requests quit in the libbgfx backend. The main loop returns early
+when quit is already requested and skips presentation if quit is requested
+mid-frame. Backend close destroys/resets its FMV texture, dimensions and serial
+before bgfx shutdown; HWND destruction remains after shutdown (this order was
+already correct before this fix). Repeated close was verified.
+
+Validation: Release build and `video_safety` pass. Synthetic pixel fixtures
+cover both orientations, short/empty samples, extra trailing bytes and invalid
+or overflowing dimensions. A real Direct3D 11 window test sends WM_CLOSE,
+checks the HWND is still valid through mainloop_frame's quit return, then
+checks it is destroyed by close and that close can be repeated. Test log:
+`assets/validation/video-safety/after.txt`. Existing present/hiz shader-link
+warnings (#105) were observed in this test; the backend still opened and the
+test passed. Actual DirectShow decoder fallback, intro playback and FMV texture
+allocation/release during playback remain manual validation; the synthetic
+copy tests do not claim to cover a full decoder graph.
+
+
+Intro cancellation follow-up (#102): `video_fmv_play_boot_intros` now takes a
+boolean pump callback. False aborts the sequence, including ESC-release waits,
+closes the active video and clears OSD blocking. Boot returns through renderer
+cleanup before starting Init when the window was closed during intros. The
+video_safety suite checks cancellation both before opening a decoder and after
+opening a generated silent AVI; no later intro is opened. Immediate LibVLC
+cancellation can log demux errors in this fixture; actual rendered frames are
+not asserted. Release build and the suite pass.
+
+
+### Options save failure policy (#109)
+
+`host_game_options_update` keeps failed options dirty but suspends automatic
+saveConfig retries after the first failure. `host_game_options_dirty` rearms
+the normal 500 ms debounce on a new setting change. Forced updates (including
+shutdown) can still retry; repeated failures without a change log only once.
+Success clears dirty/failure state, and options load resets it for a new
+session. Runtime settings continue to apply even when persistence fails.
+
+Release build and `options_retry` pass. An isolated compiled Config fixture
+binds a counted saveConfig adapter: checks debounce, failure followed by 100
+updates after another debounce interval, rearming on a real GPS option change,
+forced retry, recovery and no extra writes after success. This tests the save
+result policy, not filesystem permissions; the existing save implementation is
+unchanged. Evidence: `assets/validation/options-retry/after.txt`.
+
+
+Enhanced settings persistence follow-up: MSAA, dynamic reflections, volumetric
+clouds, sunlight and local lights now round-trip through
+save/game/openslrr_options beside framerate_mode. The renderer-option native
+saves after explicit changes; debug-menu changes/reset use
+`host_save_graphics_options`. This does not extend the stock Config binary
+format. Missing keys retain defaults; invalid MSAA/bool lines are ignored.
+Loading resets defaults first so settings do not leak between roots/sessions.
+The parent directory is created on an explicit host save. Save failures are
+reported per user change, without a periodic retry loop.
+
+Release build, options_retry and script_safety pass. The persistence test writes
+and reloads every MSAA index (0=off, 1=2x, 2=4x, 3=8x), all enhanced booleans,
+framerate coexistence, the debug-save entry point, legacy and invalid files.
+These are real disk round-trips in an isolated fixture; the stock Config
+saveConfig remains counted/injected for retry-policy tests.
+
+
+### Live GameRef lookup (#106)
+
+`gameref_find_live` now uses a live-ID hash index rather than scanning g_refs.
+The index points at stable unordered_map elements and is erased before their
+states are removed. ID allocation is monotonic until clear, without redundant
+collision scans or signed overflow; exhaustion returns 0. IDs of entries that
+become aliases remain dormant and are filtered at lookup, preserving wrapper
+unbind semantics. Alias deletion, canonical deletion and clear remove indexed
+entries. This index does not add Java GC roots or change ID ownership.
+
+`advance_free_bodies` resolves the controlled chassis and validates its script
+frame once before iterating bodies. Loose panels can have different owner IDs;
+their per-panel lookups remain, now indexed. Seated-driver world traversal
+(#112) is unchanged and stays open; caching its results requires reliable
+invalidation of all relevant scene changes.
+
+Release build, live_lookup, physics_position and ped_crossing pass. The same
+lifetime/alias fixture passes with baseline a15ab7b and current code, covering
+stable addresses after rehash, dormant aliases, alias/canonical removal, reused
+keys and clear/reset. Isolated 100,000 lookups / 8,000 nodes measured about
+2.71 s before and 0.81 ms after; not an in-game FPS measurement. Evidence:
+`assets/validation/live-lookup/before.txt` and
+`assets/validation/live-lookup/after.txt`. Gameplay validation is separate.
+
+
+### Driver duplicate visibility (#112)
+
+`DriverSeat` now owns a `GameRefRenderMask`. The duplicate-render mask is rebuilt
+when the scene revision, root, kept render or resource type changes, rather
+than undoing visibility and breadth-first walking the world on every pose.
+Creation/upsert, removal, clear, alias binding, changed parenting and resource
+type changes invalidate it. All production GameRef type assignments use
+`gameref_set_type`; direct metadata mutation outside these entry points must
+explicitly use upsert or the appropriate setter. Upsert conservatively
+invalidates even an existing entry, as callers may initialize more metadata
+afterwards. Ordinary transform changes and redundant parent assignments do not
+invalidate. Frequent scene mutations can therefore still cause repeated walks;
+there is no measured in-game frame-time claim.
+
+Rebuild traversal has no 4,096-node cutoff and visits each canonical key once,
+terminating even with aliases/cycles. Already-empty renders are left alone.
+Release restores only entries hidden by this mask, checking their per-creation
+incarnation so a recycled key or cleared world is never unhidden accidentally.
+Incarnations continue across clear and do not alter live IDs or Java GC roots.
+
+Release build and driver_mask, live_lookup, script_safety, ped_crossing pass.
+The driver-mask fixture checks a duplicate after 5,000 nodes, 10,000 unchanged
+cache hits, motion/no-op parenting, late creation, type/reparent/world changes,
+alias/cycle traversal, original hidden visibility, removal/reused keys and
+clear/release. This tests the shared production mask used by pose_driver, not
+seated animation or a full garage transition. Evidence:
+`assets/validation/driver-mask/after.txt`. No production Java/native API change.
+
+
+### File texture replacement and hidden preview viewports
+
+The MWM DriverSelect chain uses ResourceRef.makeTexture, duplicate,
+RenderRef.changeResource and RenderRef.create. makeTexture supplies a file path
+rather than an RPK texture ID. RenderRef now stores per-instance
+texture_file_replacements alongside RPK replacements; duplicate and instance
+creation copy the paths by value. Scene collection maps the original texture
+resource to matching mesh slots and publishes the replacement path. Replacing
+the same source updates its file entry; replacing it with an RPK texture clears
+the file entry. Geometry/shared mesh textures are unchanged. This closes the
+file-backed material path without changing production Java or inventing an
+executable special case for DriverSelect. It does not implement all possible
+dynamic texture resource queries such as standalone makeTexture IDs.
+
+`gameref_active_cameras` excludes bound aliases and cameras whose non-null
+viewport is inactive or missing. Cameras with no viewport retain their prior
+eligibility. Thus Osd.hide / Viewport.deactivate stops the scene preview even
+when a script retains its scene camera and render objects. Reactivating the
+viewport makes its camera eligible again; no model is forcibly destroyed.
+
+Reference checks: DriverSelect.java RefreshRender/exit and Osd.hide, SLRR_rev
+src/runtime/viewport-native.ts deactivate, plus slrr-reverse native signatures
+for makeTexture/changeResource. No external implementation copied.
+
+Release build and driver_selector, driver_mask, physics_position pass. The
+selector fixture uses actual humans.rpk / vin.SCX and verifies the file path
+reaches a collected material slot through registered natives; subsequent
+changes preserve prior copies. It also tests viewport deactivate/reactivate/
+destroy against fullscreen camera selection. Synthetic paths do not assert
+image decoding or a visual skin comparison; gameplay remains to validate.
+Evidence: `assets/validation/driver-selector/after.txt`.
+
+
+PR #155 gameplay validation (17 November 2026): the user confirmed seated
+driver behavior and then the MWM DriverSelect skin/menu fixes. No production
+Java was modified. NATIVE_AUDIT.md now records file-backed texture propagation,
+viewport lifetime eligibility and remaining dynamic-texture-ID limits; its
+stock registration totals are synchronized with the Python checker (339
+bodies, 3 explicit no-ops, 34 missing, 376 total; 31 active missing plus 3
+leftovers). ENGINE_CONTRACT.md states the generic material/camera rules.
+
+
+### Exact native coverage descriptors (#115)
+
+`scripts/render_native_coverage.py:host_registrations` retains full descriptors
+instead of normalizing slashes and dropping returns. Source diagnostics reject
+slash-form and malformed descriptors with file/line context. Stock return types
+come from the pinned typed_signature via stock_runtime_descriptor; the pinned
+manifest itself is unchanged. classify_rows tries the exact expected descriptor
+first, then only an omitted void return. If the same owner/method/parameters
+exist with no matching return, the audit fails and lists expected/registered
+descriptors. Additional return overloads are allowed when an expected signature
+also exists. Bodies and native_noop remain distinct per exact registration.
+
+Validation: nine standard-library Python tests cover primitive/object/array
+returns, omitted V, exact priority, overloads, missing bindings, slash and syntax
+errors, source diagnostic locations and CLI --check failure before output
+writes. The full source audit and regenerated-output --check pass; counts remain
+339 bodies / 3 explicit no-ops / 34 missing (376 total). Generated coverage JSON
+now states the exact-descriptor scope; README and NATIVE_AUDIT.md agree. No
+runtime source, executable, stock manifest or production Java changed, so no
+new game compilation or in-game validation is needed for this audit-only fix.
+
+
+### Per-axis gamepad fallback (#96)
+
+`src/platform/host_input_mapping.hpp` shares the production mapping and analog
+steering policy between mapped_axis and host_input_update_controller. Defaults
+(left stick steering, RT throttle, LT brake, B handbrake) remain available when
+an unrelated pad action is added. An explicit pad binding for a driving axis
+replaces that axis's default. A physical channel assigned elsewhere cannot
+also drive its default action; the two steering halves are checked separately.
+Keyboard steering retains priority and its digital classification. Explicit
+analog steering still uses its configured transfer function. Smoothing, forced
+axes, device polling and the Y/reverse fallback are unchanged.
+
+Release build, pad_fallback and script_safety pass. The new fixture supplies
+synthetic physical values to the same pure production mapping helpers, testing
+extra horn/camera buttons, per-axis overrides, reassigned triggers/B, half-stick
+claims, keyboard priority, explicit analog remaps and short input spans. No
+hardware or full options-screen interaction is asserted. Evidence:
+`assets/validation/pad-fallback/after.txt`. Native coverage --check remains
+current; no native signatures or production Java changed.
+
+
+### Immutable loaded classes and reference overloads (#73, #66)
+
+`Jvm::load_class_file` caches successfully loaded absolute, lexically normalized
+paths (case-folded on Windows). Failed/empty loads are not cached. A new file
+may introduce new classes, including siblings concatenated with an existing
+class; exact loaded class names are never overwritten or reinitialized. Class
+storage is published before its literal/static enrichment, so recursive class
+queries see the existing definition. Live methods, TREE vectors, statics and
+RID initializer metadata remain valid for the VM lifetime. Changed files,
+including new blobs appended to a previously loaded path, require restart.
+A fresh VM sees the new disk contents. No live hot-reload API is introduced.
+
+`find_method_by_name` scores null as a reference instead of tying primitive
+arguments. Primitive arrays are reference parameters as well. This fixes the
+ordinary this(null)/this(parent) overload chain without recognizing Dummy or
+any particular mod class. Numeric conversion scoring is retained. Selection
+among multiple equally scored reference overloads remains declaration-order;
+this does not implement full source-language overload inference.
+
+Validation: baseline dede4b5 fails all three class_lifetime scenarios; current
+code passes them. Coverage includes repeated/normalized-path load with mutable
+statics, reload inside an executing native callback/TREE frame, new concatenated
+containers with an existing class and a new sibling, failed-load retry and an
+already-loaded file later corrupted on disk. Constructor fixtures cover four
+Dummy-shaped overloads, null/int selection and primitive-array parameters.
+The actual game Dummy.class is also executed with production GameType natives;
+all four constructors produce native roots and preserve parent/flags. This is
+not a full career, catalog or suspended-fiber gameplay run. The minimal test
+pack setup logs unrelated frontend RID misses. Evidence:
+`assets/validation/class-lifetime/before.txt` and
+`assets/validation/class-lifetime/after.txt`.
+
+Release build, vm_lookup, tree_numbers, save_io and TUFA corpus checks pass.
+The corpus is unchanged: 1,501 files, 1,546 accepted classes and the existing
+Dialog.class CONS-kind-2 rejection. vm_lookup now checks immutable definitions
+in the running VM and refreshed metadata in a fresh VM. No native signatures
+or production Java changed. Static ++ behavior is covered separately by #63 below; the constructor
+counter fixture uses explicit addition to isolate constructor dispatch.
+
+
+### Static increment/decrement writeback and career days (#63)
+
+TREE previously computed ++/-- but only wrote back locals, instance fields or
+array elements. Static field reads now retain their actual owner/name through
+both direct/quick field opcodes and resolved name paths. Statement and
+expression ++/-- use a shared field-writeback helper; postfix retains the old
+expression result and prefix exposes the stepped value. Instance reads clear
+the static target so an earlier static access cannot redirect a later write.
+Integer stepping keeps 32-bit wrap and floats remain floats. No GameLogic/day
+special case, production Java change or new native is involved.
+
+The actual shipped GameLogic.spendTime TREE now advances day when time crosses
+its existing strict `> 24*3600` condition. The exact-midnight boundary is not
+changed; a positive step beyond it advances the day. Multi-day steps increment
+once per wrap and still notify timeRefresher and call System.syncGameTime.
+
+Validation: static_increment has 0/2 passing on baseline 4de3d3c and 2/2 on the
+fix. A compiled generic fixture covers statement/expression pre/post ++/--,
+float fields, uninitialized statics, foreign owners, both 0x1b/0x1c encodings,
+multiple increments in one expression, int overflow and local/instance
+regressions. A TreeHost harness executes the actual GameLogic.class method,
+checking exact midnight, single/multiple day crossings and expected notification/
+clock-sync calls. It isolates the VM method from the rest of the career; full
+career persistence and header display require in-game validation. Evidence:
+`assets/validation/static-increment/before.txt` and
+`assets/validation/static-increment/after.txt`.
+
+Release build, tree_numbers, class_lifetime and save_io pass. Native coverage
+--check remains current; stock registration counts are unchanged.
+
+## Garage main-menu inventory save ordering (#59)
+
+The verified MWM Garage.class main-menu command saves before changing section.
+This differs from sources/sl/Scripts/game/src/Garage.java, which already changes
+section first. A save taken before Garage.exit sees player.parts empty because
+the purchased parts still belong to the mechanic's VisualInventory.
+
+The distributed patch/sl/Scripts/game/Garage.class swaps the two standalone
+TREE statements. GameLogic.changeActiveSection now runs Garage.exit and
+Mechanic.flushInventory before autoSaveQuiet snapshots player.parts. The VM,
+natives and save format are unchanged. scripts/patch_garage_save_order.py
+reproduces the binary patch from one SHA-256 verified MWM input and rejects
+other mods; do not apply binary offsets to an unknown Garage container.
+
+Validation: inventory_transition executes the actual shipped GameLogic transition,
+Mechanic.flushInventory and Garage.osdCommand/exit with isolated presentation
+callbacks. The original records zero transferred items at save and three after
+exit; the patched handler records all three before save, with one exit/enter.
+This verifies call ordering, not a complete career file round-trip or gameplay.
+The suite also checks generic interface dispatch; no class-specific VM workaround
+is needed. In-game validation must buy parts, leave via Main Menu, reload and
+check the inventory, then repeat with normal Exit Game saving.

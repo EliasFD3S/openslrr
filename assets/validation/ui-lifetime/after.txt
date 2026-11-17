@@ -1,0 +1,15 @@
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+PASS stable handles, hidden roots, destroyed roots and repeated compaction
+[font] png atlas 512x256 outline=1 alpha=0
+[font] slii24 atlas=C:\Users\Elias\Desktop\openslrr\game\frontend\textures\Fonts\slii24.png glyphs=256 px=24
+[gc] before=3 alive=2 freed=1 finalized=0
+[gc] before=2 alive=0 freed=2 finalized=0
+PASS shared font atlas, live text retention and weak font alias collection

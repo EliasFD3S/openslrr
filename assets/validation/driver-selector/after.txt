@@ -1,0 +1,14 @@
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[rpk] parsed humans.rpk pack=1 deps=1 entries=82
+[rpk] openLib humans.rpk -> 1
+[rpk] model 0xc 'driver' src=humans\drivers\vin.SCX tex=1
+[scx] geometry C:\Users\Elias\Desktop\openslrr\game\humans/drivers/vin.SCX v=4 verts=1691 tris=2058 groups=4 uvs=1691
+[scx]   group[0] tex=0 idx=0..+3318 'Material #106'
+[scx]   group[1] tex=0 idx=3318..+2532 'Material #106'
+[scx]   group[2] tex=0 idx=5850..+282 'Material #106'
+[scx]   group[3] tex=0 idx=6132..+42 'Material #106'
+[scene] resource=0x1000c source=C:\Users\Elias\Desktop\openslrr\game\humans/drivers/vin.SCX vertices=1691
+PASS makeTexture/changeResource/duplicate/create reaches humans material; instance independence; hidden/destroyed viewport cameras excluded

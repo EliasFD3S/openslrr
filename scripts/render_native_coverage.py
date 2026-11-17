@@ -13,7 +13,7 @@ counts by hand. One run rewrites:
 
 Usage:
   python scripts/render_native_coverage.py            regenerate the outputs
-  python scripts/render_native_coverage.py --check    exit 1 if they are stale
+  python scripts/render_native_coverage.py --check    fail on stale outputs or descriptor mismatches
   python scripts/render_native_coverage.py --list missing|noop|body
                                                       print matching signatures
   python scripts/render_native_coverage.py --import-stock natives_stubs.cpp
@@ -422,11 +422,31 @@ def helper_lambdas(text: str) -> dict[str, tuple[list[str], list[str], int, int]
 
 
 def descriptor_parameters(descriptor: str) -> str:
-    descriptor = descriptor.replace("/", ".")
     close = descriptor.find(")")
     if not descriptor.startswith("(") or close < 0:
         raise ValueError(f"invalid descriptor {descriptor}")
     return descriptor[:close + 1]
+
+
+def validate_runtime_descriptor(descriptor: str) -> None:
+    # Match NativeRegistry: dotted owners and exact return types. Only an
+    # omitted void return is an alias; never translate slash descriptors.
+    if "/" in descriptor:
+        raise ValueError(f"slash-form descriptor cannot match dotted TUFA calls: {descriptor}")
+    parameters = descriptor_parameters(descriptor)
+    scalar = r"(?:[ZBCSIJFD]|L[^;()\[\]/]+;)"
+    argument = r"\[*" + scalar
+    result = descriptor[len(parameters):] or "V"
+    if not re.fullmatch(r"\((?:" + argument + r")*\)", parameters) or not re.fullmatch(
+            r"(?:V|" + argument + r")", result):
+        raise ValueError(f"invalid runtime descriptor {descriptor}")
+
+
+def stock_runtime_descriptor(row: dict, owners: dict[str, str]) -> str:
+    match = re.fullmatch(r"(.+?)\s+[^ (]+\((.*)\)", row["typed_signature"])
+    if not match:
+        raise ValueError(f"invalid stock signature {row['typed_signature']}")
+    return stock_descriptor(row["typed_signature"], owners) + descriptor_type(match.group(1), owners)
 
 
 def host_registrations() -> dict[tuple[str, str, str], str]:
@@ -463,7 +483,8 @@ def host_registrations() -> dict[tuple[str, str, str], str]:
                     resolved = [
                         evaluate(params.get(arg.strip(), arg), env, constants) for arg in args[:3]
                     ]
-                    key = (resolved[0], resolved[1], descriptor_parameters(resolved[2]))
+                    validate_runtime_descriptor(resolved[2])
+                    key = (resolved[0], resolved[1], resolved[2])
                 except (ValueError, TypeError) as error:
                     raise SystemExit(
                         f"native coverage: {relative}:{line}: {error}; extend "
@@ -481,14 +502,29 @@ def host_registrations() -> dict[tuple[str, str, str], str]:
 # ---------------------------------------------------------------------------
 # Coverage model
 
-def classify() -> list[tuple[dict, str, str]]:
-    rows = validate_stock(load_stock_document())
-    host = host_registrations()
+def classify_rows(rows: list[dict], host: dict[tuple[str, str, str], str]) -> list[tuple[dict, str, str]]:
+    owners = {row["class"].rsplit(".", 1)[-1]: row["class"] for row in rows}
     result = []
     for row in rows:
-        key = (row["class"], row["method"], descriptor_parameters(row["descriptor"]))
-        result.append((row, family_of(row["class"], row["method"]), host.get(key, "missing")))
+        expected = stock_runtime_descriptor(row, owners)
+        identity = (row["class"], row["method"])
+        kind = host.get((*identity, expected))
+        if kind is None and expected.endswith("V"):
+            kind = host.get((*identity, expected[:-1]))
+        if kind is None:
+            candidates = sorted(desc for (owner, method, desc) in host
+                                if (owner, method) == identity and
+                                descriptor_parameters(desc) == descriptor_parameters(expected))
+            if candidates:
+                raise SystemExit(f"native coverage: return descriptor mismatch for "
+                                 f"{row['class']}.{row['method']}: expected {expected}, "
+                                 f"registered {', '.join(candidates)}")
+        result.append((row, family_of(*identity), kind or "missing"))
     return result
+
+
+def classify() -> list[tuple[dict, str, str]]:
+    return classify_rows(validate_stock(load_stock_document()), host_registrations())
 
 
 def coverage(updated: str) -> dict:
@@ -501,7 +537,7 @@ def coverage(updated: str) -> dict:
         "total": sum(sum(row[k] for k in KINDS) for row in categories),
         "scope": (
             "Stock native table (assets/progress/stock-natives.json), matched against the "
-            "class/method/parameter signatures registered under src/ by "
+            "class/method/full descriptors (including returns, with omitted-void alias) registered under src/ by "
             "scripts/render_native_coverage.py. Explicit native_noop bindings are counted "
             "separately. Bodies can be partial implementations or return constants; these "
             "are binding counts, not gameplay-completion or validation scores."

@@ -2,6 +2,7 @@
 #include "slrr/job_system.hpp"
 
 #include <cctype>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -74,7 +75,18 @@ uint32_t cfg_render_id(const std::string& path) {
 
 }  // namespace
 
-void RpkIndex::set_root(std::string root) { root_ = std::move(root); }
+namespace { std::atomic<uint64_t> g_index_generation{0}; }
+RpkIndex::RpkIndex() : generation_(++g_index_generation) {}
+void RpkIndex::set_root(std::string root) {
+  if (root_ == root) return;
+  // Root/index mutation is quiescent: stop preload readers before rebinding.
+  std::scoped_lock lock(payload_mutex_,rsd_mutex_);
+  root_ = std::move(root);
+  packs_.clear();by_path_.clear();next_id_=1;
+  payload_cache_.clear();rsd_cache_.clear();pack_streams_.clear();
+  payload_disk_reads_=0;rsd_parse_count_=0;
+  generation_=++g_index_generation;
+}
 
 std::string RpkIndex::resolve_disk_path(const std::string& path) const {
   std::string p = path;
@@ -112,11 +124,16 @@ std::vector<std::string> RpkIndex::list_rpks(const std::string& dir) const {
   return out;
 }
 
-bool RpkIndex::parse_rpak(const std::string& disk, RpkPack& pack) const {
+bool RpkIndex::parse_rpak(const std::string& disk, RpkPack& output) const {
+  try {
+  RpkPack pack;
+  pack.pack_id=output.pack_id;pack.path=output.path;
   std::ifstream in(disk, std::ios::binary | std::ios::ate);
   if (!in) return false;
-  const auto sz = static_cast<size_t>(in.tellg());
-  if (sz < 16) return false;
+  const auto length=in.tellg();
+  if (length<16) return false;
+  const auto sz = static_cast<size_t>(length);
+  pack.file_size=sz;
   in.seekg(0);
   std::vector<uint8_t> buf(sz);
   in.read(reinterpret_cast<char*>(buf.data()),
@@ -135,14 +152,14 @@ bool RpkIndex::parse_rpak(const std::string& disk, RpkPack& pack) const {
   pack.version = version;
   const uint32_t dep_a = rd_u32(buf.data() + 8);
   const uint32_t dep_b = rd_u32(buf.data() + 12);
-  const uint32_t dep_n = dep_a + dep_b;
+  const uint64_t dep_n = uint64_t(dep_a) + dep_b;
   size_t off = 16;
+  if (sz<32 || dep_n>(sz-32)/64) return false;
   const size_t dep_bytes = static_cast<size_t>(dep_n) * 64;
-  if (off + dep_bytes + 16 > sz) return false;
 
   pack.deps.clear();
   pack.deps.reserve(dep_n);
-  for (uint32_t i = 0; i < dep_n; ++i) {
+  for (uint64_t i = 0; i < dep_n; ++i) {
     const uint8_t* d = buf.data() + off;
     RpkDep dep;
     dep.id = rd_u32(d);
@@ -157,8 +174,8 @@ bool RpkIndex::parse_rpak(const std::string& disk, RpkPack& pack) const {
   const uint32_t table_size = rd_u32(buf.data() + off);
   const uint32_t count = rd_u32(buf.data() + off + 4);
   off += 16;  // tableSize, count, skip(8)
+  if (table_size > sz-off || count > table_size/23) return false;
   const size_t table_end = off + table_size;
-  if (table_end > sz) return false;
 
   pack.entries.clear();
   pack.by_type_id.clear();
@@ -166,7 +183,7 @@ bool RpkIndex::parse_rpak(const std::string& disk, RpkPack& pack) const {
   for (uint32_t i = 0; i < count; ++i) {
     if (off + 23 > table_end) {
       jobs_printf("[rpk] TOC overrun entry %u %s\n", i, disk.c_str());
-      break;
+      return false;
     }
     const uint8_t* e = buf.data() + off;
     RpkEntry ent;
@@ -177,9 +194,10 @@ bool RpkIndex::parse_rpak(const std::string& disk, RpkPack& pack) const {
     (void)rd_f32(e + 10);
     ent.offset = rd_u32(e + 14);
     ent.size = rd_u32(e + 18);
+    if (uint64_t(ent.offset)+ent.size>pack.file_size) return false;
     const uint8_t alias_len = e[22];
     off += 23;
-    if (off + alias_len > table_end) break;
+    if (alias_len > table_end-off) return false;
     if (alias_len) {
       ent.alias.assign(reinterpret_cast<const char*>(buf.data() + off),
                        alias_len);
@@ -188,17 +206,22 @@ bool RpkIndex::parse_rpak(const std::string& disk, RpkPack& pack) const {
       off += alias_len;
     }
     if (ent.flags & 1) {
-      if (off + 48 > table_end) break;
+      if (table_end-off < 48) return false;
       off += 48;  // f32[12]
     }
-    pack.by_type_id[ent.type_id] = pack.entries.size();
+    pack.by_type_id.try_emplace(ent.type_id & 0xFFFFu, pack.entries.size());
     pack.entries.push_back(std::move(ent));
   }
 
   jobs_printf("[rpk] parsed %s pack=%d deps=%zu entries=%zu\n",
               pack.path.c_str(), pack.pack_id, pack.deps.size(),
               pack.entries.size());
+  output=std::move(pack);
   return true;
+  } catch (const std::exception& error) {
+    std::fprintf(stderr,"[rpk] load failed %s: %s\n",disk.c_str(),error.what());
+    return false;
+  }
 }
 
 int32_t RpkIndex::open_all() {
@@ -242,6 +265,7 @@ int32_t RpkIndex::open_all() {
   jobs_parallel_for(fresh.size(), [&](size_t i) {
     indexed[i] = parse_rpak(resolve_disk_path(fresh[i]), parsed[i]);
   });
+  if (!fresh.empty()) generation_ = ++g_index_generation;
   for (size_t i = 0; i < fresh.size(); ++i) {
     const int32_t id = next_id_++;
     by_path_[norm_key(fresh[i])] = id;
@@ -261,6 +285,7 @@ int32_t RpkIndex::open_lib(const std::string& path) {
   auto it = by_path_.find(key);
   if (it != by_path_.end()) return it->second;
 
+  generation_=++g_index_generation;
   const int32_t id = next_id_++;
   by_path_[key] = id;
   if (static_cast<size_t>(id) >= packs_.size()) packs_.resize(id + 1);
@@ -315,7 +340,8 @@ const RpkIndex* g_active_rpk = nullptr;
 int g_pack_misses = 0;
 }  // namespace
 
-void rpk_set_active(const RpkIndex* index) { g_active_rpk = index; }
+RpkIndex::~RpkIndex() { if (g_active_rpk==this) g_active_rpk=nullptr; }
+void rpk_set_active(const RpkIndex* index) { g_active_rpk = index; g_pack_misses=0; }
 
 uint32_t rpk_resolve_resource(const std::string& pack, uint32_t local) {
   const uint32_t loc = local & 0xFFFFu;
@@ -333,14 +359,8 @@ uint32_t rpk_resolve_resource(const std::string& pack, uint32_t local) {
 const RpkEntry* RpkIndex::find_entry(int32_t pack_id, uint32_t type_id) const {
   const RpkPack* p = pack_by_id(pack_id);
   if (!p) return nullptr;
-  auto it = p->by_type_id.find(type_id);
-  if (it != p->by_type_id.end()) return &p->entries[it->second];
-  // Fallback: match lo16 only (compiled frontend:0x011Dr often stores local).
-  const uint32_t local = type_id & 0xFFFFu;
-  for (const auto& e : p->entries) {
-    if ((e.type_id & 0xFFFFu) == local) return &e;
-  }
-  return nullptr;
+  auto it = p->by_type_id.find(type_id & 0xFFFFu);
+  return it == p->by_type_id.end() ? nullptr : &p->entries[it->second];
 }
 
 const RpkEntry* RpkIndex::resolve(uint32_t full_id) const {
@@ -369,31 +389,48 @@ std::string RpkIndex::disk_path_for_pack(int32_t pack_id) const {
   return resolve_disk_path(p->path);
 }
 
+uint32_t RpkIndex::canonical_id(uint32_t id) const {
+  if (pack_from_full(id)>0) return id;
+  // Preserve resolve's last-pack-wins policy for unscoped local resources.
+  for (size_t i=packs_.size();i-->1;)
+    if (find_entry(static_cast<int32_t>(i),id)) return make_full_id(static_cast<int32_t>(i),id);
+  return id;
+}
 std::vector<uint8_t> RpkIndex::read_payload(uint32_t full_id) const {
-  const RpkEntry* e = resolve(full_id);
-  if (!e || e->size == 0) return {};
-  int32_t pid = pack_from_full(full_id);
-  if (pid <= 0) {
-    for (size_t i = 1; i < packs_.size(); ++i) {
-      for (const auto& ent : packs_[i].entries) {
-        if (&ent == e) {
-          pid = static_cast<int32_t>(i);
-          break;
-        }
-      }
-      if (pid > 0) break;
-    }
+  try {
+  full_id=canonical_id(full_id);
+  const RpkEntry* e=resolve(full_id);
+  if (!e || !e->size) return {};
+  const auto* pack=pack_by_id(pack_from_full(full_id));
+  if (!pack || uint64_t(e->offset)+e->size>pack->file_size) return {};
+  std::lock_guard lock(payload_mutex_);
+  if (auto it=payload_cache_.find(full_id);it!=payload_cache_.end()) return it->second;
+  const int32_t pid=pack_from_full(full_id);
+  auto& stream=pack_streams_[pid];
+  if (!stream) {
+    auto opened=std::make_unique<std::ifstream>(disk_path_for_pack(pid),std::ios::binary);
+    if (!*opened) return {};
+    stream=std::move(opened);
   }
-  const std::string path = disk_path_for_pack(pid);
-  if (path.empty()) return {};
-  std::ifstream in(path, std::ios::binary);
-  if (!in) return {};
-  in.seekg(static_cast<std::streamoff>(e->offset));
+  stream->clear();stream->seekg(0,std::ios::end);
+  const auto current_size=stream->tellg();
+  if (current_size<0 || uint64_t(e->offset)+e->size>static_cast<uint64_t>(current_size)) return {};
+  stream->seekg(static_cast<std::streamoff>(e->offset));
   std::vector<uint8_t> out(e->size);
-  in.read(reinterpret_cast<char*>(out.data()),
-          static_cast<std::streamsize>(e->size));
-  if (!in) return {};
+  stream->read(reinterpret_cast<char*>(out.data()),static_cast<std::streamsize>(out.size()));
+  if (!*stream) return {};
+  ++payload_disk_reads_;
+  // Cache small text descriptors, not another resident copy of map binaries.
+  auto text_end=out.end();
+  if (!out.empty() && out.back()==0) --text_end;
+  const bool inline_cfg=out.size()>=4 && std::memcmp(out.data(),"ICFG",4)==0;
+  if (inline_cfg || std::find(out.begin(),text_end,uint8_t(0))==text_end)
+    payload_cache_.emplace(full_id,out);
   return out;
+  } catch (const std::exception& error) {
+    std::fprintf(stderr,"[rpk] payload 0x%08x: %s\n",full_id,error.what());
+    return {};
+  }
 }
 
 namespace {
@@ -408,13 +445,8 @@ bool payload_is_text_rsd(const std::vector<uint8_t>& bytes, size_t& end_out) {
   return true;
 }
 
-std::vector<std::string> parse_rsd_props(const std::string& text,
-                                         const char* key) {
-  std::vector<std::string> out;
-  if (!key || !*key) return out;
-  std::string want_l = key;
-  for (char& c : want_l)
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+std::unordered_map<std::string,std::vector<std::string>> parse_rsd_props(const std::string& text) {
+  std::unordered_map<std::string,std::vector<std::string>> out;
   size_t line_start = 0;
   while (line_start < text.size()) {
     size_t line_end = text.find('\n', line_start);
@@ -437,12 +469,12 @@ std::vector<std::string> parse_rsd_props(const std::string& text,
       std::string k = line.substr(0, sp);
       for (char& c : k)
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-      if (k == want_l) {
+      if (!k.empty()) {
         size_t v = sp;
         while (v < line.size() &&
                (line[v] == ' ' || line[v] == '\t' || line[v] == '='))
           ++v;
-        out.push_back(line.substr(v));
+        out[k].push_back(line.substr(v));
       }
     }
     line_start = line_end + (line_end < text.size() ? 1 : 0);
@@ -556,11 +588,25 @@ std::string RpkIndex::texture_path_for_id(uint32_t id) const {
 
 std::vector<std::string> RpkIndex::payload_props(uint32_t full_id,
                                                  const char* key) const {
-  const auto bytes = read_payload(full_id);
-  size_t end = 0;
-  if (!payload_is_text_rsd(bytes, end)) return {};
-  return parse_rsd_props(
-      std::string(reinterpret_cast<const char*>(bytes.data()), end), key);
+  if (!key || !*key) return {};
+  full_id=canonical_id(full_id);
+  if (!resolve(full_id)) return {};
+  std::string lower=key;
+  for (char& c:lower) c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  std::lock_guard lock(rsd_mutex_);
+  auto found=rsd_cache_.find(full_id);
+  if (found==rsd_cache_.end()) {
+    const auto bytes=read_payload(full_id);
+    size_t end=0;
+    RsdProperties props;
+    if (payload_is_text_rsd(bytes,end)) {
+      props=parse_rsd_props(std::string(reinterpret_cast<const char*>(bytes.data()),end));
+      ++rsd_parse_count_;
+    } else if (bytes.empty()) return {}; // Do not cache transient read failures.
+    found=rsd_cache_.emplace(full_id,std::move(props)).first;
+  }
+  auto values=found->second.find(lower);
+  return values==found->second.end()?std::vector<std::string>{}:values->second;
 }
 
 std::vector<std::string> RpkIndex::textures_for_scx(

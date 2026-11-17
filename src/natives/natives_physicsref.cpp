@@ -51,7 +51,7 @@ GameRefState* create_body(Object* self, Object* parent, int32_t type,
   gameref_set_parent(self, parent);
   state->script = self;
   state->class_name = self->class_name;
-  state->type_id = type;
+  gameref_set_type(*state, type);
   state->alias = alias;
   state->empty = false;
   state->physics_shape = shape;

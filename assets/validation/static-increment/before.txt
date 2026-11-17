@@ -1,0 +1,5 @@
+[jvm] load_class: classpath not ready
+[static_increment] test 1 failed: f.vm.get_static("probe.Counter","day").v.i==2 at tests/test_static_increment.cpp:36
+[static_increment] test 2 failed: host.fields["day"].v.i==2 && host.fields["time"].v.f==1 at tests/test_static_increment.cpp:96
+[static_increment] 0 passed, 2 failed
+[compiler] attempted=1 succeeded=1 failed=0 classes=2 (restart for loaded classes)

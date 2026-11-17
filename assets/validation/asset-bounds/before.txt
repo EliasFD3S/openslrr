@@ -1,0 +1,4 @@
+[asset_bounds] test 2 failed: info.ok==!invalid&&geo.info.ok==!invalid at tests/test_asset_bounds.cpp:19
+[asset_bounds] test 3 failed: info.ok==!invalid&&geo.info.ok==!invalid at tests/test_asset_bounds.cpp:19
+[asset_bounds] test 4 failed: clip.times.empty() at tests/test_asset_bounds.cpp:26
+[asset_bounds] 2 passed, 3 failed

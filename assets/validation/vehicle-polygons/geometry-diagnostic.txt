@@ -1,0 +1,2 @@
+game\cars\racers\Enula_data\meshes\trunk.scx: triangles=222 top-view pixels=52397 frontmost unwanted backfaces=1069
+game\cars\racers\MC_data\meshes\chassis.scx: triangles=2218 top-view pixels=48180 frontmost unwanted backfaces=2699

@@ -1,0 +1,13 @@
+flags=2 expected=1:19.835 actual=1:19.835 PASS
+flags=2 expected=1:19.835 actual=1:19.835 PASS
+flags=2 expected=0:00.000 actual=0:00.000 PASS
+flags=2 expected=0:01.200 actual=0:01.200 PASS
+flags=2 expected=0:59.999 actual=0:59.999 PASS
+flags=0 expected=00:59:59.999 actual=00:59:59.999 PASS
+flags=1 expected=00:00 actual=00:00 PASS
+flags=33 expected=1:04pm actual=1:04pm PASS
+flags=33 expected=12:00pm actual=12:00pm PASS
+flags=33 expected=12:00am actual=12:00am PASS
+flags=6 expected=1.234 actual=1.234 PASS
+flags=2 expected=0:00.000 actual=0:00.000 PASS
+time_format 12 passed, 0 failed

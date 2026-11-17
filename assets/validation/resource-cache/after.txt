@@ -1,0 +1,19 @@
+[rpk] parsed frontend.rpk pack=1 deps=0 entries=1
+[rpk] openLib frontend.rpk -> 1
+[script] frontend/scripts 1
+[script] 0x0001004c page.cfg render=0x4c bodyRes=0x0 bodyR=0.000 trigR=0.000 noclick=0 name=RootA
+[rpk] parsed frontend.rpk pack=1 deps=0 entries=1
+[rpk] openLib frontend.rpk -> 1
+[script] frontend/scripts 1
+[script] 0x0001004c page.cfg render=0x4c bodyRes=0x0 bodyR=0.000 trigR=0.000 noclick=0 name=RootB
+[rpk] openLib missing.rpk -> 1 (no TOC)
+[rpk] parsed frontend.rpk pack=2 deps=0 entries=1
+[rpk] openLib frontend.rpk -> 2
+[script] frontend/scripts 1
+[script] 0x0002004c page.cfg render=0x4c bodyRes=0x0 bodyR=0.000 trigR=0.000 noclick=0 name=RootB
+[rpk] parsed frontend.rpk pack=1 deps=0 entries=1
+[rpk] openLib frontend.rpk -> 1
+PASS concurrent repeated properties: 1 disk read / 1 RSD parse
+PASS repeated property order, local IDs and misses
+PASS root switch invalidates RPK, frontend CFG and shadow metadata
+PASS active index does not dangle after destruction

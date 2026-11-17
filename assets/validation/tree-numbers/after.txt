@@ -1,0 +1,59 @@
+[compiler] probe/src/Numbers.java:20:40: warning W_UNVERIFIED: operator %= (no shipped source uses it)
+[jvm] load_class: classpath not ready
+[compiler] attempted=1 succeeded=1 failed=0 classes=1 (restart for loaded classes)
+PASS add expected=16777217 actual=16777217 tag=1
+[jvm] load_class: classpath not ready
+PASS sub expected=16777217 actual=16777217 tag=1
+PASS mul expected=16777221 actual=16777221 tag=1
+PASS add expected=-2147483648 actual=-2147483648 tag=1
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+PASS sub expected=2147483647 actual=2147483647 tag=1
+PASS mul expected=-2 actual=-2 tag=1
+PASS neg expected=-2147483648 actual=-2147483648 tag=1
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+PASS inc expected=-2147483648 actual=-2147483648 tag=1
+PASS dec expected=2147483647 actual=2147483647 tag=1
+PASS charge expected=16777217 actual=16777217 tag=1
+PASS charge expected=0 actual=0 tag=1
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+PASS cmul expected=16777221 actual=16777221 tag=1
+PASS cdiv expected=16777217 actual=16777217 tag=1
+PASS cmod expected=1 actual=1 tag=1
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+PASS cadd expected=16777217 actual=16777217 tag=1
+[jvm] load_class: classpath not ready
+PASS fractional expected=67 actual=67 tag=1
+[jvm] load_class: classpath not ready
+PASS cast expected=0 actual=0 tag=1
+PASS cast expected=2147483647 actual=2147483647 tag=1
+PASS cast expected=-2147483648 actual=-2147483648 tag=1
+PASS cast expected=-3 actual=-3 tag=1
+PASS div expected=0 actual=0 tag=1
+PASS mod expected=-1 actual=-1 tag=1
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+PASS neq expected=0 actual=0 tag=1
+PASS value-dispatch tag=15
+PASS value-dispatch tag=16
+PASS value-dispatch tag=17
+PASS value-dispatch tag=18
+PASS value-dispatch tag=19
+PASS div expected=-2147483648 actual=-2147483648 tag=1
+PASS mod expected=0 actual=0 tag=1

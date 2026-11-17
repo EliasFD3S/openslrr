@@ -4,6 +4,10 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <mutex>
+#include <memory>
+#include <fstream>
+#include <atomic>
 
 namespace slrr {
 
@@ -27,15 +31,21 @@ struct RpkPack {
   int32_t pack_id = 0;
   std::string path;  // path as opened (relative or absolute)
   uint32_t version = 0;
+  uint64_t file_size = 0; // Validated TOC payload ranges refer to this snapshot.
   std::vector<RpkDep> deps;
   std::vector<RpkEntry> entries;
-  // type_id (full u32 as stored) → index into entries
+  // low 16-bit local type id → first matching entry index
   std::unordered_map<uint32_t, size_t> by_type_id;
 };
 
 // openLib / rpkScan + RPAK TOC parse (SLRR_rev rpk.md).
 class RpkIndex {
  public:
+  RpkIndex();
+  ~RpkIndex();
+  uint64_t generation() const { return generation_; }
+  uint64_t payload_disk_reads() const { return payload_disk_reads_.load(); }
+  uint64_t rsd_parse_count() const { return rsd_parse_count_.load(); }
   void set_root(std::string root);
 
   // Non-recursive *.rpk basenames in dir (relative to game root or absolute).
@@ -55,7 +65,7 @@ class RpkIndex {
   // "frontend.rpk", "MW_Mod.rpk", or the same name in a subfolder.
   const RpkPack* pack_by_name(const std::string& pack) const;
 
-  // Lookup entry in pack by local type_id (exact u32 match, then lo16).
+  // Lookup entry by the low 16-bit local type id in constant expected time.
   const RpkEntry* find_entry(int32_t pack_id, uint32_t type_id) const;
 
   // Runtime full id = (pack_id << 16) | (type_id & 0xFFFF).
@@ -121,6 +131,14 @@ class RpkIndex {
   std::string resolve_disk_path(const std::string& path) const;
   bool parse_rpak(const std::string& disk, RpkPack& pack) const;
 
+  uint32_t canonical_id(uint32_t full_id) const;
+  uint64_t generation_ = 0;
+  mutable std::mutex payload_mutex_, rsd_mutex_;
+  mutable std::unordered_map<uint32_t, std::vector<uint8_t>> payload_cache_;
+  mutable std::unordered_map<int32_t, std::unique_ptr<std::ifstream>> pack_streams_;
+  using RsdProperties = std::unordered_map<std::string, std::vector<std::string>>;
+  mutable std::unordered_map<uint32_t, RsdProperties> rsd_cache_;
+  mutable std::atomic<uint64_t> payload_disk_reads_{0}, rsd_parse_count_{0};
   std::string root_;
   std::unordered_map<std::string, int32_t> by_path_;
   std::vector<RpkPack> packs_;  // index 0 unused; pack_id == index

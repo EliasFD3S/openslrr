@@ -1,0 +1,19 @@
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[TREE] ignored array store outside [0, 1048576): -1
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[native] System.exit()
+[compiler] attempted=1 succeeded=1 failed=0 classes=1 (restart for loaded classes)
+PASS native short/mistagged/boxed arguments; bounded direct and compound array stores

@@ -33,6 +33,8 @@ GameRefState* gameref_get(void* key) {
   return found == states.end() ? nullptr : &found->second;
 }
 
+void gameref_set_type(GameRefState& node, int32_t type) { node.type_id = type; }
+
 void gameref_set_parent(void* key, void* parent) {
   if (auto* state = gameref_upsert(key)) state->parent = parent;
 }

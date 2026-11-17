@@ -1,0 +1,5 @@
+PASS 100000 missing native lookups with 4000 registrations: 7067 us (informational)
+[compiler] attempted=1 succeeded=1 failed=0 classes=1 (restart for loaded classes)
+[rpk] openLib frontend.rpk -> 1 (no TOC)
+[compiler] attempted=1 succeeded=1 failed=0 classes=1 (restart for loaded classes)
+PASS descriptor aliases, exact priority, late registration, mutable statics and class reload

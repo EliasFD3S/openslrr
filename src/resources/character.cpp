@@ -54,6 +54,9 @@ struct BoneLink {
   int bone = 0;
 };
 
+// Advanced by the main loop using the same clock as physics. Render queries
+// must not advance animation while the simulation is paused.
+float g_character_sim_time = 0.f;
 std::unordered_map<void*, Character> g_characters;
 std::unordered_map<void*, BoneLink> g_links;
 std::unordered_map<void*, void*> g_animations;
@@ -495,7 +498,14 @@ void character_forget(void* key) {
   }
 }
 
+void character_set_sim_time(double seconds) {
+  if (std::isfinite(seconds) && seconds >= 0.0)
+    g_character_sim_time = static_cast<float>(seconds);
+}
+
 void character_forget_all() {
+  g_skeletons.clear();
+  g_clips.clear();
   g_characters.clear();
   g_links.clear();
   g_animations.clear();
@@ -506,7 +516,7 @@ std::shared_ptr<const ScxGeometry> character_posed(void* key, int32_t type_id,
                                                    const RpkIndex& packs) {
   Character* character = ensure_character(key, type_id, &packs);
   if (!character || !bind || bind->skin_weights.empty()) return nullptr;
-  rebuild(*character, gameref_now());
+  rebuild(*character, g_character_sim_time);
   if (!character->want_skin || !character->bind ||
       character->worlds.size() < character->bind->bones.size() * 16)
     return nullptr;
@@ -528,7 +538,7 @@ int character_skin_palette(void* key, int32_t type_id, const RpkIndex& packs,
   if (!out || capacity <= 0) return 0;
   Character* character = ensure_character(key, type_id, &packs);
   if (!character || !character->bind) return 0;
-  rebuild(*character, gameref_now());
+  rebuild(*character, g_character_sim_time);
   if (character->worlds.size() < character->bind->bones.size() * 16) return 0;
   return skeleton_skin_palette(*character->bind, character->worlds.data(), out, capacity);
 }
@@ -567,7 +577,7 @@ bool character_aim_bone(void* key, int32_t type_id, const RpkIndex& packs,
   if (!character || !character->bind || !target_cm) return false;
   const int count = static_cast<int>(character->bind->bones.size());
   if (bone < 0 || end < 0 || bone >= count || end >= count || bone == end) return false;
-  rebuild(*character, gameref_now());
+  rebuild(*character, g_character_sim_time);
   if (character->worlds.size() < static_cast<size_t>(count) * 16) return false;
   const float* worlds = character->worlds.data();
   const float* origin = worlds + bone * 16;
@@ -610,7 +620,7 @@ bool character_align_axis(void* key, int32_t type_id, const RpkIndex& packs,
   if (!character || !character->bind || !direction || axis < 0 || axis > 2) return false;
   const int count = static_cast<int>(character->bind->bones.size());
   if (bone < 0 || bone >= count) return false;
-  rebuild(*character, gameref_now());
+  rebuild(*character, g_character_sim_time);
   if (character->worlds.size() < static_cast<size_t>(count) * 16) return false;
   const float* origin = character->worlds.data() + bone * 16;
   float from[3] = {origin[axis * 4], origin[axis * 4 + 1], origin[axis * 4 + 2]};
@@ -652,7 +662,7 @@ bool character_solve_limb(void* key, int32_t type_id, const RpkIndex& packs,
   const int count = static_cast<int>(character->bind->bones.size());
   if (upper < 0 || lower < 0 || end < 0 || upper >= count || lower >= count || end >= count)
     return false;
-  rebuild(*character, gameref_now());
+  rebuild(*character, g_character_sim_time);
   if (character->worlds.size() < static_cast<size_t>(count) * 16) return false;
   const auto at = [&](int bone, float* out) {
     const float* m = character->worlds.data() + bone * 16;
@@ -731,7 +741,7 @@ bool character_bone_metres(void* owner, int bone, float out[16]) {
   const auto found = g_characters.find(owner);
   if (found == g_characters.end() || !found->second.bind) return false;
   Character& character = found->second;
-  rebuild(character, gameref_now());
+  rebuild(character, g_character_sim_time);
   const size_t count = character.bind->bones.size();
   if (static_cast<size_t>(bone) >= count || character.worlds.size() < count * 16)
     return false;
