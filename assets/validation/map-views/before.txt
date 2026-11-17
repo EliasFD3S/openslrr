@@ -1,0 +1,4 @@
+Baseline 67cd581
+[map_views] test 1 failed: fullscreen_script_camera() == scene at tests/test_map_views.cpp:41
+[map_views] 0 passed, 1 failed
+Save I/O test exit code: 1 (log: C:\Users\Elias\Desktop\openslrr\build\map-views-tests\before.log)

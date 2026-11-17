@@ -568,7 +568,13 @@ GameRefState* fullscreen_script_camera() {
     GameRefState* vp = c->viewport ? gameref_get(c->viewport) : nullptr;
     if (c->cockpit_index >= 0 && (!vp || !vp->vp_active ||
         !gameref_find_live(c->follow_vehicle))) continue;
-    if (vp && (vp->vp_w < 0.99f || vp->vp_h < 0.99f)) continue;
+    if (void* world = scene_instances_world()) {
+      // A local Dummy world (GPS, inventory, selector) never supplies the
+      // main scene camera, even if its viewport fills the screen. Conversely,
+      // the scene camera remains the main camera when scripts resize its view.
+      float matrix[16];
+      if (!scene_instance_transform(c->key, world, matrix)) continue;
+    } else if (vp && (vp->vp_w < 0.99f || vp->vp_h < 0.99f)) continue;
     // Osd.show() adds a second fullscreen camera (priority 2, parent = the
     // Osd) after the scene camera. It exists for 3D widgets; those are drawn
     // as 2D. Taking it as the world camera looks past the car.

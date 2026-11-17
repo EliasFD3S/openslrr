@@ -263,7 +263,8 @@ struct DueTimer {
 std::vector<DueTimer> gameref_poll_timers(float now_sec);
 
 std::vector<GameRefState*> gameref_active_cameras();
-// Newest fullscreen camera. Catalog slots (viewport under 1×1) are skipped.
+// Newest active camera in the selected scene world, including a resized view.
+// Independent local worlds are excluded; without a selected world, use fullscreen.
 GameRefState* fullscreen_script_camera();
 // system:0x33. Constructor params are "x,y,z,yaw,pitch,roll,...".
 void gameref_bind_scene_camera(void* key, const std::string& params);

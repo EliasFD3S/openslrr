@@ -1697,3 +1697,35 @@ This verifies call ordering, not a complete career file round-trip or gameplay.
 The suite also checks generic interface dispatch; no class-specific VM workaround
 is needed. In-game validation must buy parts, leave via Main Menu, reload and
 check the inventory, then repeat with normal Exit Game saving.
+
+## Full-screen navigator and scene viewport ownership (#65)
+
+Navigator.show creates a small viewport at priority 12; ViewMap recreates the
+same independent localroot camera with a 1x1 viewport at priority 5. Track's
+map command resizes the driving OSD viewport to (.64, .64, .35, .35).
+Previously sync_instances discarded every full-screen secondary camera and
+fullscreen_script_camera could instead select the navigator as the main scene
+camera, while the main world pass always occupied the entire framebuffer.
+
+Camera ownership now follows the selected scene world via the existing
+scene_instance_transform ancestry check. Independent Dummy roots stay separate,
+even with an owning parent; resizing the driving viewport does not transfer
+main-camera ownership. When no world is selected the legacy full-screen
+fallback remains. The legacy fullscreen_script_camera function name is retained.
+
+The renderer collects independent local-world views at full screen as well as
+insets, uses the scene viewport rectangle and aspect for the world pass, and
+orders inset-world/preview passes by viewport priority (map 5 before scene 10).
+It resets the bgfx ordering on the next frame so closing M restores normal
+composition. Interface views remain above the camera passes; shadow/reflection
+views are outside the reordered range. Full-frame depth occlusion is skipped
+for an inset world view. No Java change or new native is needed.
+
+Validation: map_views fails on baseline 67cd581 and passes on the fix. The test
+uses real camera activation, world isolation/ancestry and viewport lifetime,
+including a local root owned by the scene, the GPS-to-full-screen transition,
+a resized driving view and map closure. It does not render GPU pixels. Release
+build and driver_selector regression pass; visual in-game validation is pending.
+Check M in Valo: map tiles/roads and available markers, bottom-right driving
+view, then M again; repeat, drive to move the GPS and check garage/catalog
+previews. Evidence is in assets/validation/map-views/{before,after}.txt.

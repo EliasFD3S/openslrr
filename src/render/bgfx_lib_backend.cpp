@@ -888,6 +888,8 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
     // Garage, dealer and car lot all use the script camera, which looks
     // at the car (or the empty bay). The free orbit is only a fallback.
     const auto* script_camera = fullscreen_script_camera();
+    const auto* world_vp = script_camera ? gameref_get(script_camera->viewport) : nullptr;
+    const bool world_inset = world_vp && (world_vp->vp_w < .99f || world_vp->vp_h < .99f);
     const bool world_cam = gameref_world_camera(world_eye, world_at, &world_fov,
                                                  &world_zn, &world_zf, world_up);
 
@@ -905,6 +907,7 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
         world_zf = video.view_distance;
       const float aspect =
           height_ > 0 ? static_cast<float>(width_) / static_cast<float>(height_)
+                      * (world_vp && world_vp->vp_h > 0.f ? world_vp->vp_w / world_vp->vp_h : 1.f)
                       : 1.333f;
       const bx::Vec3 eye{world_eye[0], world_eye[1], -world_eye[2]};
       const bx::Vec3 at{world_at[0], world_at[1], -world_at[2]};
@@ -1009,6 +1012,13 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       const uint32_t clear = (garage_ || world_cam) ? 0x3a342cff : 0x1a2230ff;
       bgfx::setViewClear(world_view, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL,
                          clear, 0.f, 0);
+    }
+    if (world_cam && world_inset) {
+      const int x = std::clamp(int(world_vp->vp_x * width_), 0, width_ - 1);
+      const int y = std::clamp(int(world_vp->vp_y * height_), 0, height_ - 1);
+      bgfx::setViewRect(world_view, x, y,
+          std::clamp(int(world_vp->vp_w * width_), 1, width_ - x),
+          std::clamp(int(world_vp->vp_h * height_), 1, height_ - y));
     }
     bgfx::setViewTransform(world_view, view, render_proj);
     bgfx::setViewMode(world_view, bgfx::ViewMode::Sequential);
@@ -1311,7 +1321,11 @@ SceneFrustum LibBgfxBackend::view_frustum(const float* view, const float* projec
     std::memcpy(hiz_eye_, eye, sizeof(hiz_eye_));
     std::memcpy(cull_view_, view, sizeof(cull_view_));
     std::memcpy(cull_proj_, projection, sizeof(cull_proj_));
-    scene_instances_set_hiz(&LibBgfxBackend::hiz_keep, this);
+    const auto* main_camera = fullscreen_script_camera();
+    const auto* main_vp = main_camera ? gameref_get(main_camera->viewport) : nullptr;
+    // The depth pyramid covers the full framebuffer, not a script inset.
+    const bool inset = main_vp && (main_vp->vp_w < .99f || main_vp->vp_h < .99f);
+    scene_instances_set_hiz(inset ? nullptr : &LibBgfxBackend::hiz_keep, this);
     const auto frustum = view_frustum(view, projection);
     std::vector<std::shared_ptr<const ScxGeometry>> resident_props;
     instances_ = scene_instances_collect(&frustum, &resident_props);
@@ -1321,7 +1335,10 @@ SceneFrustum LibBgfxBackend::view_frustum(const float* view, const float* projec
     previews_.clear();
     for(const auto* camera:gameref_active_cameras()) {
       const auto* vp=gameref_get(camera->viewport);
-      if(!vp||!vp->vp_active||vp->vp_w<=0||vp->vp_h<=0||(vp->vp_w>=.99f&&vp->vp_h>=.99f))continue;
+      if(!vp||!vp->vp_active||vp->vp_w<=0||vp->vp_h<=0||camera==main_camera)continue;
+      float scene_matrix[16];
+      if(vp->vp_w>=.99f && vp->vp_h>=.99f &&
+          scene_instance_transform(camera->key,scene_instances_world(),scene_matrix))continue;
       void* root=camera->parent;
       auto objects=scene_instances_collect_root(root);
       if(objects.empty()&&camera->aim_look) {
@@ -1674,6 +1691,27 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
   void LibBgfxBackend::draw_previews()
 {
     perf::Scope perf_scope(perf::Zone::World);
+    // Reset each frame: closing the map must restore normal world/OSD order.
+    bgfx::setViewOrder(0, 64, nullptr);
+    const auto* main_camera = fullscreen_script_camera();
+    const auto* main_vp = main_camera ? gameref_get(main_camera->viewport) : nullptr;
+    const bool inset = main_vp && (main_vp->vp_w < .99f || main_vp->vp_h < .99f);
+    if (inset && !video_fmv_is_playing()) {
+      std::vector<std::pair<int32_t, uint16_t>> views{{main_vp->vp_pri, kWorldView}};
+      for (size_t i = 0; i < previews_.size() && kPreview0 + i < 64; ++i)
+        views.push_back({previews_[i].viewport.vp_pri, uint16_t(kPreview0 + i)});
+      std::stable_sort(views.begin(), views.end(), [](const auto& a, const auto& b) {
+        return a.first < b.first;
+      });
+      std::array<uint16_t, 64> order{};
+      size_t slot = 0;
+      for (uint16_t i = 0; i < kWorldView; ++i) order[slot++] = i;
+      order[slot++] = kFmvLayer;
+      order[slot++] = kOsdUnder;
+      for (const auto& entry : views) order[slot++] = entry.second;
+      for (uint16_t i = kPreview0 + uint16_t(views.size() - 1); i < 64; ++i) order[slot++] = i;
+      bgfx::setViewOrder(0, uint16_t(order.size()), order.data());
+    }
     uint16_t id = kPreview0;
     for(const auto&p:previews_) {
       if(id>=64)break;
