@@ -120,8 +120,10 @@ class Pool {
     start();
     std::unique_lock submit(submit_mu_, std::defer_lock);
     // One batch at a time. A nested call, or a second thread's call while a
-    // batch runs, does its own work instead of waiting for the pool.
-    if (count == 1 || t_in_job || !submit.try_lock() || !has_workers()) {
+    // batch runs, does its own work instead of waiting for the pool. The lock
+    // is taken last, so the serial path never holds it: a body that calls
+    // jobs_parallel_for again must not try_lock a mutex its thread owns.
+    if (count == 1 || t_in_job || !has_workers() || !submit.try_lock()) {
       std::exception_ptr error;
       for (size_t i = 0; i < count; ++i) {
         try {

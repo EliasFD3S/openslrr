@@ -170,6 +170,19 @@ SLRR_TEST(shutdown_falls_back_to_the_calling_thread) {
   SLRR_REQUIRE(total.load() == 32);
 }
 
+SLRR_TEST(nested_calls_after_shutdown_stay_serial) {
+  // Runs after shutdown_falls_back_to_the_calling_thread: no workers left.
+  const auto caller = std::this_thread::get_id();
+  std::atomic_int total{0};
+  jobs_parallel_for(4, [&](size_t) {
+    jobs_parallel_for(4, [&](size_t) {
+      SLRR_REQUIRE(std::this_thread::get_id() == caller);
+      total.fetch_add(1);
+    });
+  });
+  SLRR_REQUIRE(total.load() == 16);
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
       every_index_runs_exactly_once,
@@ -182,6 +195,7 @@ int main() {
       job_output_prints_in_index_order,
       captured_task_output_waits_for_its_caller,
       shutdown_falls_back_to_the_calling_thread,
+      nested_calls_after_shutdown_stay_serial,
   };
   return slrr::standalone::run("job_system", tests);
 }

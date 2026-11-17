@@ -2061,18 +2061,18 @@ std::string map_texture_key(std::string path) {
 {
     prefetched_textures_.clear();
     std::vector<std::string> files;
-    std::unordered_set<std::string> shared_once;
     for (const auto& [geo, share_map_textures] : meshes) {
       std::unordered_set<std::string> slots;
       for (std::string& path : part_texture_paths(*geo)) {
-        // A shared map texture that already exists is not read again, and the
-        // first map mesh to load a new one creates it for the others.
+        // A shared map texture that already exists is not read again.
         if (path.empty() || (share_map_textures && map_textures_.contains(map_texture_key(path))))
           continue;
         auto [entry, added] = prefetched_textures_.try_emplace(path);
         if (added) files.push_back(path);
-        if (slots.insert(path).second && (!share_map_textures || shared_once.insert(path).second))
-          ++entry->second.uses;
+        // One use per mesh. A sharer that finds the texture created by an
+        // earlier one still releases its use, and one whose texture failed
+        // (missing file, paint stub) still finds the decoded image here.
+        if (slots.insert(path).second) ++entry->second.uses;
       }
     }
     // A single file is read by load_part_textures itself, as before.
@@ -2098,6 +2098,10 @@ std::string map_texture_key(std::string path) {
       const std::string& path = paths[i];
       if (path.empty()) continue;
       std::string shared_key;
+      const auto prefetched = prefetched_textures_.find(path);
+      if (prefetched != prefetched_textures_.end() &&
+          std::find(prefetched_used.begin(), prefetched_used.end(), path) == prefetched_used.end())
+        prefetched_used.push_back(path);
       if (share_map_textures) {
         shared_key = map_texture_key(path);
         if (auto shared = map_textures_.find(shared_key); shared != map_textures_.end()) {
@@ -2127,10 +2131,6 @@ std::string map_texture_key(std::string path) {
       };
 
       DdsImage read;
-      const auto prefetched = prefetched_textures_.find(path);
-      if (prefetched != prefetched_textures_.end() &&
-          std::find(prefetched_used.begin(), prefetched_used.end(), path) == prefetched_used.end())
-        prefetched_used.push_back(path);
       const DdsImage& img = prefetched != prefetched_textures_.end()
                                 ? prefetched->second.image
                                 : (read = load_texture_file(path));
