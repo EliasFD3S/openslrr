@@ -193,6 +193,19 @@ A native with a body is not necessarily complete. Distinguish, in the audits:
 absent, explicit no-op, fixed/mock value, partial, implemented, and validated
 in a defined scenario. See `NATIVE_AUDIT.md`.
 
+Loaded class definitions are immutable for the VM lifetime, whether requested
+by name or `.class` path. Never replace a class's methods/TREE vectors or rerun
+its statics under executing or suspended frames. Recompilation takes effect
+for an already-loaded class after restart. Null and arrays are reference
+arguments during by-name overload selection; null must not tie an integer
+constructor solely because both are one-argument calls.
+
+TREE increment/decrement must write back to the operand's actual storage:
+local, instance field, static owner/field or array slot. Preserve the owner
+resolved by a field path; computing a stepped stack value alone is insufficient.
+Postfix expressions return the old value, prefix expressions the new value.
+The career clock/day transition uses this general static-field behavior.
+
 ## 6. Threads, events, and dialogs
 
 Script threads are cooperative and implemented with Windows fibers. They keep
@@ -303,6 +316,18 @@ reference wrappers do not justify duplicating the underlying object.
 `scene_instances_collect` produces the instances to draw for the selected
 world. Geometry can be shared. Pose, color, and texture replacements are
 instance properties. Avoid modifying shared geometry to fix a single car.
+
+File-backed textures created by `ResourceRef.makeTexture` must reach the same
+per-instance material path as RPK textures through `changeResource`,
+`duplicate`, and `RenderRef.create`. Copy the replacement path by value; do not
+make the render depend on a temporary Java texture wrapper or mutate shared
+mesh textures. Standalone dynamic texture ID queries remain incomplete.
+
+An active camera with a non-null viewport may render only while that viewport
+exists and is active. `Viewport.deactivate` / OSD hiding must stop an old
+preview even when the script retains its camera and scene. Reactivation may
+reuse those objects. Do not implement this by recognizing a mod's selector
+class or forcibly deleting its model.
 
 A map is not necessarily one SCX. `GroundMapData` distinguishes render and
 collision meshes, exterior packs, and placements. Valo City requires resolving

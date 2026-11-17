@@ -8,11 +8,18 @@
 #include <cmath>
 #include <cstdio>
 #include <unordered_set>
+#include <unordered_map>
+#include <algorithm>
+#include <stdexcept>
+#include <limits>
 
 namespace slrr {
 namespace {
 
 std::vector<OsdWidget> g_widgets;
+std::unordered_map<int32_t, size_t> g_widget_ids;
+uint64_t g_next_widget_id = 0;
+std::unordered_set<const void*> g_widget_gc_refs;
 OsdClickFn g_click;
 OsdSliderFn g_slider;
 OsdHoverFn g_hover;
@@ -136,21 +143,48 @@ void osd_set_framebuffer_listener(OsdFramebufferFn fn) {
   g_fb_listener = std::move(fn);
 }
 
-void osd_hide_widget(int32_t index) {
-  if (index < 0 || static_cast<size_t>(index) >= g_widgets.size()) return;
-  OsdWidget& w = g_widgets[static_cast<size_t>(index)];
-  w.hidden = true;
-  w.dead = true;
+OsdWidget* osd_widget_mut(int32_t id) {
+  const auto it = g_widget_ids.find(id);
+  if (it == g_widget_ids.end()) return nullptr;
+  auto& w = g_widgets[it->second];
+  return w.dead ? nullptr : &w;
 }
-
-OsdWidget* osd_widget_mut(int32_t index) {
-  if (index < 0 || static_cast<size_t>(index) >= g_widgets.size())
-    return nullptr;
-  return &g_widgets[static_cast<size_t>(index)];
+void osd_hide_widget(int32_t id) {
+  if (auto* w = osd_widget_mut(id)) {
+    // Release every script pointer immediately; stale handles never revive it.
+    *w = OsdWidget{};
+    w->id = id;
+    w->hidden = w->dead = true;
+  }
+}
+void osd_destroy_owner(Object* owner) {
+  if (!owner) return;
+  for (auto& w : g_widgets) if (w.owner == owner) osd_hide_widget(w.id);
+  slrr_text_destroy_owner(owner);
+}
+void osd_forget(Object* object) {
+  // Called during sweep after osd_visit_gc_roots built the root snapshot.
+  if (!object || !g_widget_gc_refs.count(object)) return;
+  for (auto& w : g_widgets)
+    if (w.owner == object || w.handler == object || w.button == object ||
+        w.picture_source == object || w.highlight_for == object ||
+        w.label_src == object || w.value_str == object || w.gadget == object ||
+        w.text_key == object) osd_hide_widget(w.id);
+}
+void osd_compact_widgets() {
+  const int32_t hover = g_hover_index >= 0 ? g_widgets[g_hover_index].id : -1;
+  const int32_t focus = g_string_focus >= 0 ? g_widgets[g_string_focus].id : -1;
+  std::erase_if(g_widgets, [](const auto& w){return w.dead;});
+  g_widget_ids.clear();
+  for (size_t i=0;i<g_widgets.size();++i) g_widget_ids[g_widgets[i].id]=i;
+  auto index = [](int32_t id) {auto i=g_widget_ids.find(id);return i==g_widget_ids.end()?-1:static_cast<int32_t>(i->second);};
+  g_hover_index=index(hover);g_string_focus=index(focus);
 }
 
 void osd_clear_widgets() {
   g_widgets.clear();
+  g_widget_ids.clear();
+  g_widget_gc_refs.clear();
   g_group_count = 1;
   g_current_group = 0;
   g_took_zero = false;
@@ -181,7 +215,11 @@ bool osd_owner_modal(Object* owner) {
          (fit->second.v.i & 1) != 0;
 }
 
-void osd_add_widget(OsdWidget w) {
+int32_t osd_add_widget(OsdWidget w) {
+  if (g_next_widget_id > static_cast<uint64_t>(INT32_MAX))
+    throw std::runtime_error("OSD widget handle space exhausted");
+  w.id = static_cast<int32_t>(g_next_widget_id++);
+  const int32_t id = w.id;
   if (w.group < 0) w.group = g_current_group;
   if (g_hidden_groups.count(w.group) != 0) {
     w.group_hidden = true;
@@ -189,27 +227,21 @@ void osd_add_widget(OsdWidget w) {
   }
   if (w.layer == 0) w.layer = osd_viewport_pri(w.owner);
   if (owner_suppressed(w)) w.hidden = true;
+  g_widget_ids[id] = g_widgets.size();
   g_widgets.push_back(std::move(w));
+  return id;
 }
 
 const std::vector<OsdWidget>& osd_widgets() { return g_widgets; }
 
-void osd_set_widget_pos(int32_t index, float x, float y) {
-  if (index < 0 || static_cast<size_t>(index) >= g_widgets.size()) return;
-  g_widgets[static_cast<size_t>(index)].x = x;
-  g_widgets[static_cast<size_t>(index)].y = y;
+void osd_set_widget_pos(int32_t id, float x, float y) {
+  if (auto* w=osd_widget_mut(id)) {w->x=x;w->y=y;}
 }
-
-void osd_set_widget_cmd(int32_t index, int32_t cmd) {
-  if (index < 0 || static_cast<size_t>(index) >= g_widgets.size()) return;
-  g_widgets[static_cast<size_t>(index)].cmd = cmd;
+void osd_set_widget_cmd(int32_t id, int32_t cmd) {
+  if (auto* w=osd_widget_mut(id)) w->cmd=cmd;
 }
-
-void osd_set_widget_icon(int32_t index, uint32_t icon_id, std::string path) {
-  if (index < 0 || static_cast<size_t>(index) >= g_widgets.size()) return;
-  OsdWidget& w = g_widgets[static_cast<size_t>(index)];
-  w.icon_id = icon_id;
-  w.icon_path = std::move(path);
+void osd_set_widget_icon(int32_t id, uint32_t icon_id, std::string path) {
+  if (auto* w=osd_widget_mut(id)) {w->icon_id=icon_id;w->icon_path=std::move(path);}
 }
 
 void osd_sync_button_label(Object* osd, void* text, float y,
@@ -870,7 +902,7 @@ void bind_input(Object* g) {
     w->handler = handler;
     w->handler_class = handler->class_name;
   }
-  g_string_focus = wit->second.v.i;
+  g_string_focus = static_cast<int32_t>(g_widget_ids.at(wit->second.v.i));
   sync_string_value(*w);
   if (w->owner) w->owner->fields["actGadget"] = Value::make_obj(g);
 }
@@ -912,9 +944,7 @@ void osd_attach_button_picture(Object* render) {
     for (OsdWidget& old : g_widgets) {
       if (&old == vis || &old == &w || old.hit_only || old.dead) continue;
       if (old.button != w.button) continue;
-      old.hidden = true;
-      old.dead = true;
-      old.icon_path.clear();
+      osd_hide_widget(old.id);
     }
     if (w.hit_only) {
       w.icon_id = vis->icon_id;
@@ -1038,11 +1068,16 @@ void osd_on_group_leaf(Object* group, bool leaf) {
 
 
 void osd_visit_gc_roots(const GcRootVisitor& visit) {
-  // Hidden pages may be shown again. Retain their backing script objects,
-  // including retired widgets until the registry itself releases them.
+  g_widget_gc_refs.clear();
+  auto root = [&](const void* pointer) {
+    if (pointer) g_widget_gc_refs.insert(pointer);
+    visit(pointer);
+  };
+  // Hidden pages may be shown again; destroyed widgets must release roots.
   for (const auto& w : g_widgets) {
-    visit(w.handler); visit(w.owner); visit(w.button); visit(w.picture_source);
-    visit(w.highlight_for); visit(w.label_src); visit(w.value_str); visit(w.gadget); visit(w.text_key);
+    if (w.dead) continue;
+    root(w.handler); root(w.owner); root(w.button); root(w.picture_source);
+    root(w.highlight_for); root(w.label_src); root(w.value_str); root(w.gadget); root(w.text_key);
   }
 }
 }  // namespace slrr

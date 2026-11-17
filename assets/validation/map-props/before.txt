@@ -1,0 +1,2 @@
+maps/test_track.rpk placements=1413 exterior=0 registered=0 FAIL
+maps/ROC_track.rpk placements=1791 exterior=0 registered=0 FAIL

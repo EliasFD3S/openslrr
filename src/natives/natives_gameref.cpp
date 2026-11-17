@@ -123,7 +123,7 @@ Object* script_construct(Jvm& jvm, const RpkIndex& rpk, uint32_t full_id,
   Object* inst = jvm.new_object(tc->name());
   if (!inst) return nullptr;
   if (GameRefState* st = gameref_upsert(inst, GameRefKind::GameType)) {
-    st->type_id = static_cast<int32_t>(full_id);
+    gameref_set_type(*st, static_cast<int32_t>(full_id));
     st->script = inst;
     st->class_name = tc->name();
     st->alias = alias;
@@ -243,7 +243,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
         if (!args.empty() && args[0].tag == ValueTag::Obj)
           gameref_set_parent(self, args[0].v.o);
         if (args.size() >= 2 && args[1].tag == ValueTag::Int)
-          st->type_id = args[1].v.i;
+          gameref_set_type(*st, args[1].v.i);
         if (args.size() >= 4 && args[3].tag == ValueTag::Obj && args[3].v.o)
           st->alias = args[3].v.o->str;
         if (st->alias == "dummy" || st->alias == "controller") gameref_make_live(self);
@@ -581,7 +581,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
             if (it != type->fields.end() && it->second.tag == ValueTag::Int)
               tid = it->second.v.i;
           }
-          st->type_id = tid;
+          gameref_set_type(*st, tid);
           if (self) self->fields["id"] = Value::make_int(tid);
         }
         if (alias_o && !alias_o->str.empty()) st->alias = alias_o->str;

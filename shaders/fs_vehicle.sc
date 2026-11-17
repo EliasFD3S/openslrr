@@ -5,7 +5,7 @@ SAMPLER2D(s_vehicleMix, 1);
 SAMPLER2D(s_vehicleEnv, 2);
 SAMPLER2D(s_vehicleBake, 3);
 SAMPLERCUBE(s_sceneReflection, 4);
-uniform vec4 u_dynamicReflection;
+uniform vec4 u_dynamicReflection; // x: reflection mode, y: two-sided material
 uniform vec4 u_reflectionProbe;
 uniform vec4 u_reflectionBoxMin;
 uniform vec4 u_reflectionBoxMax;
@@ -116,15 +116,16 @@ void main()
     // alpha. The spheremap times its strength, plus the specular, is added.
     // u_sunDiff.a marks a scene light (setLight or a directional resource).
     if (u_vehicleLayers.w > 2.5) {
-        // The mesh is two-sided, so both windings blend. Stock culls one.
-        // Two full alphas of this near-black tint stack into a black pane.
-        // 1-sqrt(1-a) twice transmits the same as one authored alpha.
-        float alpha = 1.0-sqrt(max(1.0-u_vehicleDiffuse.a, 0.0));
+        // Single-sided glass uses its authored opacity and reflection once.
+        // Retain the previous compensation only for explicitly two-sided glass.
+        float faceWeight = u_dynamicReflection.y > 0.5 ? 0.5 : 1.0;
+        float alpha = u_dynamicReflection.y > 0.5
+            ? 1.0-sqrt(max(1.0-u_vehicleDiffuse.a, 0.0)) : u_vehicleDiffuse.a;
         vec3 lit = u_vehicleDiffuse.rgb*illum;
         // A headlight cover names an empty spheremap and borrows the sky.
         // Cabin glass keeps its strength, plus a graze, so it is not a hole.
         float envK = u_vehicleChannels.w > 1.5 ? 0.4 : (1.0+fres*0.5);
-        vec3 shine = environment*weight*envK*0.5 + u_vehicleSpec.rgb*spec*0.5;
+        vec3 shine = (environment*weight*envK + u_vehicleSpec.rgb*spec)*faceWeight;
         gl_FragColor = vec4(lit*alpha + shine, alpha);
         return;
     } else if (u_vehicleLayers.w > 1.5) {

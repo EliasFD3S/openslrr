@@ -1,0 +1,1 @@
+PASS pad defaults, extra horn/camera buttons, per-axis overrides, physical conflicts, half-stick claims, keyboard priority and analog classification

@@ -21,6 +21,7 @@ struct SceneInstance {
   // Column-major renderer matrix; script meters, with the SCX Z reflection.
   std::array<float, 16> transform{};
   bool sky = false;
+  bool emissive_overlay = false;  // authored night facade, drawn after opaque geometry
   uint32_t color = 0xffffff;
   int paint_slot = -1;
   std::string paint_texture;

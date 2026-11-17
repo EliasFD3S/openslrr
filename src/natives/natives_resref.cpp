@@ -30,7 +30,7 @@ namespace slrr {
 
 // A map GroundRef is a native ground: its triangles live in the instance
 // tree. Stitched outdoor maps also carry static object placements.
-// The garage shell is already the boot scene.
+// Garage shells follow this same world-owned path; no permanent boot copy.
 void spawn_ground_shell(Jvm& jvm, const RpkIndex& rpk, Object* ground) {
   if (!ground || ground->class_name.find("GroundRef") == std::string::npos)
     return;
@@ -53,18 +53,12 @@ void spawn_ground_shell(Jvm& jvm, const RpkIndex& rpk, Object* ground) {
     if (already_attached) continue;
     const RpkIndex::ModelRef model =
         rpk.model_for_resource(RpkIndex::pack_from_full(full), full & 0xffffu);
-    if (model.ok) {
-      std::string src = model.source;
-      for (char& c : src)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-      if (src.find("garage") != std::string::npos) continue;
-    } else if (!map.poly) {
-      continue;
-    }
+    if (!model.ok && !map.poly) continue;
     scene_instances_override_mesh(full, map.poly);
     scene_instances_override_collision(full, map.collision);
-    if (id != primary || !map.exterior_maps.empty())
-      scene_instances_add_ground_props(map);
+    // Standalone maps carry placements too. Exterior stitching only affects
+    // which additional grounds are visited, not whether this ground has props.
+    scene_instances_add_ground_props(map);
     Object* node = jvm.new_object("java.util.resource.RenderRef");
     if (!node) return;
     GameRefState* shell = gameref_upsert(node, GameRefKind::RenderRef);
@@ -72,7 +66,7 @@ void spawn_ground_shell(Jvm& jvm, const RpkIndex& rpk, Object* ground) {
     shell->script = node;
     shell->class_name = node->class_name;
     shell->empty = false;
-    shell->type_id = static_cast<int32_t>(full);
+    gameref_set_type(*shell, static_cast<int32_t>(full));
     node->fields["id"] = Value::make_int(static_cast<int32_t>(full));
     gameref_set_parent(node, ground);
     scene_ambience_attach(node, rpk, map);
@@ -217,7 +211,7 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
         GameRefState* st = gameref_upsert(self);
         if(st)st->binding=nullptr;
         if (st) {
-          st->type_id = id;
+          gameref_set_type(*st, id);
           if (id != 0) {
             st->empty = false;
             const RpkEntry* e = rpk.resolve(static_cast<uint32_t>(id));
@@ -246,7 +240,7 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           // set(null) → clear bind (PE sub_545FC0(handle,0)).
           if (GameRefState* st = gameref_upsert(self)) {
             st->binding=nullptr;
-            st->type_id = 0;
+            gameref_set_type(*st, 0);
             st->empty = true;
           }
           res_sync_id_field(self, 0);
@@ -266,7 +260,7 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
         GameRefState* st = gameref_upsert(self);
         if (st) {
           st->binding = nullptr;
-          st->type_id = id;
+          gameref_set_type(*st, id);
           st->empty = (id == 0);
         }
         res_sync_id_field(self, id);
@@ -287,7 +281,7 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           auto it = self->fields.find("id");
           if (it != self->fields.end() && it->second.tag == ValueTag::Int)
             id = it->second.v.i;
-          if (st) st->type_id = id;
+          if (st) gameref_set_type(*st, id);
         }
         const RpkEntry* e = rpk.resolve(static_cast<uint32_t>(id));
         self->fields["loaded"] = Value::make_int(e ? 1 : 0);
@@ -406,7 +400,7 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
     if (!o) return Value::make_obj(nullptr);
     o->fields["id"] = Value::make_int(static_cast<int32_t>(full));
     if (GameRefState* st = gameref_upsert(o)) {
-      st->type_id = static_cast<int32_t>(full);
+      gameref_set_type(*st, static_cast<int32_t>(full));
       st->empty = false;
     }
     return Value::make_obj(o);
@@ -501,7 +495,7 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           return Value::make_void();
         auto* sound = gameref_upsert(self);
         sound->binding = nullptr;
-        sound->type_id = 0;
+        gameref_set_type(*sound, 0);
         sound->sound_file = file.string();
         gameref_set_parent(self, args[0].v.o);
         res_sync_id_field(self, gameref_make_live(self));
@@ -542,12 +536,14 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
         if (id != 0) {
           self->fields["id"] = Value::make_int(id);
           if (GameRefState* dst = gameref_upsert(self, GameRefKind::RenderRef)) {
-            dst->type_id = id;
+            gameref_set_type(*dst, id);
             if (const auto* source = gameref_get(src)) {
               dst->texture_replacements = source->texture_replacements;
+              dst->texture_file_replacements = source->texture_file_replacements;
               dst->directional_light.flare = source->directional_light.flare;
             } else {
               dst->texture_replacements.clear();
+              dst->texture_file_replacements.clear();
               dst->directional_light.flare = {};
             }
           }

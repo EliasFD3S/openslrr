@@ -73,7 +73,7 @@ void scene_sun_apply_day_cycle(SceneSun& light) {
   // full sun, and let the daylight ramp bring dusk back down.
   const float base_luma = light.diffuse[0] * 0.2126f + light.diffuse[1] * 0.7152f +
                           light.diffuse[2] * 0.0722f;
-  const float gain = base_luma > 1e-4f ? std::min(1.15f / base_luma, 2.8f) : 1.f;
+  const float gain = base_luma > 1e-4f ? std::min(1.45f / base_luma, 4.f) : 1.f;
   for (int i = 0; i < 3; ++i) {
     const float tint = warm[i] + (1.f - warm[i]) * twilight;
     light.diffuse[i] *= daylight * std::max(gain, 1.f) * tint;

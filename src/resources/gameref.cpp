@@ -20,11 +20,15 @@ namespace slrr {
 namespace {
 
 std::unordered_map<void*, GameRefState> g_refs;
+// unordered_map rehash preserves element addresses. Erase removes the index
+// before freeing its state; aliases retain their own dormant ID if unbound.
+std::unordered_map<int32_t, GameRefState*> g_live_refs;
+uint64_t g_scene_revision = 1, g_next_incarnation = 1;
 // Canonical keys of trigger volumes and of free PhysicsRef bodies, so their
 // per-frame and per-tick passes do not scan every GameRef.
 std::unordered_set<void*> g_trigger_refs, g_simulated_refs;
 std::unordered_set<void*> g_lights;
-int32_t g_next_live = 0x70000000;
+uint32_t g_next_live = 0x70000000;
 int32_t g_fog_color = 0;
 float g_fog_near = 0.f;
 float g_fog_far = 0.f;
@@ -55,8 +59,10 @@ const float* gameref_render_matrix(const GameRefState& node) {
 }
 
 void gameref_clear() {
+  ++g_scene_revision;
   part_drop_actors();
   character_forget_all();
+  g_live_refs.clear();
   g_refs.clear();
   g_trigger_refs.clear();
   g_simulated_refs.clear();
@@ -67,6 +73,7 @@ void gameref_clear() {
 
 GameRefState* gameref_upsert(void* key, GameRefKind kind) {
   if (!key) return nullptr;
+  ++g_scene_revision;
   auto it = g_refs.find(key);
   if (it != g_refs.end()) {
     if (kind != GameRefKind::Generic) it->second.kind = kind;
@@ -74,6 +81,7 @@ GameRefState* gameref_upsert(void* key, GameRefKind kind) {
     return &it->second;
   }
   GameRefState n;
+  n.incarnation = g_next_incarnation++;
   n.key = key;
   n.kind = kind;
   n.empty = false;
@@ -92,12 +100,19 @@ GameRefState* gameref_get(void* key) {
 }
 GameRefState* gameref_find_live(int32_t id) {
   if(id<0x70000000)return nullptr;
-  for(auto& entry:g_refs)if(!entry.second.binding&&entry.second.live_id==id)return &entry.second;
-  return nullptr;
+  const auto it = g_live_refs.find(id);
+  return it != g_live_refs.end() && !it->second->binding ? it->second : nullptr;
 }
 int32_t gameref_make_live(void* key) {
   auto* state=gameref_get(key);if(!state)state=gameref_upsert(key);if(!state)return 0;
-  if(!state->live_id){while(gameref_find_live(g_next_live))++g_next_live;state->live_id=g_next_live++;}
+  if (!state->live_id) {
+    // IDs never recycle before clear. Check exhaustion without signed overflow.
+    if (g_next_live > static_cast<uint32_t>(INT32_MAX)) return 0;
+    const auto id = static_cast<int32_t>(g_next_live);
+    g_live_refs.emplace(id, state);
+    state->live_id = id;
+    ++g_next_live;
+  }
   return state->live_id;
 }
 bool gameref_bind_alias(void* reference,void* target) {
@@ -108,17 +123,19 @@ bool gameref_bind_alias(void* reference,void* target) {
 
 void gameref_remove(void* key) {
   if (!key) return;
+  ++g_scene_revision;
   g_trigger_refs.erase(key);
   g_simulated_refs.erase(key);
   character_forget(key);
   script_events_destroy(static_cast<Object*>(key));
   auto own=g_refs.find(key);
-  if(own!=g_refs.end()&&own->second.binding){g_refs.erase(own);return;}
+  if(own!=g_refs.end()&&own->second.binding){g_live_refs.erase(own->second.live_id);g_refs.erase(own);return;}
   GameRefState* n = gameref_get(key);
   if (n) unlink_from_parent(n);
   // Orphan children stay keyed but parent cleared.
   for (auto it = g_refs.begin(); it != g_refs.end();) {
     if (it->second.binding == key) {
+      g_live_refs.erase(it->second.live_id);
       it = g_refs.erase(it);
     } else {
       if (it->second.parent == key) it->second.parent = nullptr;
@@ -126,7 +143,41 @@ void gameref_remove(void* key) {
     }
   }
   g_lights.erase(key);
+  if (n) g_live_refs.erase(n->live_id);
   g_refs.erase(key);
+}
+
+void gameref_set_type(GameRefState& node, int32_t type) {
+  if (node.type_id == type) return;
+  node.type_id = type;
+  ++g_scene_revision;
+}
+void gameref_release_render_mask(GameRefRenderMask& mask) {
+  for (const auto& [key, incarnation] : mask.hidden) {
+    auto* node = gameref_get(key);
+    if (node && node->key == key && node->incarnation == incarnation) node->empty = false;
+  }
+  mask = {};
+}
+bool gameref_mask_duplicate_renders(GameRefRenderMask& mask, void* root, void* keep, int32_t type) {
+  if (mask.revision == g_scene_revision && mask.root == root && mask.keep == keep && mask.type == type)
+    return false;
+  gameref_release_render_mask(mask);
+  std::vector<void*> pending{root};
+  std::unordered_set<void*> visited;
+  for (size_t i = 0; i < pending.size(); ++i) {
+    auto* node = gameref_get(pending[i]);
+    if (!node || !visited.insert(node->key).second) continue;
+    const bool kept = node->key == keep || node->script == keep;
+    if (!kept && node->kind == GameRefKind::RenderRef && node->type_id == type && !node->empty) {
+      mask.hidden.emplace_back(node->key, node->incarnation);
+      node->empty = true;
+    }
+    for (void* child : node->children) pending.push_back(child);
+  }
+  mask.revision = g_scene_revision;
+  mask.root = root; mask.keep = keep; mask.type = type;
+  return true;
 }
 
 void gameref_set_parent(void* key, void* parent) {
@@ -135,6 +186,8 @@ void gameref_set_parent(void* key, void* parent) {
   if (!n) return;
   key=n->key;
   if(auto* canonical_parent=gameref_get(parent))parent=canonical_parent->key;
+  if (n->parent == parent) return;
+  ++g_scene_revision;
   unlink_from_parent(n);
   n->parent = parent;
   if (parent) {
@@ -233,6 +286,7 @@ std::vector<DueTimer> gameref_poll_timers(float now_sec) {
 void gameref_bind_scene_camera(void* key, const std::string& params) {
   GameRefState* st = gameref_get(key);
   if (!st || (st->type_id & 0xFFFF) != 0x33) return;
+  if (st->kind != GameRefKind::Camera) ++g_scene_revision;
   st->kind = GameRefKind::Camera;
   st->cam_active = false;
   st->half_aov = 60.f;
@@ -514,7 +568,13 @@ GameRefState* fullscreen_script_camera() {
     GameRefState* vp = c->viewport ? gameref_get(c->viewport) : nullptr;
     if (c->cockpit_index >= 0 && (!vp || !vp->vp_active ||
         !gameref_find_live(c->follow_vehicle))) continue;
-    if (vp && (vp->vp_w < 0.99f || vp->vp_h < 0.99f)) continue;
+    if (void* world = scene_instances_world()) {
+      // A local Dummy world (GPS, inventory, selector) never supplies the
+      // main scene camera, even if its viewport fills the screen. Conversely,
+      // the scene camera remains the main camera when scripts resize its view.
+      float matrix[16];
+      if (!scene_instance_transform(c->key, world, matrix)) continue;
+    } else if (vp && (vp->vp_w < 0.99f || vp->vp_h < 0.99f)) continue;
     // Osd.show() adds a second fullscreen camera (priority 2, parent = the
     // Osd) after the scene camera. It exists for 3D widgets; those are drawn
     // as 2D. Taking it as the world camera looks past the car.
@@ -970,8 +1030,14 @@ void gameref_orbit_world_camera(float yaw_delta, float pitch_delta,
 std::vector<GameRefState*> gameref_active_cameras() {
   std::vector<GameRefState*> out;
   for (auto& kv : g_refs) {
-    if (kv.second.kind == GameRefKind::Camera && kv.second.cam_active)
-      out.push_back(&kv.second);
+    if (kv.second.kind != GameRefKind::Camera || !kv.second.cam_active || kv.second.binding) continue;
+    // A camera cannot render through a hidden or destroyed viewport. Scene
+    // ownership alone does not end its lifetime when a dialog/section exits.
+    if (kv.second.viewport) {
+      const auto* viewport = gameref_get(kv.second.viewport);
+      if (!viewport || !viewport->vp_active) continue;
+    }
+    out.push_back(&kv.second);
   }
   std::sort(out.begin(), out.end(),
             [](const GameRefState* a, const GameRefState* b) {

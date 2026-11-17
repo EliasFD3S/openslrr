@@ -21,7 +21,7 @@ uniform vec4 u_cloudSky;
 uniform vec4 u_cloudWind;
 // x: legacy cutout when positive, or -(reference + 1) / 255 for SCX4
 // y: unlit (skip ndl — OSD icons)
-// z: write texture alpha (blend) instead of opaque 1
+// z: 0 opaque, 1 texture alpha for blending, 2 alpha-to-coverage
 uniform vec4 u_alphaTest;
 // Text.changeColor modulate (ARGB → rgba 0..1). Default white.
 uniform vec4 u_color;
@@ -85,9 +85,10 @@ float daylightDistribution(float cosZenith, float cosSun)
 
 float cloudDensity(vec3 p)
 {
-	vec3 samplePos = (p - vec3(u_cloudWind.x, 0.0, u_cloudWind.y)) * vec3(0.0014, 0.0025, 0.0014);
+	vec3 samplePos = (p - vec3(u_cloudWind.x, 0.0, u_cloudWind.y)) * vec3(0.0019, 0.0032, 0.0019);
 	float shape = cloudNoise(samplePos) * 0.72 + cloudNoise(samplePos * 2.7) * 0.28;
-	return smoothstep(0.47, 0.68, shape) * sin(3.14159 * saturate((p.y - 650.0) / 480.0));
+	// Smaller separated puffs leave clear sky between the formations.
+	return smoothstep(0.52, 0.72, shape) * sin(3.14159 * saturate((p.y - 650.0) / 480.0));
 }
 
 // Two grids whose scales are not multiples, with a drift that leaves the cell,
@@ -141,8 +142,9 @@ vec3 renderSky(vec3 ray, vec2 pixel)
 	if (u_cloudSky.w < 1.5 || ray.y < 0.04) return sky;
 	float start = max(0.0, (650.0 - u_cloudSky.y) / ray.y);
 	float stop = min(12000.0, (1130.0 - u_cloudSky.y) / ray.y);
-	// Shorten the march near the horizon and stagger neighbouring rays.
-	float stepLength = min(85.0, (stop - start) / 48.0);
+	// Sample the entire layer even at oblique angles. Capping the step
+	// length truncates the volume near the horizon into a flat sheet.
+	float stepLength = (stop - start) / 48.0;
 	float jitter = fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
 	if (stepLength <= 0.0) return sky;
 	vec3 cloud = vec3(0.0, 0.0, 0.0);
@@ -150,9 +152,14 @@ vec3 renderSky(vec3 ray, vec2 pixel)
 	for (int i = 0; i < 48; ++i) {
 		vec3 p = u_cloudSky.xyz + ray * (start + (float(i) + jitter) * stepLength);
 		float density = cloudDensity(p);
-		float alpha = 1.0 - exp(-density * stepLength * 0.009);
+		float alpha = 1.0 - exp(-density * stepLength * 0.006);
 		float sunExposure = 1.0 - cloudDensity(p + sun * 120.0);
-		vec3 light = u_sunAmb.rgb + u_sunDiff.rgb * (0.30 + 0.70 * sunExposure);
+		// Keep scattering highlights bounded as direct ground sunlight grows.
+		// Otherwise saturated white clouds merge into an overcast blanket.
+		float sunPeak = max(max(u_sunDiff.r, u_sunDiff.g), u_sunDiff.b);
+		vec3 cloudSun = u_sunDiff.rgb / max(sunPeak, 1.0);
+		vec3 light = min(u_sunAmb.rgb, vec3(0.22, 0.22, 0.22))
+		           + cloudSun * (0.28 + 0.62 * sunExposure);
 		cloud += light * alpha * transmission;
 		transmission *= 1.0 - alpha;
 		if (transmission < 0.015) break;
@@ -173,15 +180,20 @@ void main()
 		vec4 layer = texture2D(s_meshMix, mapUv(uvSet(u_lightmap.w - 1.0, v_texcoord0, v_texcoord1, v_texcoord2), u_meshMixUv));
 		tex.rgb = mix(tex.rgb, layer.rgb, layer.a);
 	}
-	if ((u_alphaTest.x > 0.5 && tex.a < 0.5)
-		|| (u_alphaTest.x < 0.0 && tex.a * 255.0 <= -u_alphaTest.x * 255.0 - 1.0))
+	// MSAA coverage must retain both sides of the authored cutoff. A hard
+	// discard first would remove the partially covered edge samples.
+	if (u_alphaTest.z < 1.5 && ((u_alphaTest.x > 0.5 && tex.a < 0.5)
+		|| (u_alphaTest.x < 0.0 && tex.a * 255.0 <= -u_alphaTest.x * 255.0 - 1.0)))
 		discard;
 	float light = (u_alphaTest.y > 0.75) ? 1.0 : ((u_alphaTest.y > 0.25) ? 0.65 + 0.35 * ndl : ndl);
 	float outA = (u_alphaTest.z > 0.5) ? tex.a : 1.0;
 	if (u_alphaTest.z > 1.5) {
 		float cutoff = (-u_alphaTest.x * 255.0 - 1.0) / 255.0;
-		float width = max(fwidth(tex.a), 0.06);
-		outA = smoothstep(cutoff, cutoff + width, tex.a);
+		// Centre the pixel footprint on the cutoff: alpha == cutoff covers
+		// half the samples. The old one-sided ramp eroded thin leaves as
+		// derivatives grew with distance. Evaluate derivatives before clipping.
+		float width = max(fwidth(tex.a), 1.0 / 255.0);
+		outA = tex.a > 0.0 ? saturate((tex.a - cutoff) / width + 0.5) : 0.0;
 	}
 	vec3 tint = u_color.rgb;
 	// The instanced prop path carries the placement colour here (1 elsewhere).
@@ -224,8 +236,17 @@ void main()
 		float distanceToEye = length(v_worldPos - u_staticShadowEye.xyz);
 		if (distanceToEye < range && edge > u_staticShadowParams.y && p.z > 0.0 && p.z < 1.0) {
 			float texel = u_staticShadowParams.y;
-			float slope = max(abs(dFdx(v_staticShadow.z)), abs(dFdy(v_staticShadow.z)));
-			float depth = p.z - min(u_staticShadowParams.z + slope, 0.0008);
+			// Measure slope in shadow UV space, not screen pixels. A receiver
+			// also present in the depth pass needs bias across the PCF footprint.
+			vec3 dx = dFdx(v_staticShadow);
+			vec3 dy = dFdy(v_staticShadow);
+			float det = dx.x * dy.y - dx.y * dy.x;
+			vec2 gradient = vec2(0.0, 0.0);
+			if (abs(det) > 1e-10)
+				gradient = vec2(dy.y * dx.z - dx.y * dy.z,
+				                dx.x * dy.z - dy.x * dx.z) / det;
+			float slope = dot(abs(gradient), vec2(texel * 2.0, texel * 2.0));
+			float depth = p.z - min(u_staticShadowParams.z + slope, 0.004);
 			// Hardware 2x2 compare. A point-sampled disk drew the shadow
 			// map's own texels as stripes on the garage apron.
 			vec2 o = vec2(texel * 1.5, texel * 0.5);
@@ -268,6 +289,12 @@ void main()
 		              * mix(0.35, 1.0, visibility);
 	}
 	vec3 shaded = tex.rgb * bake * tint * placement * illumination;
+	if (u_alphaTest.y > 1.5) {
+		// EmissionMaskMap (SCX 0x06000005) selects lit windows/sign detail.
+		vec2 emissionUv = mapUv(uvSet(u_lightmap.z, v_texcoord0, v_texcoord1, v_texcoord2), u_lightmapUv);
+		vec3 emission = texture2D(s_lightmap, emissionUv).rgb;
+		shaded = tex.rgb * tint * placement * emission;
+	}
 	// Sky and OSD set u_alphaTest.y. Their fragments stay sharp.
 	if (u_fogColor.a > 0.5 && u_alphaTest.y < 0.5) {
 		float span = max(u_fogRange.y - u_fogRange.x, 1.0);

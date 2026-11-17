@@ -9,6 +9,8 @@
 #include <fstream>
 #include <unordered_map>
 #include <vector>
+#include <memory>
+#include <algorithm>
 
 #if defined(SLRR_HAS_LIBBGFX)
 // Implementation lives in ptx_image.cpp (STB_IMAGE_IMPLEMENTATION).
@@ -19,7 +21,8 @@ namespace slrr {
 namespace {
 
 std::string g_root;
-std::unordered_map<void*, SlrrFont> g_fonts;
+std::unordered_map<void*, std::shared_ptr<const SlrrFont>> g_fonts;
+std::unordered_map<std::string, std::weak_ptr<const SlrrFont>> g_font_assets;
 uint32_t g_text_default_color = 0xffffffffu;
 
 struct TextState {
@@ -336,6 +339,13 @@ bool slrr_font_load(void* key, const char* name) {
     if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
   }
 
+  const std::string asset_key = g_root + "/" + up;
+  if (auto found=g_font_assets.find(asset_key);found!=g_font_assets.end()) {
+    if (auto cached=found->second.lock()) {
+      g_fonts[key]=std::move(cached);
+      return true;
+    }
+  }
   std::vector<uint8_t> scx_bytes, atlas_bytes;
   const std::string scx_path =
       join_root("frontend\\meshes\\Fonts\\" + n + ".scx");
@@ -390,11 +400,13 @@ bool slrr_font_load(void* key, const char* name) {
     if (g.adv_px < 0.f) g.adv_px = 0.f;
   }
   st.ready = !st.glyphs.empty();
-  g_fonts[key] = std::move(st);
+  st.cache_key = asset_key;
+  g_fonts[key] = std::make_shared<const SlrrFont>(std::move(st));
+  g_font_assets[asset_key] = g_fonts[key];
   std::printf("[font] %s atlas=%s glyphs=%zu px=%d\n", n.c_str(),
-              atlas_path.c_str(), g_fonts[key].glyphs.size(),
-              g_fonts[key].px_height);
-  return g_fonts[key].ready;
+              atlas_path.c_str(), g_fonts[key]->glyphs.size(),
+              g_fonts[key]->px_height);
+  return g_fonts[key]->ready;
 }
 
 bool slrr_font_load_from_rid(void* key, int32_t rid) {
@@ -405,13 +417,13 @@ bool slrr_font_load_from_rid(void* key, int32_t rid) {
 
 bool slrr_font_ready(void* key) {
   auto it = g_fonts.find(key);
-  return it != g_fonts.end() && it->second.ready;
+  return it != g_fonts.end() && it->second->ready;
 }
 
 const SlrrFont* slrr_font_get(void* key) {
   auto it = g_fonts.find(key);
-  if (it == g_fonts.end() || !it->second.ready) return nullptr;
-  return &it->second;
+  if (it == g_fonts.end() || !it->second->ready) return nullptr;
+  return it->second.get();
 }
 
 float slrr_font_measure_px(void* key, const char* text) {
@@ -713,6 +725,25 @@ void slrr_text_update(void* key) {
   g_osd_text.push_back(std::move(ot));
 }
 
+void slrr_font_forget(void* key) {
+  if (auto alias=g_fonts.find(key);alias!=g_fonts.end()) {
+    const auto asset_key=alias->second->cache_key;
+    g_fonts.erase(alias);
+    auto asset=g_font_assets.find(asset_key);
+    if (asset!=g_font_assets.end() && asset->second.expired()) g_font_assets.erase(asset);
+  }
+  if (g_texts.count(key)) slrr_text_destroy(key);
+}
+bool slrr_font_asset_live(const std::string& key) {
+  auto it=g_font_assets.find(key);
+  return it!=g_font_assets.end() && !it->second.expired();
+}
+void slrr_text_destroy_owner(void* owner) {
+  std::vector<void*> keys;
+  for (const auto& [key,text]:g_texts) if (text.osd==owner) keys.push_back(key);
+  for (auto* key:keys) slrr_text_destroy(key);
+}
+
 void slrr_text_clear_all() {
   g_osd_text.clear();
   g_texts.clear();
@@ -723,7 +754,7 @@ const std::vector<SlrrOsdText>& slrr_osd_texts() { return g_osd_text; }
 
 void font_visit_gc_roots(const GcRootVisitor& visit) {
   visit(g_ui_small); visit(g_ui_medium); visit(g_ui_large);
-  for (const auto& entry : g_fonts) visit(entry.first);
+  // ResourceRef-to-font aliases are weak VM payloads, not GC roots.
   for (const auto& entry : g_texts) {
     visit(entry.first); visit(entry.second.font); visit(entry.second.osd);
   }

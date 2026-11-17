@@ -1,0 +1,22 @@
+[rpk] openLib bad1.rpk -> 1 (no TOC)
+PASS reject TOC count
+[rpk] openLib bad2.rpk -> 1 (no TOC)
+PASS reject dependency addition overflow
+[rpk] openLib bad3.rpk -> 1 (no TOC)
+PASS reject payload size
+[rpk] openLib bad4.rpk -> 1 (no TOC)
+PASS reject offset plus size overflow
+[rpk] openLib bad5.rpk -> 1 (no TOC)
+PASS reject truncated alias
+[rpk] openLib bad6.rpk -> 1 (no TOC)
+PASS reject truncated bounds
+[rpk] openLib bad7.rpk -> 1 (no TOC)
+PASS reject table range
+[rpk] parsed truncated.rpk pack=1 deps=0 entries=1
+[rpk] openLib truncated.rpk -> 1
+[rpk] parsed cycle.rpk pack=1 deps=0 entries=1
+[rpk] openLib cycle.rpk -> 1
+[rpk] parsed shared.rpk pack=1 deps=0 entries=1
+[rpk] openLib shared.rpk -> 1
+PASS truncated disk payload rejected before allocation/read
+PASS cyclic map terminates and shared node emits one placement

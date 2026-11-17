@@ -9,6 +9,7 @@
 #include "slrr/slrr_font.hpp"
 
 #include <cstdint>
+#include <cmath>
 #include <filesystem>
 #include <limits>
 #include <string>
@@ -16,6 +17,27 @@
 #include <vector>
 
 namespace slrr {
+
+// Missing or mistagged arguments use explicit fallbacks, never union bits.
+inline float native_arg_number(const std::vector<Value>& args, size_t i, float fallback = 0.f) {
+  if (i >= args.size()) return fallback;
+  const auto& v = args[i];
+  if (v.tag == ValueTag::Int) return static_cast<float>(v.v.i);
+  if (v.tag == ValueTag::Float && std::isfinite(v.v.f)) return v.v.f;
+  return fallback;
+}
+inline int32_t native_arg_integer(const std::vector<Value>& args, size_t i, int32_t fallback = 0) {
+  if (i >= args.size()) return fallback;
+  const auto& v = args[i];
+  if (v.tag == ValueTag::Int) return v.v.i;
+  if (v.tag != ValueTag::Float || !std::isfinite(v.v.f)) return fallback;
+  if (v.v.f >= 2147483648.f) return INT32_MAX;
+  if (v.v.f <= -2147483648.f) return INT32_MIN;
+  return static_cast<int32_t>(v.v.f);
+}
+inline Object* native_arg_object(const std::vector<Value>& args, size_t i) {
+  return i < args.size() && args[i].tag == ValueTag::Obj ? args[i].v.o : nullptr;
+}
 
 inline Value native_noop(Object*, const std::vector<Value>&) {
   return Value::make_void();
@@ -83,6 +105,8 @@ struct HostFile {
   // True when bytes is the Java payload of an SDAT container. A raw file
   // left by an older host stays false, so readResID returns the stored id.
   bool sdat = false;
+  // Unrepresentable resources are written as null, keeping the stream aligned.
+  uint32_t degraded_resources = 0;
   std::filesystem::path path;
   std::vector<SdatPackRef> sdat_packs;
   std::vector<SdatBlobRef> sdat_blobs;

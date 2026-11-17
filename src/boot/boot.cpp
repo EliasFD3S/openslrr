@@ -312,8 +312,19 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
       const int32_t cap = (opt.max_frames > 0) ? 2 : 0;
       if(opt.spawn_car.empty())video_fmv_play_boot_intros(cap, [&render]() {
         render.pump(0);
+        if (render.quit_requested()) return false;
         render.flush();
+        return !render.quit_requested();
       });
+      if (render.quit_requested()) {
+        video_fmv_close();
+        host_set_loading_present({});
+        osd_set_framebuffer_listener({});
+        host_music_stop();
+        render.close();
+        host_set_render_callbacks({}, {});
+        return 0;
+      }
     }
   }
 
@@ -374,62 +385,12 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     }
   }
 
-  // Garage SCX preload (used after NEW CAREER). Flush so splash stays visible.
+  // Garage.java creates the selected GroundRef and its RenderRef children.
+  // Their meshes and collisions belong to that world, including G2/G3/ROC.
+  // Do not install a permanent G1 copy in the renderer or static floor cache.
   bgfx_clear_scene(render);
   int32_t scx_verts = 0;
   int32_t scx_tris = 0;
-  const std::vector<uint32_t> garage_renders =
-      rpk.garage_render_ids(garage_pack, 0);
-  int32_t load_i = 0;
-  for (uint32_t rid : garage_renders) {
-    RpkIndex::ModelRef model = rpk.model_for_resource(garage_pack, rid);
-    if (!model.ok || model.source.empty()) continue;
-    std::string path = model.source;
-    for (char& c : path)
-      if (c == '/') c = '\\';
-    if (path.size() > 4) {
-      std::string ext = path.substr(path.size() - 4);
-      for (char& c : ext)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-      if (ext == ".scy") path = path.substr(0, path.size() - 4) + ".scx";
-    }
-    const std::string abs = opt.game_root + "\\" + path;
-    bgfx_try_scx_smoke(render, abs);
-    ScxGeometry geo = load_scx_geometry(abs);
-    geo.textures = std::move(model.textures);
-    scx_resolve_baked_lightmaps(geo);
-    std::printf(
-        "[boot] RPK garage render 0x%x '%s' v=%u groups=%d verts=%d "
-        "tris=%d tex=%zu ok=%d\n",
-        rid, model.alias.c_str(), geo.info.version, geo.info.groups,
-        geo.info.vertices, geo.info.triangles, geo.textures.size(),
-        geo.info.ok ? 1 : 0);
-    if (!geo.info.ok) continue;
-    scx_verts += geo.info.vertices;
-    scx_tris += geo.info.triangles;
-    scene_instances_add_static_mesh(geo);
-    bgfx_add_scx_geometry(render, std::move(geo));
-    if (want_window && render.ready() && (++load_i % 2) == 0) {
-      mainloop_sync_section_render(render, sections);
-      render.pump(0);
-      render.flush();
-    }
-  }
-  if (garage_renders.empty()) {
-    std::fprintf(stderr,
-                 "[boot] WARN no g1 renders in garage.rpk — fallback SCX\n");
-    const std::string garage_scx =
-        opt.game_root + "/misc/garage/g1/garazs_01.scx";
-    ScxGeometry scx_geo = load_scx_geometry(garage_scx);
-    scx_geo.textures = rpk.textures_for_scx(garage_scx);
-    scx_resolve_baked_lightmaps(scx_geo);
-    scx_verts = scx_geo.info.vertices;
-    scx_tris = scx_geo.info.triangles;
-    if (scx_geo.info.ok) {
-      scene_instances_add_static_mesh(scx_geo);
-      bgfx_set_scx_geometry(render, std::move(scx_geo));
-    }
-  }
 
   // Garage preload can eat the Splash 3s timer — restart it so MainLoop
   // actually shows the plate for ~3s (stock: splash after intros, then menu).

@@ -1,0 +1,3 @@
+maps/test_track.rpk placements=1413 exterior=0 registered=1 PASS
+maps/ROC_track.rpk placements=1791 exterior=0 registered=1 PASS
+Save I/O test exit code: 0 (log: C:\Users\Elias\Desktop\openslrr\build\map-props-tests\after.log)

@@ -1,0 +1,74 @@
+[compiler] probe/src/Config.java:2:2: warning W_UNVERIFIED: import of a single class (no shipped source uses it)
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] invoke_by_name: class java.lang.Object
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[options] save failed; retry on next change or shutdown
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[options] save failed; retry on next change or shutdown
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] invoke_by_name: class java.lang.Object
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] invoke_by_name: class java.lang.Object
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] invoke_by_name: class java.lang.Object
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] invoke_by_name: class java.lang.Object
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] invoke_by_name: class java.lang.Object
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] invoke_by_name: class java.lang.Object
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] invoke_by_name: class java.lang.Object
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] invoke_by_name: class java.lang.Object
+[jvm] load_class: classpath not ready
+[compiler] attempted=2 succeeded=2 failed=0 classes=2 (restart for loaded classes)
+[options] saved save/game/options
+[options] saved save/game/options
+PASS graphics disk round-trip: all MSAA modes, booleans, framerate coexistence, debug path, legacy and malformed files
+PASS debounce; failed saves suspend automatic retries; real changes rearm; forced retry and success clear dirty

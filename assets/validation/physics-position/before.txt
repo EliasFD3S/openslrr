@@ -1,0 +1,3 @@
+[physics_position] test 1 failed: v&&v->fields["x"].v.f==10&&v->fields["y"].v.f==20&&v->fields["z"].v.f==30 at tests/test_physics_position.cpp:14
+[physics_position] test 4 failed: f.read()->fields["y"].v.f==42 at tests/test_physics_position.cpp:17
+[physics_position] 2 passed, 2 failed

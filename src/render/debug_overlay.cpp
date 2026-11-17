@@ -42,6 +42,7 @@ void draw_render(uint16_t width, uint16_t height, DebugOverlay::RenderOptions& o
               static_cast<unsigned long long>(audio.coalesced));
   ImGui::Separator();
   auto& enhanced = host_enhanced_graphics();
+  const auto previous_enhanced = enhanced;
   ImGui::Checkbox("VSync", &options.vsync);
   ImGui::Checkbox("Vehicle shadows", &options.shadows);
   ImGui::Checkbox("Map shadows", &options.map_shadows);
@@ -72,6 +73,7 @@ void draw_render(uint16_t width, uint16_t height, DebugOverlay::RenderOptions& o
     options = {};
     enhanced = {};
   }
+  if (enhanced != previous_enhanced) host_save_graphics_options();
 }
 
 void draw_tuning(Jvm* vm) {

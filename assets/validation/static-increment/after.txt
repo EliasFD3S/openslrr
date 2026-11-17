@@ -1,0 +1,21 @@
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[static_increment] 2 passed, 0 failed
+[compiler] attempted=1 succeeded=1 failed=0 classes=2 (restart for loaded classes)
+PASS static pre/post ++/--, statement, float, foreign owner, local/instance regression and int wrap
+PASS actual GameLogic.spendTime TREE: midnight boundary, single/multiple days, notification and clock sync

@@ -1,0 +1,4 @@
+garage 0x7a shell=1 meshes=1 PASS
+garage 0x6 shell=1 meshes=1 PASS
+garage 0xc7 shell=1 meshes=1 PASS
+garage 0x2f shell=1 meshes=1 PASS

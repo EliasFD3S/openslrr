@@ -1,0 +1,68 @@
+#pragma once
+#include "slrr/host_input.hpp"
+#include <algorithm>
+#include <cmath>
+#include <optional>
+#include <span>
+
+namespace slrr::input_mapping {
+constexpr int kPadDevice = 2;
+
+inline std::optional<float> pad_fallback(const ControllerInput& input, int axis,
+                                         std::span<const float> pad) {
+  if (axis != 1 && axis != 28 && axis != 29 && axis != 48) return std::nullopt;
+  for (const auto& binding : input.bindings)
+    if (binding.device == kPadDevice && binding.axis == axis) return std::nullopt;
+  auto available = [&](int physical) {
+    return std::none_of(input.bindings.begin(), input.bindings.end(), [&](const InputBinding& b) {
+      return b.device == kPadDevice && b.physical == physical;
+    });
+  };
+  auto value = [&](int physical) {
+    return physical < static_cast<int>(pad.size()) && available(physical) ? pad[physical] : 0.f;
+  };
+  switch (axis) {
+    case 1: return value(0) - value(1);
+    case 28: return value(9);
+    case 29: return value(8);
+    case 48: return value(21);
+  }
+  return std::nullopt;
+}
+
+template<class Physical>
+float mapped_axis(const ControllerInput& input, int axis, Physical physical,
+                  std::span<const float> pad) {
+  float positive = 0.f, negative = 0.f;
+  for (const auto& binding : input.bindings) {
+    if (binding.axis != axis || binding.from == binding.to) continue;
+    const float value = physical(binding.device, binding.physical);
+    const float t = std::clamp((value - binding.from) / (binding.to - binding.from), 0.f, 1.f);
+    const float mapped = std::lerp(binding.low, binding.high, t);
+    positive = std::max(positive, mapped);
+    negative = std::min(negative, mapped);
+  }
+  if (const auto fallback = pad_fallback(input, axis, pad)) {
+    if (axis == 1) {
+      if (positive + negative == 0.f) return *fallback;
+    } else return std::max(positive, *fallback);
+  }
+  return positive + negative;
+}
+
+template<class Physical>
+bool steering_is_analog(const ControllerInput& input, Physical physical,
+                         std::span<const float> pad) {
+  bool analog = false, digital = false;
+  for (const auto& binding : input.bindings) {
+    if (binding.axis != 1) continue;
+    const bool analog_binding = binding.device == kPadDevice && binding.physical >= 0 && binding.physical < 10;
+    const bool active = std::abs(physical(binding.device, binding.physical)) > .01f;
+    analog |= analog_binding && active;
+    digital |= !analog_binding && active;
+  }
+  const auto fallback = pad_fallback(input, 1, pad);
+  analog |= fallback && std::abs(*fallback) > .01f;
+  return analog && !digital;
+}
+}  // namespace slrr::input_mapping

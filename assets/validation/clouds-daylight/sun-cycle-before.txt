@@ -1,0 +1,15 @@
+FAIL daylight direct energy
+PASS noon sun overhead
+PASS no direct sun after sunset
+PASS night ambient unchanged
+PASS warm fading sunset
+PASS finite nonnegative cycle
+PASS finite nonnegative cycle
+PASS finite nonnegative cycle
+PASS finite nonnegative cycle
+PASS finite nonnegative cycle
+PASS finite nonnegative cycle
+PASS finite nonnegative cycle
+PASS finite nonnegative cycle
+PASS finite nonnegative cycle
+PASS 24 hour repeat

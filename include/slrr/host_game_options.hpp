@@ -10,8 +10,11 @@ struct EnhancedGraphics {
   bool volumetric_clouds = true;
   bool dynamic_lighting = true;
   bool local_lights = true;
+  bool operator==(const EnhancedGraphics&) const = default;
 };
 EnhancedGraphics& host_enhanced_graphics();
+// Persist host-only graphics alongside the stock options, without changing Config.
+bool host_save_graphics_options();
 // Options -> Advanced Game Options -> Framerate Adaptive Behaviour.
 // Classic draws cars at their last 60 Hz physics tick, as before. Adaptive
 // draws them between ticks. Saved in save/game/openslrr_options.

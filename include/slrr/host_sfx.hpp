@@ -23,6 +23,9 @@ void host_sfx_set_volume(float volume);
 struct HostSfxStats {
   uint32_t active = 0;
   uint64_t coalesced = 0;
+  uint64_t rejected = 0, wave_reads = 0, cache_hits = 0;
+  uint32_t cached_waves = 0;
+  uint64_t cached_bytes = 0;
 };
 HostSfxStats host_sfx_stats();
 

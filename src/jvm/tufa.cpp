@@ -84,6 +84,7 @@ class Reader {
 std::vector<TufaConstant> parse_constants(const std::vector<uint8_t>& bytes) {
   Reader r(bytes.data(), bytes.size(), "CONS");
   const uint32_t n = r.u32();
+  if (n > r.left()/8) throw std::runtime_error("CONS: count exceeds remaining bytes");
   std::vector<TufaConstant> out;
   out.reserve(n);
   for (uint32_t i = 0; i < n; ++i) {
@@ -135,6 +136,8 @@ void parse_members(const std::vector<uint8_t>* bytes, bool methods,
   Reader r(bytes->data(), bytes->size(), methods ? "MTHD" : "FILD");
   auto read_part = [&](std::vector<TufaMember>* dest) {
     const uint32_t n = r.u32();
+    if (n > r.left()/(methods?20u:16u))
+      throw std::runtime_error("members: count exceeds remaining bytes");
     dest->reserve(n);
     for (uint32_t i = 0; i < n; ++i) {
       TufaMember m;
@@ -142,7 +145,10 @@ void parse_members(const std::vector<uint8_t>* bytes, bool methods,
       m.name = r.u32();
       m.descriptor = r.u32();
       m.tree = r.u32();
-      if (methods) m.locals = r.u32();
+      if (methods) {
+        m.locals = r.u32();
+        if (m.locals > kTufaMaxLocals) throw std::runtime_error("method local count out of range");
+      }
       dest->push_back(m);
     }
   };
@@ -154,10 +160,12 @@ void parse_members(const std::vector<uint8_t>* bytes, bool methods,
 std::vector<std::vector<TufaNode>> parse_trees(const std::vector<uint8_t>& bytes) {
   Reader r(bytes.data(), bytes.size(), "TREE");
   const uint32_t n = r.u32();
+  if (n > r.left()/4) throw std::runtime_error("TREE: count exceeds remaining bytes");
   std::vector<std::vector<TufaNode>> trees;
   trees.reserve(n);
   for (uint32_t i = 0; i < n; ++i) {
     const uint32_t len = r.u32();
+    if (len > r.left()/3) throw std::runtime_error("TREE: node count exceeds remaining bytes");
     std::vector<TufaNode> nodes;
     nodes.reserve(len);
     for (uint32_t j = 0; j < len; ++j) {
@@ -169,6 +177,8 @@ std::vector<std::vector<TufaNode>> parse_trees(const std::vector<uint8_t>& bytes
       node.line = r.u16();
       node.wide = (kTreeOpFlags[node.op] >> 12) != 0;
       if (node.wide) node.imm = r.u32();
+      if ((node.op==0x01 || node.op==0x02) && node.imm>=kTufaMaxLocals)
+        throw std::runtime_error("TREE: local slot out of range");
       nodes.push_back(node);
     }
     trees.push_back(std::move(nodes));
@@ -219,6 +229,7 @@ TufaClass parse_one_blob(Reader& file) {
   cls.name_index = c.u32();
   cls.super_index = c.u32();
   const uint32_t ni = c.u32();
+  if (ni > c.left()/4) throw std::runtime_error("CLSS: interface count exceeds remaining bytes");
   cls.interfaces.reserve(ni);
   for (uint32_t i = 0; i < ni; ++i) cls.interfaces.push_back(c.u32());
   c.done();
@@ -241,6 +252,29 @@ TufaClass parse_one_blob(Reader& file) {
   check_members(cls.instance_fields);
   check_members(cls.static_methods);
   check_members(cls.instance_methods);
+  // Validate the entire pool and every constant-bearing opcode before any
+  // static initializer is published or evaluated by the VM. Keep reference()
+  // compatibility with bare UTF8 and NameAndType carriers.
+  for (uint32_t i=0;i<cls.constants.size();++i) {
+    switch(cls.constants[i].kind) {
+      case TufaConstKind::Class: (void)cls.class_name(i); break;
+      case TufaConstKind::Resource: (void)cls.resource(i); break;
+      case TufaConstKind::Reference:
+      case TufaConstKind::NameAndType: (void)cls.reference(i); break;
+      default: break;
+    }
+  }
+  for (const auto& nodes:cls.trees) for (const auto& node:nodes) {
+    switch(node.op) {
+      case 0x06: case 0x09: case 0x12: case 0x25: case 0x26:
+        (void)cls.utf8(node.imm); break;
+      case 0x0e: (void)cls.resource(node.imm); break;
+      case 0x19: (void)cls.class_name(node.imm); break;
+      case 0x1a: case 0x1b: case 0x1c:
+        (void)cls.reference(node.imm); break;
+      default: break;
+    }
+  }
   return cls;
 }
 
@@ -296,12 +330,17 @@ TufaClass::Resource TufaClass::resource(uint32_t index) const {
 
 bool tufa_parse(const uint8_t* data, size_t size, std::vector<TufaClass>* out,
                 std::string* err) {
+  if (!out || (!data && size)) {
+    if (err) *err="invalid TUFA input";
+    return false;
+  }
   try {
     out->clear();
     Reader r(data, size, "TUFA");
     while (r.left()) out->push_back(parse_one_blob(r));
     return true;
   } catch (const std::exception& e) {
+    out->clear();
     if (err) *err = e.what();
     return false;
   }
@@ -309,21 +348,25 @@ bool tufa_parse(const uint8_t* data, size_t size, std::vector<TufaClass>* out,
 
 bool tufa_load_file(const std::string& path, std::vector<TufaClass>* out,
                     std::string* err) {
-  std::ifstream in(path, std::ios::binary);
-  if (!in) {
-    if (err) *err = "cannot open " + path;
+  try {
+    if (out) out->clear();
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
+    if (!in) { if (err) *err="cannot open " + path; return false; }
+    const auto length=in.tellg();
+    if (length<0) { if (err) *err="cannot size " + path; return false; }
+    const auto n=static_cast<size_t>(length);
+    in.seekg(0,std::ios::beg);
+    std::vector<uint8_t> buf(n);
+    if (n && !in.read(reinterpret_cast<char*>(buf.data()),static_cast<std::streamsize>(n))) {
+      if (err) *err="read failed " + path;
+      return false;
+    }
+    return tufa_parse(buf.data(),buf.size(),out,err);
+  } catch (const std::exception& e) {
+    if (out) out->clear();
+    if (err) *err=std::string("TUFA file load: ")+e.what();
     return false;
   }
-  in.seekg(0, std::ios::end);
-  const auto n = static_cast<size_t>(in.tellg());
-  in.seekg(0, std::ios::beg);
-  std::vector<uint8_t> buf(n);
-  if (n && !in.read(reinterpret_cast<char*>(buf.data()),
-                    static_cast<std::streamsize>(n))) {
-    if (err) *err = "read failed " + path;
-    return false;
-  }
-  return tufa_parse(buf.data(), buf.size(), out, err);
 }
 
 }  // namespace slrr

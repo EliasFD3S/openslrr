@@ -244,13 +244,13 @@ void register_lang_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
       });
   jvm.natives().register_method("java.lang.String", "timeToString", "(FI)Ljava.lang.String;",
       [&jvm](Object*, const std::vector<Value>& args) {
-        const float time = args.empty() ? 0.f : args[0].tag == ValueTag::Float ? args[0].v.f : static_cast<float>(args[0].v.i);
-        const int flags = args.size() > 1 ? args[1].v.i : 0;
+        const float time = native_arg_number(args, 0);
+        const int flags = native_arg_integer(args, 1);
         return Value::make_obj(jvm.new_string(format_game_time(time, flags)));
       });
   jvm.natives().register_method("java.lang.String", "timeToString", "(F)Ljava.lang.String;",
       [&jvm](Object*, const std::vector<Value>& args) {
-        const float time = args.empty() ? 0.f : args[0].tag == ValueTag::Float ? args[0].v.f : static_cast<float>(args[0].v.i);
+        const float time = native_arg_number(args, 0);
         return Value::make_obj(jvm.new_string(format_game_time(time, 0)));
       });
   // GameLogic.save / load / loadDefaults / changeActiveSection are the Java

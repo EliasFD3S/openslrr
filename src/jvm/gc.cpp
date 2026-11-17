@@ -1,4 +1,6 @@
 #include "slrr/jvm.hpp"
+#include "slrr/osd_registry.hpp"
+#include "slrr/slrr_font.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <limits>
@@ -39,6 +41,7 @@ int Jvm::collect_garbage() {
   struct Guard { bool& running; ~Guard() { running = false; } } guard{gc_running_};
   const bool requested = gc_pending_;
   gc_pending_ = false;
+  osd_compact_widgets();
   const size_t before = heap_.size();
   std::unordered_set<const void*> managed;
   std::unordered_set<const void*> marked;
@@ -101,6 +104,8 @@ int Jvm::collect_garbage() {
   const size_t sweep_size = heap_.size();
   heap_.erase(std::remove_if(heap_.begin(), heap_.end(), [&](const auto& o) {
     if (marked.count(o.get())) return false;
+    osd_forget(o.get());
+    slrr_font_forget(o.get());
     host_input_forget(o.get());
     return true;
   }), heap_.end());

@@ -1,0 +1,4 @@
+Working fix
+[map_views] 1 passed, 0 failed
+PASS local GPS/fullscreen map stays separate from resized scene camera; close and viewport lifetime
+Save I/O test exit code: 0 (log: C:\Users\Elias\Desktop\openslrr\build\map-views-tests\after.log)

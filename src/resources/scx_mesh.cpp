@@ -134,6 +134,16 @@ bool parse_v3(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
       info.error = "v3 index overrun";
       return false;
     }
+    // Validate local indices even for metadata-only reads. An index into a
+    // later group's vertices is still invalid for this material group.
+    for (uint32_t t = 0; t < face_count; ++t) {
+      const uint8_t* ix = buf.data() + off + static_cast<size_t>(t) * 12;
+      if (rd_u32(ix) >= vcount || rd_u32(ix + 4) >= vcount ||
+          rd_u32(ix + 8) >= vcount) {
+        info.error = "v3 face vertex index out of range";
+        return false;
+      }
+    }
     if (want_geo) {
       group.index_start = static_cast<uint32_t>(geo.indices.size());
       group.index_count = face_count * 3;
@@ -261,6 +271,8 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
               mat.specular[0] = buf[p + 0] / 255.f;
               mat.specular[1] = buf[p + 1] / 255.f;
               mat.specular[2] = buf[p + 2] / 255.f;
+            } else if (want_geo && prop == 2) {
+              for (int c = 0; c < 3; ++c) mat.emission_color[c] = buf[p + c] / 255.f;
             }
             p += 4;
           } else if (prop >= 0x01000000u && prop <= 0x01000002u) {
@@ -295,6 +307,10 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
             if (prop == 0x06000004u && tex_i < 0xffffu) {
               mat.illumination_index = static_cast<uint16_t>(tex_i);
               mat.illumination_map = map;
+            }
+            if (prop == 0x06000005u && tex_i < 0xffffu) {
+              mat.emission_index = static_cast<uint16_t>(tex_i);
+              mat.emission_map = map;
             }
             if (prop == 0x06000007u && tex_i < 0xffffu) {
               mat.lightmap_index = static_cast<uint16_t>(tex_i);
@@ -437,7 +453,8 @@ bool parse_v4(const std::vector<uint8_t>& buf, ScxGeometry& geo, bool want_geo) 
           geo.uvs.push_back(vv);
           geo.uv2.push_back(u2); geo.uv2.push_back(v2);
           geo.uv3.push_back(u3); geo.uv3.push_back(v3);
-          if (!geo.skin_weights.empty()) {
+          // The first skinned vertex has no preceding weights to backfill.
+          if (skinned || !geo.skin_weights.empty()) {
             for (int k = 0; k < 4; ++k) {
               geo.skin_weights.push_back(skinned ? skin_w[k] : 0.f);
               geo.skin_bones.push_back(skinned ? skin_b[k] : 0);

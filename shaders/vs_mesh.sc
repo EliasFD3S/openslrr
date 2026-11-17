@@ -4,6 +4,7 @@ $output v_normal, v_texcoord0, v_texcoord1, v_texcoord2, v_color0, v_staticShado
 #include <bgfx_shader.sh>
 
 uniform mat4 u_staticShadowMtx;
+uniform vec4 u_alphaTest;
 
 void main()
 {
@@ -15,6 +16,14 @@ void main()
 	v_color0 = a_color0;
 	v_tint = vec4(1.0, 1.0, 1.0, 1.0);
 	vec4 world = mul(u_model[0], vec4(a_position, 1.0));
+	// Night detail is authored coplanar with the facade. A 2 mm normal
+	// offset avoids depth ties without a distance-dependent clip-space bias.
+	float surfaceNormalLength = dot(v_normal, v_normal);
+	if (u_alphaTest.y > 1.5 && surfaceNormalLength > 1e-8) {
+		vec4 overlay = world;
+		overlay.xyz += v_normal * (0.002 / sqrt(surfaceNormalLength));
+		gl_Position = mul(u_viewProj, overlay);
+	}
 	// Pull the receiver out of its own surface. A few centimetres stops the
 	// cornice and the wall from shadowing themselves in stripes.
 	float nl = dot(v_normal, v_normal);

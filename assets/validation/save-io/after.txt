@@ -1,0 +1,14 @@
+Baseline: 17115433f8aaa2e6a0bcce970c25afdd7dc01ce0
+Suite: tests/test_save_io.cpp
+Run: after
+
+[save_io] 10 passed, 0 failed
+[native] File.delete save/career ok=0
+[native] File.delete save/career/main ok=1
+[native] File.delete save/career ok=1
+[native] File.delete save/career/J..R-1/main ok=1
+[native] File.delete save/career/Mr...-1/main ok=1
+[native] File.delete save/career/normal-1/main ok=1
+[sdat] resource 0x12340056 has no pack; writing null placeholder
+[sdat] resource 0x00000056 has no pack; writing null placeholder
+[sdat] resource 0xffff0056 has no pack; writing null placeholder

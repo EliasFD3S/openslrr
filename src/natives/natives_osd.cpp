@@ -113,7 +113,7 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         self->fields["active"] = Value::make_int(0);
         auto it = self->fields.find("_osd");
         if (it != self->fields.end() && it->second.tag == ValueTag::Obj)
-          osd_set_owner_visible(it->second.v.o, false);
+          osd_destroy_owner(it->second.v.o);
         return Value::make_void();
       });
   jvm.natives().register_method(
@@ -215,7 +215,7 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         auto* state=gameref_upsert(self,GameRefKind::Camera);state->empty=false;
         gameref_set_parent(self,!args.empty()&&args[0].tag==ValueTag::Obj?args[0].v.o:nullptr);
         state->viewport=args.size()>1&&args[1].tag==ValueTag::Obj?args[1].v.o:nullptr;
-        state->cam_pri=args.size()>2?args[2].v.i:0;
+        state->cam_pri=native_arg_integer(args,2);
         state->half_aov=args.size()>3?as_f(args[3],45):45;
         state->dmin=args.size()>4?as_f(args[4],.1f):.1f;
         state->dmax=args.size()>5?as_f(args[5],100):100;state->cam_active=true;
@@ -224,7 +224,7 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   jvm.natives().register_method("java.render.Camera", "destroy", "()V", [](Object* self,const std::vector<Value>&){gameref_remove(self);return Value::make_void();});
   jvm.natives().register_method(
       "java.render.Camera", "activate", "(Ljava.render.Viewport;I)V",
-      [](Object* self,const std::vector<Value>& args){if(auto* s=gameref_get(self)){if(!args.empty()&&args[0].tag==ValueTag::Obj)s->viewport=args[0].v.o;if(args.size()>1)s->cam_pri=args[1].v.i;s->cam_active=true;}return Value::make_void();});
+      [](Object* self,const std::vector<Value>& args){if(auto* s=gameref_get(self)){if(!args.empty()&&args[0].tag==ValueTag::Obj)s->viewport=args[0].v.o;if(args.size()>1)s->cam_pri=native_arg_integer(args,1);s->cam_active=true;}return Value::make_void();});
   jvm.natives().register_method(
       "java.render.Camera", "deactivate", "(Ljava.render.Viewport;)V",
       [](Object* self,const std::vector<Value>& args){if(auto* s=gameref_get(self);s&&(args.empty()||(args[0].tag==ValueTag::Obj&&args[0].v.o==s->viewport)))s->cam_active=false;return Value::make_void();});
@@ -296,9 +296,8 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         // that string against the Text the same call creates.
         if (args.size() > 4 && args[4].tag == ValueTag::Obj && args[4].v.o)
           w.tip = args[4].v.o->str;
-        const int32_t wi = static_cast<int32_t>(osd_widgets().size());
+        const int32_t wi = osd_add_widget(std::move(w));
         self->fields["_osd_wi"] = Value::make_int(wi);
-        osd_add_widget(std::move(w));
         return Value::make_void();
       });
   jvm.natives().register_method(
@@ -339,7 +338,10 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   jvm.natives().register_method(
       "java.util.resource.PhysicsRef", "getPos", "()Ljava.lang.Vector3;",
       [&jvm](Object* self, const std::vector<Value>&) {
-        if (self) {
+        const GameRefState* state = gameref_get(self);
+        // World bodies are owned by the simulation. OSD hit rectangles have
+        // no physics shape and keep their script-space hotspot coordinates.
+        if (self && (!state || state->physics_shape == PhysicsShape::None)) {
           const auto stored = self->fields.find("pos");
           if (stored != self->fields.end() && stored->second.tag == ValueTag::Obj &&
               stored->second.v.o) {
@@ -455,12 +457,8 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   jvm.natives().register_method(
       "java.render.Text", "setPos", "(FF)V",
       [](Object* self, const std::vector<Value>& args) {
-        const float x =
-            args.size() >= 1 && args[0].tag == ValueTag::Float ? args[0].v.f
-                                                               : 0.f;
-        const float y =
-            args.size() >= 2 && args[1].tag == ValueTag::Float ? args[1].v.f
-                                                               : 0.f;
+        const float x = native_arg_number(args, 0);
+        const float y = native_arg_number(args, 1);
         slrr_text_set_pos(self, x, y);
         return Value::make_void();
       });

@@ -18,6 +18,7 @@ struct SlrrFontGlyph {
 
 struct SlrrFont {
   std::string name;
+  std::string cache_key;
   int32_t atlas_w = 0;
   int32_t atlas_h = 0;
   int32_t px_height = 20;
@@ -56,6 +57,9 @@ void slrr_font_set_game_root(const std::string& root);
 bool slrr_font_load(void* key, const char* name);
 bool slrr_font_load_from_rid(void* key, int32_t rid);
 bool slrr_font_ready(void* key);
+void slrr_font_forget(void* key);
+bool slrr_font_asset_live(const std::string& cache_key);
+void slrr_text_destroy_owner(void* owner);
 const SlrrFont* slrr_font_get(void* key);
 float slrr_font_measure_px(void* key, const char* text);
 const char* slrr_font_name_for_rid(int32_t rid);

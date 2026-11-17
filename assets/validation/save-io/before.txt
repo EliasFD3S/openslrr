@@ -1,0 +1,19 @@
+Baseline: 17115433f8aaa2e6a0bcce970c25afdd7dc01ce0
+Suite: tests/test_save_io.cpp
+Run: before
+
+[save_io] test 1 failed: f.erase(path) == 0 at tests/test_save_io.cpp:96
+[save_io] test 2 failed: f.erase("save/career") == 0 at tests/test_save_io.cpp:104
+[save_io] test 4 failed: !slrr::under_game(f.root.string(), "save/J..R-1/main").empty() at tests/test_save_io.cpp:117
+[save_io] test 5 failed: f.open(path, 1) == 1 at tests/test_save_io.cpp:126
+[save_io] test 6 failed: payload.bytes.size() == 12 + 4 + text.str.size() + 1 at tests/test_save_io.cpp:79
+[save_io] test 7 failed: payload.bytes.size() == 12 + 4 + text.str.size() + 1 at tests/test_save_io.cpp:79
+[save_io] test 8 failed: payload.bytes.size() == 12 + 4 + text.str.size() + 1 at tests/test_save_io.cpp:79
+[save_io] 3 passed, 7 failed
+[native] File.delete . ok=1
+[native] File.delete save/career ok=1
+[native] File.delete save/career/main ok=1
+[native] File.delete save/career ok=1
+[sdat] resource 0x12340056 has no pack
+[sdat] resource 0x00000056 has no pack
+[sdat] resource 0xffff0056 has no pack

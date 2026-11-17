@@ -1,0 +1,4 @@
+SCX case 0: PASS
+SCX case 1: PASS
+SCX case 2: PASS
+SCX case 3: PASS

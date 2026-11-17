@@ -1,0 +1,8 @@
+Baseline: main 71aec8b
+[save_persistence] test 1 failed: disk_bytes(f.root/"save/main")==original at tests/test_save_persistence.cpp:86
+[save_persistence] test 2 failed: exists(f,"save/pending")==1 at tests/test_save_persistence.cpp:98
+[save_persistence] test 5 failed: transfer(f,"copy","save/pending","save/destination")==-1 at tests/test_save_persistence.cpp:120
+[save_persistence] test 8 failed: write(&empty)==1 at tests/test_save_persistence.cpp:142
+[save_persistence] test 9 failed: f.damage(index).v.o==nullptr at tests/test_save_persistence.cpp:159
+[save_persistence] test 10 failed: f.damage(0).v.o==nullptr at tests/test_save_persistence.cpp:168
+[save_persistence] 4 passed, 6 failed

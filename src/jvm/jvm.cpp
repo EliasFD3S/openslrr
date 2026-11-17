@@ -7,6 +7,7 @@
 #include "slrr/rpk_index.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <limits>
 
 #include <cstdio>
@@ -163,6 +164,19 @@ void Jvm::seed_static_fields(const TufaClass& cls) {
   // so we don't overwrite host-set object statics with a stray argc int.
   const std::string owner = cls.name();
   if (owner.empty()) return;
+  auto& rid_fields = static_rids_[owner];
+  rid_fields.clear();
+  // Record once, including the negative result for ordinary integer constants.
+  std::unordered_set<std::string> checked;
+  for (const auto& f : cls.static_fields) {
+    const auto name = cls.utf8(f.name);
+    if (f.tree == kTufaNone || f.tree >= cls.trees.size() || !checked.insert(name).second)
+      continue;
+    const auto& tree = cls.trees[f.tree];
+    if (tree.size() > 8) continue;
+    for (const auto& n : tree)
+      if (n.op == 0x0e && n.wide) rid_fields[name].push_back(cls.resource(n.imm));
+  }
   for (const auto& f : cls.static_fields) {
     const std::string fname = cls.utf8(f.name);
     if (fname.empty()) continue;
@@ -265,7 +279,13 @@ void Jvm::enrich_static_fields(const TufaClass& cls) {
     if (fname.empty()) continue;
     TufaMember m = f;
     if (m.locals < 1) m.locals = 1;
-    TreeEvalResult tr = tree_eval(this, cls, m, nullptr, {});
+    TreeEvalResult tr;
+    try {
+      tr = tree_eval(this, cls, m, nullptr, {});
+    } catch (const std::exception& error) {
+      std::fprintf(stderr,"[jvm] static initializer %s.%s: %s\n",owner.c_str(),fname.c_str(),error.what());
+      continue;
+    }
     if (!tr.ok || tr.value.tag == ValueTag::Void) continue;
     if (call && tr.value.tag != ValueTag::Obj) continue;
     statics_[owner][fname] = tr.value;
@@ -333,12 +353,20 @@ void Jvm::apply_field_defaults(Object* obj) {
 }
 
 bool Jvm::load_class_file(const std::string& path) {
-  if (!loading_paths_.insert(path).second) return true;
+  std::error_code error;
+  auto absolute = std::filesystem::absolute(path, error);
+  std::string path_key = (error ? std::filesystem::path(path) : absolute).lexically_normal().string();
+#ifdef _WIN32
+  std::transform(path_key.begin(), path_key.end(), path_key.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+#endif
+  if (loaded_paths_.contains(path_key)) return true;
+  if (!loading_paths_.insert(path_key).second) return true;
   struct LoadingGuard {
     std::unordered_set<std::string>* set;
     std::string path;
     ~LoadingGuard() { set->erase(path); }
-  } guard{&loading_paths_, path};
+  } guard{&loading_paths_, path_key};
 
   std::vector<TufaClass> blobs;
   std::string err;
@@ -349,6 +377,9 @@ bool Jvm::load_class_file(const std::string& path) {
   }
   for (auto& cls : blobs) {
     const std::string name = cls.name();
+    // A class definition and its trees must outlive every executing/suspended
+    // frame. A different container may still introduce unseen sibling classes.
+    if (by_name_.contains(name)) continue;
     auto dot=name.find_last_of('.');
     if(dot!=std::string::npos){
       auto directory=std::filesystem::absolute(path).parent_path().string();
@@ -356,11 +387,15 @@ bool Jvm::load_class_file(const std::string& path) {
       auto candidate=std::make_pair(directory,package);
       if(std::find(classpath_.begin(),classpath_.end(),candidate)==classpath_.end())classpath_.push_back(candidate);
     }
-    seed_static_fields(cls);
-    by_name_[name] = std::move(cls);
-    enrich_static_fields(by_name_[name]);
+    auto [entry, inserted] = by_name_.try_emplace(name, std::move(cls));
+    if (inserted) {
+      seed_static_fields(entry->second);
+      enrich_static_fields(entry->second);
+    }
   }
-  return !blobs.empty();
+  if (blobs.empty()) return false;
+  loaded_paths_.insert(path_key);
+  return true;
 }
 
 bool Jvm::load_class(const std::string& fqn_or_path) {
@@ -539,12 +574,22 @@ const TufaMember* Jvm::find_method_by_name(
     while (i < jni.size() && jni[i] != ')') {
       if (ai >= runtime->size()) return -1000;
       const Value& a = (*runtime)[ai];
+      const size_t parameter_begin = i;
+      const bool array = jni[i] == '[';
       char c = jni[i];
       if (c == '[') {
         while (i < jni.size() && jni[i] == '[') ++i;
         c = i < jni.size() ? jni[i] : 0;
       }
-      if (c == 'L' || jni[i] == 'L') {
+      if (array) {
+        if (c == 'L') while (i < jni.size() && jni[i] != ';') ++i;
+        if (i < jni.size()) ++i;
+        const auto type = jni.substr(parameter_begin, i - parameter_begin);
+        if (a.tag != ValueTag::Obj) s -= 4;
+        else if (!a.v.o) s += 2;
+        else if (a.v.o->is_array && a.v.o->class_name == type) s += 8;
+        else s += 1;
+      } else if (c == 'L' || jni[i] == 'L') {
         const size_t begin = (i < jni.size() && jni[i] == 'L') ? i + 1 : i;
         while (i < jni.size() && jni[i] != ';') ++i;
         std::string typ = jni.substr(begin, i - begin);
@@ -554,8 +599,10 @@ const TufaMember* Jvm::find_method_by_name(
         // Any object used to score the same, so File.write(ResourceRef)
         // (declared before write(String)) won and stored player.name as
         // id 0. Load then read a zero length and the header became "null".
-        if (a.tag != ValueTag::Obj || !a.v.o)
+        if (a.tag != ValueTag::Obj)
           s -= 4;
+        else if (!a.v.o)
+          s += 2;  // null is a reference, never an int/float overload tie.
         else if (!typ.empty() &&
                  const_cast<Jvm*>(this)->tree_instance_of(a.v.o, typ))
           s += 8;
@@ -679,15 +726,13 @@ Value Jvm::get_static(const std::string& class_fqn, const std::string& field) {
   auto fit = cit->second.find(field);
   if (fit == cit->second.end()) return Value::make_void();
   if (fit->second.tag == ValueTag::Int && (fit->second.v.i & 0xffff0000) == 0) {
-    if (const auto* cls = find_class(class_fqn)) for (const auto& f : cls->static_fields) {
-      if (cls->utf8(f.name) != field || f.tree == kTufaNone || f.tree >= cls->trees.size()) continue;
-      const auto& tree = cls->trees[f.tree]; if (tree.size() > 8) break;
-      for (const auto& n : tree) if(n.op == 0x0e && n.wide) {
-        const auto rid=cls->resource(n.imm);
-        if(static_cast<uint32_t>(fit->second.v.i)==rid.id)
-          fit->second=Value::make_int(static_cast<int32_t>(rpk_resolve_resource(rid.pack,rid.id)));
+    const auto owner = static_rids_.find(class_fqn);
+    if (owner != static_rids_.end()) {
+      const auto metadata = owner->second.find(field);
+      if (metadata != owner->second.end()) for (const auto& rid : metadata->second) {
+        if (static_cast<uint32_t>(fit->second.v.i) == rid.id)
+          fit->second = Value::make_int(static_cast<int32_t>(rpk_resolve_resource(rid.pack, rid.id)));
       }
-      break;
     }
   }
   return fit->second;

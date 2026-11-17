@@ -1,0 +1,42 @@
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] TUFA load failed C:\Users\Elias\Desktop\openslrr\build\save-io-fixtures\test-37108-1\Retry.class: TUFA: truncated at 0x0
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] invoke_by_name: class java.lang.Object
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] invoke_by_name: class java.lang.Object
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] invoke_by_name: class java.lang.Object
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] invoke_by_name: class java.lang.Object
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] native/empty TREE without host binding java.util.resource.ResourceRef.newNative ()V (from java.util.resource.Dummy)
+[jvm] native/empty TREE without host binding java.util.resource.ResourceRef.newNative ()V (from java.util.resource.Dummy)
+[jvm] native/empty TREE without host binding java.util.resource.ResourceRef.newNative ()V (from java.util.resource.Dummy)
+[jvm] native/empty TREE without host binding java.util.resource.ResourceRef.newNative ()V (from java.util.resource.Dummy)
+[class_lifetime] 3 passed, 0 failed
+[compiler] attempted=1 succeeded=1 failed=0 classes=2 (restart for loaded classes)
+[compiler] attempted=2 succeeded=2 failed=0 classes=3 (restart for loaded classes)
+PASS immutable classes/statics, canonical path reuse, reentrant load, concatenated containers and failed-load retry
+[compiler] attempted=1 succeeded=1 failed=0 classes=1 (restart for loaded classes)
+constructor expected=1 actual=1 tag=1
+constructor expected=2 actual=2 tag=1
+constructor expected=3 actual=3 tag=1
+constructor expected=4 actual=4 tag=1
+PASS general Dummy-shaped constructor chains, null/reference/primitive and array overload selection
+[rpk] parsed system.rpk pack=1 deps=0 entries=28
+[rpk] openLib system.rpk -> 1
+[jvm] classpath ready (29 roots) under C:\Users\Elias\Desktop\openslrr\game
+[rpk] resource pack miss 'frontend.rpk' local=0x2a
+[rpk] resource pack miss 'frontend.rpk' local=0x24
+[rpk] resource pack miss 'frontend.rpk' local=0x2b
+PASS actual game Dummy.class: all four constructors create native roots and preserve parent/flags
