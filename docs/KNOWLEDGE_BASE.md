@@ -701,9 +701,21 @@ These are entry points, not fixes. Each needs its own reproduction.
   density), spawning tested each sample against every walker, trees were
   never instanced, and the main loop slept 1.5 ms per frame. All of these
   are addressed. Remaining per-frame costs: scene collection (about 1–2 ms),
-  a 50–140 ms frame every few seconds (not yet isolated), `gameref_find_live`
+  `gameref_find_live`
   is a linear scan, `native_has_alias` runs on every Java invoke, and every
-  instance-field store calls `osd_on_field_write`.
+  instance-field store calls `osd_on_field_write`. The recurring driving
+  stutter was isolated in #195: a loose body (promoted map prop) near the car
+  swept its corners against every body part's unindexed collision mesh
+  (`src/resources/part_runtime.cpp:collide_loose_with_car`), costing up to
+  hundreds of milliseconds per overlap.
+  `src/resources/scene_instances.cpp:scene_mesh_sweep_sphere_grid` now sweeps
+  through a cached per-part XZ cell index
+  (`src/resources/part_runtime.cpp:Record::collision_grid`), and
+  `src/resources/scene_instances.cpp:sweep_triangles` rejects triangles
+  outside the sweep's XZ footprint. Smaller hitches remain: the stock
+  `updatevariables` script on panel detachment
+  (`src/resources/part_runtime.cpp:refresh_chassis`) and the VM GC pause
+  (`src/jvm/gc.cpp:collect_garbage`).
 - **#19 pedestrians on the road.** Addressed by the port of the original
   walker model (§5.7). The `Animation` constructor descriptor used slashes
   and never matched, so script animations were unbound; it now uses the

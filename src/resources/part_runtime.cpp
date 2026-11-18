@@ -69,6 +69,9 @@ struct SfxItem {
 struct Record {
   std::unique_ptr<physics::DeformationCage> deformation;
   std::unique_ptr<ScxGeometry> collision, deformed_collision;
+  // XZ index of `collision` for the loose-body sweep; built once on first use.
+  // Not used while deformed_collision is active (that mesh is swept directly).
+  std::unique_ptr<MeshSweepGrid> collision_grid;
   unsigned deformation_upload_ticks = 0;
   float steering_input = 0;
   float steering_request = 0, steering_correction = 0;
@@ -2852,6 +2855,14 @@ bool collide_loose_with_car(physics::RigidBody& body,
     if (part != &vehicle && part->config->category != 2) continue;
     const auto& mesh = part_collision_mesh(*part);
     if (mesh.indices.empty()) continue;
+    // A deformed part is swept directly; otherwise use the cached XZ index so
+    // a short corner sweep does not scan every triangle of the panel mesh.
+    const MeshSweepGrid* grid = nullptr;
+    if (!part->deformed_collision) {
+      if (!part->collision_grid)
+        part->collision_grid = std::make_unique<MeshSweepGrid>(build_mesh_sweep_grid(mesh));
+      grid = part->collision_grid.get();
+    }
     const auto relative = part_matrix_multiply(inverse_script, world_matrix(installed.object));
     const auto inverse_relative = part_matrix_inverse_rigid(relative);
     const auto frame = part_matrix_multiply(carrier_frame, relative);
@@ -2860,7 +2871,10 @@ bool collide_loose_with_car(physics::RigidBody& body,
     for (size_t i = 0; i < corners.size(); ++i) {
       const auto start = transform(from_frame, previous[i], 1);
       const auto travel = transform(to_frame, corners[i], 1) - start;
-      if (!scene_mesh_sweep_sphere(mesh, start, travel, radius, hit)) continue;
+      const bool struck = grid
+          ? scene_mesh_sweep_sphere_grid(mesh, *grid, start, travel, radius, hit)
+          : scene_mesh_sweep_sphere(mesh, start, travel, radius, hit);
+      if (!struck) continue;
       normal = transform(frame, {hit.normal[0], hit.normal[1], hit.normal[2]}, 0);
       point = transform(frame, start + travel * hit.fraction, 1) -
               normal * (radius - hit.penetration);

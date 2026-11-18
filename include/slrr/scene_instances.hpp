@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -187,6 +188,20 @@ bool scene_instances_contact_walls(const float frame[16], const float half[3],
 // Part-local triangle queries. The sweep retains an earlier hit if supplied.
 bool scene_mesh_sweep_sphere(const ScxGeometry& mesh, physics::Vec3 start,
                              physics::Vec3 movement, double radius, SceneSphereHit& hit);
+// A coarse XZ cell index over a part-local triangle mesh, so a short sphere
+// sweep tests only the triangles near its path instead of every triangle.
+// Built once per collision mesh and cached by its owner; the mesh itself is
+// unchanged. Triangles spanning too many cells are kept in `large` and always
+// tested, mirroring the static floor index.
+struct MeshSweepGrid {
+  float cell_size = 0.25f;
+  std::unordered_map<uint64_t, std::vector<uint32_t>> cells;
+  std::vector<uint32_t> large;
+};
+MeshSweepGrid build_mesh_sweep_grid(const ScxGeometry& mesh);
+bool scene_mesh_sweep_sphere_grid(const ScxGeometry& mesh, const MeshSweepGrid& grid,
+                                  physics::Vec3 start, physics::Vec3 movement,
+                                  double radius, SceneSphereHit& hit);
 double scene_mesh_nearest(const ScxGeometry& mesh, physics::Vec3 point,
                           physics::Vec3& closest);
 uint64_t scene_instances_floor_builds();

@@ -184,10 +184,16 @@ the fixed-step drive.
 
 1. **Measure where the CPU limits.** Run the benchmark with the process
    restricted to 2 and 4 cores (`run.ps1 -Affinity`, or `start /affinity`)
-   and on a low-end CPU. Find which zone stops scaling. Also isolate the
-   20–60 ms `part_physics_advance` frames that occur every few seconds in the
-   drive. They are the visible stutter, and threading is not their known
-   cause.
+   and on a low-end CPU. Find which zone stops scaling. The 20–60 ms
+   `part_physics_advance` frames that occur every few seconds in the drive
+   were isolated (#195): a promoted map prop (loose body) near the car swept
+   its eight corners against every body part's full collision mesh, which is
+   unindexed, so one overlap could cost hundreds of milliseconds. The sweep
+   now uses a cached per-part XZ cell index (`MeshSweepGrid`), and
+   `sweep_triangles` rejects triangles outside the sweep's XZ footprint.
+   Smaller remaining hitches in the same zone: `refresh_chassis` runs the
+   stock `updatevariables` script when a panel detaches, and the VM GC pause
+   lands just after the frame; both are separate follow-ups.
 2. **Scene collection in parallel.** `scene_instances_collect` and
    `scene_instances_collect_batches` cull the 64 m prop cells. Split the cells
    over the pool; each job culls its cells and builds its own instance and

@@ -1456,11 +1456,22 @@ void sweep_triangles(const std::vector<float>& positions, double scale,
                      Vec3 start, Vec3 delta, double radius, SceneSphereHit &hit,
                      float max_vertical_normal) {
   const Vec3 end = start + delta;
+  // XZ footprint of the swept sphere. A triangle outside it cannot be hit, so
+  // reject it before the costly closest-point/conservative-advancement work.
+  const double x_lo = std::min(start.x, end.x) - radius,
+               x_hi = std::max(start.x, end.x) + radius,
+               z_lo = std::min(start.z, end.z) - radius,
+               z_hi = std::max(start.z, end.z) + radius;
   for (size_t i = 0; i + 2 < indices.size(); i += 3) {
     Vec3 v[3];
     if (!triangle_vertices(positions, indices, i, scale, v) ||
         std::min({v[0].y, v[1].y, v[2].y}) > std::max(start.y, end.y) + radius ||
         std::max({v[0].y, v[1].y, v[2].y}) < std::min(start.y, end.y) - radius)
+      continue;
+    if (std::max({v[0].x, v[1].x, v[2].x}) < x_lo ||
+        std::min({v[0].x, v[1].x, v[2].x}) > x_hi ||
+        std::max({v[0].z, v[1].z, v[2].z}) < z_lo ||
+        std::min({v[0].z, v[1].z, v[2].z}) > z_hi)
       continue;
     const Vec3 n = (v[1] - v[0]).cross(v[2] - v[0]).normalized();
     if (n.dot(n) < 0.5 || std::abs(n.y) > max_vertical_normal) continue;
@@ -1501,6 +1512,84 @@ bool scene_mesh_sweep_sphere(const ScxGeometry& mesh, Vec3 start, Vec3 movement,
   const auto fraction = hit.fraction;
   sweep_triangles(mesh.positions, mesh.position_scale, mesh.indices, start, movement,
                   radius, hit, 1.f);
+  return hit.fraction < fraction;
+}
+
+MeshSweepGrid build_mesh_sweep_grid(const ScxGeometry& mesh) {
+  MeshSweepGrid grid;
+  const double scale = mesh.position_scale;
+  const auto cell_of = [&](double value) {
+    return static_cast<int32_t>(std::floor(value / grid.cell_size));
+  };
+  for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+    double min_x = 0, max_x = 0, min_z = 0, max_z = 0;
+    bool valid = true;
+    for (int k = 0; k < 3; ++k) {
+      const size_t vertex = static_cast<size_t>(mesh.indices[i + k]) * 3;
+      if (vertex + 2 >= mesh.positions.size()) {
+        valid = false;
+        break;
+      }
+      const double x = mesh.positions[vertex] * scale,
+                   z = mesh.positions[vertex + 2] * scale;
+      if (!std::isfinite(x) || !std::isfinite(z)) {
+        valid = false;
+        break;
+      }
+      if (!k) {
+        min_x = max_x = x;
+        min_z = max_z = z;
+      } else {
+        min_x = std::min(min_x, x);
+        max_x = std::max(max_x, x);
+        min_z = std::min(min_z, z);
+        max_z = std::max(max_z, z);
+      }
+    }
+    if (!valid) continue;
+    const int32_t x0 = cell_of(min_x), x1 = cell_of(max_x),
+                  z0 = cell_of(min_z), z1 = cell_of(max_z);
+    if (static_cast<int64_t>(x1 - x0 + 1) * (z1 - z0 + 1) > 64) {
+      grid.large.insert(grid.large.end(), mesh.indices.begin() + i,
+                        mesh.indices.begin() + i + 3);
+      continue;
+    }
+    for (int32_t x = x0; x <= x1; ++x)
+      for (int32_t z = z0; z <= z1; ++z) {
+        auto& cell = grid.cells[floor_cell(x, z)];
+        cell.insert(cell.end(), mesh.indices.begin() + i, mesh.indices.begin() + i + 3);
+      }
+  }
+  return grid;
+}
+
+bool scene_mesh_sweep_sphere_grid(const ScxGeometry& mesh, const MeshSweepGrid& grid,
+                                  Vec3 start, Vec3 movement, double radius,
+                                  SceneSphereHit& hit) {
+  const Vec3 end = start + movement * hit.fraction;
+  const double a[]{start.x, start.y, start.z}, b[]{end.x, end.y, end.z};
+  for (int axis = 0; axis < 3; ++axis)
+    if (std::min(a[axis], b[axis]) > mesh.info.bbox_max[axis] * mesh.position_scale + radius ||
+        std::max(a[axis], b[axis]) < mesh.info.bbox_min[axis] * mesh.position_scale - radius)
+      return false;
+  const auto fraction = hit.fraction;
+  const auto cell_of = [&](double value) {
+    return static_cast<int32_t>(std::floor(value / grid.cell_size));
+  };
+  const int32_t x0 = cell_of(std::min(start.x, end.x) - radius),
+                x1 = cell_of(std::max(start.x, end.x) + radius),
+                z0 = cell_of(std::min(start.z, end.z) - radius),
+                z1 = cell_of(std::max(start.z, end.z) + radius);
+  for (int32_t x = x0; x <= x1; ++x)
+    for (int32_t z = z0; z <= z1; ++z) {
+      const auto cell = grid.cells.find(floor_cell(x, z));
+      if (cell != grid.cells.end())
+        sweep_triangles(mesh.positions, mesh.position_scale, cell->second, start,
+                        movement, radius, hit, 1.f);
+    }
+  if (!grid.large.empty())
+    sweep_triangles(mesh.positions, mesh.position_scale, grid.large, start, movement,
+                    radius, hit, 1.f);
   return hit.fraction < fraction;
 }
 

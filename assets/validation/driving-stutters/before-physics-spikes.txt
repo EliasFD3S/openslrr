@@ -1,0 +1,1 @@
+[physdiag] f=293 tot=804.4 ticks=804.0 | recloop=0.2{cfg=0.0 adv=0.0 coll=0.0 dmg=0.0 sync=0.1 defm=0.0} detach=0.0(n=0) | loose=803.8 free=0.0 promote=0.0 carcol=803.8 | prep=0.0 peds=0.3 loose_n=2

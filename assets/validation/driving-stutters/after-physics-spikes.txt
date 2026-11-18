@@ -1,0 +1,11 @@
+[physdiag] f=3 tot=187.7 prep=123.5 ticks=15.7 audio=0.0 peds=48.4 | loose=0.1 free=0.0 recloop=15.6{cfg=14.3 adv=0.2 coll=0.0 dmg=0.0 sync=0.8 defm=0.0} promote=0.0 detach=0.0(n=0){remp=0.0 relink=0.0 refresh=0.0}
+[physdiag] f=425 tot=29.9 prep=0.1 ticks=29.3 audio=0.1 peds=0.2 | loose=0.0 free=0.0 recloop=2.2{cfg=0.0 adv=0.1 coll=0.0 dmg=0.4 sync=0.1 defm=0.1} promote=0.0 detach=27.1(n=2){remp=0.5 relink=0.2 refresh=26.4}
+[physdiag] f=578 tot=14.6 prep=0.1 ticks=14.1 audio=0.1 peds=0.2 | loose=0.1 free=0.0 recloop=1.5{cfg=0.0 adv=0.0 coll=0.1 dmg=0.2 sync=0.1 defm=0.0} promote=0.0 detach=12.4(n=1){remp=0.2 relink=0.1 refresh=12.1}
+[physdiag] f=2176 tot=11.1 prep=0.0 ticks=0.3 audio=0.0 peds=10.7 | loose=0.1 free=0.0 recloop=0.2{cfg=0.0 adv=0.0 coll=0.0 dmg=0.0 sync=0.1 defm=0.0} promote=0.0 detach=0.0(n=0){remp=0.0 relink=0.0 refresh=0.0}
+[physdiag] f=2297 tot=10.7 prep=0.0 ticks=0.3 audio=0.0 peds=10.3 | loose=0.1 free=0.0 recloop=0.2{cfg=0.0 adv=0.0 coll=0.0 dmg=0.0 sync=0.1 defm=0.0} promote=0.0 detach=0.0(n=0){remp=0.0 relink=0.0 refresh=0.0}
+[physdiag] f=2660 tot=10.5 prep=0.0 ticks=0.3 audio=0.0 peds=10.1 | loose=0.1 free=0.0 recloop=0.2{cfg=0.0 adv=0.0 coll=0.0 dmg=0.0 sync=0.1 defm=0.0} promote=0.0 detach=0.0(n=0){remp=0.0 relink=0.0 refresh=0.0}
+[physdiag] f=2781 tot=10.8 prep=0.0 ticks=0.3 audio=0.0 peds=10.4 | loose=0.1 free=0.0 recloop=0.2{cfg=0.0 adv=0.0 coll=0.0 dmg=0.0 sync=0.1 defm=0.0} promote=0.0 detach=0.0(n=0){remp=0.0 relink=0.0 refresh=0.0}
+[physdiag] f=2902 tot=11.6 prep=0.0 ticks=0.3 audio=0.0 peds=11.2 | loose=0.1 free=0.0 recloop=0.2{cfg=0.0 adv=0.0 coll=0.1 dmg=0.0 sync=0.1 defm=0.0} promote=0.0 detach=0.0(n=0){remp=0.0 relink=0.0 refresh=0.0}
+[physdiag] f=3265 tot=11.9 prep=0.1 ticks=0.3 audio=0.0 peds=11.5 | loose=0.1 free=0.0 recloop=0.2{cfg=0.0 adv=0.0 coll=0.0 dmg=0.0 sync=0.1 defm=0.0} promote=0.0 detach=0.0(n=0){remp=0.0 relink=0.0 refresh=0.0}
+[physdiag] f=3507 tot=10.3 prep=0.0 ticks=0.3 audio=0.0 peds=9.9 | loose=0.1 free=0.0 recloop=0.2{cfg=0.0 adv=0.0 coll=0.0 dmg=0.0 sync=0.1 defm=0.0} promote=0.0 detach=0.0(n=0){remp=0.0 relink=0.0 refresh=0.0}
+[physdiag] f=3628 tot=10.3 prep=0.0 ticks=0.3 audio=0.0 peds=9.9 | loose=0.1 free=0.0 recloop=0.2{cfg=0.0 adv=0.0 coll=0.0 dmg=0.0 sync=0.1 defm=0.0} promote=0.0 detach=0.0(n=0){remp=0.0 relink=0.0 refresh=0.0}
