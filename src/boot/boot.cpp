@@ -310,7 +310,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
       osd_clear_widgets();
       slrr_text_clear_all();
       const int32_t cap = (opt.max_frames > 0) ? 2 : 0;
-      if(opt.spawn_car.empty())video_fmv_play_boot_intros(cap, [&render]() {
+      if(opt.spawn_car.empty()&&opt.bench_career.empty())video_fmv_play_boot_intros(cap, [&render]() {
         render.pump(0);
         if (render.quit_requested()) return false;
         render.flush();
@@ -361,10 +361,31 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     }
   }
 
-  if(!opt.spawn_car.empty()) {
-    auto colon=opt.spawn_car.find_last_of(':');
-    const RpkPack* pack=colon==std::string::npos?nullptr:rpk.pack_by_name(opt.spawn_car.substr(0,colon));
-    uint32_t local=0;
+  if (!opt.bench_career.empty()) {
+    std::string path = opt.bench_career;
+    if (path.back() != '/' && path.back() != '\\')
+      path += '/';
+    auto result =
+        jvm.invoke("java.game.GameLogic", "load", "(Ljava.lang.String;)I",
+                   {Value::make_obj(jvm.new_string(path))}, true);
+    if (result.tag != ValueTag::Int || result.v.i != 0) {
+      std::fprintf(stderr, "[bench] career load failed\n");
+      if (render.ready())
+        render.close();
+      return 12;
+    }
+    jvm.set_static("java.game.GameLogic", "carrerInProgress",
+                   Value::make_int(1));
+    jvm.set_static("java.game.GameLogic", "gameMode", Value::make_int(1));
+    sections.change_active_section(sections.garage());
+    std::printf("[bench] career loaded\n");
+  } else if (!opt.spawn_car.empty()) {
+    auto colon = opt.spawn_car.find_last_of(':');
+    const RpkPack *pack =
+        colon == std::string::npos
+            ? nullptr
+            : rpk.pack_by_name(opt.spawn_car.substr(0, colon));
+    uint32_t local = 0;
     try {size_t used=0;std::string value=opt.spawn_car.substr(colon+1);unsigned long id=std::stoul(value,&used,0);if(used==value.size()&&id>0&&id<=0xffff)local=static_cast<uint32_t>(id);}catch(const std::exception&){}
     Object* player=sections.seed_player(opt.player_name);
     Object* car=pack&&local?vehicle_spawn_stock(jvm,rpk,player,RpkIndex::make_full_id(pack->pack_id,local)):nullptr;
@@ -493,6 +514,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     // where the player first drives an outdoor world.
     bool bench_running = false;
     int bench_frames = 0;
+    double bench_wall=0;bool bench_profile_started=false;
     constexpr int kBenchRate = 60;
     // The car settles on its wheels, at the fixed step, before the throttle.
     constexpr int kBenchSettle = 2 * kBenchRate;
@@ -505,10 +527,20 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
       mainloop_sync_section_render(render, sections);
       const double real_dt = elapsed();
       MainLoopFrameResult fr = mainloop_frame(
-          jvm, render, sections, bench_running ? 1.0 / kBenchRate : real_dt);
-      jvm.gc_safe_point();
+          jvm, render, sections,
+          bench_running && !opt.bench_realtime ? 1.0 / kBenchRate : real_dt);
+      {
+        perf::Scope scope(perf::Zone::Gc);
+        jvm.gc_safe_point();
+      }
       perf::end_frame();
-      if (bench_running) ++bench_frames;
+      if (bench_running) {
+        if (opt.bench_realtime) {
+          bench_wall += real_dt;
+          bench_frames = int((bench_wall - 2) * kBenchRate);
+        } else
+          ++bench_frames;
+      }
       ++frames;
       if (fr.quit) break;
       if (!bench_map_started && sections.actual() &&
@@ -559,9 +591,10 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
                        {Value::make_float(seconds)}, true);
             scene_sun_set_time(seconds);
           }
-          std::printf("[bench] drive start: %.1f s full throttle\n", opt.bench_drive_seconds);
+          std::printf("[bench] drive start: %.1f s full throttle\n",
+                      opt.bench_drive_seconds);
         }
-        if (bench_running && bench_frames == 0 && opt.perf_log) perf::restart(kBenchRate);
+        if(bench_running&&bench_frames>=0&&!bench_profile_started&&opt.perf_log){perf::restart(opt.bench_realtime?0:kBenchRate);bench_profile_started=true;}
         input.bench_throttle = !bench_running ? -1.f : bench_frames >= 0 ? 1.f : 0.f;
         if (bench_running && !opt.bench_shots.empty() && bench_frames >= 0 &&
             bench_frames >= 10 * kBenchRate * bench_shot) {

@@ -102,9 +102,13 @@ void Jvm::halt_unbound(const std::string& owner, const std::string& method,
   throw std::runtime_error(unbound_);
 }
 
-void Jvm::set_game_root(std::string root) { game_root_ = std::move(root); }
+void Jvm::set_game_root(std::string root) {
+  game_root_ = std::move(root);
+  gc_finalizer_cache_.clear();
+}
 
 bool Jvm::bootstrap_classpath() {
+  gc_finalizer_cache_.clear();
   if (game_root_.empty()) {
     std::fprintf(stderr, "[jvm] bootstrap: empty game_root\n");
     return false;
@@ -389,6 +393,7 @@ bool Jvm::load_class_file(const std::string& path) {
     }
     auto [entry, inserted] = by_name_.try_emplace(name, std::move(cls));
     if (inserted) {
+      gc_finalizer_cache_.clear();
       seed_static_fields(entry->second);
       enrich_static_fields(entry->second);
     }
@@ -451,6 +456,7 @@ Object* Jvm::new_object(const std::string& class_fqn) {
   ++gc_allocated_;
   Object* raw = obj.get();
   heap_.push_back(std::move(obj));
+  heap_members_.insert(raw);
   std::optional<RootScope> roots;
   if(script_thread_active(*this))roots.emplace(*this,[&](const GcRootVisitor& visit){visit(raw);});
   apply_field_defaults(raw);

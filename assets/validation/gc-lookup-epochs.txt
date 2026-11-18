@@ -1,0 +1,28 @@
+Issue #110: finalizer eligibility cache and mark epochs (2026-11-18)
+Baseline: merged main 1a71e9e, Windows x64 Release, same local game classpath.
+Before: rebuild managed + marked hash sets each root trace, allocate pointer
+snapshot, resolve finalizer owner/native aliases for every unreachable object.
+After: weak allocation/sweep membership index, checked before dereference;
+per-object uint64 mark epochs (fresh epoch after finalizers); fixed candidate
+prefix; per-class eligibility cache invalidated on class/root/classpath/native
+changes. String payload policy, roots, finalization-once, resurrection, new
+allocation survival, safe points and allocation thresholds remain unchanged.
+Membership bucket capacity is retained for reuse; Object has an epoch field.
+Index updates add allocation cost. No VM work was moved to worker threads.
+Identical 60,000 mixed Object/String/array-descriptor benchmark, two rounds:
+Before allocation: 23.629 / 23.266 ms; collect: 170.913 / 168.287 ms.
+After allocation: 26.547 / 26.014 ms; collect: 11.280 / 10.635 ms.
+Timing values are evidence, not pass/fail thresholds or gameplay FPS claims.
+Tests: gc_runtime 5 pass (roots/cycles/pinning/scopes/foreign and stale pointers;
+inherited native + script finalizers, input String intact, resurrection,
+new allocations, nested deferral; cache hits and late native/class invalidation;
+suspended cooperative native arguments/local roots; benchmark reclamation).
+Existing --probe-gc passes requests/reporting, allocation pressure, identity,
+static/native roots, arrays and reentrant resurrection. class_lifetime passes.
+Release build and knowledge-reference check pass.
+Complete copied Elias-1 career realtime Valocity: exit=0 after 878 frames.
+Collections: 8270 -> 4629 objects, 27 finalized / 23 eligibility lookups;
+24483 -> 19070 objects, 96 finalized / 18 lookups. Full frame count/heap content
+are scenario-dependent, not required equality with a prior development replay.
+Logs: build/issue110-before.log, build/issue110-after.log,
+build/issue110-probe.log, build/issue110-classes.log, build/issue110-city.log.

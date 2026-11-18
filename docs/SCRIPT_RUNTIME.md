@@ -298,3 +298,193 @@ off-screen and captures it; it does not launch the game or modify assets/saves.
 the new 20-draw assertion. Evidence and screenshots:
 assets/validation/osd-text-batch. Full menu/catalog/HUD gameplay checks remain
 for user validation; no OpenGL runtime or general FPS improvement is claimed.
+
+
+## Shared road, traffic and race runtime (#179 / #60 / #61 / #62)
+
+`road_routes.cpp` reads the TRC declared by the selected GroundRef resource.
+Crossing/lane links establish directed streets; Hermite samples, endpoint
+projection and Dijkstra produce routes in script metres. A 64 m segment grid
+accelerates projection. Heading breaks ties between opposite road directions
+for traffic. There is no fallback to Valo for another map. `race_runtime.cpp`
+caches by ground incarnation, resource generation, root and type. A failed query
+clears the cached route; destruction clears it. Alignment returns independent
+position/direction vectors. Route position/distance queries use metres along
+the last route; these contracts are host interpretations. plotRoute creates a
+navigator-owned coloured ribbon, without sampling its texture argument.
+
+Traffic streaming checks a safe lane position before constructing the Part/CFG
+assembly. Rejected positions allocate no vehicles or Java objects; a population
+cap is not permission to construct and discard cars until it is full. Existing
+rivals keep their persistent assemblies. Search radii, spacing and retry bounds
+remain unchanged. The unavailable-spawn regression checks heap stability without
+GC and fails on cc0f0db; `traffic_runtime -BaselineRef` substitutes both the road
+and streaming implementations for comparison.
+
+Native vehicle ownership is recorded by the Part factory (native-only or
+unscripted car), independently of whether its wheel meshes are inline or mounted
+stock parts. Like SLRR_rev's TrafficVehicle template path, these cars use native
+wheel springs and tyre drive forces; they must not require Java transmission
+ratios. Scripted mechanical vehicles retain their Java drivetrain path.
+
+Traffic registrations retain the canonical map and its incarnation, as in
+SLRR_rev `TrafficNative.Registration` (v221 88130b3). Driver route and signal
+lookups use that binding for registered cars rather than assuming their parent
+has the host `GroundRef` enum. Real native maps may be generic GameTypes. Losing
+this binding leaves the driver without a route and the chassis parked; tests
+must exercise that real representation for both traffic and individual racers.
+
+`traffic_runtime.cpp` keeps model weights, stable individual IDs and temporary
+road/crossing restrictions per ground. Model declarations may be id-only Java
+resource references, rather than live instances. Positioned reinsertion is a
+finite request, separate from permanent model weights. Density selects up to 100
+active cars (20 at the default .2). Registered Java cars each have catalog weight
+one; their visible share is rounded from that weight against the summed model
+weights. They no longer reserve half the population. For 100 registered rivals
+and an ordinary model weight of 1,000, the test produces 2 rivals/18 ordinary at
+.2, 1/9 at .1 and none at zero. Those are fixture counts, not fixed production
+quotas: actual Java model weights and registered rivals determine the split.
+The density-to-cap scale remains a host policy, not recovered native timing.
+The full 0..1 range is effective: the old cap at .5 is removed. Spawn candidates
+are kept 45..160 m from the player, with candidates in front rejected below 80 m;
+ordinary cars recycle outside 220 m. This concentrates the population locally
+instead of spreading a small cap over the old 260/380 m spawn/retention ranges.
+
+Four-wheel native cars and native-only racer doubles now use the existing rigid
+body, floor collision and suspension solver while visible. The inline CFG wheels
+are valid physical corners even without scripted rim slots. Adapted from
+SLRR_rev traffic bea8ce0 traffic-vehicle.ts, the native driver supplies load-limited
+longitudinal/lateral tyre forces (5 m/s2 throttle, 8 m/s2 braking, friction .9),
+with four .25 m springs, .1 m static sag and damping ratio .65. Scripted cars
+retain their engine/dyno drivetrain; no fictional Java engine is created for
+native-only cars. The host additionally limits braking to avoid sign oscillation
+near zero and compensates the forward gravity component while holding brakes.
+
+Inline render meshes use the same hub, compression, steering and wheel rotation
+as physical contacts. Previously, inline wheels were disabled by the mounted-rim
+check and the visuals stayed at their authored pose while placement used the body
+mesh bottom. Traffic placement now uses loaded tyre contacts through park_chassis;
+it does not raise the body by a generic support-mesh bounding box. Static native
+wheels therefore settle down onto the road as upstream's native cars do. Vehicles
+without a supported four-wheel chassis retain the external-motion fallback.
+Hidden cars remain excluded from drawing, physics and triggers. Hidden rivals
+receive coarse five-second estimates. The shared signal/STOP clock advances by elapsed time with VM pause/time-warp
+applied, independently of the bounded physical catch-up. Thus low FPS does not
+stretch each signal slot; pausing still freezes it. Mainloop traffic catch-up uses the same
+four-tick budget as car physics.
+
+The traffic graph is separate from the street-centre route graph. Following
+SLRR_rev traffic bea8ce0 road-traffic.ts, RoadOther segments run in reverse stored
+order. Explicit node grey curves connect matching incoming/outgoing endpoints
+within .03 m; joins are never invented by nearest street centres. The installed
+City data supplies 1,572 lane curves and 3,854 crossing curves. Physical drivers
+receive multiple connected curves ahead and steer, accelerate and brake through
+the same Part solver as opponents. The external fallback carries arc-length
+progress through lane -> crossing -> outgoing lane. Selection chooses a destination
+branch before one of its lanes. Native traffic uses an urban cruise target;
+rural speed groups and the complete upstream traffic controller are not ported.
+
+GameRef.create_native on a native car builds its CFG-backed native assembly
+and aliases the Java handle to it, without running a chassis-specific constructor.
+This covers Valocity's fake_racers doubles created at (0,-10000,0), followed by
+addTrafficCar(dummycar,null). Registration owns insertion/visibility; removing it
+preserves the Java-owned car. Explicit insertion positions are projected onto
+actual lanes and published on the road before becoming visible. There are no
+Valocity-specific VM exceptions.
+
+Traffic projection uses a separate immutable 64m spatial grid for lane and grey
+crossing segments. Query rings expand until a conservative distance/heading bound
+proves that no unvisited segment can beat the result. Equal scores preserve the
+original edge/segment ordering. Far-away or incompletely indexed/extreme geometry
+falls back to exhaustive projection; non-finite query inputs fail safely.
+Construction uses jobs_parallel_for from #58: each worker reads one immutable
+edge and fills its own fragment; the host merges/publishes after the join. The
+VM, GameRefs, physical integration and scene publication stay on the host thread.
+Read-only queries are safe concurrently once the graph is published.
+
+This removes a complete-map search from each physical driver's repeated halt
+and route queries. On the local City fixture, 1,000 identical queries took
+1548ms at f42f1b6 and 5.3ms with the grid, with the same checksum. A 3,600-tick
+native-car integration took 5793ms before and 94-96ms after. A 20-car fleet took
+35ms for 60 physical updates. These are CPU fixture timings, not a promised full
+game framerate. Tests compare 150 indexed projections against an exhaustive
+oracle, including crossing/lane filters, non-unit headings, high/far points and
+cell boundaries, plus serial/parallel results. Reproduce with road_routes and
+its -BaselineRef f42f1b6 option; traffic_runtime also supports that baseline.
+
+Notifications emit balanced car_add <live-id> <registration-id> / car_rem
+<live-id> strings to original Java after placement. Java owns opponent lists,
+markers, challenges, countdowns, results and transitions. Removing a traffic
+registration preserves a Java-owned rival; native-owned cars are destroyed.
+
+Signal fixtures come from actual ICFG trlight placements, including exterior
+maps. The shared crossing/approach binding follows SLRR_rev traffic branch
+bea8ce06 and its traffic-control.ts: nearest crossing, then nearest flagged
+incoming endpoint, grouped by its owning street. Heads and traffic consume the
+same 10 s green / 3 s yellow branch cycle. Red/yellow prevent new entry; green
+passage latches clearance until the next road. These timings and the 2 m offset before the incoming lane end are host policy,
+not recovered original timing/stop lines.
+Signal lens emission is grouped into one cached mesh per ground shell (at most
+three colour groups), rebuilt on phase/registration changes. No separate draw
+per signal head is added. A regulated approach without a matching lamp is a distinct timed STOP state,
+not a permanent red. Registered drivers stop there for five seconds, then latch
+clearance. Physical projections include the grey crossing curves, preventing a
+car already crossing from being rebound to another incoming red approach.
+The native flare billboard/halo, explicit STOP/YIELD sign discovery and complete
+original junction producer remain outside this port.
+
+`race_brain.cpp` interprets controllable/AI commands and supplies throttle,
+brake and steering to configure_drive in the existing Part solver. Player
+Controller commands keep their owner. BeginRace/stop/suspend hold; race/GoToTarget
+plan a route; GoToTraffic follows roads and restrictions; follow periodically
+replans toward its target. The latest v221 NightRace finish policy preserves
+the destination and coasts across the finish plane when the radius-based Java
+stop event arrives early, then applies brakes.
+
+Traffic refreshes its route every two seconds, including projections onto
+crossing curves. Adapted from SLRR_rev traffic bot.ts, a driver requesting throttle
+without progress for two seconds attempts up to 3.5 seconds of reverse recovery,
+only while the rear corridor is clear, then replans. A red light/timed STOP resets
+the blocked timer and never triggers that manoeuvre. AI_stop cancels recovery.
+Reverse requests are supported by both the native force driver and the scripted
+mechanical gearbox. These recovery thresholds remain host policies from upstream.
+
+MWM ROC uses per-car ROC_cars/*.spl, not just maps/ROC_Track/race.spl. The loader
+samples the complete curve, projects the actual car position onto a segment,
+chooses direction from the car's heading, and rotates a closed loop at that
+point. Selecting a nearest key and following file order was sending the ROC
+opponent the wrong way from the scripted grid. Closed loops must advance before
+the shared start/finish can count as finished. Steering includes recovery from
+a target behind the car and braking preview before curves. Resource cue flags
+640 never rotate/bob a vehicle mesh or an installed Part render; they continue
+to animate standalone trigger indicators.
+
+Spline races no longer inherit the generic 108 km/h curvature-floor ceiling on
+straight sections: their ceiling is 55 m/s times AI level, with curvature-limited
+corner speed and braking preview out to 192 m. This is host tuning; AI_params
+and per-key spline speed metadata are not yet interpreted. The unchanged ordered
+ROC gate test now finishes in 96/104 seconds with the same 1.8 m maximum sampled
+deviation, rather than the previous 122/126 seconds.
+
+Limitations: behaviour flags are stored without tuning; trailing model
+parameters, spline width/speed metadata, AI_params and opponent IDs do not tune
+the controller. Follow offsets are world-space. Complete pursuit, traffic lane changes,
+pair-contact reactions and opponent driver seating
+remain incomplete. AI tuning, population and streaming radii are
+host models, not original-engine parity. Native bindings are not race completion.
+
+Validation uses the Release host objects and read-only local assets. road_routes
+covers directed graphs, native return formats, navigation ribbons and shared
+signal phases (1,146 heads across the installed City/exterior data). traffic_runtime
+covers real Taxi assemblies, native day-racer staging and physical ticks,
+Wagon/Teg rendered tyre-to-road contact, weighted density scaling,
+id-only declarations, balanced lifecycle events,
+red-light stop/pause/green release, and cached signal emission meshes. The
+trigger_markers test retains marker animation and excludes vehicle animation.
+The race_vehicle integration executes original Bot methods on real City and ROC
+collision terrain with stock Baiern/Enula assemblies. From the scripted ROC grid,
+the per-car spline passes all three Round checkpoints in order and reaches its
+finish gate in 96–104 simulated seconds; maximum sampled deviation is 1.8 m.
+This is an automated physics integration, not a running career UI recording.
+Day challenge/finish dialogs, the full night meeting and result/garage transitions
+still need in-game validation. Evidence: assets/validation/shared-races.txt.

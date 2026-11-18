@@ -117,6 +117,7 @@ struct DriveWheel {
   TireParameters tyre;
 };
 struct DriveInput {
+  bool native_traffic = false; // SLRR_rev TrafficVehicle tyre-force driver.
   std::array<DriveWheel, 4> wheels{};
   std::array<double, 8> ratios{};
   int gears = 0, shift = 0;

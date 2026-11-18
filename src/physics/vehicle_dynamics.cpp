@@ -644,7 +644,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
       continue;
     }
     if (w.linked()) {
-      solve_linked(body, w, s, terrain, ceiling, timestep, !drive.torque);
+      solve_linked(body, w, s, terrain, ceiling, timestep, !drive.torque && !drive.native_traffic);
       continue;
     }
     s.length = w.maximum;
@@ -674,7 +674,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
     const Vec3 point = body_point(body, wheel_pose(w, s.length).hub_origin) -
                        s.normal * w.radius;
     s.patch = point;
-    if (drive.torque) continue;
+    if (drive.torque || drive.native_traffic) continue;
     Vec3 v = body.point_velocity(point),
          tangent = v - s.normal * v.dot(s.normal);
     double speed = tangent.length();
@@ -688,14 +688,44 @@ void VehicleDynamics::step(const Terrain &terrain) {
       body.add_force(direction * (-amount), point);
     }
   }
-  if (drive.torque && drive.inertia > 0) step_drive();
+  if (drive.torque && drive.inertia > 0)
+    step_drive();
+  if (drive.native_traffic) {
+    // SLRR_rev traffic bea8ce0 traffic-vehicle.ts: one rigid body, sprung
+    // contacts and load-limited forces. No scripted engine/dyno is invented.
+    for (size_t i = 0; i < wheels.size(); ++i) {
+      auto &s = state[i];
+      if (!wheels[i].enabled || !s.contact)
+        continue;
+      auto forward = wheel_forward(body, drive.wheels[i].steer, s.hub_rotation);
+      forward = (forward - s.normal * forward.dot(s.normal)).normalized();
+      auto side = forward.cross(s.normal).normalized(),
+           velocity = body.point_velocity(s.patch);
+      double speed = velocity.dot(forward), sign = speed > 0   ? 1
+                                                   : speed < 0 ? -1
+                                                               : 0;
+      double braking =
+          sign * std::min(drive.brake * 8, std::abs(speed) / timestep);
+      double hold = drive.brake > .5 ? 9.81 * forward.y : 0;
+      double longitudinal =
+          (drive.throttle * 5 - braking - speed * .05 + hold) * body.mass / 4;
+      double lateral = -velocity.dot(side) * body.mass / 4 * 8;
+      auto force = forward * longitudinal + side * lateral;
+      double limit = s.force * .9;
+      if (force.length() > limit)
+        force = force.normalized() * limit;
+      body.add_force(force, s.patch);
+      s.rotation += speed / wheels[i].radius * timestep;
+      s.spin = speed / wheels[i].radius;
+    }
+  }
   body.integrate(timestep);
   std::array<double, 4> rigid_impulses{};
   for (int iteration = 0; iteration < 4; ++iteration) {
     double depth = 0;
     Vec3 correction;
     auto solve = [&](Vec3 point, double restitution, bool chassis = false,
-                     double* tyre_impulse = nullptr) {
+                     double *tyre_impulse = nullptr) {
       GroundHit ground;
       if (!terrain(point.x, point.z, ceiling, ground))
         return false;
@@ -709,7 +739,8 @@ void VehicleDynamics::step(const Terrain &terrain) {
       }
       const double friction = tyre_impulse && drive.torque && drive.inertia > 0 ? 0 : .6;
       const double impulse = body.contact(point, ground.normal, restitution, friction);
-      if (tyre_impulse) *tyre_impulse += impulse;
+      if (tyre_impulse)
+        *tyre_impulse += impulse;
       if (overlap > depth) {
         depth = overlap;
         correction = ground.normal.normalized();

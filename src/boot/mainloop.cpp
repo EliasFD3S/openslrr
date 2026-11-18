@@ -1,3 +1,4 @@
+#include "slrr/race_runtime.hpp"
 #include "slrr/gc_roots.hpp"
 #include "slrr/frame_profiler.hpp"
 #include "slrr/mainloop.hpp"
@@ -782,10 +783,18 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   if(!script_thread_alive(jvm,g_mechanic_thread))apply_mechanic_infoline(jvm, g_spinning_mechanic);
   double sim_seconds = 0.0;
   {
-    perf::Scope scope(perf::Zone::Physics);
     sim_seconds = jvm.advance_sim_time(dt);
     character_set_sim_time(jvm.sim_time());
-    part_physics_advance(sim_seconds);
+    {
+      perf::Scope scope(perf::Zone::Traffic);
+      race_traffic_tick(
+          jvm, static_cast<float>(std::min(sim_seconds, 4.0 / 60.0)),
+          std::isfinite(dt) && dt > 0 ? dt * jvm.time_warp() : 0.0);
+    }
+    {
+      perf::Scope scope(perf::Zone::Physics);
+      part_physics_advance(sim_seconds);
+    }
   }
   scene_ambience_tick(sim_seconds);
   scene_triggers_tick(jvm);

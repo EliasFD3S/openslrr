@@ -177,9 +177,6 @@ Code that exists but is not used:
 
 - `src/formats/trc.cpp` (road network) and `src/formats/rest.cpp` parse
   their formats but have no caller.
-- `src/render/bgfx_shadows.cpp:draw_vehicle_shadows` (the legacy projected
-  car shadow) is never called. Its two shader programs are still created at
-  init but only used by that function.
 - `src/physics/sl2_pacejka.cpp` only serves `--probe-pacejka`. The active tyre
   model is `src/physics/tire_model.cpp:tire_forces`.
 
@@ -337,10 +334,11 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   the per-instance colour into ColorMixTex (paint-masked) facades,
   and `scene_instances_collect_batches` merges one mesh's visible placements
   from all cells into one batch. The rest are drawn one by one.
-- The renderer's copy of a ground mesh or map prop merges sections with
-  identical materials into one group
-  (`src/render/bgfx_lib_backend.cpp:merge_material_groups`); the scene's
-  own geometry, used for collision and picking, keeps its sections.
+- The GPU cache retains a shared source plus draw metadata, not a second set
+  of CPU vertex/index/skin arrays. Ground/map-prop sections with identical
+  materials use transient reordered upload indices
+  (`src/render/scene_mesh_data.hpp:prepare_scene_mesh`); collision and picking
+  keep the authoritative source's original sections and indices.
 - During `flush`, collections of the active world share one snapshot
   (`src/resources/scene_instances.cpp:scene_instances_frame_cache`).
 - `ground_prop_config` retains the full native CFG. Box, sphere and SCX bodies
@@ -720,7 +718,7 @@ run time.
 | Boot adopts the section already entered by Java Init without replaying lifecycle (#76). Windowed startup retains a timer-only reset so startup work cannot consume the splash display interval. | `src/boot/boot.cpp:boot_game`, `src/boot/mainloop.cpp:mainloop_adopt_section` |
 | Wall collision, impact damage and mileage run only for the player-controlled car with an engine | `src/resources/part_runtime.cpp:advance_chassis_tick` |
 | Gamepad fallback is now per driving axis and unclaimed physical channel; hardware validation remains separate | `src/platform/host_input.cpp`, `src/platform/host_input_mapping.hpp` |
-| The `present` and `hiz` programs never link: `fs_present` and `fs_hiz` read only `v_texcoord0` but are paired with `vs_mesh`, so the offscreen scene target and the HiZ pyramid are skipped. Startup logs `[bgfx] program … failed to link` | `src/render/bgfx_lib_backend.cpp:LibBgfxBackend::open` |
+| The unused offscreen scene target, HiZ pyramid/readback and legacy projected car shadows are removed (#105). World rendering uses the swap chain; the retained projected-size filter does not perform occlusion. Shader creation releases caller handles on success and failure. | `src/render/bgfx_lib_backend.cpp:LibBgfxBackend::open`, `src/render/bgfx_program.hpp:create_owned_program` |
 
 Fixed on `main`: `System.arraycopy` overflow, PTX bounds, dyno session
 lifetime and sampling, and the `Vehicle.getHorn` / `hasCrime` registrations.
@@ -1574,8 +1572,9 @@ or overflowing dimensions. A real Direct3D 11 window test sends WM_CLOSE,
 checks the HWND is still valid through mainloop_frame's quit return, then
 checks it is destroyed by close and that close can be repeated. Test log:
 `assets/validation/video-safety/after.txt`. Existing present/hiz shader-link
-warnings (#105) were observed in this test; the backend still opened and the
-test passed. Actual DirectShow decoder fallback, intro playback and FMV texture
+warnings (#105) were observed in that historical test; the backend still opened
+and the test passed. The inactive passes and those programs are now removed;
+this does not enable HiZ occlusion. Actual DirectShow decoder fallback, intro playback and FMV texture
 allocation/release during playback remain manual validation; the synthetic
 copy tests do not claim to cover a full decoder graph.
 
@@ -2144,3 +2143,86 @@ macro; video_safety, ui_lifetime, splash_boot and osd_text_gpu. The D3D11 text
 capture retains the #82 pixel hash and 20 text draws for 1,000 glyphs. Native
 coverage remains current; knowledge references pass. These are supported-host
 regressions, not execution of the removed x86/WGL branches.
+
+
+### Shared race support (#179; #60, #61, #62)
+
+Road ownership and cache: `src/resources/race_runtime.cpp:race_ground_roads`;
+directed TRC solver: `src/resources/road_routes.cpp:RoadRoutes`;
+traffic identities/streaming/halts: `src/resources/traffic_runtime.cpp:race_traffic_tick`;
+brain commands: `src/resources/race_brain.cpp:race_brain_command` and
+`race_drive_input`; mechanical input integration:
+`src/resources/part_runtime.cpp:configure_drive`; route ribbon:
+`src/natives/natives_renderref.cpp:plotRoute`.
+Sources and host limits: EXTERNAL_RESEARCH v221 section and SCRIPT_RUNTIME shared
+race section. Tests: road_routes, race_brain, traffic_runtime and race_vehicle.
+A real assembled Baiern moves under original Bot.startRace commands in an
+isolated fixture; this is not proof of finished career day/night/ROC sessions.
+The tracker and original issues remain open pending each gameplay check.
+
+
+## Inactive renderer passes cleanup (#105)
+
+The offscreen scene target, fullscreen present quad, HiZ pyramid/readback and
+legacy projected-car-shadow path had no production caller. They and their six
+exclusive shader sources/build inputs are removed. Active cached map/garage
+shadows, vehicle depth, reflection captures, OSD and previews retain their paths.
+`scene_instances_set_size_filter` is an optional projected-size filter, not an
+occlusion query; the backend preserves its 40m near exemption and two-pixel
+cutoff, and disables it for insets, reflection and shadow collection.
+
+`create_owned_program` links without implicit shader transfer and releases both
+caller references regardless of the result. bgfx retains its own references for
+a successful program. This covers missing stages, interface mismatch and program
+creation failure without depending on bgfx's early-return ownership behavior.
+
+`render_programs_gpu` reproduces the old D3D11 rejected-link leak (shader count
+27 -> 29), explicitly cleans it, then checks 32 successful/rejected/missing-stage
+cycles return to 27 and that backend close/reopen preserves the baseline. The
+existing GPU OSD test still produces 20 draws for 1000 glyphs; map view tests pass.
+The test uses unique shader metadata hashes to prevent bgfx deduplication from
+hiding leaked references. See assets/validation/render-pass-cleanup.txt.
+
+
+## GPU mesh source ownership (#83)
+
+`ScenePart` stores `SceneMeshData` (mesh info, groups, texture paths, scale and
+vertex/index counts), a shared source and GPU handles. Uploads and skin uploads
+read all vertex attributes directly from that source. Owned standalone meshes
+move into one shared source; resident scene meshes reuse their existing source.
+Material merging copies only its reordered index scratch, released after bgfx
+has copied the upload bytes. Blended group ordering and source collision/picking
+data are preserved. No renderer-owned vertex/index/skin payload remains resident.
+
+Revision changes rebuild GPU buffers and metadata from the current source;
+changed texture identities reload bindings. Replaced deformed sources retain
+compatible texture bindings, as before. Skin buffers are recreated on demand.
+
+The `scene_mesh_cache` D3D11 test covers shared-source ownership, material order,
+blend exclusions, 16 position/normal/UV/skin/index revisions without GPU handle
+growth, deformed-source texture transfer and full cleanup. Read-only City POLY,
+Baiern chassis and area_205 assets account for 16,076,716 bytes of vertex/index/
+skin arrays the old renderer would duplicate; this is a sample payload count,
+not whole-process memory usage or an FPS gain. See
+assets/validation/mesh-cache-ownership.txt.
+
+
+## GC eligibility cache and mark epochs (#110)
+
+`src/jvm/gc.cpp:needs_finalizer` caches class eligibility, skipping descriptors
+and empty-owner searches. New class insertion, game-root/classpath changes and
+append-only native registration invalidate cached results. Real finalizers still
+run through ordinary VM dispatch and retain once-only/resurrection behavior.
+
+The weak heap address index is updated at allocation/sweep, checked before any
+native-address dereference, and never acts as a GC root. Per-object epochs
+replace temporary managed/marked hash sets; each resurrection trace gets a new
+epoch. Finalizer discovery walks a stable owning-vector prefix instead of
+allocating another pointer snapshot. See docs/VM_GC.md for memory/CPU tradeoffs.
+
+`gc_runtime` covers native/script finalizers, late class/native availability,
+resurrection and allocations, invalid native pointers, roots/pinning/cycles and
+locals/arguments on a suspended cooperative stack. The 60,000 mixed-object
+fixture takes about 11ms to collect versus 168-171ms before; allocation costs
+26-29ms versus 23ms before. The baseline/current logs and limits are recorded in
+assets/validation/gc-lookup-epochs.txt. This is not a gameplay FPS measurement.

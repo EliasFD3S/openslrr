@@ -12,6 +12,8 @@ namespace slrr {
 
 // Minimal script instance. Identity = pointer (Object.equals).
 struct Object {
+  // Collector stamp; native addresses are membership-checked before reading.
+  uint64_t gc_mark_epoch = 0;
   bool gc_disabled = false;
   bool gc_finalized = false;
   uint32_t identity_hash = 0;

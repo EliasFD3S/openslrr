@@ -70,22 +70,11 @@
 #include "dxbc/fs_vehicle.sc.bin.h"
 #include "glsl/vs_vehicle.sc.bin.h"
 #include "glsl/fs_vehicle.sc.bin.h"
-#include "dxbc/fs_white.sc.bin.h"
-#include "dxbc/vs_shadow_recv.sc.bin.h"
-#include "dxbc/fs_shadow_recv.sc.bin.h"
-#include "glsl/fs_white.sc.bin.h"
-#include "dxbc/vs_shadow_cast.sc.bin.h"
-#include "glsl/vs_shadow_cast.sc.bin.h"
-#include "glsl/vs_shadow_recv.sc.bin.h"
-#include "glsl/fs_shadow_recv.sc.bin.h"
 #include "dxbc/fs_static_shadow.sc.bin.h"
 #include "glsl/fs_static_shadow.sc.bin.h"
-#include "dxbc/fs_present.sc.bin.h"
-#include "glsl/fs_present.sc.bin.h"
-#include "dxbc/fs_hiz.sc.bin.h"
-#include "glsl/fs_hiz.sc.bin.h"
 
 #include "bgfx_lib_backend.hpp"
+#include "bgfx_program.hpp"
 
 namespace slrr {
 namespace {
@@ -103,19 +92,10 @@ static const bgfx::EmbeddedShader k_skin[] = {
 static const bgfx::EmbeddedShader k_fs[] = {
     BGFX_EMBEDDED_SHADER(fs_mesh),
     BGFX_EMBEDDED_SHADER(fs_static_shadow),
-    BGFX_EMBEDDED_SHADER(fs_present),
-    BGFX_EMBEDDED_SHADER(fs_hiz),
     BGFX_EMBEDDED_SHADER_END()};
 static const bgfx::EmbeddedShader k_vehicle[] = {
     BGFX_EMBEDDED_SHADER(vs_vehicle), BGFX_EMBEDDED_SHADER(fs_vehicle),
     BGFX_EMBEDDED_SHADER_END()};
-static const bgfx::EmbeddedShader k_shadow_white[] = {
-    BGFX_EMBEDDED_SHADER(vs_shadow_cast), BGFX_EMBEDDED_SHADER(fs_white),
-    BGFX_EMBEDDED_SHADER_END()};
-static const bgfx::EmbeddedShader k_shadow_recv[] = {
-    BGFX_EMBEDDED_SHADER(vs_shadow_recv), BGFX_EMBEDDED_SHADER(fs_shadow_recv),
-    BGFX_EMBEDDED_SHADER_END()};
-
 }  // namespace
 
   bool LibBgfxBackend::open(int32_t width, int32_t height, const char* title)
@@ -180,50 +160,38 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
 #endif
 
     const bgfx::RendererType::Enum rt = bgfx::getRendererType();
-    bgfx::ShaderHandle vsh = bgfx::createEmbeddedShader(k_vs, rt, "vs_mesh");
-    bgfx::ShaderHandle fsh = bgfx::createEmbeddedShader(k_fs, rt, "fs_mesh");
-    if (!bgfx::isValid(vsh) || !bgfx::isValid(fsh)) {
-      std::fprintf(stderr, "[bgfx] embedded shaders missing for renderer %d\n",
+    program_ = create_owned_program(
+        bgfx::createEmbeddedShader(k_vs, rt, "vs_mesh"),
+        bgfx::createEmbeddedShader(k_fs, rt, "fs_mesh"));
+    if (!bgfx::isValid(program_)) {
+      std::fprintf(stderr, "[bgfx] mesh program creation failed for renderer %d\n",
                    static_cast<int>(rt));
       bgfx::shutdown();
       return false;
     }
-    program_ = bgfx::createProgram(vsh, fsh, true);
-    text_program_ = bgfx::createProgram(
+    text_program_ = create_owned_program(
         bgfx::createEmbeddedShader(k_text, rt, "vs_osd_text"),
-        bgfx::createEmbeddedShader(k_text, rt, "fs_osd_text"), true);
-    bgfx::ShaderHandle skin_vs = bgfx::createEmbeddedShader(k_skin, rt, "vs_skin");
-    bgfx::ShaderHandle skin_fs = bgfx::createEmbeddedShader(k_fs, rt, "fs_mesh");
-    if (bgfx::isValid(skin_vs) && bgfx::isValid(skin_fs))
-      skin_program_ = bgfx::createProgram(skin_vs, skin_fs, true);
-    else {
-      if (bgfx::isValid(skin_vs)) bgfx::destroy(skin_vs);
-      if (bgfx::isValid(skin_fs)) bgfx::destroy(skin_fs);
-    }
+        bgfx::createEmbeddedShader(k_text, rt, "fs_osd_text"));
+    skin_program_ = create_owned_program(
+        bgfx::createEmbeddedShader(k_skin, rt, "vs_skin"),
+        bgfx::createEmbeddedShader(k_fs, rt, "fs_mesh"));
     u_skin_bones_ = bgfx::createUniform("u_skinBones", bgfx::UniformType::Mat4, 48);
-    static_shadow_program_ = bgfx::createProgram(
+    static_shadow_program_ = create_owned_program(
         bgfx::createEmbeddedShader(k_vs, rt, "vs_mesh"),
-        bgfx::createEmbeddedShader(k_fs, rt, "fs_static_shadow"), true);
-    inst_program_ = bgfx::createProgram(
+        bgfx::createEmbeddedShader(k_fs, rt, "fs_static_shadow"));
+    inst_program_ = create_owned_program(
         bgfx::createEmbeddedShader(k_vs, rt, "vs_mesh_inst"),
-        bgfx::createEmbeddedShader(k_fs, rt, "fs_mesh"), true);
-    inst_shadow_program_ = bgfx::createProgram(
+        bgfx::createEmbeddedShader(k_fs, rt, "fs_mesh"));
+    inst_shadow_program_ = create_owned_program(
         bgfx::createEmbeddedShader(k_vs, rt, "vs_mesh_inst"),
-        bgfx::createEmbeddedShader(k_fs, rt, "fs_static_shadow"), true);
-    present_program_ = bgfx::createProgram(
-        bgfx::createEmbeddedShader(k_vs, rt, "vs_mesh"),
-        bgfx::createEmbeddedShader(k_fs, rt, "fs_present"), true);
-    hiz_program_ = bgfx::createProgram(
-        bgfx::createEmbeddedShader(k_vs, rt, "vs_mesh"),
-        bgfx::createEmbeddedShader(k_fs, rt, "fs_hiz"), true);
-    u_hiz_params_ = bgfx::createUniform("u_hizParams", bgfx::UniformType::Vec4);
+        bgfx::createEmbeddedShader(k_fs, rt, "fs_static_shadow"));
     s_static_shadow_ = bgfx::createUniform("s_staticShadow", bgfx::UniformType::Sampler);
     u_static_shadow_mtx_ = bgfx::createUniform("u_staticShadowMtx", bgfx::UniformType::Mat4);
     u_static_shadow_params_ = bgfx::createUniform("u_staticShadowParams", bgfx::UniformType::Vec4);
     u_static_shadow_eye_ = bgfx::createUniform("u_staticShadowEye", bgfx::UniformType::Vec4);
-    vehicle_program_ = bgfx::createProgram(
+    vehicle_program_ = create_owned_program(
         bgfx::createEmbeddedShader(k_vehicle, rt, "vs_vehicle"),
-        bgfx::createEmbeddedShader(k_vehicle, rt, "fs_vehicle"), true);
+        bgfx::createEmbeddedShader(k_vehicle, rt, "fs_vehicle"));
     s_mix_ = bgfx::createUniform("s_vehicleMix", bgfx::UniformType::Sampler);
     s_env_ = bgfx::createUniform("s_vehicleEnv", bgfx::UniformType::Sampler);
     s_bake_ = bgfx::createUniform("s_vehicleBake", bgfx::UniformType::Sampler);
@@ -252,39 +220,13 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     u_fog_range_ = bgfx::createUniform("u_fogRange", bgfx::UniformType::Vec4);
     u_fog_eye_ = bgfx::createUniform("u_fogEye", bgfx::UniformType::Vec4);
     u_sun_dir_ = bgfx::createUniform("u_sunDir", bgfx::UniformType::Vec4);
-    bgfx::ShaderHandle white_vs =
-        bgfx::createEmbeddedShader(k_shadow_white, rt, "vs_shadow_cast");
-    bgfx::ShaderHandle white_fs =
-        bgfx::createEmbeddedShader(k_shadow_white, rt, "fs_white");
-    if (bgfx::isValid(white_vs) && bgfx::isValid(white_fs))
-      shadow_program_ = bgfx::createProgram(white_vs, white_fs, true);
-    else {
-      if (bgfx::isValid(white_vs)) bgfx::destroy(white_vs);
-      if (bgfx::isValid(white_fs)) bgfx::destroy(white_fs);
-    }
-    bgfx::ShaderHandle recv_vs =
-        bgfx::createEmbeddedShader(k_shadow_recv, rt, "vs_shadow_recv");
-    bgfx::ShaderHandle recv_fs =
-        bgfx::createEmbeddedShader(k_shadow_recv, rt, "fs_shadow_recv");
-    if (bgfx::isValid(recv_vs) && bgfx::isValid(recv_fs))
-      shadow_recv_ = bgfx::createProgram(recv_vs, recv_fs, true);
-    else {
-      if (bgfx::isValid(recv_vs)) bgfx::destroy(recv_vs);
-      if (bgfx::isValid(recv_fs)) bgfx::destroy(recv_fs);
-    }
-    u_shadow_mtx_ = bgfx::createUniform("u_shadowMtx", bgfx::UniformType::Mat4);
-    if (!bgfx::isValid(shadow_program_) || !bgfx::isValid(shadow_recv_))
-      std::fprintf(stderr, "[shadow] shader program creation failed: caster=%d receiver=%d\n",
-                   bgfx::isValid(shadow_program_), bgfx::isValid(shadow_recv_));
-    u_shadow_ramp_ = bgfx::createUniform("u_shadowRamp", bgfx::UniformType::Vec4);
     // bgfx returns an invalid program, without a message in Release, when the
     // fragment $input list differs from the vertex $output list. The features
     // behind these programs then switch themselves off silently.
     const std::pair<const char*, bgfx::ProgramHandle> programs[] = {
         {"mesh", program_}, {"osd_text", text_program_}, {"skin", skin_program_},
         {"static_shadow", static_shadow_program_}, {"inst", inst_program_},
-        {"inst_shadow", inst_shadow_program_}, {"present", present_program_},
-        {"hiz", hiz_program_}, {"vehicle", vehicle_program_}};
+        {"inst_shadow", inst_shadow_program_}, {"vehicle", vehicle_program_}};
     for (const auto& [name, handle] : programs)
       if (!bgfx::isValid(handle))
         std::fprintf(stderr, "[bgfx] program %s failed to link\n", name);
@@ -394,14 +336,6 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
       bgfx::destroy(u_color_);
       u_color_ = BGFX_INVALID_HANDLE;
     }
-    destroy_scene_target();
-    destroy_hiz();
-    if (bgfx::isValid(present_program_)) bgfx::destroy(present_program_);
-    present_program_ = BGFX_INVALID_HANDLE;
-    if (bgfx::isValid(hiz_program_)) bgfx::destroy(hiz_program_);
-    hiz_program_ = BGFX_INVALID_HANDLE;
-    if (bgfx::isValid(u_hiz_params_)) bgfx::destroy(u_hiz_params_);
-    u_hiz_params_ = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(program_)) {
       bgfx::destroy(program_);
       program_ = BGFX_INVALID_HANDLE;
@@ -424,14 +358,6 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     }
     if (bgfx::isValid(vehicle_program_)) bgfx::destroy(vehicle_program_);
     vehicle_program_ = BGFX_INVALID_HANDLE;
-    if (bgfx::isValid(shadow_program_)) bgfx::destroy(shadow_program_);
-    shadow_program_ = BGFX_INVALID_HANDLE;
-    if (bgfx::isValid(shadow_recv_)) bgfx::destroy(shadow_recv_);
-    shadow_recv_ = BGFX_INVALID_HANDLE;
-    if (bgfx::isValid(u_shadow_mtx_)) bgfx::destroy(u_shadow_mtx_);
-    u_shadow_mtx_ = BGFX_INVALID_HANDLE;
-    if (bgfx::isValid(u_shadow_ramp_)) bgfx::destroy(u_shadow_ramp_);
-    u_shadow_ramp_ = BGFX_INVALID_HANDLE;
     destroy_reflections();
     if (bgfx::isValid(car_depth_fb_)) bgfx::destroy(car_depth_fb_);
     car_depth_fb_ = BGFX_INVALID_HANDLE;
@@ -447,11 +373,6 @@ static const bgfx::EmbeddedShader k_shadow_recv[] = {
     for (auto* handle : {&s_static_shadow_, &u_static_shadow_mtx_, &u_static_shadow_params_, &u_static_shadow_eye_}) {
       if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
       *handle = BGFX_INVALID_HANDLE;
-    }
-    for (int i = 0; i < kShadowSlots; ++i) {
-      if (bgfx::isValid(shadow_fb_[i])) bgfx::destroy(shadow_fb_[i]);
-      shadow_fb_[i] = BGFX_INVALID_HANDLE;
-      shadow_tex_[i] = BGFX_INVALID_HANDLE;
     }
     for (auto* handle : {&s_mix_, &s_env_, &s_bake_, &u_layers_, &u_channels_, &u_base_uv_, &u_mix_uv_, &u_env_uv_, &u_diffuse_, &u_spec_, &u_sun_diff_, &u_sun_amb_, &u_sun_spec_, &u_sun_dir_, &u_cloud_sky_, &u_cloud_wind_, &u_fog_color_, &u_fog_range_, &u_fog_eye_, &s_reflection_cube_, &u_dynamic_reflection_, &u_reflection_probe_, &u_reflection_box_min_, &u_reflection_box_max_, &u_local_light_, &s_car_depth_, &u_car_depth_mtx_, &u_car_depth_params_}) {
       if(bgfx::isValid(*handle)) bgfx::destroy(*handle);
@@ -522,301 +443,14 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
   applied_video_mode_ = mode;
 }
 
-  bool LibBgfxBackend::ensure_scene_target(uint16_t width, uint16_t height) {
-    if (!bgfx::isValid(present_program_) || width == 0 || height == 0) return false;
-    uint64_t msaa = 0;
-    const uint32_t mask = reset_flags_ & BGFX_RESET_MSAA_MASK;
-    if (mask == BGFX_RESET_MSAA_X8) msaa = BGFX_TEXTURE_RT_MSAA_X8;
-    else if (mask == BGFX_RESET_MSAA_X4) msaa = BGFX_TEXTURE_RT_MSAA_X4;
-    else if (mask == BGFX_RESET_MSAA_X2) msaa = BGFX_TEXTURE_RT_MSAA_X2;
-    if (bgfx::isValid(scene_fb_) && scene_w_ == width && scene_h_ == height &&
-        scene_msaa_ == msaa)
-      return true;
-    destroy_scene_target();
-    const uint64_t sample = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
-                            BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT;
-    if (msaa != 0) {
-      const uint64_t rt = BGFX_TEXTURE_RT | msaa | sample;
-      bgfx::TextureHandle attachments[2] = {
-          bgfx::createTexture2D(width, height, false, 1, bgfx::TextureFormat::RGBA8, rt),
-          bgfx::createTexture2D(width, height, false, 1, bgfx::TextureFormat::D32F, rt)};
-      if (!bgfx::isValid(attachments[0]) || !bgfx::isValid(attachments[1])) {
-        if (bgfx::isValid(attachments[0])) bgfx::destroy(attachments[0]);
-        if (bgfx::isValid(attachments[1])) bgfx::destroy(attachments[1]);
-        return false;
-      }
-      scene_fb_ = bgfx::createFrameBuffer(2, attachments, true);
-      const uint64_t resolve = BGFX_TEXTURE_BLIT_DST | sample;
-      scene_color_ = bgfx::createTexture2D(width, height, false, 1,
-                                           bgfx::TextureFormat::RGBA8, resolve);
-      scene_depth_ = bgfx::createTexture2D(width, height, false, 1,
-                                           bgfx::TextureFormat::D32F, resolve);
-    } else {
-      const uint64_t rt = BGFX_TEXTURE_RT | sample;
-      scene_color_ = bgfx::createTexture2D(width, height, false, 1,
-                                           bgfx::TextureFormat::RGBA8, rt);
-      scene_depth_ = bgfx::createTexture2D(width, height, false, 1,
-                                           bgfx::TextureFormat::D32F, rt);
-      if (!bgfx::isValid(scene_color_) || !bgfx::isValid(scene_depth_)) {
-        destroy_scene_target();
-        return false;
-      }
-      const bgfx::TextureHandle attachments[] = {scene_color_, scene_depth_};
-      scene_fb_ = bgfx::createFrameBuffer(2, attachments, false);
-    }
-    if (!bgfx::isValid(scene_fb_) || !bgfx::isValid(scene_color_) ||
-        !bgfx::isValid(scene_depth_)) {
-      destroy_scene_target();
-      return false;
-    }
-    scene_w_ = width;
-    scene_h_ = height;
-    scene_msaa_ = msaa;
-    return true;
+  bool LibBgfxBackend::screen_size_keep(const float center[3], float radius, void* user) {
+    return static_cast<const LibBgfxBackend*>(user)->screen_size_visible(center, radius);
   }
 
-  void LibBgfxBackend::destroy_scene_target() {
-    if (bgfx::isValid(scene_fb_)) bgfx::destroy(scene_fb_);
-    scene_fb_ = BGFX_INVALID_HANDLE;
-    if (bgfx::isValid(scene_color_)) bgfx::destroy(scene_color_);
-    if (bgfx::isValid(scene_depth_)) bgfx::destroy(scene_depth_);
-    scene_color_ = BGFX_INVALID_HANDLE;
-    scene_depth_ = BGFX_INVALID_HANDLE;
-    scene_w_ = 0;
-    scene_h_ = 0;
-    scene_msaa_ = 0;
-  }
-
-  bgfx::TextureHandle LibBgfxBackend::scene_color_texture() const {
-    return scene_color_;
-  }
-
-  bgfx::TextureHandle LibBgfxBackend::scene_depth_texture() const {
-    return scene_depth_;
-  }
-
-  void LibBgfxBackend::draw_fullscreen(uint16_t view, bgfx::ProgramHandle program,
-                                      bgfx::TextureHandle texture,
-                                      const float* hiz_params) {
-    if (!bgfx::isValid(program) || !bgfx::isValid(texture)) return;
-    if (bgfx::getAvailTransientVertexBuffer(4, layout_) < 4 ||
-        bgfx::getAvailTransientIndexBuffer(6) < 6)
-      return;
-    float ortho[16];
-    bx::mtxOrtho(ortho, -1.f, 1.f, 1.f, -1.f, 0.f, 100.f, 0.f,
-                 bgfx::getCaps()->homogeneousDepth);
-    bgfx::setViewTransform(view, nullptr, ortho);
-    MeshVertex quad[4]{};
-    auto setv = [](MeshVertex& vertex, float x, float y, float u, float v) {
-      vertex.x = x;
-      vertex.y = y;
-      vertex.z = 0.f;
-      vertex.nz = 1.f;
-      vertex.u = u;
-      vertex.v = v;
-    };
-    // This ortho puts y = -1 at the top of the window, matching the movie layer.
-    if (bgfx::getCaps()->originBottomLeft) {
-      setv(quad[0], -1.f, -1.f, 0.f, 1.f);
-      setv(quad[1], 1.f, -1.f, 1.f, 1.f);
-      setv(quad[2], 1.f, 1.f, 1.f, 0.f);
-      setv(quad[3], -1.f, 1.f, 0.f, 0.f);
-    } else {
-      setv(quad[0], -1.f, -1.f, 0.f, 0.f);
-      setv(quad[1], 1.f, -1.f, 1.f, 0.f);
-      setv(quad[2], 1.f, 1.f, 1.f, 1.f);
-      setv(quad[3], -1.f, 1.f, 0.f, 1.f);
-    }
-    const uint16_t indices[6] = {0, 1, 2, 0, 2, 3};
-    bgfx::TransientVertexBuffer vertices;
-    bgfx::TransientIndexBuffer indexes;
-    bgfx::allocTransientVertexBuffer(&vertices, 4, layout_);
-    bgfx::allocTransientIndexBuffer(&indexes, 6);
-    std::memcpy(vertices.data, quad, sizeof(quad));
-    std::memcpy(indexes.data, indices, sizeof(indices));
-    float identity[16];
-    bx::mtxIdentity(identity);
-    bgfx::setTransform(identity);
-    if (bgfx::isValid(u_static_shadow_mtx_))
-      bgfx::setUniform(u_static_shadow_mtx_, identity);
-    if (hiz_params) bgfx::setUniform(u_hiz_params_, hiz_params);
-    bgfx::setVertexBuffer(0, &vertices);
-    bgfx::setIndexBuffer(&indexes);
-    bgfx::setTexture(0, s_tex_, texture,
-                     BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
-                         BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT);
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    bgfx::submit(view, program);
-  }
-
-  void LibBgfxBackend::present_scene(uint16_t view) {
-    // The swap chain is not a blit target. One textured quad copies the color.
-    draw_fullscreen(view, present_program_, scene_color_texture(), nullptr);
-  }
-
-  void LibBgfxBackend::destroy_hiz() {
-    for (auto& level : hiz_gpu_) {
-      if (bgfx::isValid(level.fb)) bgfx::destroy(level.fb);
-      if (bgfx::isValid(level.read)) bgfx::destroy(level.read);
-      level = {};
-    }
-    hiz_level_count_ = 0;
-    hiz_source_w_ = 0;
-    hiz_source_h_ = 0;
-    for (auto& read : hiz_read_)
-      if (read.pending) read.discard = true;
-  }
-
-  void LibBgfxBackend::build_hiz_pyramid(uint16_t width, uint16_t height) {
-    if (!bgfx::isValid(hiz_program_) || width == 0 || height == 0) return;
-    if (hiz_source_w_ != width || hiz_source_h_ != height) {
-      destroy_hiz();
-      uint16_t level_w = width;
-      uint16_t level_h = height;
-      for (int i = 0; i < kHizLevels && (level_w > 1 || level_h > 1); ++i) {
-        level_w = std::max<uint16_t>(1, level_w / 2);
-        level_h = std::max<uint16_t>(1, level_h / 2);
-        constexpr uint64_t rt_flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
-            BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT;
-        constexpr uint64_t read_flags = BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK |
-            BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_MIN_POINT |
-            BGFX_SAMPLER_MAG_POINT;
-        auto tex = bgfx::createTexture2D(level_w, level_h, false, 1,
-                                         bgfx::TextureFormat::R32F, rt_flags);
-        auto read = bgfx::createTexture2D(level_w, level_h, false, 1,
-                                          bgfx::TextureFormat::R32F, read_flags);
-        if (!bgfx::isValid(tex) || !bgfx::isValid(read)) {
-          if (bgfx::isValid(tex)) bgfx::destroy(tex);
-          if (bgfx::isValid(read)) bgfx::destroy(read);
-          break;
-        }
-        auto fb = bgfx::createFrameBuffer(1, &tex, true);
-        if (!bgfx::isValid(fb)) {
-          bgfx::destroy(tex);
-          bgfx::destroy(read);
-          break;
-        }
-        hiz_gpu_[i] = {tex, read, fb, level_w, level_h};
-        hiz_level_count_ = i + 1;
-      }
-      hiz_source_w_ = width;
-      hiz_source_h_ = height;
-    }
-    const auto depth = scene_depth_texture();
-    if (!bgfx::isValid(depth) || hiz_level_count_ == 0) return;
-    uint16_t src_w = width;
-    uint16_t src_h = height;
-    auto src = depth;
-    for (int i = 0; i < hiz_level_count_; ++i) {
-      const auto view = static_cast<uint16_t>(kHizView + i);
-      const auto& level = hiz_gpu_[i];
-      bgfx::setViewFrameBuffer(view, level.fb);
-      bgfx::setViewRect(view, 0, 0, level.w, level.h);
-      bgfx::setViewClear(view, BGFX_CLEAR_NONE, 0, 0.f, 0);
-      bgfx::setViewMode(view, bgfx::ViewMode::Sequential);
-      bgfx::touch(view);
-      const float params[4] = {1.f / static_cast<float>(src_w),
-                               1.f / static_cast<float>(src_h), 0.f, 0.f};
-      draw_fullscreen(view, hiz_program_, src, params);
-      src = level.tex;
-      src_w = level.w;
-      src_h = level.h;
-    }
-    const auto blit_view = static_cast<uint16_t>(kHizView + hiz_level_count_);
-    for (int i = 0; i < hiz_level_count_; ++i) {
-      bgfx::TextureRegion source, destination;
-      source.init(hiz_gpu_[i].tex, 0, 0, hiz_gpu_[i].w, hiz_gpu_[i].h);
-      destination.init(hiz_gpu_[i].read, 0, 0, hiz_gpu_[i].w, hiz_gpu_[i].h);
-      bgfx::blit(blit_view, destination, source);
-    }
-  }
-
-  void LibBgfxBackend::read_hiz_pyramid(const float* view, const float* proj) {
-    if (hiz_level_count_ <= 0) return;
-    int slot = -1;
-    for (int i = 0; i < 2; ++i) {
-      const int candidate = (hiz_write_ + i) & 1;
-      if (!hiz_read_[candidate].pending && candidate != hiz_active_) {
-        slot = candidate;
-        break;
-      }
-    }
-    if (slot < 0)
-      for (int i = 0; i < 2; ++i)
-        if (!hiz_read_[i].pending) {
-          slot = i;
-          break;
-        }
-    if (slot < 0) return;
-    auto& read = hiz_read_[slot];
-    read.levels.resize(hiz_level_count_);
-    read.width.resize(hiz_level_count_);
-    read.height.resize(hiz_level_count_);
-    uint32_t ready = 0;
-    for (int i = 0; i < hiz_level_count_; ++i) {
-      const auto w = hiz_gpu_[i].w;
-      const auto h = hiz_gpu_[i].h;
-      read.width[i] = w;
-      read.height[i] = h;
-      read.levels[i].assign(static_cast<size_t>(w) * h, 0.f);
-      bgfx::TextureRegion region;
-      region.init(hiz_gpu_[i].read, 0, 0, w, h);
-      ready = std::max(ready, bgfx::read(region, read.levels[i].data()));
-    }
-    std::memcpy(read.view, view, sizeof(read.view));
-    std::memcpy(read.proj, proj, sizeof(read.proj));
-    float inverse[16];
-    bx::mtxInverse(inverse, view);
-    read.eye[0] = inverse[12];
-    read.eye[1] = inverse[13];
-    read.eye[2] = -inverse[14];
-    read.world = scene_instances_world();
-    read.garage = garage_;
-    read.full_w = hiz_source_w_;
-    read.full_h = hiz_source_h_;
-    read.ready_at = ready;
-    read.pending = true;
-    read.valid = false;
-    read.discard = false;
-    read.serial = ++hiz_serial_;
-    hiz_write_ = (slot + 1) & 1;
-  }
-
-  void LibBgfxBackend::promote_hiz(uint32_t frame) {
-    for (int i = 0; i < 2; ++i) {
-      auto& read = hiz_read_[i];
-      if (!read.pending || frame < read.ready_at) continue;
-      read.pending = false;
-      read.valid = !read.discard;
-      read.discard = false;
-      if (!read.valid) continue;
-      if (hiz_active_ < 0 || read.serial >= hiz_read_[hiz_active_].serial)
-        hiz_active_ = i;
-    }
-  }
-
-  bool LibBgfxBackend::hiz_usable(const float eye[3]) const {
-    if (hiz_active_ < 0 || garage_) return false;
-    const auto& read = hiz_read_[hiz_active_];
-    if (!read.valid || read.pending || read.garage || read.levels.empty()) return false;
-    if (read.world != scene_instances_world()) return false;
-    if (read.full_w != static_cast<uint16_t>(width_) ||
-        read.full_h != static_cast<uint16_t>(height_))
-      return false;
-    const float dx = eye[0] - read.eye[0];
-    const float dy = eye[1] - read.eye[1];
-    const float dz = eye[2] - read.eye[2];
-    return dx * dx + dy * dy + dz * dz <= 40.f * 40.f;
-  }
-
-  bool LibBgfxBackend::hiz_keep(const float center[3], float radius, void* user) {
-    return static_cast<const LibBgfxBackend*>(user)->hiz_visible(center, radius);
-  }
-
-  bool LibBgfxBackend::hiz_visible(const float center[3], float radius) const {
-    const float dx = center[0] - hiz_eye_[0];
-    const float dy = center[1] - hiz_eye_[1];
-    const float dz = center[2] - hiz_eye_[2];
+  bool LibBgfxBackend::screen_size_visible(const float center[3], float radius) const {
+    const float dx = center[0] - cull_eye_[0];
+    const float dy = center[1] - cull_eye_[1];
+    const float dz = center[2] - cull_eye_[2];
     if (std::sqrt(dx * dx + dy * dy + dz * dz) - radius < 40.f) return true;
     if (width_ <= 0 || height_ <= 0) return true;
     const float rx = center[0];
@@ -1211,7 +845,6 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
 {
     for(auto& entry:instance_meshes_)destroy_part(entry.second);
     instance_meshes_.clear();deformed_meshes_.clear();instances_.clear();previews_.clear();
-    projected_shadows_.clear();
     for (ScenePart& p : parts_) destroy_part(p);
     parts_.clear();
     mesh_ok_ = false;
@@ -1222,15 +855,15 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
 {
     if (!geo.info.ok) return;
     ScenePart part;
-    part.geo = std::move(geo);
-    expand_scene_bbox(part.geo.info.bbox_min, part.geo.info.bbox_max);
+    part.source = std::make_shared<ScxGeometry>(std::move(geo));
+    expand_scene_bbox(part.source->info.bbox_min, part.source->info.bbox_max);
     // Banner/logo atlases (Long_logos*.dds, group "reklam") read mirrored in
     // stock UV — flip U only on those verts (horizontal 180°).
     // Banner UVs stay as stored. Flipping them mirrored the front faces.
     upload_part(part);
     load_part_textures(part);
     std::printf("[bgfx] +SCX verts=%zu idx=%zu tex=%zu parts=%zu\n",
-                part.geo.positions.size() / 3, part.geo.indices.size(),
+                part.geo.vertex_count, part.geo.index_count,
                 part.tex.size(), parts_.size() + 1);
     parts_.push_back(std::move(part));
     mesh_ok_ = true;
@@ -1239,76 +872,11 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
     int sum_verts = 0;
     for (const ScenePart& p : parts_) {
       sum_groups += p.geo.info.groups;
-      sum_verts += static_cast<int>(p.geo.positions.size() / 3);
+      sum_verts += static_cast<int>(p.geo.vertex_count);
       sum_tris += p.geo.info.triangles;
     }
     set_scx_mesh(3, sum_groups, sum_verts, sum_tris, mesh_min_, mesh_max_);
   }
-
-namespace {
-bool same_map(const ScxTextureMap& a, const ScxTextureMap& b) {
-  return a.channel == b.channel && a.tiling == b.tiling && a.scale_u == b.scale_u &&
-         a.scale_v == b.scale_v && a.offset_u == b.offset_u && a.offset_v == b.offset_v;
-}
-
-// Everything a draw reads from a group, except its index range and name.
-bool same_material(const ScxGroup& a, const ScxGroup& b) {
-  return a.texture_index == b.texture_index && a.mix_index == b.mix_index &&
-         a.reflection_index == b.reflection_index && a.lightmap_index == b.lightmap_index &&
-         a.illumination_index == b.illumination_index &&
-         a.emission_index == b.emission_index && same_map(a.emission_map, b.emission_map) &&
-         std::equal(std::begin(a.emission_color), std::end(a.emission_color), std::begin(b.emission_color)) &&
-         a.mix_vertex_color == b.mix_vertex_color && a.material_type == b.material_type &&
-         a.reflection_strength == b.reflection_strength && same_map(a.base_map, b.base_map) &&
-         same_map(a.mix_map, b.mix_map) && same_map(a.reflection_map, b.reflection_map) &&
-         same_map(a.lightmap_map, b.lightmap_map) &&
-         same_map(a.illumination_map, b.illumination_map) &&
-         a.material_flags == b.material_flags && a.alpha_reference == b.alpha_reference &&
-         std::equal(std::begin(a.diffuse), std::end(a.diffuse), std::begin(b.diffuse)) &&
-         std::equal(std::begin(a.specular), std::end(a.specular), std::begin(b.specular)) &&
-         a.shininess == b.shininess;
-}
-}  // namespace
-
-void LibBgfxBackend::merge_material_groups(ScxGeometry& geo) {
-  if (geo.groups.size() < 2) return;
-  const bool v3 = geo.info.version == 3, v4 = geo.info.version == 4;
-  for (const auto& group : geo.groups) {
-    // Blended sections are drawn in their stored order. Leave such a mesh as is.
-    if ((v4 && (group.material_flags & 0x40000000u)) ||
-        (v3 && (group.material_flags & 0x101u) == 0x101u))
-      return;
-    if (static_cast<size_t>(group.index_start) + group.index_count > geo.indices.size()) return;
-  }
-  // Materials in order of first use; each keeps its sections in stored order.
-  std::vector<size_t> material_of(geo.groups.size());
-  std::vector<size_t> first;
-  for (size_t i = 0; i < geo.groups.size(); ++i) {
-    size_t m = 0;
-    while (m < first.size() && !same_material(geo.groups[first[m]], geo.groups[i])) ++m;
-    if (m == first.size()) first.push_back(i);
-    material_of[i] = m;
-  }
-  if (first.size() == geo.groups.size()) return;
-  std::vector<uint32_t> indices;
-  indices.reserve(geo.indices.size());
-  std::vector<ScxGroup> groups;
-  groups.reserve(first.size());
-  for (size_t m = 0; m < first.size(); ++m) {
-    ScxGroup merged = geo.groups[first[m]];
-    merged.index_start = static_cast<uint32_t>(indices.size());
-    for (size_t i = 0; i < geo.groups.size(); ++i) {
-      if (material_of[i] != m) continue;
-      const auto begin = geo.indices.begin() + geo.groups[i].index_start;
-      indices.insert(indices.end(), begin, begin + geo.groups[i].index_count);
-    }
-    merged.index_count = static_cast<uint32_t>(indices.size()) - merged.index_start;
-    groups.push_back(std::move(merged));
-  }
-  geo.indices = std::move(indices);
-  geo.groups = std::move(groups);
-  geo.info.groups = static_cast<int32_t>(geo.groups.size());
-}
 
 SceneFrustum LibBgfxBackend::view_frustum(const float* view, const float* projection) {
     float clip[16];
@@ -1330,25 +898,79 @@ SceneFrustum LibBgfxBackend::view_frustum(const float* view, const float* projec
     return frustum;
 }
 
+void LibBgfxBackend::cache_scene_mesh(
+    const std::shared_ptr<const ScxGeometry> &source, void *owner,
+    bool map_prop) {
+  const auto *key = source.get();
+  const auto *node = owner ? gameref_get(owner) : nullptr;
+  const bool deformed = node && node->deformed_geometry.get() == key;
+  if (auto found = instance_meshes_.find(key);
+      found != instance_meshes_.end()) {
+    ScenePart &part = found->second;
+    if (part.revision != source->revision) {
+      const bool textures_changed = part.geo.textures != source->textures ||
+                                    part.geo.info.path != source->info.path;
+      if (textures_changed)
+        destroy_part(part);
+      if (bgfx::isValid(part.vbh))
+        bgfx::destroy(part.vbh);
+      if (bgfx::isValid(part.skin_vbh))
+        bgfx::destroy(part.skin_vbh);
+      if (bgfx::isValid(part.ibh))
+        bgfx::destroy(part.ibh);
+      part.vbh = BGFX_INVALID_HANDLE;
+      part.skin_vbh = BGFX_INVALID_HANDLE;
+      part.ibh = BGFX_INVALID_HANDLE;
+      part.revision = source->revision;
+      upload_part(part);
+      if (textures_changed)
+        load_part_textures(part, map_prop);
+    }
+    return;
+  }
+  ScenePart part;
+  part.source = source;
+  // Static map meshes repeat a few materials across hundreds of sections.
+  // Keep one draw per material instead of one per section.
+  part.merge_groups = !deformed && (map_prop || source->ground_polygons);
+  upload_part(part);
+  if (deformed) {
+    const auto previous = deformed_meshes_.find(owner);
+    if (previous != deformed_meshes_.end()) {
+      auto old = instance_meshes_.find(previous->second);
+      if (old != instance_meshes_.end() &&
+          old->second.geo.textures == part.geo.textures &&
+          old->second.geo.info.path == part.geo.info.path) {
+        part.tex = std::move(old->second.tex);
+        part.shared_texture_paths = std::move(old->second.shared_texture_paths);
+      }
+    }
+  }
+  if (part.tex.empty())
+    load_part_textures(part, map_prop);
+  part.revision = source->revision;
+  instance_meshes_.emplace(key, std::move(part));
+}
+
   void LibBgfxBackend::sync_instances(const float* view, const float* projection)
 {
     float camera[16];
     bx::mtxInverse(camera, view);
     const float eye[3] = {camera[12], camera[13], -camera[14]};
-    std::memcpy(hiz_eye_, eye, sizeof(hiz_eye_));
+    std::memcpy(cull_eye_, eye, sizeof(cull_eye_));
     std::memcpy(cull_view_, view, sizeof(cull_view_));
     std::memcpy(cull_proj_, projection, sizeof(cull_proj_));
     const auto* main_camera = fullscreen_script_camera();
     const auto* main_vp = main_camera ? gameref_get(main_camera->viewport) : nullptr;
-    // The depth pyramid covers the full framebuffer, not a script inset.
+    // The size estimate uses full-frame dimensions; keep script insets conservative.
     const bool inset = main_vp && (main_vp->vp_w < .99f || main_vp->vp_h < .99f);
-    scene_instances_set_hiz(inset ? nullptr : &LibBgfxBackend::hiz_keep, this);
+    scene_instances_set_size_filter(inset ? nullptr : &LibBgfxBackend::screen_size_keep, this);
     const auto frustum = view_frustum(view, projection);
     std::vector<std::shared_ptr<const ScxGeometry>> resident_props;
     instances_ = scene_instances_collect(&frustum, &resident_props);
     prop_batches_.clear();
     scene_instances_collect_batches(&frustum, prop_batches_);
-    scene_instances_set_hiz(nullptr, nullptr);
+    scene_instances_set_size_filter(nullptr, nullptr);
     previews_.clear();
     for(const auto* camera:gameref_active_cameras()) {
       const auto* vp=gameref_get(camera->viewport);
@@ -1374,43 +996,7 @@ SceneFrustum LibBgfxBackend::view_frustum(const float* view, const float* projec
       const auto* node = owner ? gameref_get(owner) : nullptr;
       const bool deformed = node && node->deformed_geometry.get() == key;
       if (deformed) current_deformed[owner] = key;
-      if (auto found = instance_meshes_.find(key); found != instance_meshes_.end()) {
-        ScenePart& part = found->second;
-        if (part.revision != source->revision) {
-          if (bgfx::isValid(part.vbh)) bgfx::destroy(part.vbh);
-          if (bgfx::isValid(part.skin_vbh)) bgfx::destroy(part.skin_vbh);
-          if (bgfx::isValid(part.ibh)) bgfx::destroy(part.ibh);
-          part.vbh = BGFX_INVALID_HANDLE;
-          part.skin_vbh = BGFX_INVALID_HANDLE;
-          part.ibh = BGFX_INVALID_HANDLE;
-          part.geo.positions = source->positions;
-          part.geo.normals = source->normals;
-          part.revision = source->revision;
-          upload_part(part);
-        }
-        return;
-      }
-      ScenePart part;
-      part.source = source;
-      part.geo = *source;
-      // Static map meshes repeat a few materials across hundreds of sections.
-      // Keep one draw per material instead of one per section.
-      if (!deformed && (map_prop || source->ground_polygons)) merge_material_groups(part.geo);
-      upload_part(part);
-      if (deformed) {
-        const auto previous = deformed_meshes_.find(owner);
-        if (previous != deformed_meshes_.end()) {
-          auto old = instance_meshes_.find(previous->second);
-          if (old != instance_meshes_.end() && old->second.geo.textures == part.geo.textures &&
-              old->second.geo.info.path == part.geo.info.path) {
-            part.tex = std::move(old->second.tex);
-            part.shared_texture_paths = std::move(old->second.shared_texture_paths);
-          }
-        }
-      }
-      if (part.tex.empty()) load_part_textures(part, map_prop);
-      part.revision = source->revision;
-      instance_meshes_.emplace(key, std::move(part));
+      cache_scene_mesh(source, owner, map_prop);
     };
     // A map or a car brings many new meshes in one frame. Decode all of their
     // texture files together on the job pool; cache() then creates them.
@@ -1832,11 +1418,15 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
   }
   void LibBgfxBackend::upload_part(ScenePart& part)
 {
-    const size_t n = part.geo.positions.size() / 3;
-    if (n == 0 || part.geo.indices.empty()) return;
+    if (!part.source) return;
+    const auto& source = *part.source;
+    auto upload = prepare_scene_mesh(source, part.merge_groups);
+    part.geo = std::move(upload.metadata);
+    const size_t n = source.positions.size() / 3;
+    if (n == 0 || source.indices.empty()) return;
     bool reverse_tread = false;
-    if (part.geo.textures.size() == 1) {
-      std::string path = part.geo.textures.front();
+    if (source.textures.size() == 1) {
+      std::string path = source.textures.front();
       std::replace(path.begin(), path.end(), '\\', '/');
       // The stock sport texture's chevrons point backwards with its SCX UVs.
       // U runs around the tyre. Negating it preserves the repeat and the seam.
@@ -1844,33 +1434,33 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
     }
     std::vector<MeshVertex> verts(n);
     for (size_t i = 0; i < n; ++i) {
-      const float unit = part.geo.position_scale;
-      verts[i].x = part.geo.positions[i * 3 + 0] * unit;
-      verts[i].y = part.geo.positions[i * 3 + 1] * unit;
+      const float unit = source.position_scale;
+      verts[i].x = source.positions[i * 3 + 0] * unit;
+      verts[i].y = source.positions[i * 3 + 1] * unit;
       // Garage length runs along X toward the door. Z is left/right in that
       // view; the stock door reference has the bumper on the other side.
-      verts[i].z = -part.geo.positions[i * 3 + 2] * unit;
-      if (part.geo.normals.size() >= (i + 1) * 3) {
-        verts[i].nx = part.geo.normals[i * 3 + 0];
-        verts[i].ny = part.geo.normals[i * 3 + 1];
-        verts[i].nz = -part.geo.normals[i * 3 + 2];
+      verts[i].z = -source.positions[i * 3 + 2] * unit;
+      if (source.normals.size() >= (i + 1) * 3) {
+        verts[i].nx = source.normals[i * 3 + 0];
+        verts[i].ny = source.normals[i * 3 + 1];
+        verts[i].nz = -source.normals[i * 3 + 2];
       } else {
         verts[i].nx = 0;
         verts[i].ny = 1;
         verts[i].nz = 0;
       }
-      if (part.geo.uvs.size() >= (i + 1) * 2) {
-        const float u = part.geo.uvs[i * 2];
+      if (source.uvs.size() >= (i + 1) * 2) {
+        const float u = source.uvs[i * 2];
         verts[i].u = reverse_tread ? -u : u;
-        verts[i].v = part.geo.uvs[i * 2 + 1];
+        verts[i].v = source.uvs[i * 2 + 1];
       } else {
         verts[i].u = 0;
         verts[i].v = 0;
       }
-      if(part.geo.uv2.size()>i*2+1) {verts[i].u2=part.geo.uv2[i*2];verts[i].v2=part.geo.uv2[i*2+1];}
-      if(part.geo.uv3.size()>i*2+1) {verts[i].u3=part.geo.uv3[i*2];verts[i].v3=part.geo.uv3[i*2+1];}
-      if (i < part.geo.vertex_colors.size()) {
-        const uint32_t argb = part.geo.vertex_colors[i];
+      if(source.uv2.size()>i*2+1) {verts[i].u2=source.uv2[i*2];verts[i].v2=source.uv2[i*2+1];}
+      if(source.uv3.size()>i*2+1) {verts[i].u3=source.uv3[i*2];verts[i].v3=source.uv3[i*2+1];}
+      if (i < source.vertex_colors.size()) {
+        const uint32_t argb = source.vertex_colors[i];
         verts[i].rgba = (argb & 0xff00ff00u) | ((argb & 0xffu) << 16) |
                         ((argb >> 16) & 0xffu);
       }
@@ -1878,37 +1468,39 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
     const bgfx::Memory* vmem = bgfx::copy(
         verts.data(), static_cast<uint32_t>(verts.size() * sizeof(MeshVertex)));
     part.vbh = bgfx::createVertexBuffer(vmem, layout_);
+    const auto& indices = upload.indices(source);
     const bgfx::Memory* imem = bgfx::copy(
-        part.geo.indices.data(),
-        static_cast<uint32_t>(part.geo.indices.size() * sizeof(uint32_t)));
+        indices.data(), static_cast<uint32_t>(indices.size() * sizeof(uint32_t)));
     part.ibh = bgfx::createIndexBuffer(imem, BGFX_BUFFER_INDEX32);
   }
   void LibBgfxBackend::upload_skin(ScenePart& part)
 {
-    const size_t n = part.geo.positions.size() / 3;
+    if (!part.source) return;
+    const auto& source = *part.source;
+    const size_t n = source.positions.size() / 3;
     if (n == 0 || !bgfx::isValid(part.ibh)) return;
     std::vector<MeshVertex> verts(n);
     for (size_t i = 0; i < n; ++i) {
-      const float unit = part.geo.position_scale;
-      verts[i].x = part.geo.positions[i * 3 + 0] * unit;
-      verts[i].y = part.geo.positions[i * 3 + 1] * unit;
-      verts[i].z = -part.geo.positions[i * 3 + 2] * unit;
-      if (part.geo.normals.size() >= (i + 1) * 3) {
-        verts[i].nx = part.geo.normals[i * 3 + 0];
-        verts[i].ny = part.geo.normals[i * 3 + 1];
-        verts[i].nz = -part.geo.normals[i * 3 + 2];
+      const float unit = source.position_scale;
+      verts[i].x = source.positions[i * 3 + 0] * unit;
+      verts[i].y = source.positions[i * 3 + 1] * unit;
+      verts[i].z = -source.positions[i * 3 + 2] * unit;
+      if (source.normals.size() >= (i + 1) * 3) {
+        verts[i].nx = source.normals[i * 3 + 0];
+        verts[i].ny = source.normals[i * 3 + 1];
+        verts[i].nz = -source.normals[i * 3 + 2];
       } else {
         verts[i].ny = 1;
       }
-      if (part.geo.uvs.size() >= (i + 1) * 2) {
-        verts[i].u = part.geo.uvs[i * 2];
-        verts[i].v = part.geo.uvs[i * 2 + 1];
+      if (source.uvs.size() >= (i + 1) * 2) {
+        verts[i].u = source.uvs[i * 2];
+        verts[i].v = source.uvs[i * 2 + 1];
       }
       uint32_t packed = 0;
       for (int influence = 0; influence < 4; ++influence) {
         const size_t slot = i * 4 + static_cast<size_t>(influence);
-        float weight = slot < part.geo.skin_weights.size() ? part.geo.skin_weights[slot] : 0.f;
-        uint16_t bone = slot < part.geo.skin_bones.size() ? part.geo.skin_bones[slot] : 0;
+        float weight = slot < source.skin_weights.size() ? source.skin_weights[slot] : 0.f;
+        uint16_t bone = slot < source.skin_bones.size() ? source.skin_bones[slot] : 0;
         if (bone >= 48) {
           bone = 0;
           weight = 0.f;
@@ -2017,7 +1609,7 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
         if (!part.tex.empty()) tex = part.tex[0];
         const bool cut =
             part.geo.info.version != 3;  // no groups: v4 yes, v3 opaque
-        submit_range(0, static_cast<uint32_t>(part.geo.indices.size()), tex,
+        submit_range(0, static_cast<uint32_t>(part.geo.index_count), tex,
                      cut, nullptr);
       }
     }
@@ -2105,7 +1697,7 @@ std::string map_texture_key(std::string path) {
 
   void LibBgfxBackend::load_part_textures(ScenePart& part, bool share_map_textures)
 {
-    const std::vector<std::string> paths = part_texture_paths(part.geo);
+    const std::vector<std::string> paths = part_texture_paths(*part.source);
     part.tex.assign(paths.size(), BGFX_INVALID_HANDLE);
     if (share_map_textures) part.shared_texture_paths.resize(paths.size());
     int loaded = 0;

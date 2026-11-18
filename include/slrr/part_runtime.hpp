@@ -20,7 +20,7 @@ struct InstalledPart {
 void register_part_natives(Jvm &jvm, RpkIndex &resources);
 Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
                     uint32_t resource, const std::string &alias,
-                    const std::string &params = {});
+                    const std::string &params = {}, bool native_only = false);
 // Positive-mass native map placement. Uses the loose-part mesh solver and
 // exchanges contact impulses with the controlled car and static scene.
 // Returns the loose body's node, or nullptr when it could not be created.
@@ -53,6 +53,10 @@ bool part_camera_pose(void* car, int camera, float* matrix);
 void *part_shadow_source(void *render, float *frame);
 // Advance only cars belonging to the active world, at a fixed physics step.
 void part_physics_advance(double seconds);
+// External traffic motion owns pose/velocity; physics resumes from that pose on release.
+void part_set_external_motion(Object*,bool);
+// Metres travelled and road-wheel steering angle for externally driven traffic.
+void part_animate_external_wheels(Object*,float metres,float steer);
 // GroundRef pedestrian natives. Density is people per square metre after the
 // script's Config factor. Types are the GameRefs Valocity registers.
 void part_set_pedestrian_density(void* ground, float density);

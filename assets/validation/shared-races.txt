@@ -1,0 +1,205 @@
+Shared race primitives / tracker #179 (#60 #61 #62)
+Updated 2026-11-18 after the first in-game feedback.
+OpenSLRR main 3f1110e merged into codex/traffic-race-natives (a95635a).
+References: SLRR_rev v221 cbb99147 initially; refreshed v221 ab4b4943 and
+traffic bea8ce06. Exact revisions and source paths: docs/EXTERNAL_RESEARCH.md.
+
+Windows x64 Release build: PASS.
+Reproduce: scripts/run_save_io_tests.ps1 -Suite <name>.
+
+road_routes: directed one/two-way routes, nearest crossing distance semantics,
+native alignment arrays/metre cache queries, route ribbons/cache invalidation,
+and shared green/yellow/red branch phases. Installed City + exterior data binds
+1,146 actual trlight heads. Phase tests assert mutually exclusive branches.
+
+traffic_runtime: id-only resource declarations (regression failed before fix),
+IDs/deduplication, balanced notifications, finite positioned insertion/pause,
+complete Taxi body + four wheel meshes, movement and teardown. Default density
+now admits 20 active cars, bounded at 50; urban cruise target 15–35 km/h with
+acceleration/braking and following gaps. A real controlled City approach stops
+on red, remains stationary while paused, then resumes on green. Signal lenses
+are cached per shell in up to three emission groups, retained when paused and
+rebuilt on phase changes, rather than one draw per head.
+
+trigger_markers: standalone indicators still rotate/bob/fade and remain
+pass-through; the same cue flags never animate a vehicle mesh. This reproduces
+and fixes the observed floating/rotating car body independently of its wheels.
+
+race_brain: countdown/suspend/command ownership, closed loop start, route traffic
+restrictions, braking preview before a sharp bend, behind-target recovery, and
+NightRace coasting across the finish plane after an early Java stop command.
+
+race_vehicle: original MWM Bot.startRace/followSplineTrack; actual City and ROC
+collision terrain; original assets read only, VM files isolated in a temp root.
+Baiern/Enula physically drive and stop on a City route, above the sampled road.
+ROC uses cars/racers/ROC_cars/ROC_MC.spl, scripted grid near (5.4,0,-6), yaw -.55,
+and the bot's lateral start offset. The route is projected onto the complete
+loop and oriented by heading. Every expected Round gate is reached in order:
+  Baiern: gates at 66.3 / 74.6 / 90.4 s; finish gate 125.9 s.
+  Enula:  gates at 63.9 / 71.8 / 87.2 s; finish gate 122.2 s.
+Maximum sampled lateral deviation: 1.774 m (independent denser spline sampling).
+The test then sends AI_stop and checks braking; approximately 107 km/h to rest.
+Earlier generic race.spl/flat-surface checks did not establish career ROC paths.
+
+Other required checks: physics_recovery, gameref_alias, native-coverage Python
+regressions, render_native_coverage.py --check and check_knowledge_refs.py.
+
+This is host/physics/scene integration, not a career UI video. The original
+finish/results handlers, daytime horn challenge, night meeting, repeat track
+transitions and return to garage remain for in-game validation. Do not close
+#60/#61/#62/#179 on the strength of registration counts or these tests alone.
+Known host-model gaps: traffic behaviour/AI_params tuning, dedicated lane/turn
+curves, full pursuit/contact reactions, spline metadata, opponent driver seating,
+original signal producer/timing/STOP-YIELD and flare halos.
+
+2026-11-18 next playtest follow-up (same PR #180)
+- User confirmed ROC follows the track in game; reported slow AI.
+- Upstream pins refreshed: traffic bea8ce0 / v221 ab4b494 unchanged.
+- Port actual reverse RoadOther lanes and explicitly connected grey curves:
+  installed City graph 1572 lanes, 3854 crossing curves, 2397 bending curves.
+- Traffic integration follows real City turns for 60 seconds at 60 Hz;
+  checks every frame for position/heading jumps, four rotating wheel meshes,
+  fixed wheel mounting centres and nonzero wheel steering. Latest run: maximum
+  step 0.121m, maximum heading step 0.085rad, wheel steering peak 0.601rad.
+- Native day-racer regression executes create_native with real fake_racers/Teg
+  at (0,-10000,0), registers addTrafficCar(dummy,null), verifies alias/chassis,
+  floor contact, visibility, movement and preservation on registration removal.
+- ROC same original grid, real terrain, per-car spline and ordered gates:
+  Baiern finish 104.4s; Enula 96.0s (previous 125.9/122.2s).
+  Maximum sampled lateral error remains 1.774m; mechanical braking still passes.
+- Release build; road_routes, race_brain, traffic_runtime, race_vehicle,
+  physics_recovery, gameref_alias and trigger_markers checks pass.
+- Full City UI challenge/return flow and latest rendered behavior await user
+  validation. Traffic lane changes, contact/pursuit and AI_params remain partial.
+
+2026-11-18 physical suspension and density follow-up
+- Visible four-wheel native traffic and fake racers now advance VehicleDynamics;
+  native tyre-force/spring policy ported from traffic bea8ce0 traffic-vehicle.ts.
+- Original inline CFG wheels are accepted without scripted rim slots. All four
+  render hubs now match the solver's compressed hub transforms/steering/spin.
+- Real Wagon and fake_racers/Teg settle on actual City collision terrain:
+  tyre-radius contact gaps <0.0001m; actual rendered tyre bottoms approximately
+  -0.0127m (Wagon) and -0.0034m (Teg) relative to the sampled road.
+  Each corner has positive supporting force; no body-bottom ride-height lift.
+- Native day-racer staging test requires active physical ticks and real movement.
+- Physical City turning test: four animated wheels, steering, >1000 solver ticks;
+  maximum per-frame step .132m and heading step .009rad at 60Hz.
+- Physical red-light hold: .0006m drift / .0003m/s after settling; pause and
+  green release pass. Brake sign overshoot is bounded at rest.
+- Weight fixture: 100 registered rivals (weight 1 each), ordinary weight 1000:
+  Config.trafficDensity .2 -> 20 cars: 18 ordinary / 2 rivals;
+  .1 -> 10 cars: 9 ordinary / 1 rival; 0 -> no visible cars.
+  Actual catalog weights determine production proportions. Density scale and
+  rounding remain explicit host policy, not recovered native count semantics.
+- All seven integration suites pass, including unchanged physical ROC gate tests.
+- Latest visible City behavior still awaits user validation; pursuit, lane changes
+  and full challenge/result transitions remain outside automated acceptance.
+
+2026-11-18 stopped-flow and local density follow-up
+- Fix regulated approaches with no matching lamp: signal state -2 represents a
+  five-second STOP, not permanent red. Actual City missing-lamp regression holds
+  initially then drives away; ordinary red/pause/green behavior remains checked.
+- Physical projection includes grey crossing curves, so a car already entering
+  a junction is not controlled by a neighbouring lane's red light.
+- Traffic route refresh every 2s; throttle-without-progress for 2s requests up to
+  3.5s physical reverse recovery with rear corridor check, then replans. Red and
+  timed STOP waits reset that timer. Test verifies rear blockage and AI_stop.
+- Config density no longer saturates at .5 (maximum cap now 100). Initial traffic
+  lies within 165m in the City fixture; spawn range 45..160m, front candidates
+  below 80m rejected; ordinary cars recycle outside 220m.
+- Density .8 fixture populated 61 cars (54 normal / 7 rivals), above the old cap
+  of 50, without reducing the inter-car spawn gap. Default remains 20 total.
+- These stream radii and count scale are host policy. Latest City UI driving
+  still awaits the maintainer's playtest; native coverage is not gameplay parity.
+
+2026-11-18 traffic CPU performance follow-up
+Baseline: f42f1b6. Same Release host objects/data/test inputs; baseline runner
+substitutes only road_routes.cpp from the specified revision.
+Commands:
+  ./scripts/run_save_io_tests.ps1 -Suite road_routes -BaselineRef f42f1b6
+  ./scripts/run_save_io_tests.ps1 -Suite road_routes
+  ./scripts/run_save_io_tests.ps1 -Suite traffic_runtime
+- Exhaustive 1000-query baseline: 1548.005ms; initial indexed run: 5.280ms.
+  Both checksum 1031.8738. Approximately 293x cheaper on this machine.
+- 150 exhaustive-oracle comparisons pass (lane/crossing eligibility, unit and
+  non-unit headings), along with far/high/boundary/invalid queries. Parallel
+  read-only projection matches serial output exactly.
+- Worker pool concurrency: 24. Index fragments are built in parallel, then
+  merged on the host. Graph/frame ownership and physical solver remain serial.
+- Native City driving 3600 ticks: baseline 5792.922ms; grid 93.741-96.474ms.
+- Physical fleet: 20 cars / 60 ticks / 35.084ms total (about .585ms/update).
+- Separate full executable smoke: isolated save root, linked read-only assets,
+  copied current options, 2560x1440 D3D11, Baiern development car, ValoCity_Track,
+  bench-drive 3 / bench-time 13 / no-vsync. Exit 0 in java.game.Valocity.
+  Stable samples: physics .60-.62ms, frame 3.23-3.64ms. This short development
+  session is not the user's career camera/traffic mix; it is not an FPS promise
+  or a controlled before/after GPU benchmark. Original save files untouched.
+- Release host builds; all seven integration suites and nine Python coverage
+  tests pass. Latest actual career performance awaits user verification.
+
+2026-11-18 actual-career profiling follow-up (diagnosis, no claimed FPS fix)
+- User reports 365-1680ms frames immediately in Valocity; pause restores FPS.
+  GPU counter ~57ms is smaller than the full frame and is not sufficient alone
+  to attribute the slowdown. Main render-thread time also excludes simulation.
+- Added automatic timing when the debug overlay is opened: scripts, traffic,
+  physics and vehicle/pedestrian/collision subtimes, collect/shadows/reflections,
+  flush/present, end-of-frame GC, outside measured host/wait and peak frame.
+- Added --bench-career using original GameLogic.load plus Garage, and
+  --bench-realtime to preserve wall-clock deltas/catch-up rather than fixed step.
+- Actual local career was copied into the isolated benchmark root. Original
+  game assets were reused; original saves/options were not written by these runs.
+- Career map run at 2560x1421, VSync on, five real-time drive seconds: initial
+  1144ms loading frame; subsequent completed windows ~6.94ms/frame, physics
+  .87-.91ms, traffic .03-.04ms, scripts .38-.41ms, GPU counter ~6.9ms.
+  It does NOT reproduce the reported persistent manual-session slowdown.
+- frame_profiler unit verifies snapshot publication, independent stage values,
+  window reset and restart clearing. Renderer/debug changes are diagnostic;
+  the exact slow manual scene still needs its new stage readings from the user.
+
+Traffic unavailable-spawn allocation follow-up (2026-11-18)
+User capture now attributes 391.58 / 402.88 ms to Traffic, rather than GPU.
+Code review found complete Part/CFG creation before safe-place rejection, up to
+cap*3 assemblies per update. Reorder only: select safe candidate, then construct
+and publish the successful car. SLRR_rev traffic-stream.ts likewise selects a
+safe spawn before creating the vehicle. No density or rendering-quality reduction.
+Deterministic real-City/Taxi test, focus outside reachable lanes, 10 updates:
+cc0f0db: 134.741 ms, 3600 disposable VM objects, regression fails.
+new: 3.378 ms, 0 disposable objects, all 8 traffic_runtime tests pass.
+Times are scenario measurements, not asserted thresholds or claimed in-game FPS.
+Release host build and knowledge-reference checks pass. Manual capture's exact
+391 ms scene has not yet been reproduced; maintainer validation remains pending.
+
+Signal-clock follow-up (2026-11-18)
+Mainloop previously fed the lamp/STOP clock the physical catch-up capped at
+4/60 second. At 0.7 FPS a 13-second phase could take almost five real minutes;
+multiple approaches compound the apparent permanent red. Signals now consume
+elapsed wall time scaled by VM time-warp, while motion keeps its existing cap.
+The clock uses double precision. Pause/time-warp zero still freezes phases.
+A real City fixture checks lamp state against the route graph at every half-second
+across 104 seconds while motion advances only 4/60 per frame, then checks pause.
+Manual intersection validation remains pending.
+Release build passes; all 9 traffic_runtime cases and knowledge references pass.
+
+Complete-career immobilization follow-up (2026-11-18)
+Reference refreshed to SLRR_rev v221 88130b3e1ee51b11f8de7bec84875f259e05147c:
+TrafficNative retains registration map/ground; native stock templates do not
+require Java drivetrain fields. These two integration contracts were lost.
+(1) Host car_ground only recognized the GroundRef enum. Actual map nodes were
+GameTypes: brain probes reported null map, zero route points, parked chassis.
+Traffic drivers now resolve the incarnation-checked map from their registration.
+Updating the two existing real City movement tests to use a GameType map made
+both fail before the fix (traffic turns and native day-racer movement).
+(2) Native drive was incorrectly inferred from inline wheel meshes. Full native
+stock assemblies have mounted wheels but no Java ratio field; drive probes
+reported inline=0, ratio=null, active=true, resulting in no engine force.
+The factory now retains native ownership; native wheel/drive policy uses that
+identity. New real Baiern stock-assembly regression requires movement >5m,
+without Java ratios or inline wheel renders, on a generic GameType map.
+Release build: pass. traffic_runtime: 10 pass, physics_recovery: 8 pass,
+race_vehicle: 2 pass. Temporary probes removed from shipped code.
+Isolated complete Elias-1 career replay, real-time Valocity: before all four
+registered cars remained at 0m/s. With both fixes car IDs 2/3/5 move at 7.6-7.9m/s
+by clock t=7s; ID4 waits then is moving at 7.846m/s at t=21s. Positions change
+continuously by tens of metres. Logs: build/traffic-probe2.log (before),
+build/traffic-native-drive.log (after). This does not claim full upstream Bot
+parity or validate every manual intersection/day-race interaction.

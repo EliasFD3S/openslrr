@@ -26,6 +26,8 @@ class NativeRegistry {
                const std::vector<Value>& args) const;
 
   std::vector<std::string> signatures() const;
+  // Registrations are append-only; failed duplicate registration changes none.
+  size_t method_count() const { return methods_.size(); }
 
  private:
   static std::string key(const std::string& class_fqn, const std::string& method,

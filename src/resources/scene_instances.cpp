@@ -7,6 +7,7 @@
 #include "slrr/object.hpp"
 #include "slrr/part_config.hpp"
 #include "slrr/part_runtime.hpp"
+#include "slrr/race_runtime.hpp"
 #include "slrr/rpk_index.hpp"
 #include "slrr/scene_ambience.hpp"
 #include "slrr/skeleton.hpp"
@@ -29,8 +30,8 @@ namespace slrr {
 namespace {
 const RpkIndex *g_resources = nullptr;
 void *g_world = nullptr;
-SceneHizTest g_hiz = nullptr;
-void* g_hiz_user = nullptr;
+SceneSizeFilter g_size_filter = nullptr;
+void* g_size_filter_user = nullptr;
 void *g_sky = nullptr;
 bool g_preview_lamps = false;
 uint32_t g_environment = 0;
@@ -71,6 +72,8 @@ struct GroundProp {
   bool hidden = false;   // replaced by a live loose body
   int32_t dormant = -1;  // index into GroundPropMap::dormant, or -1
   bool night_only = false;
+  bool signal = false;
+  RoadPoint signal_position{};
 };
 struct GroundPropCell {
   std::vector<GroundProp> props;
@@ -93,6 +96,8 @@ struct DormantProp {
   std::vector<std::pair<GroundPropCell*, uint32_t>> props;  // render instances to hide
 };
 struct GroundPropMap {
+  std::shared_ptr<const ScxGeometry> signal_geometry;
+  uint64_t signal_stamp=0;
   std::vector<DormantProp> dormant;
   std::unordered_map<uint64_t, std::vector<uint32_t>> dormant_grid;
   std::unordered_map<uint64_t, GroundPropCell> cells;
@@ -1067,7 +1072,7 @@ bool scene_instances_ground_frame(void *ground, float *matrix) {
 namespace {
 void collect_render_nodes(GameRefState* node, std::vector<GameRefState*>& out,
                           unsigned depth = 0, bool physics = false) {
-  if (!node || node->empty || (node->flags & kWorldTreeLeaf) ||
+  if (!node || node->empty || node->streamed_hidden || (node->flags & kWorldTreeLeaf) ||
       (depth && (node->flags & kWorldTreeRoot)) || depth >= 128)
     return;
   const bool render = node->kind == GameRefKind::RenderRef &&
@@ -1928,7 +1933,8 @@ std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
     // SCRIPT_RUNTIME.md; original per-bit semantics are not established.
     uint32_t resource_flags = 0;
     scene_shadow_info(static_cast<uint32_t>(n->type_id), &resource_flags, nullptr);
-    if (n->kind == GameRefKind::RenderRef && (resource_flags & 0x280u) == 0x280u) {
+    if (n->kind == GameRefKind::RenderRef && !n->vehicle_material &&
+        !part_render_owner(n->key) && (resource_flags & 0x280u) == 0x280u) {
       const float t = gameref_now();
       const float c = std::cos(t), s = std::sin(t);
       auto& m = instance.transform;
@@ -2077,12 +2083,116 @@ void scene_instances_frame_cache(bool enabled) {
   }
 }
 
-void scene_instances_set_hiz(SceneHizTest test, void* user) {
-  g_hiz = test;
-  g_hiz_user = user;
+void scene_instances_set_size_filter(SceneSizeFilter test, void* user) {
+  g_size_filter = test;
+  g_size_filter_user = user;
 }
 
 namespace {
+std::shared_ptr<const ScxGeometry> signal_lens(int state) {
+  static std::array<std::shared_ptr<const ScxGeometry>, 3> lenses;
+  if (state < 0 || state > 2)
+    return {};
+  if (lenses[state])
+    return lenses[state];
+  auto geo = std::make_shared<ScxGeometry>();
+  geo->info.ok = true;
+  geo->info.version = 4;
+  geo->position_scale = 1;
+  float y = state == 0 ? .32f : state == 1 ? -.005f : -.335f;
+  geo->positions = {1, y, .17f};
+  geo->normals = {0, 0, 1};
+  geo->uvs = {.5f, .5f};
+  for (int i = 0; i <= 16; ++i) {
+    float a = 6.2831853f * i / 16;
+    geo->positions.insert(geo->positions.end(), {1 + .11f * std::cos(a),
+                                                 y + .11f * std::sin(a), .17f});
+    geo->normals.insert(geo->normals.end(), {0, 0, 1});
+    geo->uvs.insert(geo->uvs.end(),
+                    {.5f + .5f * std::cos(a), .5f + .5f * std::sin(a)});
+    if (i)
+      geo->indices.insert(geo->indices.end(),
+                          {0u, uint32_t(i), uint32_t(i + 1)});
+  }
+  ScxGroup group;
+  group.index_count = uint32_t(geo->indices.size());
+  group.diffuse[0] = group.diffuse[1] = group.diffuse[2] = 0;
+  group.emission_color[0] = state == 0 ? 1 : state == 1 ? 1 : .05f;
+  group.emission_color[1] = state == 0 ? .01f : state == 1 ? .65f : 1;
+  group.emission_color[2] = state == 2 ? .03f : 0;
+  geo->groups.push_back(group);
+  geo->info.bbox_min[0] = .89f;
+  geo->info.bbox_max[0] = 1.11f;
+  geo->info.bbox_min[1] = y - .11f;
+  geo->info.bbox_max[1] = y + .11f;
+  geo->info.bbox_min[2] = geo->info.bbox_max[2] = .17f;
+  return lenses[state] = geo;
+}
+std::shared_ptr<const ScxGeometry> signal_geometry(GroundPropMap &map) {
+  const auto stamp = race_signal_revision();
+  if (map.signal_stamp == stamp && map.signal_geometry)
+    return map.signal_geometry;
+  std::array<ScxGeometry, 3> colors;
+  for (const auto &entry : map.cells)
+    for (const auto &prop : entry.second.props)
+      if (prop.signal) {
+        int state = race_signal_at(prop.signal_position);
+        auto lens = signal_lens(state);
+        if (!lens)
+          continue;
+        auto &color = colors[state];
+        uint32_t offset = uint32_t(color.positions.size() / 3);
+        for (size_t i = 0; i < lens->positions.size(); i += 3) {
+          auto point = transform_point(prop.pose, {lens->positions[i],
+                                                   lens->positions[i + 1],
+                                                   lens->positions[i + 2]});
+          color.positions.insert(color.positions.end(), point.begin(),
+                                 point.end());
+          color.normals.insert(color.normals.end(),
+                               {prop.pose[8], prop.pose[9], prop.pose[10]});
+        }
+        color.uvs.insert(color.uvs.end(), lens->uvs.begin(), lens->uvs.end());
+        for (auto index : lens->indices)
+          color.indices.push_back(offset + index);
+      }
+  auto merged = std::make_shared<ScxGeometry>();
+  merged->info.ok = true;
+  merged->info.version = 4;
+  merged->position_scale = 1;
+  for (int state = 0; state < 3; ++state) {
+    auto &color = colors[state];
+    if (color.indices.empty())
+      continue;
+    auto lens = signal_lens(state);
+    ScxGroup group = lens->groups.front();
+    group.name = "traffic signal";
+    group.index_start = uint32_t(merged->indices.size());
+    group.index_count = uint32_t(color.indices.size());
+    uint32_t offset = uint32_t(merged->positions.size() / 3);
+    merged->positions.insert(merged->positions.end(), color.positions.begin(),
+                             color.positions.end());
+    merged->normals.insert(merged->normals.end(), color.normals.begin(),
+                           color.normals.end());
+    merged->uvs.insert(merged->uvs.end(), color.uvs.begin(), color.uvs.end());
+    for (auto index : color.indices)
+      merged->indices.push_back(offset + index);
+    merged->groups.push_back(group);
+  }
+  for (size_t i = 0; i < merged->positions.size(); i += 3)
+    for (int axis = 0; axis < 3; ++axis) {
+      float value = merged->positions[i + axis];
+      if (i == 0)
+        merged->info.bbox_min[axis] = merged->info.bbox_max[axis] = value;
+      else {
+        merged->info.bbox_min[axis] =
+            std::min(merged->info.bbox_min[axis], value);
+        merged->info.bbox_max[axis] =
+            std::max(merged->info.bbox_max[axis], value);
+      }
+    }
+  map.signal_stamp = stamp;
+  return map.signal_geometry = merged;
+}
 bool night_props_visible() {
   const float seconds = std::fmod(scene_sun_time(), 86400.f);
   const float hour = (seconds < 0.f ? seconds + 86400.f : seconds) / 3600.f;
@@ -2129,18 +2239,31 @@ std::vector<SceneInstance> scene_instances_collect(
       return true;
     };
     const SceneSun lighting = out[i].lighting;
+    auto glow = signal_geometry(found->second);
+    if (glow && !glow->indices.empty()) {
+      SceneInstance instance;
+      instance.geometry = std::move(glow);
+      instance.emissive_overlay = true;
+      instance.lighting = lighting;
+      instance.transform = shell;
+      for (int col = 0; col < 4; ++col)
+        for (int row = 0; row < 4; ++row)
+          if ((col == 2) != (row == 2))
+            instance.transform[col * 4 + row] *= -1;
+      out.push_back(std::move(instance));
+    }
     for (const auto& [key, cell] : found->second.cells) {
         if (!visible(cell.center, cell.radius)) continue;
-        if (g_hiz) {
+        if (g_size_filter) {
           const auto cell_world = transform_point(shell, cell.center);
-          if (!g_hiz(cell_world.data(), cell.radius, g_hiz_user)) continue;
+          if (!g_size_filter(cell_world.data(), cell.radius, g_size_filter_user)) continue;
         }
         for (const auto& prop : cell.props) {
-          if (prop.batched || prop.hidden || (prop.night_only && !night_props_visible())) continue;
+          if (prop.signal || prop.batched || prop.hidden || (prop.night_only && !night_props_visible())) continue;
           if (!visible(prop.center, prop.radius)) continue;
-          if (g_hiz) {
+          if (g_size_filter) {
             const auto prop_world = transform_point(shell, prop.center);
-            if (!g_hiz(prop_world.data(), prop.radius, g_hiz_user)) continue;
+            if (!g_size_filter(prop_world.data(), prop.radius, g_size_filter_user)) continue;
           }
           auto mesh = geometry(prop.render_id);
           if (!mesh) continue;
@@ -2186,9 +2309,9 @@ void scene_instances_collect_batches(const SceneFrustum* frustum,
     for (const auto& [key, cell] : found->second.cells) {
       (void)key;
       if (cell.batches.empty() || !visible(cell.center, cell.radius)) continue;
-      if (g_hiz) {
+      if (g_size_filter) {
         const auto cell_world = transform_point(shell, cell.center);
-        if (!g_hiz(cell_world.data(), cell.radius, g_hiz_user)) continue;
+        if (!g_size_filter(cell_world.data(), cell.radius, g_size_filter_user)) continue;
       }
       for (const auto& batch : cell.batches) {
         const uint64_t batch_key = (static_cast<uint64_t>(static_cast<uint32_t>(base.type_id)) << 32) |
@@ -2216,9 +2339,9 @@ void scene_instances_collect_batches(const SceneFrustum* frustum,
           const auto& prop = cell.props[index];
           if (prop.hidden || (prop.night_only && !night_props_visible()) ||
               !visible(prop.center, prop.radius)) continue;
-          if (g_hiz) {
+          if (g_size_filter) {
             const auto prop_world = transform_point(shell, prop.center);
-            if (!g_hiz(prop_world.data(), prop.radius, g_hiz_user)) continue;
+            if (!g_size_filter(prop_world.data(), prop.radius, g_size_filter_user)) continue;
           }
           auto matrix = part_matrix_multiply(shell, prop.pose);
           for (int col = 0; col < 4; ++col)
@@ -2545,7 +2668,7 @@ void build_prop_batches(GroundPropCell& cell, const std::unordered_set<uint32_t>
   std::unordered_map<uint32_t, std::vector<uint32_t>> groups;
   for (uint32_t index = 0; index < cell.props.size(); ++index) {
     const auto id = cell.props[index].render_id;
-    if (!batchable.contains(id)) continue;
+    if (cell.props[index].signal || !batchable.contains(id)) continue;
     groups[id].push_back(index);
   }
   cell.batches.clear();
@@ -2672,6 +2795,9 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
       render_cell.props.push_back({resource, transform, color});
       render_cell.props.back().dormant = dormant_index;
       render_cell.props.back().night_only = ground_prop_is_night(*g_resources, resource);
+      if(type->second.native_kind=="trlight"){
+        render_cell.props.push_back({resource,pose,0xffffff});auto&glow=render_cell.props.back();glow.signal=true;glow.signal_position=placement.position;
+      }
       used_resources.insert(resource);
       ++props;
     }

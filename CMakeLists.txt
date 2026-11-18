@@ -75,6 +75,10 @@ add_executable(slrr_host
   src/resources/scene_ambience.cpp
   src/resources/scene_triggers.cpp
   src/resources/trigger_volume.cpp
+  src/resources/road_routes.cpp
+  src/resources/race_runtime.cpp
+  src/resources/race_brain.cpp
+  src/resources/traffic_runtime.cpp
   src/resources/scx_mesh.cpp
   src/resources/skeleton.cpp
   src/resources/character.cpp
@@ -175,7 +179,7 @@ target_include_directories(slrr_host PRIVATE
 
 bgfx_compile_shaders(
   TYPE VERTEX
-  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_osd_text.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh_inst.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_skin.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow_recv.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow_cast.sc"
+  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_osd_text.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh_inst.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_skin.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_vehicle.sc"
   VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
   OUTPUT_DIR "${SLRR_SHADER_OUT}"
   INCLUDE_DIRS "${_bgfx_shader_inc}"
@@ -185,7 +189,7 @@ bgfx_compile_shaders(
 )
 bgfx_compile_shaders(
   TYPE FRAGMENT
-  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_osd_text.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_white.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_shadow_recv.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_static_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_present.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_hiz.sc"
+  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_osd_text.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_static_shadow.sc"
   VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
   OUTPUT_DIR "${SLRR_SHADER_OUT}"
   INCLUDE_DIRS "${_bgfx_shader_inc}"

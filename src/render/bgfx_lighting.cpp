@@ -448,7 +448,7 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
       bgfx::setState(state);
       bgfx::submit(view_id, skinned ? skin_program_ : program_);
     };
-    if(part.geo.groups.empty())draw(0,static_cast<uint32_t>(part.geo.indices.size()),0,0,nullptr);
+    if(part.geo.groups.empty())draw(0,static_cast<uint32_t>(part.geo.index_count),0,0,nullptr);
     else for(const auto&g:part.geo.groups)draw(g.index_start,g.index_count,g.texture_index,g.material_flags,&g);
   }
 
@@ -493,7 +493,7 @@ void LibBgfxBackend::draw_prop_batches(uint16_t view_id,
         const ScxGroup* group = groups.empty() ? nullptr : &groups[group_index];
         const uint32_t first = group ? group->index_start : 0;
         const uint32_t index_count = group ? group->index_count
-                                           : static_cast<uint32_t>(part.geo.indices.size());
+                                           : static_cast<uint32_t>(part.geo.index_count);
         const uint16_t slot = group ? group->texture_index : 0;
         const uint32_t flags = group ? group->material_flags : 0;
         const auto tex = slot < part.tex.size() && bgfx::isValid(part.tex[slot])

@@ -29,6 +29,7 @@ void usage() {
       "           [--spawn-car cars/racers/Baiern.rpk:0x6]\n"
       "           [--vehicle-osd PATH]\n"
       "           [--perf-log CSV|-] [--bench-map TRACK] [--bench-drive SECONDS]\n"
+      "           [--bench-career SAVE_DIRECTORY] [--bench-realtime]\n"
       "           [--bench-time HOUR] [--bench-shots DIR]\n"
       "           [--no-vsync] [--debug-overlay]\n"
       "           [PlayerName]\n"
@@ -136,6 +137,8 @@ int main(int argc, char** argv) {
       opt.bench_shots = argv[++i];
       continue;
     }
+    if(std::strcmp(a,"--bench-realtime")==0){opt.bench_realtime=true;continue;}
+    if(std::strcmp(a,"--bench-career")==0&&i+1<argc){opt.bench_career=argv[++i];opt.auto_new=true;continue;}
     if (std::strcmp(a, "--bench-map") == 0 && i + 1 < argc) {
       opt.bench_map = argv[++i];
       continue;

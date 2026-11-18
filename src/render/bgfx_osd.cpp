@@ -946,12 +946,6 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     bgfx::setUniform(u_color_, white);
   }
 #endif
-#ifdef _WIN32
-  void LibBgfxBackend::draw_osd_string(float x, float y, int32_t align, uint32_t argb,
-                       const std::string& text, void* font_key)
-{
-    draw_osd_line(font_key, text, x, y, align, argb);
-  }
-#endif
+
 
 }  // namespace slrr

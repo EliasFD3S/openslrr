@@ -66,10 +66,10 @@ void scene_instances_select(void *world, void *skydome, bool preview_lamps);
 using SceneFrustum = std::array<std::array<float, 4>, 6>;
 bool scene_instances_has_ground_props();
 void* scene_instances_world();
-// Previous-frame occlusion. A true result keeps the sphere. Null skips the
-// test, which is what the shadow map and the reflection faces do.
-using SceneHizTest = bool (*)(const float center[3], float radius, void* user);
-void scene_instances_set_hiz(SceneHizTest test, void* user);
+// Optional projected-size filter: true keeps the sphere. No depth/occlusion
+// data is read. Null disables filtering for shadow maps and reflection faces.
+using SceneSizeFilter = bool (*)(const float center[3], float radius, void* user);
+void scene_instances_set_size_filter(SceneSizeFilter test, void* user);
 std::vector<SceneInstance> scene_instances_collect(
     const SceneFrustum* frustum = nullptr,
     std::vector<std::shared_ptr<const ScxGeometry>>* resident_props = nullptr);

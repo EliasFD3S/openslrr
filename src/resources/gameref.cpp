@@ -1,3 +1,4 @@
+#include "slrr/race_runtime.hpp"
 #include "slrr/gc_roots.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/script_events.hpp"
@@ -59,6 +60,7 @@ const float* gameref_render_matrix(const GameRefState& node) {
 }
 
 void gameref_clear() {
+  race_reset();
   ++g_scene_revision;
   part_drop_actors();
   character_forget_all();
@@ -127,6 +129,7 @@ void gameref_remove(void* key) {
   g_trigger_refs.erase(key);
   g_simulated_refs.erase(key);
   character_forget(key);
+  race_forget(key);
   script_events_destroy(static_cast<Object*>(key));
   auto own=g_refs.find(key);
   if(own!=g_refs.end()&&own->second.binding){g_live_refs.erase(own->second.live_id);g_refs.erase(own);return;}

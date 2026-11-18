@@ -1,3 +1,4 @@
+#include "slrr/race_runtime.hpp"
 #include "slrr/natives_boot.hpp"
 #include "natives_internal.hpp"
 
@@ -667,18 +668,27 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
       "java.util.resource.RenderRef", "plotRoute",
       "(Ljava.util.resource.ResourceRef;Ljava.util.resource.ResourceRef;IF"
       "Ljava.lang.Vector3;)I",
-      [](Object*, const std::vector<Value>&) {
-        return Value::make_int(0);
+      [&rpk](Object* self, const std::vector<Value>& args) {
+        const auto* route=race_plot_route();
+        if(!self||args.size()!=5||!route||route->points.size()<2||
+           args[0].tag!=ValueTag::Obj||!args[0].v.o||args[0].v.o==self||
+           args[3].tag!=ValueTag::Float||!std::isfinite(args[3].v.f)||args[3].v.f<=0||
+           args[4].tag!=ValueTag::Obj||!args[4].v.o)return Value::make_int(0);
+        const auto scale=line_vector(args[4].v.o,{});
+        if(!std::all_of(scale.begin(),scale.end(),[](float v){return std::isfinite(v);}))return Value::make_int(0);
+        const float width=args[3].v.f*std::max(std::fabs(scale[0]),std::fabs(scale[2]));
+        if(width<=0)return Value::make_int(0);
+        auto*line=gameref_upsert(self,GameRefKind::RenderRef);gameref_set_type(*line,0);
+        line->binding=nullptr;line->line_end.reset();line->line_length=0;
+        line->line_geometry=std::make_shared<ScxGeometry>();
+        auto&mesh=*line->line_geometry;mesh.info.ok=true;mesh.info.version=3;mesh.position_scale=1;
+        gameref_set_parent(self,args[0].v.o);gameref_make_live(self);
+        const auto color=uint32_t(args[2].v.i);line->color=0xffffff;
+        for(const auto&p:route->points){RenderLinePoint current{{p[0]*scale[0],p[1]*scale[1]+.002f,p[2]*scale[2]},{0,1,0},width};if(line->line_end)append_line_segment(*line,*line->line_end,current,color);line->line_end=current;}
+        for(size_t i=0;i+2<mesh.positions.size();i+=3)for(int k=0;k<3;++k){if(i==0)mesh.info.bbox_min[k]=mesh.info.bbox_max[k]=mesh.positions[i+k];else{mesh.info.bbox_min[k]=std::min(mesh.info.bbox_min[k],mesh.positions[i+k]);mesh.info.bbox_max[k]=std::max(mesh.info.bbox_max[k],mesh.positions[i+k]);}}
+        return Value::make_int(!mesh.indices.empty());
       });
 
-  jvm.natives().register_method(
-      "java.util.resource.GroundRef", "getNearestCross",
-      "(Ljava.lang.Vector3;F)Ljava.lang.Vector3;",
-      [](Object*, const std::vector<Value>&) {
-        // Track.changeCamTV uses its current camera pose when a map has no
-        // crossing index. Route data can supply a result when available.
-        return Value::make_obj(nullptr);
-      });
   jvm.natives().register_method(
       "java.util.resource.GroundRef", "setPedestrianDensityN", "(F)V",
       [](Object* self, const std::vector<Value>& args) {

@@ -1,6 +1,6 @@
 # Native audit and roadmap
 
-Baseline snapshot from 9 November 2026, incrementally updated 17 November 2026.
+Baseline snapshot from 9 November 2026, incrementally updated 18 November 2026.
 `Camera.setFog` is registered. The remaining `PhysicsRef` signatures are
 bound, and `GameRef.setActiveCollision` is no longer an explicit no-op.
 Earlier increments covered the resource and vehicle bindings, the Language
@@ -19,9 +19,9 @@ implementations and following selected calls to their consumers.
 
 | Status | Stock signatures |
 | --- | ---: |
-| Registered with a body | 339 |
+| Registered with a body | 355 |
 | Registered with the explicit `native_noop` handler | 3 |
-| Absent from the registry | 34 |
+| Absent from the registry | 18 |
 | **Total** | **376** |
 
 The first category includes constant responses, inline empty bodies and
@@ -59,17 +59,21 @@ that category. It is not a compatibility score or a complete runtime trace.
 | `Thread.setDaemon` | Sets and clears the per-thread flag. Shutdown still cancels every fiber. |
 | `System.simTime`, `timeWarp` | The simulation clock follows the warp factor, and setting it returns the previous factor. Physics uses the scaled elapsed time. UI clocks, sleeps and host timer dispatch use real time. |
 | `System.setMeasure`, `getConfigOptions` | The measure setting controls digital vehicle instruments. The options refresh reads gameplay settings and schedules a debounced save when they change. Failed saves suspend automatic retries until another change; forced shutdown saves can retry. Enhanced graphics are stored separately in save/game/openslrr_options. |
-| `RenderRef.setFlare`, `Navigator.updateNavigator`, `GroundRef.getNearestCross` | Directional flares use the scene's texture and an approximate sprite layout. The GPS camera and markers follow scene objects. The crossing query returns null until the road index is available. |
+| `RenderRef.setFlare`, `Navigator.updateNavigator`, `GroundRef.getNearestCross` | Directional flares use the scene's texture and an approximate sprite layout. The GPS camera and markers follow scene objects. The crossing query now reads the selected ground TRC and honours the desired crossing distance (v221 host semantics). |
 | `GfxEngine.numDisplayModes`, `currDisplayMode`, `displayModeName`, `changeVideoMode` | Enumerate available Win32 32-bit display modes with an 800×600 fallback, identify the current resolution, and apply validated mode changes through the host options path. |
 | `Camera.setFog` | Stores the color and the near and far distances on the driving camera. The fade uses those distances. The color argument is replaced by the day and twilight sky color before the shader reads it. |
 | `GroundRef.setFog` | Stores a global color and near and far distances. Nothing in the renderer reads them. |
-| `RenderRef.plotRoute` | Always returns zero. Route line construction is missing. |
+| `RenderRef.plotRoute` | Builds a navigator-owned coloured ribbon from the last queried route. Invalid/missing routes return zero. Texture input is not yet sampled. |
+| `GroundRef` road/route natives | Selected-ground directed TRC routes, independent alignment position/direction vectors, cached length/metre position/projection queries, timed crossing halts and path exclusions. Host route-query semantics beyond the v221 port are not recovered original implementations. |
+| `GroundRef` traffic natives | Explicit TRC lane/crossing-curve traversal, physical native wheel/suspension/tyre forces with matching render hubs, native-only racer placement from off-map staging, model-weight-based rival share and density scaling, finite positioned reinsertion, stable individual IDs, balanced deferred Java notifications and teardown. setTrafficCarBehaviour stores its flag only; trailing model parameters remain uninterpreted. Signal fixtures share a host crossing cycle with cached lens emission and red/yellow entry restrictions, five-second missing-lamp STOP and rear-checked blocked-driver recovery. Original signal timing, explicit STOP/YIELD signs, full pursuit and traffic contact response remain incomplete. |
+| Brain AI commands (not separate native signatures) | Shared physical driver for AI_race, GoToTarget, GoToTraffic, follow and MWM ROC splines. BeginRace/stop/suspend hold; NightRace retains the race destination. Host tuning, basic world-space follow offsets; renderinstance seating and spline metadata remain incomplete. Original Bot bytecode, real City/ROC terrain, ordered ROC gates and the finish gate pass physics integration tests; full career UI/result flows remain pending gameplay validation. |
 | `RenderRef.lineCreate`, `lineAdd` | Build renderable ribbons from positions, normals and widths. Color is applied per segment. |
 | `Chassis.setCooling`, `setSteerWheelRadius`, `setSteerWheel`, `setBuck`, `setNitroSFX` | Store configuration. No temperature simulation, bucking effect or nitro audio consumes these values yet. The installed wheel on slot type 11 turns about the cfg `steering` locator. |
 | `GroundRef.setPedestrianDensityN`, `addPedestrianType`, `remPedestrianType`, `removePedestrianType`, `pedestrianDistance` | Density, after the script's Config factor, sets people per square metre of `city.walk` row area around the driven car. Each type's `native ped` cfg supplies the render and the walk clip. Walkers follow the original engine model: free agents inside a row, pushed back by its walls and both sidewalk runs, leaving only through gates (see `src/resources/pedestrian_lines.cpp`). `removePedestrianType` is the original native table's name for `remPedestrianType`. `pedestrianDistance(pos, type)` returns the distance to the nearest live walker of that type id, or of any type for 0, and -1 when there is none. |
 | `PhysicsRef.getPos` | Returns a new Vector3 copying the one stored by `setMatrix`. Without one, it returns a new Vector3 from the object's pose. The copy matters: `Osd` keyboard navigation calls `gad.getHotSpot().sub(cur)`, and returning the stored vector let the arrow keys move the button's own Rectangle (`Rectangle.pos` is the same vector the button passed to `setMatrix`). |
 | `Part.setSfxLoopParams` | Stores the two parameters without applying them to a voice. |
 | `Chassis.setHornSFX` | Stores all indexed sounds. The current player input plays the index 1 sample once per press. |
+| `GameRef.create_native` on native cars | Builds the CFG-backed native assembly, skips a chassis-specific Java constructor and binds the Java reference to its live chassis. Tested with the real fake_racers staging/traffic flow; other native resource kinds retain their existing path. |
 | `GameRef.getInfo`, `queueEvent` | Implement selected queries and commands. `repair` performs the native per-part deformation, damage-associated slot/wheel and CFG mount/base-mesh reset; stock Java owns the installed-tree recursion and wear/tear caps, with a native fallback only for detached assembly children omitted from `attachedParts`. Unhandled queries return zero. Other command paths still need coverage as new sections are exercised. |
 | `GameType.registerCallback`, notifications | Control, drive and animate callbacks run. Notifications have event routing and GC roots. Other callback modes and event producers still need verification. |
 | `Input.getAxis`, `activeAxis`, `Controller.user_SetAxisSmooth` | Keyboard, mouse and one logical XInput pad are wired. Pointer movement is excluded from rebinding. Negative mouse axis requests reset deltas, while their sensitivity argument remains unused. Default pad driving controls are retained per axis unless explicitly overridden or their physical channel is assigned elsewhere. Steering fallback and analog classification share that policy. Smoothing uses a host time-based approximation. Menu/cancel hotkey presses share a 250 ms UI debounce across command changes; select has a separate gate. Releases and driving axes remain immediate. |
@@ -100,11 +104,11 @@ being replaced by success-returning mocks.
 
 | System | Count | Methods |
 | --- | ---: | --- |
-| `GroundRef` | 19 | `setWater` (2 overloads), `addWaterLimit`, `addTrafficCar`, `remTrafficCar`, `notifyTrafficCar`, `addTrafficN`, `addTrafficP`, `delTraffic`, `setTrafficCarBehaviour`, `haltTrafficCross`, `haltTrafficPath`, `getStartDirection`, `findRoute`, `getRouteLength` (2 overloads), `getRoutePos`, `getRouteDist`, `alignToRoad` |
+| `GroundRef` | 3 | `setWater` (2 overloads), `addWaterLimit` |
 | `ParticleSystem` | 9 | `init`, `stop`, `setFreq`, `setDirectSource`, `setSource`, `setCounter`, `getCounter`, `delAction`, `modePermanent` |
 | `Painter` | 3 | `doPaint`, `paintPart`, `xPaint` |
 
-There are 31 missing active signatures and 3 missing leftovers, for 34 total.
+There are 15 missing active signatures and 3 missing leftovers, for 18 total.
 No PhysicsRef signature remains absent from the stock table.
 
 ## Roadmap
@@ -120,10 +124,11 @@ No PhysicsRef signature remains absent from the stock table.
    physics boundary. Continue with standalone dynamic bodies and validate
    track barriers and prop contact in game. Connect impact deformation and
    wear to the parts and the regional HUD display.
-3. **Complete the navigation and race loop.** Read road and route data,
-   implement the `GroundRef` route queries, `Navigator.updateNavigator`
-   and route rendering. Verify map, rear view and cruise control in a race.
-   Add traffic after routes and collision are stable. Pedestrians already walk the `city.walk` sidewalk rows near the player; they do not use the road graph.
+3. **Validate the navigation and race loop.** Shared road queries, route
+   ribbons, traffic lifecycle and physical bot inputs are now implemented
+   for #179. Verify daytime challenges, the night meeting, ROC spline finish,
+   timing/results and repeat entry in game. Complete the documented traffic
+   behaviour, pursuit and contact limitations. Pedestrians already walk the `city.walk` sidewalk rows near the player; they do not use the road graph.
 4. **Complete garage actions and effects.** Implement the `Painter` natives
    and resource-created sound, then animation, particles, flares and fog.
    Verify paint and installed-part state through a career save and reload.

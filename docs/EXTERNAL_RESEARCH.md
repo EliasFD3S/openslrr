@@ -359,7 +359,8 @@ Where OpenSLRR gaps already have an SLRR_rev implementation (revision
 | Car damage | `SLRR_rev:src/engine/deformable-panel.ts`, `SLRR_rev:src/engine/vehicle-damage.ts`, `SLRR_rev:src/engine/vehicle-3d.ts` | SLRR_rev's own model, not original behaviour. OpenSLRR adapts its XPBD cage, builds cages over the render shell with the part's own mass as SLRR_rev does, and ports its wheel release (`releaseFailedWheels`, 0.3 m hardpoint travel, 55 kJ strut energy). SLRR_rev's mass is point masses at body poses with a render-bounds box inertia; OpenSLRR integrates each body's shape instead |
 | Physical flaps (#42) | `SLRR_rev:docs/native-status.md` lists `Part.flap` as unregistered; `SLRR_rev:src/engine/deformable-panel.ts` pins a hood cage with two hinge clamps and a latch | No hinge to migrate. OpenSLRR's `include/slrr/flap_hinge.hpp` is its own design |
 
-Missing in SLRR_rev too, so these need original research: all `Painter`
+At the historical `77b0fb6` snapshot these were also missing (the v221
+update below supersedes the road/traffic entries): all `Painter`
 and `ParticleSystem` natives, the `GroundRef` route queries (`findRoute`,
 `getRouteLength`, `getRoutePos`, `getRouteDist`, `alignToRoad`,
 `getStartDirection`), `RenderRef.plotRoute`, `PhysicsRef.create` and
@@ -367,6 +368,139 @@ and `ParticleSystem` natives, the `GroundRef` route queries (`findRoute`,
 `haltTrafficCross`. OpenSLRR implements `pedestrianDistance` and
 `removePedestrianType` from the slrr-reverse notes on 0x00589BE0 and
 0x00484E20.
+
+### v221 shared race port, 18 November 2026
+
+Source branch supplied by the maintainer: [SLRR_rev v221](https://github.com/nedobylskiy/SLRR_rev/tree/v221),
+pinned at `cbb99147a126b098fa776dab158b5d4493cdab2c`.
+The older snapshot above must not be used to describe this branch's coverage.
+
+| Mechanic | v221 source | OpenSLRR adaptation |
+| --- | --- | --- |
+| Directed routes / crossings | `SLRR_rev:src/engine/road-route.ts`, `road-nearest.ts`, `map-roads.ts`; `SLRR_rev:src/runtime/ground-road-native.ts` | C++ selected-ground TRC lookup, lane orientation, Hermite samples, Dijkstra and projection; simulation-clock traffic halts |
+| Traffic identity / lifetime | `SLRR_rev:src/runtime/traffic-native.ts`; `SLRR_rev:src/engine/traffic-models.ts`, `traffic-stream.ts`, `distant-rivals.ts` | Per-ground weights and IDs, original Java car_add/car_rem, bounded nearby population and coarse distant rivals; reuse native CFG assembly rendering |
+| Race input | `SLRR_rev:src/engine/race-driver.ts` and `SLRR_rev:src/render/java-vehicles.ts` | Shared C++ controller supplies the existing Part mechanical solver; player control stays separate |
+
+The upstream branch implements AI_race/BeginRace/stop/suspend, not all MWM
+commands. OpenSLRR adds AI_spline using the local ROC race.spl and verifies the
+original Bot.followSplineTrack command builder. Original City bytecode consumes
+alignToRoad[0] as a position and [1] as a normalized direction. Additional route
+cache queries, positioned reinsertion and follow/traffic commands are host
+extensions, not code already present in v221. No Three/WebGL infrastructure or
+production Java patch is copied.
+
+Read alongside upstream docs `ground-road-routing.md`, `java-race-bots.md`,
+`java-traffic-models.md` and `traffic-java-bridge.md`. Upstream itself disclaims
+original AI parity and complete pursuit. OpenSLRR likewise does not claim exact
+speed, steering, collision response, signals, traffic-behaviour flags or spline
+metadata semantics. Runtime limits and evidence are in SCRIPT_RUNTIME's shared
+race section and assets/validation/shared-races.txt. #179 and its three original
+issues remain open for their separate in-game acceptance checks.
+
+### Traffic and v221 updates during the first race playtest
+
+The maintainer pointed out the newer branches. Read-only references were refreshed
+at traffic `bea8ce06eabef78ad0c25dde00e17a48765199b5` and v221
+`ab4b4943c948d34960b458add314609694646927`. In particular:
+
+- `SLRR_rev:src/engine/traffic-control.ts` and
+  `SLRR_rev:docs/traffic-signals-research.md`: flagged-link fixture binding and one
+  crossing state shared by drivers and lenses. The port uses the documented
+  host 10/3 second cycle; it does not claim original producer/timing parity.
+- `SLRR_rev:src/render/traffic-signals.ts`: the installed head's lens centres
+  (local X=1, Y=.32/-.005/-.335, Z=.16). OpenSLRR uses grouped emissive lens
+  geometry in its existing renderer, without copying Three.js or its sprite
+  architecture. Original flare/PTX halo work remains separate.
+- `SLRR_rev:src/engine/race-driver.ts` on the new v221: behind-target recovery and
+  NightRace's finish-plane runout. The latter prevents a radius-based stop event
+  from braking the opponent before it crosses the line.
+
+The local Java sources ROCTrack.java and Roc.java show the per-opponent
+ROC_cars spline selection, the -.55 rad grid heading and the ordered Round gates.
+OpenSLRR's complete-loop projection/orientation is its own host extension;
+upstream v221 still does not implement AI_spline. The updated integration tests
+use that actual grid, per-car data and map collisions, rather than extrapolating
+from a flat surface and the generic race.spl. Steady simulation and signal mesh
+publication remain on the host thread under the new worker-pool contract.
+
+### Traffic lane and native-only assembly follow-up
+
+The traffic/v221 pins above were refreshed again after the next playtest and
+were unchanged. SLRR_rev:src/engine/road-traffic.ts is now used for reverse
+RoadOther traversal, .03 m explicit grey-curve joins, arc-length cursor transitions
+and branch-before-lane turn choice. The old street-centre-plus-offset shortcut
+was insufficient: it produced discontinuous headings and crossing jumps.
+SLRR_rev:src/render/java-vehicles.ts also distinguishes native-only fake racers
+from mechanical Java cars and builds their CFG assemblies. OpenSLRR implements
+that ownership at GameRef.create_native through its existing Part factory, rather
+than adding a second renderer-owned vehicle system. Local Valocity.java confirms
+the native-only -10000 m staging position and subsequent traffic registration.
+
+The port adds wheel spin from travelled distance/CFG radius and curvature-driven
+steering in the Part visual owner. Upstream lane changes, dedicated physical
+traffic recovery and all contact/pursuit policies are not claimed as implemented.
+The ROC straight-speed increase is OpenSLRR tuning requested after the maintainer
+confirmed spline following in game; it is not attributed to recovered AI_params.
+
+### Visible native traffic physics and population follow-up
+
+The next screenshots showed the limits of external animation and body-bottom
+placement. Read SLRR_rev:src/engine/traffic-vehicle.ts and
+SLRR_rev:src/engine/traffic-stream.ts at the same traffic pin. Visible native cars
+now use its one-body/four-ray-spring model and load-limited tyre-force law inside
+OpenSLRR's existing VehicleDynamics, with physical hub transforms driving inline
+wheel meshes. The .25m/.1m/.65 spring policy and 5/8 m/s2/.9 tyre policy come from
+that reference. Low-speed brake impulse limiting and slope holding are host
+stability additions. Upstream also has physical/distant LOD and recovery/control
+features that are not claimed as fully ported here.
+
+SLRR_rev:src/runtime/traffic-native.ts assigns each addTrafficCar model weight 1,
+in the same catalog as addTrafficN model weights. OpenSLRR now derives the visible
+rival share from those weights instead of taking half the population. The rounding
+and density-to-cap scale are host policies; neither the previous 50% reservation
+nor any fixed ratio is attributed to the original game.
+
+### Stopped traffic and local population follow-up
+
+SLRR_rev:src/engine/traffic-control.ts assigns a five-second STOP fallback to
+incoming branches without lamps on a regulated crossing. OpenSLRR had treated
+such branches as red forever; they now have a distinct timed-stop state. Including
+the grey curve in physical projection also avoids binding a car already in the
+junction to the red light of an unrelated approach.
+SLRR_rev:src/engine/bot.ts supplies two-second blocked detection, rear-clearance
+checks and 3.5-second reverse recovery. These are now supported by host traffic
+brains and both native/mechanical drive inputs, without overriding signal waits.
+
+The closer spawn/retention radii and removal of the density slider's .5 saturation
+are OpenSLRR stream tuning prompted by the playtest, not original native count
+semantics. A local City fixture verifies all visible initial cars lie within
+165m, including more than 50 cars when Config.trafficDensity is .8.
+
+### Traffic projection performance
+
+The exhaustive per-driver lane search was too expensive at physical traffic
+frequency. OpenSLRR now extends its existing 64m street-projection grid strategy
+to lane/crossing curves, with a conservative termination bound, stable tie order
+and exhaustive fallback. This is a host acceleration structure, not a change to
+the TRC routes or SLRR_rev driving policy. #58's worker pool constructs per-edge
+index fragments; no worker touches Java, GameRef or the solver. The published
+immutable index supports concurrent queries, checked against serial results.
+Evidence and limitations: assets/validation/shared-races.txt.
+
+### Registered map identity follow-up
+
+Refreshed SLRR_rev v221 at 88130b3e1ee51b11f8de7bec84875f259e05147c.
+Read src/runtime/traffic-native.ts, src/engine/traffic-stream.ts,
+src/engine/traffic-control.ts and src/engine/bot.ts. `Registration` retains
+`ground` and `map`; the bridge closes over the registered map for routes,
+halts, spawning and individual racers. OpenSLRR's parent-enum-only lookup
+lost that identity for native GameType map instances. Driver lookups now use
+the incarnation-checked registration binding. `TrafficNative.bridge.selection` also explicitly distinguishes original unscripted
+dummycars, whose stock template must be built instead of reading absent Java Part
+fields. `viewer.ts` instantiates a TrafficVehicle from that template's bounds,
+mass and wheels. OpenSLRR now preserves native ownership from its Part factory,
+rather than inferring the drive model from inline wheel meshes. This is a port
+integration fix, not a claim that every upstream Bot behavior has been translated already.
 
 ## 8. Draft PR #3: what it contains and what applies to main
 

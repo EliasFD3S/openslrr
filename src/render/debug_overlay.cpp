@@ -1,4 +1,5 @@
 #include "debug_overlay.hpp"
+#include "slrr/frame_profiler.hpp"
 
 #include "slrr/host_game_options.hpp"
 #include "slrr/host_input.hpp"
@@ -34,6 +35,29 @@ void draw_render(uint16_t width, uint16_t height, DebugOverlay::RenderOptions& o
                 ms(stats->gpuTimeEnd - stats->gpuTimeBegin, stats->gpuTimerFreq));
     ImGui::Text("%u draws | %u textures | %u views", stats->numDraw,
                 stats->numTextures, stats->numViews);
+  }
+  const auto timing = perf::snapshot();
+  if (timing.ready) {
+    auto ms = [&](perf::Zone z) {
+      return timing.zones[static_cast<size_t>(z)];
+    };
+    ImGui::Text("CPU scripts %.2f | traffic %.2f | physics %.2f ms",
+                ms(perf::Zone::Scripts), ms(perf::Zone::Traffic),
+                ms(perf::Zone::Physics));
+    ImGui::Text("CPU vehicles %.2f | pedestrians %.2f | collision %.2f ms",
+                ms(perf::Zone::Vehicles), ms(perf::Zone::Pedestrians),
+                ms(perf::Zone::Collision));
+    ImGui::Text("CPU collect %.2f | shadows %.2f | reflections %.2f ms",
+                ms(perf::Zone::Collect), ms(perf::Zone::Shadows),
+                ms(perf::Zone::Reflections));
+    ImGui::Text("CPU flush %.2f | present wait %.2f | peak frame %.2f ms",
+                ms(perf::Zone::Flush), ms(perf::Zone::Present),
+                timing.worst_ms);
+    const double measured = ms(perf::Zone::Scripts) + ms(perf::Zone::Traffic) +
+                            ms(perf::Zone::Physics) + ms(perf::Zone::Flush) +
+                            ms(perf::Zone::Gc);
+    ImGui::Text("CPU GC %.2f | other host/wait %.2f ms", ms(perf::Zone::Gc),
+                std::max(0., timing.frame_ms - measured));
   }
   ImGui::Text("Collision mesh rebuilds: %llu",
               static_cast<unsigned long long>(scene_instances_floor_builds()));
@@ -300,6 +324,7 @@ void DebugOverlay::draw_vehicle_tab(std::span<Object* const> vehicles) {
 void DebugOverlay::draw(HWND hwnd, uint16_t width, uint16_t height, const char* reflection_status,
                         std::span<Object* const> vehicles) {
   if (!open_) return;
+  if(!perf::enabled())perf::enable("");
   if (!initialized_) {
     imguiCreate();
     ImGui::GetIO().IniFilename = nullptr;

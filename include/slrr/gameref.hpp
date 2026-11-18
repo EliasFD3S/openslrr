@@ -80,6 +80,7 @@ struct GameRefState {
   int32_t type_id = 0;
   int32_t event_mask = 0;
   bool empty = true;
+  bool streamed_hidden = false; // Inactive traffic keeps its script identity, not geometry/physics.
   float pos[3] = {0, 0, 0};
   float ypr[3] = {0, 0, 0};
   float vel[3] = {0, 0, 0};

@@ -1,0 +1,22 @@
+Issue #83: GPU mesh CPU ownership (2026-11-18)
+Baseline: merged main a53078c, Windows x64 Release, libbgfx Direct3D11.
+Old cache retained source and deep-copied the entire ScxGeometry into ScenePart;
+revision re-upload separately copied positions/normals again.
+New ScenePart metadata type cannot own vertex/index/skin arrays. Shared scene
+sources remain authoritative. Standalone owned meshes move to one shared source.
+Opaque material merging retains metadata and only temporary upload indices;
+blend ordering and source arrays remain unchanged. GPU copy owns transfer bytes.
+Tests (scene_mesh_cache): shared original index path, opaque material section
+ordering/ranges, SCX3/4 blend exclusions, invalid range no-merge, real source data
+unchanged, source/skin uploads, 16 mutable-source revisions updating metadata and
+buffers without GPU handle growth, deformed replacement texture transfer,
+source lease release and vertex/index buffer counts return to baseline.
+Read-only real City POLY + Baiern chassis + area_205 sample: 16,076,716 bytes of
+vertex/index/skin payload no longer duplicated by resident cache entries. This
+is not a whole-process resident/peak memory measurement; upload scratch remains.
+scx_skin: 4 cases pass. map_alpha: pass (including actual storefront materials).
+Release build and knowledge-reference check pass.
+Copied full Elias-1 career realtime Valocity smoke exits=0 after 624 frames.
+Screenshot build/issue83-shots/t00.tga, converted PNG visually checked: map,
+foliage, pedestrians, car, reflections and HUD present. This short check does
+not claim complete gameplay/pixel-equivalence validation or FPS improvement.

@@ -1,0 +1,23 @@
+Issue #105: inactive passes and shader lifetime (2026-11-18)
+Baseline: main 0a44cf4, libbgfx Direct3D11, Windows x64 Release.
+Source audit: ensure_scene_target/present_scene/build_hiz_pyramid/read_hiz_pyramid/
+promote_hiz/hiz_usable, draw_vehicle_shadows and draw_osd_string had no callers.
+The only active hiz_keep/hiz_visible path was a projected-size filter, no depth.
+Removed inactive scene/HiZ/projected-shadow implementation, state, exclusive
+program/uniform creation and six unused shader sources/build inputs. Retained
+active map/garage shadows, vehicle depth, reflections, preview/OSD and size filter.
+Pinned bgfx src/bgfx_p.h createProgram rejects mismatched varying hashes before
+shaderTakeOwnership. Missing-stage rejection also returns before ownership.
+GPU regression deliberately reproduces the legacy rejected-link leak: shaders
+27 -> 29. Cleans the two owned handles, returns to 27. New owned-program helper
+cycles success, rejected varying pair, missing vertex/fragment and both missing
+32 times, returns to 27. Backend close/reopen also returns to baseline.
+GPU OSD: 20 lines / 1000 glyphs -> exactly 20 additional draws, removed text ->
+baseline draws restored. Map views: pass. Shader binaries are real compiled DXBC;
+unique unused metadata hashes avoid bgfx shader deduplication hiding ref leaks.
+This cleanup enables no new HiZ/occlusion feature and claims no gameplay FPS gain.
+Release host build passes; knowledge references: 291 checked, 0 errors.
+Copied Elias-1 career, realtime Valocity smoke: exit=0, 635 frames. Main scene,
+reflection/shadow submissions and OSD execute; no program link-failure warnings
+in stdout/stderr. No screenshot/pixel equivalence or full gameplay acceptance
+is claimed by this short smoke. Logs: build/issue105-city.log/.err.

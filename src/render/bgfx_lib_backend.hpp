@@ -12,6 +12,7 @@
 #include "slrr/osd_registry.hpp"
 #include "debug_overlay.hpp"
 #include "osd_text_batch.hpp"
+#include "scene_mesh_data.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -46,10 +47,9 @@ struct MeshVertex {
 
 class LibBgfxBackend final : public IRenderBackend {
 
-  // View 0 is the cached map shadow, followed by the vehicle shadow maps.
+  // View 0 is the cached map shadow, followed by vehicle depth in view 1.
   // The world is view 5 or 6, depending on the FMV backdrop. Previews start at 8. The
   // interface stays on kOsdView, above those rects.
-  static constexpr int kShadowSlots = 4;
   static constexpr uint16_t kShadowResolution = 2048;
   static constexpr uint16_t kStaticShadowView = 0;
   static constexpr uint16_t kVehicleShadowFirst = 1;
@@ -58,9 +58,6 @@ class LibBgfxBackend final : public IRenderBackend {
   static constexpr uint16_t kOsdUnder = 7;
   static constexpr uint16_t kPreview0 = 8;
   static constexpr uint16_t kOsdView = 70;
-  // One view per pyramid level, after the world and the reflection faces.
-  static constexpr uint16_t kHizView = 110;
-  static constexpr int kHizLevels = 16;
 
  public:
   const char* name() const override { return "bgfx"; }
@@ -119,10 +116,12 @@ class LibBgfxBackend final : public IRenderBackend {
 
 
  private:
+  friend struct SceneMeshCacheRegression;
   DebugOverlay debug_overlay_;
   bool debug_was_visible_ = false;
   struct ScenePart {
-    ScxGeometry geo;
+    SceneMeshData geo;
+    bool merge_groups = false;
     std::shared_ptr<const ScxGeometry> source;
     bgfx::VertexBufferHandle vbh = BGFX_INVALID_HANDLE;
     bgfx::VertexBufferHandle skin_vbh = BGFX_INVALID_HANDLE;
@@ -137,29 +136,14 @@ class LibBgfxBackend final : public IRenderBackend {
   };
   std::unordered_map<std::string, SharedMapTexture> map_textures_;
   struct Preview { GameRefState camera; GameRefState viewport; std::vector<SceneInstance> instances; };
-  // Projection depends on scene geometry, never on the viewing camera.
-  // Keep parked cars out of the per-vertex floor queries on subsequent frames.
-  struct ProjectedShadow {
-    struct Stamp {
-      void* key = nullptr;
-      std::shared_ptr<const ScxGeometry> source;
-      std::array<float, 16> transform{};
-    };
-    std::vector<Stamp> stamps;
-    std::array<float, 3> light{};
-    void* owner = nullptr;
-    float ceiling = 0.f;
-    uint64_t floor_revision = 0;
-    std::vector<MeshVertex> vertices;
-    std::vector<uint32_t> indices;
-  };
-  std::unordered_map<void*, ProjectedShadow> projected_shadows_;
   std::vector<SceneInstance> instances_;
   std::vector<SceneBatch> prop_batches_;
   std::vector<Preview> previews_;
   std::unordered_map<const ScxGeometry*,ScenePart> instance_meshes_;
   std::unordered_map<void*, const ScxGeometry*> deformed_meshes_;
 
+  void cache_scene_mesh(const std::shared_ptr<const ScxGeometry>& source,
+                        void* owner, bool map_prop);
   void sync_instances(const float* view, const float* projection);
   static SceneFrustum view_frustum(const float* view, const float* projection);
   void apply_video_mode(const VideoMode& mode);
@@ -182,10 +166,6 @@ class LibBgfxBackend final : public IRenderBackend {
   void draw_dynamic_world(uint16_t view_id);
   void draw_sun_flare(const float* view, const float* projection, uint16_t view_id);
 
-  bool ensure_vehicle_shadow_target(int slot, uint16_t size);
-  void draw_vehicle_shadows(uint16_t view_id, const float* eye, const VideoOptions& video);
-  uint16_t vehicle_shadow_size_ = 0;
-
   void draw_previews();
 
 
@@ -199,11 +179,6 @@ class LibBgfxBackend final : public IRenderBackend {
 
   void upload_part(ScenePart& part);
   void upload_skin(ScenePart& part);
-  // Renderer copy only: sections with identical materials become one group
-  // over a reordered index buffer. Meshes with blended sections are kept.
-  static void merge_material_groups(ScxGeometry& geo);
-
-
   static bool is_logo_texture_slot(const ScxGeometry& geo, uint16_t tex_i);
 
 
@@ -259,11 +234,6 @@ class LibBgfxBackend final : public IRenderBackend {
 
 
   void draw_fmv(uint16_t view_id);
-
-
-  // Draw a string in OSD text-space (same path as SlrrOsdText glyphs).
-  void draw_osd_string(float x, float y, int32_t align, uint32_t argb,
-                       const std::string& text, void* font_key);
 
 
   void draw_osd();
@@ -341,10 +311,6 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::UniformHandle s_mix_=BGFX_INVALID_HANDLE,s_env_=BGFX_INVALID_HANDLE,s_bake_=BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_layers_=BGFX_INVALID_HANDLE,u_channels_=BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_base_uv_=BGFX_INVALID_HANDLE,u_mix_uv_=BGFX_INVALID_HANDLE,u_env_uv_=BGFX_INVALID_HANDLE,u_diffuse_=BGFX_INVALID_HANDLE,u_spec_=BGFX_INVALID_HANDLE,u_sun_diff_=BGFX_INVALID_HANDLE,u_sun_amb_=BGFX_INVALID_HANDLE,u_sun_spec_=BGFX_INVALID_HANDLE,u_sun_dir_=BGFX_INVALID_HANDLE;
-  bgfx::ProgramHandle shadow_program_ = BGFX_INVALID_HANDLE;
-  bgfx::ProgramHandle shadow_recv_ = BGFX_INVALID_HANDLE;
-  bgfx::UniformHandle u_shadow_mtx_ = BGFX_INVALID_HANDLE;
-  bgfx::UniformHandle u_shadow_ramp_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle static_shadow_program_ = BGFX_INVALID_HANDLE;
   bgfx::FrameBufferHandle static_shadow_fb_ = BGFX_INVALID_HANDLE;
   bgfx::TextureHandle static_shadow_tex_ = BGFX_INVALID_HANDLE;
@@ -403,74 +369,11 @@ class LibBgfxBackend final : public IRenderBackend {
   std::array<float, 3> static_shadow_eye_{};
   VideoMode applied_video_mode_{};
   uint32_t reset_flags_ = BGFX_RESET_VSYNC;
-  bgfx::TextureHandle shadow_tex_[4] = {
-      BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE,
-      BGFX_INVALID_HANDLE};
-  bgfx::FrameBufferHandle shadow_fb_[4] = {
-      BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE,
-      BGFX_INVALID_HANDLE};
-
-  // World color and depth live off the window so the depth can be read.
-  // The window itself only receives one fullscreen copy.
-  bgfx::ProgramHandle present_program_ = BGFX_INVALID_HANDLE;
-  bgfx::ProgramHandle hiz_program_ = BGFX_INVALID_HANDLE;
-  bgfx::UniformHandle u_hiz_params_ = BGFX_INVALID_HANDLE;
-  bgfx::FrameBufferHandle scene_fb_ = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle scene_color_ = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle scene_depth_ = BGFX_INVALID_HANDLE;
-  uint16_t scene_w_ = 0;
-  uint16_t scene_h_ = 0;
-  uint64_t scene_msaa_ = 0;
-  bool ensure_scene_target(uint16_t width, uint16_t height);
-  void destroy_scene_target();
-  bgfx::TextureHandle scene_color_texture() const;
-  bgfx::TextureHandle scene_depth_texture() const;
-  void draw_fullscreen(uint16_t view, bgfx::ProgramHandle program,
-                       bgfx::TextureHandle texture, const float* hiz_params);
-  void present_scene(uint16_t view);
-
-  struct HizLevel {
-    bgfx::TextureHandle tex = BGFX_INVALID_HANDLE;
-    bgfx::TextureHandle read = BGFX_INVALID_HANDLE;
-    bgfx::FrameBufferHandle fb = BGFX_INVALID_HANDLE;
-    uint16_t w = 0;
-    uint16_t h = 0;
-  };
-  struct HizRead {
-    std::vector<std::vector<float>> levels;
-    std::vector<uint16_t> width;
-    std::vector<uint16_t> height;
-    float view[16]{};
-    float proj[16]{};
-    float eye[3]{};
-    void* world = nullptr;
-    uint16_t full_w = 0;
-    uint16_t full_h = 0;
-    uint32_t ready_at = 0;
-    uint32_t serial = 0;
-    bool pending = false;
-    bool valid = false;
-    bool discard = false;
-    bool garage = false;
-  };
-  std::array<HizLevel, kHizLevels> hiz_gpu_{};
-  HizRead hiz_read_[2]{};
-  int hiz_level_count_ = 0;
-  int hiz_write_ = 0;
-  int hiz_active_ = -1;
-  uint32_t hiz_serial_ = 0;
-  uint16_t hiz_source_w_ = 0;
-  uint16_t hiz_source_h_ = 0;
-  float hiz_eye_[3]{};
+  float cull_eye_[3]{};
   float cull_view_[16]{};
   float cull_proj_[16]{};
-  void destroy_hiz();
-  void build_hiz_pyramid(uint16_t width, uint16_t height);
-  void read_hiz_pyramid(const float* view, const float* proj);
-  void promote_hiz(uint32_t frame);
-  bool hiz_usable(const float eye[3]) const;
-  bool hiz_visible(const float center[3], float radius) const;
-  static bool hiz_keep(const float center[3], float radius, void* user);
+  bool screen_size_visible(const float center[3], float radius) const;
+  static bool screen_size_keep(const float center[3], float radius, void* user);
 
 };
 

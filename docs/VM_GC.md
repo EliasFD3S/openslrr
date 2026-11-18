@@ -47,6 +47,44 @@ roots, arrays, pin/unpin semantics, finalizer resurrection, reentrant deferral,
 explicit requests and allocation pressure. `[gc]` lines report reclamation.
 It does not start the game or open a window.
 
+## Collection costs and finalizer lookup (#110)
+
+The VM maintains a weak address-membership index as objects are allocated and
+swept. It is not a root provider: membership alone never keeps an object alive.
+A native address must pass that index before the collector reads any Object
+field; stack/foreign and no-longer-managed pointers are ignored without dereference.
+
+Marking uses a uint64 epoch on each Object. Each root trace advances the epoch;
+only the first visit queues an object. The post-finalization resurrection trace
+uses a fresh epoch. On epoch wrap, stamps are reset before reuse. The collector
+no longer builds whole-heap managed/marked hash sets or copies the heap into a
+pointer snapshot: finalizer discovery walks a fixed prefix of the owning vector.
+Class loading may append allocations, but collection cannot recursively sweep.
+
+Finalizer eligibility (including a negative result) is cached per class name.
+A newly loaded class, game-root/classpath change, or new native registration
+invalidates the cache. Native registrations are append-only, so their count is
+a version token. Arrays are descriptors rather than finalizable classes. Empty
+owners are never passed through short-name class/native searches. Eligible
+objects still invoke their normal finalizer once; String native-payload cleanup
+continues to use its C++ destructor, preserving other finalizers' String inputs.
+`[gc]` reports the number of eligibility cache misses as finalizer_lookups.
+
+This trades two temporary per-collection hash sets for an epoch field and a
+persistent membership index whose bucket capacity follows the VM's high-water
+allocation count. Index insertion/removal adds work to allocation/sweep; it does
+not transfer VM or finalization work to another thread. Safe points, roots,
+requests, pinning, resurrection and allocation thresholds keep their contracts.
+
+Validation: `gc_runtime` checks cycles, arrays, pinning, explicit scoped roots,
+foreign/stale addresses, inherited native and scripted finalizers, preserved
+String inputs, resurrection, finalizer allocations, reentrant deferral, cache
+reuse/invalidation and cooperative suspended-stack roots. The existing
+`--probe-gc` and class-lifetime regressions also pass. A 60,000 mixed-object
+benchmark measured collection at 168-171ms before and about 11ms after, with
+allocation about 23ms before and 26-29ms after. These are fixture measurements,
+not a promised gameplay FPS gain. See assets/validation/gc-lookup-epochs.txt.
+
 ## References consulted
 
 - `repos/slrr-reverse/engine/Runtime/System/System_natives.cpp` documents

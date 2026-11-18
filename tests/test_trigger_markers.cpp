@@ -110,6 +110,8 @@ int run_markers() {
             "cue rotates and bobs");
       check(before[0].opacity > 0 && before[0].opacity < 1, "cue alpha enabled");
       check(gameref_get(&marker)->pos[1] == 3, "animation leaves script pose fixed");
+      n->vehicle_material=true;auto vehicle=scene_instances_collect_root(&world);check(vehicle.size()==1&&vehicle[0].transform[13]==3&&vehicle[0].transform[0]==1&&vehicle[0].opacity==1,"resource cue flags never rotate or float a vehicle mesh");
+
     }
     gameref_remove(&marker);
   }

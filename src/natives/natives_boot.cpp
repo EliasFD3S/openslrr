@@ -1,3 +1,4 @@
+#include "slrr/race_runtime.hpp"
 #include "slrr/natives_boot.hpp"
 #include "slrr/script_threads.hpp"
 #include "slrr/script_events.hpp"
@@ -604,6 +605,7 @@ void register_boot_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   register_resref_natives(jvm, rpk, sections);
   register_script_natives(jvm, rpk, sections);
   register_part_natives(jvm,rpk);
+  register_race_natives(jvm,rpk,sections);
   install_osd_script_hover(jvm);
 
   // Statics

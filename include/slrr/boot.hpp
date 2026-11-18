@@ -26,9 +26,11 @@ struct BootOptions {
   // quit. The run advances 1/60 s per frame, so every build covers the same
   // path frame by frame however fast it renders.
   float bench_drive_seconds = 0.f;
+  bool bench_realtime=false; // Preserve wall-clock stalls/catch-up while profiling.
   // --bench-map: from the garage, start the GameLogic.MapBox track whose
   // script class name contains this text (ValoCity_Track for the city).
   std::string bench_map;
+  std::string bench_career; // Relative save directory, for reproducing career performance.
   // --bench-time: game hour set when the benchmark drive starts (-1 keeps it).
   float bench_hour = -1.f;
   // --bench-shots: directory for window captures (TGA) at the start of the
