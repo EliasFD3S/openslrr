@@ -405,6 +405,111 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   (`src/natives/natives_script.cpp:register_script_natives`).
 - Car saves use the SDAT container (`src/natives/natives_io.cpp:sdat_frame`).
 
+### 5.10 Threads and the worker pool
+
+Read this before adding parallel work. The contract is
+[ENGINE_CONTRACT.md §6](ENGINE_CONTRACT.md#host-threads-and-the-worker-pool);
+this section is the working guide.
+
+**Threads that exist.**
+
+| Thread | Owner | Runs |
+| --- | --- | --- |
+| Host thread | `src/boot/boot.cpp:boot_game` | VM and script fibers, frame pump, physics, scene collection, bgfx submission, every GameRef and cache mutation |
+| bgfx render thread | bgfx (`src/render/bgfx_lib_backend.cpp:open`) | Graphics API calls for the frame the host submitted |
+| Worker pool, one per logical CPU minus one | `src/platform/job_system.cpp:jobs_parallel_for` | Data-parallel batches started by the host thread |
+| Exterior map parser | `src/natives/natives_resref.cpp:spawn_ground_shell` (`std::async`) | `scene_instances_ground_map` for the next chained map file |
+| Pedestrian stepper | `src/resources/part_runtime.cpp:PedSim` | Walker steering on copies of the walker records |
+| Audio and video | XAudio2, Media Foundation, VLC | Their own decode and output threads |
+
+**API** (`include/slrr/job_system.hpp`).
+
+- `jobs_parallel_for(count, body)` calls `body(i)` once per index and
+  returns when all have finished. The calling thread takes part. The first
+  exception is rethrown after every index has run.
+- It runs serially, on the calling thread, when `count` is 1, inside a job,
+  when the pool has no workers (one CPU, or after `jobs_shutdown`), or when
+  another thread's batch holds the pool. Never wait for a batch from inside a
+  job.
+- `jobs_concurrency()` gives the thread count, caller included. It follows
+  the process affinity mask.
+- `jobs_inside()` is true inside a job. `index_floor` uses it to pick its
+  serial path (`src/resources/scene_instances.cpp:index_floor`).
+- `jobs_printf` holds a job's log lines and prints them in index order when
+  the batch ends. `JobLogCapture` holds the lines of a task that runs
+  outside the pool, such as a `std::async`, for its caller to print. Use one
+  of them for any log line that can come from a job.
+
+**Pattern.** Every user follows prepare, run, publish:
+
+1. On the host thread, collect the inputs and size the results: one slot per
+   index, or a cache entry reserved before the batch, as
+   `src/resources/scene_instances.cpp:scene_instances_prepare_physics` does.
+2. Run the batch. A body reads its inputs and writes only its own slot.
+3. On the host thread, publish the slots in index order into caches,
+   registries and logs. Pack ids, cache contents and log order then do not
+   depend on the thread count.
+
+When results must be appended, keep the serial order: split the work into
+contiguous runs and append the runs in order
+(`src/resources/scene_instances.cpp:index_floor`). The same applies to
+offsets computed before a parallel copy
+(`src/resources/scene_instances.cpp:merge_static_meshes`).
+
+**What a job may touch.**
+
+| Safe to call or read from a job | Host thread only |
+| --- | --- |
+| `RpkIndex` const methods: its payload and RSD caches lock their own mutexes (`src/resources/rpk_index.cpp:read_payload`) | The VM, `Object`, `Value`, `Jvm::RootScope`, natives |
+| `load_scx_geometry`, `load_texture_file`, `parse_part_config`, `scene_instances_ground_map`, `src/resources/scene_instances.cpp:load_geometry`, `src/resources/scene_instances.cpp:build_native_collision` | GameRef state (`gameref_get`, matrices, parents) |
+| Immutable data that nothing writes during the batch | Scene caches: `g_meshes` through `geometry()`, `g_native_collision`, floor and ground caches. Preload missing meshes with `preload_meshes` first; a lookup that misses inserts. |
+| | bgfx: create textures and buffers after the batch. Decode on the pool, upload on the host (`src/render/bgfx_lib_backend.cpp:prefetch_part_textures`). |
+
+Before calling a function from a job, check it for `static` locals, globals
+and lazily filled caches. `RpkIndex` keeps its payload and RSD caches behind
+mutexes: payload reads from several jobs are safe but take turns, which
+limits the speed-up.
+
+**Pitfalls already met.**
+
+- `std::mutex` is not recursive. Do not hold a lock while running bodies that
+  may start another batch. `jobs_parallel_for` takes its own lock last for
+  this reason.
+- A `std::future` from `std::async` blocks in its destructor. Keep the
+  futures in the function that owns the data they read.
+- Freeing per-job containers costs time too: the cell runs of a large
+  `index_floor` take a few milliseconds to destroy.
+- Do not grow a buffer by one element range at a time with `reserve` of the
+  exact size. It reallocates every time and made `merge_static_meshes`
+  quadratic: 12.5 s of a city load.
+- A prefetched result that several consumers share needs one use per
+  consumer. Otherwise a failed first consumer forces the others to redo the
+  work serially (`src/render/bgfx_lib_backend.cpp:load_part_textures`).
+
+**Checking a change.**
+
+- Standalone tests (`tests/test_job_system.cpp`, built by hand) under g++
+  with `-fsanitize=thread`, and with `-fsanitize=address,undefined`.
+- Determinism: compare the `[rpk]`, `[scene]` and `[scx]` log lines of a
+  run on all cores with a run restricted to one core. For example, set the
+  parent PowerShell's `ProcessorAffinity` before `Start-Process`, or use
+  `start /affinity 1`. The lines must match, apart from the randomly chosen
+  sky dome.
+- Equivalence: when a parallel algorithm replaces a serial one, compare
+  their outputs once in a local build (not committed), as was done for
+  `index_floor` on all six city collision meshes.
+- Speed: time the stage on the city benchmark (§3) on all cores and with 1,
+  2 and 4 cores. `--perf-log` covers the frame. Load stages need local
+  timers.
+- Assets: same pack, prop, collision, mesh and texture counts as `main`, and
+  matching start-of-drive window captures (`--bench-shots`) when the same
+  sky dome is chosen.
+
+**Where to build next.** [MILESTONES.md M7](MILESTONES.md#m7--multicore-frame)
+lists the planned steps for the frame loop: measure where the CPU limits,
+cull scene collection in parallel, record draws with bgfx encoders, run
+physics after PR #48, and optional pipelining.
+
 ## 6. Invariants and pitfalls
 
 VM and lifetime:
@@ -421,15 +526,11 @@ VM and lifetime:
   (`src/resources/scene_instances.cpp:scene_instances_prepare_physics`), the
   floor index of large meshes (`src/resources/scene_instances.cpp:index_floor`)
   and texture decoding
-  (`src/render/bgfx_lib_backend.cpp:prefetch_part_textures`). Exterior maps
-  are parsed on a `std::async` thread while the parent map's props load
-  (`src/natives/natives_resref.cpp:spawn_ground_shell`). A job writes only
-  its own slot of a result the caller prepared and never touches the VM,
-  GameRef state, other cache entries or bgfx; the host thread publishes the
-  results. A nested call runs serially. Job code logs with `jobs_printf`
-  (`src/platform/job_system.cpp:jobs_printf`), which keeps the serial line
-  order. Steady per-frame work stays on the host thread; `docs/MILESTONES.md`
-  (M7) plans the next steps.
+  (`src/render/bgfx_lib_backend.cpp:prefetch_part_textures`). A job writes
+  only its own slot of a result the caller prepared and never touches the
+  VM, GameRef state, other cache entries or bgfx; the host thread publishes
+  the results. Steady per-frame work stays on the host thread. §5.10 is the
+  guide for adding parallel work.
 - An `Object*` held in C++ is not a root. Use `Jvm::RootScope`
   (`include/slrr/jvm.hpp:RootScope`) across yields, or register a root
   provider for a native registry.
@@ -680,6 +781,10 @@ Each answer names its evidence.
 17. *A script call does nothing and nothing crashes. Where do you look?*
     stderr, for `native/empty TREE without host binding`: outside Init an
     unbound native returns void instead of failing (§5.3).
+18. *Can a worker-pool job look up a mesh with `geometry()`?* Only if the
+    mesh is already loaded: a miss inserts into `g_meshes`. Preload the ids
+    with `preload_meshes` on the host thread first, and publish job results
+    on the host thread (§5.10).
 
 ## 13. Keeping this file true
 
