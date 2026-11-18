@@ -38,9 +38,11 @@ that category. It is not a compatibility score or a complete runtime trace.
 
 | Native or group | Current behavior |
 | --- | --- |
+| `FindFile` and File path operations | Share canonical physical confinement (#84). Enumeration alone can address the root. Leading separators are game-relative; external junctions are rejected and internal junctions allowed. Masks and dotted names remain supported. See [SAVE_IO_FIXES.md](SAVE_IO_FIXES.md). |
 | `GameRef.setState` | Sets pose and linear/angular velocities. Cars receive the state in the live solver. Generic GameRefs retain the state but have no general dynamic-body solver yet. |
 | `GameRef.setActiveCollision` | Queues an idempotent activation request. The next physics preparation enables the generic object's CFG-defined collision and clears the queued flag. Existing vehicle and legacy RenderRef collision remain independent. |
 | `PhysicsRef` | `create`, `createBox`, `createSphere`, `setMatrix`, `setStatic`, `getPos`, `getOri`, `getVel` (both overloads) and `getAngVel` are bound. World boxes, spheres and resource CFG bodies join scene collision; OSD click boxes remain separate. `getVel(Vector3)` returns point velocity. `setStatic(0)` hands the body to the host free-body solver (gravity, scene and car contacts; a primitive gets a 500 kg/m³ density); `setStatic(1)` fixes it again. Free bodies do not collide with each other. |
+| `GameRef.setMatrix`, `WheelRef` setters | Non-finite pose/scalar/vector inputs are rejected before mutation. Per-body solver failures suspend a chassis, remove a failed loose body, or disable a free PhysicsRef; valid simulation continues for other bodies. Existing signatures/counts are unchanged (#75). |
 | `GameRef.getDetail`, `RenderRef.getDetail` | Read the canonical instance's detail bias; the default is zero. No distance-dependent LOD bias producer is implemented yet. |
 | `Vehicle.getHorn` | Checks the selected horn SFX row on the canonical chassis, using live player horn input or the `sethorn` command. |
 | `Vehicle.hasCrime` | Returns the stored zone speed limit in m/s, or -1 without a zone. Automatic zone enter/leave producers are still missing. |
@@ -70,7 +72,7 @@ that category. It is not a compatibility score or a complete runtime trace.
 | `Chassis.setHornSFX` | Stores all indexed sounds. The current player input plays the index 1 sample once per press. |
 | `GameRef.getInfo`, `queueEvent` | Implement selected queries and commands. `repair` performs the native per-part deformation, damage-associated slot/wheel and CFG mount/base-mesh reset; stock Java owns the installed-tree recursion and wear/tear caps, with a native fallback only for detached assembly children omitted from `attachedParts`. Unhandled queries return zero. Other command paths still need coverage as new sections are exercised. |
 | `GameType.registerCallback`, notifications | Control, drive and animate callbacks run. Notifications have event routing and GC roots. Other callback modes and event producers still need verification. |
-| `Input.getAxis`, `activeAxis`, `Controller.user_SetAxisSmooth` | Keyboard, mouse and one logical XInput pad are wired. Pointer movement is excluded from rebinding. Negative mouse axis requests reset deltas, while their sensitivity argument remains unused. Default pad driving controls are retained per axis unless explicitly overridden or their physical channel is assigned elsewhere. Steering fallback and analog classification share that policy. Smoothing uses a host time-based approximation. |
+| `Input.getAxis`, `activeAxis`, `Controller.user_SetAxisSmooth` | Keyboard, mouse and one logical XInput pad are wired. Pointer movement is excluded from rebinding. Negative mouse axis requests reset deltas, while their sensitivity argument remains unused. Default pad driving controls are retained per axis unless explicitly overridden or their physical channel is assigned elsewhere. Steering fallback and analog classification share that policy. Smoothing uses a host time-based approximation. Menu/cancel hotkey presses share a 250 ms UI debounce across command changes; select has a separate gate. Releases and driving axes remain immediate. |
 | `Controller.user_SetAxisSpeed`, `user_SetAxisForce` | Scale software smoothing and override the logical axis value. The force coefficient and hardware feedback are unimplemented. |
 | `Sound.has3DHardware`, `hasMixHardware`, `enableDebugDump` | Fixed capability responses. Zero reports the lack of legacy hardware mixing support and keeps the legacy debug overlay disabled. |
 | `System.runFinalization`, `WheelRef.finalize` | Compatibility bodies. VM finalizers run during collection. Wheel references borrow their state from the chassis. |
@@ -157,3 +159,19 @@ driver behavior, skin changes and return to the menu in game for PR #155
 (#112 and #156). Evidence logs live in assets/validation/driver-mask and
 assets/validation/driver-selector; see KNOWLEDGE_BASE.md for implementation
 entry points and remaining limits.
+
+
+Issue #130 changes scene collision/render collection, not native registrations.
+RenderRefs no longer acquire collision merely from their visible mesh; trigger
+sensors are excluded, while explicit physics and ground collision survive.
+The trigger_markers suite exercises native-car ON/OFF notification delivery
+and the visual/physics separation with MWM resources. See SCRIPT_RUNTIME.md,
+"Trigger cues and physical bodies", for reconstructed cue settings and the
+remaining in-game validation. Registration counts do not imply that the full
+MWM challenge is validated.
+
+
+Issue #82 batches the renderer output of existing Text/OSD natives. It changes
+no registration or Java body. Existing glyph/font/colour/layer semantics are
+retained; controlled D3D11 render evidence and limits are documented under
+"Batched OSD text" in SCRIPT_RUNTIME.md.

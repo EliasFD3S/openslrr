@@ -1,0 +1,20 @@
+Issue #114 - source dependency resolution and supported compiler guard
+Baseline b85dc44: 5/10 passed; corrected: 10/10 passed.
+Regression cases: MinGW guard, custom FetchContent base, source-dir overrides,
+in-tree dependencies, relative explicit source directories.
+Actual CMake/Visual Studio 2022 configurations use existing pinned bgfx/bimg/bx
+source checkouts offline. Source/build/cache fixture directories contain spaces.
+Generated project paths checked: ImGui source, bgfx shader includes, bimg third-party includes.
+Guard tests execute the production condition with simulated variable values;
+they do not constitute builds with installed MinGW/x86/ARM64 toolchains.
+Normal configure and Release x64 slrr_host build succeeded.
+Alternative dependency layouts were configured/generated, not fully compiled.
+Native coverage --check current. Knowledge references: 274 checked, zero errors.
+No gameplay change or in-game validation required/claimed for this build fix.
+The unrelated local optional compile_game_sources guard is excluded from the commit.
+Fixtures provide a tiny dummy utility source to isolate that pre-existing missing file.
+No dependency sources, game assets or saves modified. Test fixtures/logs remain in build/.
+Reproduce:
+ python tests/test_cmake_dependency_paths.py
+ python tests/test_cmake_dependency_paths.py --baseline-ref b85dc44
+Supply --bgfx-source, --bimg-source and --bx-source for non-default existing checkouts.

@@ -80,6 +80,8 @@ void osd_forget(Object* object);
 void osd_compact_widgets();
 // Dialog.show sets Osd.OF_MODAL. That plate has to cover the catalog.
 bool osd_owner_modal(Object* owner);
+// Lowest visible owned page plate, ignoring cursor tooltip/text layers.
+int32_t osd_page_background_layer();
 bool osd_has_modal();
 // Viewport priority stored by Viewport.create (menu 10, dialog 22, shield 21).
 int32_t osd_viewport_pri(Object* osd);

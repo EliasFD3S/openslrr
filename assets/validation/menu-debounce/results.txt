@@ -1,0 +1,6 @@
+Menu input debounce, Release x64, 17 November 2026
+Baseline c6e563f: menu_debounce 0 passed / 1 failed at immediate MENU-to-CANCEL transition.
+Corrected: menu_debounce 1 passed / 0 failed.
+Tests held input, cross-command cancel, physical Escape, release delivery, independent select, unthrottled driving and 275 ms re-press.
+pad_fallback passed. Release host compiled successfully.
+Gameplay pause/Continue validation pending; no screenshot validation claimed.

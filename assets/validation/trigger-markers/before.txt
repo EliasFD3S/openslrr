@@ -1,0 +1,13 @@
+PASS marker remains visible
+FAIL visual marker has no collision
+FAIL cue rotates and bobs
+FAIL cue alpha enabled
+PASS animation leaves script pose fixed
+PASS marker remains visible
+FAIL visual marker has no collision
+PASS marker remains visible
+FAIL visual marker has no collision
+PASS physical body remains solid
+FAIL sensor never becomes a solid body
+[compiler] attempted=3 succeeded=3 failed=0 classes=3 (restart for loaded classes)
+PASS native car enters/leaves sensor once, callback receives chassis live ID

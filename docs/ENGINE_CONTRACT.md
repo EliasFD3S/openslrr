@@ -217,6 +217,45 @@ for a notification. `stop` must let scopes unwind before the stack is
 released. A long C++ job inside a native does not become preemptive just
 because the caller is a fiber.
 
+### Host threads and the worker pool
+
+The host thread runs the VM, the frame pump, physics, scene collection and
+bgfx submission. bgfx presents from its own render thread, pedestrians step
+on their own worker (`PedSim` in `part_runtime.cpp`), and audio and video
+decoders keep their library threads.
+
+Loading work that only reads files goes to the shared worker pool in
+`src/platform/job_system.cpp`: one worker per logical processor besides
+the host thread. `jobs_parallel_for` spreads the indices over the workers
+and the calling thread and returns when all are done; a nested call runs
+serially. Its users are pack indexing at startup, mesh loading for a map's
+props and for the render objects new in a frame, a map's object types (CFG
+and collision meshes), the placement collision bakes, their merge and prop
+batching, static collision that appeared or moved
+(`scene_instances_prepare_physics`), the floor index of meshes of 32k
+triangles or more (`index_floor`), and decoding the texture files of the
+meshes new in a frame. An exterior map (Valo City's `city2`, named by `city`)
+is parsed on a `std::async` thread as soon as its parent map is accepted,
+while the parent's props load on the pool.
+
+A job writes only its own slot of a result that the caller prepared, such
+as a cache entry the caller reserved before the batch. It may read the
+`RpkIndex`, game files and data no one modifies during the batch; it must
+not touch the VM, script objects, GameRef state, other cache entries or
+bgfx. The caller publishes the results on the host thread, in the same order as a serial load, so pack numbers and cache
+contents do not depend on the thread count. Code that can run as a job logs
+with `jobs_printf`: its lines are held per index and printed in index order
+when the batch ends, so the log reads as a serial run's. A task outside the
+pool holds its lines with `JobLogCapture` for its caller to print. Steady
+per-frame work stays serial: it takes a few milliseconds and reads state that
+the frame mutates; [MILESTONES.md M7](MILESTONES.md#m7--multicore-frame) plans
+how to spread it.
+
+Map loading used to spend most of its time on the host thread: about 13 s
+of a warm Valo City start, mostly a merge of the placement collision that
+grew its buffer by one mesh at a time. `merge_static_meshes` now sizes its
+buffers once; keep such accumulations linear.
+
 GameType notifications and callbacks are separate registries.
 The documented modes 8, 9, and 28 concern `control(float)`, `drive()`, and
 `animate()`. Iteration must tolerate an unregister or a reregister during the
@@ -530,6 +569,14 @@ This is a host loose-body approximation, not a general dynamic triangle-mesh
 engine: loose bodies collide with the car and the static scene, not with
 each other.
 
+Rigid-body validation exceptions are contained by the owning body runtime.
+Keep strict kernel checks; do not catch a whole frame and silently skip the
+remaining bodies. Invalid GameRef poses and wheel inputs are rejected before
+mutation. A failed chassis is suspended at its last finite published pose,
+a failed loose map prop returns to scenery, and a failed free PhysicsRef stops
+simulation. Native map-body creation is transactional. See the #75 entry in
+KNOWLEDGE_BASE.md for recovery, retry and testing limits.
+
 The frequency currently declared is **120 Hz**, with an update frequency
 declared at **60 Hz** in `vehicle_dynamics.hpp`. `advance(seconds)` uses an
 accumulator. Do not bring back "once per frame" integration, and do not
@@ -746,6 +793,11 @@ Do not collect casters using only the visible camera frustum.
 The list must respect the useful light volume. When the time of day changes,
 sun-dependent matrices and caches must be invalidated.
 
+The renderer factory always selects libbgfx for Bgfx in the supported build.
+NullBackend is retained for headless probes and tests; there is no separate
+WGL fallback. Image and font decoders do not depend on an optional renderer
+macro. The Windows x64/MSVC toolchain requirement remains in CMake.
+
 ### Sky and lights
 
 The Enhanced sky must be driven by game time and by parameters consistent
@@ -753,6 +805,13 @@ with the sun, the clouds, and the reflection. A night-time appearance must
 not leave a noon sun in the materials or in the shadow.
 Animated cloud parameters need a stable time, distinct from a count of
 elapsed frames.
+
+OSD text uses a dedicated position/UV layout and unlit shader pair. A text
+line submits one indexed batch per available transient-buffer chunk, preserving
+font, colour, layer and draw order. Do not route glyphs through world-lighting
+bindings or merge labels across the plates/icons that separate them. Long lines
+must rebase their 16-bit indices while retaining pen advance. See
+`src/render/osd_text_batch.hpp` and `LibBgfxBackend::draw_osd_line`.
 
 OSD surfaces have their own blending contract. Do not apply world lighting
 to them, or a global correction meant for the body.

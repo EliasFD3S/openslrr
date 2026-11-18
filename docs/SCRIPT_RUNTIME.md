@@ -117,3 +117,184 @@ budgeted cooperative pump and sleeping VM threads. The source declarations and
 actual callers in SLRR_rev/the installed TUFA classes supply the script
 contracts. The fiber scheduler is the host implementation, not a literal
 copy of the original VM's internal stack layout.
+
+## Boot section adoption (#76)
+
+The stock Init/GameLogic chain already enters SplashScreen in Java. After Init,
+boot uses `mainloop_adopt_section`, as the frame loop does, to synchronize the
+host without invoking enter again. Replaying enter replaces the OSD reference
+and schedules a second timer; adoption preserves the existing presentation.
+
+Windowed startup still removes/re-arms only the splash timer after startup
+work. GameRef timers use steady wall-clock deadlines, so loading may otherwise
+consume the three-second display interval even with one enter. The initial
+splash frame is still presented immediately after adoption; FMV/loading-frame
+handling is unchanged. No Java or native-signature change is required.
+
+`run_save_io_tests.ps1 -Suite splash_boot` runs real shipped Init/Splash code
+with the Null renderer and checks one pending timer and stable OSD identity
+across repeated adoption. Requires local `game` assets; it opens no window
+and does not request a new career. With `-BaselineRef a5184d2`, the same test
+fails with two timers; the corrected build passes with one. Existing
+`inventory_transition` tests pass 4/4. Windowed FMV/splash visual continuity
+still requires user validation. See [evidence](../assets/validation/splash-boot/results.txt).
+
+### Track presentation without a menu plate
+
+A driving HUD normally has no fullscreen menu background. The renderer's
+missing-menu backdrop must therefore be suppressed when
+`fullscreen_script_camera` selects an active world camera. Without that check,
+Select Track can display a solid white mask above the map but below the HUD;
+opening a pause menu supplies a background and temporarily removes the mask.
+The fallback's dark tint must also be passed to `draw_osd_quad`, which writes
+its own color uniform; setting that uniform before the call is overwritten.
+
+Release build and `map_views`, `ui_lifetime`, `splash_boot` checks pass. A local
+headless TestTrack investigation confirmed an active scene camera and no
+remaining loading overlay; it did not validate pixels. Test normal Select Track
+entry, Escape/Continue, another track, Valo, and FMV/menu backgrounds in game.
+
+### Menu input debounce
+
+Menu-toggle and cancel hotkey presses share a 250 ms cooldown across dialog
+commands: virtual axes 36/35 and physical Escape use the same gate. Select
+(axis 34, physical Enter/numpad Enter) has a separate gate. A suppressed
+press still updates held state, so it is not delivered later when the timeout
+expires; release and a new press are required. Release events and driving axes
+are not delayed. The existing command gate for directional UI navigation stays
+unchanged. This is a UI-action guard, not a global keyboard or simulation delay.
+
+`run_save_io_tests.ps1 -Suite menu_debounce` exercises the actual hotkey
+dispatcher through a compiled Java native handler. Baseline `c6e563f` fails
+when MENU is followed immediately by CANCEL; the corrected build passes held
+input, cross-command cancellation, physical Escape, release, independent
+accept and driving checks. Repressing after 275 ms succeeds. `pad_fallback`
+also passes. In-game pause/Continue behavior still needs user validation.
+
+### UI rectangles have one render owner
+
+RenderRef.setMatrix projects script Rectangle instances into the OSD registry.
+Once `_rect` and `_osd_wi` identify that handoff, scene collection must not also
+submit the unscaled template mesh through a cursor or OSD preview camera. That
+second submission produced a large black tooltip panel behind the compact
+2D tooltip. Hidden/retired UI rectangles stay excluded while their resource
+instance survives; ordinary 3D meshes are unaffected. No texture-ID or
+particular-tooltip special case is used.
+
+`run_save_io_tests.ps1 -Suite tooltip_render` uses the real frontend rectangle
+mesh beneath a cursor world. Baseline `d988359` fails the one-owner assertion;
+the corrected build passes visible/hidden/retired rectangle suppression and
+ordinary-mesh preservation. `ui_lifetime` and `map_views` also pass. Requires
+read-only local frontend assets. Pixel validation remains an in-game check.
+
+### Catalog vehicle preview versus fullscreen showroom
+
+Catalog's vehicle page uses an inset CarViewport and CarScene, while the
+main-menu CarSelect has a fullscreen camera. An inset CarScene stays out of
+the primary world selection: the normal preview pass draws it over the page,
+clears depth without clearing its background color, and uses its script
+look/move pose. Promoting it to the primary world produced a brown rectangle
+and applied main-world orbit logic to the preview framing. Fullscreen CarScene
+showrooms continue to supply the main world.
+
+The fullscreen MouseCursor camera is UI-only and cannot supply the main 3D
+camera, including when a tooltip appears. It remains registered for UI use.
+This avoids a cursor preview replacing the selected world/camera on hover.
+
+`run_save_io_tests.ps1 -Suite car_select_view` covers catalog inset selection,
+script pose preservation, repeated cursor-hover synchronization, fullscreen
+showroom preservation and cursor-only UI. Baseline `a2095e8`: 0 passed /
+2 failed; corrected: 2 passed / 0 failed. `map_views`, `tooltip_render` and
+`ui_lifetime` also pass. No Java changes or native signature changes.
+These are host selection/collection tests; rendered framing and long-hover
+visibility still require in-game validation.
+
+Tooltip visibility also changes the set of OSD layers: the script's cursor
+rectangle/text can introduce layer 0 below the catalog page's layer 10.
+`draw_osd` must select its under-preview page plate from visible, owned,
+nonmodal background widgets (`osd_page_background_layer`), not from the
+minimum of all widget/text layers. Otherwise the page is moved above the car
+when the tooltip appears. Modal plates remain above previews. The additional
+`car_select_view` regression models that layer-0 arrival and repeated hiding,
+keeps page layer 10 stable, excludes modal plates, and retires a hidden page.
+The suite now has three cases; the original 0/2 baseline describes only the
+two earlier camera-selection cases.
+
+
+## Trigger cues and physical bodies (#130)
+
+A RenderRef is visual unless it has explicit collision activation, a physics
+shape, or a registered ground/collision mesh. Physics preparation must not
+silently turn its display mesh into an obstacle. Trigger volumes themselves
+are sensors even when a mesh or physical shape is attached. Ground shells,
+CFG collision bodies and explicit PhysicsRef objects retain their physics.
+This separates the MWM Test Track marker/frame from the actual challenge
+weights; the latter must still hit the car. No production Java is changed.
+
+The frontend finishObject resource uses flags 640 (0x280). The host now
+recognizes that combined cue profile on RenderRefs and applies rotation and
+vertical bobbing to the collected render matrix, leaving the script pose and
+sensor fixed. Untextured SCX3 groups retain their authored diffuse colour;
+the cue uses the transparent pass. User comparison with original MWM confirms
+both movements. The 1 rad/s turn, 0.5 m bob at 2 rad/s and opacity 0.65 are
+host compatibility defaults, not recovered original constants or proven
+independent meanings for the two flag bits. The other matching frontend
+resource (paintcan) shares this profile. Compare its presentation in game too.
+MWM's explicit script animation of the weight/frame remains authoritative.
+
+Research consulted nedobylskiy/SLRR_rev at
+4ca11c265e0b9b3dad09a7f23d4a2af7740d626b and EliasFD3S/slrr-reverse at
+93588c4c6f72ddcb231e1c9ca46429e7db5991b6. Their rendering/animation code does
+not establish those flag bits' original timing or opacity. An offline read of
+the installed MWM executable establishes the resource flags parser only;
+this is ordinary offline analysis, not REA Evidence.
+
+The trigger_markers suite uses the local read-only frontend/DestructionTools
+assets and verifies visibility, lack of marker collision, rotation, bobbing,
+opacity, unchanged script pose, and preservation of a physical box. A sensor
+with an attached physical box stays traversable. A synthetic native car drives
+outside/inside/outside a sphere and delivers exactly one ON/OFF callback with
+its chassis live ID. This checks native event dispatch, not the entire MWM
+challenge dialog. trigger_volume, garage_shell, map_props and physics_recovery
+also pass. In-game marker appearance and challenge activation await validation.
+Evidence: assets/validation/trigger-markers/validation.txt.
+
+
+## Batched OSD text (#82)
+
+Text native signatures, registries, ownership and font decoding are unchanged.
+The registry, tooltip-line and HUD-string renderer paths share draw_osd_line.
+Each line retains its original layer/view, hover colour, alignment, byte charset,
+authored quad corners/UVs, advance and straight-alpha blending. There is no
+sorting across text lines or across the background/icon/text stages.
+
+OsdTextRun emits indexed quads with 20-byte position/UV vertices, bounded by
+available transient vertices/indices and 16-bit local indices (16,383 glyphs per
+chunk). Chunks retain pen position; missing glyphs/spaces advance without drawing.
+Reusable scratch vectors avoid per-glyph allocation. Empty or exhausted buffers
+do not submit partial quads. vs_osd_text/fs_osd_text bind only atlas stage 0 and
+colour; world lightmaps, shadows, fog and sun uniforms are absent. Both shader
+profiles (DXBC and GLSL) build; the runtime link check includes the text program.
+
+Icon eligibility/pass is classified once per widget per frame, then traversed
+in the same registry order within layer and highlight/icon/knob pass. This removes
+repeated lower-casing and layer-by-layer triple classification. Widget/background,
+modal and preview ownership rules remain in the existing OSD pipeline.
+
+Validation against c63a8cd: the real Direct3D 11 backend with read-only slii24 font
+assets renders 20 lines / 1,000 glyphs in 20 text draws instead of 1,000 (-98%).
+Total bgfx stats are 23 versus 1,003, including three constant touched views.
+Clearing the text returns to three. The 1280x800 before/after TGA pixel payloads
+are byte-identical, including alternating opaque blue and half-alpha gold lines.
+This is a controlled renderer scene, not an FPS measurement in a running game.
+The existing present/hiz link warnings also occur in the baseline and are outside
+this text change; the text program links and renders successfully.
+
+run_save_io_tests.ps1 suites: osd_text_batch (4 layout/bounds/chunk tests),
+osd_text_gpu (opt-in Windows/GPU/assets integration), car_select_view,
+tooltip_render and ui_lifetime pass. The GPU suite opens its own test window
+off-screen and captures it; it does not launch the game or modify assets/saves.
+-BaselineRef c63a8cd on osd_text_gpu reports 1,000 draws and intentionally fails
+the new 20-draw assertion. Evidence and screenshots:
+assets/validation/osd-text-batch. Full menu/catalog/HUD gameplay checks remain
+for user validation; no OpenGL runtime or general FPS improvement is claimed.

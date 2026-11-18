@@ -1,0 +1,12 @@
+[bgfx] program present failed to link
+[bgfx] program hiz failed to link
+[0000027c451d37f0] cache_read stream error: cannot pre fill buffer
+[0000027c45e6a9e0] mjpeg demux error: cannot peek
+PASS top-down/bottom-up RGB32; short samples preserve output; invalid/overflow dimensions rejected
+[fmv] LibVLC open C:\Users\Elias\Desktop\openslrr\build\save-io-fixtures\test-34488-1\Data\FMV\Activision.avi loop=0
+[fmv] boot intros played=1
+PASS cancellation during a silent AVI stops playback and skips later intros
+[cursor] loaded 10/10 shapes (2.cur..11.cur)
+[bgfx] open 320x240 GPU=libbgfx renderer=Direct3D 11
+[fmv] boot intros played=0
+PASS WM_CLOSE retains HWND until backend close; quit frame returns; close is repeatable

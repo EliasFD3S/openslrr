@@ -167,9 +167,6 @@ namespace slrr {
 {
     const auto& texts = slrr_osd_texts();
     if (texts.empty() || width_ <= 0 || height_ <= 0) return;
-    const float sw = static_cast<float>(width_);
-    const float sh = static_cast<float>(height_);
-
     // Text-menu hover: stock HL_LABELCOLOR → COLOR_SELECTED (full white).
     const OsdWidget* hover = osd_hover_widget();
 
@@ -179,88 +176,13 @@ namespace slrr {
       if (filter_layer && t.layer != only_layer) continue;
       const SlrrFont* font = slrr_font_get(t.font_key);
       if (!font || !font->ready) continue;
-      bgfx::TextureHandle tex = tex_for_font(t.font_key);
-      if (!bgfx::isValid(tex)) continue;
-
-      float width_px = slrr_font_measure_px(t.font_key, t.text.c_str());
-      const float width_osd = 2.f * width_px / sw;
-      float pen_x = t.x;
-      if (t.align == 1) pen_x -= width_osd * 0.5f;  // CENTER
-      else if (t.align == 0) pen_x -= width_osd;     // RIGHT
-      // Host OSD: y+ down (top = -1). Glyph extends downward.
-      const float top_y = t.y;
-
       uint32_t argb = t.color;
       const bool glow = hover && hover->label_src == t.text_key;
       // changeSelection2(-1) focuses the first row (NEW CAREER) in yellow
       // even when the pointer is elsewhere. That color is the hover state.
       if (argb == 0xFFFFCB00u && !glow) argb = 0xFFC0C0C0u;
       if (glow) argb = 0xFFFFFFFFu;
-      const float cr = ((argb >> 16) & 0xff) / 255.f;
-      const float cg = ((argb >> 8) & 0xff) / 255.f;
-      const float cb = (argb & 0xff) / 255.f;
-      const float ca = ((argb >> 24) & 0xff) / 255.f;
-      const float col[4] = {cr, cg, cb, ca};
-      bgfx::setUniform(u_color_, col);
-      const float u_at[4] = {0.f, 1.f, 1.f, 0.f};
-      bgfx::setUniform(u_alpha_test_, u_at);
-
-      const float to_x = 2.f / sw;
-      const float to_y = 2.f / sh;
-      for (unsigned char ch : t.text) {
-        const size_t gi = static_cast<size_t>(ch);
-        const bool has = gi < font->glyphs.size();
-        const SlrrFontGlyph* g = has ? &font->glyphs[gi] : nullptr;
-        const float adv_px =
-            (g && g->adv_px > 0.f) ? g->adv_px
-                                   : static_cast<float>(font->px_height) * 0.35f;
-        const bool draw =
-            g && (g->u1 > g->u0 + 1e-6f) && (g->v1 > g->v0 + 1e-6f);
-        const float adv_osd = adv_px * to_x;
-        if (draw) {
-          // Mesh order: TL, TR, BL, BR. Quad winding matches the old UV box.
-          const int corner[4] = {0, 1, 3, 2};
-          MeshVertex v[4];
-          auto setv = [](MeshVertex& o, float x, float y, float uu, float vv) {
-            o.x = x;
-            o.y = y;
-            o.z = 0.f;
-            o.nx = 0;
-            o.ny = 0;
-            o.nz = 1;
-            o.u = uu;
-            o.v = vv;
-          };
-          for (int i = 0; i < 4; ++i) {
-            const int c = corner[i];
-            setv(v[i], pen_x + g->px[c] * to_x, top_y + g->py[c] * to_y,
-                 g->tu[c], g->tv[c]);
-          }
-          const uint16_t idx[6] = {0, 1, 2, 0, 2, 3};
-          if (bgfx::getAvailTransientVertexBuffer(4, layout_) < 4 ||
-              bgfx::getAvailTransientIndexBuffer(6) < 6)
-            break;
-          bgfx::TransientVertexBuffer tvb;
-          bgfx::TransientIndexBuffer tib;
-          bgfx::allocTransientVertexBuffer(&tvb, 4, layout_);
-          bgfx::allocTransientIndexBuffer(&tib, 6);
-          std::memcpy(tvb.data, v, sizeof(v));
-          std::memcpy(tib.data, idx, sizeof(idx));
-          float mtx[16];
-          bx::mtxIdentity(mtx);
-          bgfx::setTransform(mtx);
-          bgfx::setVertexBuffer(0, &tvb);
-          bgfx::setIndexBuffer(&tib);
-          bgfx::setTexture(0, s_tex_, tex);
-          bind_baked_light(nullptr, nullptr);
-          bgfx::setUniform(u_color_, col);
-          bgfx::setUniform(u_alpha_test_, u_at);
-          bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                         BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
-          bgfx::submit(osd_view_, program_);
-        }
-        pen_x += adv_osd;
-      }
+      draw_osd_line(t.font_key, t.text, t.x, t.y, t.align, argb);
     }
     const float white_c[4] = {1.f, 1.f, 1.f, 1.f};
     bgfx::setUniform(u_color_, white_c);
@@ -792,7 +714,10 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     }
     // Fallback veil only when there is no plate and no movie. Over prime.avi
     // it reads as a black opacity layer on top of the FMV.
-    if (!have_bg_tex && osd_overlay_ && !garage_ && !video_fmv_is_playing()) {
+    // A driving HUD has no menu plate. Its active world camera must remain
+    // visible instead of receiving the menu-only fallback veil.
+    if (!have_bg_tex && osd_overlay_ && !garage_ &&
+        !video_fmv_is_playing() && !fullscreen_script_camera()) {
       OsdWidget plate;
       plate.x = 0.f;
       plate.y = 0.f;
@@ -800,11 +725,10 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       plate.half_h = 1.f;
       plate.background = true;
       // White tex + darken via color uniform — draw after setting color.
-      const float dark[4] = {0.05f, 0.05f, 0.07f, 0.82f};
-      bgfx::setUniform(u_color_, dark);
+      // draw_osd_quad owns the tint uniform; pass the color into the draw.
       const float u_at[4] = {0.f, 1.f, 1.f, 0.f};
       bgfx::setUniform(u_alpha_test_, u_at);
-      draw_osd_quad(plate);
+      draw_osd_quad(plate, 0.05f, 0.05f, 0.07f, 0.82f);
       const float white_c[4] = {1.f, 1.f, 1.f, 1.f};
       bgfx::setUniform(u_color_, white_c);
     }
@@ -867,6 +791,37 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       return false;
     };
 
+    struct IconDraw { const OsdWidget* widget; bool glow, color_chip; };
+    std::unordered_map<int32_t, std::array<std::vector<IconDraw>, 3>> icon_passes;
+    // Classify once per frame. Keep registry order within each layer/pass.
+    for (const auto& w : widgets) {
+      if (w.hidden || w.dead) continue;
+      const uint32_t local = w.icon_id & 0xFFFFu;
+      // frontend:0x00AF is Empty.ptx. A disabled pager keeps that texture
+      // and shows frontend:0x013C only while Gadget.focus is on it.
+      std::string low = w.icon_path;
+      for (char& c : low)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      const bool blank = local == 0x00AFu ||
+                         low.find("empty.ptx") != std::string::npos;
+      // Chassis leaves this button disabled. Only a complete vehicle
+      // offers the color chip, and it starts white.
+      const bool color_chip =
+          w.cmd == 116 && blank && !w.hit_only && !w.disabled;
+      if (w.background || w.hit_only) continue;
+      if (w.disabled && !color_chip) continue;
+      if (blank && !color_chip) continue;
+      if ((local == 0x12bu || local == 0x13cu) && !osd_focus_plate_visible(w)) continue;
+      const bool knob = local == 0x0091u;
+      // Gadget.focus builds this plate 1.1× and slightly behind the icon.
+      // Creation order painted it on top, so hover hid the button.
+      const bool glow = local == 0x012Bu || local == 0x013Cu;
+      const int which = knob ? 2 : (glow ? 0 : 1);
+      icon_passes[w.layer][which].push_back({&w, glow, color_chip});
+    }
+    // Cursor tooltips/text can add a lower layer. They must not promote
+    // the page background above preview cameras by changing layers.front().
+    const int32_t page_background_layer = osd_page_background_layer();
     for (int32_t layer : layers) {
       // Credits first, then plates and icons, then labels. The frame and
       // button textures cover the scroller; the header and BACK stay readable.
@@ -888,7 +843,7 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
         // A modal dialog (BUY PART) overlaps the catalog previews. Sending
         // that plate to view 2 put it under the parts and under their names.
         osd_view_ = (!osd_owner_modal(w.owner) &&
-                     (layer == layers.front() || plate_behind_preview(w)))
+                     (layer == page_background_layer || plate_behind_preview(w)))
                         ? kOsdUnder
                         : kOsdView;
         draw_osd_quad(w);
@@ -916,44 +871,22 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
           if (!hl.icon_path.empty()) draw_osd_quad(hl);
         }
       }
-      auto draw_icon = [&](const OsdWidget& w, int pass) {
-        if (w.layer != layer || w.hidden || w.dead) return;
-        const uint32_t local = w.icon_id & 0xFFFFu;
-        // frontend:0x00AF is Empty.ptx. A disabled pager keeps that texture
-        // and shows frontend:0x013C only while Gadget.focus is on it.
-        std::string low = w.icon_path;
-        for (char& c : low)
-          c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        const bool blank = local == 0x00AFu ||
-                           low.find("empty.ptx") != std::string::npos;
-        // Chassis leaves this button disabled. Only a complete vehicle
-        // offers the color chip, and it starts white.
-        const bool color_chip =
-            w.cmd == 116 && blank && !w.hit_only && !w.disabled;
-        if (w.background || w.hit_only) return;
-        if (w.disabled && !color_chip) return;
-        if (blank && !color_chip) return;
-        if ((local == 0x12bu || local == 0x13cu) && !osd_focus_plate_visible(w)) return;
-        const bool knob = local == 0x0091u;
-        // Gadget.focus builds this plate 1.1× and slightly behind the icon.
-        // Creation order painted it on top, so hover hid the button.
-        const bool glow = local == 0x012Bu || local == 0x013Cu;
-        const int which = knob ? 2 : (glow ? 0 : 1);
-        if (which != pass) return;
-        if(glow) {
-          OsdWidget plate=w;
-          const auto& path=osd_highlight_disabled(w)?osd_disabled_highlight_path():osd_highlight_path();
-          if(!path.empty())plate.icon_path=path;
-          if(!plate.icon_path.empty())draw_osd_quad(plate);
-        } else if (color_chip) {
-          OsdWidget chip = w;
-          chip.icon_path.clear();
-          draw_osd_quad(chip);
-        } else if (!w.icon_path.empty()) draw_osd_quad(w);
-      };
-      for (const OsdWidget& w : widgets) draw_icon(w, 0);
-      for (const OsdWidget& w : widgets) draw_icon(w, 1);
-      for (const OsdWidget& w : widgets) draw_icon(w, 2);
+      const auto icons = icon_passes.find(layer);
+      if (icons != icon_passes.end())
+        for (const auto& pass : icons->second)
+          for (const auto& entry : pass) {
+            const auto& w = *entry.widget;
+            if(entry.glow) {
+              OsdWidget plate=w;
+              const auto& path=osd_highlight_disabled(w)?osd_disabled_highlight_path():osd_highlight_path();
+              if(!path.empty())plate.icon_path=path;
+              if(!plate.icon_path.empty())draw_osd_quad(plate);
+            } else if (entry.color_chip) {
+              OsdWidget chip = w;
+              chip.icon_path.clear();
+              draw_osd_quad(chip);
+            } else if (!w.icon_path.empty()) draw_osd_quad(w);
+          }
       // Current button pictures are foreground icons, drawn once after the
       // highlight pass. Never repaint a cached hit-box glyph on hover.
       draw_osd_texts(layer, true, false);
@@ -977,159 +910,47 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
   void LibBgfxBackend::draw_osd_line(void* font_key, const std::string& text, float x, float y,
                      int align, uint32_t argb)
 {
-    if (!font_key || text.empty() || width_ <= 0 || height_ <= 0) return;
+    if (!font_key || text.empty() || width_ <= 0 || height_ <= 0 ||
+        !bgfx::isValid(text_program_)) return;
     const SlrrFont* font = slrr_font_get(font_key);
     if (!font || !font->ready) return;
-    bgfx::TextureHandle tex = tex_for_font(font_key);
+    const auto tex = tex_for_font(font_key);
     if (!bgfx::isValid(tex)) return;
-    const float sw = static_cast<float>(width_);
-    const float sh = static_cast<float>(height_);
-    float pen_x = x;
-    const float width_osd = 2.f * slrr_font_measure_px(font_key, text.c_str()) / sw;
-    if (align == 1) pen_x -= width_osd * 0.5f;
-    else if (align == 0) pen_x -= width_osd;
-    const float cr = ((argb >> 16) & 0xff) / 255.f;
-    const float cg = ((argb >> 8) & 0xff) / 255.f;
-    const float cb = (argb & 0xff) / 255.f;
-    const float ca = ((argb >> 24) & 0xff) / 255.f;
-    const float col[4] = {cr, cg, cb, ca};
-    const float u_at[4] = {0.f, 1.f, 1.f, 0.f};
-    const float to_x = 2.f / sw;
-    const float to_y = 2.f / sh;
-    for (unsigned char ch : text) {
-      const size_t gi = static_cast<size_t>(ch);
-      const SlrrFontGlyph* g =
-          gi < font->glyphs.size() ? &font->glyphs[gi] : nullptr;
-      const float adv_px = (g && g->adv_px > 0.f)
-                               ? g->adv_px
-                               : static_cast<float>(font->px_height) * 0.35f;
-      const bool draw =
-          g && (g->u1 > g->u0 + 1e-6f) && (g->v1 > g->v0 + 1e-6f);
-      if (draw) {
-        const int corner[4] = {0, 1, 3, 2};
-        MeshVertex v[4];
-        auto setv = [](MeshVertex& o, float px, float py, float uu, float vv) {
-          o.x = px;
-          o.y = py;
-          o.z = 0.f;
-          o.nx = 0;
-          o.ny = 0;
-          o.nz = 1;
-          o.u = uu;
-          o.v = vv;
-        };
-        for (int i = 0; i < 4; ++i) {
-          const int c = corner[i];
-          setv(v[i], pen_x + g->px[c] * to_x, y + g->py[c] * to_y, g->tu[c],
-               g->tv[c]);
-        }
-        const uint16_t idx[6] = {0, 1, 2, 0, 2, 3};
-        if (bgfx::getAvailTransientVertexBuffer(4, layout_) < 4 ||
-            bgfx::getAvailTransientIndexBuffer(6) < 6)
-          break;
-        bgfx::TransientVertexBuffer tvb;
-        bgfx::TransientIndexBuffer tib;
-        bgfx::allocTransientVertexBuffer(&tvb, 4, layout_);
-        bgfx::allocTransientIndexBuffer(&tib, 6);
-        std::memcpy(tvb.data, v, sizeof(v));
-        std::memcpy(tib.data, idx, sizeof(idx));
-        float mtx[16];
-        bx::mtxIdentity(mtx);
-        bgfx::setTransform(mtx);
-        bgfx::setVertexBuffer(0, &tvb);
-        bgfx::setIndexBuffer(&tib);
-        bgfx::setTexture(0, s_tex_, tex);
-        bind_baked_light(nullptr, nullptr);
-        bgfx::setUniform(u_color_, col);
-        bgfx::setUniform(u_alpha_test_, u_at);
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                       BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
-        bgfx::submit(osd_view_, program_);
-      }
-      pen_x += adv_px * to_x;
+    OsdTextRun run(*font, text, x, y, static_cast<float>(width_),
+                   static_cast<float>(height_), align,
+                   slrr_font_measure_px(font_key, text.c_str()));
+    const float col[4] = {((argb >> 16) & 255) / 255.f,
+                         ((argb >> 8) & 255) / 255.f,
+                         (argb & 255) / 255.f, ((argb >> 24) & 255) / 255.f};
+    for (;;) {
+      const auto capacity = osd_text_capacity(
+          bgfx::getAvailTransientVertexBuffer(kOsdTextBatchGlyphs * 4, text_layout_),
+          bgfx::getAvailTransientIndexBuffer(kOsdTextBatchGlyphs * 6));
+      if (!capacity || !run.next(capacity, text_vertices_, text_indices_)) break;
+      bgfx::TransientVertexBuffer tvb;
+      bgfx::TransientIndexBuffer tib;
+      bgfx::allocTransientVertexBuffer(&tvb, static_cast<uint32_t>(text_vertices_.size()), text_layout_);
+      bgfx::allocTransientIndexBuffer(&tib, static_cast<uint32_t>(text_indices_.size()));
+      std::memcpy(tvb.data, text_vertices_.data(), text_vertices_.size() * sizeof(OsdTextVertex));
+      std::memcpy(tib.data, text_indices_.data(), text_indices_.size() * sizeof(uint16_t));
+      float mtx[16]; bx::mtxIdentity(mtx);
+      bgfx::setTransform(mtx);
+      bgfx::setVertexBuffer(0, &tvb); bgfx::setIndexBuffer(&tib);
+      bgfx::setTexture(0, s_tex_, tex);
+      bgfx::setUniform(u_color_, col);
+      bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                     BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
+      bgfx::submit(osd_view_, text_program_);
     }
+    const float white[4] = {1.f, 1.f, 1.f, 1.f};
+    bgfx::setUniform(u_color_, white);
   }
 #endif
 #ifdef _WIN32
   void LibBgfxBackend::draw_osd_string(float x, float y, int32_t align, uint32_t argb,
                        const std::string& text, void* font_key)
 {
-    if (text.empty() || !font_key || width_ <= 0 || height_ <= 0) return;
-    const SlrrFont* font = slrr_font_get(font_key);
-    if (!font || !font->ready) return;
-    bgfx::TextureHandle tex = tex_for_font(font_key);
-    if (!bgfx::isValid(tex)) return;
-    const float sw = static_cast<float>(width_);
-    const float sh = static_cast<float>(height_);
-    float width_px = slrr_font_measure_px(font_key, text.c_str());
-    const float width_osd = 2.f * width_px / sw;
-    float pen_x = x;
-    if (align == 1) pen_x -= width_osd * 0.5f;
-    else if (align == 0) pen_x -= width_osd;
-    const float top_y = y;
-    const float cr = ((argb >> 16) & 0xff) / 255.f;
-    const float cg = ((argb >> 8) & 0xff) / 255.f;
-    const float cb = (argb & 0xff) / 255.f;
-    const float ca = ((argb >> 24) & 0xff) / 255.f;
-    const float col[4] = {cr, cg, cb, ca};
-    const float u_at[4] = {0.f, 1.f, 1.f, 0.f};
-    bgfx::setUniform(u_color_, col);
-    bgfx::setUniform(u_alpha_test_, u_at);
-    const float to_x = 2.f / sw;
-    const float to_y = 2.f / sh;
-    for (unsigned char ch : text) {
-      const size_t gi = static_cast<size_t>(ch);
-      const bool has = gi < font->glyphs.size();
-      const SlrrFontGlyph* g = has ? &font->glyphs[gi] : nullptr;
-      const float adv_px =
-          (g && g->adv_px > 0.f) ? g->adv_px
-                                 : static_cast<float>(font->px_height) * 0.35f;
-      const bool draw =
-          g && (g->u1 > g->u0 + 1e-6f) && (g->v1 > g->v0 + 1e-6f);
-      const float adv_osd = adv_px * to_x;
-      if (draw) {
-        const int corner[4] = {0, 1, 3, 2};
-        MeshVertex v[4];
-        auto setv = [](MeshVertex& o, float px, float py, float uu, float vv) {
-          o.x = px;
-          o.y = py;
-          o.z = 0.f;
-          o.nx = 0;
-          o.ny = 0;
-          o.nz = 1;
-          o.u = uu;
-          o.v = vv;
-        };
-        for (int i = 0; i < 4; ++i) {
-          const int c = corner[i];
-          setv(v[i], pen_x + g->px[c] * to_x, top_y + g->py[c] * to_y, g->tu[c],
-               g->tv[c]);
-        }
-        const uint16_t idx[6] = {0, 1, 2, 0, 2, 3};
-        if (bgfx::getAvailTransientVertexBuffer(4, layout_) < 4 ||
-            bgfx::getAvailTransientIndexBuffer(6) < 6)
-          break;
-        bgfx::TransientVertexBuffer tvb;
-        bgfx::TransientIndexBuffer tib;
-        bgfx::allocTransientVertexBuffer(&tvb, 4, layout_);
-        bgfx::allocTransientIndexBuffer(&tib, 6);
-        std::memcpy(tvb.data, v, sizeof(v));
-        std::memcpy(tib.data, idx, sizeof(idx));
-        float mtx[16];
-        bx::mtxIdentity(mtx);
-        bgfx::setTransform(mtx);
-        bgfx::setVertexBuffer(0, &tvb);
-        bgfx::setIndexBuffer(&tib);
-        bgfx::setTexture(0, s_tex_, tex);
-        bind_baked_light(nullptr, nullptr);
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                       BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
-        bgfx::submit(osd_view_, program_);
-      }
-      pen_x += adv_osd;
-    }
-    const float white_c[4] = {1.f, 1.f, 1.f, 1.f};
-    bgfx::setUniform(u_color_, white_c);
+    draw_osd_line(font_key, text, x, y, align, argb);
   }
 #endif
 

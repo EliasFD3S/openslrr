@@ -2,7 +2,7 @@
 
 Copy the `sl` folder from this patch into the game root and accept the replacement of `OptionsDialog.class` and `Garage.class`. The OptionsDialog Java source is shipped with its compiled class. Use the Enhanced v3 Release.
 
-The **Video Options** menu applies the resolution and the Enhanced settings in game. Exterior scenery range is 5 km. The scenery shadow map and the vehicle shadow map each use a resolution of 2048 × 2048. **F12 → Renderer** also sets how many reflection faces are computed per frame.
+The **Video Options** menu applies the resolution and the Enhanced settings in game. Exterior scenery range is 3 km. The scenery shadow map and the vehicle shadow map each use a resolution of 2048 × 2048. **Ctrl+F12 → Renderer** also sets how many reflection faces are computed per frame.
 
 ## Java natives
 

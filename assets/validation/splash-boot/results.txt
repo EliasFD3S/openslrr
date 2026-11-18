@@ -1,0 +1,8 @@
+Issue #76, Release x64, baseline a5184d2, 17 November 2026
+Command: scripts/run_save_io_tests.ps1 -Suite splash_boot [-BaselineRef a5184d2]
+Real boot_game with shipped Init/Splash and Null renderer, local game assets.
+Before: 0 passed / 1 failed, Splash pending timers=2.
+After: 1 passed / 0 failed, Splash pending timers=1; adoption preserves OSD identity.
+inventory_transition: 4 passed / 0 failed.
+Native coverage check unchanged and passes.
+Windowed FMV-to-splash continuity requires user validation.

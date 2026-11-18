@@ -343,7 +343,7 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
       // Colour function and alpha coverage are independent. In particular,
       // type-0 rail panels still blend, and type-3 bridge trusses still cut out.
       const auto surface = group ? scx_surface(part.geo.info.version, *group) : ScxSurface{};
-      const bool blend = !instance.sky && (instance.emissive_overlay ||
+      const bool blend = !instance.sky && (instance.opacity < 1.f || instance.emissive_overlay ||
           (!preview && surface.blend) ||
           (part.geo.info.version == 3 && surface.blend));
       if (pass != int(blend)) return;
@@ -377,6 +377,9 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
                                  !blend && preview && tex.idx != white_tex_.idx ? 1.f : 0.f};
       const uint32_t color = preview || instance.cull_backfaces ? instance.color : 0xffffffu;
       float tint[4]={((color>>16)&255)/255.f,((color>>8)&255)/255.f,(color&255)/255.f,1};
+      tint[3] *= instance.opacity;
+      if (group && part.geo.info.version == 3 && texture_index == 0xffff)
+        for (int i = 0; i < 4; ++i) tint[i] *= group->diffuse[i];
       if (material_mix)
         for (int i = 0; i < 3; ++i) tint[i] *= group->diffuse[i];
       if (blend && !instance.emissive_overlay && group)

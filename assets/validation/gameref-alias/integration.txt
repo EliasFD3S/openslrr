@@ -1,0 +1,10 @@
+PR #121 / issue #93 integrated with main 4e4b782 (includes merged PR #175).
+Release x64 slrr_host build: succeeded.
+Conflicts: docs/KNOWLEDGE_BASE.md and scripts/run_save_io_tests.ps1. Both sets of notes/suites preserved.
+gameref_alias: main baseline 1 passed / 2 failed; integrated 3 passed / 0 failed.
+live_lookup: passed (100000 lookups, aliases/removal/key reuse).
+trigger_markers: passed, plus three repeat runs passed.
+A prior trigger regression run aborted without output. Added exception reporting and robust animation sampling around extrema; no engine change for this test adjustment.
+Native coverage generator check: current. Knowledge references: passed.
+No production Java or native signature changes. No new in-game validation.
+Local CMake/knowledge-base/milestone edits restored and excluded from commits.

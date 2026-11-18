@@ -1,4 +1,4 @@
-# OpenSLRR knowledge base for coding agents
+| `FindFile` and File share canonical physical-root confinement (#84). Enumeration alone may address the root; leading separators remain game-relative, parent traversal and external junctions are rejected, and internal junctions are allowed. File.delete remains nonrecursive (#68, #71). Invalid SDAT writes preserve alignment (#70); see [SAVE_IO_FIXES.md](SAVE_IO_FIXES.md) | `src/natives/natives_boot.cpp:under_game`, `src/natives/natives_boot.cpp:findfile_start`, `src/natives/natives_io.cpp:register_io_natives` |
 
 Verified against `main` at `b907b6b` (12 November 2026). Every code reference
 below is written as `path` or `path:symbol` and can be rechecked with
@@ -171,6 +171,7 @@ current gaps to SLRR_rev code are in
 | UI | `src/ui/osd_registry.cpp:osd_add_widget`, `src/ui/osd_registry.cpp:osd_on_field_write` | OSD widgets, hit-testing, modal state |
 | Map ambience | `src/resources/scene_ambience.cpp:scene_ambience_attach`, `src/resources/scene_ambience.cpp:scene_ambience_tick` | `sfx_loop`/`sfx_random` lines of map placements |
 | Platform | `src/platform/host_input.cpp`, `src/platform/host_sfx.cpp`, `src/platform/host_music.cpp`, `src/platform/video_fmv.cpp`, `src/platform/host_game_options.cpp` | Input, audio, FMV, options |
+| Worker pool | `src/platform/job_system.cpp:jobs_parallel_for` | One worker per logical processor for loading work off the host thread (§6) |
 
 Code that exists but is not used:
 
@@ -179,9 +180,6 @@ Code that exists but is not used:
 - `src/render/bgfx_shadows.cpp:draw_vehicle_shadows` (the legacy projected
   car shadow) is never called. Its two shader programs are still created at
   init but only used by that function.
-- `src/render/null_backend.cpp` is not compiled. The WGL fallback in
-  `src/render/bgfx_backend.cpp` is disabled because `SLRR_HAS_LIBBGFX` is
-  always defined.
 - `src/physics/sl2_pacejka.cpp` only serves `--probe-pacejka`. The active tyre
   model is `src/physics/tire_model.cpp:tire_forces`.
 
@@ -195,8 +193,9 @@ Code that exists but is not used:
    native family through `src/natives/natives_boot.cpp:register_boot_natives`,
    loads options through the engine-owned `java.util.Config`
    (`src/platform/host_game_options.cpp:host_game_options_load`), scans every
-   `.rpk` under the root (`src/resources/rpk_index.cpp:open_all`), checks the
-   build number, opens the window and plays the intros.
+   `.rpk` under the root (`src/resources/rpk_index.cpp:open_all`, which reads
+   the packs on the worker pool and numbers them in directory order), checks
+   the build number, opens the window and plays the intros.
 3. `src/boot/boot.cpp:start_init` runs `Init.<init>(I)` with halting on the
    first unbound native.
 4. The main loop repeats: window pump, section render sync,
@@ -447,12 +446,132 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   (`src/natives/natives_script.cpp:register_script_natives`).
 - Car saves use the SDAT container (`src/natives/natives_io.cpp:sdat_frame`).
 
+### 5.10 Threads and the worker pool
+
+Read this before adding parallel work. The contract is
+[ENGINE_CONTRACT.md §6](ENGINE_CONTRACT.md#host-threads-and-the-worker-pool);
+this section is the working guide.
+
+**Threads that exist.**
+
+| Thread | Owner | Runs |
+| --- | --- | --- |
+| Host thread | `src/boot/boot.cpp:boot_game` | VM and script fibers, frame pump, physics, scene collection, bgfx submission, every GameRef and cache mutation |
+| bgfx render thread | bgfx (`src/render/bgfx_lib_backend.cpp:open`) | Graphics API calls for the frame the host submitted |
+| Worker pool, one per logical CPU minus one | `src/platform/job_system.cpp:jobs_parallel_for` | Data-parallel batches started by the host thread |
+| Exterior map parser | `src/natives/natives_resref.cpp:spawn_ground_shell` (`std::async`) | `scene_instances_ground_map` for the next chained map file |
+| Pedestrian stepper | `src/resources/part_runtime.cpp:PedSim` | Walker steering on copies of the walker records |
+| Audio and video | XAudio2, Media Foundation, VLC | Their own decode and output threads |
+
+**API** (`include/slrr/job_system.hpp`).
+
+- `jobs_parallel_for(count, body)` calls `body(i)` once per index and
+  returns when all have finished. The calling thread takes part. The first
+  exception is rethrown after every index has run.
+- It runs serially, on the calling thread, when `count` is 1, inside a job,
+  when the pool has no workers (one CPU, or after `jobs_shutdown`), or when
+  another thread's batch holds the pool. Never wait for a batch from inside a
+  job.
+- `jobs_concurrency()` gives the thread count, caller included. It follows
+  the process affinity mask.
+- `jobs_inside()` is true inside a job. `index_floor` uses it to pick its
+  serial path (`src/resources/scene_instances.cpp:index_floor`).
+- `jobs_printf` holds a job's log lines and prints them in index order when
+  the batch ends. `JobLogCapture` holds the lines of a task that runs
+  outside the pool, such as a `std::async`, for its caller to print. Use one
+  of them for any log line that can come from a job.
+
+**Pattern.** Every user follows prepare, run, publish:
+
+1. On the host thread, collect the inputs and size the results: one slot per
+   index, or a cache entry reserved before the batch, as
+   `src/resources/scene_instances.cpp:scene_instances_prepare_physics` does.
+2. Run the batch. A body reads its inputs and writes only its own slot.
+3. On the host thread, publish the slots in index order into caches,
+   registries and logs. Pack ids, cache contents and log order then do not
+   depend on the thread count.
+
+When results must be appended, keep the serial order: split the work into
+contiguous runs and append the runs in order
+(`src/resources/scene_instances.cpp:index_floor`). The same applies to
+offsets computed before a parallel copy
+(`src/resources/scene_instances.cpp:merge_static_meshes`).
+
+**What a job may touch.**
+
+| Safe to call or read from a job | Host thread only |
+| --- | --- |
+| `RpkIndex` const methods: its payload and RSD caches lock their own mutexes (`src/resources/rpk_index.cpp:read_payload`) | The VM, `Object`, `Value`, `Jvm::RootScope`, natives |
+| `load_scx_geometry`, `load_texture_file`, `parse_part_config`, `scene_instances_ground_map`, `src/resources/scene_instances.cpp:load_geometry`, `src/resources/scene_instances.cpp:build_native_collision` | GameRef state (`gameref_get`, matrices, parents) |
+| Immutable data that nothing writes during the batch | Scene caches: `g_meshes` through `geometry()`, `g_native_collision`, floor and ground caches. Preload missing meshes with `preload_meshes` first; a lookup that misses inserts. |
+| | bgfx: create textures and buffers after the batch. Decode on the pool, upload on the host (`src/render/bgfx_lib_backend.cpp:prefetch_part_textures`). |
+
+Before calling a function from a job, check it for `static` locals, globals
+and lazily filled caches. `RpkIndex` keeps its payload and RSD caches behind
+mutexes: payload reads from several jobs are safe but take turns, which
+limits the speed-up.
+
+**Pitfalls already met.**
+
+- `std::mutex` is not recursive. Do not hold a lock while running bodies that
+  may start another batch. `jobs_parallel_for` takes its own lock last for
+  this reason.
+- A `std::future` from `std::async` blocks in its destructor. Keep the
+  futures in the function that owns the data they read.
+- Freeing per-job containers costs time too: the cell runs of a large
+  `index_floor` take a few milliseconds to destroy.
+- Do not grow a buffer by one element range at a time with `reserve` of the
+  exact size. It reallocates every time and made `merge_static_meshes`
+  quadratic: 12.5 s of a city load.
+- A prefetched result that several consumers share needs one use per
+  consumer. Otherwise a failed first consumer forces the others to redo the
+  work serially (`src/render/bgfx_lib_backend.cpp:load_part_textures`).
+
+**Checking a change.**
+
+- Standalone tests (`tests/test_job_system.cpp`, built by hand) under g++
+  with `-fsanitize=thread`, and with `-fsanitize=address,undefined`.
+- Determinism: compare the `[rpk]`, `[scene]` and `[scx]` log lines of a
+  run on all cores with a run restricted to one core. For example, set the
+  parent PowerShell's `ProcessorAffinity` before `Start-Process`, or use
+  `start /affinity 1`. The lines must match, apart from the randomly chosen
+  sky dome.
+- Equivalence: when a parallel algorithm replaces a serial one, compare
+  their outputs once in a local build (not committed), as was done for
+  `index_floor` on all six city collision meshes.
+- Speed: time the stage on the city benchmark (§3) on all cores and with 1,
+  2 and 4 cores. `--perf-log` covers the frame. Load stages need local
+  timers.
+- Assets: same pack, prop, collision, mesh and texture counts as `main`, and
+  matching start-of-drive window captures (`--bench-shots`) when the same
+  sky dome is chosen.
+
+**Where to build next.** [MILESTONES.md M7](MILESTONES.md#m7--multicore-frame)
+lists the planned steps for the frame loop: measure where the CPU limits,
+cull scene collection in parallel, record draws with bgfx encoders, run
+physics after PR #48, and optional pipelining.
+
 ## 6. Invariants and pitfalls
 
 VM and lifetime:
 
 - Script threads are cooperative fibers on the host thread, never parallel
   workers. Native C++ work inside a fiber is not preempted.
+- Loading work that only reads files runs on the worker pool
+  (`src/platform/job_system.cpp:jobs_parallel_for`): pack indexing, mesh
+  loading (`src/resources/scene_instances.cpp:preload_meshes`, also called
+  by `collect_root` for the meshes new in a frame), a map's object types
+  (`src/resources/scene_instances.cpp:build_native_collision`), placement
+  collision bakes and their merge, prop batching, static collision that
+  appeared or moved
+  (`src/resources/scene_instances.cpp:scene_instances_prepare_physics`), the
+  floor index of large meshes (`src/resources/scene_instances.cpp:index_floor`)
+  and texture decoding
+  (`src/render/bgfx_lib_backend.cpp:prefetch_part_textures`). A job writes
+  only its own slot of a result the caller prepared and never touches the
+  VM, GameRef state, other cache entries or bgfx; the host thread publishes
+  the results. Steady per-frame work stays on the host thread. §5.10 is the
+  guide for adding parallel work.
 - An `Object*` held in C++ is not a root. Use `Jvm::RootScope`
   (`include/slrr/jvm.hpp:RootScope`) across yields, or register a root
   provider for a native registry.
@@ -561,21 +680,20 @@ Process:
 
 From [NATIVE_AUDIT.md](NATIVE_AUDIT.md) and
 `assets/progress/native-coverage.json` (12 November 2026): of 376 stock
-signatures, 331 have a body, 4 are explicit no-ops and 41 are missing.
+signatures, 339 have a body, 3 are explicit no-ops and 34 are missing.
 `scripts/render_native_coverage.py` recomputes these counts from `src/`;
 `--list missing` prints the missing signatures.
 
 | Missing family | Count | Blocks |
 | --- | ---: | --- |
 | `GroundRef` routes, traffic, water | 19 | Navigation, traffic |
-| `PhysicsRef` | 7 | `create`, `createSphere`, `setStatic`, `getVel` ×2, `getAngVel`, `getOri`: world physics objects |
 | `ParticleSystem` | 9 | Smoke, sparks and other effects |
 | `Painter` | 3 | Paint booth: `doPaint`, `paintPart`, `xPaint` |
 | Leftovers (`Welder`) | 3 | No stock caller found |
 
-Explicit no-ops: `System.analyze` ×3 (faithful) and
-`GameRef.setActiveCollision` (a real gap). Two host-only no-ops outside the
-stock table: `Player.<init>` and `LoadingScreen.<init>`.
+Explicit no-ops: `System.analyze` ×3 (faithful).
+`GameRef.setActiveCollision` has a body since PR #22 (§12). Two host-only
+no-ops outside the stock table: `Player.<init>` and `LoadingScreen.<init>`.
 
 Partial bodies that matter for upcoming work: `GameRef.setState` applies to
 cars only, `GroundRef.getNearestCross` returns null,
@@ -586,14 +704,8 @@ reads, and `Part.setSfxLoopParams` stores values without applying them.
 
 | Statement | Code reality |
 | --- | --- |
-| README lists "projected car shadows" | The projected pass `draw_vehicle_shadows` is never called. Car shadows come from the car depth map (`src/render/bgfx_shadows.cpp:update_car_depth`) |
-| `patch/README.md`: exterior scenery range 5 km | `flush` forces 3,000 m (`src/render/bgfx_lib_backend.cpp:flush`) |
-| `patch/README.md`: "F12 → Renderer" | The panel opens with Ctrl+F12 |
-| README: pedestrian density slider scales the crowd; `patch/README.md`: the slider is gone | The patched OptionsDialog drops the slider and forces `Config.pedestrianDensity = 1.5` (`patch/sl/Scripts/game/src/OptionsDialog.java`); the host still scales the crowd by that value (`src/resources/part_runtime.cpp:tick_pedestrians`) |
-| NATIVE_AUDIT: `GfxEngine` exposes one fixed 800×600 mode and an empty change call | Modes are enumerated with `EnumDisplaySettingsW` and applied (`src/natives/natives_script.cpp:display_modes`) |
 | HOST_NATIVE_UTILITIES: engine-loop audio not yet implemented | `update_engine_audio` runs every physics frame |
-| `.gitignore` last line `*.md !README.md` | A single malformed pattern that matches nothing; Markdown files are not ignored |
-| Stale comments: "no green-thread budget yet" in `src/boot/mainloop.cpp`, "240 Hz tick" in `src/resources/scene_instances.cpp`, "WGL until libbgfx is linked" in `include/slrr/render_backend.hpp` | Fibers have budgets, physics is 120/60 Hz, libbgfx is always linked |
+| Stale comments: "no green-thread budget yet" in `src/boot/mainloop.cpp`, "240 Hz tick" in `src/resources/scene_instances.cpp` | Fibers have budgets, physics is 120/60 Hz |
 
 ## 10. Open risk register
 
@@ -605,10 +717,9 @@ run time.
 | --- | --- |
 | DirectShow dynamic media-format renegotiation is not supported; malformed/short RGB32 frames are rejected | `src/platform/video_fmv.cpp` (`grab_frame`) |
 | `FindFile` still bypasses shared path confinement. The File native path validator now checks canonical components, rejects the root and accepts dots within names; File.delete is nonrecursive (#68, #71). Invalid SDAT resource writes preserve field alignment with a null placeholder (#70); see [SAVE_IO_FIXES.md](SAVE_IO_FIXES.md) | `src/natives/natives_boot.cpp:under_game`, `src/natives/natives_io.cpp:register_io_natives` |
-| Boot enters the Splash section again after Java already entered it | `src/boot/boot.cpp:boot_game` (`change_active_section` instead of `adopt_actual`) |
+| Boot adopts the section already entered by Java Init without replaying lifecycle (#76). Windowed startup retains a timer-only reset so startup work cannot consume the splash display interval. | `src/boot/boot.cpp:boot_game`, `src/boot/mainloop.cpp:mainloop_adopt_section` |
 | Wall collision, impact damage and mileage run only for the player-controlled car with an engine | `src/resources/part_runtime.cpp:advance_chassis_tick` |
 | Gamepad fallback is now per driving axis and unclaimed physical channel; hardware validation remains separate | `src/platform/host_input.cpp`, `src/platform/host_input_mapping.hpp` |
-| `shaders/varying.def.sc` declares `v_worldPos` twice | `shaders/varying.def.sc` |
 | The `present` and `hiz` programs never link: `fs_present` and `fs_hiz` read only `v_texcoord0` but are paired with `vs_mesh`, so the offscreen scene target and the HiZ pyramid are skipped. Startup logs `[bgfx] program … failed to link` | `src/render/bgfx_lib_backend.cpp:LibBgfxBackend::open` |
 
 Fixed on `main`: `System.arraycopy` overflow, PTX bounds, dyno session
@@ -668,6 +779,21 @@ These are entry points, not fixes. Each needs its own reproduction.
   capture also draws the preloaded garage shell; before, the paint and glass
   mirrored only the props and the clear colour
   (`src/render/bgfx_lib_backend.cpp:update_reflections`).
+- **#56 single-threaded game.** Checked with the city benchmark (§3) and
+  per-thread CPU sampling. Before, the host thread did nearly all the work:
+  about 20 of 29 s of process CPU in a run, with at most four threads busy at
+  once. A warm Valo City load took about 13 s on that thread, 12.5 s of it in
+  `src/resources/scene_instances.cpp:merge_static_meshes`, which grew its
+  buffer by one placement's mesh at a time. On a first launch over freshly
+  copied files, serial texture decoding added about 14 s. Loading work now
+  runs on the worker pool (§6) and the merge sizes its buffers once: the load takes
+  about 1–2 s warm and 5 s on a first launch, with up to 20 threads busy on
+  a 20-thread CPU.
+  The VM, physics, scene collection and bgfx submission stay on the host
+  thread by contract; in the drive they cost about 4–7 ms per frame. A
+  follow-up overlapped the chained `city2` parse with `city`'s props, indexed
+  large collision meshes on the pool and kept the log order serial: the warm
+  load is now under 1 s.
 
 ## 12. Self-check
 
@@ -719,6 +845,10 @@ Each answer names its evidence.
 17. *A script call does nothing and nothing crashes. Where do you look?*
     stderr, for `native/empty TREE without host binding`: outside Init an
     unbound native returns void instead of failing (§5.3).
+18. *Can a worker-pool job look up a mesh with `geometry()`?* Only if the
+    mesh is already loaded: a miss inserts into `g_meshes`. Preload the ids
+    with `preload_meshes` on the host thread first, and publish job results
+    on the host thread (§5.10).
 
 ## 13. Keeping this file true
 
@@ -748,7 +878,7 @@ No in-game validation is claimed yet. Test initial G1, then use fastpromotion
 for club garages and letmeroc for the ROC garage; inspect walls, floor/lift,
 props and reflections for old G1 geometry. Confirm the car remains supported
 by each active garage's collision geometry and that returning to G1 works.
-Issue #93 / PR #121 remains independent and unmerged.
+Issue #93 / PR #121 is independent of the garage lifetime correction.
 
 
 ### Garage shell follow-up: obsolete exclusion removed
@@ -1846,3 +1976,171 @@ rebuild, reporting the previous clean version from the boot consumer. These are
 build-graph tests, not a game launch or a full Ninja build of the bgfx project.
 The full game's Visual Studio Release target also builds. Native bindings and
 runtime gameplay are unchanged. Evidence: assets/validation/version-order.
+
+## Per-body physics failure containment (#75)
+
+The rigid-body kernel deliberately throws on invalid mass/bounds/orientation,
+non-finite frames and non-finite integration state. Keep those kernel checks:
+the owning runtime now contains failures at each chassis, loose-part and free
+PhysicsRef body rather than allowing a frame pump to unwind a Java dialog or
+terminate the host. std::exception failures are reported and handled locally.
+
+Chassis configuration is transactional (configure/set_frame on a candidate).
+An invalid chassis is suspended with physics_pending_placement cleared; a step
+failure restores its saved rigid body and the last finite local pose, resets
+motion and interpolation and leaves other chassis ticking. Pose orientation is
+reconstructed as in dynamics_sync. With no valid pose to restore, the node is
+hidden. The normal start/wakeup path can retry simulation; unchanged bad data
+will suspend it again. A chassis failure is logged once per record lifetime.
+
+Loose-body creation also configures a candidate. Failed native map promotion
+cleans partial nodes, keeps the ordinary scenery and suppresses repeated retries
+for that resource until the part runtime is reset. A failed active loose body
+is removed; a promoted map prop returns to its authored placement. A failed free
+PhysicsRef restores its last published finite pose and is removed from simulated
+bodies. Failed loose/free contact steps restore the collision partner's saved
+rigid body too. These guards do not roll back arbitrary script/asset mutations
+or promise recovery from allocation failure.
+
+GameRef.setMatrix rejects non-finite position/rotation before mutation. WheelRef
+setters reject non-finite scalar or Vector3/Ypr fields atomically; finite values
+retain their existing semantics. Numeric overflow generated later in the solver
+is caught before an invalid body frame is published. Free bodies now have an
+explicit first-configuration flag (live_id can legitimately still be zero), and
+free-body state plus failed-native-type suppression reset with part registration.
+No native signature is added; the kernel and normal physics tick remain intact.
+
+Validation: physics_recovery is 0/8 passing on f3638a1 and 8/8 on the fix. Its
+isolated synthetic RPK/CFG/SCX fixtures cover NaN poses, malformed free-body
+bounds, invalid free frames, zero-height chassis bounds, corrupted chassis
+pose/orientation, wheel updates, extreme finite velocity overflowing the render
+frame, and transactional invalid map-body creation. A native pump callback
+returns after the numerical failure while a healthy chassis keeps ticking.
+This is not an automated real Dialog.display test. Active detached-panel failure
+and contact-partner rollback paths are implemented but not separately fault-
+injected by this suite. map_props and physics_position regressions pass. The
+Release build and native audit checks pass. In-game driving/collision/dialog
+smoke validation is pending. Evidence: assets/validation/physics-recovery.
+
+## Unique world-position varying (#100)
+
+shaders/varying.def.sc keeps the initialized v_worldPos on TEXCOORD4 and removes
+the duplicate TEXCOORD6 declaration. The bundled shaderc inserts declarations
+by name and retains the first entry, so TEXCOORD4 was already the effective
+semantic. No producer/consumer shader or remaining semantic is reassigned.
+The duplicate is removed from the open risk register above.
+
+Validation: the Release target regenerated DXBC and GLSL shaders successfully.
+SHA-256 comparison of all 26 generated shader headers before/after found no
+changed bytes. A declaration scan found no repeated attribute/varying names.
+This is a declaration cleanup with unchanged compiled shader output; a new
+in-game visual difference is not expected. Evidence:
+assets/validation/worldpos-varying/validation.txt.
+
+Track HUDs do not require a menu background: `src/resources/gameref.cpp:fullscreen_script_camera` suppresses the fallback veil while a world camera is active. See [SCRIPT_RUNTIME.md](SCRIPT_RUNTIME.md#track-presentation-without-a-menu-plate).
+
+Menu hotkey presses use a shared 250 ms cancel/menu gate and a separate select gate, without delaying release or driving: `src/platform/host_input.cpp:host_input_check_hotkeys`. Validation and scope are in [SCRIPT_RUNTIME.md](SCRIPT_RUNTIME.md#menu-input-debounce).
+
+UI rectangles handed to the OSD registry are excluded from 3D scene/preview collection, including cursor tooltip templates: `src/resources/scene_instances.cpp:collect_root`. See [SCRIPT_RUNTIME.md](SCRIPT_RUNTIME.md#ui-rectangles-have-one-render-owner).
+
+Catalog vehicle insets stay in the preview pass, preserving the page background and script camera pose; fullscreen showrooms retain main-world ownership. Cursor cameras are UI-only: `src/boot/mainloop.cpp:mainloop_sync_section_render`, `src/resources/gameref.cpp:fullscreen_script_camera`. See [SCRIPT_RUNTIME.md](SCRIPT_RUNTIME.md#catalog-vehicle-preview-versus-fullscreen-showroom).
+
+Tooltip layer 0 must not promote catalog page backgrounds above preview cameras. Background ordering uses owned nonmodal page plates rather than the lowest arbitrary widget/text layer: `src/ui/osd_registry.cpp:osd_page_background_layer`.
+
+Trigger indicators are visual RenderRefs, while trigger volumes stay sensors; explicit physics and ground collision remain authoritative: `src/resources/scene_instances.cpp:scene_instances_prepare_physics`. Cue rendering and reconstructed motion defaults are documented in [SCRIPT_RUNTIME.md](SCRIPT_RUNTIME.md#trigger-cues-and-physical-bodies-130).
+
+## 14. Validated issue fixes (2026-11-16)
+
+### GameRef aliases: events and timers (#93)
+
+`src/resources/gameref.cpp:gameref_set_event_mask` and
+`src/resources/gameref.cpp:gameref_add_timer` resolve the canonical node before
+creating a new GameType state. Alias writes now reach the same event mask and
+timer queue used by reads, clear/remove operations and timer dispatch. Existing
+canonical kinds are preserved; unregistered objects still create GameType state.
+No Java changes or scene-specific exceptions. This fixes state routing, not the
+scheduler itself. Stock paths mostly use direct objects, so the main impact is
+aliased native instances and mod scripts.
+
+Release x64 compilation succeeds. Three deterministic GameRef tests cover mask
+set/clear and kind preservation, timer canonical destination/one-shot/removal,
+and unregistered-object creation. Main 784a760: 1 pass / 2 fail; corrected:
+3 pass / 0 fail. Run `./scripts/run_save_io_tests.ps1 -Suite gameref_alias`,
+or add `-BaselineRef 784a760` to reproduce. In-game validation remains pending;
+these tests exercise the actual state primitives but not Java event dispatch.
+
+PR #121 integration update (2026-11-17): conflicts were limited to this
+knowledge base and the test runner; current main's suites and fixes are kept.
+Release x64 rebuild succeeds. Against main 4e4b782, gameref_alias still reports
+1 pass / 2 fail; the integrated branch reports 3 pass / 0 fail. live_lookup and
+trigger_markers pass too. The trigger animation regression now samples two
+bob heights and both yaw basis components, avoiding equal-value samples at
+animation extrema, and reports caught exceptions instead of aborting silently.
+These remain automated host checks; no additional in-game validation is claimed.
+Evidence: assets/validation/gameref-alias/integration.txt.
+
+OSD text lines share one bounded glyph batcher and an unlit shader, avoiding per-glyph draws/world-light bindings: `src/render/bgfx_osd.cpp:draw_osd_line`. Measured draw counts and pixel comparison are in [SCRIPT_RUNTIME.md](SCRIPT_RUNTIME.md#batched-osd-text-82).
+
+## CMake dependency paths and toolchain guard (#114)
+
+CMakeLists.txt reads the resolved BGFX_DIR/BIMG_DIR definitions from the
+already-added bgfx.cmake directory scope. This follows its actual choice of
+explicit paths, in-tree checkouts or FetchContent sources, including custom
+FETCHCONTENT_BASE_DIR and FETCHCONTENT_SOURCE_DIR overrides. It does not infer
+source paths from the host build directory or overwrite cache preferences.
+ImGui sources, shader includes and bimg third-party headers now use the same
+checkout as the corresponding libraries. A missing resolved directory fails
+configuration with a direct diagnostic.
+
+The guard now explicitly requires Windows x64 and an MSVC-compatible compiler,
+matching the existing MSVC flags and documented Visual Studio workflow. MinGW
+is rejected rather than allowed through to fail on /utf-8 or /fp:precise. x86,
+ARM64 and non-Windows targets remain unsupported. Clang-cl is not separately
+validated; the exercised compiler is Visual Studio 2022 MSVC.
+
+Validation: tests/test_cmake_dependency_paths.py configures the real project
+in isolated directories containing spaces, offline against existing dependency
+sources. Five cases cover default/custom caches, source overrides, in-tree
+checkouts and relative explicit directories; generated ImGui/shader/bimg paths
+are checked. Five cases execute the actual guard with supported/unsupported
+platform/compiler/architecture values. Current: 10/10 pass. Baseline b85dc44: 5/10 pass;
+results recorded in assets/validation/cmake-dependency-paths. The guard cases
+simulate variables, not installed MinGW/ARM compiler runs. Non-default cases
+are configure/generate checks; the ordinary Release x64 host build succeeds.
+No game runtime behavior or native registrations change.
+
+Fixtures/logs remain under build/ for inspection. They reference the existing
+sources through directory junctions without modifying dependency checkouts.
+A tiny fixture-only compile_game_sources.cpp isolates the independent missing
+utility file in HEAD; the pre-existing local optional-target edit stays excluded.
+
+## Removed inactive renderer/video fallbacks (#113)
+
+The supported Windows x64 build always uses libbgfx for game rendering.
+The obsolete, non-compiling WGL branch has been removed from the renderer
+factory. The implemented NullBackend remains in bgfx_backend.cpp for headless
+probes/tests and the existing unwired D3D9 selection; only the unused three-line
+null_backend.cpp stub was removed. This does not remove bgfx's own renderer
+backends or add cross-platform support.
+
+SLRR_HAS_LIBBGFX no longer gates the factory or PNG/PTX decoders, and CMake
+no longer defines it. Font PNG and PTX/JPEG/PNG decoding always use the same
+existing stb implementation, with no replacement decoder or asset changes.
+The GPU regression runner no longer injects the obsolete define either.
+
+The non-Win64 DirectShow soft-success branch was deleted: graph setup failure
+now takes the existing error return after graph cleanup rather than inventing
+a playing video without a decoder. The supported Win64 playback path already
+used that error behavior. Other VLC/AVIFile/DirectShow selection and playback
+lifetime code remain unchanged. No unsupported x86 build is claimed.
+
+Validation/evidence: assets/validation/dead-fallbacks. This cleanup is checked
+by building the supported host without the old define and exercising existing
+renderer/video/font regressions. It does not establish non-Windows or x86
+compatibility or reproduce the removed dormant branch as a supported runtime.
+
+Issue #113 checks passed: Release x64 compile/link without the old renderer
+macro; video_safety, ui_lifetime, splash_boot and osd_text_gpu. The D3D11 text
+capture retains the #82 pixel hash and 20 text draws for 1,000 glyphs. Native
+coverage remains current; knowledge references pass. These are supported-host
+regressions, not execution of the removed x86/WGL branches.

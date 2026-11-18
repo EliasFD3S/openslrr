@@ -224,6 +224,8 @@ void gameref_process_collision_requests() {
 
 void gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
                         float pitch, float roll) {
+  if (!std::isfinite(px) || !std::isfinite(py) || !std::isfinite(pz) ||
+      !std::isfinite(yaw) || !std::isfinite(pitch) || !std::isfinite(roll)) return;
   GameRefState* n = gameref_get(key);
   if(!n)n=gameref_upsert(key);
   if (!n) return;
@@ -239,7 +241,8 @@ void gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
 }
 
 void gameref_set_event_mask(void* key, int32_t mask) {
-  GameRefState* n = gameref_upsert(key, GameRefKind::GameType);
+  GameRefState* n = gameref_get(key);
+  if (!n) n = gameref_upsert(key, GameRefKind::GameType);
   if (n) n->event_mask |= mask;
 }
 
@@ -249,7 +252,8 @@ void gameref_clear_event_mask(void* key, int32_t mask) {
 }
 
 void gameref_add_timer(void* key, float deadline_abs, int32_t timer_id) {
-  GameRefState* n = gameref_upsert(key, GameRefKind::GameType);
+  GameRefState* n = gameref_get(key);
+  if (!n) n = gameref_upsert(key, GameRefKind::GameType);
   if (!n) return;
   GameRefTimer t;
   t.deadline = deadline_abs;
@@ -579,7 +583,8 @@ GameRefState* fullscreen_script_camera() {
     // Osd) after the scene camera. It exists for 3D widgets; those are drawn
     // as 2D. Taking it as the world camera looks past the car.
     if (GameRefState* parent = c->parent ? gameref_get(c->parent) : nullptr)
-      if (parent->class_name.find("Osd") != std::string::npos) continue;
+      if (parent->class_name.find("Osd") != std::string::npos ||
+          parent->class_name == "java.io.MouseCursor") continue;
     if (!found || c->cam_seq >= found->cam_seq) found = c;
   }
   return found;

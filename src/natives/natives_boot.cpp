@@ -46,19 +46,24 @@ std::string file_name_of(Object* file) {
   return it->second.v.o->str;
 }
 
-// Game-relative descendant path. Parent components and resolved escapes are
-// rejected, but legal file names containing two dots are not traversal.
-std::filesystem::path under_game(const std::string& root, std::string rel) {
+namespace {
+// Shared physical containment for file targets and enumeration directories.
+// Only a directory listing may address the game root itself.
+std::filesystem::path resolve_under_game(const std::string& root, std::string rel,
+                                        bool allow_root) {
   namespace fs = std::filesystem;
-  if (root.empty() || rel.empty() || rel.find('\0') != std::string::npos)
-    return {};
+  if (root.empty() || rel.find('\0') != std::string::npos) return {};
+  if (rel.empty() && !allow_root) return {};
   for (char& c : rel)
     if (c == '/') c = '\\';
   // Drive names and NTFS alternate streams are not game-relative files.
   if (rel.find(':') != std::string::npos) return {};
   while (!rel.empty() && (rel.front() == '\\' || rel.front() == '/'))
     rel.erase(rel.begin());
-  if (rel.empty()) return {};
+  if (rel.empty()) {
+    if (!allow_root) return {};
+    rel = ".";
+  }
   const fs::path relative(rel);
   for (const auto& component : relative)
     if (component == "..") return {};
@@ -76,8 +81,14 @@ std::filesystem::path under_game(const std::string& root, std::string rel) {
       return {};
   }
   // In particular, File.delete(".") must never address the game root.
-  if (child == check.end()) return {};
+  if (child == check.end() && !allow_root) return {};
   return check;
+}
+
+} // namespace
+
+std::filesystem::path under_game(const std::string& root, std::string rel) {
+  return resolve_under_game(root,std::move(rel),false);
 }
 
 void wr_u32(std::vector<uint8_t>& b, uint32_t v) {
@@ -168,6 +179,8 @@ void findfile_start(Jvm& jvm, Object* self, const std::string& pattern,
                     int32_t flags) {
   self->find_entries.clear();
   self->find_index = 0;
+  if (pattern.find('\0') != std::string::npos || pattern.find(':') != std::string::npos)
+    return;
   std::string pat = pattern;
   for (char& c : pat)
     if (c == '/') c = '\\';
@@ -180,9 +193,8 @@ void findfile_start(Jvm& jvm, Object* self, const std::string& pattern,
 
   namespace fs = std::filesystem;
   std::error_code ec;
-  fs::path base(jvm.game_root());
-  if (!dir.empty()) base /= dir;
-  if (!fs::is_directory(base, ec)) {
+  const fs::path base = resolve_under_game(jvm.game_root(),dir,true);
+  if (base.empty() || !fs::is_directory(base, ec)) {
     std::printf("[native] FindFile.first(%s, %d) -> 0 (no dir)\n",
                 pattern.c_str(), flags);
     return;
@@ -190,11 +202,15 @@ void findfile_start(Jvm& jvm, Object* self, const std::string& pattern,
   for (fs::directory_iterator it(base, ec), end; !ec && it != end;
        it.increment(ec)) {
     std::error_code ec2;
-    const bool is_dir = it->is_directory(ec2);
-    if (flags == 1 && is_dir) continue;   // FILES_ONLY
-    if (flags == 2 && !is_dir) continue;  // DIRS_ONLY
     const std::string name = it->path().filename().string();
     if (name == "." || name == "..") continue;
+    // Do not expose an escaping junction/symlink as a usable child either.
+    const auto child = dir.empty() ? name : dir + "\\" + name;
+    if (under_game(jvm.game_root(),child).empty()) continue;
+    const bool is_dir = it->is_directory(ec2);
+    if (ec2) continue;
+    if (flags == 1 && is_dir) continue;   // FILES_ONLY
+    if (flags == 2 && !is_dir) continue;  // DIRS_ONLY
     if (!findfile_glob(name, mask)) continue;
     self->find_entries.push_back(name);
   }

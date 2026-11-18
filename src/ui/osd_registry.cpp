@@ -215,6 +215,16 @@ bool osd_owner_modal(Object* owner) {
          (fit->second.v.i & 1) != 0;
 }
 
+int32_t osd_page_background_layer() {
+  int32_t layer = std::numeric_limits<int32_t>::max();
+  for (const auto& w : g_widgets) {
+    if (w.hidden || w.dead || w.disabled || !w.background ||
+        w.icon_path.empty() || !w.owner || osd_owner_modal(w.owner)) continue;
+    layer = std::min(layer, w.layer);
+  }
+  return layer;
+}
+
 int32_t osd_add_widget(OsdWidget w) {
   if (g_next_widget_id > static_cast<uint64_t>(INT32_MAX))
     throw std::runtime_error("OSD widget handle space exhausted");

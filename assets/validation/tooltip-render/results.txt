@@ -1,0 +1,8 @@
+Tooltip duplicate template rendering, 17 November 2026
+Real frontend.rpk rectangle template (0xd7) under cursor world, local read-only assets.
+Baseline d988359: tooltip_render 0 passed / 1 failed; registered UI rectangle still collected in 3D.
+Corrected: tooltip_render 1 passed / 0 failed.
+Visible, hidden and retired mapped UI rectangles excluded; ordinary mesh preserved.
+ui_lifetime passed; map_views 1 passed / 0 failed.
+Release x64 build succeeded after user closed the game.
+Pixel/gameplay validation pending. No successful screenshot claimed.

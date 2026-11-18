@@ -4,9 +4,9 @@ project(slrr_host LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR
-   (MSVC AND NOT CMAKE_CXX_COMPILER_ARCHITECTURE_ID STREQUAL "x64"))
-  message(FATAL_ERROR "Open SLRR requires Windows x64. Use -A x64 with Visual Studio.")
+if(NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR
+   NOT CMAKE_CXX_COMPILER_ARCHITECTURE_ID STREQUAL "x64")
+  message(FATAL_ERROR "Open SLRR requires Windows x64 with an MSVC-compatible compiler. Use -A x64 with Visual Studio 2022.")
 endif()
 
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake/CMakeLists.txt")
@@ -41,6 +41,7 @@ add_executable(slrr_host
   src/platform/host_music.cpp
   src/platform/host_game_options.cpp
   src/platform/host_cursor.cpp
+  src/platform/job_system.cpp
   src/platform/video_fmv.cpp
   src/platform/video_fmv_vlc.cpp
   src/natives/native_registry.cpp
@@ -145,13 +146,16 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake/cmake/bgfxToolUtils.
 
 set(SLRR_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders")
 file(MAKE_DIRECTORY "${SLRR_SHADER_OUT}")
-# Allow each architecture to use its own build tree with the same sources.
-if(NOT BGFX_DIR)
-  set(BGFX_DIR "${CMAKE_CURRENT_BINARY_DIR}/_deps/bgfx-src")
-endif()
-if(NOT BIMG_DIR)
-  set(BIMG_DIR "${CMAKE_CURRENT_BINARY_DIR}/_deps/bimg-src")
-endif()
+# bgfx.cmake resolves explicit directories, in-tree checkouts and FetchContent
+# in its own scope. Reuse those exact paths rather than guessing _deps names.
+foreach(_slrr_dep IN ITEMS BGFX BIMG)
+  get_directory_property(${_slrr_dep}_DIR
+    DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake"
+    DEFINITION ${_slrr_dep}_DIR)
+  if(NOT IS_DIRECTORY "${${_slrr_dep}_DIR}")
+    message(FATAL_ERROR "bgfx.cmake did not resolve a valid ${_slrr_dep}_DIR")
+  endif()
+endforeach()
 set(_bgfx_shader_inc "${BGFX_DIR}/src")
 
 # Use Dear ImGui and its renderer from the same bgfx checkout.
@@ -171,7 +175,7 @@ target_include_directories(slrr_host PRIVATE
 
 bgfx_compile_shaders(
   TYPE VERTEX
-  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh_inst.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_skin.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow_recv.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow_cast.sc"
+  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_osd_text.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh_inst.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_skin.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow_recv.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow_cast.sc"
   VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
   OUTPUT_DIR "${SLRR_SHADER_OUT}"
   INCLUDE_DIRS "${_bgfx_shader_inc}"
@@ -181,7 +185,7 @@ bgfx_compile_shaders(
 )
 bgfx_compile_shaders(
   TYPE FRAGMENT
-  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_white.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_shadow_recv.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_static_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_present.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_hiz.sc"
+  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_osd_text.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_white.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_shadow_recv.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_static_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_present.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_hiz.sc"
   VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
   OUTPUT_DIR "${SLRR_SHADER_OUT}"
   INCLUDE_DIRS "${_bgfx_shader_inc}"
@@ -208,7 +212,6 @@ target_include_directories(slrr_host PRIVATE
 )
 target_link_libraries(slrr_host PRIVATE bgfx bx bimg slrr_script_compiler)
 target_compile_features(slrr_host PRIVATE cxx_std_20)
-target_compile_definitions(slrr_host PRIVATE SLRR_HAS_LIBBGFX=1)
 message(STATUS "slrr_host: libbgfx + mesh shaders enabled")
 
 install(TARGETS slrr_host RUNTIME DESTINATION bin)

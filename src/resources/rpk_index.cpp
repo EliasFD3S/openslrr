@@ -1,4 +1,5 @@
 #include "slrr/rpk_index.hpp"
+#include "slrr/job_system.hpp"
 
 #include <cctype>
 #include <algorithm>
@@ -8,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <unordered_set>
 #include <vector>
 
 #ifdef _WIN32
@@ -139,12 +141,12 @@ bool RpkIndex::parse_rpak(const std::string& disk, RpkPack& output) const {
   if (!in) return false;
 
   if (sz < 16 || std::memcmp(buf.data(), "RPAK", 4) != 0) {
-    std::printf("[rpk] not RPAK: %s\n", disk.c_str());
+    jobs_printf("[rpk] not RPAK: %s\n", disk.c_str());
     return false;
   }
   const uint32_t version = rd_u32(buf.data() + 4);
   if (version != 0x200) {
-    std::printf("[rpk] bad version 0x%x %s\n", version, disk.c_str());
+    jobs_printf("[rpk] bad version 0x%x %s\n", version, disk.c_str());
     return false;
   }
   pack.version = version;
@@ -180,7 +182,7 @@ bool RpkIndex::parse_rpak(const std::string& disk, RpkPack& output) const {
   pack.entries.reserve(count);
   for (uint32_t i = 0; i < count; ++i) {
     if (off + 23 > table_end) {
-      std::printf("[rpk] TOC overrun entry %u %s\n", i, disk.c_str());
+      jobs_printf("[rpk] TOC overrun entry %u %s\n", i, disk.c_str());
       return false;
     }
     const uint8_t* e = buf.data() + off;
@@ -211,7 +213,7 @@ bool RpkIndex::parse_rpak(const std::string& disk, RpkPack& output) const {
     pack.entries.push_back(std::move(ent));
   }
 
-  std::printf("[rpk] parsed %s pack=%d deps=%zu entries=%zu\n",
+  jobs_printf("[rpk] parsed %s pack=%d deps=%zu entries=%zu\n",
               pack.path.c_str(), pack.pack_id, pack.deps.size(),
               pack.entries.size());
   output=std::move(pack);
@@ -227,6 +229,7 @@ int32_t RpkIndex::open_all() {
   std::error_code ec;
   if (root_.empty() || !fs::exists(root_, ec)) return 0;
   int32_t n = 0;
+  std::vector<std::string> paths;
   const fs::directory_options opt =
       fs::directory_options::skip_permission_denied;
   for (fs::recursive_directory_iterator it(fs::path(root_), opt, ec), end;
@@ -242,8 +245,34 @@ int32_t RpkIndex::open_all() {
     if (ext != ".rpk") continue;
     std::error_code rel_ec;
     fs::path rel = fs::relative(it->path(), fs::path(root_), rel_ec);
-    open_lib(rel_ec ? it->path().string() : rel.string());
+    paths.push_back(rel_ec ? it->path().string() : rel.string());
     ++n;
+  }
+  // Indexing reads each whole pack. Read them on the job pool, then number
+  // them in directory order as open_lib would.
+  std::vector<std::string> fresh;
+  std::unordered_set<std::string> keys;
+  for (const auto& path : paths) {
+    const std::string key = norm_key(path);
+    if (!by_path_.contains(key) && keys.insert(key).second) fresh.push_back(path);
+  }
+  std::vector<RpkPack> parsed(fresh.size());
+  std::vector<char> indexed(fresh.size());
+  for (size_t i = 0; i < fresh.size(); ++i) {
+    parsed[i].pack_id = next_id_ + static_cast<int32_t>(i);
+    parsed[i].path = fresh[i];
+  }
+  jobs_parallel_for(fresh.size(), [&](size_t i) {
+    indexed[i] = parse_rpak(resolve_disk_path(fresh[i]), parsed[i]);
+  });
+  if (!fresh.empty()) generation_ = ++g_index_generation;
+  for (size_t i = 0; i < fresh.size(); ++i) {
+    const int32_t id = next_id_++;
+    by_path_[norm_key(fresh[i])] = id;
+    if (static_cast<size_t>(id) >= packs_.size()) packs_.resize(id + 1);
+    packs_[static_cast<size_t>(id)] = std::move(parsed[i]);
+    std::printf(indexed[i] ? "[rpk] openLib %s -> %d\n" : "[rpk] openLib %s -> %d (no TOC)\n",
+                fresh[i].c_str(), id);
   }
   rpk_set_active(this);
   std::printf("[rpk] open_all %d files, packs=%d entries=%d\n", n, pack_count(),
@@ -656,7 +685,7 @@ std::vector<std::string> RpkIndex::textures_for_scx(
 
       std::vector<std::string> paths = resolve_tex_paths(pack_id, tex_refs);
       if (!paths.empty()) {
-        std::printf("[rpk] textures_for_scx %s -> %zu slots (pack %d entry "
+        jobs_printf("[rpk] textures_for_scx %s -> %zu slots (pack %d entry "
                     "0x%x)\n",
                     scx_path.c_str(), paths.size(), pack_id, ent.type_id);
         return paths;
@@ -728,7 +757,7 @@ RpkIndex::ModelRef RpkIndex::model_for_resource(int32_t pack_id,
   out.source = src;
   out.textures = resolve_tex(tex_refs);
   out.ok = true;
-  std::printf("[rpk] model 0x%x '%s' src=%s tex=%zu\n", out.type_id,
+  jobs_printf("[rpk] model 0x%x '%s' src=%s tex=%zu\n", out.type_id,
               out.alias.c_str(), out.source.c_str(), out.textures.size());
   return out;
 }

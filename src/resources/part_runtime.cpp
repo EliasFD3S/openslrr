@@ -32,6 +32,8 @@
 #include <memory>
 #include <mutex>
 #include <sstream>
+#include <stdexcept>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -176,7 +178,7 @@ struct Record {
   std::array<bool, 4> geometry_solved{};
   physics::VehicleDynamics dynamics;
   bool physics_ready = false, physics_dirty = true, physics_suspended = false;
-  bool physics_reported = false;
+  bool physics_reported = false, physics_fault_reported = false;
   int reported_contacts = -1, physics_status_lines = 0;
   void *physics_parent = nullptr;
   PartMatrix published_frame{};
@@ -213,6 +215,7 @@ std::unordered_map<Object *, LoosePanel> loose_panels;
 std::vector<Object *> settled_wheel_releases;
 // Script PhysicsRef bodies released by setStatic(0), keyed by their GameRef.
 struct FreeBody {
+  bool configured = false;
   int32_t live_id = 0;  // guards against a reused key
   physics::RigidBody body;
   PartMatrix carrier_frame{};
@@ -221,6 +224,7 @@ struct FreeBody {
   float pos[3] = {}, ypr[3] = {};  // last published pose; a change is setMatrix
 };
 std::unordered_map<void *, FreeBody> free_bodies;
+std::unordered_set<uint32_t> invalid_dynamic_types;
 int32_t controlled_vehicle = 0;
 
 struct DriverSeat {
@@ -1878,6 +1882,26 @@ std::vector<InstalledPart> part_installed_tree(Object *root) {
 }
 
 namespace {
+bool finite_frame(const PartMatrix& frame) {
+  return std::all_of(frame.begin(),frame.end(),[](float value){return std::isfinite(value);});
+}
+// Zero moments (no shaped body) keep the solid box of the bounds.
+bool initialize_loose_body(physics::RigidBody& body,double mass,
+                           physics::Vec3 lo,physics::Vec3 hi,physics::Vec3 center,
+                           const PartMatrix* frame,uint32_t resource,
+                           physics::Vec3 moments = {}) {
+  try {
+    auto candidate = body;
+    candidate.configure(mass,lo,hi,center,moments);
+    if (frame) candidate.set_frame(*frame);
+    body = candidate;
+    return true;
+  } catch (const std::exception& error) {
+    std::fprintf(stderr,"[phys] rejected loose body type=0x%x: %s\n",resource,error.what());
+    return false;
+  }
+}
+
 bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
   auto unavailable = [&](const char *reason) {
     if (!rec.physics_reported) {
@@ -1935,9 +1959,23 @@ bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
   double* axes[3] = {&moments.x, &moments.y, &moments.z};
   for (int axis = 0; axis < 3; ++axis)
     *axes[axis] = inertia[axis] > 0 ? std::max<double>(inertia[axis], box[axis] * .3) : 0;
-  rec.dynamics.body.configure(mass, lo, hi, {com[0], com[1], com[2]}, moments);
+  // Configure a candidate: a bad bound/frame cannot poison the existing body.
+  auto candidate = rec.dynamics.body;
+  try {
+    candidate.configure(mass, lo, hi, {com[0], com[1], com[2]}, moments);
+    candidate.set_frame(frame);
+  } catch (const std::exception& error) {
+    rec.physics_ready = false;
+    rec.physics_suspended = true;
+    rec.physics_pending_placement = false;
+    if (!rec.physics_fault_reported) {
+      std::fprintf(stderr,"[phys] suspended chassis type=0x%x: %s\n",rec.state.resource,error.what());
+      rec.physics_fault_reported = true;
+    }
+    return false;
+  }
   const bool held = rec.physics_ready;
-  rec.dynamics.body.set_frame(frame);
+  rec.dynamics.body = candidate;
   if (held) {
     rec.dynamics.body.velocity = velocity;
     rec.dynamics.body.set_omega(omega);
@@ -3271,9 +3309,11 @@ void detach_panel(Object* part, Record& rec, Object* chassis, Record& vehicle) {
   auto& loose = loose_panels[part];
   loose.vehicle = gameref_make_live(chassis);
   auto& body = loose.body;
-  // Zero moments (no shaped body) keep the box of the bounds.
-  body.configure(mass, lo - padding, hi + padding, center, moments);
-  body.set_frame(frame);
+  if (!initialize_loose_body(body, mass, lo - padding, hi + padding, center, &frame,
+                             rec.state.resource, moments)) {
+    loose_panels.erase(part);
+    return;
+  }
   const auto& carrier = vehicle.dynamics.body;
   loose.carrier_frame = carrier.frame();
   body.velocity = carrier.point_velocity(body.position);
@@ -3415,7 +3455,8 @@ unsigned map_object_quiet_ticks(const physics::RigidBody& body, bool free, unsig
 Object* part_add_dynamic_native(const PartConfig& config,
                                 const std::vector<PartRender>& renders,
                                 const PartMatrix& world, void* parent, int32_t seed) {
-  if (!runtime || !parent) return nullptr;
+  if (!runtime || !parent || !finite_frame(world) ||
+      invalid_dynamic_types.contains(config.resource)) return nullptr;
   // Mass and centre from the collision bodies; nocollision bodies do not move
   // the object.
   double mass = 0.0;
@@ -3494,7 +3535,12 @@ Object* part_add_dynamic_native(const PartConfig& config,
     return nullptr;
   }
   auto& loose = loose_panels[node];
-  loose.body.configure(mass, lo, hi, center / mass);
+  if (!initialize_loose_body(loose.body,mass,lo,hi,center/mass,nullptr,config.resource)) {
+    invalid_dynamic_types.insert(config.resource);
+    loose_panels.erase(node);
+    part_destroy(node);
+    return nullptr;
+  }
   loose.render_offsets = std::move(offsets);
   loose.vehicle = controlled_vehicle;
   loose.quiet_ticks = physics::VehicleDynamics::update_frequency / 2;
@@ -3535,14 +3581,18 @@ void advance_loose_panels() {
   using physics::Vec3;
   std::vector<std::pair<Object*, bool>> settled;  // keep the current pose?
   for (auto it = loose_panels.begin(); it != loose_panels.end();) {
-    auto* part = it->first;
-    auto& loose = it->second;
+    auto current = it++;
+    auto* part = current->first;
+    auto& loose = current->second;
     auto* node = gameref_get(part);
     auto* rec = record(part);
     const bool native_dynamic = rec && rec->config->native_kind == "native_dynamic";
+    Record* collision_vehicle = nullptr;
+    physics::RigidBody carrier_before;
+    try {
     PartMatrix parent_frame;
     if (!node || !node->parent) {
-      it = loose_panels.erase(it);
+      loose_panels.erase(current);
       part_destroy(part);
       continue;
     }
@@ -3555,7 +3605,7 @@ void advance_loose_panels() {
         const auto frame = loose.body.frame();
         scene_instances_settle_dynamic(part, frame.data());
       }
-      it = loose_panels.erase(it);
+      loose_panels.erase(current);
       part_destroy(part);
       continue;
     }
@@ -3563,18 +3613,18 @@ void advance_loose_panels() {
       loose.vehicle = controlled_vehicle;
     auto* owner = gameref_find_live(loose.vehicle);
     if (native_dynamic && (!owner || owner->parent != node->parent)) {
-      ++it;
       continue;
     }
     if (!owner) {
-      it = loose_panels.erase(it);
+      loose_panels.erase(current);
       part_destroy(part);
       continue;
     }
-    ++it;
     auto* chassis = static_cast<Object*>(owner->key);
     auto* vehicle = record(chassis);
     if (!vehicle || !vehicle->physics_ready) continue;
+    collision_vehicle = vehicle;
+    carrier_before = vehicle->dynamics.body;
     if (native_dynamic && !rec->physics_ready) {
       // The first active tick supplies the real ground-shell transform. The
       // placement was created before scene_instances_select was guaranteed.
@@ -3627,6 +3677,7 @@ void advance_loose_panels() {
     }
     if (loose.quiet_ticks >= rest_ticks) body.velocity = body.momentum = {};
     const auto local = part_matrix_multiply(part_matrix_inverse_rigid(parent_frame), body.frame());
+    if (!finite_frame(local)) throw std::runtime_error("non-finite loose-body frame");
     if (native_dynamic) {
       for (size_t i = 0; i < rec->renders.size() && i < loose.render_offsets.size(); ++i)
         if (auto* state = gameref_get(rec->renders[i])) {
@@ -3635,6 +3686,13 @@ void advance_loose_panels() {
         }
     } else {
       std::copy(local.begin(), local.end(), node->local_matrix);
+    }
+    } catch (const std::exception& error) {
+      if (collision_vehicle) collision_vehicle->dynamics.body = carrier_before;
+      std::fprintf(stderr,"[phys] removed loose body type=0x%x: %s\n",rec?rec->state.resource:0,error.what());
+      if (native_dynamic) scene_instances_settle_dynamic(part,nullptr);
+      loose_panels.erase(part);
+      part_destroy(part);
     }
   }
   for (const auto& [part, keep_pose] : settled) {
@@ -3759,17 +3817,27 @@ void advance_free_bodies() {
       continue;
     live.insert(key);
     auto& free = free_bodies[key];
+    // Keep the published pose until the complete step has succeeded.
+    const auto saved_pos = free.configured
+        ? std::array{free.pos[0],free.pos[1],free.pos[2]}
+        : std::array{state->pos[0],state->pos[1],state->pos[2]};
+    const auto saved_ypr = free.configured
+        ? std::array{free.ypr[0],free.ypr[1],free.ypr[2]}
+        : std::array{state->ypr[0],state->ypr[1],state->ypr[2]};
+    const auto carrier_before = vehicle ? vehicle->dynamics.body : physics::RigidBody{};
+    try {
     const bool moved = !std::equal(free.pos, free.pos + 3, state->pos) ||
                        !std::equal(free.ypr, free.ypr + 3, state->ypr);
-    if (free.live_id != state->live_id || moved) {
+    if (!free.configured || free.live_id != state->live_id || moved) {
       // New body, reused key or setMatrix: start at rest at the script pose.
-      if (free.live_id != state->live_id) {
+      if (!free.configured || free.live_id != state->live_id) {
         free = FreeBody{};
         free.live_id = state->live_id;
         if (!configure_free_body(*state, free.body)) {
           gameref_set_physics_simulated(key, false);
           continue;
         }
+        free.configured = true;
       }
       float local[16];
       PartMatrix script_local;
@@ -3807,7 +3875,24 @@ void advance_free_bodies() {
     free.quiet_ticks = map_object_quiet_ticks(body, !carrier_contact && support.touching,
                                               free.quiet_ticks, free.rest_anchor);
     if (free.quiet_ticks >= rest_ticks) body.velocity = body.momentum = {};
+    const auto frame = body.frame();
+    if (!std::all_of(frame.begin(),frame.end(),[](float v){return std::isfinite(v);}))
+      throw std::runtime_error("non-finite free-body frame");
     publish_free_body(*state, free, parent_frame);
+    } catch (const std::exception& error) {
+      if (vehicle) vehicle->dynamics.body = carrier_before;
+      std::fprintf(stderr,"[phys] disabled PhysicsRef id=%d: %s\n",state->live_id,error.what());
+      state->matrix_override = false;
+      if (!std::all_of(saved_pos.begin(),saved_pos.end(),[](float v){return std::isfinite(v);}) ||
+          !std::all_of(saved_ypr.begin(),saved_ypr.end(),[](float v){return std::isfinite(v);}))
+        state->empty = true; // No finite pose exists to render; never publish NaNs.
+      std::copy(saved_pos.begin(),saved_pos.end(),state->pos);
+      std::copy(saved_ypr.begin(),saved_ypr.end(),state->ypr);
+      std::fill(std::begin(state->vel),std::end(state->vel),0.f);
+      std::fill(std::begin(state->angular_vel),std::end(state->angular_vel),0.f);
+      gameref_set_physics_simulated(key,false);
+      free_bodies.erase(key);
+    }
   }
   std::erase_if(free_bodies, [&](const auto& entry) { return !live.contains(entry.first); });
 }
@@ -3842,6 +3927,10 @@ void advance_chassis_tick() {
     auto *node = gameref_get(chassis);
     if (!node)
       continue;
+    const auto saved_body = rec.dynamics.body;
+    const auto saved_local = node_local(chassis);
+    const bool was_ready = rec.physics_ready;
+    try {
     PartMatrix frame, parent = eye_matrix();
     if (!scene_instances_script_matrix(chassis, frame.data()))
       continue;
@@ -3849,6 +3938,8 @@ void advance_chassis_tick() {
         !scene_instances_script_matrix(node->parent, parent.data()))
       continue;
     const auto local = node_local(chassis);
+    if (!finite_frame(frame) || !finite_frame(parent) || !finite_frame(local))
+      throw std::runtime_error("non-finite chassis frame");
     bool external = node->parent != rec.physics_parent;
     for (size_t i = 0; i < 16; ++i)
       external =
@@ -3907,6 +3998,8 @@ void advance_chassis_tick() {
       rec.mileage += static_cast<float>(std::hypot(delta.x, delta.z) * .1);
     }
     rec.engine_running = rec.dynamics.drive.torque && rec.dynamics.engine_running;
+    if (!finite_frame(rec.dynamics.body.frame()))
+      throw std::runtime_error("non-finite chassis output");
     if (steps) {
       dynamics_sync(chassis, rec, parent);
       rec.render_blend = true;
@@ -3949,6 +4042,41 @@ void advance_chassis_tick() {
           rec.dynamics.body.momentum = {};
         }
       }
+    }
+    } catch (const std::exception& error) {
+      if (!rec.physics_fault_reported) {
+        std::fprintf(stderr,"[phys] suspended chassis type=0x%x: %s\n",rec.state.resource,error.what());
+        rec.physics_fault_reported = true;
+      }
+      rec.dynamics.body = saved_body;
+      rec.dynamics.body.velocity = rec.dynamics.body.momentum = {};
+      rec.dynamics.reset_clock();
+      rec.dynamics.reset_drive();
+      rec.dynamics.release_wheels();
+      rec.physics_ready = false;
+      rec.physics_suspended = true;
+      rec.physics_pending_placement = false;
+      rec.engine_running = rec.render_blend = false;
+      const auto& safe = finite_frame(saved_local) ? saved_local : rec.published_frame;
+      if (finite_frame(saved_local) || (was_ready && finite_frame(safe))) {
+        std::copy(safe.begin(),safe.end(),node->local_matrix);
+        std::copy(safe.begin()+12,safe.begin()+15,node->pos);
+        const double pitch = std::asin(std::clamp(-double(safe[9]),-1.0,1.0));
+        node->ypr[1] = static_cast<float>(pitch);
+        if (std::fabs(std::cos(pitch)) > 1e-6) {
+          node->ypr[0] = std::atan2(safe[8],safe[10]);
+          node->ypr[2] = std::atan2(safe[1],safe[5]);
+        } else {
+          node->ypr[0] = std::atan2(-safe[2],safe[0]);
+          node->ypr[2] = 0;
+        }
+        node->matrix_override = true;
+      } else {
+        node->empty = true; // No valid pose has ever been published for this body.
+      }
+      node->render_pose = false;
+      std::fill(std::begin(node->vel),std::end(node->vel),0.f);
+      std::fill(std::begin(node->angular_vel),std::end(node->angular_vel),0.f);
     }
   }
   // After the records loop: creating a loose body inserts into `records`.
@@ -5348,6 +5476,8 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   dyno_clear_sessions();
   loose_panels.clear();
   settled_wheel_releases.clear();
+  free_bodies.clear();
+  invalid_dynamic_types.clear();
   controlled_vehicle = 0;
   hud_preview = {};
   hud_preview_directory.clear();
@@ -6240,8 +6370,20 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
         return Value::make_void();
       });
   auto wheel = [&](const char *name, const char *signature, NativeFn fn) {
+    const bool setter = std::string_view(name).starts_with("set");
     jvm.natives().register_method("java.game.parts.WheelRef", name, signature,
-                                  std::move(fn));
+      [setter,fn=std::move(fn)](Object* self,const std::vector<Value>& args) {
+        if (setter) for (const auto& arg:args) {
+          if (arg.tag==ValueTag::Float && !std::isfinite(arg.v.f)) return Value::make_void();
+          if (arg.tag==ValueTag::Obj && arg.v.o)
+            for (const char* field:{"x","y","z","p","r"}) {
+              const auto found=arg.v.o->fields.find(field);
+              if(found!=arg.v.o->fields.end() && found->second.tag==ValueTag::Float &&
+                 !std::isfinite(found->second.v.f)) return Value::make_void();
+            }
+        }
+        return fn(self,args);
+      });
   };
   wheel("finalize", "()V", [](Object *, const std::vector<Value> &) {
     return Value::make_void();

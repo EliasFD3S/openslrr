@@ -1,0 +1,16 @@
+Working fix
+[phys] disabled PhysicsRef id=0: invalid rigid body mass/bounds
+[phys] disabled PhysicsRef id=0: invalid rigid frame
+PASS non-finite GameRef pose rejected atomically
+PASS malformed body disabled locally; healthy body keeps advancing
+PASS invalid free-body frame stays at last finite published pose
+[phys] suspended chassis type=0x10008: invalid rigid body mass/bounds
+PASS degenerate chassis bounds suspended locally while a healthy chassis keeps ticking
+[phys] suspended chassis type=0x10006: non-finite chassis frame
+PASS corrupted chassis pose restored and suspended without repeated simulation
+PASS wheel scalar and vector setters reject invalid updates atomically
+[phys] suspended chassis type=0x10006: non-finite chassis output
+[phys] rejected loose body type=0x12345678: invalid rigid body mass/bounds
+[physics_recovery] 8 passed, 0 failed
+PASS numerical overflow contained; native pump and healthy chassis continue; valid placement/start retries successfully
+PASS invalid dynamic-native creation cleans its partial state and suppresses repeated retries

@@ -5,6 +5,9 @@ This guide describes the SLRR contract, subsystem responsibilities, and
 compatibility pitfalls. Then read the specialized documentation for your task:
 
 - VM, threads, events, and dialogs: [SCRIPT_RUNTIME.md](docs/SCRIPT_RUNTIME.md).
+- Host threads, the worker pool and how to add parallel work:
+  [KNOWLEDGE_BASE.md §5.10](docs/KNOWLEDGE_BASE.md#510-threads-and-the-worker-pool)
+  and [ENGINE_CONTRACT.md §6](docs/ENGINE_CONTRACT.md#host-threads-and-the-worker-pool).
 - Object lifetime: [VM_GC.md](docs/VM_GC.md).
 - Script compilation: [SCRIPT_COMPILER.md](docs/SCRIPT_COMPILER.md).
 - Bindings, no-ops, and limitations: [NATIVE_AUDIT.md](docs/NATIVE_AUDIT.md).

@@ -3,6 +3,8 @@
 #include "slrr/scene_collision.hpp"
 #include <limits>
 #include "slrr/gameref.hpp"
+#include "slrr/job_system.hpp"
+#include "slrr/object.hpp"
 #include "slrr/part_config.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/rpk_index.hpp"
@@ -11,7 +13,6 @@
 #include "slrr/vehicle_dynamics.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <charconv>
 #include <cctype>
 #include <cmath>
@@ -21,7 +22,6 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -166,11 +166,11 @@ std::unordered_map<void *, FloorMesh> g_floor_meshes;
 bool g_floor_prepared = false;
 uint64_t g_floor_builds = 0;
 uint64_t g_floor_revision = 1;
-void index_floor(StaticMesh &mesh) {
-  // Static garage triangles are indexed once in script space. Physics asks
-  // for several support samples per 240 Hz tick; rescanning the whole shell
-  // for every wheel/corner is unnecessary.
-  for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+using FloorCells = std::unordered_map<uint64_t, std::vector<uint32_t>>;
+// Indexes triangles [first, last) of the mesh into cells and large.
+void index_triangles(const StaticMesh& mesh, size_t first, size_t last, FloorCells& cells,
+                     std::vector<uint32_t>& large) {
+  for (size_t i = first * 3; i + 2 < mesh.indices.size() && i < last * 3; i += 3) {
     float min_x = 0, max_x = 0, min_z = 0, max_z = 0;
     bool valid = true;
     for (int k = 0; k < 3; ++k) {
@@ -200,21 +200,62 @@ void index_floor(StaticMesh &mesh) {
     const int32_t x0 = cell_coordinate(min_x, mesh), x1 = cell_coordinate(max_x, mesh);
     const int32_t z0 = cell_coordinate(min_z, mesh), z1 = cell_coordinate(max_z, mesh);
     if ((int64_t(x1) - x0 + 1) * (int64_t(z1) - z0 + 1) > 4096) {
-      mesh.large_triangles.insert(mesh.large_triangles.end(),
-                                  mesh.indices.begin() + i,
-                                  mesh.indices.begin() + i + 3);
+      large.insert(large.end(), mesh.indices.begin() + i, mesh.indices.begin() + i + 3);
       continue;
     }
     for (int32_t x = x0; x <= x1; ++x)
       for (int32_t z = z0; z <= z1; ++z) {
-        auto &cell = mesh.cells[floor_cell(x, z)];
+        auto &cell = cells[floor_cell(x, z)];
         cell.insert(cell.end(), mesh.indices.begin() + i,
                     mesh.indices.begin() + i + 3);
       }
   }
 }
 
-StaticMesh bake_static_mesh(const ScxGeometry& geo, const PartMatrix& matrix) {
+// From this size a mesh is indexed on the job pool (a map's merged
+// collision has hundreds of thousands of triangles).
+constexpr size_t kPoolFloorTriangles = 32768;
+
+bool pool_floor_index(const StaticMesh& mesh) {
+  return mesh.indices.size() / 3 >= kPoolFloorTriangles;
+}
+
+void index_floor(StaticMesh &mesh) {
+  // Static garage triangles are indexed once in script space. Physics asks
+  // for several support samples per 240 Hz tick; rescanning the whole shell
+  // for every wheel/corner is unnecessary.
+  const size_t triangles = mesh.indices.size() / 3;
+  const size_t workers = pool_floor_index(mesh) && !jobs_inside() ? jobs_concurrency() : 1;
+  if (workers < 2) {
+    index_triangles(mesh, 0, triangles, mesh.cells, mesh.large_triangles);
+    return;
+  }
+  // Each job indexes a contiguous run of triangles. Appending the runs in
+  // order gives every cell the triangle order of a serial pass.
+  struct Run {
+    FloorCells cells;
+    std::vector<uint32_t> large;
+  };
+  std::vector<Run> runs(std::min(workers * 2, triangles / 4096 + 1));
+  jobs_parallel_for(runs.size(), [&](size_t r) {
+    index_triangles(mesh, triangles * r / runs.size(), triangles * (r + 1) / runs.size(),
+                    runs[r].cells, runs[r].large);
+  });
+  for (auto& run : runs) {
+    for (auto& [key, list] : run.cells) {
+      auto& cell = mesh.cells[key];
+      if (cell.empty())
+        cell = std::move(list);
+      else
+        cell.insert(cell.end(), list.begin(), list.end());
+    }
+    mesh.large_triangles.insert(mesh.large_triangles.end(), run.large.begin(), run.large.end());
+  }
+}
+
+// index = false leaves the cells empty, for a caller that indexes later.
+StaticMesh bake_static_mesh(const ScxGeometry& geo, const PartMatrix& matrix,
+                            bool index = true) {
   StaticMesh mesh;
   mesh.scale = 1.f;
   if (geo.indices.size() > 100000) mesh.cell_size = 8.f;
@@ -228,11 +269,12 @@ StaticMesh bake_static_mesh(const ScxGeometry& geo, const PartMatrix& matrix) {
     mesh.positions[i + 1] = matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13];
     mesh.positions[i + 2] = matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14];
   }
-  index_floor(mesh);
+  if (index) index_floor(mesh);
   return mesh;
 }
 
-StaticMesh transform_static_mesh(const StaticMesh& source, const PartMatrix& matrix) {
+StaticMesh transform_static_mesh(const StaticMesh& source, const PartMatrix& matrix,
+                                 bool index = true) {
   StaticMesh mesh;
   mesh.scale = 1.f;
   mesh.cell_size = source.cell_size;
@@ -246,7 +288,7 @@ StaticMesh transform_static_mesh(const StaticMesh& source, const PartMatrix& mat
     mesh.positions[i + 1] = matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13];
     mesh.positions[i + 2] = matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14];
   }
-  index_floor(mesh);
+  if (index) index_floor(mesh);
   return mesh;
 }
 
@@ -254,14 +296,26 @@ void merge_static_meshes(std::vector<StaticMesh>& meshes) {
   if (meshes.size() < 2) return;
   StaticMesh combined;
   combined.scale = 1.f;
-  for (const auto& source : meshes) {
-    const auto first = static_cast<uint32_t>(combined.positions.size() / 3);
-    combined.positions.reserve(combined.positions.size() + source.positions.size());
-    for (float value : source.positions)
-      combined.positions.push_back(value * source.scale);
-    combined.indices.reserve(combined.indices.size() + source.indices.size());
-    for (uint32_t index : source.indices) combined.indices.push_back(first + index);
+  // Size the buffers once (growing them by one mesh at a time copied the
+  // whole buffer per placement: 12.5 s of a Valo City load), then copy each
+  // mesh to its own range on the job pool.
+  std::vector<size_t> position_at(meshes.size() + 1), index_at(meshes.size() + 1);
+  for (size_t m = 0; m < meshes.size(); ++m) {
+    position_at[m + 1] = position_at[m] + meshes[m].positions.size();
+    index_at[m + 1] = index_at[m] + meshes[m].indices.size();
   }
+  combined.positions.resize(position_at.back());
+  combined.indices.resize(index_at.back());
+  jobs_parallel_for(meshes.size(), [&](size_t m) {
+    const auto& source = meshes[m];
+    const auto first = static_cast<uint32_t>(position_at[m] / 3);
+    std::transform(source.positions.begin(), source.positions.end(),
+                   combined.positions.begin() + static_cast<std::ptrdiff_t>(position_at[m]),
+                   [scale = source.scale](float value) { return value * scale; });
+    std::transform(source.indices.begin(), source.indices.end(),
+                   combined.indices.begin() + static_cast<std::ptrdiff_t>(index_at[m]),
+                   [first](uint32_t index) { return first + index; });
+  });
   if (combined.indices.size() > 100000) combined.cell_size = 8.f;
   index_floor(combined);
   meshes.clear();
@@ -365,7 +419,7 @@ std::shared_ptr<const ScxGeometry> load_geometry(const RpkIndex& resources, uint
         mesh->textures = std::move(model.textures);
         scx_resolve_baked_lightmaps(*mesh);
         result = std::move(mesh);
-        std::printf("[scene] resource=0x%x source=%s vertices=%d\n", id,
+        jobs_printf("[scene] resource=0x%x source=%s vertices=%d\n", id,
                     path.string().c_str(), result->info.vertices);
       }
     }
@@ -381,31 +435,17 @@ std::shared_ptr<const ScxGeometry> geometry(uint32_t id) {
   return mesh;
 }
 
-void preload_ground_meshes(const std::vector<uint32_t>& resources) {
+void preload_meshes(const std::vector<uint32_t>& resources) {
   std::vector<uint32_t> missing;
   for (const auto id : resources)
     if (!g_meshes.contains(id) && !g_overrides.contains(id)) missing.push_back(id);
   if (missing.empty()) return;
   std::vector<std::shared_ptr<const ScxGeometry>> decoded(missing.size());
-  std::atomic_size_t next{0};
   const auto& index = *g_resources;
-  const auto parse = [&] {
-    for (size_t job = next.fetch_add(1); job < missing.size(); job = next.fetch_add(1))
-      decoded[job] = load_geometry(index, missing[job]);
-  };
   // Workers only read assets. Publish the completed cache on the host thread,
   // while the loading screen is still up.
-  {
-    std::vector<std::jthread> workers;
-    const auto count = std::min<size_t>({missing.size(), 4u,
-        std::max(1u, std::thread::hardware_concurrency())});
-    try {
-      for (size_t i = 1; i < count; ++i) workers.emplace_back(parse);
-    } catch (const std::system_error&) {
-      // The calling thread can finish the queue if a worker cannot start.
-    }
-    parse();
-  }
+  jobs_parallel_for(missing.size(),
+                    [&](size_t job) { decoded[job] = load_geometry(index, missing[job]); });
   for (size_t i = 0; i < missing.size(); ++i)
     g_meshes.emplace(missing[i], std::move(decoded[i]));
 }
@@ -732,7 +772,7 @@ read_ground_materials(const std::filesystem::path &path) {
 
 void scene_instances_preload(const std::vector<uint32_t>& resources) {
   if (!g_resources || resources.empty()) return;
-  preload_ground_meshes(resources);
+  preload_meshes(resources);
 }
 
 void scene_instances_set_resources(const RpkIndex *resources) {
@@ -1201,10 +1241,21 @@ void scene_instances_prepare_physics() {
   g_script_collision_shapes.clear();
   std::unordered_set<void *> active;
   std::unordered_set<void *> active_ground;
+  // Moved or new collision is rebuilt after the walk, on the job pool: each
+  // rebuild only reads its source mesh and writes its own cache slot.
+  struct MeshRebuild {
+    StaticMesh* out;
+    const StaticMesh* source;    // a map's merged prop collision, or
+    const ScxGeometry* geometry; // a render node's mesh
+    const PartMatrix* matrix;
+  };
+  std::vector<MeshRebuild> rebuilds;
+  std::vector<std::pair<GroundCollisionWorld*, const GroundPropMap*>> rebuilt_grounds;
   if (g_world)
     for (auto *n : render_nodes_in_world(g_world, true)) {
       if (!n || n->empty || n->sky_render || n->vehicle_material || n->line_geometry ||
-          n->dynamic_native || n->physics_simulated)
+          n->dynamic_native || n->physics_simulated ||
+          n->trigger_shape != TriggerShape::None)
         continue;
       // A skinned character is not landscape. Its bind mesh was becoming a
       // solid obstacle, offset from the drawn body, and it destroyed the car.
@@ -1213,6 +1264,13 @@ void scene_instances_prepare_physics() {
       if (!chain_matrix(n->key, g_world, m.data(), false))
         continue;
       const auto id = static_cast<uint32_t>(n->type_id);
+      // RenderRef creates a visual, not a physics body. Ground shells and
+      // explicitly registered collision meshes retain their collision source.
+      if (n->kind == GameRefKind::RenderRef && !n->collision_active &&
+          n->physics_shape == PhysicsShape::None &&
+          g_ground_props.find(id) == g_ground_props.end() &&
+          g_collision_overrides.find(id) == g_collision_overrides.end())
+        continue;
       if (n->kind == GameRefKind::RenderRef) {
         const auto ground = g_ground_props.find(id);
         if (ground != g_ground_props.end()) {
@@ -1223,48 +1281,11 @@ void scene_instances_prepare_physics() {
           if (source_changed || cached.matrix != m) {
             cached.matrix = m;
             cached.inverse = part_matrix_inverse_rigid(m);
-            cached.meshes.clear();
-            cached.meshes.reserve(ground->second.collision_meshes.size());
-            for (const auto& mesh : ground->second.collision_meshes)
-              cached.meshes.push_back(transform_static_mesh(mesh, m));
-            cached.has_bounds = false;
-            for (const auto& mesh : cached.meshes) {
-              for (size_t i = 0; i + 2 < mesh.positions.size(); i += 3) {
-                for (int axis = 0; axis < 3; ++axis) {
-                  const float value = mesh.positions[i + axis] * mesh.scale;
-                  if (!cached.has_bounds) {
-                    cached.bounds_min[axis] = cached.bounds_max[axis] = value;
-                  } else {
-                    cached.bounds_min[axis] = std::min(cached.bounds_min[axis], value);
-                    cached.bounds_max[axis] = std::max(cached.bounds_max[axis], value);
-                  }
-                }
-                cached.has_bounds = true;
-              }
-            }
-            // Coarse sphere meshes can be smaller than their analytic shape.
-            // Union exact primitive bounds before using the shell AABB as a
-            // conservative rejection test.
-            if (const auto analytic = ground->second.collision_shapes.bounds()) {
-              for (unsigned corners = 0; corners < 8; ++corners) {
-                const double x = (corners & 1) ? analytic->maximum.x : analytic->minimum.x;
-                const double y = (corners & 2) ? analytic->maximum.y : analytic->minimum.y;
-                const double z = (corners & 4) ? analytic->maximum.z : analytic->minimum.z;
-                const float world[3] = {
-                    static_cast<float>(m[0] * x + m[4] * y + m[8] * z + m[12]),
-                    static_cast<float>(m[1] * x + m[5] * y + m[9] * z + m[13]),
-                    static_cast<float>(m[2] * x + m[6] * y + m[10] * z + m[14])};
-                for (int axis = 0; axis < 3; ++axis) {
-                  if (!cached.has_bounds) {
-                    cached.bounds_min[axis] = cached.bounds_max[axis] = world[axis];
-                  } else {
-                    cached.bounds_min[axis] = std::min(cached.bounds_min[axis], world[axis]);
-                    cached.bounds_max[axis] = std::max(cached.bounds_max[axis], world[axis]);
-                  }
-                }
-                cached.has_bounds = true;
-              }
-            }
+            cached.meshes.assign(ground->second.collision_meshes.size(), {});
+            for (size_t k = 0; k < cached.meshes.size(); ++k)
+              rebuilds.push_back({&cached.meshes[k], &ground->second.collision_meshes[k],
+                                  nullptr, &cached.matrix});
+            rebuilt_grounds.emplace_back(&cached, &ground->second);
             ++g_floor_builds;
             ++g_floor_revision;
           }
@@ -1304,7 +1325,7 @@ void scene_instances_prepare_physics() {
       if (cached.source != geo || cached.matrix != m) {
         cached.source = geo;
         cached.matrix = m;
-        cached.mesh = bake_static_mesh(*geo, m);
+        rebuilds.push_back({&cached.mesh, nullptr, geo.get(), &cached.matrix});
         ++g_floor_builds;
         ++g_floor_revision;
       }
@@ -1316,6 +1337,57 @@ void scene_instances_prepare_physics() {
         parent = node ? node->parent : nullptr;
       }
     }
+  jobs_parallel_for(rebuilds.size(), [&](size_t i) {
+    const auto& task = rebuilds[i];
+    *task.out = task.geometry ? bake_static_mesh(*task.geometry, *task.matrix, false)
+                              : transform_static_mesh(*task.source, *task.matrix, false);
+    if (!pool_floor_index(*task.out)) index_floor(*task.out);
+  });
+  // A large mesh is indexed after the batch, one at a time across the pool.
+  for (const auto& task : rebuilds)
+    if (pool_floor_index(*task.out)) index_floor(*task.out);
+  for (const auto& [rebuilt, source] : rebuilt_grounds) {
+    auto& cached = *rebuilt;
+    const auto& m = cached.matrix;
+    cached.has_bounds = false;
+    for (const auto& mesh : cached.meshes) {
+      for (size_t i = 0; i + 2 < mesh.positions.size(); i += 3) {
+        for (int axis = 0; axis < 3; ++axis) {
+          const float value = mesh.positions[i + axis] * mesh.scale;
+          if (!cached.has_bounds) {
+            cached.bounds_min[axis] = cached.bounds_max[axis] = value;
+          } else {
+            cached.bounds_min[axis] = std::min(cached.bounds_min[axis], value);
+            cached.bounds_max[axis] = std::max(cached.bounds_max[axis], value);
+          }
+        }
+        cached.has_bounds = true;
+      }
+    }
+    // Coarse sphere meshes can be smaller than their analytic shape.
+    // Union exact primitive bounds before using the shell AABB as a
+    // conservative rejection test.
+    if (const auto analytic = source->collision_shapes.bounds()) {
+      for (unsigned corners = 0; corners < 8; ++corners) {
+        const double x = (corners & 1) ? analytic->maximum.x : analytic->minimum.x;
+        const double y = (corners & 2) ? analytic->maximum.y : analytic->minimum.y;
+        const double z = (corners & 4) ? analytic->maximum.z : analytic->minimum.z;
+        const float world[3] = {
+            static_cast<float>(m[0] * x + m[4] * y + m[8] * z + m[12]),
+            static_cast<float>(m[1] * x + m[5] * y + m[9] * z + m[13]),
+            static_cast<float>(m[2] * x + m[6] * y + m[10] * z + m[14])};
+        for (int axis = 0; axis < 3; ++axis) {
+          if (!cached.has_bounds) {
+            cached.bounds_min[axis] = cached.bounds_max[axis] = world[axis];
+          } else {
+            cached.bounds_min[axis] = std::min(cached.bounds_min[axis], world[axis]);
+            cached.bounds_max[axis] = std::max(cached.bounds_max[axis], world[axis]);
+          }
+        }
+        cached.has_bounds = true;
+      }
+    }
+  }
   for (auto it = g_floor_meshes.begin(); it != g_floor_meshes.end();)
     if (!active.count(it->first)) {
       ++g_floor_revision;
@@ -1785,7 +1857,40 @@ std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
   if (!g_resources || !root)
     return out;
   const auto lighting=scene_instances_light(root);
-  for (auto *n : render_nodes_in_world(root)) {
+  // Rectangle.setMatrix already projected this instance into the 2D OSD.
+  // Cursor/OSD cameras must not draw the unscaled template mesh again.
+  // Keep hidden/retired UI rectangles out too: their visibility is owned
+  // by the OSD registry, not by the surviving resource instance.
+  const auto osd_rectangle = [](const GameRefState* n) {
+    const auto* script = static_cast<Object*>(n->script);
+    if (!script) return false;
+    const auto rect = script->fields.find("_rect");
+    const auto widget = script->fields.find("_osd_wi");
+    return rect != script->fields.end() && rect->second.tag == ValueTag::Int &&
+           rect->second.v.i != 0 && widget != script->fields.end() &&
+           widget->second.tag == ValueTag::Int;
+  };
+  const auto nodes = render_nodes_in_world(root);
+  {
+    // A new car or scene brings many meshes at once: read them on the job
+    // pool instead of one by one in the loop below. Lamp renders keep their
+    // lazy load, as they are only drawn while lit.
+    std::vector<uint32_t> missing;
+    for (const auto* n : nodes) {
+      if ((n->sky_render && n->key != g_sky) || n->light_flags || n->line_geometry ||
+          (n->deformed_geometry && n->deformed_type == n->type_id) || osd_rectangle(n))
+        continue;
+      const auto id = static_cast<uint32_t>(n->type_id);
+      if (!g_meshes.contains(id) && !g_overrides.contains(id)) missing.push_back(id);
+    }
+    if (missing.size() > 1) {
+      std::sort(missing.begin(), missing.end());
+      missing.erase(std::unique(missing.begin(), missing.end()), missing.end());
+      preload_meshes(missing);
+    }
+  }
+  for (auto *n : nodes) {
+    if (osd_rectangle(n)) continue;
     // Source scripts replace Scene.skydome; a superseded handle may remain
     // alive until script cleanup. Never render it as ordinary foreground.
     if (n->sky_render && n->key != g_sky)
@@ -1817,6 +1922,23 @@ std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
     if (!instance.gpu_skin && !n->line_geometry && g_resources) {
       if (auto posed = character_posed(n->key, n->type_id, instance.geometry.get(), *g_resources))
         instance.geometry = std::move(posed);
+    }
+    // Legacy resource cues (flags 640, e.g. finishObject) animate independently
+    // of the script pose. Host timing/opacity defaults are documented in
+    // SCRIPT_RUNTIME.md; original per-bit semantics are not established.
+    uint32_t resource_flags = 0;
+    scene_shadow_info(static_cast<uint32_t>(n->type_id), &resource_flags, nullptr);
+    if (n->kind == GameRefKind::RenderRef && (resource_flags & 0x280u) == 0x280u) {
+      const float t = gameref_now();
+      const float c = std::cos(t), s = std::sin(t);
+      auto& m = instance.transform;
+      for (int row = 0; row < 3; ++row) {
+        const float x = m[row], z = m[8 + row];
+        m[row] = c * x - s * z;
+        m[8 + row] = s * x + c * z;
+      }
+      m[13] += .5f * std::sin(2.f * t);
+      instance.opacity = .65f;
     }
     instance.cull_backfaces = instance.geometry->ground_polygons;
     instance.key = n->key;
@@ -2264,7 +2386,7 @@ GroundMapData scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id
   geo->info.groups = static_cast<int32_t>(geo->groups.size());
   if (geo->indices.empty())
     return map;
-  std::printf("[scene] ground poly 0x%x tris=%d materials=%zu\n", map.render_id,
+  jobs_printf("[scene] ground poly 0x%x tris=%d materials=%zu\n", map.render_id,
               geo->info.triangles, mats.size());
   map.poly = std::move(geo);
   return map;
@@ -2291,18 +2413,9 @@ bool ground_prop_config(const RpkIndex& rpk, uint32_t type, PartConfig& out) {
   return true;
 }
 
-const NativeCollisionData& native_collision_data(
-    const RpkIndex& rpk, uint32_t type, const PartConfig* parsed) {
-  static const NativeCollisionData empty;
-  if (!type) return empty;
-  auto [cached, added] = g_native_collision.try_emplace(type);
-  if (!added) return cached->second;
-  PartConfig loaded;
-  if (!parsed) {
-    if (!ground_prop_config(rpk, type, loaded)) return cached->second;
-    parsed = &loaded;
-  }
-
+// Reads files only, so map loading builds several types on the job pool.
+NativeCollisionData build_native_collision(const RpkIndex& rpk, const PartConfig& parsed) {
+  NativeCollisionData data;
   auto mesh = std::make_shared<ScxGeometry>();
   mesh->position_scale = 1.f;
   mesh->info.ok = true;
@@ -2330,36 +2443,36 @@ const NativeCollisionData& native_collision_data(
   PartMatrix identity_frame{};
   identity_frame[0] = identity_frame[5] = identity_frame[10] = identity_frame[15] = 1.f;
   bool positive_mass = false, zero_mass = false;
-  for (const auto& body : parsed->bodies) {
+  for (const auto& body : parsed.bodies) {
     if (!body.collision) continue;
     if (body.mass > 0.f) {
       positive_mass = true;
-      cached->second.mass += body.mass;
+      data.mass += body.mass;
       for (int axis = 0; axis < 3; ++axis)
-        cached->second.center[axis] += body.pose.position[axis] * body.mass;
+        data.center[axis] += body.pose.position[axis] * body.mass;
     } else {
       zero_mass = true;
     }
   }
-  if (cached->second.mass > 0.f)
-    for (auto& value : cached->second.center) value /= cached->second.mass;
+  if (data.mass > 0.f)
+    for (auto& value : data.center) value /= data.mass;
   // Promote only an entirely positive-mass placement. A mixed placement keeps
   // every body static instead of moving one while baking another. A dynamic
   // type still builds its geometry: map loading uses its bounds to find the
   // dormant placement, and only static placements enter the ground caches.
-  cached->second.dynamic = positive_mass && !zero_mass;
-  for (const auto& body : parsed->bodies) {
+  data.dynamic = positive_mass && !zero_mass;
+  for (const auto& body : parsed.bodies) {
     if (!body.collision) continue;
     const auto frame = part_pose_matrix(body.pose);
     if (body.shape == PartBodyShape::Box) {
-      cached->second.primitives.push_back(body);
+      data.primitives.push_back(body);
       append(collision::make_box_mesh(
                  frame, {body.box_half[0], body.box_half[1], body.box_half[2]}),
              identity_frame);
       continue;
     }
     if (body.shape == PartBodyShape::Sphere) {
-      cached->second.primitives.push_back(body);
+      data.primitives.push_back(body);
       append(collision::make_sphere_mesh(frame, body.sphere_radius, 12, 6),
              identity_frame);
       continue;
@@ -2374,7 +2487,22 @@ const NativeCollisionData& native_collision_data(
   }
   mesh->info.vertices = static_cast<int32_t>(mesh->positions.size() / 3);
   mesh->info.triangles = static_cast<int32_t>(mesh->indices.size() / 3);
-  if (mesh->info.triangles) cached->second.mesh = std::move(mesh);
+  if (mesh->info.triangles) data.mesh = std::move(mesh);
+  return data;
+}
+
+const NativeCollisionData& native_collision_data(
+    const RpkIndex& rpk, uint32_t type, const PartConfig* parsed) {
+  static const NativeCollisionData empty;
+  if (!type) return empty;
+  auto [cached, added] = g_native_collision.try_emplace(type);
+  if (!added) return cached->second;
+  PartConfig loaded;
+  if (!parsed) {
+    if (!ground_prop_config(rpk, type, loaded)) return cached->second;
+    parsed = &loaded;
+  }
+  cached->second = build_native_collision(rpk, *parsed);
   return cached->second;
 }
 
@@ -2446,11 +2574,24 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
   };
   size_t props = 0;
   std::unordered_set<uint32_t> used_resources;
-  for (const auto& placement : map.placements) {
-    auto [type, added] = object_types.try_emplace(placement.type);
-    if (added) {
-      ground_prop_config(*g_resources, placement.type, type->second);
-      auto& renders = type->second.renders;
+  {
+    // A type's CFG and collision meshes only read packs and files. Prepare
+    // the map's types on the job pool, then place them in map order.
+    std::vector<uint32_t> types;
+    for (const auto& placement : map.placements)
+      if (object_types.try_emplace(placement.type).second) types.push_back(placement.type);
+    std::vector<PartConfig> configs(types.size());
+    std::vector<NativeCollisionData> collisions(types.size());
+    std::vector<char> build(types.size());
+    for (size_t i = 0; i < types.size(); ++i)
+      build[i] = types[i] && !g_native_collision.contains(types[i]);
+    jobs_parallel_for(types.size(), [&](size_t i) {
+      ground_prop_config(*g_resources, types[i], configs[i]);
+      if (build[i]) collisions[i] = build_native_collision(*g_resources, configs[i]);
+    });
+    for (size_t i = 0; i < types.size(); ++i) {
+      if (build[i]) g_native_collision.emplace(types[i], std::move(collisions[i]));
+      auto& renders = (object_types[types[i]] = std::move(configs[i])).renders;
       std::erase_if(renders, [&](const PartRender& render) {
         return render.variants.empty() ? !is_visible(render.resource)
             : std::none_of(render.variants.begin(), render.variants.end(), is_visible);
@@ -2462,11 +2603,20 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
           [&](const PartRender& a, const PartRender& b) { return score(a) < score(b); });
       if (best != renders.end() && best->lod_level >= 0) {
         const auto best_index = static_cast<size_t>(best - renders.begin());
-        for (size_t i = renders.size(); i-- > 0;)
-          if (i != best_index && renders[i].lod_level >= 0)
-            renders.erase(renders.begin() + i);
+        for (size_t r = renders.size(); r-- > 0;)
+          if (r != best_index && renders[r].lod_level >= 0)
+            renders.erase(renders.begin() + r);
       }
     }
+  }
+  // Static collision meshes in placement order, baked on the job pool below.
+  struct CollisionBake {
+    const ScxGeometry* mesh;
+    PartMatrix pose;
+  };
+  std::vector<CollisionBake> bakes;
+  for (const auto& placement : map.placements) {
+    const auto type = object_types.find(placement.type);
     const auto pose = part_pose_matrix({placement.position, placement.rotation});
     const auto& collision = native_collision_data(*g_resources, placement.type,
                                                   &type->second);
@@ -2500,7 +2650,7 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
         props_map.dormant.push_back(std::move(entry));
       }
     } else if (collision.mesh) {
-      props_map.collision_meshes.push_back(bake_static_mesh(*collision.mesh, pose));
+      bakes.push_back({collision.mesh.get(), pose});
     }
     if (!collision.dynamic)
       for (const auto& body : collision.primitives) {
@@ -2526,8 +2676,15 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
       ++props;
     }
   }
+  {
+    const size_t first = props_map.collision_meshes.size();
+    props_map.collision_meshes.resize(first + bakes.size());
+    jobs_parallel_for(bakes.size(), [&](size_t i) {
+      props_map.collision_meshes[first + i] = bake_static_mesh(*bakes[i].mesh, bakes[i].pose);
+    });
+  }
   props_map.resources.assign(used_resources.begin(), used_resources.end());
-  preload_ground_meshes(props_map.resources);
+  preload_meshes(props_map.resources);
   for (auto& [key, cell] : cells) {
     std::array<float, 3> lower, upper;
     lower.fill(std::numeric_limits<float>::infinity());
@@ -2565,21 +2722,7 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
   jobs.reserve(cells.size());
   for (auto& [key, cell] : cells)
     if (!cell.props.empty()) jobs.push_back(&cell);
-  std::atomic_size_t next{0};
-  const auto group = [&] {
-    for (size_t job = next.fetch_add(1); job < jobs.size(); job = next.fetch_add(1))
-      build_prop_batches(*jobs[job], batchable);
-  };
-  {
-    std::vector<std::jthread> workers;
-    const auto count = std::min<size_t>({jobs.size(), 4u,
-        std::max<size_t>(1u, std::thread::hardware_concurrency())});
-    try {
-      for (size_t i = 1; i < count; ++i) workers.emplace_back(group);
-    } catch (const std::system_error&) {
-    }
-    group();
-  }
+  jobs_parallel_for(jobs.size(), [&](size_t job) { build_prop_batches(*jobs[job], batchable); });
   std::erase_if(cells, [](const auto& entry) { return entry.second.props.empty(); });
   merge_static_meshes(props_map.collision_meshes);
   if (!props_map.collision_meshes.empty() || props_map.collision_shapes.size()) {
