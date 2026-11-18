@@ -12,10 +12,8 @@
 #include <memory>
 #include <algorithm>
 
-#if defined(SLRR_HAS_LIBBGFX)
 // Implementation lives in ptx_image.cpp (STB_IMAGE_IMPLEMENTATION).
 #include <stb/stb_image.h>
-#endif
 
 namespace slrr {
 namespace {
@@ -213,7 +211,6 @@ bool decode_tga_font_atlas(const uint8_t* data, size_t size, SlrrFont* font) {
 }
 
 bool decode_png_font_atlas(const uint8_t* data, size_t size, SlrrFont* font) {
-#if defined(SLRR_HAS_LIBBGFX)
   if (!data || !font || size < 8) return false;
   int w = 0, h = 0, comp = 0;
   stbi_uc* img =
@@ -268,12 +265,6 @@ bool decode_png_font_atlas(const uint8_t* data, size_t size, SlrrFont* font) {
   std::printf("[font] png atlas %dx%d outline=%d alpha=%d\n", w, h,
               outline_atlas ? 1 : 0, alpha_coverage ? 1 : 0);
   return true;
-#else
-  (void)data;
-  (void)size;
-  (void)font;
-  return false;
-#endif
 }
 
 }  // namespace

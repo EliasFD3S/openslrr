@@ -1,0 +1,10 @@
+[font] png atlas 512x256 outline=1 alpha=0
+[font] slii24 atlas=C:\Users\Elias\Desktop\openslrr\game\frontend\textures\Fonts\slii24.png glyphs=256 px=24
+[cursor] loaded 10/10 shapes (2.cur..11.cur)
+[bgfx] program present failed to link
+[bgfx] open 1280x800 GPU=libbgfx renderer=Direct3D 11
+[bgfx] program hiz failed to link
+[bgfx] garage viewport=1 osd_buttons=0 gpu=libbgfx
+ready=1 overlay=1 transition=0
+registered=20 font=1 ready=1
+GPU text: 20 lines / 1000 glyphs; empty=3 full=23 hidden=3 text_draws=20

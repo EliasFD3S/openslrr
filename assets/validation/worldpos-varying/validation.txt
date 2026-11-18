@@ -1,0 +1,4 @@
+Release rebuild: DXBC and GLSL shaders compiled successfully.
+Compiled shader headers compared: 26
+Changed headers: []
+All attribute/varying names are unique; v_worldPos remains on TEXCOORD4.

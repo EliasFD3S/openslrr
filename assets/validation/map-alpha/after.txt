@@ -1,0 +1,7 @@
+[map_alpha] 4 passed, 0 failed
+PASS game/objects/meshes/roadtest26_egyedi/roadtest26_egyedi.scx: 5 ColorMixTex sections retain authored alpha holes
+PASS game/objects/meshes/area_200_egyedi/area_200_egyedi.scx: 2 ColorMixTex sections retain authored alpha holes
+PASS game/objects/meshes/area_19_egyedi/area_19_egyedi.scx: 2 ColorMixTex sections retain authored alpha holes
+PASS actual dealer type-0 rail uses texture alpha without a glass colour function
+PASS opaque paint and legacy SCX3 cutout/blended/vertex-paint contracts
+PASS 5 real storefront glasses: material opacity, untextured tint and black-diffuse textured RGB; opaque/legacy unchanged

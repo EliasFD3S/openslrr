@@ -685,9 +685,9 @@ int32_t video_fmv_open(const char *path, int32_t non_exclusive, int32_t loop) {
   g_non_exclusive = non_exclusive != 0;
   g_loop = loop != 0;
   std::snprintf(g_path, sizeof(g_path), "%s", resolved.c_str());
-  // prime.avi is Cinepak (cvid). The Sample Grabber graph never inserts
-  // iccvid, then soft-ok reports success with zero frames. AVIFile uses the
-  // system codec and yields a real picture before the menu is drawn.
+  // prime.avi is Cinepak (cvid). The Sample Grabber graph may fail to
+  // insert its decoder. AVIFile uses the system codec and yields a real
+  // picture before the menu is drawn.
   if (non_exclusive) {
     g_non_exclusive = true;
     g_loop = loop != 0;
@@ -736,20 +736,6 @@ int32_t video_fmv_open(const char *path, int32_t non_exclusive, int32_t loop) {
                        : build_graph_exclusive(wpath.c_str());
   if (FAILED(hr) || !qi_open_interfaces(!g_non_exclusive)) {
     release_graph();
-#ifndef _WIN64
-    // Menu bg (non_exclusive): Soft Java treats openVideo==0 as success and
-    // skips the Dummy/Vehicle fallback. Prefer that over a hard fail when the
-    // file exists but DirectShow cannot build a texture graph yet.
-    if (g_non_exclusive) {
-      std::printf("[fmv] DS graph fail — soft-ok non_exclusive %s\n",
-                  resolved.c_str());
-      g_playing = true;
-      g_loop = loop != 0;
-      g_non_exclusive = true;
-      std::snprintf(g_path, sizeof(g_path), "%s", resolved.c_str());
-      return 0;
-    }
-#endif
     return -1;
   }
   if (!g_non_exclusive) {

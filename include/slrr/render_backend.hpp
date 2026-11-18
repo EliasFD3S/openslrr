@@ -11,8 +11,8 @@ class Jvm;
 class SectionMachine;
 
 // Thin GPU backend behind GfxEngine / RenderRef / Viewport / Camera natives.
-// Slot name "bgfx" is the product target; Win32 build uses WGL/OpenGL until
-// libbgfx is linked (same IRenderBackend API).
+// The supported Windows x64 build always links libbgfx for game rendering.
+// Null remains available for headless probes and tests.
 class IRenderBackend {
  public:
   virtual ~IRenderBackend() = default;

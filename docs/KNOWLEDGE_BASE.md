@@ -1,4 +1,4 @@
-# OpenSLRR knowledge base for coding agents
+| `FindFile` and File share canonical physical-root confinement (#84). Enumeration alone may address the root; leading separators remain game-relative, parent traversal and external junctions are rejected, and internal junctions are allowed. File.delete remains nonrecursive (#68, #71). Invalid SDAT writes preserve alignment (#70); see [SAVE_IO_FIXES.md](SAVE_IO_FIXES.md) | `src/natives/natives_boot.cpp:under_game`, `src/natives/natives_boot.cpp:findfile_start`, `src/natives/natives_io.cpp:register_io_natives` |
 
 Verified against `main` at `b907b6b` (12 November 2026). Every code reference
 below is written as `path` or `path:symbol` and can be rechecked with
@@ -180,9 +180,6 @@ Code that exists but is not used:
 - `src/render/bgfx_shadows.cpp:draw_vehicle_shadows` (the legacy projected
   car shadow) is never called. Its two shader programs are still created at
   init but only used by that function.
-- `src/render/null_backend.cpp` is not compiled. The WGL fallback in
-  `src/render/bgfx_backend.cpp` is disabled because `SLRR_HAS_LIBBGFX` is
-  always defined.
 - `src/physics/sl2_pacejka.cpp` only serves `--probe-pacejka`. The active tyre
   model is `src/physics/tire_model.cpp:tire_forces`.
 
@@ -521,21 +518,20 @@ Process:
 
 From [NATIVE_AUDIT.md](NATIVE_AUDIT.md) and
 `assets/progress/native-coverage.json` (12 November 2026): of 376 stock
-signatures, 331 have a body, 4 are explicit no-ops and 41 are missing.
+signatures, 339 have a body, 3 are explicit no-ops and 34 are missing.
 `scripts/render_native_coverage.py` recomputes these counts from `src/`;
 `--list missing` prints the missing signatures.
 
 | Missing family | Count | Blocks |
 | --- | ---: | --- |
 | `GroundRef` routes, traffic, water | 19 | Navigation, traffic |
-| `PhysicsRef` | 7 | `create`, `createSphere`, `setStatic`, `getVel` ×2, `getAngVel`, `getOri`: world physics objects |
 | `ParticleSystem` | 9 | Smoke, sparks and other effects |
 | `Painter` | 3 | Paint booth: `doPaint`, `paintPart`, `xPaint` |
 | Leftovers (`Welder`) | 3 | No stock caller found |
 
-Explicit no-ops: `System.analyze` ×3 (faithful) and
-`GameRef.setActiveCollision` (a real gap). Two host-only no-ops outside the
-stock table: `Player.<init>` and `LoadingScreen.<init>`.
+Explicit no-ops: `System.analyze` ×3 (faithful).
+`GameRef.setActiveCollision` has a body since PR #22 (§12). Two host-only
+no-ops outside the stock table: `Player.<init>` and `LoadingScreen.<init>`.
 
 Partial bodies that matter for upcoming work: `GameRef.setState` applies to
 cars only, `GroundRef.getNearestCross` returns null,
@@ -546,14 +542,8 @@ reads, and `Part.setSfxLoopParams` stores values without applying them.
 
 | Statement | Code reality |
 | --- | --- |
-| README lists "projected car shadows" | The projected pass `draw_vehicle_shadows` is never called. Car shadows come from the car depth map (`src/render/bgfx_shadows.cpp:update_car_depth`) |
-| `patch/README.md`: exterior scenery range 5 km | `flush` forces 3,000 m (`src/render/bgfx_lib_backend.cpp:flush`) |
-| `patch/README.md`: "F12 → Renderer" | The panel opens with Ctrl+F12 |
-| README: pedestrian density slider scales the crowd; `patch/README.md`: the slider is gone | The patched OptionsDialog drops the slider and forces `Config.pedestrianDensity = 1.5` (`patch/sl/Scripts/game/src/OptionsDialog.java`); the host still scales the crowd by that value (`src/resources/part_runtime.cpp:tick_pedestrians`) |
-| NATIVE_AUDIT: `GfxEngine` exposes one fixed 800×600 mode and an empty change call | Modes are enumerated with `EnumDisplaySettingsW` and applied (`src/natives/natives_script.cpp:display_modes`) |
 | HOST_NATIVE_UTILITIES: engine-loop audio not yet implemented | `update_engine_audio` runs every physics frame |
-| `.gitignore` last line `*.md !README.md` | A single malformed pattern that matches nothing; Markdown files are not ignored |
-| Stale comments: "no green-thread budget yet" in `src/boot/mainloop.cpp`, "240 Hz tick" in `src/resources/scene_instances.cpp`, "WGL until libbgfx is linked" in `include/slrr/render_backend.hpp` | Fibers have budgets, physics is 120/60 Hz, libbgfx is always linked |
+| Stale comments: "no green-thread budget yet" in `src/boot/mainloop.cpp`, "240 Hz tick" in `src/resources/scene_instances.cpp` | Fibers have budgets, physics is 120/60 Hz |
 
 ## 10. Open risk register
 
@@ -565,10 +555,9 @@ run time.
 | --- | --- |
 | DirectShow dynamic media-format renegotiation is not supported; malformed/short RGB32 frames are rejected | `src/platform/video_fmv.cpp` (`grab_frame`) |
 | `FindFile` still bypasses shared path confinement. The File native path validator now checks canonical components, rejects the root and accepts dots within names; File.delete is nonrecursive (#68, #71). Invalid SDAT resource writes preserve field alignment with a null placeholder (#70); see [SAVE_IO_FIXES.md](SAVE_IO_FIXES.md) | `src/natives/natives_boot.cpp:under_game`, `src/natives/natives_io.cpp:register_io_natives` |
-| Boot enters the Splash section again after Java already entered it | `src/boot/boot.cpp:boot_game` (`change_active_section` instead of `adopt_actual`) |
+| Boot adopts the section already entered by Java Init without replaying lifecycle (#76). Windowed startup retains a timer-only reset so startup work cannot consume the splash display interval. | `src/boot/boot.cpp:boot_game`, `src/boot/mainloop.cpp:mainloop_adopt_section` |
 | Wall collision, impact damage and mileage run only for the player-controlled car with an engine | `src/resources/part_runtime.cpp:advance_chassis_tick` |
 | Gamepad fallback is now per driving axis and unclaimed physical channel; hardware validation remains separate | `src/platform/host_input.cpp`, `src/platform/host_input_mapping.hpp` |
-| `shaders/varying.def.sc` declares `v_worldPos` twice | `shaders/varying.def.sc` |
 | The `present` and `hiz` programs never link: `fs_present` and `fs_hiz` read only `v_texcoord0` but are paired with `vs_mesh`, so the offscreen scene target and the HiZ pyramid are skipped. Startup logs `[bgfx] program … failed to link` | `src/render/bgfx_lib_backend.cpp:LibBgfxBackend::open` |
 
 Fixed on `main`: `System.arraycopy` overflow, PTX bounds, dyno session
@@ -720,7 +709,7 @@ No in-game validation is claimed yet. Test initial G1, then use fastpromotion
 for club garages and letmeroc for the ROC garage; inspect walls, floor/lift,
 props and reflections for old G1 geometry. Confirm the car remains supported
 by each active garage's collision geometry and that returning to G1 works.
-Issue #93 / PR #121 remains independent and unmerged.
+Issue #93 / PR #121 is independent of the garage lifetime correction.
 
 
 ### Garage shell follow-up: obsolete exclusion removed
@@ -1729,3 +1718,260 @@ build and driver_selector regression pass; visual in-game validation is pending.
 Check M in Valo: map tiles/roads and available markers, bottom-right driving
 view, then M again; repeat, drive to move the GPS and check garage/catalog
 previews. Evidence is in assets/validation/map-views/{before,after}.txt.
+
+## Authored map alpha versus colour mixing (#50)
+
+The opaque bridge and construction openings are not missing texture alpha:
+their SCX4 ColorMixTex sections (type 3) carry explicit alpha-test flags. The
+previous material_mix shortcut treated every type-3 surface as opaque paint,
+turning texture alpha into a solid colour weight and bypassing discard in both
+ordinary and instanced rendering and the static shadow pass. The dealer's
+korlat panels instead use type 0 with explicit blending; the old glass test
+required material_type bit 0x04, so their texture alpha was ignored too.
+
+include/slrr/scx_mesh.hpp:scx_surface separates colour function from coverage.
+SCX4 0x40000000 selects blending; otherwise 0x20000000 selects alpha testing.
+ColorMixTex paint mixing applies only when neither flag is present. SCX3's
+existing flags 1 (cutout), 0x101 (blend) and 0x100 (paint without alpha opacity)
+keep their previous coverage classification. This policy is shared by map
+materials in draw_instance, draw_prop_batches, update_static_shadow and prop
+batch eligibility. Vehicle-specific shaders retain their own material path.
+Blended props stay out of opaque batches and static shadow casting, as with
+existing glass. This does not add transparent-depth sorting or blended shadows.
+
+Verified assets: roadtest26_egyedi has five type-3 tested sections at reference
+56 for the bridge grids/cables; area_200_egyedi and area_19_egyedi each have two
+such sections (references 25 and 56 respectively). The dealer marketkulso
+korlat is type 0 with flags 0xc0000000. No asset files or map names are used
+as rendering exceptions. SLRR_rev's scxDiffuseUsesAlpha was consulted for its
+SCX3 alphaOpacity distinction; the correction is based on the local materials
+and the renderer's own flags, not copied code.
+
+Validation: map_alpha passes three tests covering the real bridge, both worksite
+meshes and dealer rail, plus opaque paint and legacy classification controls.
+night_props still passes (including sign emission). Release builds and native
+coverage --check pass. These tests check asset/material contracts, not GPU
+pixels. Visual in-game validation is pending: inspect the bridge grids from
+both sides, the worksite grids/cables and dealer rails; also check ordinary
+facades, foliage and the resulting cutout shadows. Evidence is recorded under
+assets/validation/map-alpha. No native was added or changed.
+
+### Storefront colour/opacity follow-up
+
+The maintainer validated the bridge, worksite and dealer fix in game, then
+reported solid white city storefront panes. Real storefront glass meshes use
+COLOR_DIFFUSE opacity around 0.247 or 0.498. The 06x5_shop_uveg and
+12x6_uveges_uveg type-0x32/0x33 variants deliberately omit a diffuse texture;
+other storefront Tex families have textures but black diffuse RGB. The generic
+map draw previously used white fallback RGB and forced tint alpha to one.
+
+scx_modulate_blend now carries authored opacity into the existing straight-alpha
+mesh output for blended SCX4 surfaces and applies diffuse RGB when the texture
+slot is deliberately absent. Textured families retain sampled RGB, so their
+black diffuse colour does not black out the window. Absent diffuse maps use
+straight-alpha blending; decoded premultiplied images also scale RGB by material
+opacity. Opaque surfaces, legacy
+SCX3, emissive overlays and the vehicle material path are unchanged. This adds
+no new reflection implementation; it corrects the existing mesh pass modulation.
+
+map_alpha now passes four tests, including five actual storefront glass meshes:
+two without diffuse textures and three textured variants. The test checks tint,
+material opacity and opaque/legacy controls. The original bridge/worksite/dealer
+tests remain passing. Storefront visual verification is pending; the screenshot
+provided by the maintainer is stored as storefront-before.png under the same
+validation directory and is explicitly a before image.
+
+## Version metadata before compilation on every generator (#103)
+
+CMakeLists.txt now defines slrr_version as an always-run custom target whose
+byproduct is generated/slrr_version.h. slrr_host depends on that target, and
+src/boot/boot.cpp explicitly lists the header as OBJECT_DEPENDS.
+The old TARGET PRE_BUILD command behaved as PRE_LINK outside Visual Studio,
+so Ninja/Makefiles could compile or reuse objects with the previous version.
+Configure-time generation no longer hides that ordering problem on first build.
+
+cmake/write_version.cmake still writes only when the computed content changes:
+revision count and short hash follow HEAD, and a dirty checkout adds +. The
+version target is checked every build, but an unchanged header does not trigger
+compilation/relinking. The window-title consumer rebuilds in the same invocation after a
+Git-only metadata change. Paths passed to the generator are quoted.
+
+Validation: tests/test_version_build.py extracts the actual production version
+rule into independent Git fixtures with spaces in their paths and compiles a
+small main plus a header-consuming boot function at the production source paths. It checks
+initial clean build, metadata-only dirty state, new commit without C++ edits,
+an unchanged rebuild (header and executable timestamps preserved), and clean
+rebuild after generated outputs are removed. Ninja, NMake Makefiles and Visual
+Studio 17 2022 all pass. Baseline 9df8920 fails the first dirty-metadata Ninja
+rebuild, reporting the previous clean version from the boot consumer. These are
+build-graph tests, not a game launch or a full Ninja build of the bgfx project.
+The full game's Visual Studio Release target also builds. Native bindings and
+runtime gameplay are unchanged. Evidence: assets/validation/version-order.
+
+## Per-body physics failure containment (#75)
+
+The rigid-body kernel deliberately throws on invalid mass/bounds/orientation,
+non-finite frames and non-finite integration state. Keep those kernel checks:
+the owning runtime now contains failures at each chassis, loose-part and free
+PhysicsRef body rather than allowing a frame pump to unwind a Java dialog or
+terminate the host. std::exception failures are reported and handled locally.
+
+Chassis configuration is transactional (configure/set_frame on a candidate).
+An invalid chassis is suspended with physics_pending_placement cleared; a step
+failure restores its saved rigid body and the last finite local pose, resets
+motion and interpolation and leaves other chassis ticking. Pose orientation is
+reconstructed as in dynamics_sync. With no valid pose to restore, the node is
+hidden. The normal start/wakeup path can retry simulation; unchanged bad data
+will suspend it again. A chassis failure is logged once per record lifetime.
+
+Loose-body creation also configures a candidate. Failed native map promotion
+cleans partial nodes, keeps the ordinary scenery and suppresses repeated retries
+for that resource until the part runtime is reset. A failed active loose body
+is removed; a promoted map prop returns to its authored placement. A failed free
+PhysicsRef restores its last published finite pose and is removed from simulated
+bodies. Failed loose/free contact steps restore the collision partner's saved
+rigid body too. These guards do not roll back arbitrary script/asset mutations
+or promise recovery from allocation failure.
+
+GameRef.setMatrix rejects non-finite position/rotation before mutation. WheelRef
+setters reject non-finite scalar or Vector3/Ypr fields atomically; finite values
+retain their existing semantics. Numeric overflow generated later in the solver
+is caught before an invalid body frame is published. Free bodies now have an
+explicit first-configuration flag (live_id can legitimately still be zero), and
+free-body state plus failed-native-type suppression reset with part registration.
+No native signature is added; the kernel and normal physics tick remain intact.
+
+Validation: physics_recovery is 0/8 passing on f3638a1 and 8/8 on the fix. Its
+isolated synthetic RPK/CFG/SCX fixtures cover NaN poses, malformed free-body
+bounds, invalid free frames, zero-height chassis bounds, corrupted chassis
+pose/orientation, wheel updates, extreme finite velocity overflowing the render
+frame, and transactional invalid map-body creation. A native pump callback
+returns after the numerical failure while a healthy chassis keeps ticking.
+This is not an automated real Dialog.display test. Active detached-panel failure
+and contact-partner rollback paths are implemented but not separately fault-
+injected by this suite. map_props and physics_position regressions pass. The
+Release build and native audit checks pass. In-game driving/collision/dialog
+smoke validation is pending. Evidence: assets/validation/physics-recovery.
+
+## Unique world-position varying (#100)
+
+shaders/varying.def.sc keeps the initialized v_worldPos on TEXCOORD4 and removes
+the duplicate TEXCOORD6 declaration. The bundled shaderc inserts declarations
+by name and retains the first entry, so TEXCOORD4 was already the effective
+semantic. No producer/consumer shader or remaining semantic is reassigned.
+The duplicate is removed from the open risk register above.
+
+Validation: the Release target regenerated DXBC and GLSL shaders successfully.
+SHA-256 comparison of all 26 generated shader headers before/after found no
+changed bytes. A declaration scan found no repeated attribute/varying names.
+This is a declaration cleanup with unchanged compiled shader output; a new
+in-game visual difference is not expected. Evidence:
+assets/validation/worldpos-varying/validation.txt.
+
+Track HUDs do not require a menu background: `src/resources/gameref.cpp:fullscreen_script_camera` suppresses the fallback veil while a world camera is active. See [SCRIPT_RUNTIME.md](SCRIPT_RUNTIME.md#track-presentation-without-a-menu-plate).
+
+Menu hotkey presses use a shared 250 ms cancel/menu gate and a separate select gate, without delaying release or driving: `src/platform/host_input.cpp:host_input_check_hotkeys`. Validation and scope are in [SCRIPT_RUNTIME.md](SCRIPT_RUNTIME.md#menu-input-debounce).
+
+UI rectangles handed to the OSD registry are excluded from 3D scene/preview collection, including cursor tooltip templates: `src/resources/scene_instances.cpp:collect_root`. See [SCRIPT_RUNTIME.md](SCRIPT_RUNTIME.md#ui-rectangles-have-one-render-owner).
+
+Catalog vehicle insets stay in the preview pass, preserving the page background and script camera pose; fullscreen showrooms retain main-world ownership. Cursor cameras are UI-only: `src/boot/mainloop.cpp:mainloop_sync_section_render`, `src/resources/gameref.cpp:fullscreen_script_camera`. See [SCRIPT_RUNTIME.md](SCRIPT_RUNTIME.md#catalog-vehicle-preview-versus-fullscreen-showroom).
+
+Tooltip layer 0 must not promote catalog page backgrounds above preview cameras. Background ordering uses owned nonmodal page plates rather than the lowest arbitrary widget/text layer: `src/ui/osd_registry.cpp:osd_page_background_layer`.
+
+Trigger indicators are visual RenderRefs, while trigger volumes stay sensors; explicit physics and ground collision remain authoritative: `src/resources/scene_instances.cpp:scene_instances_prepare_physics`. Cue rendering and reconstructed motion defaults are documented in [SCRIPT_RUNTIME.md](SCRIPT_RUNTIME.md#trigger-cues-and-physical-bodies-130).
+
+## 14. Validated issue fixes (2026-11-16)
+
+### GameRef aliases: events and timers (#93)
+
+`src/resources/gameref.cpp:gameref_set_event_mask` and
+`src/resources/gameref.cpp:gameref_add_timer` resolve the canonical node before
+creating a new GameType state. Alias writes now reach the same event mask and
+timer queue used by reads, clear/remove operations and timer dispatch. Existing
+canonical kinds are preserved; unregistered objects still create GameType state.
+No Java changes or scene-specific exceptions. This fixes state routing, not the
+scheduler itself. Stock paths mostly use direct objects, so the main impact is
+aliased native instances and mod scripts.
+
+Release x64 compilation succeeds. Three deterministic GameRef tests cover mask
+set/clear and kind preservation, timer canonical destination/one-shot/removal,
+and unregistered-object creation. Main 784a760: 1 pass / 2 fail; corrected:
+3 pass / 0 fail. Run `./scripts/run_save_io_tests.ps1 -Suite gameref_alias`,
+or add `-BaselineRef 784a760` to reproduce. In-game validation remains pending;
+these tests exercise the actual state primitives but not Java event dispatch.
+
+PR #121 integration update (2026-11-17): conflicts were limited to this
+knowledge base and the test runner; current main's suites and fixes are kept.
+Release x64 rebuild succeeds. Against main 4e4b782, gameref_alias still reports
+1 pass / 2 fail; the integrated branch reports 3 pass / 0 fail. live_lookup and
+trigger_markers pass too. The trigger animation regression now samples two
+bob heights and both yaw basis components, avoiding equal-value samples at
+animation extrema, and reports caught exceptions instead of aborting silently.
+These remain automated host checks; no additional in-game validation is claimed.
+Evidence: assets/validation/gameref-alias/integration.txt.
+
+OSD text lines share one bounded glyph batcher and an unlit shader, avoiding per-glyph draws/world-light bindings: `src/render/bgfx_osd.cpp:draw_osd_line`. Measured draw counts and pixel comparison are in [SCRIPT_RUNTIME.md](SCRIPT_RUNTIME.md#batched-osd-text-82).
+
+## CMake dependency paths and toolchain guard (#114)
+
+CMakeLists.txt reads the resolved BGFX_DIR/BIMG_DIR definitions from the
+already-added bgfx.cmake directory scope. This follows its actual choice of
+explicit paths, in-tree checkouts or FetchContent sources, including custom
+FETCHCONTENT_BASE_DIR and FETCHCONTENT_SOURCE_DIR overrides. It does not infer
+source paths from the host build directory or overwrite cache preferences.
+ImGui sources, shader includes and bimg third-party headers now use the same
+checkout as the corresponding libraries. A missing resolved directory fails
+configuration with a direct diagnostic.
+
+The guard now explicitly requires Windows x64 and an MSVC-compatible compiler,
+matching the existing MSVC flags and documented Visual Studio workflow. MinGW
+is rejected rather than allowed through to fail on /utf-8 or /fp:precise. x86,
+ARM64 and non-Windows targets remain unsupported. Clang-cl is not separately
+validated; the exercised compiler is Visual Studio 2022 MSVC.
+
+Validation: tests/test_cmake_dependency_paths.py configures the real project
+in isolated directories containing spaces, offline against existing dependency
+sources. Five cases cover default/custom caches, source overrides, in-tree
+checkouts and relative explicit directories; generated ImGui/shader/bimg paths
+are checked. Five cases execute the actual guard with supported/unsupported
+platform/compiler/architecture values. Current: 10/10 pass. Baseline b85dc44: 5/10 pass;
+results recorded in assets/validation/cmake-dependency-paths. The guard cases
+simulate variables, not installed MinGW/ARM compiler runs. Non-default cases
+are configure/generate checks; the ordinary Release x64 host build succeeds.
+No game runtime behavior or native registrations change.
+
+Fixtures/logs remain under build/ for inspection. They reference the existing
+sources through directory junctions without modifying dependency checkouts.
+A tiny fixture-only compile_game_sources.cpp isolates the independent missing
+utility file in HEAD; the pre-existing local optional-target edit stays excluded.
+
+## Removed inactive renderer/video fallbacks (#113)
+
+The supported Windows x64 build always uses libbgfx for game rendering.
+The obsolete, non-compiling WGL branch has been removed from the renderer
+factory. The implemented NullBackend remains in bgfx_backend.cpp for headless
+probes/tests and the existing unwired D3D9 selection; only the unused three-line
+null_backend.cpp stub was removed. This does not remove bgfx's own renderer
+backends or add cross-platform support.
+
+SLRR_HAS_LIBBGFX no longer gates the factory or PNG/PTX decoders, and CMake
+no longer defines it. Font PNG and PTX/JPEG/PNG decoding always use the same
+existing stb implementation, with no replacement decoder or asset changes.
+The GPU regression runner no longer injects the obsolete define either.
+
+The non-Win64 DirectShow soft-success branch was deleted: graph setup failure
+now takes the existing error return after graph cleanup rather than inventing
+a playing video without a decoder. The supported Win64 playback path already
+used that error behavior. Other VLC/AVIFile/DirectShow selection and playback
+lifetime code remain unchanged. No unsupported x86 build is claimed.
+
+Validation/evidence: assets/validation/dead-fallbacks. This cleanup is checked
+by building the supported host without the old define and exercising existing
+renderer/video/font regressions. It does not establish non-Windows or x86
+compatibility or reproduce the removed dormant branch as a supported runtime.
+
+Issue #113 checks passed: Release x64 compile/link without the old renderer
+macro; video_safety, ui_lifetime, splash_boot and osd_text_gpu. The D3D11 text
+capture retains the #82 pixel hash and 20 text draws for 1,000 glyphs. Native
+coverage remains current; knowledge references pass. These are supported-host
+regressions, not execution of the removed x86/WGL branches.

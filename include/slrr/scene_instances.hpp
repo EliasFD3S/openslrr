@@ -20,6 +20,7 @@ struct SceneInstance {
   std::shared_ptr<const ScxGeometry> geometry;
   // Column-major renderer matrix; script meters, with the SCX Z reflection.
   std::array<float, 16> transform{};
+  float opacity = 1.f;
   bool sky = false;
   bool emissive_overlay = false;  // authored night facade, drawn after opaque geometry
   uint32_t color = 0xffffff;

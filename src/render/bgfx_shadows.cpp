@@ -193,14 +193,10 @@ void LibBgfxBackend::update_static_shadow(const float* eye, const VideoOptions& 
     const auto& part = found->second;
     if (!bgfx::isValid(part.vbh) || !bgfx::isValid(part.ibh)) continue;
     for (const auto& group : part.geo.groups) {
-      const auto flags = group.material_flags;
       const bool v4 = part.geo.info.version == 4;
-      if ((v4 && (flags & 0x40000000u) && (group.material_type & 0x04u)) ||
-          (part.geo.info.version == 3 && (flags & 0x101u) == 0x101u))
-        continue;
-      // Storefront mix uses the texture's alpha as a colour weight.
-      const bool cutout = v4 ? group.material_type != 0x03u && (flags & 0x20000000u)
-                             : (flags & 1u) != 0;
+      const auto surface = scx_surface(part.geo.info.version, group);
+      if (surface.blend) continue;
+      const bool cutout = surface.cutout;
       const auto slot = group.texture_index;
       const auto tex = slot < part.tex.size() && bgfx::isValid(part.tex[slot])
           ? part.tex[slot] : white_tex_;

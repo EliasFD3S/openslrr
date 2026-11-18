@@ -1,0 +1,9 @@
+Select Track white-mask regression, 17 November 2026
+Cause: menu fallback drawn above active world; default quad tint overwrote dark uniform.
+Fix: require no active world camera; supply tint as quad arguments.
+Release x64 build succeeded.
+map_views: 1 passed, 0 failed.
+ui_lifetime: stable handles/roots/compaction and font lifetime checks passed.
+splash_boot: 1 passed, 0 failed (one splash timer retained).
+Temporary headless real TestTrack diagnostic: active world camera, 80 registered widgets, no visible large background, loading=false and overlay empty.
+No pixel validation or interactive success claimed. User in-game validation pending.

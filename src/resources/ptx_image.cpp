@@ -7,12 +7,10 @@
 #include <limits>
 #include <vector>
 
-#if defined(SLRR_HAS_LIBBGFX)
 #define STB_IMAGE_IMPLEMENTATION
 // JPEG (PTX mips) + PNG (SLII* font atlases). No ONLY_* — both needed.
 #define STBI_NO_STDIO
 #include <stb/stb_image.h>
-#endif
 
 namespace slrr {
 namespace {
@@ -135,7 +133,6 @@ DdsImage load_ptx_file(const std::string& path) {
   // Mips are smallest-first; last level is full resolution.
   const PtxJpegLevel& lv = levels.back();
 
-#if defined(SLRR_HAS_LIBBGFX)
   int w = 0, h = 0, comp = 0;
   stbi_uc* rgba = stbi_load_from_memory(lv.rgb, static_cast<int>(lv.rgb_size),
                                         &w, &h, &comp, 4);
@@ -178,19 +175,12 @@ DdsImage load_ptx_file(const std::string& path) {
   out.data.assign(rgba, rgba + out.mip0_size);
   stbi_image_free(rgba);
   out.ok = true;
-#else
-  (void)lv;
-  out.width = pw;
-  out.height = ph;
-  out.error = "ptx needs SLRR_HAS_LIBBGFX (stb_image)";
-#endif
   return out;
 }
 
 DdsImage load_rgba_file(const std::string& path) {
   DdsImage out;
   out.path = path;
-#if defined(SLRR_HAS_LIBBGFX)
   std::ifstream in(path, std::ios::binary | std::ios::ate);
   if (!in) {
     out.error = "open failed";
@@ -235,9 +225,6 @@ DdsImage load_rgba_file(const std::string& path) {
   out.data.assign(rgba, rgba + out.mip0_size);
   stbi_image_free(rgba);
   out.ok = true;
-#else
-  out.error = "not DDS";
-#endif
   return out;
 }
 

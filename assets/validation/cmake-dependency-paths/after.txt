@@ -1,0 +1,11 @@
+PASS guard msvc-x64
+PASS guard mingw-x64
+PASS guard msvc-arm64
+PASS guard msvc-x86
+PASS guard non-windows
+PASS configure/generated paths default-cache
+PASS configure/generated paths custom-cache
+PASS configure/generated paths source-overrides
+PASS configure/generated paths in-tree
+PASS configure/generated paths relative-explicit
+10/10 passed; fixtures: C:\Users\Elias\Desktop\openslrr\build\cmake114 fixtures ft6m98gg

@@ -1,0 +1,12 @@
+Issue #130 - MWM trigger markers
+Baseline: 6339249 (merged PR #174).
+Release x64 host build succeeded. No production Java/native signature changes.
+Before: trigger_markers exit 1, six failed checks (three marker collisions, animation, opacity, sensor collision).
+After: trigger_markers exit 0. Native car delivers one enter and one leave with chassis live ID.
+Additional suites: trigger_volume (4/4), garage_shell, map_props, physics_recovery all exit 0.
+Native coverage generator --check: current. Knowledge references: 271 checked, 105 external skipped, 0 errors.
+This is host collection/physics/dispatch evidence, not screenshot or full MWM challenge validation.
+Cue timing/opacity reconstructed defaults: 1 rad/s yaw, 0.5 m amplitude at 2 rad/s, alpha 0.65.
+Original flag-bit semantics and timing not recovered; user confirms rotation plus bobbing.
+Source snapshots and research limits: docs/SCRIPT_RUNTIME.md. REA unavailable; ordinary offline analysis only.
+Deferred issue-130 stash preserved; unrelated local CMake/KB/MILESTONES edits excluded.

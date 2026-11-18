@@ -504,6 +504,14 @@ This is a host loose-body approximation, not a general dynamic triangle-mesh
 engine: loose bodies collide with the car and the static scene, not with
 each other.
 
+Rigid-body validation exceptions are contained by the owning body runtime.
+Keep strict kernel checks; do not catch a whole frame and silently skip the
+remaining bodies. Invalid GameRef poses and wheel inputs are rejected before
+mutation. A failed chassis is suspended at its last finite published pose,
+a failed loose map prop returns to scenery, and a failed free PhysicsRef stops
+simulation. Native map-body creation is transactional. See the #75 entry in
+KNOWLEDGE_BASE.md for recovery, retry and testing limits.
+
 The frequency currently declared is **120 Hz**, with an update frequency
 declared at **60 Hz** in `vehicle_dynamics.hpp`. `advance(seconds)` uses an
 accumulator. Do not bring back "once per frame" integration, and do not
@@ -630,6 +638,11 @@ Do not collect casters using only the visible camera frustum.
 The list must respect the useful light volume. When the time of day changes,
 sun-dependent matrices and caches must be invalidated.
 
+The renderer factory always selects libbgfx for Bgfx in the supported build.
+NullBackend is retained for headless probes and tests; there is no separate
+WGL fallback. Image and font decoders do not depend on an optional renderer
+macro. The Windows x64/MSVC toolchain requirement remains in CMake.
+
 ### Sky and lights
 
 The Enhanced sky must be driven by game time and by parameters consistent
@@ -637,6 +650,13 @@ with the sun, the clouds, and the reflection. A night-time appearance must
 not leave a noon sun in the materials or in the shadow.
 Animated cloud parameters need a stable time, distinct from a count of
 elapsed frames.
+
+OSD text uses a dedicated position/UV layout and unlit shader pair. A text
+line submits one indexed batch per available transient-buffer chunk, preserving
+font, colour, layer and draw order. Do not route glyphs through world-lighting
+bindings or merge labels across the plates/icons that separate them. Long lines
+must rebase their 16-bit indices while retaining pen advance. See
+`src/render/osd_text_batch.hpp` and `LibBgfxBackend::draw_osd_line`.
 
 OSD surfaces have their own blending contract. Do not apply world lighting
 to them, or a global correction meant for the body.

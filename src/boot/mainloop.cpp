@@ -211,9 +211,16 @@ void mainloop_sync_section_render(IRenderBackend& render,
   // CarScene and has no map, so the mesh was never collected.
   void* car_preview = object_field("CarScene");
   void* world = object_field("map");
-  if (!world) world = car_preview;
+  // A catalog's CarScene is an inset over its page, not the main world.
+  // Keep it in the ordinary preview-camera pass (depth-only clear and the
+  // script look/move pose), while fullscreen showrooms can own the main view.
+  auto* preview_camera = gameref_get(object_field("Cam"));
+  auto* preview_view = preview_camera ? gameref_get(preview_camera->viewport) : nullptr;
+  const bool inset_preview = car_preview && preview_view &&
+      (preview_view->vp_w < .99f || preview_view->vp_h < .99f);
+  if (!world && !inset_preview) world = car_preview;
   if (!world) world = object_field("Scene");
-  if (!world)
+  if (!world && !inset_preview)
     if (GameRefState* cam = fullscreen_script_camera()) world = cam->parent;
   scene_instances_select(world, object_field("skydome"), world && world == car_preview);
   const bool in_garage =

@@ -11,6 +11,7 @@
 #include "slrr/scene_sun.hpp"
 #include "slrr/osd_registry.hpp"
 #include "debug_overlay.hpp"
+#include "osd_text_batch.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -308,6 +309,10 @@ class LibBgfxBackend final : public IRenderBackend {
   float mesh_max_[3] = {0, 0, 0};
   std::vector<ScenePart> parts_;
   bgfx::VertexLayout layout_;
+  bgfx::VertexLayout text_layout_;
+  bgfx::ProgramHandle text_program_ = BGFX_INVALID_HANDLE;
+  std::vector<OsdTextVertex> text_vertices_;
+  std::vector<uint16_t> text_indices_;
   bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle inst_program_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle inst_shadow_program_ = BGFX_INVALID_HANDLE;

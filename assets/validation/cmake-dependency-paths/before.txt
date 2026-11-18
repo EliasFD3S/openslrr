@@ -1,0 +1,11 @@
+PASS guard msvc-x64
+FAIL guard mingw-x64
+PASS guard msvc-arm64
+PASS guard msvc-x86
+PASS guard non-windows
+PASS configure/generated paths default-cache
+FAIL configure/generated paths custom-cache
+FAIL configure/generated paths source-overrides
+FAIL configure/generated paths in-tree
+FAIL configure/generated paths relative-explicit
+5/10 passed; fixtures: C:\Users\Elias\Desktop\openslrr\build\cmake114 fixtures 9dnewg4r

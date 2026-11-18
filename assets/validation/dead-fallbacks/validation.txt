@@ -1,0 +1,18 @@
+Issue #113 - remove inactive WGL and decoder soft-success fallbacks
+Base: main 6fcc278 (merged #177).
+Release x64 host configure/build/link succeeded without SLRR_HAS_LIBBGFX.
+Removed: broken WGL implementation, unused null_backend.cpp stub, conditional
+font/PTX/PNG decoder stubs, non-Win64 DirectShow soft-success branch.
+Retained: actual NullBackend factory, libbgfx and all supported Win64 video paths.
+Existing suites passed: video_safety, ui_lifetime, splash_boot, osd_text_gpu.
+The splash suite exercises the Null backend. Video tests exercise cancellation,
+WM_CLOSE/quit/cleanup and RGB32 decoding. Font lifetime suite loads the PNG atlas.
+D3D11 text scene: empty/full/cleared stats 3/23/3 = 20 text draws / 1000 glyphs.
+Captured pixel payload matches the #82 reference byte hash:
+801363b3061a12036e7a948690c7518ea5fbc26551c8583ae2e8fc0944359e7e
+No remaining SLRR_HAS_LIBBGFX guard/define in production source, headers or CMake.
+Native coverage --check current; knowledge references: 262 checked, zero errors.
+This is cleanup of unreachable code in the supported build; no x86/WGL runtime
+reproduction or expanded platform support is claimed. No full gameplay retest.
+No production Java/native signature change, dependency or game data modification.
+Local CMake optional-target, knowledge-base and milestone edits remain excluded.

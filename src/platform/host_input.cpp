@@ -363,6 +363,16 @@ void host_input_check_hotkeys(Jvm& jvm, Object* controller, Object* focus) {
     if (it == hotkeys.end()) continue;
     const Hotkey hk = *it;
     hk.key->fields["state"] = Value::make_int(hk.down ? 1 : 0);
+    // MENU and CANCEL can be the same physical Escape/Start press across
+    // two different dialogs. Debounce the action, not its per-dialog command.
+    const bool virtual_axis = (hk.flags & 1) != 0;
+    const bool cancel = virtual_axis ? (hk.axis == 35 || hk.axis == 36)
+                                     : hk.axis == 0x01;
+    const bool select = virtual_axis ? hk.axis == 34
+                                     : (hk.axis == 0x1c || hk.axis == 0x9c);
+    if ((cancel || select) &&
+        !host_input_allow_ui(cancel ? -0x10000 : -0x10001, hk.down))
+      continue;
     const auto video_command = hk.key->fields.find("command");
     if (video_command != hk.key->fields.end() &&
         video_command->second.tag == ValueTag::Int &&

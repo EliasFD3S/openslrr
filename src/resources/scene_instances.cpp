@@ -4,6 +4,7 @@
 #include <limits>
 #include "slrr/gameref.hpp"
 #include "slrr/job_system.hpp"
+#include "slrr/object.hpp"
 #include "slrr/part_config.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/rpk_index.hpp"
@@ -1253,7 +1254,8 @@ void scene_instances_prepare_physics() {
   if (g_world)
     for (auto *n : render_nodes_in_world(g_world, true)) {
       if (!n || n->empty || n->sky_render || n->vehicle_material || n->line_geometry ||
-          n->dynamic_native || n->physics_simulated)
+          n->dynamic_native || n->physics_simulated ||
+          n->trigger_shape != TriggerShape::None)
         continue;
       // A skinned character is not landscape. Its bind mesh was becoming a
       // solid obstacle, offset from the drawn body, and it destroyed the car.
@@ -1262,6 +1264,13 @@ void scene_instances_prepare_physics() {
       if (!chain_matrix(n->key, g_world, m.data(), false))
         continue;
       const auto id = static_cast<uint32_t>(n->type_id);
+      // RenderRef creates a visual, not a physics body. Ground shells and
+      // explicitly registered collision meshes retain their collision source.
+      if (n->kind == GameRefKind::RenderRef && !n->collision_active &&
+          n->physics_shape == PhysicsShape::None &&
+          g_ground_props.find(id) == g_ground_props.end() &&
+          g_collision_overrides.find(id) == g_collision_overrides.end())
+        continue;
       if (n->kind == GameRefKind::RenderRef) {
         const auto ground = g_ground_props.find(id);
         if (ground != g_ground_props.end()) {
@@ -1848,6 +1857,19 @@ std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
   if (!g_resources || !root)
     return out;
   const auto lighting=scene_instances_light(root);
+  // Rectangle.setMatrix already projected this instance into the 2D OSD.
+  // Cursor/OSD cameras must not draw the unscaled template mesh again.
+  // Keep hidden/retired UI rectangles out too: their visibility is owned
+  // by the OSD registry, not by the surviving resource instance.
+  const auto osd_rectangle = [](const GameRefState* n) {
+    const auto* script = static_cast<Object*>(n->script);
+    if (!script) return false;
+    const auto rect = script->fields.find("_rect");
+    const auto widget = script->fields.find("_osd_wi");
+    return rect != script->fields.end() && rect->second.tag == ValueTag::Int &&
+           rect->second.v.i != 0 && widget != script->fields.end() &&
+           widget->second.tag == ValueTag::Int;
+  };
   const auto nodes = render_nodes_in_world(root);
   {
     // A new car or scene brings many meshes at once: read them on the job
@@ -1856,7 +1878,7 @@ std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
     std::vector<uint32_t> missing;
     for (const auto* n : nodes) {
       if ((n->sky_render && n->key != g_sky) || n->light_flags || n->line_geometry ||
-          (n->deformed_geometry && n->deformed_type == n->type_id))
+          (n->deformed_geometry && n->deformed_type == n->type_id) || osd_rectangle(n))
         continue;
       const auto id = static_cast<uint32_t>(n->type_id);
       if (!g_meshes.contains(id) && !g_overrides.contains(id)) missing.push_back(id);
@@ -1868,6 +1890,7 @@ std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
     }
   }
   for (auto *n : nodes) {
+    if (osd_rectangle(n)) continue;
     // Source scripts replace Scene.skydome; a superseded handle may remain
     // alive until script cleanup. Never render it as ordinary foreground.
     if (n->sky_render && n->key != g_sky)
@@ -1899,6 +1922,23 @@ std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
     if (!instance.gpu_skin && !n->line_geometry && g_resources) {
       if (auto posed = character_posed(n->key, n->type_id, instance.geometry.get(), *g_resources))
         instance.geometry = std::move(posed);
+    }
+    // Legacy resource cues (flags 640, e.g. finishObject) animate independently
+    // of the script pose. Host timing/opacity defaults are documented in
+    // SCRIPT_RUNTIME.md; original per-bit semantics are not established.
+    uint32_t resource_flags = 0;
+    scene_shadow_info(static_cast<uint32_t>(n->type_id), &resource_flags, nullptr);
+    if (n->kind == GameRefKind::RenderRef && (resource_flags & 0x280u) == 0x280u) {
+      const float t = gameref_now();
+      const float c = std::cos(t), s = std::sin(t);
+      auto& m = instance.transform;
+      for (int row = 0; row < 3; ++row) {
+        const float x = m[row], z = m[8 + row];
+        m[row] = c * x - s * z;
+        m[8 + row] = s * x + c * z;
+      }
+      m[13] += .5f * std::sin(2.f * t);
+      instance.opacity = .65f;
     }
     instance.cull_backfaces = instance.geometry->ground_polygons;
     instance.key = n->key;
@@ -2492,9 +2532,7 @@ bool prop_mesh_batchable(const ScxGeometry& mesh) {
   const bool v3 = mesh.info.version == 3;
   if (mesh.groups.empty() || mesh.ground_polygons || (!v4 && !v3)) return false;
   for (const auto& group : mesh.groups) {
-    const auto flags = group.material_flags;
-    const bool glass = v4 && (flags & 0x40000000u) && (group.material_type & 0x04u);
-    const bool blend = glass || (v3 && (flags & 0x101u) == 0x101u);
+    const bool blend = scx_surface(mesh.info.version, group).blend;
     // Blended sections are drawn after the opaque world, one by one.
     // Alpha-tested foliage, vertex-coloured walls and ColorMixTex facades
     // (fs_mesh mixes the instance colour under the texture) draw instanced.

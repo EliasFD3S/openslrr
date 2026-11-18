@@ -1,0 +1,13 @@
+Catalog vehicle preview, 17 November 2026, Release x64
+car_select_view baseline a2095e8: 0 passed / 2 failed.
+car_select_view corrected: 2 passed / 0 failed.
+Tests catalog inset/main-world separation, pose preservation, repeated cursor-hover synchronization, fullscreen showroom and cursor-only UI exclusion.
+map_views: 1 passed / 0 failed.
+tooltip_render: 1 passed / 0 failed.
+ui_lifetime passed. Release build succeeded.
+No pixel/gameplay success claimed; user validation pending.
+
+Tooltip layer follow-up: car_select_view now 3 passed / 0 failed.
+New case reproduces the former all-layers minimum becoming 0 on tooltip appearance while the page is 10. Owned page layer stays 10 through repeated tooltip hiding and modal additions.
+ui_lifetime and tooltip_render rerun passed; Release rebuild succeeded.
+This added policy test is not part of the original two-case baseline comparison. Pixel validation still pending.

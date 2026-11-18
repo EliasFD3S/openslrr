@@ -1,0 +1,10 @@
+Baseline f3638a1
+[physics_recovery] test 1 failed: state->pos[0]==1 && state->pos[1]==2 && state->ypr[0]==.1f at tests/test_physics_recovery.cpp:18
+[physics_recovery] test 2 failed: !gameref_get(&bad)->physics_simulated at tests/test_physics_recovery.cpp:25
+[physics_recovery] test 3 failed: invalid rigid frame
+[physics_recovery] test 4 failed: invalid rigid body mass/bounds
+[physics_recovery] test 5 failed: !state.active && std::isfinite(node->local_matrix[0]) && node->local_matrix[13]==y at tests/test_physics_recovery.cpp:77
+[physics_recovery] test 6 failed: call("getRadius","()F").v.f==.4f at tests/test_physics_recovery.cpp:85
+[physics_recovery] test 7 failed: std::isfinite(value) at tests/test_physics_recovery.cpp:109
+[physics_recovery] test 8 failed: invalid rigid body mass/bounds
+[physics_recovery] 0 passed, 8 failed

@@ -18,8 +18,8 @@ return for a missing path is preserved.
 The stock `File.delete(path, mask)` wrapper enumerates names and invokes the
 single-path native. Stock menu code deletes directory contents before deleting
 the directory itself. This flow still works. No save-only allowlist was added:
-other legitimate game-relative paths remain available. FindFile's separate
-path handling is unchanged and remains an open risk.
+other legitimate game-relative paths remain available. FindFile now shares
+the same physical confinement (#84, below).
 
 ### #71 — Two dots inside a career name are not a parent-directory component
 
@@ -90,3 +90,22 @@ Recorded summary: [before](../assets/validation/save-io/before.txt) and
 The Release x64 host builds successfully. Knowledge-reference checks are run
 separately. These checks establish the named native/file regressions; they
 are not an in-game validation of the complete career save/load flow.
+
+## #84 — FindFile path confinement
+
+FindFile directories and children now use the same canonical component checks
+as File. Enumeration alone may address the root. Leading separators remain
+game-relative, so delete-by-mask lists and deletes from the same directory.
+Parent traversal, drive/alternate-stream syntax, embedded NULs and resolved
+escapes yield no entries and clear earlier state. Dotted names, masks, sorting
+and file/directory flags are preserved.
+
+Physical confinement is intentional: internal NTFS junctions work, external
+junctions remain rejected, including same-prefix sibling targets. This is path
+validation, not protection against concurrent reparse-point replacement.
+
+Run `scripts/run_save_io_tests.ps1 -Suite findfile_paths`, optionally with
+`-BaselineRef db8f069`. Baseline: 1 pass / 4 failures; corrected: 5 passes.
+The real native registry and isolated NTFS junctions are exercised. Existing
+`save_io` and `save_persistence` suites each pass 10 tests. No Java patch or
+save-format change is required. See [evidence](../assets/validation/findfile-paths/results.txt).

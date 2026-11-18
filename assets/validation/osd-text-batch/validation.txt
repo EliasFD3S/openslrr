@@ -1,0 +1,20 @@
+Issue #82 - bounded OSD text batching / minimal text shaders
+Baseline: c63a8cd (main after merging #175 and #121).
+Release x64 build and both DXBC/GLSL text shader compilations succeeded.
+CPU layout/bounds/chunk coverage: 4 passed / 0 failed.
+Controlled Direct3D 11 run: 20 lines, 50 A glyphs per line, slii24, 1280x800.
+Baseline: empty/full/cleared draw stats 3/1003/3 = 1000 text draws.
+Corrected: empty/full/cleared draw stats 3/23/3 = 20 text draws (-98%).
+Before/after 4,096,000-byte TGA pixel payloads: identical, 0 differing bytes.
+Pixel SHA256: 801363b3061a12036e7a948690c7518ea5fbc26551c8583ae2e8fc0944359e7e
+PNG copies included. Font RGB, outlines, positions and alternating half-alpha colours match.
+The present/hiz link warnings occur on both baseline and corrected runs. Text program works.
+car_select_view, tooltip_render and ui_lifetime suites also pass.
+No production Java/native signatures changed. No game assets/saves modified.
+No FPS gain or full in-game menu/catalog validation claimed. GLSL compiled, not runtime-tested.
+Reproduce:
+ ./scripts/run_save_io_tests.ps1 -Suite osd_text_batch
+ ./scripts/run_save_io_tests.ps1 -Suite osd_text_gpu
+ ./scripts/run_save_io_tests.ps1 -Suite osd_text_gpu -BaselineRef c63a8cd
+The baseline intentionally fails the new <=20 text-draw requirement.
+Generated captures: build/osd-text-gpu-tests/osd-text-gpu-{before,after}.tga.

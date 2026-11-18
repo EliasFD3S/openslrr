@@ -76,13 +76,13 @@ The chart, the counts above and [native-coverage.json](assets/progress/native-co
 | Script scheduling | ✅ Cooperative Windows fiber stacks; real run/sleep/wait, isAlive, stop, suspend/resume, and frame budgets. GameType callback lists and notification routing. See [SCRIPT_RUNTIME.md](docs/SCRIPT_RUNTIME.md) |
 | VM memory | ✅ Mark/sweep garbage collection, pin/unpin and finalizers; conservative native roots. See [VM_GC.md](docs/VM_GC.md) |
 | Resources | ✅ RPK packs, SCX models, DDS mipmaps, PTX textures and CFG configurations. Packs, meshes, map objects and textures load on every CPU core |
-| Rendering | ✅ bgfx/D3D11, skydomes, sun flares, environment reflections, projected car shadows and multilayer track materials |
+| Rendering | ✅ bgfx/D3D11, skydomes, sun flares, environment reflections, car shadow maps and multilayer track materials |
 | Interface | ✅ Menus, career dialogs, catalog, car showroom, track selection, and paint inventory |
 | Cars | ✅ Assembly from scripts and CFG files; reference Baiern with 76 parts. Showroom camera orbit, vehicle information, powertrain layout, gear ratios and dyno calculations |
 | Workshop | ✅ Point at a part to read its name, hide the body or the engine, open panels with interpolated motion and adjust tunable parts. Remove or fit attached assemblies, and drag inventory parts onto Repair/Sell. Detached suspension parts regain their rest pose in the inventory |
 | Physics | ⏳ Fixed-step chassis, suspension and tyre contacts, differential lock, impact deformation and panel detachment. Handling and damage still need comparison with the original |
 | Audio and video | ✅ Effects, loops, FMV audio and four music playlists streamed with Media Foundation/XAudio2. Repeated effects and menu sounds have separate overlap limits |
-| Options | ✅ Game, Advanced Game and audio settings use the stock `save/game/options` format. Pedestrian density scales a walking crowd in the city. Traffic density is saved while its simulation is pending |
+| Options | ✅ Game, Advanced Game and audio settings use the stock `save/game/options` format. The patched OptionsDialog removes the pedestrian density slider and fixes the crowd at the original maximum (1.5). Traffic density is saved while its simulation is pending |
 | Driving | ⏳ Test Track driving with engine SFX tables, keyboard and XInput, stock and CFG-defined instruments, and GPS. Acceleration has been compared with stock Nonus and Einvagen telemetry, with differences remaining |
 | World and career | ⏳ City, traffic and complete career flow; vehicle purchase/save/load still need end-to-end validation |
 
@@ -114,7 +114,7 @@ Headless diagnostics cover all four music sets (muted), audio-volume save/reload
 - Windows Media Foundation for music decoding (included in standard Windows installations; Windows N editions need the Media Feature Pack).
 - An Internet connection while preparing and initially configuring dependencies.
 
-Open SLRR builds for Windows x64 and uses bgfx for rendering. It loads the original game scripts and assets.
+Open SLRR builds for Windows x64 with an MSVC-compatible compiler and uses bgfx for rendering. CMake rejects non-MSVC toolchains (including MinGW), x86 and ARM64 before adding targets. It loads the original game scripts and assets.
 
 Install **VLC 3.x for Windows x64** for the original Cinepak AVI intros, the menu background, and formats such as H.264/AAC in MP4. Open SLRR looks in the standard VideoLAN installation directory. For a custom installation, set `SLRR_VLC_DIR` to the absolute folder containing `libvlc.dll`, `libvlccore.dll`, and `plugins`.
 
@@ -141,6 +141,17 @@ cmake --build build --config Release --target slrr_host --parallel
 ```
 
 The executable is generated at `build/Release/slrr_host.exe`. The first build includes bgfx and its shader tools, so it may take a while.
+
+Dependency locations follow the paths selected by the pinned `bgfx.cmake`:
+its in-tree `bgfx`/`bimg`/`bx` checkouts, explicit `BGFX_DIR`/`BIMG_DIR`/`BX_DIR`,
+or FetchContent. A custom `FETCHCONTENT_BASE_DIR` is supported; the host uses
+the same sources for ImGui, shader includes and bimg headers as the libraries.
+For pre-existing source checkouts, pass absolute paths with
+`-DFETCHCONTENT_SOURCE_DIR_BGFX=...`, `-DFETCHCONTENT_SOURCE_DIR_BIMG=...` and
+`-DFETCHCONTENT_SOURCE_DIR_BX=...`. Keep their revisions aligned with the pinned
+wrapper. `FETCHCONTENT_FULLY_DISCONNECTED=ON` requires sources already present;
+it does not download a missing dependency.
+
 
 ## Run
 

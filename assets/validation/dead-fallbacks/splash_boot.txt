@@ -1,0 +1,4 @@
+[section] adopt java.game.SplashScreen
+Splash pending timers=1
+[section] adopt java.game.SplashScreen
+PASS real Init boot creates one splash timer; repeated adoption preserves its OSD

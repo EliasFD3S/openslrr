@@ -346,9 +346,9 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
                  {Value::make_obj(garage)}, false);
       sections.set_garage(garage);
     }
-    Value av = jvm.get_static("java.game.GameLogic", "actualState");
-    if (av.tag == ValueTag::Obj && av.v.o && sections.actual() != av.v.o)
-      sections.change_active_section(av.v.o);
+    // Init's Java transition has already run enter and built the OSD/timer.
+    // Adopt its result exactly as the frame loop does; do not replay enter.
+    mainloop_adopt_section(jvm, sections);
     std::printf("[boot] after Init section=%s\n",
                 sections.actual_name().c_str());
     if (want_window) {

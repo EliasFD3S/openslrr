@@ -1,0 +1,1 @@
+[osd_text_batch] 4 passed, 0 failed

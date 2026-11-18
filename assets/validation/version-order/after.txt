@@ -1,0 +1,18 @@
+PASS Ninja: clean initial build -> boot r1-d17bb7c
+PASS Ninja: dirty metadata first rebuild -> boot r1-d17bb7c+
+PASS Ninja: new commit first rebuild -> boot r2-4993b86
+PASS Ninja: unchanged rebuild -> boot r2-4993b86
+PASS Ninja: unchanged header and executable timestamps
+PASS Ninja: clean rebuild restores generated header -> boot r2-4993b86
+PASS NMake Makefiles: clean initial build -> boot r1-28b8b7c
+PASS NMake Makefiles: dirty metadata first rebuild -> boot r1-28b8b7c+
+PASS NMake Makefiles: new commit first rebuild -> boot r2-836f5b1
+PASS NMake Makefiles: unchanged rebuild -> boot r2-836f5b1
+PASS NMake Makefiles: unchanged header and executable timestamps
+PASS NMake Makefiles: clean rebuild restores generated header -> boot r2-836f5b1
+PASS Visual Studio 17 2022: clean initial build -> boot r1-94d5544
+PASS Visual Studio 17 2022: dirty metadata first rebuild -> boot r1-94d5544+
+PASS Visual Studio 17 2022: new commit first rebuild -> boot r2-fd954c1
+PASS Visual Studio 17 2022: unchanged rebuild -> boot r2-fd954c1
+PASS Visual Studio 17 2022: unchanged header and executable timestamps
+PASS Visual Studio 17 2022: clean rebuild restores generated header -> boot r2-fd954c1

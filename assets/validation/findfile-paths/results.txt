@@ -1,0 +1,7 @@
+Issue #84; baseline db8f069; Release x64; 17 November 2026
+findfile_paths baseline: 1 passed, 4 failed (expected).
+findfile_paths corrected: 5 passed, 0 failed.
+save_io: 10 passed, 0 failed.
+save_persistence: 10 passed, 0 failed.
+Release host build succeeded. No gameplay validation claimed.
+Real natives and isolated NTFS junctions tested. Physical confinement retained.
