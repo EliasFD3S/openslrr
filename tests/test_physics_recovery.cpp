@@ -118,6 +118,28 @@ void numerical_failure_keeps_native_pump_alive(){
  SLRR_REQUIRE(part_physics_state(f.good,recovered) && recovered.active && std::isfinite(recovered.height));
  std::puts("PASS numerical overflow contained; native pump and healthy chassis continue; valid placement/start retries successfully");
 }
+void released_car_without_driver_hits_static_wall(){
+  CarFixture f;
+  part_destroy(f.bad);
+  f.bad=nullptr;
+  Object wall;
+  physicsref_create_box(&wall,&f.world,.25f,10.f,10.f,"coasting wall");
+  gameref_set_matrix(&wall,5,10,0,0,0,0);
+  const float velocity[3]={8,0,0},angular[3]={0,0,0};
+  // setState releases a real body without assigning a Controller or AI brain.
+  // configure_drive then has no torque/native driver, but must retain collision.
+  part_apply_state(f.good,velocity,angular);
+  SLRR_REQUIRE(part_controlled_chassis()==nullptr);
+  for(int tick=0;tick<60;++tick)
+    part_physics_advance(1./60.);
+  const auto* node=gameref_get(f.good);
+  PartPhysicsState state;
+  SLRR_REQUIRE(node && part_physics_state(f.good,state) && state.active);
+  std::printf("COASTING wall x=%.3f vx=%.3f ticks=%llu\n",node->pos[0],node->vel[0],state.ticks);
+  SLRR_REQUIRE(node->pos[0]>2 && node->pos[0]<4 && std::fabs(node->vel[0])<2);
+  gameref_remove(&wall);
+  std::puts("PASS released driverless car keeps static wall response without engine torque");
+}
 void malformed_dynamic_native_creation_is_transactional(){
  CarFixture f;PartConfig config;config.resource=0x12345678;config.name="invalid native test";
  PartBody body;body.shape=PartBodyShape::Box;body.box_half={1,1,1};
@@ -130,4 +152,4 @@ void malformed_dynamic_native_creation_is_transactional(){
  SLRR_REQUIRE(gameref_get(&f.world)->children.size()==before);
  std::puts("PASS invalid dynamic-native creation cleans its partial state and suppresses repeated retries");
 }
-int main(){const standalone::Test tests[]={matrix_rejects_nonfinite,malformed_free_body_does_not_stop_other_bodies,invalid_free_frame_recovers_last_pose,degenerate_chassis_is_suspended,corrupt_chassis_restores_pose,wheel_setters_reject_nonfinite_atomically,numerical_failure_keeps_native_pump_alive,malformed_dynamic_native_creation_is_transactional};return standalone::run("physics_recovery",tests);}
+int main(){const standalone::Test tests[]={matrix_rejects_nonfinite,malformed_free_body_does_not_stop_other_bodies,invalid_free_frame_recovers_last_pose,degenerate_chassis_is_suspended,corrupt_chassis_restores_pose,wheel_setters_reject_nonfinite_atomically,numerical_failure_keeps_native_pump_alive,released_car_without_driver_hits_static_wall,malformed_dynamic_native_creation_is_transactional};return standalone::run("physics_recovery",tests);}

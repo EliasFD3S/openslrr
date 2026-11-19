@@ -1,0 +1,91 @@
+Issue #197: shared vehicle contacts and initial remaining-work audit
+Baseline OpenSLRR: d1c719d18d6e76db0f3d6b2a8ff54b44a820bdfd
+Reference refreshed 2026-11-19 UTC:
+  SLRR_rev v221 7441a697f3b7b2d0ff7ddbe3f20f2e29a03165aa
+  SLRR_rev traffic bea8ce06eabef78ad0c25dde00e17a48765199b5
+
+Implementation:
+- Unchanged 60 Hz host/control accumulator, with all cars sharing two 120 Hz
+  substeps. Unique finite-mass chassis OBB pairs, bounded translational sweep,
+  reciprocal contact point, equal/opposite impulse, inverse-mass correction.
+- Native mounted-wheel stock assemblies, inline traffic and mechanical cars
+  participate independently of player/AI ownership. Parked cars can wake on
+  contact; new scripted placement and dirty assembly mass remain authoritative.
+- Promoted props/detached assemblies/free PhysicsRef bodies consider all active
+  cars. Unshaped PhysicsRef primitives use the reference chassis OBB path;
+  authored resource/panel mesh paths remain separate. Dynamic-body numerical
+  recovery rolls back rigid exchanges before damage/wake events commit.
+- Pair impacts carry actual normal impulse and pre-hit motion; mount energy is
+  not computed from the full pair-relative speed twice. The first queued engine
+  release retains its pre-impact motion. Existing wall callers remain compatible.
+- Published angular velocity now matches rigid-body motion; passive wake seeds
+  Adaptive interpolation from the car, not the world origin. Publication checks
+  float-width pose/motion before mutation. A successful explicit placement retry
+  restores contact eligibility after a locally contained physics fault.
+- Released coasting cars keep static-world contacts without an engine/controller;
+  the existing damage/mileage/cockpit block is not newly invented behavior.
+
+Preservation:
+Original /mnt/c/openslrr/open-SL is read-only. Each Windows build, asset/save copy,
+fixture root, log and executable belongs to the ticket's independent validation
+stage. No user/concurrent task process was stopped or binary overwritten.
+
+Checks completed:
+- Knowledge references: 321 checked, 119 external skipped, zero errors.
+- Native coverage generated metadata: current; Python coverage tests: 9 pass.
+- Portable contact kernel: 18 pass; final ASan+UBSan: 18 pass.
+- Existing scene-collision kernel: 15 pass; dynamic-response kernel: 2 pass.
+  Initial manual g++ link missed suspension_geometry.cpp, then passed with the
+  actual dependency; this was a harness invocation issue, not a source fix.
+- Windows x64 MSVC Release slrr_host: baseline and shared-contact build pass.
+- Baseline supported-host suites: physics_recovery 8, road_routes 6, race_brain 5,
+  traffic_runtime 10, race_vehicle 2: all pass (31 total).
+- New driverless static-wall regression against preserved baseline: expected
+  failure, car passes wall at x=8.000 / vx=8.000 / 120 physical ticks.
+  Changed code: passes at x=3.015 / vx=-1.682 / 120 ticks.
+- Shared-contact supported-host validation: physics_recovery 9 pass;
+  vehicle_contacts_runtime 9 pass; road_routes 6, race_brain 5,
+  traffic_runtime 10, race_vehicle 2 and gameref_alias/trigger_markers pass.
+  Final explicit retry/publication-guard + retained-player-control rerun pending.
+
+Real-assembly contact regression evidence:
+- Native stock Baiern (mounted CFG wheels, no Java ratios) versus inline Wagon
+  on generic GameType map: both change velocity with opposing impulses.
+- Native Baiern/full mechanical Enula high-relative-speed head-on: no crossing.
+- Full mechanical Baiern rear-end and inline Teg offset-side impact wake passive
+  cars. Actual/published side yaw rates match: .635715 / 2.335105 rad/s.
+- Parked re-placement remains in the new location; normal body-panel removal
+  updates mass from 1352.402 to 1349.902 kg without waking the car.
+- Hidden ancestor/other-world/overpass exclusions; controller/brain handoff,
+  deletion and zero-time pause; finite moving detached parts after damage.
+- Free PhysicsRef struck with player absent/far: AI speed changes 12.7686/11.8245
+  m/s; body peak vx 8.3453/8.0168 m/s and travel 5.3945/5.6152 m.
+- Actual positive-mass city prop promoted by AI proximity reacts without player
+  selection. Damage-enabled mechanical pair affects both chassis and produces
+  16 detached original parts with finite, moving world frames.
+These are host/VM/real-asset integration checks, not full career race acceptance.
+
+Build-only staging limitation:
+The tracked CMakeLists references absent tools/compile_game_sources.cpp. Only
+that unrelated executable target (five lines) is omitted in the private staging
+CMake copy; no fake stub is introduced. slrr_host sources/target are unchanged
+from this branch. The private runner additionally accepts frozen baseline
+sources/labels and uses the private game cwd, with separate native stderr capture.
+No external executable or concurrent build's object cache is used as evidence.
+
+Gameplay evidence: pending final validation and isolated application captures.
+No audible engine comparison or complete day/night/ROC challenge/results/return
+acceptance is claimed. Prior shared-races.txt gameplay observations are historical.
+
+Remaining scope / limitations:
+- Chassis contacts are conservative OBBs, not individual panel collision meshes.
+- Sweep is bounded (64 samples/current orientations), not exact rotational CCD.
+- Loose bodies do not collide with each other; unsupported non-four-wheel traffic
+  retains external motion. Complete upstream traffic recovery/following/lane and
+  speed policy, indicators/audio/driver seating and police visual reproduction
+  remain in #197, along with complete career/gameplay acceptance.
+- docs/TRAFFIC_RACE_AUDIT.md separates baseline causes from reported/unreproduced
+  defects and records what the refreshed upstream does not implement.
+
+Status: partial #197 contact implementation; final verification pending. Use
+Refs #197, not a closing keyword. A person reviews/merges; no agent auto-merge.

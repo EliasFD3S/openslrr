@@ -49,6 +49,11 @@ struct Contact {
   physics::Vec3 point{};
 };
 
+// Validated general box/box SAT, without an index or static ownership. The
+// normal points from `obstacle` towards `moving`; point is on the obstacle.
+// Touching boxes overlap with zero penetration. Invalid boxes never overlap.
+std::optional<Contact> overlap_boxes(const Box& moving, const Box& obstacle) noexcept;
+
 // Separating-axis overlap of a box with one triangle. The normal points from
 // the triangle towards the box centre's side, so moving the box along it by
 // `penetration` separates them; `point` is the triangle point nearest to the

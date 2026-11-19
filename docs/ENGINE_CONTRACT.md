@@ -572,6 +572,11 @@ mesh, mass and centre, starts asleep, wakes on car contact, and exchanges
 equal/opposite impulses with both car and static scene. A sleeping loose body
 skips the per-part car test unless its bounding sphere can reach the car's.
 Free `PhysicsRef` bodies (`setStatic(0)`) use the same loose-body contacts.
+Native/mechanical chassis also resolve unique finite-mass OBB pairs on shared
+120 Hz substeps. Dynamic-body reach, wake, contact and map-prop demotion consider
+all active physical cars, not just the controlled car; only a freshly detached
+engine temporarily ignores its original carrier. See the #197 audit for the
+bounded translational sweep, actual-impulse damage and remaining limits.
 This is a host loose-body approximation, not a general dynamic triangle-mesh
 engine: loose bodies collide with the car and the static scene, not with
 each other.
@@ -706,8 +711,9 @@ none of its corners is inside the car's bounds (at most 1 s). Whenever a part
 breaks off, the reconfigured chassis keeps its velocity and angular velocity, as
 SLRR_rev does, not its angular momentum: with less inertia the same momentum
 would spin it up (a car that lost its engine pitched over).
-The car then has no dyno, so no drive torque, engine audio or rpm, and it keeps
-its wall collision and damage although drive torque normally gates them.
+The car then has no dyno, so no drive torque, engine audio or rpm. Released
+bodies keep wall collision, damage and distance accumulation regardless of
+engine or controller ownership.
 `configure_drive` gives it a drive in neutral with a zero-torque engine that
 never starts, so it coasts on its tyres and its brakes still work, instead of
 the parked-tyre friction that stops a car without a drive. Repair
@@ -1046,7 +1052,16 @@ outcome. Visible four-wheel native traffic, native racer doubles and scripted ri
 use the shared rigid-body/suspension solver. Native CFG wheel renders must use
 the same hub compression, steering and spin as physical contacts; inline wheels
 do not require scripted rim slots. Unsupported chassis retain an external-motion
-fallback. Java model weights, including weight-one registered rivals, determine
+fallback. Released bodies keep static-world response without requiring a live
+engine or controller. The 60 Hz host/control tick contains shared 120 Hz vehicle
+substeps; each unordered chassis OBB pair exchanges finite-mass impulses once,
+then all corrected bodies/wheels are published. Parked physical cars can wake on
+contact without a driver. Movable map props and free bodies query all active
+physical cars rather than only the controlled one. Pair impacts carry actual
+normal impulse and pre-hit motion for mount damage/detachment; legacy wall
+callers retain their default reconstruction. Bounded translational sweeping is
+not exact rotational CCD. See [the #197 audit](TRAFFIC_RACE_AUDIT.md).
+Java model weights, including weight-one registered rivals, determine
 the traffic/adversary share under the configured host population cap. Streaming visibility must exclude an entire
 car subtree from rendering, physics and triggers without destroying its Java
 identity. Incarnations prevent stale traffic/brain references after removal.

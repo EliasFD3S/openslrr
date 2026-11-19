@@ -380,9 +380,10 @@ within .03 m; joins are never invented by nearest street centres. The installed
 City data supplies 1,572 lane curves and 3,854 crossing curves. Physical drivers
 receive multiple connected curves ahead and steer, accelerate and brake through
 the same Part solver as opponents. The external fallback carries arc-length
-progress through lane -> crossing -> outgoing lane. Selection chooses a destination
-branch before one of its lanes. Native traffic uses an urban cruise target;
-rural speed groups and the complete upstream traffic controller are not ported.
+progress through lane -> crossing -> outgoing lane. The external/coarse path chooses a destination branch before one of its lanes;
+the physical brain currently rebuilds lookahead using the first connected exit.
+Native traffic uses an urban cruise target; rural speed groups, physical forward
+peer following and the complete upstream traffic controller are not ported.
 
 GameRef.create_native on a native car builds its CFG-backed native assembly
 and aliases the Java handle to it, without running a chassis-specific constructor.
@@ -469,8 +470,15 @@ deviation, rather than the previous 122/126 seconds.
 Limitations: behaviour flags are stored without tuning; trailing model
 parameters, spline width/speed metadata, AI_params and opponent IDs do not tune
 the controller. Follow offsets are world-space. Complete pursuit, traffic lane changes,
-pair-contact reactions and opponent driver seating
-remain incomplete. AI tuning, population and streaming radii are
+the full traffic impact/recovery policy and opponent driver seating
+remain incomplete. Native/mechanical chassis now share 120 Hz contact substeps
+under the unchanged 60 Hz host/control tick. Each active-world OBB pair receives
+one finite-mass response, with a bounded translational sweep and all corrected
+body/wheel frames published together. Hidden ancestor chains, other worlds and
+stale incarnations are excluded. Parked bodies can wake on contact while Java
+retains car/driver ownership. Promoted props and free bodies query all active
+physical cars; pair damage carries actual impulse and pre-hit motion rather than
+reusing the wall-relative speed assumption. See TRAFFIC_RACE_AUDIT for limits. AI tuning, population and streaming radii are
 host models, not original-engine parity. Native bindings are not race completion.
 
 Validation uses the Release host objects and read-only local assets. road_routes

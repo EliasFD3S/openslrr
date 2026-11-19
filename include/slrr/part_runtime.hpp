@@ -22,7 +22,7 @@ Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
                     uint32_t resource, const std::string &alias,
                     const std::string &params = {}, bool native_only = false);
 // Positive-mass native map placement. Uses the loose-part mesh solver and
-// exchanges contact impulses with the controlled car and static scene.
+// exchanges contact impulses with active-world physical cars and static scene.
 // Returns the loose body's node, or nullptr when it could not be created.
 Object* part_add_dynamic_native(const PartConfig& config,
                              const std::vector<PartRender>& renders,
