@@ -90,6 +90,9 @@ SceneSun scene_instances_light(void* root=nullptr);
 // Rejects missing parents, hidden subtrees and cycles. Draws simulated
 // bodies at their pose interpolated between physics ticks.
 bool scene_instance_transform(void *key, void *root, float *matrix);
+// Direct setMatrix preview camera: PE camera basis, including the same root
+// frame used by the preview meshes, in reflected render coordinates.
+bool scene_instances_preview_view(const GameRefState& camera, float* view);
 // Active world, unreflected script metres. False for inventory/other worlds.
 bool scene_instances_script_matrix(void *key, float *matrix);
 // The same, at the drawn pose (gameref_render_matrix). Use it for cameras,
@@ -134,6 +137,8 @@ struct ScenePickSurface {
   float world[3] = {0.f, 0.f, 0.f};
   float local[3] = {0.f, 0.f, 0.f};
   float normal[3] = {0.f, 0.f, 0.f};
+  float screen_up[3] = {0.f, 1.f, 0.f};
+  bool mirrored = false;
 };
 bool scene_instances_pick_surface(const float origin[3], const float direction[3],
                                   ScenePickSurface *surface);

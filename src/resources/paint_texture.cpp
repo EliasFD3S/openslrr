@@ -19,10 +19,12 @@ struct Entry {
   PaintImage committed, shown;
   bool temp = false;
   uint32_t revision = 1;
+  unsigned unused_frames = 0;
 };
 std::unordered_map<uint32_t, Entry> g_textures;
 std::vector<uint32_t> g_released;
 uint32_t g_next_local = 1;
+uint32_t g_revision = 1;
 
 Entry* entry(uint32_t id) {
   auto it = g_textures.find(id);
@@ -172,7 +174,7 @@ std::vector<uint8_t> deflate_fixed(const std::vector<uint8_t>& data) {
   w.bits(1, 2);  // BTYPE 01
   constexpr uint32_t kWindow = 32768, kHashSize = 1 << 15;
   constexpr int kChain = 24;
-  std::vector<int32_t> head(kHashSize, -1), previous(data.size(), -1);
+  std::vector<int32_t> head(kHashSize, -1), previous(kWindow, -1);
   auto hash = [&](size_t i) {
     return ((uint32_t(data[i]) << 10) ^ (uint32_t(data[i + 1]) << 5) ^ data[i + 2]) &
            (kHashSize - 1);
@@ -180,7 +182,7 @@ std::vector<uint8_t> deflate_fixed(const std::vector<uint8_t>& data) {
   auto insert = [&](size_t i) {
     if (i + 2 >= data.size()) return;
     const uint32_t h = hash(i);
-    previous[i] = head[h];
+    previous[i & (kWindow - 1)] = head[h];
     head[h] = static_cast<int32_t>(i);
   };
   size_t i = 0;
@@ -199,7 +201,7 @@ std::vector<uint8_t> deflate_fixed(const std::vector<uint8_t>& data) {
           best_distance = static_cast<uint32_t>(distance);
           if (length == limit) break;
         }
-        candidate = previous[static_cast<size_t>(candidate)];
+        candidate = previous[static_cast<size_t>(candidate) & (kWindow - 1)];
       }
     }
     if (best_length >= 3) {
@@ -286,6 +288,7 @@ uint32_t paint_texture_create(PaintImage image) {
     const uint32_t id = kPaintTextureHigh | local;
     if (g_textures.count(id)) continue;
     Entry e;
+    e.revision = ++g_revision;
     e.shown = image;
     e.committed = std::move(image);
     g_textures.emplace(id, std::move(e));
@@ -322,7 +325,7 @@ bool paint_texture_draw(uint32_t id, bool temp,
     e->shown = e->committed;
     e->temp = false;
   }
-  ++e->revision;
+  e->revision = ++g_revision;
   return true;
 }
 
@@ -331,7 +334,7 @@ bool paint_texture_clear_temp(uint32_t id) {
   if (!e || !e->temp) return false;
   e->shown = e->committed;
   e->temp = false;
-  ++e->revision;
+  e->revision = ++g_revision;
   return true;
 }
 
@@ -342,6 +345,18 @@ bool paint_texture_has_temp(uint32_t id) {
 
 void paint_texture_release(uint32_t id) {
   if (g_textures.erase(id)) g_released.push_back(id);
+}
+
+void paint_texture_collect(const std::function<bool(uint32_t)>& used) {
+  for (auto it = g_textures.begin(); it != g_textures.end();) {
+    if (used(it->first)) it->second.unused_frames = 0;
+    else if (++it->second.unused_frames >= 3) {
+      g_released.push_back(it->first);
+      it = g_textures.erase(it);
+      continue;
+    }
+    ++it;
+  }
 }
 
 std::vector<uint32_t> paint_texture_take_released() {
@@ -474,10 +489,14 @@ size_t paint_stamp_mesh(PaintImage& target, const ScxGeometry& geometry, int pai
     return 0;
   float n[3] = {stamp.normal[0], stamp.normal[1], stamp.normal[2]};
   if (!normalize3(n)) return 0;
-  // In-plane axes: "up" is the mesh's +Y projected onto the surface, or +Z
-  // on a roof or floor. The script's rotation turns them about the normal.
-  float up[3] = {0.f, 1.f, 0.f};
-  if (std::fabs(n[1]) > .9f) up[1] = 0.f, up[2] = 1.f;
+  // Project screen up (expressed in this mesh frame) onto the surface.
+  // The fallback handles a view looking exactly along that up vector.
+  float up[3] = {stamp.up[0], stamp.up[1], stamp.up[2]};
+  if (!normalize3(up)) return 0;
+  if (std::fabs(dot3(up, n)) > .99f) {
+    up[0] = 0.f; up[1] = std::fabs(n[1]) > .9f ? 0.f : 1.f;
+    up[2] = up[1] ? 0.f : 1.f;
+  }
   const float d = dot3(up, n);
   float b0[3] = {up[0] - n[0] * d, up[1] - n[1] * d, up[2] - n[2] * d};
   if (!normalize3(b0)) return 0;
@@ -529,6 +548,15 @@ size_t paint_stamp_mesh(PaintImage& target, const ScxGeometry& geometry, int pai
         uv[k][0] = (uvs[vi[k] * 2] * group.base_map.scale_u + group.base_map.offset_u) * w;
         uv[k][1] = (uvs[vi[k] * 2 + 1] * group.base_map.scale_v + group.base_map.offset_v) * h;
       }
+      // Malformed asset coordinates must not reach float-to-int conversion
+      // or turn a brush tick into an unbounded raster walk.
+      for (int k = 0; k < 3; ++k) {
+        bad |= !std::isfinite(dist[k]) || !std::isfinite(decal[k][0]) ||
+               !std::isfinite(decal[k][1]);
+        for (int a = 0; a < 2; ++a)
+          bad |= !std::isfinite(uv[k][a]) || std::fabs(uv[k][a]) > 1048576.f;
+      }
+      if (bad) continue;
       auto all = [&](auto pred) { return pred(0) && pred(1) && pred(2); };
       if (all([&](int k) { return dist[k] > depth; }) ||
           all([&](int k) { return dist[k] < -depth; }) ||
@@ -568,8 +596,12 @@ size_t paint_stamp_mesh(PaintImage& target, const ScxGeometry& geometry, int pai
         const float* a1 = uv[(k + 2) % 3];
         slack[k] = -.7f * std::hypot(a1[0] - a0[0], a1[1] - a0[1]) / std::fabs(area);
       }
-      for (int y = int(std::floor(lo[1])); y <= int(std::ceil(hi[1])); ++y)
-        for (int x = int(std::floor(lo[0])); x <= int(std::ceil(hi[0])); ++x) {
+      const int x0 = std::max(0, int(std::floor(lo[0])));
+      const int y0 = std::max(0, int(std::floor(lo[1])));
+      const int x1 = std::min(int(target.width) - 1, int(std::ceil(hi[0])));
+      const int y1 = std::min(int(target.height) - 1, int(std::ceil(hi[1])));
+      for (int y = y0; y <= y1; ++y)
+        for (int x = x0; x <= x1; ++x) {
           const float cx = x + .5f, cy = y + .5f;
           float bary[3];
           for (int k = 0; k < 3; ++k) {
@@ -580,10 +612,9 @@ size_t paint_stamp_mesh(PaintImage& target, const ScxGeometry& geometry, int pai
           if (bary[0] < slack[0] || bary[1] < slack[1] || bary[2] < slack[2]) continue;
           const float sd = bary[0] * decal[0][0] + bary[1] * decal[1][0] + bary[2] * decal[2][0];
           const float td = bary[0] * decal[0][1] + bary[1] * decal[1][1] + bary[2] * decal[2][1];
-          if (sd < 0.f || sd > 1.f || td < 0.f || td > 1.f) continue;
-          const int px = ((x % int(target.width)) + int(target.width)) % int(target.width);
-          const int py = ((y % int(target.height)) + int(target.height)) % int(target.height);
-          const size_t index = size_t(py) * target.width + size_t(px);
+          const float z = bary[0] * dist[0] + bary[1] * dist[1] + bary[2] * dist[2];
+          if (sd < 0.f || sd > 1.f || td < 0.f || td > 1.f || std::fabs(z) > depth) continue;
+          const size_t index = size_t(y) * target.width + size_t(x);
           if (covered[index]) continue;
           float src[4];
           sample(brush, sd, td, src);

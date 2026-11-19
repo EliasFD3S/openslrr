@@ -2256,12 +2256,13 @@ picked part; the host draws directly instead:
 - `paintPart` fills the part's own texture with the can colour.
 - `doPaint` projects the brush (`misc.garage:0x0102`, a soft dot) or a decal
   with `src/resources/paint_texture.cpp:paint_stamp_mesh`: a square `size`
-  metres wide, along the hit normal, "up" being the part's +Y, turned by
+  metres wide, along the hit normal, oriented to screen up (including
+  mirrored part frames), turned by
   `rot` and mirrored by `flip`. Only paint-slot triangles facing the stamp
   inside a depth slab are painted; each texel blends once per stamp.
   `temp = 1` (the decal preview) is drawn over a copy and replaced by the next
   preview.
-- `xPaint` and `painter_tick` (250 ms without a refresh) take the preview off.
+- `xPaint` and `painter_tick` (two host frames without a refresh) take the preview off.
   A texture created only for a preview gives the part its previous texture
   back.
 
@@ -2270,7 +2271,9 @@ These orientation, size and expiry rules are host approximations.
 Textures. `paint_texture.hpp` keeps Painter textures in host memory with ids
 `0xFFFFxxxx`. `src/resources/part_runtime.cpp:assign_texture` shows them in
 the part's paint slot like a pack colour (`Part.setTexture` accepts them) and
-releases one when no live part shows it. A part draws on a copy when it
+reclaims one after three host frames without a live part or open save
+reader using it. This also reclaims unused loaded-skin textures and preserves
+ids through synchronous part rebuilds. A part draws on a copy when it
 shares its texture. `scene_instances_texture` maps the id to a `paint:` path;
 `src/render/bgfx_osd.cpp:paint_texture_handle` uploads it with a box-filtered
 mip chain and again on each change. Images start from the part's current
@@ -2284,3 +2287,13 @@ blob carries a PNG (`paint_png_encode`, fixed-Huffman deflate).
 that the original game writes. Stock MWM saves with painted parts therefore
 load their paint. OpenSLRR saves are not meant to be read by the original
 executable.
+
+Paint-can preview follow-up. The preview meshes included their local world's
+root transform, but the direct `setMatrix` camera ignored that same transform.
+The inventory world moves with its owning garage state, so the mismatch moved
+the cans up/down or entirely outside the cells. The generic direct-preview
+camera view now includes the same root frame:
+`src/resources/scene_instances.cpp:scene_instances_preview_view`. The
+`car_select_view` regression moves and rotates a common root and verifies that
+the projected item remains fixed relative to its camera. Aimed preview cameras
+keep their existing world-space look/move path.

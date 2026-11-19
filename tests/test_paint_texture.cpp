@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 
 namespace {
 
@@ -187,6 +188,62 @@ SLRR_TEST(stamp_blends_each_texel_once_and_orients_the_brush) {
   SLRR_REQUIRE(texel(oriented, 4, 16)[1] == 255 && texel(oriented, 27, 16)[0] == 255);
 }
 
+SLRR_TEST(stamp_rejects_invalid_coordinates_before_rasterization) {
+  auto geometry = quad();
+  auto target = image(32, 32, 0xff000000u);
+  const auto brush = image(2, 2, 0xffffffffu);
+  slrr::PaintStamp stamp;
+  stamp.normal[2] = 1.f;
+  stamp.size = 4.f;
+  for (auto& uv : geometry.uvs) uv = 1e30f;
+  SLRR_REQUIRE(slrr::paint_stamp_mesh(target, geometry, 0, brush, stamp) == 0);
+  geometry = quad();
+  for (auto& p : geometry.positions) p = std::numeric_limits<float>::quiet_NaN();
+  SLRR_REQUIRE(slrr::paint_stamp_mesh(target, geometry, 0, brush, stamp) == 0);
+}
+
+SLRR_TEST(unused_textures_have_rebuild_grace_and_are_then_reclaimed) {
+  slrr::paint_texture_clear_all();
+  const auto id = slrr::paint_texture_create(image(4, 4, 0xff123456));
+  const auto revision = slrr::paint_texture_revision(id);
+  auto unused = [](uint32_t) { return false; };
+  slrr::paint_texture_collect(unused);
+  slrr::paint_texture_collect(unused);
+  SLRR_REQUIRE(slrr::paint_texture_exists(id));
+  slrr::paint_texture_collect([&](uint32_t v) { return v == id; });
+  slrr::paint_texture_collect(unused);
+  slrr::paint_texture_collect(unused);
+  SLRR_REQUIRE(slrr::paint_texture_exists(id));
+  slrr::paint_texture_collect(unused);
+  SLRR_REQUIRE(!slrr::paint_texture_exists(id));
+  const auto next = slrr::paint_texture_create(image(4, 4, 0xffabcdef));
+  SLRR_REQUIRE(slrr::paint_texture_revision(next) != revision);
+  slrr::paint_texture_release(next);
+}
+
+SLRR_TEST(stamp_does_not_wrap_uv_borders_and_respects_screen_up) {
+  auto geometry = quad();
+  auto target = image(64, 64, 0xff000000);
+  const auto brush = image(2, 2, 0xffffffff);
+  slrr::PaintStamp stamp;
+  stamp.normal[2] = 1.f;
+  stamp.size = .5f;
+  stamp.hit[0] = -.95f;
+  slrr::paint_stamp_mesh(target, geometry, 0, brush, stamp);
+  SLRR_REQUIRE(texel(target, 0, 32)[0] == 255);
+  SLRR_REQUIRE(texel(target, 63, 32)[0] == 0);
+  // Rotating screen up rather than rotating the mesh does not change the
+  // meaning of left/right for a split decal.
+  PaintImage split = image(2, 1, 0xffff0000u);
+  split.rgba[4] = 0; split.rgba[5] = 255;
+  stamp.hit[0] = 0;
+  stamp.size = 2;
+  stamp.up[0] = 1; stamp.up[1] = 0;
+  slrr::paint_stamp_mesh(target, geometry, 0, split, stamp);
+  SLRR_REQUIRE(texel(target, 32, 6)[0] == 255);
+  SLRR_REQUIRE(texel(target, 32, 57)[1] == 255);
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
       png_encoding_round_trips_flat_and_detailed_images,
@@ -194,6 +251,9 @@ int main() {
       paint_texture_ids_temp_strokes_and_release,
       stamp_paints_the_facing_paint_slot_under_the_brush_only,
       stamp_blends_each_texel_once_and_orients_the_brush,
+      stamp_rejects_invalid_coordinates_before_rasterization,
+      unused_textures_have_rebuild_grace_and_are_then_reclaimed,
+      stamp_does_not_wrap_uv_borders_and_respects_screen_up,
   };
   return slrr::standalone::run("paint_texture", tests);
 }

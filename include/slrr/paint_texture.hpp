@@ -17,7 +17,8 @@ struct PaintImage {
   uint32_t width = 0, height = 0;
   std::vector<uint8_t> rgba;
   bool valid() const {
-    return width && height && rgba.size() == size_t(width) * height * 4;
+    return width && height && width <= 4096 && height <= 4096 &&
+           rgba.size() == size_t(width) * height * 4;
   }
 };
 
@@ -42,6 +43,9 @@ bool paint_texture_draw(uint32_t id, bool temp,
 bool paint_texture_clear_temp(uint32_t id);
 bool paint_texture_has_temp(uint32_t id);
 void paint_texture_release(uint32_t id);
+// Reclaim textures unused by parts or open save readers for three host
+// frames. The grace period preserves ids through a synchronous part rebuild.
+void paint_texture_collect(const std::function<bool(uint32_t)>& used);
 // Ids released since the last call, for GPU handles to follow.
 std::vector<uint32_t> paint_texture_take_released();
 void paint_texture_clear_all();
@@ -63,13 +67,15 @@ bool paint_image_decode(const uint8_t* data, size_t size, PaintImage* out);
 void paint_fill(PaintImage& image, uint32_t argb);
 
 // Projected decal or spray stamp. hit and normal are in the mesh's scaled
-// local frame (metres, before the render Z reflection). The brush square is
+// local frame (metres, before the render Z reflection); up is screen up in
+// that frame. The brush square is
 // size metres wide, turned by rot radians about the normal and mirrored by
 // flip. Only triangles of the paint slot that face the stamp are painted;
 // each covered texel blends brush RGB x color RGB at brush alpha x color
 // alpha. Returns the number of texels changed.
 struct PaintStamp {
   float hit[3]{}, normal[3]{};
+  float up[3] = {0.f, 1.f, 0.f};
   float size = 0.7f, rotation = 0.f;
   bool flip = false;
   uint32_t argb = 0xffffffffu;

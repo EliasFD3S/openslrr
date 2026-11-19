@@ -88,7 +88,8 @@ namespace slrr {
     if (!bgfx::isValid(gpu.handle)) {
       gpu.handle = bgfx::createTexture2D(static_cast<uint16_t>(image->width),
                                          static_cast<uint16_t>(image->height), mips, 1,
-                                         bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE, nullptr);
+                                         bgfx::TextureFormat::RGBA8,
+                                         BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP, nullptr);
       if (!bgfx::isValid(gpu.handle)) {
         paint_tex_.erase(id);
         return white_tex_;

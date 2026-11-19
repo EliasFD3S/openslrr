@@ -13,8 +13,8 @@
 //
 // Host approximations, not recovered from the executable: the stamp is a
 // square `size` metres wide projected along the hit normal, "up" being the
-// part's +Y; a temporary stroke is replaced by the next one and expires a
-// quarter second after the last; whole-part paint replaces the texture
+// screen up; a temporary stroke is replaced by the next one and expires
+// two unrefreshed host frames after the last; whole-part paint replaces the texture
 // with one flat colour.
 
 #include "natives_internal.hpp"
@@ -27,7 +27,6 @@
 #include "slrr/scene_instances.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cstdio>
 #include <unordered_map>
 
@@ -56,18 +55,18 @@ bool part_under_pointer(PointerPart& out) {
 }
 
 // Decoded pack textures: brushes, decals and the paint a part starts from.
+std::unordered_map<uint32_t, PaintImage> g_pack_images;
 const PaintImage* texture_pixels(uint32_t id) {
   if (!id) return nullptr;
   if (paint_texture_exists(id)) return paint_texture_committed(id);
-  static std::unordered_map<uint32_t, PaintImage> cache;
-  if (auto it = cache.find(id); it != cache.end())
+  if (auto it = g_pack_images.find(id); it != g_pack_images.end())
     return it->second.valid() ? &it->second : nullptr;
   PaintImage image;
   const std::string path = scene_instances_texture(id);
   if (!path.empty() && !paint_image_from_texture(load_texture_file(path), &image))
     std::printf("[painter] texture 0x%08x (%s) could not be decoded\n", id, path.c_str());
-  auto& slot = cache[id] = std::move(image);
-  return slot.valid() ? &slot : nullptr;
+  if (!image.valid()) return nullptr;
+  return &g_pack_images.emplace(id, std::move(image)).first->second;
 }
 
 // Painter textures made for a temporary stroke only. Clearing the stroke
@@ -75,7 +74,7 @@ const PaintImage* texture_pixels(uint32_t id) {
 // never applied does not turn the part into a saved image.
 std::unordered_map<uint32_t, uint32_t> g_preview_only;
 uint32_t g_temp_texture = 0;
-std::chrono::steady_clock::time_point g_temp_time;
+uint64_t g_frame = 0, g_temp_frame = 0;
 
 void clear_temp(uint32_t id) {
   if (!id) return;
@@ -98,10 +97,9 @@ uint32_t own_texture(Object* part, bool temp) {
   }
   PaintImage base;
   if (const PaintImage* shown = texture_pixels(current ? current : source)) base = *shown;
-  if (!base.valid()) {
-    base.width = base.height = 256;
-    base.rgba.assign(size_t(256) * 256 * 4, 255);
-  }
+  if (!base.valid() && current != source)
+    if (const PaintImage* fallback = texture_pixels(source)) base = *fallback;
+  if (!base.valid()) return 0;
   const uint32_t id = paint_texture_create(std::move(base));
   if (!id || !part_set_paint_texture(part, id)) {
     paint_texture_release(id);
@@ -132,13 +130,25 @@ bool has_cursor(const std::vector<Value>& args) {
 }  // namespace
 
 void painter_tick() {
-  if (g_temp_texture && std::chrono::steady_clock::now() - g_temp_time > std::chrono::milliseconds(250)) {
+  ++g_frame;
+  if (g_temp_texture && g_frame - g_temp_frame > 2) {
     clear_temp(g_temp_texture);
     g_temp_texture = 0;
   }
+  paint_texture_collect([](uint32_t id) {
+    if (part_showing_texture(id)) return true;
+    for (const auto& [file, state] : g_host_files)
+      for (const auto& blob : state.sdat_blobs)
+        if (static_cast<uint32_t>(blob.abs_id) == id) return true;
+    return false;
+  });
 }
 
 void register_painter_natives(Jvm& jvm) {
+  g_pack_images.clear();
+  g_preview_only.clear();
+  g_temp_texture = 0;
+  g_frame = g_temp_frame = 0;
   // void paintPart(GameRef cursor, int color): MODE_PAINTPART left click.
   jvm.natives().register_method(
       kPainter, "paintPart", "(Ljava.util.resource.GameRef;I)V",
@@ -167,19 +177,21 @@ void register_painter_natives(Jvm& jvm) {
         }
         const PaintImage* brush = texture_pixels(static_cast<uint32_t>(int_arg(args, 2)));
         if (!brush) return Value::make_void();
+        // Keep the pixels alive even if assigning the destination or
+        // clearing an old preview releases this same dynamic brush.
+        const PaintImage brush_copy = *brush;
         PaintStamp stamp;
         std::copy(hit.surface.local, hit.surface.local + 3, stamp.hit);
         std::copy(hit.surface.normal, hit.surface.normal + 3, stamp.normal);
+        std::copy(hit.surface.screen_up, hit.surface.screen_up + 3, stamp.up);
         stamp.argb = static_cast<uint32_t>(int_arg(args, 1));
         stamp.rotation = float_arg(args, 4);
         stamp.size = float_arg(args, 5);
-        stamp.flip = int_arg(args, 6) != 0;
+        stamp.flip = (int_arg(args, 6) != 0) != hit.surface.mirrored;
         const uint32_t id = own_texture(hit.part, temp);
         if (!id) return Value::make_void();
         if (g_temp_texture && g_temp_texture != id) clear_temp(g_temp_texture);
         g_temp_texture = 0;
-        // The brush may be a texture that is itself being painted.
-        const PaintImage brush_copy = *brush;
         const auto geometry = hit.surface.geometry;
         const int slot = hit.surface.paint_slot;
         paint_texture_draw(id, temp, [&](PaintImage& image) {
@@ -187,7 +199,7 @@ void register_painter_natives(Jvm& jvm) {
         });
         if (temp) {
           g_temp_texture = id;
-          g_temp_time = std::chrono::steady_clock::now();
+          g_temp_frame = g_frame;
         }
         return Value::make_void();
       });

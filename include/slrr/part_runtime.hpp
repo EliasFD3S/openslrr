@@ -48,7 +48,7 @@ Object *part_render_owner(void *key);
 // Part.getTexture and the cfg `texture` (the paint slot; 0 = unpaintable).
 bool part_paint_textures(Object *part, uint32_t *current, uint32_t *source);
 // Part.setTexture for a pack texture or a Painter texture (paint_texture.hpp).
-// A Painter texture that no live part shows any more is released.
+// Unused Painter textures are reclaimed after the script frame.
 bool part_set_paint_texture(Object *part, uint32_t texture);
 // True when another live part than `part` shows this texture.
 bool part_paint_texture_shared(uint32_t texture, Object *part);

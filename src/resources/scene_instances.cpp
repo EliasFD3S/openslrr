@@ -2910,6 +2910,33 @@ bool ray_triangle(const float o[3], const float d[3], const float a[3],
   return t > 1e-4f;
 }
 
+bool scene_instances_preview_view(const GameRefState& camera, float* view) {
+  float root[16];
+  if (!view || !chain_matrix(camera.parent, camera.parent, root, false, true)) return false;
+  // Direct camera poses use the same Ry*Rx*Rz convention as Vector3.rotate.
+  const float sy=std::sin(camera.ypr[0]), cy=std::cos(camera.ypr[0]);
+  const float sp=std::sin(camera.ypr[1]), cp=std::cos(camera.ypr[1]);
+  const float sr=std::sin(camera.ypr[2]), cr=std::cos(camera.ypr[2]);
+  float pose[16] = {sr*sp*sy+cr*cy, sr*cp, sr*sp*cy-cr*sy, 0,
+                     cr*sp*sy-sr*cy, cr*cp, cr*sp*cy+sr*sy, 0,
+                     cp*sy, -sp, cp*cy, 0,
+                     camera.pos[0], camera.pos[1], camera.pos[2], 1};
+  float frame[16], inv[9];
+  multiply(frame, root, pose);
+  if (!invert_columns(frame, inv)) return false;
+  identity(view);
+  for (int col=0; col<3; ++col)
+    for (int row=0; row<3; ++row) view[col*4+row] = inv[col*3+row];
+  for (int row=0; row<3; ++row)
+    view[12+row] = -(inv[row]*frame[12] + inv[3+row]*frame[13] + inv[6+row]*frame[14]);
+  // Mesh vertices are S*v and instances S*M*S. Convert the camera view
+  // to that same reflected frame (and left-handed projection convention).
+  for (int col=0; col<4; ++col)
+    for (int row=0; row<4; ++row)
+      if ((col==2)!=(row==2)) view[col*4+row] *= -1.f;
+  return true;
+}
+
 bool scene_instances_pointer_ray(int px, int py, int width, int height,
                                  float origin[3], float direction[3]) {
   if (width <= 0 || height <= 0) return false;
@@ -2948,6 +2975,15 @@ bool scene_instances_pick_surface(const float origin[3], const float direction[3
   if (!origin || !direction || !surface)
     return false;
   *surface = ScenePickSurface{};
+  float screen_up[3] = {0.f, 1.f, 0.f}, eye[3], at[3];
+  if (gameref_world_camera(eye, at, nullptr, nullptr, nullptr, screen_up)) {
+    float f[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
+    const float fl2 = f[0]*f[0] + f[1]*f[1] + f[2]*f[2];
+    if (fl2 > 1e-8f) {
+      const float d = (f[0]*screen_up[0] + f[1]*screen_up[1] + f[2]*screen_up[2]) / fl2;
+      for (int k = 0; k < 3; ++k) screen_up[k] -= f[k] * d;
+    }
+  }
   float best = 1e9f;
   void *hit = nullptr;
   for (const SceneInstance &instance : scene_instances_collect_root(g_world)) {
@@ -3024,7 +3060,11 @@ bool scene_instances_pick_surface(const float origin[3], const float direction[3
         const float side = n[0] * d[0] + n[1] * d[1] + n[2] * d[2] > 0.f ? -1.f : 1.f;
         surface->geometry = instance.geometry;
         surface->paint_slot = instance.paint_slot;
+        surface->mirrored = matrix[0] * (matrix[5]*matrix[10] - matrix[6]*matrix[9])
+                          - matrix[4] * (matrix[1]*matrix[10] - matrix[2]*matrix[9])
+                          + matrix[8] * (matrix[1]*matrix[6] - matrix[2]*matrix[5]) < 0.f;
         for (int k = 0; k < 3; ++k) {
+          surface->screen_up[k] = inv[k] * screen_up[0] + inv[3+k] * screen_up[1] + inv[6+k] * screen_up[2];
           surface->local[k] = o[k] + d[k] * t;
           surface->normal[k] = nl > 0.f ? side * n[k] / nl : 0.f;
         }

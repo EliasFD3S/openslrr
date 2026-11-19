@@ -233,8 +233,11 @@ bool decode_image_rgba(const uint8_t* data, size_t size, uint32_t* width,
   if (!data || !width || !height || !rgba ||
       size > static_cast<size_t>(std::numeric_limits<int>::max()))
     return false;
-#if defined(SLRR_HAS_LIBBGFX)
   int w = 0, h = 0, comp = 0;
+  // Check save-provided dimensions before the decoder allocates pixels.
+  if (!stbi_info_from_memory(data, static_cast<int>(size), &w, &h, &comp) ||
+      w <= 0 || h <= 0 || w > 4096 || h > 4096)
+    return false;
   stbi_uc* pixels = stbi_load_from_memory(data, static_cast<int>(size), &w, &h, &comp, 4);
   if (!pixels || w <= 0 || h <= 0) {
     if (pixels) stbi_image_free(pixels);
@@ -245,9 +248,6 @@ bool decode_image_rgba(const uint8_t* data, size_t size, uint32_t* width,
   rgba->assign(pixels, pixels + size_t(w) * size_t(h) * 4);
   stbi_image_free(pixels);
   return true;
-#else
-  return false;
-#endif
 }
 
 DdsImage load_texture_file(const std::string& path) {

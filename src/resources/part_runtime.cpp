@@ -312,18 +312,12 @@ bool texture_in_use(uint32_t texture, const Object *except = nullptr) {
       return true;
   return false;
 }
-void drop_unused_paint(uint32_t texture, const Object *except = nullptr) {
-  if (paint_texture_exists(texture) && !texture_in_use(texture, except))
-    paint_texture_release(texture);
-}
-void assign_texture(Object *part, Record &rec, uint32_t texture) {
-  const uint32_t old = rec.state.texture;
+void assign_texture(Object *, Record &rec, uint32_t texture) {
   rec.state.texture = texture;
   for (auto *render : rec.renders)
     if (auto *node = gameref_get(render))
       node->paint_texture = texture;
-  if (old != texture)
-    drop_unused_paint(old, part);
+  // Reclaim after script callbacks, not in the middle of a part rebuild.
 }
 void repair_part(Object *part, Record &rec);
 bool flap_geometry_for(Object *part, Record &rec,
@@ -1917,9 +1911,7 @@ bool part_destroy(Object *part) {
   for (auto *render : rec->renders)
     gameref_remove(render);
   release_side(*rec);
-  const uint32_t texture = rec->state.texture;
   records.erase(part);
-  drop_unused_paint(texture);
   gameref_remove(part);
   return true;
 }
@@ -5633,6 +5625,7 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   runtime = &jvm;
   for (auto &[key, rec] : records) release_side(rec);
   records.clear();
+  paint_texture_clear_all();
   repair_relink_pending.clear();
   // Dyno sessions belong to the old world's Java objects. The registry is
   // deliberately weak during GC, so world teardown must release it explicitly.
