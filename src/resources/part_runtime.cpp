@@ -396,6 +396,8 @@ PartMatrix node_local(Object *obj) {
   std::copy(n->ypr, n->ypr + 3, pose.rotation.begin());
   return part_pose_matrix(pose);
 }
+// Part-assembly transform (not a generic scene-node transform). A RenderRef
+// has no Record; compose its node_local matrix with its owning part instead.
 PartMatrix world_matrix(Object *obj) {
   std::vector<PartMatrix> chain;
   for (int i = 0; obj && i < 32; ++i) {
@@ -1974,13 +1976,14 @@ void rebuild_body_support(Object* chassis, Record& rec) {
     }
     const auto part_frame = world_matrix(item.object);
     const auto from_part = part_matrix_multiply(to_chassis, part_frame);
-    const auto to_part = part_matrix_inverse_rigid(part_frame);
     for (auto* render : part->renders) {
       const auto* node = gameref_get(render);
       if (!node || node->light_flags) continue;
       const auto mesh = scene_instances_geometry(static_cast<uint32_t>(node->type_id));
       if (!mesh) continue;
-      const auto mesh_to_part = part_matrix_multiply(to_part, world_matrix(render));
+      // RenderRefs are already local to their owning part. world_matrix
+      // only follows native Part records, not a RenderRef's scene parent.
+      const auto mesh_to_part = node_local(render);
       for (size_t v = 0; v + 2 < mesh->positions.size(); v += 3) {
         Vec3 p = transform(mesh_to_part, {mesh->positions[v] * mesh->position_scale,
             mesh->positions[v + 1] * mesh->position_scale,
