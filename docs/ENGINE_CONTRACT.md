@@ -696,11 +696,18 @@ chassis wall-impact damage event.
 A rim-less corner with only hub hardware uses a metal friction disk (0.4)
 and rolling-resistance factor 0.04, not the lost tyre's script values. An
 installed outer dually remains a rubber contact. Parked tyres use a 0.8
-friction bound; body and metal contacts use 0.4. These are host tuning.
+friction upper bound; body and metal contacts use 0.4. These are host tuning.
+Rubber sticking is additionally bounded by the intended model's zero-slip
+friction-ellipse axes (`tire_friction_limits`), including script grip,
+alignment, progressive load efficiency and lateral smoothing. A zero
+longitudinal grip cannot be replaced with free parking friction. The same
+capacity equations are shared with the dynamic curve; its forces do not
+change. Native traffic keeps its separate force policy.
 A projected friction solve acts after forces/gravity but before advancing
 the pose, allowing real sticking instead of permanent tiny sliding steps.
-A mechanical brake hold additionally cannot spend more than its remaining
-brake/bearing impulse budget. The friction cone still permits slipping when
+A mechanical brake's longitudinal hold additionally cannot spend more than
+its remaining brake/bearing impulse budget; lateral grip is independent of
+brake torque. The remaining friction ellipse still permits slipping when
 support is insufficient; no general chassis sleep state or new wake-state
 machine is introduced. `RigidBody::integrate` keeps its existing behaviour;
 the vehicle owner uses its force/pose split to insert the constraints.

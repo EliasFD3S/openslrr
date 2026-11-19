@@ -35,6 +35,11 @@ struct TireTuning {
 };
 TireTuning& tire_tuning();
 
+// Force-ellipse axes with zero-slip grip scaling (N). Static holding can use
+// these bounds without requiring motion; this is not a finite-speed force.
+TireForces tire_friction_limits(double load, double alignment,
+                                const TireParameters& tire);
+
 // Reference Magic Formula curves, scaled by the script inputs and host
 // tuning, with progressive load efficiency and a combined friction ellipse.
 // Positive longitudinal pushes along the wheel heading; lateral opposes

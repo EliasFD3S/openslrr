@@ -290,6 +290,48 @@ SLRR_TEST(baiern_rear_hub_geometry_does_not_glide_with_a_missing_spring) {
   SLRR_REQUIRE(d.body.orientation.rotate({0, 1, 0}).y > .95);
 }
 
+SLRR_TEST(zero_longitudinal_grip_is_not_replaced_by_parking_friction) {
+  auto d = car(true);
+  for (auto& w : d.drive.wheels) w.tyre.longitudinal_grip = 0;
+  run(d, 3, flat());
+  d.body.velocity = d.body.orientation.rotate({0, 0, -.02});
+  d.drive.brake = 1;
+  run(d, .5, flat());
+  SLRR_REQUIRE(d.body.velocity.length() > .015);
+}
+
+SLRR_TEST(low_grip_tyres_cannot_stick_above_their_reference_friction_limit) {
+  auto d = car(true);
+  for (auto& w : d.drive.wheels) w.tyre.friction = .01;
+  d.drive.brake = 1;
+  const double angle = std::atan(.5);
+  d.body.orientation = {0, 0, std::sin(angle / 2), std::cos(angle / 2)};
+  const Terrain slope = [](double x, double, double, GroundHit& hit) {
+    hit.height = x * .5;
+    hit.normal = Vec3{-.5, 1, 0}.normalized();
+    return true;
+  };
+  run(d, 3, slope);
+  const double before = d.body.position.x;
+  run(d, 1, slope);
+  SLRR_REQUIRE(d.body.position.x < before - .1);
+}
+
+SLRR_TEST(static_tyre_limits_keep_longitudinal_and_lateral_script_inputs_separate) {
+  TireParameters tyre;
+  const auto reference = tire_friction_limits(4000, 1, tyre);
+  tyre.longitudinal_grip = 0;
+  const auto no_rolling_grip = tire_friction_limits(4000, 1, tyre);
+  SLRR_REQUIRE(no_rolling_grip.longitudinal == 0);
+  SLRR_REQUIRE(no_rolling_grip.lateral == reference.lateral);
+  tyre.longitudinal_grip = 1;
+  tyre.friction *= .2;
+  const auto low = tire_friction_limits(4000, 1, tyre);
+  SLRR_REQUIRE(std::abs(low.longitudinal / reference.longitudinal - .2) < 1e-12);
+  SLRR_REQUIRE(std::abs(low.lateral / reference.lateral - .2) < 1e-12);
+  SLRR_REQUIRE(tire_friction_limits(4000, 0, tyre).lateral == 0);
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
     missing_spring_uses_current_substep_support_and_settles,
@@ -305,6 +347,9 @@ int main() {
     compliant_support_scales_with_mass_without_changing_the_pose,
     hard_body_landing_still_reports_a_ground_impact,
     baiern_rear_hub_geometry_does_not_glide_with_a_missing_spring,
+    zero_longitudinal_grip_is_not_replaced_by_parking_friction,
+    low_grip_tyres_cannot_stick_above_their_reference_friction_limit,
+    static_tyre_limits_keep_longitudinal_and_lateral_script_inputs_separate,
   };
   return slrr::standalone::run("missing_support", tests);
 }

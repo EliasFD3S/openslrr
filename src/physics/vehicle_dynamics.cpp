@@ -363,8 +363,8 @@ void solve_fixed_support(const RigidBody& body, std::array<FixedSupport, 12>& co
 }
 
 struct RestContact {
-  Vec3 point, normal;
-  double limit = 0;
+  Vec3 point, normal, heading;
+  double limit_x = 0, limit_y = 0;
   Vec3 impulse;
 };
 
@@ -377,7 +377,8 @@ void solve_rest_contacts(RigidBody& body, std::array<RestContact, 12>& contacts,
     for (size_t i = 0; i < count; ++i) {
       auto& c = contacts[i];
       const Vec3 seed = std::abs(c.normal.y) < .9 ? Vec3{0, 1, 0} : Vec3{1, 0, 0};
-      const Vec3 x = seed.cross(c.normal).normalized(), y = c.normal.cross(x);
+      const Vec3 x = c.heading.length() > .5 ? c.heading.normalized() : seed.cross(c.normal).normalized();
+      const Vec3 y = c.normal.cross(x);
       const Vec3 r = c.point - body.position;
       const auto inverse = [&](Vec3 a, Vec3 b) {
         return a.dot(b) / body.mass +
@@ -388,11 +389,50 @@ void solve_rest_contacts(RigidBody& body, std::array<RestContact, 12>& contacts,
       if (!(determinant > 1e-18)) continue;
       const Vec3 v = body.point_velocity(c.point);
       const double vx = v.dot(x), vy = v.dot(y);
-      Vec3 candidate = c.impulse +
-          x * ((xy * vy - yy * vx) / determinant) +
-          y * ((xy * vx - xx * vy) / determinant);
-      if (candidate.length() > c.limit)
-        candidate = candidate.normalized() * c.limit;
+      const double old_x = c.impulse.dot(x), old_y = c.impulse.dot(y);
+      const double gx = vx - xx * old_x - xy * old_y;
+      const double gy = vy - xy * old_x - yy * old_y;
+      double ix = 0, iy = 0;
+      if (c.limit_x <= 0) {
+        if (c.limit_y > 0) iy = std::clamp(-gy / yy, -c.limit_y, c.limit_y);
+      } else if (c.limit_y <= 0) {
+        ix = std::clamp(-gx / xx, -c.limit_x, c.limit_x);
+      } else {
+        ix = (xy * gy - yy * gx) / determinant;
+        iy = (xy * gx - xx * gy) / determinant;
+        if (std::hypot(ix / c.limit_x, iy / c.limit_y) > 1) {
+          // Project in the effective-mass metric, not radially. This is the
+          // minimum post-impulse kinetic energy inside the friction ellipse;
+          // arbitrary anisotropic clipping can otherwise add energy.
+          double a = xx * c.limit_x * c.limit_x, b = yy * c.limit_y * c.limit_y;
+          double cross = xy * c.limit_x * c.limit_y;
+          double fx = gx * c.limit_x, fy = gy * c.limit_y;
+          const double scale = std::max({a, b, std::abs(cross), std::abs(fx), std::abs(fy)});
+          a /= scale; b /= scale; cross /= scale; fx /= scale; fy /= scale;
+          const auto at = [&](double multiplier) {
+            const double d = (a + multiplier) * (b + multiplier) - cross * cross;
+            return Vec3{(cross * fy - (b + multiplier) * fx) / d,
+                        (cross * fx - (a + multiplier) * fy) / d, 0};
+          };
+          double lo = 0, hi = std::hypot(fx, fy);
+          for (int pass = 0; pass < 24; ++pass) {
+            const double middle = (lo + hi) * .5;
+            if (at(middle).length() > 1) lo = middle;
+            else hi = middle;
+          }
+          const auto q = at(hi);
+          ix = q.x * c.limit_x;
+          iy = q.y * c.limit_y;
+        }
+      }
+      const auto energy = [&](double a, double b) {
+        return .5 * (xx * a * a + 2 * xy * a * b + yy * b * b) + gx * a + gy * b;
+      };
+      if (!std::isfinite(ix) || !std::isfinite(iy) || energy(ix, iy) > energy(old_x, old_y)) {
+        ix = old_x;
+        iy = old_y;
+      }
+      const Vec3 candidate = x * ix + y * iy;
       body.impulse(candidate - c.impulse, c.point);
       c.impulse = candidate;
     }
@@ -807,7 +847,8 @@ void VehicleDynamics::step(const Terrain &terrain) {
     const double force = c.impulse / timestep;
     body.add_force(c.normal * force, c.point);
     if (c.wheel >= 0) state[static_cast<size_t>(c.wheel)].force = force;
-    else if (force > 0) rest_contacts[rest_count++] = {c.point, c.normal, .4 * c.impulse, {}};
+    else if (force > 0)
+      rest_contacts[rest_count++] = {c.point, c.normal, {}, .4 * c.impulse, .4 * c.impulse, {}};
   }
 
   /*
@@ -889,15 +930,29 @@ void VehicleDynamics::step(const Terrain &terrain) {
     if (!parked && !(braked && speed < .05 && std::abs(s.spin * wheels[i].radius) < .05))
       continue;
     const double mu = wheels[i].metal_contact ? .4 : .8;
-    const double available = std::max(0.0, mu * s.force -
-        std::hypot(s.tire_force.longitudinal, s.tire_force.lateral));
-    double limit = available * timestep;
-    if (!parked && !drive.native_traffic) limit = std::min(limit, s.holding_impulse);
+    TireForces caps{mu * s.force, mu * s.force};
+    if (!wheels[i].metal_contact && !drive.native_traffic) {
+      const double tilt = body.orientation.rotate(s.hub_rotation.rotate({0, -1, 0})).dot(s.normal);
+      const auto peaks = tire_friction_limits(s.force, std::max(.25, tilt * tilt), cfg.tyre);
+      caps.longitudinal = std::min(caps.longitudinal, peaks.longitudinal);
+      caps.lateral = std::min(caps.lateral, peaks.lateral);
+    }
+    const double used = std::hypot(
+        caps.longitudinal > 0 ? s.tire_force.longitudinal / caps.longitudinal : 0,
+        caps.lateral > 0 ? s.tire_force.lateral / caps.lateral : 0);
+    const bool no_capacity = (caps.longitudinal <= 0 && s.tire_force.longitudinal != 0) ||
+                             (caps.lateral <= 0 && s.tire_force.lateral != 0);
+    const double remaining = no_capacity ? 0 : std::max(0.0, 1 - used);
+    double limit_x = caps.longitudinal * remaining * timestep;
+    const double limit_y = caps.lateral * remaining * timestep;
+    if (!parked && !drive.native_traffic) limit_x = std::min(limit_x, s.holding_impulse);
+    Vec3 heading = wheel_forward(body, cfg.steer, s.hub_rotation);
+    heading = (heading - s.normal * heading.dot(s.normal)).normalized();
     Vec3 surface = s.patch;
     GroundHit hit;
     if (terrain(surface.x, surface.z, ceiling, hit))
       surface += s.normal * ((hit.height - surface.y) * s.normal.y);
-    rest_contacts[rest_count++] = {surface, s.normal, limit, {}};
+    rest_contacts[rest_count++] = {surface, s.normal, heading, limit_x, limit_y, {}};
   }
   body.integrate_forces(timestep);
   solve_rest_contacts(body, rest_contacts, rest_count);

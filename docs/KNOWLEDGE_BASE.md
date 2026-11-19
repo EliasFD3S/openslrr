@@ -643,9 +643,13 @@ Physics:
   missing from scripts uses CFG `base - travel`. Rim-less hub hardware has a
   metal contact, not the previous tyre's grip. Static friction is projected
   after forces/gravity and before pose advance
-  (`src/physics/vehicle_dynamics.cpp:solve_rest_contacts`); controlled brake
-  holding is additionally limited by its unspent brake impulse. This adds no
-  new chassis sleep/wake state machine.
+  (`src/physics/vehicle_dynamics.cpp:solve_rest_contacts`). Rubber sticking
+  also respects the active tyre model's anisotropic zero-slip capacities
+  (`src/physics/tire_model.cpp:tire_friction_limits`), so low grip or zero
+  longitudinal grip cannot borrow a stronger parking coefficient. Controlled
+  longitudinal brake holding is additionally limited by its unspent brake
+  impulse, independently of lateral grip. This adds no new chassis
+  sleep/wake state machine.
 - A CFG `body` line is mass and collision; it is not a crush zone. Do not size
   a deformation cage from the phys SCX bodies. The assembly mass properties
   integrate the closed phys hulls (815 of 818 stock racer hulls in the earlier
