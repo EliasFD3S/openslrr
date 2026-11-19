@@ -49,6 +49,12 @@ struct HostInput {
   bool part_click = false;
   int part_click_x = 0;
   int part_click_y = 0;
+  // Left button pressed on the 3D view (no OSD widget, modal or movie under
+  // it) and still held; press/release are edges for the next world pointer
+  // dispatch (EC_LDOWN / EC_LUP).
+  bool world_button = false;
+  bool world_press = false;
+  bool world_release = false;
   bool keys_left = false;
   bool keys_right = false;
   bool keys_up = false;

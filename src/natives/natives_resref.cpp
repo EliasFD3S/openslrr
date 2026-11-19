@@ -6,6 +6,7 @@
 #include "slrr/scene_ambience.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/part_runtime.hpp"
+#include "slrr/paint_texture.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/osd_registry.hpp"
@@ -253,6 +254,9 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
             if (e) {
               self->fields["typeof"] = Value::make_int(e->typeof_);
               self->str = e->alias;
+            } else if (paint_texture_exists(static_cast<uint32_t>(id))) {
+              // Painter texture: File.write saves it as a texture blob.
+              self->fields["typeof"] = Value::make_int(7);
             }
           }
         }

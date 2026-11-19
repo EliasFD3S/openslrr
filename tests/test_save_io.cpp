@@ -1,4 +1,5 @@
 #include "save_io_fixture.hpp"
+#include "slrr/paint_texture.hpp"
 
 namespace {
 void invalid_resource_roundtrip(int32_t id, int restype) {
@@ -94,6 +95,67 @@ SLRR_TEST(raw_file_resource_write_keeps_its_original_id) {
   SLRR_REQUIRE(f.read_resource() == 0x12340056);
   f.close();
 }
+SLRR_TEST(painter_texture_roundtrips_through_the_save_trailer) {
+  Fixture f;
+  slrr::PaintImage image;
+  image.width = 16;
+  image.height = 8;
+  image.rgba.resize(16 * 8 * 4);
+  for (size_t i = 0; i < image.rgba.size(); ++i) image.rgba[i] = static_cast<uint8_t>(i * 7);
+  const uint32_t id = slrr::paint_texture_create(image);
+  SLRR_REQUIRE(id != 0);
+  SLRR_REQUIRE(f.open("save/painted", 1) == 1);
+  SLRR_REQUIRE(f.write_resource(int32_t(id), 7) == 4);
+  SLRR_REQUIRE(f.write_resource(int32_t(id), 7) == 4);  // same blob twice
+  SLRR_REQUIRE(f.write_int(99) == 4);
+  f.close();
+  slrr::paint_texture_release(id);
+  SLRR_REQUIRE(f.open("save/painted", 0) == 1);
+  const auto restored = static_cast<uint32_t>(f.read_resource());
+  SLRR_REQUIRE(slrr::paint_texture_exists(restored));
+  SLRR_REQUIRE(static_cast<uint32_t>(f.read_resource()) == restored);
+  SLRR_REQUIRE(f.read_int() == 99);
+  const slrr::PaintImage* back = slrr::paint_texture_committed(restored);
+  SLRR_REQUIRE(back && back->width == 16 && back->height == 8 && back->rgba == image.rgba);
+  f.close();
+  slrr::paint_texture_release(restored);
+
+  // A dead Painter id is a null placeholder, keeping later fields aligned.
+  SLRR_REQUIRE(f.open("save/dead", 1) == 1);
+  SLRR_REQUIRE(f.write_resource(int32_t(id), 7) == 0);
+  SLRR_REQUIRE(f.write_int(5) == 4);
+  f.close();
+  SLRR_REQUIRE(f.open("save/dead", 0) == 1);
+  SLRR_REQUIRE(f.read_resource() == 0);
+  SLRR_REQUIRE(f.read_int() == 5);
+  f.close();
+}
+SLRR_TEST(stock_side_file_texture_is_loaded_for_an_empty_blob) {
+  Fixture f;
+  // Stock layout: payload, then one empty type-7 blob and no packs; the
+  // image is "<save>.<ordinal>" beside the file.
+  std::vector<uint8_t> file = {'S', 'D', 'A', 'T', 0x00, 0x01, 0x02, 0x00};
+  auto u32 = [&](uint32_t v) { for (int i = 0; i < 4; ++i) file.push_back(uint8_t(v >> (8 * i))); };
+  u32(1);  // payload: the wired ordinal
+  u32(1); u32(1); u32(7); u32(0);  // one blob: ordinal 1, kind 7, size 0
+  u32(0);  // no packs
+  u32(20);
+  fs::create_directories(f.root / "save/stock");
+  { std::ofstream out(f.root / "save/stock/PlayerCar0", std::ios::binary);
+    out.write(reinterpret_cast<const char*>(file.data()), std::streamsize(file.size())); }
+  slrr::PaintImage image;
+  image.width = image.height = 4;
+  image.rgba.assign(64, 200);
+  const auto png = slrr::paint_png_encode(image);
+  { std::ofstream out(f.root / "save/stock/PlayerCar0.1", std::ios::binary);
+    out.write(reinterpret_cast<const char*>(png.data()), std::streamsize(png.size())); }
+  SLRR_REQUIRE(f.open("save/stock/PlayerCar0", 0) == 1);
+  const auto restored = static_cast<uint32_t>(f.read_resource());
+  SLRR_REQUIRE(slrr::paint_texture_exists(restored));
+  SLRR_REQUIRE(slrr::paint_texture_committed(restored)->rgba == image.rgba);
+  f.close();
+  slrr::paint_texture_release(restored);
+}
 int main() {
   const slrr::standalone::Test tests[] = {
     game_root_cannot_be_deleted_or_opened_as_a_file,
@@ -106,6 +168,8 @@ int main() {
     unsupported_blob_resource_keeps_following_save_fields_aligned,
     valid_and_null_resources_still_roundtrip,
     raw_file_resource_write_keeps_its_original_id,
+    painter_texture_roundtrips_through_the_save_trailer,
+    stock_side_file_texture_is_loaded_for_an_empty_blob,
   };
   return slrr::standalone::run("save_io", tests);
 }

@@ -8,6 +8,7 @@
 #include "slrr/job_system.hpp"
 
 #include "slrr/dds_image.hpp"
+#include "slrr/paint_texture.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/host_sfx.hpp"
@@ -286,6 +287,7 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
         bgfx::destroy(kv.second);
     }
     osd_tex_.clear();
+    release_paint_textures(true);
     gps_hud_path_.clear();
     hud_preview_meshes_.clear();
     for (auto& kv : font_tex_) {
@@ -488,6 +490,7 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
   void LibBgfxBackend::flush()
 {
     ++frames_;
+    if (!paint_texture_take_released().empty()) release_paint_textures(false);
     for (auto it=font_tex_.begin();it!=font_tex_.end();) {
       if (!slrr_font_asset_live(it->first)) {
         if (bgfx::isValid(it->second)) bgfx::destroy(it->second);
@@ -1850,6 +1853,11 @@ std::string map_texture_key(std::string path) {
         self->inventory_drag_source_ = video_fmv_block_osd()
                                           ? nullptr : osd_inventory_drag_source_at(x, y);
         self->inventory_dragging_ = false;
+        if (slider_hit < 0 && !self->inventory_drag_source_ && !video_fmv_block_osd() &&
+            !osd_has_modal() && !in.rmb_down) {
+          in.world_button = true;
+          in.world_press = true;
+        }
       }
       return 0;
     }
@@ -1861,6 +1869,10 @@ std::string map_texture_key(std::string path) {
       return DefWindowProcA(hwnd, msg, wp, lp);
     }
     if (msg == WM_LBUTTONUP || msg == WM_RBUTTONUP) {
+      if (msg == WM_LBUTTONUP && in.world_button) {
+        in.world_button = false;
+        in.world_release = true;
+      }
       if (msg == WM_LBUTTONUP && self && self->lmb_down_ && !in.rmb_down) {
         self->lmb_down_ = false;
         if (self->slider_drag_index_ >= 0) {
@@ -1915,6 +1927,10 @@ std::string map_texture_key(std::string path) {
       if (in.rmb_down) {
         end_camera_drag();
         in.look_yaw = in.look_pitch = in.mouse_dx = in.mouse_dy = 0.f;
+      }
+      if (in.world_button) {
+        in.world_button = false;
+        in.world_release = true;
       }
       if (self) {
         self->slider_drag_index_=-1;

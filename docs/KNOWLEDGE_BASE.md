@@ -686,8 +686,10 @@ signatures, 339 have a body, 3 are explicit no-ops and 34 are missing.
 | --- | ---: | --- |
 | `GroundRef` routes, traffic, water | 19 | Navigation, traffic |
 | `ParticleSystem` | 9 | Smoke, sparks and other effects |
-| `Painter` | 3 | Paint booth: `doPaint`, `paintPart`, `xPaint` |
 | Leftovers (`Welder`) | 3 | No stock caller found |
+
+The three `Painter` natives that this table listed are bound since #64;
+see "Garage paint booth (#64)" below.
 
 Explicit no-ops: `System.analyze` ×3 (faithful).
 `GameRef.setActiveCollision` has a body since PR #22 (§12). Two host-only
@@ -2226,3 +2228,59 @@ locals/arguments on a suspended cooperative stack. The 60,000 mixed-object
 fixture takes about 11ms to collect versus 168-171ms before; allocation costs
 26-29ms versus 23ms before. The baseline/current logs and limits are recorded in
 assets/validation/gc-lookup-epochs.txt. This is not a gameplay FPS measurement.
+
+## Garage paint booth (#64)
+
+Body paint, spray and decals were inert: the three `Painter` natives were
+unbound, and no world-pointer event ever reached `Painter.handleEvent`, because
+only the Mechanic received part clicks.
+
+Events. `MouseCursor.addHandler` registers `EVENT_CURSOR` on the cursor
+GameRef. `src/boot/mainloop.cpp:dispatch_world_pointer` now emits `EC_HOVER`,
+`EC_LEAVE`, `EC_LDOWN`, `EC_LUP` and `EC_LCLICK` from that GameRef whenever
+the Mechanic thread is not running (see SCRIPT_RUNTIME.md). The
+press/release edges come from `HostInput::world_press` / `world_release`,
+set only for a left press that missed every OSD widget. `GameRef.getInfo`
+answers `GII_CATEGORY` (7) with `GIR_CAT_PART` (9) for parts, which the
+Painter, CarMarket and garage drop handlers test. Vehicles are not yet
+reported as `GIR_CAT_VEHICLE`.
+
+Natives. `src/natives/natives_painter.cpp:register_painter_natives` binds
+`paintPart`, `doPaint` and `xPaint`. Each picks the part under the pointer
+with `src/resources/scene_instances.cpp:scene_instances_pick_surface`, which
+also returns the hit mesh, its paint slot and the hit point and normal in the
+mesh frame. The executable (slrr-reverse notes on 0x004827D0, 0x00482960,
+0x00482C00) queues `paint 0 0 <color> 0 -1` and `bigdecal ...` commands on the
+picked part; the host draws directly instead:
+
+- `paintPart` fills the part's own texture with the can colour.
+- `doPaint` projects the brush (`misc.garage:0x0102`, a soft dot) or a decal
+  with `src/resources/paint_texture.cpp:paint_stamp_mesh`: a square `size`
+  metres wide, along the hit normal, "up" being the part's +Y, turned by
+  `rot` and mirrored by `flip`. Only paint-slot triangles facing the stamp
+  inside a depth slab are painted; each texel blends once per stamp.
+  `temp = 1` (the decal preview) is drawn over a copy and replaced by the next
+  preview.
+- `xPaint` and `painter_tick` (250 ms without a refresh) take the preview off.
+  A texture created only for a preview gives the part its previous texture
+  back.
+
+These orientation, size and expiry rules are host approximations.
+
+Textures. `paint_texture.hpp` keeps Painter textures in host memory with ids
+`0xFFFFxxxx`. `src/resources/part_runtime.cpp:assign_texture` shows them in
+the part's paint slot like a pack colour (`Part.setTexture` accepts them) and
+releases one when no live part shows it. A part draws on a copy when it
+shares its texture. `scene_instances_texture` maps the id to a `paint:` path;
+`src/render/bgfx_osd.cpp:paint_texture_handle` uploads it with a box-filtered
+mip chain and again on each change. Images start from the part's current
+paint (DXT/DDS/PNG/PTX decoded by `paint_image_from_texture`).
+
+Saves. `Part.save` and `Vehicle.saveSkin` write the texture through
+`File.write(ResourceRef)`: `ResourceRef.set` types it 7 and the SDAT trailer
+blob carries a PNG (`paint_png_encode`, fixed-Huffman deflate).
+`src/natives/natives_io.cpp:sdat_load_texture_blob` restores it on
+`readResID`; an empty stock blob reads the JPEG side file `<save>.<ordinal>`
+that the original game writes. Stock MWM saves with painted parts therefore
+load their paint. OpenSLRR saves are not meant to be read by the original
+executable.

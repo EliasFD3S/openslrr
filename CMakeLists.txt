@@ -54,6 +54,7 @@ add_executable(slrr_host
   src/natives/natives_renderref.cpp
   src/natives/natives_resref.cpp
   src/natives/natives_script.cpp
+  src/natives/natives_painter.cpp
   src/ui/osd_registry.cpp
   src/ui/osd_script.cpp
   src/ui/ui_time.cpp
@@ -84,6 +85,7 @@ add_executable(slrr_host
   src/resources/character.cpp
   src/resources/dds_image.cpp
   src/resources/ptx_image.cpp
+  src/resources/paint_texture.cpp
   src/jvm/tufa.cpp
   src/jvm/tree_eval.cpp
   src/jvm/jvm.cpp

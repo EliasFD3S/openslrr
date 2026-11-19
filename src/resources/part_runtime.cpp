@@ -13,6 +13,7 @@
 #include "slrr/wheel_mount.hpp"
 #include "slrr/host_sfx.hpp"
 #include "slrr/osd_registry.hpp"
+#include "slrr/paint_texture.hpp"
 #include "slrr/jvm.hpp"
 #include "slrr/rpk_index.hpp"
 #include "slrr/scene_instances.hpp"
@@ -302,6 +303,27 @@ Object *canonical(Object *object) {
 Record *record(Object *object) {
   auto found = records.find(canonical(object));
   return found == records.end() ? nullptr : &found->second;
+}
+// Painter textures belong to the parts that show them. One no live part
+// uses any more is freed (a copied texture may be shared by two parts).
+bool texture_in_use(uint32_t texture, const Object *except = nullptr) {
+  for (const auto &[part, rec] : records)
+    if (part != except && rec.state.texture == texture)
+      return true;
+  return false;
+}
+void drop_unused_paint(uint32_t texture, const Object *except = nullptr) {
+  if (paint_texture_exists(texture) && !texture_in_use(texture, except))
+    paint_texture_release(texture);
+}
+void assign_texture(Object *part, Record &rec, uint32_t texture) {
+  const uint32_t old = rec.state.texture;
+  rec.state.texture = texture;
+  for (auto *render : rec.renders)
+    if (auto *node = gameref_get(render))
+      node->paint_texture = texture;
+  if (old != texture)
+    drop_unused_paint(old, part);
 }
 void repair_part(Object *part, Record &rec);
 bool flap_geometry_for(Object *part, Record &rec,
@@ -648,9 +670,15 @@ Object *add_part(Jvm &jvm, Object *parent, uint32_t resource,
     };
     rec->state.wear = field("wear", 1);
     rec->state.tear = field("tear", 1);
-    rec->state.texture = static_cast<uint32_t>(field("color", 0));
-    for (auto *render : rec->renders)
-      gameref_get(render)->paint_texture = rec->state.texture;
+    // A resource id, read as an integer: a Painter id (0xFFFFxxxx) is
+    // negative and does not survive a trip through float.
+    const auto color = descriptor->fields.find("color");
+    const uint32_t texture =
+        color == descriptor->fields.end() ? 0u
+        : color->second.tag == ValueTag::Int
+            ? static_cast<uint32_t>(color->second.v.i)
+            : static_cast<uint32_t>(field("color", 0));
+    assign_texture(child, *rec, texture);
     stock_parts(jvm, child, descriptor);
   }
   return child;
@@ -1555,10 +1583,7 @@ void paint_one(Object *part, uint32_t texture) {
   auto *rec = record(part);
   if (!rec || !rec->config->texture)
     return;
-  rec->state.texture = texture;
-  for (auto *render : rec->renders)
-    if (auto *node = gameref_get(render))
-      node->paint_texture = texture;
+  assign_texture(canonical(part), *rec, texture);
 }
 void paint_tree(Object *root, uint32_t texture) {
   std::vector<Object *> pending{root};
@@ -1892,9 +1917,37 @@ bool part_destroy(Object *part) {
   for (auto *render : rec->renders)
     gameref_remove(render);
   release_side(*rec);
+  const uint32_t texture = rec->state.texture;
   records.erase(part);
+  drop_unused_paint(texture);
   gameref_remove(part);
   return true;
+}
+bool part_paint_textures(Object *part, uint32_t *current, uint32_t *source) {
+  auto *rec = record(part);
+  if (!rec)
+    return false;
+  if (current)
+    *current = rec->state.texture;
+  if (source)
+    *source = rec->config->texture;
+  return true;
+}
+bool part_set_paint_texture(Object *part, uint32_t texture) {
+  auto *rec = record(part);
+  if (!rec || !rec->config->texture)
+    return false;
+  assign_texture(canonical(part), *rec, texture);
+  return true;
+}
+bool part_paint_texture_shared(uint32_t texture, Object *part) {
+  return texture_in_use(texture, canonical(part));
+}
+Object *part_showing_texture(uint32_t texture) {
+  for (const auto &[part, rec] : records)
+    if (texture && rec.state.texture == texture)
+      return part;
+  return nullptr;
 }
 std::vector<InstalledPart> part_installed_tree(Object *root) {
   std::vector<InstalledPart> out;
@@ -5652,6 +5705,11 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
       if (controller && target && as_part(static_cast<Object*>(target->key)) == as_part(self))
         return Value::make_int(gameref_make_live(controller));
     }
+    // GII_CATEGORY: installed and loose parts, the chassis included, are
+    // GIR_CAT_PART (9). Painter, CarMarket and the garage drop test it on
+    // the picked object. GIR_CAT_VEHICLE (5) is not reported yet.
+    if (query == 7)
+      return Value::make_int(p ? 9 : 0);
     if (query == 5 || query == 1)
       return Value::make_int(state->live_id);
     if (query == 6)
@@ -6011,13 +6069,12 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
     // 0, and anything that is not a texture record, leaves the part as it
     // is. A loaded car writes 0 for an unpainted piece and a factory color
     // for the rest; clearing the render there made the panels vanish.
+    // A Painter texture (and one a save or skin file brought back) is a
+    // texture too, though no pack holds it.
     const RpkEntry *entry = id && index ? index->resolve(id) : nullptr;
-    if (!entry || entry->typeof_ != 7)
+    if (!paint_texture_exists(id) && (!entry || entry->typeof_ != 7))
       return Value::make_int(old);
-    p->state.texture = static_cast<int>(id);
-    for (auto *render : p->renders)
-      if (auto *node = gameref_get(render))
-        node->paint_texture = p->state.texture;
+    assign_texture(canonical(s), *p, id);
     return Value::make_int(old);
   });
   bind(

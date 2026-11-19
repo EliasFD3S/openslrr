@@ -124,6 +124,19 @@ std::string scene_instances_texture(uint32_t resource);
 // instances outside the active world are ignored. Null when the ray only
 // starts inside a volume (the garage shell around the camera).
 void *scene_instances_pick(const float origin[3], const float direction[3], float* point = nullptr);
+// The same pick, with the hit surface: the mesh drawn there, its paint slot
+// (or -1) and the hit point and face normal in the mesh's scaled local frame
+// (script metres before the render reflection), the normal facing the ray.
+struct ScenePickSurface {
+  void *key = nullptr;
+  std::shared_ptr<const ScxGeometry> geometry;
+  int paint_slot = -1;
+  float world[3] = {0.f, 0.f, 0.f};
+  float local[3] = {0.f, 0.f, 0.f};
+  float normal[3] = {0.f, 0.f, 0.f};
+};
+bool scene_instances_pick_surface(const float origin[3], const float direction[3],
+                                  ScenePickSurface *surface);
 bool scene_instances_pointer_ray(int px, int py, int width, int height,
                                  float origin[3], float direction[3]);
 // A typeof-1 ground tree can include render triangles, collision triangles

@@ -1,5 +1,6 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/paint_texture.hpp"
 #include "slrr/scene_collision.hpp"
 #include <limits>
 #include "slrr/gameref.hpp"
@@ -811,7 +812,10 @@ std::shared_ptr<const ScxGeometry> scene_instances_geometry(uint32_t resource) {
   return geometry(resource);
 }
 std::string scene_instances_texture(uint32_t resource) {
-  if (!resource || !g_resources) return {};
+  if (!resource) return {};
+  // Painter textures live in host memory; the renderer uploads them by id.
+  if (paint_texture_exists(resource)) return paint_texture_path(resource);
+  if (!g_resources) return {};
   if (const auto it = g_texture_paths.find(resource); it != g_texture_paths.end())
     return it->second;
   auto path = g_resources->texture_path_for_id(resource);
@@ -2931,8 +2935,19 @@ bool scene_instances_pointer_ray(int px, int py, int width, int height,
   return true;
 }
 void *scene_instances_pick(const float origin[3], const float direction[3], float* point) {
-  if (!origin || !direction)
+  ScenePickSurface surface;
+  if (!scene_instances_pick_surface(origin, direction, &surface))
     return nullptr;
+  if (point)
+    std::copy(surface.world, surface.world + 3, point);
+  return surface.key;
+}
+
+bool scene_instances_pick_surface(const float origin[3], const float direction[3],
+                                  ScenePickSurface *surface) {
+  if (!origin || !direction || !surface)
+    return false;
+  *surface = ScenePickSurface{};
   float best = 1e9f;
   void *hit = nullptr;
   for (const SceneInstance &instance : scene_instances_collect_root(g_world)) {
@@ -2999,16 +3014,34 @@ void *scene_instances_pick(const float origin[3], const float direction[3], floa
         best = t;
         hit = instance.key;
         triangle = true;
+        // Face normal turned toward the viewer: winding is not a reliable
+        // side once the render reflection and mirrored parts are involved.
+        const float e1[3] = {v[1][0] - v[0][0], v[1][1] - v[0][1], v[1][2] - v[0][2]};
+        const float e2[3] = {v[2][0] - v[0][0], v[2][1] - v[0][1], v[2][2] - v[0][2]};
+        float n[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2],
+                      e1[0] * e2[1] - e1[1] * e2[0]};
+        const float nl = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        const float side = n[0] * d[0] + n[1] * d[1] + n[2] * d[2] > 0.f ? -1.f : 1.f;
+        surface->geometry = instance.geometry;
+        surface->paint_slot = instance.paint_slot;
+        for (int k = 0; k < 3; ++k) {
+          surface->local[k] = o[k] + d[k] * t;
+          surface->normal[k] = nl > 0.f ? side * n[k] / nl : 0.f;
+        }
       }
     }
     if (!triangle && idx.empty() && tmin >= 0.f && tmin < best) {
       best = tmin;
       hit = instance.key;
+      surface->geometry = nullptr;
+      surface->paint_slot = -1;
     }
   }
-  if (hit && point)
-    for (int i = 0; i < 3; ++i) point[i] = origin[i] + direction[i] * best;
-  return hit;
+  if (!hit)
+    return false;
+  surface->key = hit;
+  for (int i = 0; i < 3; ++i) surface->world[i] = origin[i] + direction[i] * best;
+  return true;
 }
 
 void scene_visit_gc_roots(const GcRootVisitor& visit) {

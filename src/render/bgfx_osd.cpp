@@ -4,6 +4,7 @@
 
 #include "slrr/part_runtime.hpp"
 #include "slrr/dds_image.hpp"
+#include "slrr/paint_texture.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/host_sfx.hpp"
@@ -31,6 +32,8 @@ namespace slrr {
   bgfx::TextureHandle LibBgfxBackend::tex_for_osd_icon(const std::string& path)
 {
     if (path.empty()) return white_tex_;
+    if (const uint32_t paint = paint_texture_from_path(path))
+      return paint_texture_handle(paint);
     auto it = osd_tex_.find(path);
     if (it != osd_tex_.end()) return it->second;
     DdsImage img = load_texture_file(path);
@@ -67,6 +70,74 @@ namespace slrr {
   }
 #endif
 #ifdef _WIN32
+  bgfx::TextureHandle LibBgfxBackend::paint_texture_handle(uint32_t id)
+{
+    const PaintImage* image = paint_texture_image(id);
+    if (!image || !image->valid() || image->width > 4096 || image->height > 4096)
+      return white_tex_;
+    auto& gpu = paint_tex_[id];
+    const uint32_t revision = paint_texture_revision(id);
+    if (bgfx::isValid(gpu.handle) && gpu.revision == revision) return gpu.handle;
+    const auto pow2 = [](uint32_t v) { return v && !(v & (v - 1)); };
+    const bool mips = pow2(image->width) && pow2(image->height);
+    if (bgfx::isValid(gpu.handle) &&
+        (gpu.width != image->width || gpu.height != image->height || gpu.mips != mips)) {
+      bgfx::destroy(gpu.handle);
+      gpu.handle = BGFX_INVALID_HANDLE;
+    }
+    if (!bgfx::isValid(gpu.handle)) {
+      gpu.handle = bgfx::createTexture2D(static_cast<uint16_t>(image->width),
+                                         static_cast<uint16_t>(image->height), mips, 1,
+                                         bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE, nullptr);
+      if (!bgfx::isValid(gpu.handle)) {
+        paint_tex_.erase(id);
+        return white_tex_;
+      }
+      gpu.width = image->width;
+      gpu.height = image->height;
+      gpu.mips = mips;
+    }
+    // Box-filtered mip chain; a painted panel is mostly seen smaller than
+    // its texture, and a texture without mips shimmers.
+    std::vector<uint8_t> level = image->rgba;
+    uint32_t w = image->width, h = image->height;
+    for (uint8_t mip = 0;; ++mip) {
+      bgfx::updateTexture2D(gpu.handle, 0, mip, 0, 0, static_cast<uint16_t>(w),
+                            static_cast<uint16_t>(h),
+                            bgfx::copy(level.data(), static_cast<uint32_t>(level.size())));
+      if (!mips || (w == 1 && h == 1)) break;
+      const uint32_t nw = std::max(1u, w / 2), nh = std::max(1u, h / 2);
+      std::vector<uint8_t> next(size_t(nw) * nh * 4);
+      for (uint32_t y = 0; y < nh; ++y)
+        for (uint32_t x = 0; x < nw; ++x)
+          for (int c = 0; c < 4; ++c) {
+            const uint32_t x0 = std::min(x * 2, w - 1), x1 = std::min(x * 2 + 1, w - 1);
+            const uint32_t y0 = std::min(y * 2, h - 1), y1 = std::min(y * 2 + 1, h - 1);
+            const uint32_t sum = level[(size_t(y0) * w + x0) * 4 + c] + level[(size_t(y0) * w + x1) * 4 + c] +
+                                 level[(size_t(y1) * w + x0) * 4 + c] + level[(size_t(y1) * w + x1) * 4 + c];
+            next[(size_t(y) * nw + x) * 4 + c] = static_cast<uint8_t>((sum + 2) / 4);
+          }
+      level.swap(next);
+      w = nw;
+      h = nh;
+    }
+    gpu.revision = revision;
+    return gpu.handle;
+  }
+
+  void LibBgfxBackend::release_paint_textures(bool all)
+{
+    if (all) paint_texture_take_released();
+    for (auto it = paint_tex_.begin(); it != paint_tex_.end();) {
+      if (all || !paint_texture_exists(it->first)) {
+        if (bgfx::isValid(it->second.handle)) bgfx::destroy(it->second.handle);
+        it = paint_tex_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+
   void LibBgfxBackend::draw_osd_quad(const OsdWidget& w, float cr, float cg,
                      float cb, float ca)
 {

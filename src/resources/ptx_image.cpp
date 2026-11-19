@@ -228,6 +228,28 @@ DdsImage load_rgba_file(const std::string& path) {
   return out;
 }
 
+bool decode_image_rgba(const uint8_t* data, size_t size, uint32_t* width,
+                       uint32_t* height, std::vector<uint8_t>* rgba) {
+  if (!data || !width || !height || !rgba ||
+      size > static_cast<size_t>(std::numeric_limits<int>::max()))
+    return false;
+#if defined(SLRR_HAS_LIBBGFX)
+  int w = 0, h = 0, comp = 0;
+  stbi_uc* pixels = stbi_load_from_memory(data, static_cast<int>(size), &w, &h, &comp, 4);
+  if (!pixels || w <= 0 || h <= 0) {
+    if (pixels) stbi_image_free(pixels);
+    return false;
+  }
+  *width = static_cast<uint32_t>(w);
+  *height = static_cast<uint32_t>(h);
+  rgba->assign(pixels, pixels + size_t(w) * size_t(h) * 4);
+  stbi_image_free(pixels);
+  return true;
+#else
+  return false;
+#endif
+}
+
 DdsImage load_texture_file(const std::string& path) {
   const std::string ext = lower_ext(path);
   if (ext == ".ptx") return load_ptx_file(path);

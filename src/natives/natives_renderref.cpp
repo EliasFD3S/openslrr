@@ -1,4 +1,5 @@
 #include "slrr/race_runtime.hpp"
+#include "slrr/paint_texture.hpp"
 #include "slrr/natives_boot.hpp"
 #include "natives_internal.hpp"
 
@@ -372,7 +373,9 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
             if (tid != 0 || !texpath.empty())
               osd_set_widget_icon(
                   already->second.v.i, tid,
-                  !texpath.empty() ? texpath : rpk.texture_path_for_id(tid));
+                  !texpath.empty() ? texpath
+                  : paint_texture_exists(tid) ? paint_texture_path(tid)
+                                              : rpk.texture_path_for_id(tid));
             osd_attach_button_picture(self);
           } else if ((tid != 0 || !texpath.empty()) && local != 0x0018u &&
                      mw > 0.f && mh > 0.f) {
@@ -380,7 +383,9 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
             float hw = 0.f, hh = 0.f;
             osd_mesh_halves(osd, mw, mh, &hw, &hh, &plate);
             const std::string icon =
-                !texpath.empty() ? texpath : rpk.texture_path_for_id(tid);
+                !texpath.empty() ? texpath
+                  : paint_texture_exists(tid) ? paint_texture_path(tid)
+                                              : rpk.texture_path_for_id(tid);
             // The dealer swaps catalog → sell on the same button. The new
             // rectangle is a different size after the viewport activates, so
             // a size check left the first glyph up under the second one.

@@ -359,6 +359,12 @@ See `ptx_image.cpp`.
 and children. A type resource is not its live instance. A script alias and
 reference wrappers do not justify duplicating the underlying object.
 
+Painter textures (#64) are host images with ids `0xFFFFxxxx`
+(`paint_texture.hpp`). A part shows one through its `Part.setTexture` value
+like a pack texture; it is drawn into only while that part alone shows it,
+and it is released when no live part shows it any more. They are saved as
+type-7 blobs, never as pack references; see §15.
+
 `scene_instances_collect` produces the instances to draw for the selected
 world. Geometry can be shared. Pose, color, and texture replacements are
 instance properties. Avoid modifying shared geometry to fix a single car.
@@ -917,6 +923,12 @@ Resetting a section means inspecting, together: parent world, pose,
 velocities, the physics accumulator, contacts, assembly, camera, lights,
 reflections, shadows, and loading state. Do not keep the fallen pose of an
 old car as the initial pose of the next one.
+
+`File.write(ResourceRef)` stores a Painter texture as a PNG inside the SDAT
+blob trailer. `readResID` turns the blob back into a new Painter texture; a
+blob the stock game left empty is read from its side file
+`<save>.<ordinal>` (JPEG). A texture id that is no longer live is written as
+a null placeholder rather than an empty blob.
 
 A catalog/garage round trip does not necessarily recreate the same set of
 objects as a dealer round trip. A state repaired by the dealer but not by

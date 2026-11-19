@@ -606,6 +606,7 @@ void register_boot_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   register_script_natives(jvm, rpk, sections);
   register_part_natives(jvm,rpk);
   register_race_natives(jvm,rpk,sections);
+  register_painter_natives(jvm);
   install_osd_script_hover(jvm);
 
   // Statics

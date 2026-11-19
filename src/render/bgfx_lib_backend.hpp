@@ -210,6 +210,9 @@ class LibBgfxBackend final : public IRenderBackend {
   static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
   bgfx::TextureHandle tex_for_osd_icon(const std::string& path);
+  // Painter textures (paint_texture.hpp), uploaded again when their pixels
+  // change. tex_for_osd_icon routes their "paint:" paths here.
+  bgfx::TextureHandle paint_texture_handle(uint32_t id);
 
 
   void draw_osd_quad(const OsdWidget& w, float cr = 1.f, float cg = 1.f,
@@ -304,6 +307,13 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::UniformHandle u_mesh_base_uv_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_mesh_mix_uv_ = BGFX_INVALID_HANDLE;
   std::unordered_map<std::string, bgfx::TextureHandle> osd_tex_;
+  struct PaintTextureGpu {
+    bgfx::TextureHandle handle = BGFX_INVALID_HANDLE;
+    uint32_t revision = 0, width = 0, height = 0;
+    bool mips = false;
+  };
+  std::unordered_map<uint32_t, PaintTextureGpu> paint_tex_;
+  void release_paint_textures(bool all);
   std::unordered_map<std::string, bgfx::TextureHandle> font_tex_;
   bgfx::UniformHandle u_alpha_test_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_color_ = BGFX_INVALID_HANDLE;

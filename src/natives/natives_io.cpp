@@ -1,5 +1,6 @@
 #include "slrr/natives_boot.hpp"
 #include "natives_internal.hpp"
+#include "slrr/paint_texture.hpp"
 
 #include "slrr/gameref.hpp"
 #include "slrr/host_cursor.hpp"
@@ -270,7 +271,9 @@ std::vector<uint8_t> sdat_frame(const std::vector<uint8_t>& payload,
 
 // File-local id for write(ResourceRef). A null ref is 0. A pack resource
 // becomes (ordinal << 16) | local. An unsaved id (high word 0xFFFF, type
-// 5 or 7) becomes its session ordinal, with an empty blob in the trailer.
+// 5 or 7) becomes its session ordinal, with a blob in the trailer. A
+// Painter texture's blob holds its committed pixels as a PNG; a type-7 id
+// that is no longer a live texture cannot be saved.
 bool sdat_wire_resource(RpkIndex& rpk, HostFile& file, int32_t host_id,
                         int32_t restype, int32_t* wired) {
   if (!wired) return false;
@@ -288,6 +291,12 @@ bool sdat_wire_resource(RpkIndex& rpk, HostFile& file, int32_t host_id,
       }
     }
     SdatBlobRef blob;
+    if (restype == 7) {
+      const PaintImage* image = paint_texture_committed(uid);
+      if (!image) return false;
+      blob.bytes = paint_png_encode(*image);
+      if (blob.bytes.empty()) return false;
+    }
     blob.ordinal = static_cast<int32_t>(file.sdat_blobs.size() + 1);
     blob.kind = restype;
     blob.abs_id = host_id;
@@ -314,7 +323,25 @@ bool sdat_wire_resource(RpkIndex& rpk, HostFile& file, int32_t host_id,
   return true;
 }
 
-int32_t sdat_remap_resource(const HostFile& file, uint32_t wired) {
+// A saved texture blob becomes a Painter texture again. The stock game
+// leaves the blob empty and writes the image (JPEG) beside the save as
+// "<file>.<ordinal>"; this host embeds a PNG.
+int32_t sdat_load_texture_blob(const HostFile& file, SdatBlobRef& blob) {
+  std::vector<uint8_t> bytes = blob.bytes;
+  if (bytes.empty() && !file.path.empty()) {
+    std::filesystem::path side = file.path;
+    side += "." + std::to_string(blob.ordinal);
+    std::ifstream in(side, std::ios::in | std::ios::binary);
+    if (in)
+      bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  }
+  PaintImage image;
+  if (bytes.empty() || !paint_image_decode(bytes.data(), bytes.size(), &image)) return 0;
+  blob.abs_id = static_cast<int32_t>(paint_texture_create(std::move(image)));
+  return blob.abs_id;
+}
+
+int32_t sdat_remap_resource(HostFile& file, uint32_t wired) {
   if (!file.sdat) return static_cast<int32_t>(wired);
   if (wired == 0) return 0;
   const uint32_t hi = wired & 0xFFFF0000u;
@@ -327,8 +354,12 @@ int32_t sdat_remap_resource(const HostFile& file, uint32_t wired) {
     return 0;
   }
   const int32_t ordinal = static_cast<int32_t>(wired & 0xFFFF);
-  for (const SdatBlobRef& blob : file.sdat_blobs) {
-    if (blob.ordinal == ordinal && blob.abs_id != 0) return blob.abs_id;
+  for (SdatBlobRef& blob : file.sdat_blobs) {
+    if (blob.ordinal != ordinal) continue;
+    if (blob.abs_id != 0 && (blob.kind != 7 ||
+                             paint_texture_exists(static_cast<uint32_t>(blob.abs_id))))
+      return blob.abs_id;
+    if (blob.kind == 7) return sdat_load_texture_blob(file, blob);
   }
   return 0;
 }

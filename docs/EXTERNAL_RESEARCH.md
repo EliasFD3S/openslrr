@@ -213,8 +213,11 @@ All little-endian. Each item notes OpenSLRR's status.
   follows an MSVC-style LCG (`SLRR_rev:docs/java-math.md`). **corpus**
 - `WheelRef.setLoadSmooth` writes coefficient 14; `setDamping(f)` sets
   rebound to 0.7 × bump. OpenSLRR matches (`SLRR_rev:docs/physics-reverse-port.md`). **ext**
-- Both projects still lack all `Painter` and `ParticleSystem` natives, the
+- SLRR_rev lacks all `Painter` and `ParticleSystem` natives, the
   `GroundRef` route queries, and `PhysicsRef.create`/`createSphere`.
+  OpenSLRR now binds the `Painter` natives (#64) from the slrr-reverse
+  notes on 0x004827D0, 0x00482960 and 0x00482C00; the drawing itself is a
+  host design (KNOWLEDGE_BASE.md, "Garage paint booth (#64)").
 
 ## 4. Game mechanics and telemetry
 
@@ -361,13 +364,14 @@ Where OpenSLRR gaps already have an SLRR_rev implementation (revision
 
 At the historical `77b0fb6` snapshot these were also missing (the v221
 update below supersedes the road/traffic entries): all `Painter`
-and `ParticleSystem` natives, the `GroundRef` route queries (`findRoute`,
+(bound in OpenSLRR since #64) and `ParticleSystem` natives, the `GroundRef` route queries (`findRoute`,
 `getRouteLength`, `getRoutePos`, `getRouteDist`, `alignToRoad`,
 `getStartDirection`), `RenderRef.plotRoute`, `PhysicsRef.create` and
 `createSphere`, dynamic standalone `PhysicsRef` bodies and
 `haltTrafficCross`. OpenSLRR implements `pedestrianDistance` and
 `removePedestrianType` from the slrr-reverse notes on 0x00589BE0 and
-0x00484E20.
+0x00484E20, and the three `Painter` natives from its notes on 0x004827D0
+(`paintPart`), 0x00482960 (`doPaint`) and 0x00482C00 (`xPaint`).
 
 ### v221 shared race port, 18 November 2026
 
