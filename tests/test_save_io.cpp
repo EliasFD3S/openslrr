@@ -1,5 +1,6 @@
 #include "save_io_fixture.hpp"
 #include "slrr/paint_texture.hpp"
+#include "slrr/gameref.hpp"
 
 namespace {
 void invalid_resource_roundtrip(int32_t id, int restype) {
@@ -156,6 +157,46 @@ SLRR_TEST(stock_side_file_texture_is_loaded_for_an_empty_blob) {
   f.close();
   slrr::paint_texture_release(restored);
 }
+SLRR_TEST(file_backed_decal_has_an_id_and_survives_save_load_and_resource_ownership) {
+  Fixture f;
+  slrr::gameref_clear();
+  slrr::register_resref_natives(f.vm,f.packs,f.sections);
+  slrr::register_painter_natives(f.vm);
+  slrr::PaintImage image;
+  image.width=image.height=4;
+  image.rgba.assign(64,128);
+  const auto png=slrr::paint_png_encode(image);
+  {std::ofstream out(f.root/"decal.png",std::ios::binary);
+   out.write(reinterpret_cast<const char*>(png.data()),std::streamsize(png.size()));}
+  slrr::Object texture,path,restored_ref,decal;
+  path.str="decal.png";
+  auto resource=[&](const char* method,const char* sig,slrr::Object* self,std::vector<slrr::Value> args={}){
+    return f.registry.invoke("java.util.resource.ResourceRef",method,sig,self,args);
+  };
+  resource("makeTexture","(Ljava.util.resource.ResourceRef;Ljava.lang.String;)V",&texture,
+           {slrr::Value::make_obj(nullptr),slrr::Value::make_obj(&path)});
+  const auto id=resource("id","()I",&texture).v.i;
+  SLRR_REQUIRE(id>=0x70000000);
+  // Catalog buys new Decal(texture.id()), which binds another wrapper.
+  resource("set","(I)V",&decal,{slrr::Value::make_int(id)});
+  SLRR_REQUIRE(f.open("save/decal",1)==1);
+  SLRR_REQUIRE(f.invoke("write","(Ljava.util.resource.ResourceRef;)I",{slrr::Value::make_obj(&decal)},&f.file).v.i==4);
+  f.close();
+  resource("deleteNative","()V",&decal);
+  resource("deleteNative","()V",&texture);
+  SLRR_REQUIRE(f.open("save/decal",0)==1);
+  const auto loaded=f.read_resource();
+  SLRR_REQUIRE(slrr::paint_texture_exists(uint32_t(loaded)));
+  SLRR_REQUIRE(slrr::paint_texture_committed(uint32_t(loaded))->rgba==image.rgba);
+  resource("set","(I)V",&restored_ref,{slrr::Value::make_int(loaded)});
+  f.close();
+  for(int i=0;i<5;++i)slrr::painter_tick();
+  SLRR_REQUIRE(slrr::paint_texture_exists(uint32_t(loaded)));
+  resource("deleteNative","()V",&restored_ref);
+  for(int i=0;i<3;++i)slrr::painter_tick();
+  SLRR_REQUIRE(!slrr::paint_texture_exists(uint32_t(loaded)));
+  slrr::gameref_clear();
+}
 int main() {
   const slrr::standalone::Test tests[] = {
     game_root_cannot_be_deleted_or_opened_as_a_file,
@@ -170,6 +211,7 @@ int main() {
     raw_file_resource_write_keeps_its_original_id,
     painter_texture_roundtrips_through_the_save_trailer,
     stock_side_file_texture_is_loaded_for_an_empty_blob,
+    file_backed_decal_has_an_id_and_survives_save_load_and_resource_ownership,
   };
   return slrr::standalone::run("save_io", tests);
 }

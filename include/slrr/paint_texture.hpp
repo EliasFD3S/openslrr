@@ -43,7 +43,7 @@ bool paint_texture_draw(uint32_t id, bool temp,
 bool paint_texture_clear_temp(uint32_t id);
 bool paint_texture_has_temp(uint32_t id);
 void paint_texture_release(uint32_t id);
-// Reclaim textures unused by parts or open save readers for three host
+// Reclaim textures unused by parts, resource wrappers or save readers for three host
 // frames. The grace period preserves ids through a synchronous part rebuild.
 void paint_texture_collect(const std::function<bool(uint32_t)>& used);
 // Ids released since the last call, for GPU handles to follow.

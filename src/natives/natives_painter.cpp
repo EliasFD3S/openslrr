@@ -55,18 +55,18 @@ bool part_under_pointer(PointerPart& out) {
 }
 
 // Decoded pack textures: brushes, decals and the paint a part starts from.
-std::unordered_map<uint32_t, PaintImage> g_pack_images;
+std::unordered_map<std::string, PaintImage> g_pack_images;
 const PaintImage* texture_pixels(uint32_t id) {
   if (!id) return nullptr;
   if (paint_texture_exists(id)) return paint_texture_committed(id);
-  if (auto it = g_pack_images.find(id); it != g_pack_images.end())
-    return it->second.valid() ? &it->second : nullptr;
-  PaintImage image;
   const std::string path = scene_instances_texture(id);
+  if (auto it = g_pack_images.find(path); it != g_pack_images.end())
+    return &it->second;
+  PaintImage image;
   if (!path.empty() && !paint_image_from_texture(load_texture_file(path), &image))
     std::printf("[painter] texture 0x%08x (%s) could not be decoded\n", id, path.c_str());
   if (!image.valid()) return nullptr;
-  return &g_pack_images.emplace(id, std::move(image)).first->second;
+  return &g_pack_images.emplace(path, std::move(image)).first->second;
 }
 
 // Painter textures made for a temporary stroke only. Clearing the stroke
@@ -136,7 +136,7 @@ void painter_tick() {
     g_temp_texture = 0;
   }
   paint_texture_collect([](uint32_t id) {
-    if (part_showing_texture(id)) return true;
+    if (part_showing_texture(id) || gameref_uses_resource(id)) return true;
     for (const auto& [file, state] : g_host_files)
       for (const auto& blob : state.sdat_blobs)
         if (static_cast<uint32_t>(blob.abs_id) == id) return true;

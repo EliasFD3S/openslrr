@@ -68,17 +68,23 @@ try {
   if ($CorpusOnly -and $Suite -notin @('tufa_validation','rpk_validation')) {
     throw "CorpusOnly requires a validation suite"
   }
-  # Windows PowerShell treats a native stderr line as an ErrorRecord.
-  # Tests intentionally print their summaries there, even on success;
-  # preserve the executable's exit status rather than aborting on stderr.
-  $savedErrorAction = $ErrorActionPreference
+  # Read both native pipes concurrently: Windows PowerShell otherwise turns
+  # even a successful test's stderr summary into a terminating ErrorRecord.
+  $start = New-Object System.Diagnostics.ProcessStartInfo
+  $start.FileName = $executable
+  if ($CorpusOnly) { $start.Arguments = '--corpus' }
+  $start.UseShellExecute = $false
+  $start.RedirectStandardOutput = $true
+  $start.RedirectStandardError = $true
+  $testProcess = [System.Diagnostics.Process]::Start($start)
   try {
-    $ErrorActionPreference = 'Continue'
-    if ($CorpusOnly) { & $executable --corpus *> $log }
-    else { & $executable *> $log }
-    $testExit = $LASTEXITCODE
+    $stdout = $testProcess.StandardOutput.ReadToEndAsync()
+    $stderr = $testProcess.StandardError.ReadToEndAsync()
+    $testProcess.WaitForExit()
+    $testExit = $testProcess.ExitCode
+    [IO.File]::WriteAllText($log, $stdout.GetAwaiter().GetResult() + $stderr.GetAwaiter().GetResult())
   } finally {
-    $ErrorActionPreference = $savedErrorAction
+    $testProcess.Dispose()
   }
   Get-Content $log
   Write-Output "Save I/O test exit code: $testExit (log: $log)"

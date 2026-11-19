@@ -105,6 +105,11 @@ GameRefState* gameref_find_live(int32_t id) {
   const auto it = g_live_refs.find(id);
   return it != g_live_refs.end() && !it->second->binding ? it->second : nullptr;
 }
+bool gameref_uses_resource(uint32_t id) {
+  return std::any_of(g_refs.begin(), g_refs.end(), [id](const auto& entry) {
+    return !entry.second.binding && static_cast<uint32_t>(entry.second.type_id) == id;
+  });
+}
 int32_t gameref_make_live(void* key) {
   auto* state=gameref_get(key);if(!state)state=gameref_upsert(key);if(!state)return 0;
   if (!state->live_id) {

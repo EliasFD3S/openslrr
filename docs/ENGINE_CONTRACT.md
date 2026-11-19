@@ -362,8 +362,10 @@ reference wrappers do not justify duplicating the underlying object.
 Painter textures (#64) are host images with ids `0xFFFFxxxx`
 (`paint_texture.hpp`). A part shows one through its `Part.setTexture` value
 like a pack texture; it is drawn into only while that part alone shows it,
-and it is reclaimed after three host frames without a part or open save
-reader using it. They are saved as
+and it is reclaimed after three host frames without a part, native resource
+wrapper or open save reader using it. `ResourceRef.makeTexture` file textures
+have live native handles; their pixels are embedded the same way on save.
+Painter textures are saved as
 type-7 blobs, never as pack references; see §15.
 
 `scene_instances_collect` produces the instances to draw for the selected

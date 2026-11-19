@@ -815,6 +815,15 @@ std::string scene_instances_texture(uint32_t resource) {
   if (!resource) return {};
   // Painter textures live in host memory; the renderer uploads them by id.
   if (paint_texture_exists(resource)) return paint_texture_path(resource);
+  // ResourceRef.makeTexture/Decal names a file by a live native handle.
+  if (const auto* live = gameref_find_live(static_cast<int32_t>(resource))) {
+    const auto* owner = static_cast<Object*>(live->key);
+    const auto path = owner->fields.find("_texpath");
+    const auto type = owner->fields.find("typeof");
+    if (type != owner->fields.end() && type->second.tag == ValueTag::Int && type->second.v.i == 7 &&
+        path != owner->fields.end() && path->second.tag == ValueTag::Obj && path->second.v.o)
+      return path->second.v.o->str;
+  }
   if (!g_resources) return {};
   if (const auto it = g_texture_paths.find(resource); it != g_texture_paths.end())
     return it->second;

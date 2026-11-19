@@ -374,8 +374,8 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
               osd_set_widget_icon(
                   already->second.v.i, tid,
                   !texpath.empty() ? texpath
-                  : paint_texture_exists(tid) ? paint_texture_path(tid)
-                                              : rpk.texture_path_for_id(tid));
+                  : (paint_texture_exists(tid) || gameref_find_live(static_cast<int32_t>(tid)))
+                        ? scene_instances_texture(tid) : rpk.texture_path_for_id(tid));
             osd_attach_button_picture(self);
           } else if ((tid != 0 || !texpath.empty()) && local != 0x0018u &&
                      mw > 0.f && mh > 0.f) {
@@ -384,8 +384,8 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
             osd_mesh_halves(osd, mw, mh, &hw, &hh, &plate);
             const std::string icon =
                 !texpath.empty() ? texpath
-                  : paint_texture_exists(tid) ? paint_texture_path(tid)
-                                              : rpk.texture_path_for_id(tid);
+                  : (paint_texture_exists(tid) || gameref_find_live(static_cast<int32_t>(tid)))
+                        ? scene_instances_texture(tid) : rpk.texture_path_for_id(tid);
             // The dealer swaps catalog → sell on the same button. The new
             // rectangle is a different size after the viewport activates, so
             // a size check left the first glyph up under the second one.
@@ -520,7 +520,10 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
         }
         if (from && id && from != uint32_t(id)) {
           const auto image = [&rpk](uint32_t resource) {
-            auto ext = std::filesystem::path(rpk.texture_path_for_id(resource)).extension().string();
+            if (paint_texture_exists(resource)) return true;
+            const auto path = paint_texture_exists(resource) || gameref_find_live(static_cast<int32_t>(resource))
+                ? scene_instances_texture(resource) : rpk.texture_path_for_id(resource);
+            auto ext = std::filesystem::path(path).extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
             return ext == ".dds" || ext == ".ptx" || ext == ".png" || ext == ".tga" ||
                    ext == ".bmp" || ext == ".jpg" || ext == ".jpeg";

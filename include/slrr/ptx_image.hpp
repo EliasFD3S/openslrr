@@ -14,7 +14,7 @@ namespace slrr {
 DdsImage load_ptx_file(const std::string& path);
 
 // PNG/JPEG/TGA/BMP bytes to straight (not premultiplied) RGBA8, rows
-// top-down. False without stb_image (no libbgfx) or for other data.
+// top-down. Rejects invalid images and dimensions above 4096 before decoding.
 bool decode_image_rgba(const uint8_t* data, size_t size, uint32_t* width,
                        uint32_t* height, std::vector<uint8_t>* rgba);
 

@@ -2271,13 +2271,22 @@ These orientation, size and expiry rules are host approximations.
 Textures. `paint_texture.hpp` keeps Painter textures in host memory with ids
 `0xFFFFxxxx`. `src/resources/part_runtime.cpp:assign_texture` shows them in
 the part's paint slot like a pack colour (`Part.setTexture` accepts them) and
-reclaims one after three host frames without a live part or open save
-reader using it. This also reclaims unused loaded-skin textures and preserves
+reclaims one after three host frames without a live part, resource wrapper
+or open save reader using it. This also reclaims unused loaded-skin textures and preserves
 ids through synchronous part rebuilds. A part draws on a copy when it
 shares its texture. `scene_instances_texture` maps the id to a `paint:` path;
 `src/render/bgfx_osd.cpp:paint_texture_handle` uploads it with a box-filtered
 mip chain and again on each change. Images start from the part's current
 paint (DXT/DDS/PNG/PTX decoded by `paint_image_from_texture`).
+
+File-backed decals. Stock `Decal(String)` calls `ResourceRef.makeTexture`,
+then Painter receives only `brush.id()`. Previously `makeTexture` stored a
+filename but left that ID at zero. It now allocates a live native texture ID
+and type 7. `scene_instances_texture` resolves its canonical wrapper's file;
+file-texture duplication creates an independent handle, and aliases carry the
+type so career saves can serialize purchased decal sets. The PNG serializer
+also accepts these file resources. Loaded image resources stay alive while
+native resource wrappers refer to them (`gameref_uses_resource`).
 
 Saves. `Part.save` and `Vehicle.saveSkin` write the texture through
 `File.write(ResourceRef)`: `ResourceRef.set` types it 7 and the SDAT trailer

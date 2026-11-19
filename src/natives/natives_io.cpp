@@ -1,6 +1,7 @@
 #include "slrr/natives_boot.hpp"
 #include "natives_internal.hpp"
 #include "slrr/paint_texture.hpp"
+#include "slrr/ptx_image.hpp"
 
 #include "slrr/gameref.hpp"
 #include "slrr/host_cursor.hpp"
@@ -282,7 +283,8 @@ bool sdat_wire_resource(RpkIndex& rpk, HostFile& file, int32_t host_id,
     return true;
   }
   const uint32_t uid = static_cast<uint32_t>(host_id);
-  if ((uid & 0xFFFF0000u) == 0xFFFF0000u) {
+  const bool file_texture = restype == 7 && gameref_find_live(host_id);
+  if ((uid & 0xFFFF0000u) == 0xFFFF0000u || file_texture) {
     if (restype != 5 && restype != 7) return false;
     for (const SdatBlobRef& blob : file.sdat_blobs) {
       if (blob.abs_id == host_id) {
@@ -290,9 +292,16 @@ bool sdat_wire_resource(RpkIndex& rpk, HostFile& file, int32_t host_id,
         return true;
       }
     }
+    if (file.sdat_blobs.size() >= 0xFFFF) return false;
     SdatBlobRef blob;
     if (restype == 7) {
+      PaintImage decoded;
       const PaintImage* image = paint_texture_committed(uid);
+      if (!image && file_texture) {
+        const auto path = scene_instances_texture(uid);
+        if (!path.empty() && paint_image_from_texture(load_texture_file(path), &decoded))
+          image = &decoded;
+      }
       if (!image) return false;
       blob.bytes = paint_png_encode(*image);
       if (blob.bytes.empty()) return false;
