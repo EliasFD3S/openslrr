@@ -103,13 +103,17 @@ current gaps to SLRR_rev code are in
   The CMake guard rejects anything but Windows x64 (`CMakeLists.txt`).
   `bgfx.cmake` is cloned manually into the gitignored `third_party`
   folder at a pinned commit.
-- **Known build blocker on a fresh clone:** `CMakeLists.txt` declares the
-  `compile_game_sources` executable from `tools/compile_game_sources.cpp`,
-  but `/tools/` is gitignored (`.gitignore`) and the file is not tracked.
-  CMake stops with "Cannot find source file" unless the file exists locally.
-  The README's coverage generator under `tools/` is missing for the same
-  reason. Reproduced on Windows with a fresh export of `b907b6b`; a local
-  one-line `int main() { return 0; }` stub unblocks the build.
+- `compile_game_sources` is built from the tracked
+  `tools/compile_game_sources.cpp`, explicitly allowed by `.gitignore`.
+  The target was added in `af0dc9c` without its source, not deleted later;
+  the older `/tools/` ignore rule hid it. The restored CLI delegates to
+  `script_compile_all` rather than using the former local no-op stubs.
+  Build with `cmake --build build --config Release --target compile_game_sources`,
+  then run `build/Release/compile_game_sources.exe <game-root> <directory>`.
+  The directory is relative to the root. Use a copied game root: compilation
+  writes class files and retains first originals as `.openslrr.bak`.
+  Exit codes: 0 for successful compilation, 1 for failures or no source units,
+  2 for incorrect arguments.
 - The vendored compiler `third_party/slrrc` is a C++17 static library built
   with `/fp:precise`; its literal self-test must pass before any output is
   published (`src/jvm/script_compiler.cpp:script_compile_all`).
@@ -812,8 +816,9 @@ Each answer names its evidence.
    `Jvm::RootScope` or a registered root provider (§6).
 6. *Does doubling the frame rate double the simulation speed?* No: fixed
    60 Hz host ticks with two 120 Hz substeps, at most four ticks per frame.
-7. *Why does a fresh clone fail to configure?* `CMakeLists.txt` needs the
-   untracked, gitignored `tools/compile_game_sources.cpp` (§3).
+7. *What caused the missing compiler-tool source error on fresh clones?*
+   `af0dc9c` added the target without tracking its ignored source. The source
+   is now tracked and the CLI uses the existing compiler adapter (§3).
 8. *Why did cars pass through Valo City trees?* Placement bodies were dropped
    and props were not in the collision index. PR #22 retains and indexes those
    bodies and adds full-chassis contact coverage (§11, #16).

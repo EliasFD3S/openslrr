@@ -31,8 +31,8 @@ named scenario.
 Goal: a fresh clone builds, and every claim about progress can be
 regenerated.
 
-- Track `tools/compile_game_sources.cpp` or make its CMake target optional;
-  today a clean clone cannot configure (`CMakeLists.txt`, `.gitignore`).
+- Done: track `tools/compile_game_sources.cpp` with a narrow `.gitignore`
+  exception, restoring the declared compiler target for clean checkouts.
 - Done: `scripts/render_native_coverage.py` regenerates the 329/4/43 figures,
   the README chart and table from `src/` and the pinned stock table
   `assets/progress/stock-natives.json`.
