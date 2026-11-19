@@ -2306,3 +2306,8 @@ local worlds of inventory previews. The stock script's preview camera remains
 authoritative. The real-asset `trigger_markers` regression checks stationary,
 opaque paint cans in a local preview and preserves the active-world marker's
 rotation/bobbing and sensor behavior.
+
+Remaining UI limitation: the garage's decal-picker thumbnail meshes are still
+blank. Catalog images, the hovered decal preview, application and saved painted
+pixels work; this change does not reconstruct the separate button-render mesh
+path. Projection/preview behavior remains the host approximation described above.
