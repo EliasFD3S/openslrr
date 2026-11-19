@@ -632,6 +632,20 @@ Physics:
   still requires the service brake below 0.05
   (`src/physics/vehicle_dynamics.cpp:VehicleDynamics::step_drive`).
   See ENGINE_CONTRACT §11 and [the migration plan](VEHICLE_DYNAMICS_PLAN.md).
+- Installed body low points are cached from real mesh vertices, not the
+  chassis AABB's empty underside corners
+  (`src/resources/part_runtime.cpp:rebuild_body_support`). Hidden meshes keep
+  their supports; corner gear and hinged panels have separate contact paths.
+  Slot poses, deformation, repair and assembly changes invalidate the cache.
+- Missing-spring fixed-travel support is solved implicitly with body contacts
+  in the current substep, before the tyre law consumes the load
+  (`src/physics/vehicle_dynamics.cpp:solve_fixed_support`). A compression limit
+  missing from scripts uses CFG `base - travel`. Rim-less hub hardware has a
+  metal contact, not the previous tyre's grip. Static friction is projected
+  after forces/gravity and before pose advance
+  (`src/physics/vehicle_dynamics.cpp:solve_rest_contacts`); controlled brake
+  holding is additionally limited by its unspent brake impulse. This adds no
+  new chassis sleep/wake state machine.
 - A CFG `body` line is mass and collision; it is not a crush zone. Do not size
   a deformation cage from the phys SCX bodies. The assembly mass properties
   integrate the closed phys hulls (815 of 818 stock racer hulls in the earlier

@@ -8,8 +8,15 @@ as the intended model. This supersedes the pre-revision proposals in
 [the original plan](https://github.com/EliasFD3S/openslrr/pull/48#issuecomment-6886055973)
 and [the missing-spring addendum](https://github.com/EliasFD3S/openslrr/pull/48#issuecomment-6905136573)
 where they assume the previous tyre curve, jacking or brake ordering.
-The request is to update documentation, revise this plan and review the code;
-this documentation revision does not implement the proposed physics/UI changes.
+The documentation/plan/review request was completed first. Implementation
+was then [approved by deqque13](https://github.com/EliasFD3S/openslrr/pull/48#issuecomment-6999709346).
+Stage A is implemented in `8bd1e77` (vehicle 14/14, wheel mounts 7/7,
+sanitisers and Windows Release builds pass). The current support migration
+adds jointly implicit normal loads, actual body low points and static
+friction before pose advance; its focused suite covers missing springs,
+hardware grip, ten-minute rail rest, slope sticking/sliding, brake-budget
+limits, mass scaling, air and native-drive release. Host replays and the
+remaining stages are not yet claimed complete.
 
 Keep the reference Magic Formula model, its script-input scaling and its
 0.75-bounds fallback inertia. Do not restore the old solver or pursue stock

@@ -674,11 +674,36 @@ holding the service brake. Previous burnout measurements do not validate
 this revision. The `8ac2ba9` brake-hold reproducer (traction despite zero
 final wheel spin) is covered by forward/reverse and weak/strong brake tests.
 
-A corner without a working spring still uses the rigid-contact path and its
-previous substep's support load; that support impulse is solved after body
-integration. Parked tyres retain the velocity-damping friction rule, not
-true static sticking or a general chassis sleep state. The missing-spring
-slide and garage creep remain follow-up items, not fixes in `8ac2ba9`.
+The approved support migration replaces the spring-less corner's old
+previous-load/post-step-impulse path with a same-substep compliant tyre /
+bump-stop load. Fixed-travel corners and up to eight installed-body low
+points solve their implicit normal impulses jointly on a predicted body;
+the resulting loads reach the tyre law before integration. Stiffness scales
+with mass, the installed damper is retained, and a deep-penetration safety
+stop remains. An absent scripted compression limit falls back to CFG spring
+`base - travel`, not `base` (which could prop up the missing-spring corner).
+
+`rebuild_body_support` extracts actual low mesh vertices across left/right
+and four longitudinal sectors. It excludes running gear (already represented
+by wheels) and hinged panels (whose floor contact remains unsupported),
+respects slot poses/deformation, and refreshes after assembly changes,
+damage and repair. Hiding a mesh does not remove its physical support. In an
+upright car these samples replace fictitious underside AABB corners; the
+old box remains the fallback for callers without samples and after rollover.
+Floor-only support does not turn a low panel rubbing the ground into a
+chassis wall-impact damage event.
+
+A rim-less corner with only hub hardware uses a metal friction disk (0.4)
+and rolling-resistance factor 0.04, not the lost tyre's script values. An
+installed outer dually remains a rubber contact. Parked tyres use a 0.8
+friction bound; body and metal contacts use 0.4. These are host tuning.
+A projected friction solve acts after forces/gravity but before advancing
+the pose, allowing real sticking instead of permanent tiny sliding steps.
+A mechanical brake hold additionally cannot spend more than its remaining
+brake/bearing impulse budget. The friction cone still permits slipping when
+support is insufficient; no general chassis sleep state or new wake-state
+machine is introduced. `RigidBody::integrate` keeps its existing behaviour;
+the vehicle owner uses its force/pose split to insert the constraints.
 
 For the dyno, a new configuration must rebuild the matching curve banks,
 including nitro. Do not mix an old nitro bank with a new RPM step or a new
