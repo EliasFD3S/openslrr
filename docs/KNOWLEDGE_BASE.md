@@ -267,12 +267,13 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
    dynamics and calls `VehicleDynamics::advance` for two 120 Hz substeps
    (`include/slrr/vehicle_dynamics.hpp:VehicleDynamics`). At most four host
    ticks run per frame; excess time is dropped.
-4. Wall contact is `collide_chassis`: four 0.18 m spheres against the static
-   index. It runs only for a released chassis whose `drive.torque` is set
-   or whose engine flew out (`engine_lost`), and `configure_drive` sets the
-   torque only for the player-controlled car with gear ratios, a dyno and a
-   positive maximum RPM. Other cars get no wall
-   collision, impact damage or mileage
+4. Wall contact is `collide_chassis`: four 0.18 m sphere probes plus oriented
+   chassis-box contacts against the static index. A released car enters it
+   when `drive.torque`, `engine_lost` or `drive.native_traffic` is set.
+   `configure_drive` handles player and autonomous mechanical cars, an
+   engine-lost car's zero-torque neutral drive, and the distinct native
+   traffic force path. Wall collision, impact damage and mileage are no
+   longer player-only; damage options still distinguish the player
    (`src/resources/part_runtime.cpp:advance_chassis_tick`,
    `src/resources/part_runtime.cpp:configure_drive`).
 5. Impacts feed `damage_chassis` and the XPBD cage
@@ -619,10 +620,23 @@ Physics:
 - The physics delta is clamped to 0.1 s and scaled by the time warp
   (`src/jvm/jvm.cpp:advance_sim_time`), and at most four host ticks run per
   frame, so below 15 FPS the simulation slows down.
+- The intended vehicle solver is maintainer revision `8ac2ba9`, not the
+  earlier #48 curve. `src/physics/tire_model.cpp:tire_forces` scales reference
+  Magic Formula curves by clamped ratios of script friction, stiffness and
+  sliction, with progressive load efficiency, lateral load smoothing and a
+  combined friction ellipse. Stiffness is a B multiplier, not an exact slope.
+  `setCPatch` tolerance and `setInstantCenter` data are copied/stored but have
+  no active solver effect; there is no jacking or shared lateral impulse
+  bound. Tyre force precedes brakes; raised launch take-up requires the
+  service brake below 0.05 (`src/physics/vehicle_dynamics.cpp:VehicleDynamics::step_drive`).
+  See ENGINE_CONTRACT §11 and [the migration plan](VEHICLE_DYNAMICS_PLAN.md).
 - A CFG `body` line is mass and collision; it is not a crush zone. Do not size
-  a deformation cage from the phys SCX bodies, and do not take inertia from the
-  render bounds: 815 of the 818 stock racer phys hulls with mass are closed
-  solids, and the mass properties integrate them.
+  a deformation cage from the phys SCX bodies. The assembly mass properties
+  integrate the closed phys hulls (815 of 818 stock racer hulls in the earlier
+  audit), with a 30%-of-render-box moment floor for chassis configuration.
+  The generic rigid-body fallback now uses 0.75 times the bounds dimensions
+  (`src/physics/vehicle_dynamics.cpp:RigidBody::configure`); a supplied inertia
+  vector replaces it only when every component is positive and finite.
 - Repairs must restore deformation, damage-associated slot state and wheel
   damage together. The native `repair` command does this locally for each part
   (`src/resources/part_runtime.cpp:repair_part`); stock Java covers the normal
@@ -666,7 +680,7 @@ Process:
 | SFX voices | 32 total, 3 menu, 2 copies per cue, 35 ms coalescing | `src/platform/host_sfx.cpp:host_sfx_play_file` |
 | Ambient start range | 250 m beyond the CFG radius | `src/resources/scene_ambience.cpp:scene_ambience_audible` |
 | Chassis wall probe | four spheres of 0.18 m | `src/resources/part_runtime.cpp:collide_chassis` |
-| Tyre friction units | script friction / 1.68 = peak mu | `include/slrr/tire_model.hpp:kFrictionUnits` |
+| Tyre reference scaling (`8ac2ba9`) | friction / 1.76863, stiffness / 17.6839, sliction / 0.814, each clamped; nominal lateral peak multiplier 1.42 before load/slip factors | `src/physics/tire_model.cpp:tire_forces` |
 | Hinged panel step / latch release / tear-off | 240 Hz / 3.5 m/s local impact speed / 4.5 m/s contact speed or 0.15 m blocked overlap | `src/resources/part_runtime.cpp:kFlapStep`, `include/slrr/flap_hinge.hpp:FlapTuning` |
 | Prop cell | 64 m | `src/resources/scene_instances.cpp:kPropCellSize` |
 | Shadow maps | 2048² | `src/render/bgfx_lib_backend.hpp:kShadowResolution` |
@@ -830,10 +844,12 @@ Each answer names its evidence.
     idempotent request and consumes it at the physics boundary
     (`src/resources/gameref.cpp:gameref_process_collision_requests`).
 13. *Which tyre model drives the car?* `src/physics/tire_model.cpp:tire_forces`,
-    not `sl2_pacejka.cpp`. Its curve comes from the tyre script's `WheelRef`
-    values (friction, stiffness, sliction, load capacity, `frictn_x`, patch
-    angle); `configure_drive` copies them each tick
-    (`src/resources/part_runtime.cpp:configure_drive`).
+    not `sl2_pacejka.cpp`. Revision `8ac2ba9` scales reference curves by script
+    friction, stiffness, sliction, load capacity/smoothing and `frictn_x`;
+    `configure_drive` also copies the patch tolerance, but the solver does
+    not use that field (`src/resources/part_runtime.cpp:configure_drive`).
+    Native traffic has its own load-limited force path within the same
+    `VehicleDynamics` owner, not this mechanical-tyre curve.
 14. *Can SLRR_rev's EXE addresses be used for the MWM binary?* No. They
     belong to Steam build 940. SLRR_rev documents three EXE hashes, and the
     MWM binary is a fourth.
