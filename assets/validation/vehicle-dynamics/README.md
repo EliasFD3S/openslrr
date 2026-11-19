@@ -1,24 +1,33 @@
 # Vehicle dynamics validation (issue #42)
 
-## Evidence scope
+## Approved support migration: new evidence
 
-The images and measurements below predate the intended
-`8ac2ba9601300b36efca54dd81031fb6bc9de98b` solver. **They are historical
-Before/After evidence at the revisions listed, not current-branch handling
-or damage guarantees.** In particular, tyre peak/slope, instant-centre
-response, brake ordering, burnout and fallback inertia changed. Re-run the
-same scenarios before asserting those results for the new model.
+The [2026-11-19 support replays](support-2026-11-19/README.md) compare the
+actual intended `8ac2ba9` application with `5570bf3`: rear-right spring
+removal and a 620-second front-left-rim-less garage rest stress test.
+They include matched full application captures, exact scenarios and limits.
+The dynamic tyre law is retained. Stage A's API/test/brake corrections are
+implemented in `8bd1e77`; the two original GPT review findings are resolved.
+The gauge/loss policy, stronger crush, engine fragmentation and complete
+handling matrix are still open, not validated by the new support captures.
 
-The GPT code review of `8ac2ba9` ran Linux standalone checks and isolated
-kernel reproducers only, not a Windows host build or an in-game replay.
-The vehicle-dynamics suite does not link (removed `tire_effective_load`
-definition), and the wheel-mount suite is 6/7 (the changed default inertia
-invalidates its old corner-energy bound). Flap-hinge 12/12, mass-properties
-6/6 and dynamic-response 2/2 pass. A separate full-brake/full-throttle kernel
-probe travels 4.84 m in 3 s while the final wheel speeds are zero; that is
-an open review finding, not a demonstrated in-game result. The
+## Historical evidence scope
+
+The images and measurements in the historical sections below predate the
+intended `8ac2ba9601300b36efca54dd81031fb6bc9de98b` solver. **They are
+historical Before/After evidence at the revisions listed, not current-branch
+handling or damage guarantees.** Tyre peak/slope, instant-centre response,
+brake ordering, burnout and fallback inertia changed. Re-run the same
+scenarios before asserting those results for the new model.
+
+The initial GPT review tested unchanged `8ac2ba9`: its vehicle suite did not
+link (obsolete tyre helper declarations), and wheel mounts were 6/7 (an
+inertia-dependent old bound). A full-brake/full-throttle kernel probe moved
+4.84 m in 3 s despite zero final wheel speeds. The approved stage-A fix
+migrated the tests and reduced the same probe to 0.0021 m. These are kernel
+results, not an in-game burnout claim. The
 [revised migration plan](../../../docs/VEHICLE_DYNAMICS_PLAN.md) separates
-these checks from the required future driving captures.
+completed checks from the remaining application/visual gates.
 
 ## Historical comparison
 

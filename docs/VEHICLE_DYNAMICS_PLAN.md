@@ -11,12 +11,20 @@ where they assume the previous tyre curve, jacking or brake ordering.
 The documentation/plan/review request was completed first. Implementation
 was then [approved by deqque13](https://github.com/EliasFD3S/openslrr/pull/48#issuecomment-6999709346).
 Stage A is implemented in `8bd1e77` (vehicle 14/14, wheel mounts 7/7,
-sanitisers and Windows Release builds pass). The current support migration
-adds jointly implicit normal loads, actual body low points and static
-friction before pose advance; its focused suite covers missing springs,
-hardware grip, ten-minute rail rest, slope sticking/sliding, brake-budget
-limits, mass scaling, air and native-drive release. Host replays and the
-remaining stages are not yet claimed complete.
+sanitisers and Windows Release builds pass). Support/rest is implemented
+in `e7c9e7f` plus the render-to-part coordinate correction `005de5b`.
+The [new application evidence](../assets/validation/vehicle-dynamics/support-2026-11-19/README.md)
+compares rear-right spring removal and a 620-second three-wheel garage
+stress test against the actual intended baseline. The final static-limit
+follow-up `5570bf3`, its clean Windows Release build and the separately
+instrumented replays pass.
+
+The support suite additionally covers low-grip/zero-longitudinal-grip
+sticking, eight body samples, metal contact, gentle/steep slopes, weak
+brakes, mass scaling, air and native-drive release (16/16). Shared tyre
+capacity equations preserve bit-identical dynamic forces across 87,480
+reference-grid cases; this is not a curve rollback. The remaining gauge,
+crush, engine and complete handling/visual gates are not claimed complete.
 
 Keep the reference Magic Formula model, its script-input scaling and its
 0.75-bounds fallback inertia. Do not restore the old solver or pursue stock

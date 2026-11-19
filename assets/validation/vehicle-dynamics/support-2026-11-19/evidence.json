@@ -1,0 +1,22 @@
+{
+  "baseline": "8ac2ba9601300b36efca54dd81031fb6bc9de98b",
+  "after": "5570bf3",
+  "viewport": [
+    1280,
+    720
+  ],
+  "host_hz": 60,
+  "solver_hz": 120,
+  "car": "cars/racers/Baiern.rpk:0x6",
+  "captures": {
+    "spring-before-8ac2ba9.png": "18bb6661d25cb074051e5b4547e024f609f961c59bd9557d4972adfd3aa6d4e1",
+    "spring-after-5570bf3.png": "8ab9ee93cd4f12106bcf2a9f31df70b168c8b4522facff382e15757174ed878a",
+    "garage-before-8ac2ba9.png": "0614ec4d1b5bf2d21127ad853c00209533a29512163d3eb53370220c7891c6d1",
+    "garage-after-5570bf3.png": "5796e6678cee532446c255577152179bc9053f4df9d157b0787ea5c6552a255c"
+  },
+  "dynamic_tyre_force_grid": {
+    "cases": 87480,
+    "baseline_and_after_identical": true,
+    "sha256": "824932b5b75979e6e57c91a7ca7555ef4d4be4928f599ab49006bf1689116cfe"
+  }
+}
