@@ -101,6 +101,11 @@ namespace slrr {
     // Box-filtered mip chain; a painted panel is mostly seen smaller than
     // its texture, and a texture without mips shimmers.
     std::vector<uint8_t> level = image->rgba;
+    // Match PNG/PTX uploads: OSD uses premultiplied blending. Painted body
+    // textures are opaque; restored decal resources may have transparent RGB.
+    for (size_t i = 0; i < level.size(); i += 4)
+      for (int c = 0; c < 3; ++c)
+        level[i+c] = static_cast<uint8_t>((level[i+c] * level[i+3] + 127) / 255);
     uint32_t w = image->width, h = image->height;
     for (uint8_t mip = 0;; ++mip) {
       bgfx::updateTexture2D(gpu.handle, 0, mip, 0, 0, static_cast<uint16_t>(w),
