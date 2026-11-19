@@ -1937,7 +1937,7 @@ std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
     // SCRIPT_RUNTIME.md; original per-bit semantics are not established.
     uint32_t resource_flags = 0;
     scene_shadow_info(static_cast<uint32_t>(n->type_id), &resource_flags, nullptr);
-    if (n->kind == GameRefKind::RenderRef && !n->vehicle_material &&
+    if (root == g_world && n->kind == GameRefKind::RenderRef && !n->vehicle_material &&
         !part_render_owner(n->key) && (resource_flags & 0x280u) == 0x280u) {
       const float t = gameref_now();
       const float c = std::cos(t), s = std::sin(t);
@@ -2908,33 +2908,6 @@ bool ray_triangle(const float o[3], const float d[3], const float a[3],
     return false;
   t = (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]) * inv;
   return t > 1e-4f;
-}
-
-bool scene_instances_preview_view(const GameRefState& camera, float* view) {
-  float root[16];
-  if (!view || !chain_matrix(camera.parent, camera.parent, root, false, true)) return false;
-  // Direct camera poses use the same Ry*Rx*Rz convention as Vector3.rotate.
-  const float sy=std::sin(camera.ypr[0]), cy=std::cos(camera.ypr[0]);
-  const float sp=std::sin(camera.ypr[1]), cp=std::cos(camera.ypr[1]);
-  const float sr=std::sin(camera.ypr[2]), cr=std::cos(camera.ypr[2]);
-  float pose[16] = {sr*sp*sy+cr*cy, sr*cp, sr*sp*cy-cr*sy, 0,
-                     cr*sp*sy-sr*cy, cr*cp, cr*sp*cy+sr*sy, 0,
-                     cp*sy, -sp, cp*cy, 0,
-                     camera.pos[0], camera.pos[1], camera.pos[2], 1};
-  float frame[16], inv[9];
-  multiply(frame, root, pose);
-  if (!invert_columns(frame, inv)) return false;
-  identity(view);
-  for (int col=0; col<3; ++col)
-    for (int row=0; row<3; ++row) view[col*4+row] = inv[col*3+row];
-  for (int row=0; row<3; ++row)
-    view[12+row] = -(inv[row]*frame[12] + inv[3+row]*frame[13] + inv[6+row]*frame[14]);
-  // Mesh vertices are S*v and instances S*M*S. Convert the camera view
-  // to that same reflected frame (and left-handed projection convention).
-  for (int col=0; col<4; ++col)
-    for (int row=0; row<4; ++row)
-      if ((col==2)!=(row==2)) view[col*4+row] *= -1.f;
-  return true;
 }
 
 bool scene_instances_pointer_ray(int px, int py, int width, int height,

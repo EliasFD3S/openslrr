@@ -252,8 +252,11 @@ the cue uses the transparent pass. User comparison with original MWM confirms
 both movements. The 1 rad/s turn, 0.5 m bob at 2 rad/s and opacity 0.65 are
 host compatibility defaults, not recovered original constants or proven
 independent meanings for the two flag bits. The other matching frontend
-resource (paintcan) shares this profile. Compare its presentation in game too.
-MWM's explicit script animation of the weight/frame remains authoritative.
+resource (paintcan) shares these flags, but world-space cue animation is not
+applied in separate inventory preview worlds (#64): its half-metre bob made
+cans bounce out of their small cells. Local preview cameras and script poses
+remain authoritative. MWM's explicit script animation of the weight/frame
+remains authoritative.
 
 Research consulted nedobylskiy/SLRR_rev at
 4ca11c265e0b9b3dad09a7f23d4a2af7740d626b and EliasFD3S/slrr-reverse at

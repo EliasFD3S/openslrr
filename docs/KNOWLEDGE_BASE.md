@@ -2288,12 +2288,12 @@ that the original game writes. Stock MWM saves with painted parts therefore
 load their paint. OpenSLRR saves are not meant to be read by the original
 executable.
 
-Paint-can preview follow-up. The preview meshes included their local world's
-root transform, but the direct `setMatrix` camera ignored that same transform.
-The inventory world moves with its owning garage state, so the mismatch moved
-the cans up/down or entirely outside the cells. The generic direct-preview
-camera view now includes the same root frame:
-`src/resources/scene_instances.cpp:scene_instances_preview_view`. The
-`car_select_view` regression moves and rotates a common root and verifies that
-the projected item remains fixed relative to its camera. Aimed preview cameras
-keep their existing world-space look/move path.
+Paint-can preview follow-up. Paint cans share the resource flags (640) used
+by the host's reconstructed world-cue animation. Applying its half-metre bob
+and transparency in the tiny inventory cells moved the cans partly or entirely
+offscreen. `src/resources/scene_instances.cpp:collect_root` now applies that
+world-space animation only when collecting the active world, not the separate
+local worlds of inventory previews. The stock script's preview camera remains
+authoritative. The real-asset `trigger_markers` regression checks stationary,
+opaque paint cans in a local preview and preserves the active-world marker's
+rotation/bobbing and sensor behavior.

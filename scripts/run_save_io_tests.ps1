@@ -65,13 +65,21 @@ try {
   & $compiler /nologo /std:c++20 /EHsc /MD /O2 /utf-8 /D_CRT_SECURE_NO_WARNINGS /Iinclude /Isrc/natives @suiteIncludes "tests/test_$Suite.cpp" "/Fe:$executable" "/Fo:$testObject" @objects @libraries
   if ($LASTEXITCODE -ne 0) { throw "Save I/O regression link failed" }
   $log = Join-Path $outputRoot "$label.log"
-  if ($CorpusOnly) {
-    if ($Suite -notin @('tufa_validation','rpk_validation')) { throw "CorpusOnly requires a validation suite" }
-    & $executable --corpus *> $log
-  } else {
-    & $executable *> $log
+  if ($CorpusOnly -and $Suite -notin @('tufa_validation','rpk_validation')) {
+    throw "CorpusOnly requires a validation suite"
   }
-  $testExit = $LASTEXITCODE
+  # Windows PowerShell treats a native stderr line as an ErrorRecord.
+  # Tests intentionally print their summaries there, even on success;
+  # preserve the executable's exit status rather than aborting on stderr.
+  $savedErrorAction = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    if ($CorpusOnly) { & $executable --corpus *> $log }
+    else { & $executable *> $log }
+    $testExit = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $savedErrorAction
+  }
   Get-Content $log
   Write-Output "Save I/O test exit code: $testExit (log: $log)"
   exit $testExit

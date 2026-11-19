@@ -1333,8 +1333,25 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
         const bx::Vec3 at{p.camera.aim_at[0],p.camera.aim_at[1],-p.camera.aim_at[2]};
         const bx::Vec3 up{0.f,1.f,0.f};
         bx::mtxLookAt(view,eye,at,up);
-      }else if(!scene_instances_preview_view(p.camera,view)){
-        continue;
+      }else{
+        // setMatrix stores the PE pose Ry*Rx*Rz. The scene basis is a
+        // different yaw/pitch, so the slot camera looked past the can and
+        // the viewport stayed the garage floor. -Z of this pose points at
+        // the can. Vertices are uploaded as S*v, so the view is inv(M)*S.
+        const float yaw=p.camera.ypr[0],pitch=p.camera.ypr[1],roll=p.camera.ypr[2];
+        const float sy=std::sin(yaw),cy=std::cos(yaw),sp=std::sin(pitch),cp=std::cos(pitch),sr=std::sin(roll),cr=std::cos(roll);
+        const float srsp=sr*sp,crsp=cr*sp;
+        float pose[16]={};
+        pose[0]=srsp*sy+cr*cy; pose[1]=sr*cp; pose[2]=srsp*cy-cr*sy;
+        pose[4]=crsp*sy-sr*cy; pose[5]=cr*cp; pose[6]=crsp*cy+sr*sy;
+        pose[8]=cp*sy;          pose[9]=-sp;   pose[10]=cp*cy;
+        pose[12]=p.camera.pos[0]; pose[13]=p.camera.pos[1]; pose[14]=p.camera.pos[2]; pose[15]=1.f;
+        bx::mtxInverse(view,pose);
+        // Drawn points are S*M*v (Z mirrored). The camera has to live in that
+        // same space: S*inv(M)*S. Negating only the Z column turned the lens
+        // around and left the eye where it was, so every part sat behind it.
+        view[2]=-view[2]; view[6]=-view[6]; view[14]=-view[14];
+        view[8]=-view[8]; view[9]=-view[9]; view[11]=-view[11];
       }
       bx::mtxProj(proj,p.camera.half_aov,static_cast<float>(w)/h,std::max(.0001f,p.camera.dmin),p.camera.dmax,bgfx::getCaps()->homogeneousDepth);
       reverse_scene_projection(proj);

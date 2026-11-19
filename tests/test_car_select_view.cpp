@@ -4,8 +4,6 @@
 #include "slrr/scene_instances.hpp"
 #include "slrr/osd_registry.hpp"
 #include <limits>
-#include <cmath>
-#include <array>
 using namespace slrr;
 void inset_preview_keeps_page_and_pose(){
  Fixture f;gameref_clear();scene_instances_select(nullptr,nullptr,false);
@@ -60,31 +58,4 @@ void tooltip_does_not_promote_page_background(){
  osd_hide_widget(page_id);SLRR_REQUIRE(osd_page_background_layer()==std::numeric_limits<int32_t>::max());
  osd_clear_widgets();std::puts("PASS tooltip layer does not lift catalog background over car, repeated show/hide and modal plates");
 }
-void preview_mesh_and_camera_share_the_root_frame(){
-  Fixture f;gameref_clear();
-  Object root,object,camera;
-  auto* r=gameref_upsert(&root,GameRefKind::Dummy);r->flags=kWorldTreeRoot;
-  gameref_upsert(&object,GameRefKind::RenderRef);gameref_set_parent(&object,&root);
-  auto* c=gameref_upsert(&camera,GameRefKind::Camera);gameref_set_parent(&camera,&root);
-  gameref_set_matrix(&camera,-.0778f,.13f,-.1041f,-2.5f,-.7f,0);
-  auto projected=[&]{
-    float model[16],view[16];
-    SLRR_REQUIRE(scene_instance_transform(&object,&root,model));
-    SLRR_REQUIRE(scene_instances_preview_view(*c,view));
-    std::array<float,3> result{};
-    for(int row=0;row<3;++row)
-      result[row]=view[row]*model[12]+view[4+row]*model[13]+view[8+row]*model[14]+view[12+row];
-    return result;
-  };
-  const auto expected=projected();
-  SLRR_REQUIRE(expected[2]>0.f); // can is in front of the camera
-  // The shared local world may move, turn or scale; it must not make an
-  // inventory item bounce relative to the camera in that same world.
-  for(float y:{.482f,-.2f,1.1f}){
-    gameref_set_matrix(&root,.3f,y,-.6f,.8f,.2f,0);
-    const auto actual=projected();
-    for(int i=0;i<3;++i)SLRR_REQUIRE(std::fabs(actual[i]-expected[i])<1e-5f);
-  }
-  gameref_clear();
-}
-int main(){const standalone::Test tests[]={inset_preview_keeps_page_and_pose,cursor_camera_is_ui_only,tooltip_does_not_promote_page_background,preview_mesh_and_camera_share_the_root_frame};return standalone::run("car_select_view",tests);}
+int main(){const standalone::Test tests[]={inset_preview_keeps_page_and_pose,cursor_camera_is_ui_only,tooltip_does_not_promote_page_background};return standalone::run("car_select_view",tests);}

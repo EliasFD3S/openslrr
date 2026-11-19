@@ -90,9 +90,6 @@ SceneSun scene_instances_light(void* root=nullptr);
 // Rejects missing parents, hidden subtrees and cycles. Draws simulated
 // bodies at their pose interpolated between physics ticks.
 bool scene_instance_transform(void *key, void *root, float *matrix);
-// Direct setMatrix preview camera: PE camera basis, including the same root
-// frame used by the preview meshes, in reflected render coordinates.
-bool scene_instances_preview_view(const GameRefState& camera, float* view);
 // Active world, unreflected script metres. False for inventory/other worlds.
 bool scene_instances_script_matrix(void *key, float *matrix);
 // The same, at the drawn pose (gameref_render_matrix). Use it for cameras,

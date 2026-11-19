@@ -115,6 +115,26 @@ int run_markers() {
     }
     gameref_remove(&marker);
   }
+  // Paint cans share the cue resource flags, but an inventory preview is
+  // its own local world: world-space bob/opacity must not reach its mesh.
+  Object inventory, can;
+  gameref_upsert(&inventory, GameRefKind::Dummy)->flags=kWorldTreeRoot;
+  gameref_set_parent(&inventory,&world);
+  auto* paint=gameref_upsert(&can,GameRefKind::RenderRef);
+  const auto* frontend=f.packs.pack_by_name("frontend.rpk");
+  check(frontend!=nullptr,"paint-can pack available");
+  if(frontend){
+    paint->type_id=RpkIndex::make_full_id(frontend->pack_id,0x21);
+    gameref_set_parent(&can,&inventory);
+    gameref_set_matrix(&can,0,.02f,0,0,0,0);
+    for(int i=0;i<3;++i){
+      const auto preview=scene_instances_collect_root(&inventory);
+      check(preview.size()==1 && std::fabs(preview[0].transform[13]-.02f)<1e-6f &&
+            preview[0].transform[0]==1.f && preview[0].opacity==1.f,
+            "paint-can preview stays at script pose and opaque");
+    }
+  }
+  gameref_remove(&can);gameref_remove(&inventory);
   Object body;
   auto* b = gameref_upsert(&body, GameRefKind::PhysicsRef);
   b->physics_shape = PhysicsShape::Box;
