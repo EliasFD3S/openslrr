@@ -35,3 +35,19 @@ the distributed patch when needed.
 Update the relevant documentation whenever a contract or responsibility changes.
 Report compilation and in-game validation separately; neither result alone
 establishes complete compatibility.
+
+## Branches and pull requests
+
+- Name branches `{type}/{issue_number}-short-desc`, where `type` is `feature`,
+  `bug`, `hotfix`, or `spike`. The issue number is required. For example:
+  `bug/44-remaining-limitations-fix`.
+- Start the PR title with `#<issue_number>` and make its wording match the
+  branch's short description, for example: `#44 Remaining limitations fix`.
+- Keep the PR description concise and direct. Include a `Not fixed / limitations`
+  section listing remaining work so a crawler can add it to issue #44; write
+  `None` when nothing remains. Do not omit known gaps.
+- For UI changes, include labelled **Before** and **After** screenshots in the
+  PR description.
+- Always request review from someone other than the PR author. PRs created by
+  `antomys` must request `EliasFD3S`; PRs created by `EliasFD3S` must request
+  `antomys`.
