@@ -661,16 +661,18 @@ there is no instant-centre anti-dive/anti-squat force or jacking feedback.
 Wheel YPR and the existing arm/hub kinematics still affect contact geometry.
 The proposed anti-roll-bar loop is commented out, not implemented.
 
-The mechanical step applies the drivetrain impulse, computes tyre forces
-and their spin reaction, then applies bearing friction, the service brake
-(with optional ABS release) and handbrake to spin. Only the longitudinal
-force retains the per-wheel no-slip-reversal bound; the earlier shared
-lateral impulse bound is absent. Automatic first/reverse launch take-up is
-raised only while both service brake and handbrake are below 0.05, not
-while holding the service brake. The previous burnout measurements therefore
-do not validate this revision. Strong-brake holding currently has an open
-review reproducer: with full throttle the car can creep despite zero final
-wheel spin, because the tyre force is calculated before the brake.
+The approved migration keeps that tyre law but corrects brake coupling.
+After the drivetrain impulse, one bearing/service/handbrake impulse budget
+is consumed before tyre force sees the spin. Its unused portion holds a
+locked wheel against the subsequent tyre reaction; it is not a second full
+brake application. ABS reduces the service budget and can release an
+already-locked wheel while the road moves. Only longitudinal force retains
+the per-wheel no-slip-reversal bound; the earlier shared lateral impulse
+bound is absent. Automatic first/reverse launch take-up is still raised
+only while both service brake and handbrake are below 0.05, not while
+holding the service brake. Previous burnout measurements do not validate
+this revision. The `8ac2ba9` brake-hold reproducer (traction despite zero
+final wheel spin) is covered by forward/reverse and weak/strong brake tests.
 
 A corner without a working spring still uses the rigid-contact path and its
 previous substep's support load; that support impulse is solved after body

@@ -35,17 +35,17 @@ struct Quaternion {
 };
 using Matrix = std::array<float, 16>;
 
-// Adapted contracts: SLRR_rev a2ee10de, rigid-body-3d.ts. Without explicit
-// moments the inertia is a solid box of the bounds (the upstream
-// approximation); it is not the original game's compound inertia.
+// Adapted contracts: SLRR_rev a2ee10de, rigid-body-3d.ts. The 8ac2ba9
+// fallback uses a solid box of 0.75 times the bounds dimensions (host tuning,
+// not the collision dimensions or the original game's compound inertia).
 class RigidBody {
 public:
   double mass = 1;
   Vec3 position, velocity, momentum, center, minimum, maximum;
   Quaternion orientation;
   void configure(double kilograms, Vec3 bounds_min, Vec3 bounds_max, Vec3 com);
-  // Principal moments about `com` along the body axes, in kg m². A component
-  // that is not positive and finite keeps the solid-box value for that axis.
+  // Principal moments about `com` along the body axes, in kg m². All three
+  // must be positive and finite; otherwise the entire fallback is retained.
   void configure(double kilograms, Vec3 bounds_min, Vec3 bounds_max, Vec3 com,
                  Vec3 principal_inertia);
   Vec3 inertia() const;
@@ -91,19 +91,17 @@ struct WheelConfig {
   bool has_hub = false;
   std::array<float, 10> hub{};
   Quaternion hub_alignment;
-  // WheelRef.setInstantCenter (Suspension.setRollCenter), relative to
-  // `center` in chassis axes: the front-view centre uses x/y, the side-view
-  // centre z/y. The links carry the tyre force along the line from the
-  // contact patch through the centre, so part of it lifts or pulls the body
-  // (roll centre, anti-dive, anti-squat) instead of going through the spring.
+  // Stored WheelRef.setInstantCenter data, relative to `center` in chassis
+  // axes: front-view x/y, side-view z/y. Retained for native compatibility;
+  // the intended 8ac2ba9 solver does not apply an instant-centre load force.
   bool front_instant_center = false, side_instant_center = false;
   Vec3 front_center_offset, side_center_offset;
   bool linked() const { return unsprung > 0 || arm_length > 0; }
 };
 struct WheelState {
   bool contact = false, seeded = false;
-  // force: spring and damper support. jacking: vertical force the links add
-  // at the patch from the instant centres. The tyre load is their sum.
+  // force: spring and damper support, used as the tyre load. jacking is a
+  // reserved legacy field; the intended solver does not add it to the load.
   double length = 0, speed = 0, force = 0, jacking = 0;
   Vec3 center, normal{0, 1, 0}, hub, patch;
   Quaternion hub_rotation;

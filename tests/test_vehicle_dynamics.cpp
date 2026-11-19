@@ -104,9 +104,11 @@ SLRR_TEST(tyre_grip_follows_the_tyre_script) {
   // A wider tyre of the same compound grips more; a softer compound too.
   SLRR_REQUIRE(peak_lateral(tyre(245), 3500) > peak_lateral(tyre(195), 3500) * 1.08);
   SLRR_REQUIRE(peak_lateral(tyre(205, 1.687), 3500) > peak_lateral(tyre(205, 1.495), 3500) * 1.08);
-  // The stock sport tyre peaks near the road-tyre mu the units map to.
-  const double mu = peak_lateral(tyre(205), 3000) / tire_effective_load(3000, tyre(205));
-  SLRR_REQUIRE(mu > .95 && mu < 1.15);
+  // Pin a reference-curve sample of the intended 8ac2ba9 model, rather
+  // than asserting the old script-friction / 1.68 peak interpretation.
+  const auto reference = tire_forces(3500, 1, 20, 20, 2, TireParameters{});
+  SLRR_REQUIRE(reference.longitudinal == 0);
+  SLRR_REQUIRE(std::abs(reference.lateral + 4347.597081) < 1e-5);
 }
 
 SLRR_TEST(tyre_stiffness_and_sliction_shape_the_curve) {
@@ -114,35 +116,42 @@ SLRR_TEST(tyre_stiffness_and_sliction_shape_the_curve) {
   soft.stiffness = 10;
   stiff.stiffness = 30;
   const auto small = [](const TireParameters& t) {
-    return std::abs(tire_forces(3000, 1, 20, 20, 20 * std::tan(.01), t).lateral);
+    return std::abs(tire_forces(3000, 1, 60, 60, 60 * std::tan(.01), t).lateral);
   };
   SLRR_REQUIRE(small(stiff) > small(soft) * 2.5);
-  // The initial slope is stiffness * load per unit slip.
-  const auto base = tyre(205);
-  SLRR_REQUIRE(std::abs(small(base) / (tire_effective_load(3000, base) * std::tan(.01)) -
-                        base.stiffness) < base.stiffness * .02);
-  // A fully sliding tyre keeps about sliction of its peak.
-  auto t = tyre(205);
-  for (double sliction : {.7, .9}) {
-    t.sliction = sliction;
-    const double slide = std::abs(tire_forces(3000, 1, 20, 20, 20 * std::tan(1.4), t).lateral);
-    const double ratio = slide / peak_lateral(t, 3000);
-    SLRR_REQUIRE(std::abs(ratio - sliction) < .06);
-  }
+  auto capped = stiff, above_cap = stiff;
+  capped.stiffness = TireParameters{}.stiffness * 2.5;
+  above_cap.stiffness = capped.stiffness * 10;
+  SLRR_REQUIRE(std::abs(small(capped) - small(above_cap)) < 1e-9);
+  // At saturated slip reference-scaled sliction multiplies grip, not
+  // force divided by the curve's own peak.
+  auto low = tyre(205), high = low;
+  low.sliction = .4;
+  high.sliction = 1.2;
+  const auto sliding = [](const TireParameters& t) {
+    return std::abs(tire_forces(3000, 1, 20, 20, 50, t).lateral);
+  };
+  SLRR_REQUIRE(std::abs(sliding(low) / sliding(high) - 1. / 3) < 1e-9);
 }
 
-SLRR_TEST(tyre_load_capacity_saturates_grip) {
-  const auto t = tyre(205);
-  SLRR_REQUIRE(std::abs(tire_effective_load(2000, t) - 2000) < 200);
-  SLRR_REQUIRE(tire_effective_load(13000, t) < 13000 * .7);
-  SLRR_REQUIRE(tire_effective_load(13000, t) > tire_effective_load(9000, t));
+SLRR_TEST(tyre_load_capacity_has_progressive_efficiency) {
+  auto t = tyre(205);
+  const double low = peak_lateral(t, 2000), high = peak_lateral(t, 13000);
+  SLRR_REQUIRE(high > peak_lateral(t, 9000));
+  SLRR_REQUIRE(high / 13000 < low / 2000);
+  auto linear = t;
+  linear.maximum_load = 0;
+  SLRR_REQUIRE(std::abs(peak_lateral(linear, 13000) / peak_lateral(linear, 2000) - 6.5) < 1e-9);
+  SLRR_REQUIRE(high < peak_lateral(linear, 13000));
 }
 
 SLRR_TEST(wheelspin_uses_up_cornering_grip) {
   const auto t = tyre(205);
   const double cornering = std::abs(tire_forces(3000, 1, 20, 20, 20 * std::tan(.08), t).lateral);
   const double spinning = std::abs(tire_forces(3000, 1, 30, 20, 20 * std::tan(.08), t).lateral);
-  SLRR_REQUIRE(spinning < cornering * .6);
+  // The intended reference curve reduces lateral response before the
+  // ellipse limit; it does not promise the old curve's 60% ratio.
+  SLRR_REQUIRE(spinning < cornering * .8);
 }
 
 SLRR_TEST(parked_car_settles_without_vibration) {
@@ -168,7 +177,7 @@ SLRR_TEST(full_lock_at_speed_slides_instead_of_rolling_over) {
   SLRR_REQUIRE(car.up() > .9);
 }
 
-SLRR_TEST(instant_centres_reduce_body_roll) {
+SLRR_TEST(stored_instant_centres_do_not_change_the_intended_solver) {
   double roll[2];
   for (int with = 0; with < 2; ++with) {
     Car car(with != 0);
@@ -178,7 +187,7 @@ SLRR_TEST(instant_centres_reduce_body_roll) {
     car.run(3, .35, 0, .12);
     roll[with] = std::abs(car.roll());
   }
-  SLRR_REQUIRE(roll[1] < roll[0] * .9);
+  SLRR_REQUIRE(std::abs(roll[1] - roll[0]) < 1e-12);
 }
 
 SLRR_TEST(more_grip_corners_harder) {
@@ -195,10 +204,9 @@ SLRR_TEST(more_grip_corners_harder) {
   SLRR_REQUIRE(lateral[1] > lateral[0] * 1.08);
 }
 
-SLRR_TEST(steep_instant_centres_stay_stable_under_hard_braking) {
-  // A side-view centre 0.3 m up and 0.4 m from the wheel with a very grippy
-  // tyre: the lift feeds the tyre load, so an unbounded slope would grow it
-  // every step and make the wheel chatter on and off the road.
+SLRR_TEST(high_grip_braking_remains_finite_with_legacy_centre_fields) {
+  // Legacy centre fields remain inert even with extreme values. Hard
+  // braking with a grippy tyre must leave the support state finite.
   Car car(true, 1.6, .3, .4);
   car.run(1, 0, 0, 0);
   car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -25});
@@ -212,7 +220,7 @@ SLRR_TEST(steep_instant_centres_stay_stable_under_hard_braking) {
     for (int w = 0; w < 4; ++w) {
       const auto& s = car.dynamics.state[w];
       always_in_contact = always_in_contact && s.contact;
-      worst_lift = std::max(worst_lift, std::abs(s.jacking) - s.force);
+      worst_lift = std::max(worst_lift, std::abs(s.jacking));
     }
   }
   SLRR_REQUIRE(always_in_contact);
@@ -243,7 +251,7 @@ SLRR_TEST(the_engine_beating_weak_rear_brakes_spins_the_driven_wheels) {
   car.run(3, 1, .6, 0);
   const double wheel = car.dynamics.state[2].spin * .31;
   SLRR_REQUIRE(wheel > 5);
-  SLRR_REQUIRE(wheel > car.speed() * 3);
+  SLRR_REQUIRE(wheel - car.speed() > 5);
 }
 
 SLRR_TEST(a_car_without_an_engine_coasts_and_still_brakes) {
@@ -272,20 +280,63 @@ SLRR_TEST(a_car_without_an_engine_coasts_and_still_brakes) {
   SLRR_REQUIRE(!coasting.dynamics.engine_running);
 }
 
+SLRR_TEST(preapplied_brakes_hold_against_drive_in_both_directions) {
+  for (bool reverse : {false, true}) {
+    for (double abs : {0., 1.}) {
+      for (double torque : {6000., 1000000.}) {
+        Car car;
+        car.dynamics.drive.reverse = reverse;
+        car.dynamics.drive.abs_strength = abs;
+        for (auto& wheel : car.dynamics.drive.wheels) wheel.brake = torque;
+        car.run(1, 0, 1, 0);
+        const auto start = car.dynamics.body.position;
+        car.run(3, 1, 1, 0);
+        SLRR_REQUIRE((car.dynamics.body.position - start).length() < .01);
+        SLRR_REQUIRE(car.speed() < .005);
+        for (const auto& wheel : car.dynamics.state)
+          SLRR_REQUIRE(std::abs(wheel.spin) * .31 < .01);
+      }
+    }
+  }
+}
+
+SLRR_TEST(abs_releases_a_locked_wheel_while_the_road_moves) {
+  Car cars[2];
+  for (int i = 0; i < 2; ++i) {
+    auto& car = cars[i];
+    car.dynamics.drive.torque = [](double) { return 0.; };
+    car.dynamics.drive.gears = 0;
+    car.dynamics.drive.starter = 0;
+    car.dynamics.engine_running = false;
+    car.dynamics.drive.abs_strength = i;
+    for (auto& wheel : car.dynamics.drive.wheels) wheel.brake = 10000;
+    car.run(1, 0, 0, 0);
+    car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -20});
+    // Start locked: ABS must let the tyre reaction spin it back up.
+    for (auto& wheel : car.dynamics.state) wheel.spin = 0;
+    car.run(.3, 0, 1, 0);
+  }
+  SLRR_REQUIRE(std::abs(cars[0].dynamics.state[0].spin) < 1e-6);
+  SLRR_REQUIRE(cars[1].dynamics.state[0].spin * .31 > 5);
+  SLRR_REQUIRE(cars[1].speed() < 20);
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
       tyre_grip_follows_the_tyre_script,
       tyre_stiffness_and_sliction_shape_the_curve,
-      tyre_load_capacity_saturates_grip,
+      tyre_load_capacity_has_progressive_efficiency,
       wheelspin_uses_up_cornering_grip,
       parked_car_settles_without_vibration,
       full_lock_at_speed_slides_instead_of_rolling_over,
-      instant_centres_reduce_body_roll,
+      stored_instant_centres_do_not_change_the_intended_solver,
       more_grip_corners_harder,
-      steep_instant_centres_stay_stable_under_hard_braking,
+      high_grip_braking_remains_finite_with_legacy_centre_fields,
       a_brake_stronger_than_the_drive_holds_its_wheels,
       the_engine_beating_weak_rear_brakes_spins_the_driven_wheels,
       a_car_without_an_engine_coasts_and_still_brakes,
+      preapplied_brakes_hold_against_drive_in_both_directions,
+      abs_releases_a_locked_wheel_while_the_road_moves,
   };
   return slrr::standalone::run("vehicle_dynamics", tests);
 }

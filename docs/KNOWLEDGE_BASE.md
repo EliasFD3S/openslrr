@@ -627,8 +627,10 @@ Physics:
   combined friction ellipse. Stiffness is a B multiplier, not an exact slope.
   `setCPatch` tolerance and `setInstantCenter` data are copied/stored but have
   no active solver effect; there is no jacking or shared lateral impulse
-  bound. Tyre force precedes brakes; raised launch take-up requires the
-  service brake below 0.05 (`src/physics/vehicle_dynamics.cpp:VehicleDynamics::step_drive`).
+  bound. The approved brake fix consumes one impulse budget before tyre
+  force and holds the reaction with the unused budget; raised launch take-up
+  still requires the service brake below 0.05
+  (`src/physics/vehicle_dynamics.cpp:VehicleDynamics::step_drive`).
   See ENGINE_CONTRACT §11 and [the migration plan](VEHICLE_DYNAMICS_PLAN.md).
 - A CFG `body` line is mass and collision; it is not a crush zone. Do not size
   a deformation cage from the phys SCX bodies. The assembly mass properties

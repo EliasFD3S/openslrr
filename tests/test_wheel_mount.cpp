@@ -26,7 +26,14 @@ SLRR_TEST(central_impact_charges_the_whole_mass) {
   SLRR_REQUIRE(std::fabs(energy - expected) < 1e-6 * expected);
   // An offset corner hit turns the car and stops less of it.
   const double corner = slrr::physics::contact_impulse_energy(body, {0.9, 0.5, -2.2}, {0, 0, 1}, 10.0);
-  SLRR_REQUIRE(corner < energy && corner > 0.4 * energy);
+  // Effective mass for a z impulse with a 0.9 m x lever uses yaw inertia.
+  // The intended fallback shrinks the inertia dimensions by 0.75; the old
+  // hard-coded >0.4 energy ratio described the full-size box instead.
+  const double yaw_inertia = 1300.0 * (std::pow(1.8 * .75, 2) + std::pow(4.4 * .75, 2)) / 12;
+  const double ratio = std::pow(1.0 / (1 + 1300.0 * .9 * .9 / yaw_inertia), 2);
+  SLRR_REQUIRE(corner > 0 && corner < energy);
+  SLRR_REQUIRE(std::abs(corner / energy - ratio) < 1e-12);
+  SLRR_REQUIRE(std::abs(body.inertia().y - yaw_inertia) < 1e-9);
   SLRR_REQUIRE(slrr::physics::contact_impulse_energy(body, {0, 0.5, -2.2}, {0, 0, 1}, -1.0) == 0);
 }
 

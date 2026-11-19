@@ -68,6 +68,10 @@ void RigidBody::configure(double kilograms, Vec3 lo, Vec3 hi, Vec3 com,
   }
 }
 
+Vec3 RigidBody::inertia() const {
+  return {1.0 / inverse_inertia_.x, 1.0 / inverse_inertia_.y, 1.0 / inverse_inertia_.z};
+}
+
 void RigidBody::set_frame(const Matrix &m) {
   for (float v : m)
     if (!std::isfinite(v))
@@ -556,17 +560,42 @@ void VehicleDynamics::step_drive() {
     auto &s = state[i];
     if (!wheel.enabled)
       continue;
-    double road_speed = 0;
+    const auto brake = [](double speed, double amount) {
+      return std::copysign(std::max(0.0, std::abs(speed) - amount), speed);
+    };
+    const Vec3 heading = wheel_forward(body, cfg.steer, s.hub_rotation);
+    const Vec3 forward =
+        (heading - s.normal * heading.dot(s.normal)).normalized();
+    const Vec3 side = forward.cross(s.normal);
+    const Vec3 speed = body.point_velocity(s.patch);
+    const double road = speed.dot(forward), lateral = speed.dot(side);
+
+    // Consume one brake-impulse budget, before traction sees the driven spin.
+    // Any unused budget can hold a locked wheel against the tyre reaction
+    // below; applying the full brake a second time would double its torque.
+    double remaining_brake = 0;
+    const auto apply_brake = [&](double amount) {
+      amount = std::max(0.0, amount);
+      const double before = s.spin;
+      s.spin = brake(s.spin, amount);
+      remaining_brake += std::max(0.0, amount - std::abs(before - s.spin));
+    };
+    apply_brake(500 * timestep * cfg.bearing * drive.bearing_scale);
+    const double torque_step = timestep / wheel_inertia;
+    double service = torque_step * service_brake_ * cfg.brake * drive.brake_scale;
+    if (drive.abs_strength > 0 && s.contact && std::abs(road) >= 3 &&
+        s.spin * road >= 0) {
+      const double minimum = std::abs(road) / std::max(.01, wheel.radius) * .85;
+      const double allowed = std::max(0.0, std::abs(s.spin) - minimum);
+      service = std::lerp(service, std::min(service, allowed),
+                          std::clamp(drive.abs_strength, 0.0, 1.0));
+    }
+    apply_brake(service);
+    apply_brake(torque_step * drive.handbrake * cfg.handbrake * drive.handbrake_scale);
+
     if (!s.contact || s.force <= 0) {
       s.spin *= 1 - .25 * timestep / wheel_inertia;
     } else {
-      const Vec3 heading = wheel_forward(body, cfg.steer, s.hub_rotation);
-      const Vec3 forward =
-          (heading - s.normal * heading.dot(s.normal)).normalized();
-      const Vec3 side = forward.cross(s.normal);
-      const Vec3 speed = body.point_velocity(s.patch);
-      const double road = speed.dot(forward), lateral = speed.dot(side);
-      road_speed = road;
       s.slip_speed = s.spin * wheel.radius - road;
       s.lateral_speed = lateral;
       const double tilt =
@@ -597,25 +626,7 @@ void VehicleDynamics::step_drive() {
           (force.longitudinal * wheel.radius + rolling_torque + s.spin * .15) *
           timestep / wheel_inertia;
     }
-    const double brake_step = 500 * timestep;
-    const auto brake = [](double speed, double amount) {
-      return std::copysign(std::max(0.0, std::abs(speed) - amount), speed);
-    };
-    const double free_spin =
-        brake(s.spin, brake_step * cfg.bearing * drive.bearing_scale);
-    const double torque_step = timestep / wheel_inertia;
-    double braked = brake(free_spin, torque_step * service_brake_ * cfg.brake *
-                                         drive.brake_scale);
-    if (s.contact && std::abs(road_speed) >= 3 && free_spin * road_speed > 0) {
-      const double minimum =
-          std::abs(road_speed) / std::max(.01, wheel.radius) * .85;
-      const double allowed = std::max(0.0, std::abs(free_spin) - minimum);
-      const double released =
-          std::max(0.0, std::abs(free_spin - braked) - allowed);
-      braked += std::copysign(released * drive.abs_strength, road_speed);
-    }
-    s.spin = brake(braked, torque_step * drive.handbrake * cfg.handbrake *
-                               drive.handbrake_scale);
+    s.spin = brake(s.spin, remaining_brake);
     s.rotation =
         std::remainder(s.rotation + s.spin * timestep, 6.283185307179586);
   }
