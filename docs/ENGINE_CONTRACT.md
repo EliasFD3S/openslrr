@@ -397,7 +397,7 @@ to a loose native body with its full CFG collision mesh and mass-weighted
 body-pose centre, and its static instances are hidden. The loose body sleeps
 until contact, reuses the loose-part solver for car and static-scene contacts,
 and updates every render slot, with its CFG render pose, from the simulated
-frame. Once it rests more than 40 m beyond the car's reach it becomes an
+frame. Once it rests more than 40 m beyond every active car's reach it becomes an
 ordinary prop again at the pose where it settled (for the rest of the
 session), so only props near the car are live. It returns to its map pose
 instead when it was pushed more than a 64 m prop cell away, falls below
@@ -409,7 +409,7 @@ remain on the exact static path.
 
 `PhysicsRef.setStatic(0)` hands a script body to the host free-body solver:
 it falls under gravity, rests on the scene, and exchanges impulses with the
-controlled car like a loose part, publishing its pose and velocities for
+active physical cars like a loose part, publishing its pose and velocities for
 `getPos`, `getOri`, `getVel` and `getAngVel`. `setMatrix` places it at rest,
 and `setStatic(1)` fixes it again. Created bodies stay fixed until then; the
 stock jack, lifts and showroom walls never call `setStatic`. A primitive has

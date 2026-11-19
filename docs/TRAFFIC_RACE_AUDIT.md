@@ -48,9 +48,9 @@ mass and contact impulse; the world applies mass-weighted separation.
 `src/engine/race-driver.ts:raceTrafficContact` passes opposite impulses to the
 full-car and traffic impact owners.
 
-OpenSLRR already has a two-body `RigidBody::contact` primitive, but callers do
-not produce car pairs. More importantly, the existing
-`VehicleDynamics::Impact` carries only point, normal and speed.
+At the baseline, OpenSLRR already had a two-body `RigidBody::contact` primitive,
+but callers did not produce car pairs. Its `VehicleDynamics::Impact` carried
+only point, normal and speed.
 `src/resources/part_runtime.cpp:damage_wheel_mounts` and `damage_engine_mount`
 use `src/physics/wheel_mount.cpp:contact_impulse_energy`, which assumes a body
 hitting an immovable wall. `pre_contact_velocity` reconstructs velocity under
@@ -159,15 +159,21 @@ silently replacing it with a collision-filter toggle.
 
 The local regression `released_car_without_driver_hits_static_wall` releases a
 synthetic native chassis through `part_apply_state`, without a Controller or
-brain, towards a static PhysicsRef wall. It is limited to the local collision
-gate; it is not a car-pair, full native stock, career or visual test.
+brain, towards a static PhysicsRef wall. Nine additional real-assembly runtime
+cases cover native/mechanical and retained-player/AI pair contacts, passive wake,
+relocation/mass, filtering, free/promoted bodies, damage/detachment, pause,
+handoff/deletion and explicit recovery. Those are separate from complete race
+state-machine acceptance.
 
-Record the actual checks and any build-only staging deviations in
-[traffic-race-audit.txt](../assets/validation/traffic-race-audit.txt). No new
-in-game Before/After capture, audible comparison, complete police assembly
-capture or day/night/ROC playthrough is supplied by this audit. No menu/layout
-changes are made. The newly eligible released bodies also reach
+Actual checks and build-only staging deviations are recorded in
+[traffic-race-audit.txt](../assets/validation/traffic-race-audit.txt). Matched
+[Before/After full-career captures and natural AI/AI contact evidence](../assets/validation/traffic-contacts/README.md)
+are supplied with clearly labelled read-only diagnostic provenance. The images
+show rendering/static-contact smoke, not vehicle-pair impact footage; the
+60-simulated-second full-career trace records actual pair response. No audible
+comparison, complete police presentation capture or full day/night/ROC
+playthrough is supplied. No menu/layout changes are made. The newly eligible released bodies also reach
 the existing damage/hinge/mount logic and distance accumulation; a controlled
 engine-less car also receives the existing cockpit lean. Those are consequences
 of removing the engine gate, not newly implemented damage or camera models.
-The incomplete draft is not ready for acceptance of #197.
+This validated partial change is not acceptance of the entire #197 checklist.

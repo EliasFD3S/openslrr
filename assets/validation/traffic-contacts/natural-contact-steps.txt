@@ -1,0 +1,27 @@
+Natural full-script CareerQA-2 / Valocity / 13h / 60 simulated seconds.
+Printf-only observer: accepted pair steps J > 1000, bounded at 32; no placements or AI changes.
+All 23 records are AI/AI, not 23 distinct crashes or player-impact acceptance.
+
+[validation-contact] n=1 a=1879048580 type-a=0x1a0006 b=1879048586 type-b=0x1a0006 player-a=0 player-b=0 J=5504.699899 speed=8.200541
+[validation-contact] n=2 a=1879048581 type-a=0x1a0006 b=1879048582 type-b=0x1a0006 player-a=0 player-b=0 J=5311.312883 speed=7.882657
+[validation-contact] n=3 a=1879048595 type-a=0x1a0006 b=1879048596 type-b=0x1a0006 player-a=0 player-b=0 J=5189.692233 speed=7.682184
+[validation-contact] n=4 a=1879048583 type-a=0x1a0006 b=1879048594 type-b=0x1a0006 player-a=0 player-b=0 J=5193.107809 speed=7.686485
+[validation-contact] n=5 a=1879048580 type-a=0x1a0006 b=1879048593 type-b=0x1a0006 player-a=0 player-b=0 J=5557.582260 speed=8.287635
+[validation-contact] n=6 a=1879048580 type-a=0x1a0006 b=1879048586 type-b=0x1a0006 player-a=0 player-b=0 J=2968.112290 speed=4.442133
+[validation-contact] n=7 a=1879048580 type-a=0x1a0006 b=1879048593 type-b=0x1a0006 player-a=0 player-b=0 J=1291.476423 speed=1.917055
+[validation-contact] n=8 a=1879048581 type-a=0x1a0006 b=1879048585 type-b=0x1a0006 player-a=0 player-b=0 J=5314.602610 speed=7.886102
+[validation-contact] n=9 a=1879048581 type-a=0x1a0006 b=1879048582 type-b=0x1a0006 player-a=0 player-b=0 J=2829.404212 speed=4.206918
+[validation-contact] n=10 a=1879048581 type-a=0x1a0006 b=1879048585 type-b=0x1a0006 player-a=0 player-b=0 J=1231.485457 speed=1.820402
+[validation-contact] n=11 a=1879048580 type-a=0x1a0006 b=1879048593 type-b=0x1a0006 player-a=0 player-b=0 J=3130.353839 speed=5.397680
+[validation-contact] n=12 a=1879048580 type-a=0x1a0006 b=1879048586 type-b=0x1a0006 player-a=0 player-b=0 J=1656.651399 speed=2.483130
+[validation-contact] n=13 a=1879048575 type-a=0x1a0006 b=1879048596 type-b=0x1a0006 player-a=0 player-b=0 J=5190.864428 speed=7.679183
+[validation-contact] n=14 a=1879048595 type-a=0x1a0006 b=1879048596 type-b=0x1a0006 player-a=0 player-b=0 J=2802.876214 speed=4.142490
+[validation-contact] n=15 a=1879048575 type-a=0x1a0006 b=1879048596 type-b=0x1a0006 player-a=0 player-b=0 J=1214.922907 speed=1.793997
+[validation-contact] n=16 a=1879048580 type-a=0x1a0006 b=1879048593 type-b=0x1a0006 player-a=0 player-b=0 J=1537.658266 speed=2.945214
+[validation-contact] n=17 a=1879048580 type-a=0x1a0006 b=1879048586 type-b=0x1a0006 player-a=0 player-b=0 J=1506.449376 speed=2.219012
+[validation-contact] n=18 a=1879048580 type-a=0x1a0006 b=1879048593 type-b=0x1a0006 player-a=0 player-b=0 J=1039.545665 speed=1.550664
+[validation-contact] n=19 a=1879048587 type-a=0x1a0006 b=1879048599 type-b=0x1a0006 player-a=0 player-b=0 J=5251.147454 speed=7.778908
+[validation-contact] n=20 a=1879048580 type-a=0x1a0006 b=1879048586 type-b=0x1a0006 player-a=0 player-b=0 J=3205.164199 speed=4.712146
+[validation-contact] n=21 a=1879048580 type-a=0x1a0006 b=1879048593 type-b=0x1a0006 player-a=0 player-b=0 J=3791.376257 speed=5.591599
+[validation-contact] n=22 a=1879048580 type-a=0x1a0006 b=1879048586 type-b=0x1a0006 player-a=0 player-b=0 J=2068.621414 speed=3.059250
+[validation-contact] n=23 a=1879048597 type-a=0x1a0006 b=1879048598 type-b=0x1a0006 player-a=0 player-b=0 J=4939.904369 speed=7.266797

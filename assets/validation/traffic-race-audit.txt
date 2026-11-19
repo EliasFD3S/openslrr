@@ -45,8 +45,12 @@ Checks completed:
   Changed code: passes at x=3.015 / vx=-1.682 / 120 ticks.
 - Shared-contact supported-host validation: physics_recovery 9 pass;
   vehicle_contacts_runtime 9 pass; road_routes 6, race_brain 5,
-  traffic_runtime 10, race_vehicle 2 and gameref_alias/trigger_markers pass.
-  Final explicit retry/publication-guard + retained-player-control rerun pending.
+  traffic_runtime 10, race_vehicle 2, gameref_alias 3 and trigger_markers pass.
+  Final explicit retry/publication guards and retained controlled-player versus
+  native-AI rerun: all nine contact cases pass. Production source SHA-256:
+  29a367a99f1bb4486149186bb50b7b78fb7844ebd5364a33fceb4cf9ac4ff6b3;
+  runtime test SHA-256:
+  894229dd4fdf7314d3e1fb75c60d27166ff48a40cff2350d0e08d859297d949b.
 
 Real-assembly contact regression evidence:
 - Native stock Baiern (mounted CFG wheels, no Java ratios) versus inline Wagon
@@ -73,8 +77,35 @@ from this branch. The private runner additionally accepts frozen baseline
 sources/labels and uses the private game cwd, with separate native stderr capture.
 No external executable or concurrent build's object cache is used as evidence.
 
-Gameplay evidence: pending final validation and isolated application captures.
-No audible engine comparison or complete day/night/ROC challenge/results/return
+Actual application/gameplay evidence:
+- Matched full-script CareerQA-2 Valocity runs, 1280x720, 13:00 daylight, same
+  chase camera/HUD/options, complete independent input roots with all 8462 files
+  (535972931 bytes each) SHA-256-equal before launch. Both baseline/current
+  12-simulated-second runs naturally reached drive-done and exited 0.
+- Before/After images, exact source/executable fingerprints and the read-only
+  capture/printf diagnostic diffs: assets/validation/traffic-contacts/README.md.
+  These are real bgfx backbuffers, not desktop/mockup images; t00 preserves the
+  same initial scenario, and both t10 frames show a static tree contact, NOT a
+  vehicle-pair screenshot. Diagnostic patches change no gate/physics/AI behavior.
+- A third identical QA2 root naturally ran 60 simulated seconds and exited 0.
+  Bounded printf-only observation recorded 23 accepted AI/AI contact steps across
+  9 live-ID pairs, all native Taxi type0x1a0006, with J1039.545665-5557.582260Ns.
+  First pair J5504.699899Ns at relative normal speed8.200541m/s. No placement,
+  velocity injection, density adjustment or replacement AI was used. These are
+  steps, not 23 distinct crashes or player-impact footage. Player/AI has separate
+  retained-control real-assembly runtime coverage.
+- 59 complete 60-frame windows: mean physics4.041ms (maxwindowmean5.321ms),
+  vehicles3.666ms and traffic0.021ms; raw CSV retained. Shared host/GPU, fixed
+  simulation cadence: not a controlled FPS comparison or allocation-churn audit.
+- Exact original tested production executable61305b1c0cfde26c3eea5002f985c5af0921cee64e30a11bcbdcd532e7adda41
+  restored after all temporary diagnostics; 218 source/header/test/build inputs
+  verified final bytes and all hooks removed. Restoration rebuild succeeds;
+  post-restoration recovery9/0 + runtimecontacts9/0 pass again. All jobs collected
+  and zero private processes remain. No original data or user process changed.
+- Earlier current-save/QA1 attempts did not reach the automatic benchmark; their
+  limits are retained, not called successes. No baseline gate/query/loader fix
+  was made; complete QA2 demonstrably works.
+No audible comparison or complete day/night/ROC challenge/results/return
 acceptance is claimed. Prior shared-races.txt gameplay observations are historical.
 
 Remaining scope / limitations:
@@ -87,5 +118,6 @@ Remaining scope / limitations:
 - docs/TRAFFIC_RACE_AUDIT.md separates baseline causes from reported/unreproduced
   defects and records what the refreshed upstream does not implement.
 
-Status: partial #197 contact implementation; final verification pending. Use
-Refs #197, not a closing keyword. A person reviews/merges; no agent auto-merge.
+Status: reviewed and validated partial #197 contact implementation, ready for
+human review; the complete consolidated issue is NOT finished. Use Refs #197,
+not a closing keyword. A person reviews/merges; no agent merge or auto-merge.

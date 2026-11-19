@@ -1,0 +1,14 @@
+--- final4/src/resources/part_runtime.cpp
++++ contact-printf-only/src/resources/part_runtime.cpp
+@@ -4371,6 +4371,11 @@
+         continue;
+       }
+       if (!hit) continue;
++      static unsigned validation_pair_count = 0;
++      if (hit->normal_impulse > 1000 && validation_pair_count < 32) {
++        ++validation_pair_count;
++        std::fprintf(stderr, "[validation-contact] n=%u a=%d type-a=0x%x b=%d type-b=0x%x player-a=%d player-b=%d J=%.6f speed=%.6f\n", validation_pair_count, gameref_get(a.chassis)->live_id, unsigned(a.rec->state.resource), gameref_get(b.chassis)->live_id, unsigned(b.rec->state.resource), int(a.chassis == controlled), int(b.chassis == controlled), hit->normal_impulse, hit->speed);
++      }
+       if (hit->normal_impulse > 1) {
+         for (auto* vehicle : {&a, &b}) {
+           vehicle->rec->physics_released = true;

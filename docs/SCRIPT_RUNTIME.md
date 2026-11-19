@@ -478,8 +478,9 @@ body/wheel frames published together. Hidden ancestor chains, other worlds and
 stale incarnations are excluded. Parked bodies can wake on contact while Java
 retains car/driver ownership. Promoted props and free bodies query all active
 physical cars; pair damage carries actual impulse and pre-hit motion rather than
-reusing the wall-relative speed assumption. See TRAFFIC_RACE_AUDIT for limits. AI tuning, population and streaming radii are
-host models, not original-engine parity. Native bindings are not race completion.
+reusing the wall-relative speed assumption. See [the #197 audit](TRAFFIC_RACE_AUDIT.md)
+for limits. AI tuning, population and streaming radii are host models, not
+original-engine parity. Native bindings are not race completion.
 
 Validation uses the Release host objects and read-only local assets. road_routes
 covers directed graphs, native return formats, navigation ribbons and shared
