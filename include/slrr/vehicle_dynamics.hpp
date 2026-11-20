@@ -146,6 +146,11 @@ public:
   struct Impact {
     Vec3 point, normal;
     double speed = 0;
+    // Pair contacts supply the actual impulse and pre-impact rigid motion.
+    // Negative retains the historical immovable-wall reconstruction.
+    double normal_impulse = -1;
+    Vec3 pre_velocity{}, pre_omega{};
+    bool has_pre_motion = false;
   } ground_impact;
   std::array<WheelConfig, 4> wheels;
   std::array<WheelState, 4> state;

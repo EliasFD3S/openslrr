@@ -512,6 +512,25 @@ mass and wheels. OpenSLRR now preserves native ownership from its Part factory,
 rather than inferring the drive model from inline wheel meshes. This is a port
 integration fix, not a claim that every upstream Bot behavior has been translated already.
 
+### Consolidated #197 audit, 19 November 2026 (UTC)
+
+Refreshed v221 to `7441a697f3b7b2d0ff7ddbe3f20f2e29a03165aa`;
+traffic remains `bea8ce06eabef78ad0c25dde00e17a48765199b5`.
+The [remaining-work audit](TRAFFIC_RACE_AUDIT.md) compares current contacts,
+Bot/controller policy, native assembly, audio and driver seating against this
+snapshot. In particular, v221 vehicle-physics-world.ts / vehicle-pair-test.ts
+coordinate full-car pair contacts and deliver actual impulses to both damage
+owners. The #197 contact port preserves legacy wall callers while adding actual
+normal impulse and pre-impact rigid motion for finite-mass pairs. It reuses
+OpenSLRR's post-normal impulse friction and adds strict transactional validation,
+stable SAT tie order and bounded translational sweeping; those are host
+extensions, not recovered original collision behavior.
+Native traffic's traffic-audio.ts is a simplified positional idle fallback, not
+mechanical SfxTable parity. java-vehicles.ts binds mechanical racer drivers but
+explicitly omits native-only fake-racer seating. traffic-java-bridge.md still
+leaves full pursuit incomplete; no AI_spline/AI_params implementation was found
+in the refreshed source. These findings are not claims of new in-game acceptance.
+
 ## 8. Draft PR #3: what it contains and what applies to main
 
 PR #3 documents were written against the merge base `77d19e7`. PRs #6

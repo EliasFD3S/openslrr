@@ -391,6 +391,16 @@ Vec3 closest_point_on_triangle(Vec3 p, const std::array<Vec3, 3>& t) {
 
 }  // namespace
 
+std::optional<Contact> overlap_boxes(const Box& moving, const Box& obstacle) noexcept {
+  if (!valid_box(moving) || !valid_box(obstacle)) return std::nullopt;
+  Contact contact;
+  if (!intersect(moving, obstacle, contact) || !finite(contact.normal) ||
+      !finite(contact.point) || !std::isfinite(contact.penetration) ||
+      contact.penetration < 0)
+    return std::nullopt;
+  return contact;
+}
+
 std::optional<Contact> overlap_triangle(const Box& moving,
                                         const std::array<Vec3, 3>& triangle) noexcept {
   if (!valid_box(moving)) return std::nullopt;

@@ -99,6 +99,7 @@ add_executable(slrr_host
   src/physics/tire_model.cpp
   src/physics/dyno_model.cpp
   src/physics/vehicle_dynamics.cpp
+  src/physics/vehicle_contacts.cpp
   src/physics/scene_collision.cpp
   src/physics/deformation_cage.cpp
   src/physics/mass_properties.cpp
