@@ -36,6 +36,21 @@ int main() {
   SLRR_REQUIRE(osd_widgets().empty());
   std::puts("PASS stable handles, hidden roots, destroyed roots and repeated compaction");
 
+  // An Osd whose viewport was never activated takes no clicks (the garage
+  // parts bin built while painting lay over the decal picker).
+  Object osd,viewport,icon;osd.class_name="java.render.Osd";
+  viewport.fields["active"]=Value::make_int(0);osd.fields["vp"]=Value::make_obj(&viewport);
+  osd_on_field_write(&osd,"vp");
+  OsdWidget slot;slot.owner=&osd;slot.event_source=&icon;slot.hit_only=true;
+  osd_add_widget(slot);
+  SLRR_REQUIRE(osd_hit_index(0,0)<0);
+  osd_set_owner_visible(&osd,true);
+  SLRR_REQUIRE(osd_hit_index(0,0)>=0&&rooted(&icon));
+  osd_set_owner_visible(&osd,false);
+  SLRR_REQUIRE(osd_hit_index(0,0)<0);
+  osd_clear_widgets();
+  std::puts("PASS inactive viewports take no clicks until shown; icon sources stay rooted");
+
   slrr_font_set_game_root(fs::absolute("game").string());
   auto* first=f.vm.new_object("java.util.resource.ResourceRef");
   auto* second=f.vm.new_object("java.util.resource.ResourceRef");

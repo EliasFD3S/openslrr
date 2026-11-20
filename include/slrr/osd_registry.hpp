@@ -52,6 +52,9 @@ struct OsdWidget {
   Object* button = nullptr;
   // Exact Rectangle RenderRef, independent of screen position or texture.
   Object* picture_source = nullptr;
+  // Osd.createIcon GameRef (the garage decal picker). A click is EC_LCLICK
+  // from this object to its cursor listener, not an osdCommand.
+  Object* event_source = nullptr;
   Object* highlight_for = nullptr;
   // Text object whose changeText fills tip. File rows are created as ""
   // and renamed afterwards; hover matches tip against that text.

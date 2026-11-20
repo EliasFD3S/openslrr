@@ -10,10 +10,12 @@
 #include "slrr/osd_registry.hpp"
 #include "slrr/render_backend.hpp"
 #include "slrr/script_cfg.hpp"
+#include "slrr/scx_mesh.hpp"
 #include "slrr/slrr_font.hpp"
 #include "slrr/video_fmv.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -37,6 +39,57 @@ Object* placed_body(Object* self) {
   body_node->flags &= ~kWorldTreeRoot;
   body_node->empty = false;
   return body;
+}
+
+// Osd.createIcon (only Painter's decal picker uses it) places a "native
+// button" type in an Osd group at a converted text position and listens for
+// EC_LCLICK on it; Osd.event_handler matches the clicked object's id. Give it
+// a hit box the size of the button's render mesh. Its picture is not drawn.
+static void bind_icon_button(const RpkIndex& rpk, Object* icon, Object* group,
+                             uint32_t type, const std::string& params) {
+  if (!icon || !group) return;
+  const auto osd_it = group->fields.find("osd");
+  if (osd_it == group->fields.end() || osd_it->second.tag != ValueTag::Obj || !osd_it->second.v.o)
+    return;
+  Object* osd = osd_it->second.v.o;
+  float pos[3]{};
+  if (std::sscanf(params.c_str(), "%f , %f , %f", &pos[0], &pos[1], &pos[2]) != 3) return;
+  // "native button <cfg>": the cfg's render line names the button mesh.
+  std::string cfg = rpk.payload_prop(type, "native");
+  cfg = cfg.size() > 7 ? cfg.substr(7) : std::string{};
+  while (!cfg.empty() && std::isspace(static_cast<unsigned char>(cfg.back()))) cfg.pop_back();
+  std::replace(cfg.begin(), cfg.end(), '\\', '/');
+  std::ifstream in(std::filesystem::path(rpk.game_root()) / cfg);
+  uint32_t render = 0;
+  for (std::string line; !render && std::getline(in, line);)
+    if (line.rfind("render", 0) == 0)
+      render = static_cast<uint32_t>(std::strtoul(line.c_str() + 6, nullptr, 16));
+  if (!render) return;
+  const int32_t pack = RpkIndex::pack_from_full(type);
+  render = rpk.resolve_embedded_id(pack, render);
+  auto model = rpk.model_for_resource(RpkIndex::pack_from_full(render), render & 0xFFFFu);
+  std::replace(model.source.begin(), model.source.end(), '\\', '/');
+  const auto mesh = load_scx_geometry((std::filesystem::path(rpk.game_root()) / model.source).string());
+  if (!mesh.info.ok) return;
+  // SCX bounds are centimetres; the Osd places meshes in metres.
+  const float mesh_w = (mesh.info.bbox_max[0] - mesh.info.bbox_min[0]) * .01f;
+  const float mesh_h = (mesh.info.bbox_max[1] - mesh.info.bbox_min[1]) * .01f;
+  OsdWidget w;
+  w.owner = osd;
+  w.event_source = icon;
+  w.hit_only = true;
+  w.cmd = -1;
+  w.group = -1;  // the Osd's current group unless the Group names one
+  osd_world_to_ndc(osd, pos[0], pos[1], &w.x, &w.y);
+  osd_mesh_halves(osd, mesh_w, mesh_h, &w.half_w, &w.half_h, nullptr);
+  if (auto git = group->fields.find("_host_group");
+      git != group->fields.end() && git->second.tag == ValueTag::Int)
+    w.group = git->second.v.i;
+  std::printf("[osd] icon button 0x%08x mesh %.3fx%.3f at %.3f,%.3f half %.3f,%.3f\n", type,
+              mesh_w, mesh_h, w.x, w.y, w.half_w, w.half_h);
+  // ResourceRef.destroy hides the widget named here; id() becomes unique.
+  icon->fields["_osd_wi"] = Value::make_int(osd_add_widget(std::move(w)));
+  gameref_make_live(icon);
 }
 
 // Resource `script path.class` → instance whose statics (MapName, MapImage)
@@ -657,6 +710,9 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
           }
         }
         const auto native = rpk.payload_prop(static_cast<uint32_t>(id), "native");
+        if (id && native.rfind("button ", 0) == 0)
+          bind_icon_button(rpk, self, parent, static_cast<uint32_t>(id),
+                           params ? params->str : std::string{});
         if(id && (native.rfind("car ",0)==0 || native.rfind("part ",0)==0)) {
           Object* part=part_create(jvm,rpk,parent,static_cast<uint32_t>(id),alias?alias->str:"part",params?params->str:std::string{});
           if(part)gameref_bind_alias(self,part);

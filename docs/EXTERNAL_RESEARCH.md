@@ -213,11 +213,17 @@ All little-endian. Each item notes OpenSLRR's status.
   follows an MSVC-style LCG (`SLRR_rev:docs/java-math.md`). **corpus**
 - `WheelRef.setLoadSmooth` writes coefficient 14; `setDamping(f)` sets
   rebound to 0.7 × bump. OpenSLRR matches (`SLRR_rev:docs/physics-reverse-port.md`). **ext**
-- SLRR_rev lacks all `Painter` and `ParticleSystem` natives, the
-  `GroundRef` route queries, and `PhysicsRef.create`/`createSphere`.
-  OpenSLRR now binds the `Painter` natives (#64) from the slrr-reverse
-  notes on 0x004827D0, 0x00482960 and 0x00482C00; the drawing itself is a
-  host design (KNOWLEDGE_BASE.md, "Garage paint booth (#64)").
+- At the historical `77b0fb6` snapshot SLRR_rev lacked the `Painter` and
+  `ParticleSystem` natives, the `GroundRef` route queries, and
+  `PhysicsRef.create`/`createSphere`. Its v221 commit
+  [dddbe21](https://github.com/nedobylskiy/SLRR_rev/commit/dddbe21a5acc290e29aaa3df1fafbc15bdd3afe5)
+  (19 November 2026) adds `paintPart`, `doPaint` and `xPaint` in
+  `SLRR_rev:src/runtime/part-native.ts`, keeping colours and strokes beside the
+  texture rather than drawing into it, and the `GII_CONTROL` `control(dt)`
+  hook that drives spray. It has no `Osd.createIcon` button path for the decal
+  picker. OpenSLRR binds the same natives (#64) from the slrr-reverse notes on
+  0x004827D0, 0x00482960 and 0x00482C00, but rasterizes paint into textures
+  (KNOWLEDGE_BASE.md, "Garage paint booth (#64)").
 
 ## 4. Game mechanics and telemetry
 
@@ -363,7 +369,7 @@ Where OpenSLRR gaps already have an SLRR_rev implementation (revision
 | Physical flaps (#42) | `SLRR_rev:docs/native-status.md` lists `Part.flap` as unregistered; `SLRR_rev:src/engine/deformable-panel.ts` pins a hood cage with two hinge clamps and a latch | No hinge to migrate. OpenSLRR's `include/slrr/flap_hinge.hpp` is its own design |
 
 At the historical `77b0fb6` snapshot these were also missing (the v221
-update below supersedes the road/traffic entries): all `Painter`
+updates in §3 and below supersede the Painter and road/traffic entries): all `Painter`
 (bound in OpenSLRR since #64) and `ParticleSystem` natives, the `GroundRef` route queries (`findRoute`,
 `getRouteLength`, `getRoutePos`, `getRouteDist`, `alignToRoad`,
 `getStartDirection`), `RenderRef.plotRoute`, `PhysicsRef.create` and

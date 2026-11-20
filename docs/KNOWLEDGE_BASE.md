@@ -2312,7 +2312,24 @@ authoritative. The real-asset `trigger_markers` regression checks stationary,
 opaque paint cans in a local preview and preserves the active-world marker's
 rotation/bobbing and sensor behavior.
 
-Remaining UI limitation: the garage's decal-picker thumbnail meshes are still
-blank. Catalog images, the hovered decal preview, application and saved painted
-pixels work; this change does not reconstruct the separate button-render mesh
-path. Projection/preview behavior remains the host approximation described above.
+Decal picker. Painter is the only stock user of the legacy
+`Osd.createButton(rid, ...)`: `Osd.createIcon` creates a `native button`
+type (`misc.garage:0x008C`) in the Osd group and `Osd.event_handler` turns its
+`EC_LCLICK` into `osdCommand(CMD_DECALBUTTONS + i)` by matching the object's
+`id()`. `src/natives/natives_gameref.cpp:bind_icon_button` gives that GameRef
+a live id and a hit-only OSD widget sized from the cfg render mesh; the click
+handler in `src/boot/boot.cpp` emits `EC_LCLICK` from the icon instead of an
+osdCommand. Before this the slots took no clicks, so only the first decal of
+the shown page could be painted.
+
+The garage builds the Mechanic's parts bin even when it reopens straight
+into body paint. Its never-shown `InventoryPanel` Osds had visible hit boxes
+at layer 15 over the paint-can and decal slots, so after a catalog visit those
+clicks reached the parts bin. `osd_on_field_write("vp")` now keeps an Osd's
+widgets hidden until its viewport is activated (ENGINE_CONTRACT.md).
+
+Remaining UI limitation: the decal-picker thumbnails are still blank. The
+picker's `RenderRef.duplicate` type keeps the base resource id, so the
+"render <id>" instance cannot find its decal texture; the infoline
+("N stickies left") and the hovered preview show the selected decal.
+Projection/preview behavior remains the host approximation described above.

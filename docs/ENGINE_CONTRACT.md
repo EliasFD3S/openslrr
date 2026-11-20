@@ -382,7 +382,8 @@ An active camera with a non-null viewport may render only while that viewport
 exists and is active. `Viewport.deactivate` / OSD hiding must stop an old
 preview even when the script retains its camera and scene. Reactivation may
 reuse those objects. Do not implement this by recognizing a mod's selector
-class or forcibly deleting its model.
+class or forcibly deleting its model. The same holds for OSD widgets: an Osd
+whose viewport has never been activated neither draws nor takes clicks.
 
 A map is not necessarily one SCX. `GroundMapData` distinguishes render and
 collision meshes, exterior packs, and placements. Valo City requires resolving
