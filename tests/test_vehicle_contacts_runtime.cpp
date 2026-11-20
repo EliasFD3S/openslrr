@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -447,6 +448,177 @@ void parked_setmatrix_and_dirty_mass_do_not_restore_a_stale_body() {
             "dirty assembly mass refreshes without restoring an old solver pose");
 }
 
+struct DealerNodePose {
+  void *key = nullptr;
+  PartMatrix local{}, world{};
+};
+
+std::vector<DealerNodePose> dealer_poses(Object *car) {
+  std::vector<DealerNodePose> poses;
+  std::vector<void *> pending{car};
+  std::set<void *> visited;
+  for (size_t i = 0; i < pending.size(); ++i) {
+    auto *key = pending[i];
+    if (!visited.insert(key).second) continue;
+    const auto *node = gameref_get(key);
+    SLRR_REQUIRE(node);
+    DealerNodePose pose;
+    pose.key = key;
+    if (node->matrix_override) {
+      std::copy(std::begin(node->local_matrix), std::end(node->local_matrix),
+                pose.local.begin());
+    } else {
+      PartPose authored;
+      std::copy(std::begin(node->pos), std::end(node->pos),
+                authored.position.begin());
+      std::copy(std::begin(node->ypr), std::end(node->ypr),
+                authored.rotation.begin());
+      pose.local = part_pose_matrix(authored);
+    }
+    SLRR_REQUIRE(scene_instances_script_matrix(key, pose.world.data()));
+    poses.push_back(pose);
+    pending.insert(pending.end(), node->children.begin(), node->children.end());
+  }
+  return poses;
+}
+
+void same_dealer_poses(const std::vector<DealerNodePose> &expected,
+                       const std::vector<DealerNodePose> &actual) {
+  SLRR_REQUIRE(actual.size() == expected.size());
+  for (size_t i = 0; i < expected.size(); ++i) {
+    SLRR_REQUIRE(actual[i].key == expected[i].key);
+    for (size_t j = 0; j < 16; ++j) {
+      SLRR_REQUIRE(std::isfinite(actual[i].local[j]) &&
+                   std::isfinite(actual[i].world[j]));
+      SLRR_REQUIRE(std::fabs(actual[i].local[j] - expected[i].local[j]) < .0002f);
+      // The explicit regression pad is 20 km from zero. World-space float
+      // translations have a coarser ULP there than the local wheel frames.
+      const float tolerance = j >= 12 && j <= 14 ? .005f : .0002f;
+      SLRR_REQUIRE(std::fabs(actual[i].world[j] - expected[i].world[j]) < tolerance);
+    }
+  }
+}
+
+void fresh_dealer_car_keeps_loaded_wheels(const char *pack, bool mechanical) {
+  ContactFixture f(true);
+  auto *car = f.car(pack, mechanical);
+  // Unlike f.place(), do not call setState/start or advance before parking.
+  // This is CarMarket.addCar's stock setMatrix -> reset -> setsteer -> stop
+  // sequence; a new dealer chassis has not configured its rigid body yet.
+  Object position, rotation;
+  position.fields["x"] = Value::make_float(kPad + 20);
+  position.fields["y"] = Value::make_float(0);
+  position.fields["z"] = Value::make_float(kPad + 20);
+  rotation.fields["y"] = Value::make_float(.23f);
+  f.registry.invoke("java.util.resource.GameRef", "setMatrix",
+                    "(Ljava.lang.Vector3;Ljava.lang.Ypr;)V", car,
+                    {Value::make_obj(&position), Value::make_obj(&rotation)});
+  SLRR_REQUIRE(part_command(car, "reset"));
+  const auto straight = dealer_poses(car);
+  SLRR_REQUIRE(part_command(car, "setsteer 0.55"));
+  SLRR_REQUIRE(part_command(car, "stop"));
+  // The column normally catches up at host publication, unlike the road
+  // wheels. Prime that visual-only update without a physics tick/configure.
+  part_physics_advance(0);
+  const auto parked = dealer_poses(car);
+  SLRR_REQUIRE(parked.size() == straight.size() && parked.size() > 4);
+  // All mounted/inline wheel nodes and their render children are captured,
+  // not just the chassis. Stock dealers deliberately leave the front wheels
+  // turned: correcting their loaded pose must not erase that styling.
+  size_t steered_nodes = 0;
+  for (size_t i = 1; i < parked.size(); ++i) {
+    bool turned = false;
+    for (size_t j = 0; j < 12; ++j)
+      turned = turned || std::fabs(parked[i].local[j] - straight[i].local[j]) > .001f;
+    steered_nodes += turned;
+  }
+  SLRR_REQUIRE(steered_nodes >= 2);
+  const auto installed = part_installed_tree(car);
+  SLRR_REQUIRE(!installed.empty());
+  const auto config = load_part_config(f.packs, installed.front().resource);
+  const double steering = .55 * config.max_steer;
+  // The public telemetry intentionally withholds wheel samples until ready,
+  // so initial loaded geometry is pinned by the pre-tick local/world frames.
+  f.advance();
+  const auto first = sample(car, false);
+  std::printf("DEALER pack=%s mechanical=%d first-length=%.6f/%.6f/%.6f/%.6f "
+              "steer=%.6f nodes=%zu\n", pack, mechanical,
+              first.physics.length[0], first.physics.length[1],
+              first.physics.length[2], first.physics.length[3],
+              first.physics.steering_angle, parked.size());
+  SLRR_REQUIRE(!first.physics.active && first.physics.ticks == 0);
+  for (double length : first.physics.length) SLRR_REQUIRE(length > .05);
+  SLRR_REQUIRE(std::fabs(first.physics.steering_angle - steering) < .0001);
+  SLRR_REQUIRE(std::fabs(first.physics.steering_request - steering) < .0001);
+  same_dealer_poses(parked, dealer_poses(car));
+  for (unsigned tick = 0; tick < 60; ++tick) {
+    f.advance();
+    const auto idle = sample(car, false);
+    SLRR_REQUIRE(!idle.physics.active && idle.physics.ticks == 0);
+    SLRR_REQUIRE(idle.physics.length == first.physics.length);
+    SLRR_REQUIRE(std::fabs(idle.physics.steering_angle - steering) < .0001);
+    same_dealer_poses(parked, dealer_poses(car));
+  }
+  // Informational warmed physics-loop timing, not a machine-specific speed
+  // assertion. Keep setup, file copies, pose collection and checks outside it.
+  const auto begin = std::chrono::steady_clock::now();
+  f.advance(600);
+  const double milliseconds = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - begin).count();
+  const auto idle = sample(car, false);
+  SLRR_REQUIRE(!idle.physics.active && idle.physics.ticks == 0 &&
+               idle.physics.length == first.physics.length);
+  same_dealer_poses(parked, dealer_poses(car));
+  std::printf("DEALER parked-loop pack=%s host-updates=600 total-ms=%.3f "
+              "ms/update=%.6f\n", pack, milliseconds, milliseconds / 600);
+  std::puts("PASS fresh dealer's loaded wheel frames, intentional steering and "
+            "asleep chassis survive first configuration and repeated ticks");
+  SLRR_REQUIRE(part_command(car, "start"));
+  f.advance(120);
+  const auto started = sample(car);
+  SLRR_REQUIRE(started.physics.ticks == 240);
+  for (size_t i = 0; i < 4; ++i)
+    SLRR_REQUIRE(started.physics.contact[i] && started.physics.length[i] > .05);
+  std::puts("PASS the same freshly configured passive car starts and settles on all wheels");
+}
+
+void fresh_mechanical_dealer_baiern_keeps_loaded_wheels() {
+  fresh_dealer_car_keeps_loaded_wheels(kBaiern, true);
+}
+
+void fresh_inline_dealer_wagon_keeps_loaded_wheels() {
+  fresh_dealer_car_keeps_loaded_wheels(kWagon, false);
+}
+
+void parked_mechanical_steering_relink_is_stable() {
+  ContactFixture f(true);
+  auto *car = f.car(kBaiern, true);
+  gameref_set_matrix(car, kPad, 0, kPad, .23f, 0, 0);
+  part_park_chassis(car);
+  for (unsigned i = 0; i < 20; ++i) {
+    SLRR_REQUIRE(part_command(car, "setsteer 0.4"));
+    SLRR_REQUIRE(part_command(car, "setsteer -0.4"));
+  }
+  SLRR_REQUIRE(part_command(car, "setsteer 0.4"));
+  const auto positive = dealer_poses(car);
+  SLRR_REQUIRE(part_command(car, "setsteer -0.4"));
+  const auto negative = dealer_poses(car);
+  const auto begin = std::chrono::steady_clock::now();
+  for (unsigned i = 0; i < 600; ++i) {
+    SLRR_REQUIRE(part_command(car, "setsteer 0.4"));
+    SLRR_REQUIRE(part_command(car, "setsteer -0.4"));
+  }
+  const double milliseconds = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - begin).count();
+  same_dealer_poses(negative, dealer_poses(car));
+  SLRR_REQUIRE(part_command(car, "setsteer 0.4"));
+  same_dealer_poses(positive, dealer_poses(car));
+  std::printf("DEALER steering-relink mechanical-Baiern commands=1200 "
+              "total-ms=%.3f us/command=%.3f\n", milliseconds,
+              milliseconds * 1000 / 1200);
+  std::puts("PASS repeated steering relinks preserve both matching-angle poses");
+}
+
 void inactive_hidden_and_overpass_chassis_are_not_peers() {
   ContactFixture f(true);
   auto *moving = f.car(kWagon), *baseline = f.car(kWagon);
@@ -799,6 +971,9 @@ int main() {
       native_mechanical_high_speed_head_on_does_not_tunnel,
       mechanical_baiern_rear_end_and_offset_side_wake_parked_cars,
       parked_setmatrix_and_dirty_mass_do_not_restore_a_stale_body,
+      fresh_mechanical_dealer_baiern_keeps_loaded_wheels,
+      fresh_inline_dealer_wagon_keeps_loaded_wheels,
+      parked_mechanical_steering_relink_is_stable,
       inactive_hidden_and_overpass_chassis_are_not_peers,
       ai_hits_free_physicsref_without_nearby_player,
       ai_wakes_and_hits_promoted_map_prop_without_nearby_player,

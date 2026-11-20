@@ -905,7 +905,7 @@ bool link_rig(Record::LinkVisual &vis, const GameRefState &node) {
 }
 void relink_one(Object *part) {
   auto *rec = record(part);
-  if (!rec)
+  if (!rec || rec->links.empty())
     return;
   const bool mounted = car(part) != nullptr;
   for (auto &vis : rec->links) {
@@ -2068,7 +2068,8 @@ void rebuild_body_support(Object* chassis, Record& rec) {
   rec.body_support_dirty = false;
 }
 
-bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
+bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame,
+                        bool preserve_parked_wheels = false) {
   auto unavailable = [&](const char *reason) {
     if (!rec.physics_reported) {
       std::printf("[phys] unavailable type=0x%x: %s\n", rec.state.resource,
@@ -2146,7 +2147,9 @@ bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
     rec.dynamics.body.velocity = velocity;
     rec.dynamics.body.set_omega(omega);
   } else {
-    rec.dynamics.release_wheels();
+    // A passive body's first configuration must keep park_chassis's loaded
+    // suspension. It will not step to seed wheel lengths before publication.
+    if (!preserve_parked_wheels) rec.dynamics.release_wheels();
     rec.dynamics.reset_clock();
   }
   rec.physics_ready = true;
@@ -4459,7 +4462,7 @@ void advance_chassis_tick() {
     // setMatrix/park has authority over an asleep car too. Never publish a
     // stale solver body back over a new scripted placement.
     if (external || !rec.physics_ready || rec.physics_dirty) {
-      if (!dynamics_configure(chassis, rec, frame)) continue;
+      if (!dynamics_configure(chassis, rec, frame, true)) continue;
       rec.dynamics.body.velocity = rec.dynamics.body.momentum = {};
       rec.published_frame = local;
     }
