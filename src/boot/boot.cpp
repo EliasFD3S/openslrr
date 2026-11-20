@@ -527,6 +527,9 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     constexpr int kBenchSettle = 2 * kBenchRate;
     bool bench_map_started = opt.bench_map.empty();
     int bench_shot = 0;
+    // A track without ground props (Test Track, drag strip) never reports
+    // them; there the car resting on all its wheels for 5 s is the cue.
+    int bench_supported_frames = 0;
     while (until_quit || frames < opt.max_frames) {
       // Soft PollWindowQuit adjacency — pump before Input/sim like stock
       // neighbors (Input_tick still inside mainloop_frame).
@@ -586,9 +589,16 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
       }
       if (opt.bench_drive_seconds > 0.f) {
         auto& input = host_input();
-        if (!bench_running && part_controlled_chassis() &&
-            scene_instances_has_ground_props() && !scene_transition_active() &&
-            !osd_loading_dialog() && osd_loading_overlay().empty()) {
+        Object* bench_car = part_controlled_chassis();
+        PartPhysicsState resting;
+        bool supported = !bench_running && bench_car &&
+                         part_physics_state(bench_car, resting) && resting.active;
+        for (bool contact : resting.contact) supported = supported && contact;
+        bench_supported_frames = supported ? bench_supported_frames + 1 : 0;
+        if (!bench_running && bench_car &&
+            (scene_instances_has_ground_props() || bench_supported_frames >= 5 * kBenchRate) &&
+            !scene_transition_active() && !osd_loading_dialog() &&
+            osd_loading_overlay().empty()) {
           bench_running = true;
           bench_frames = -kBenchSettle;
           if (opt.bench_hour >= 0.f) {
@@ -603,6 +613,14 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
         }
         if(bench_running&&bench_frames>=0&&!bench_profile_started&&opt.perf_log){perf::restart(opt.bench_realtime?0:kBenchRate);bench_profile_started=true;}
         input.bench_throttle = !bench_running ? -1.f : bench_frames >= 0 ? 1.f : 0.f;
+        // A 10 Hz trace, the interval of the original-game telemetry
+        // (EXTERNAL_RESEARCH §4), to compare straight-line acceleration.
+        PartPhysicsState trace;
+        if (bench_running && bench_frames >= 0 && bench_frames % (kBenchRate / 10) == 0 &&
+            bench_car && part_physics_state(bench_car, trace))
+          std::printf("[bench] t=%.1f speed=%.2f km/h rpm=%.0f gear=%d\n",
+                      bench_frames / double(kBenchRate), trace.speed_kph, trace.rpm,
+                      trace.gear);
         if (bench_running && !opt.bench_shots.empty() && bench_frames >= 0 &&
             bench_frames >= 10 * kBenchRate * bench_shot) {
           char name[32];
