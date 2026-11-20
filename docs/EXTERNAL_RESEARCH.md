@@ -265,7 +265,10 @@ All little-endian. Each item notes OpenSLRR's status.
 - **Aerodynamics in the MWM EXE.** `Chassis.C_drag` quadratic drag and the
   CFG `wing` panels (529 stock lines, all type 4, suction ±0.25, exponent
   0.666/0.667) act on the car body; ENGINE_CONTRACT §11 has the formulas.
-  OpenSLRR applies both. **exe**
+  OpenSLRR applies both, and type 5 wings. EliasFD3S/slrr-reverse decodes the
+  same drag and clamp but not the panels. The original Invictus Aero v1.2
+  3ds Max calculator, posted on PR #223, shows how the lines are authored
+  (ENGINE_CONTRACT §11). **exe + source**
 - **Anti-roll bars.** MWM `Swaybar.updatevariables` leaves its
   `addrollbar` commands commented out, so stock anti-roll-bar parts change
   nothing in the original. Only fake-racer and traffic templates have native

@@ -338,6 +338,34 @@ SLRR_TEST(aero_panels_follow_the_recovered_wing_law) {
   SLRR_REQUIRE(std::abs(aero_panel_force(panel, 5e-5) + 5e-4) < 1e-12);
   panel.exponent = 0;
   SLRR_REQUIRE(std::abs(aero_panel_force(panel, 30) + 300) < 1e-9);
+  // Type 5: linear resistance on both sides, plus suction × the squared
+  // speed across the panel, along its normal; the exponent is ignored.
+  panel.type = 5;
+  panel.exponent = 1.5;
+  SLRR_REQUIRE(std::abs(aero_panel_force(panel, 3, 400) - (-30 + 100)) < 1e-9);
+  SLRR_REQUIRE(std::abs(aero_panel_force(panel, -3, 0) - 30) < 1e-9);
+}
+
+SLRR_TEST(a_type_5_wing_presses_along_its_normal_without_drag) {
+  const Terrain air = [](double, double, double, GroundHit&) { return false; };
+  const auto step = [&](bool wing) {
+    VehicleDynamics car;
+    car.body.configure(1300, {-.85, .15, -2.2}, {.85, 1.4, 2.2}, {0, .45, .1},
+                       {550, 2300, 2200});
+    Matrix frame{};
+    frame[0] = frame[5] = frame[10] = frame[15] = 1;
+    car.body.set_frame(frame);
+    car.body.velocity = {0, 0, -30};
+    AeroPanel panel{{0, .45, .1}, {0, -1, 0}, 20, 2, 1.5};
+    panel.type = 5;
+    if (wing) car.aero.panels = {panel};
+    car.advance(VehicleDynamics::timestep, air);
+    return car.body.velocity;
+  };
+  const Vec3 free = step(false), wing = step(true);
+  // 2 × 30² N down on 1300 kg for one 120 Hz step; no force along the flow.
+  SLRR_REQUIRE(std::abs((free.y - wing.y) - 1800.0 / 1300 * VehicleDynamics::timestep) < 1e-6);
+  SLRR_REQUIRE(std::abs(wing.z - free.z) < 1e-9);
 }
 
 SLRR_TEST(chassis_drag_slows_a_coasting_car) {
@@ -427,6 +455,7 @@ int main() {
       chassis_drag_slows_a_coasting_car,
       aero_impulses_never_reverse_the_motion,
       a_forward_facing_panel_adds_drag_and_downforce,
+      a_type_5_wing_presses_along_its_normal_without_drag,
   };
   return slrr::standalone::run("vehicle_dynamics", tests);
 }

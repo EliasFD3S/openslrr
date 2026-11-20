@@ -645,16 +645,29 @@ Aerodynamics follow the MWM EXE (build 606; addresses are for that binary).
   Above 1 m/s it applies `-C_drag |v|² v̂` at `drag_center`, with `v` that
   point's velocity, and clamps the step's impulse to the one that stops the
   point along `v̂` (0x456A83). A complete car can sit at 0: its panels drag.
+  slrr-reverse decodes the same drag and clamp (`Chassis_part2.inc`).
 - **Wing panels.** Every installed part's CFG `wing type x y z nx ny nz area
   suction exponent` line (handler 0x4443C0, 16 per part) is a panel in that
   part's frame; the EXE normalises the normal and keeps `|area|` and
-  `|suction|`. For type 4, the only stock type, with `d` the panel point's
-  velocity along its normal in body axes, `d' = sign(d) · 100 (|d|/100)^exponent`
-  when `exponent > 0`, `exponent ≠ 1` and `|d| > 10⁻⁴` (else `d' = d`), and the
-  force along the normal is `-area · d' · (d' > 0 ? 1 : suction)` (0x48EB3C).
-  Stock lines use exponent 0.666 and suction 0.25, so the force grows with
-  `|d|^0.666`, not `|d|²`. The EXE does not clamp panels; OpenSLRR applies the
-  drag's stopping bound to each panel as a safeguard for its 120 Hz step.
+  `|suction|`. With `d` the panel point's velocity along its normal in body
+  axes:
+  - Type 4 (surface, the only stock type): `d' = sign(d) · 100 (|d|/100)^exponent`
+    when `exponent > 0`, `exponent ≠ 1` and `|d| > 10⁻⁴` (else `d' = d`), and
+    the force along the normal is `-area · d' · (d' > 0 ? 1 : suction)`
+    (0x48EB3C). Stock lines use exponent 0.666 and suction 0.25, so the force
+    grows with `|d|^0.666`, not `|d|²`.
+  - Type 5 (wing): `-area · d + suction · |v_t|²` along the normal, with `v_t`
+    the velocity across the panel; the exponent is not read (0x48ED73).
+
+  The original Invictus Aero v1.2 3ds Max calculator (posted by the maintainer
+  on PR #223) writes these lines: position and unnormalised normal are the
+  area-weighted centre and normal of the selected faces, and its SLRR method
+  writes type 4 with `area` = 30 × the flattened area in m² (90 × for its
+  "Wing" option) and suction/exponent −0.25/0.666 (0.25/0.667). Its CRC and
+  Experimental methods write type 4 surfaces with other exponents (CRC: 2.0)
+  and type 5 wings. The EXE does not clamp panels; OpenSLRR applies the
+  drag's stopping bound to each panel's resistance as a safeguard for its
+  120 Hz step, and adds a type 5 wing's lift after it.
 
 `part_runtime` reads `C_drag`/`drag_center` with the drive inputs and
 collects the panels in chassis coordinates when the body support is rebuilt
@@ -662,7 +675,8 @@ collects the panels in chassis coordinates when the body support is rebuilt
 A swinging hinged panel keeps the pose it had then; a detached part takes its
 panels with it but loose bodies get no aerodynamics; native traffic templates
 keep their separate force policy without aerodynamics. The EXE's wing types
-1–3, 5 and 6 are not implemented (no stock CFG uses them).
+1–3 and 6 are not implemented (neither the stock CFGs nor the calculator use
+them).
 
 ### Intended driving model: revision `8ac2ba9`
 

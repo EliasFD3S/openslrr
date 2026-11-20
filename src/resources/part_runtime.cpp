@@ -2070,7 +2070,9 @@ void rebuild_body_support(Object* chassis, Record& rec) {
 
 // Every installed part's CFG `wing` panels act on the car body, as the EXE's
 // per-part wing nodes do (0x44B48C, 0x48E880), in their current mount pose.
-// Only type 4 occurs in the stock CFGs; the EXE's other types stay inactive.
+// Type 4 is the stock surface; type 5 is the wing the Invictus Aero
+// calculator writes for its CRC and Experimental methods. The EXE's other
+// types stay inactive.
 void rebuild_aero_panels(Object* chassis, Record& rec) {
   auto& panels = rec.dynamics.aero.panels;
   panels.clear();
@@ -2081,7 +2083,7 @@ void rebuild_aero_panels(Object* chassis, Record& rec) {
     if (!part || !part->config || part->config->wings.empty()) continue;
     const auto m = part_matrix_multiply(to_chassis, world_matrix(item.object));
     for (const auto& wing : part->config->wings) {
-      if (wing.type != 4) continue;
+      if (wing.type != 4 && wing.type != 5) continue;
       const auto& p = wing.position;
       const auto& n = wing.normal;
       physics::AeroPanel panel;
@@ -2094,6 +2096,7 @@ void rebuild_aero_panels(Object* chassis, Record& rec) {
       panel.area = wing.area;
       panel.suction = wing.suction;
       panel.exponent = wing.exponent;
+      panel.type = wing.type;
       if (panel.position.finite() && panel.normal.length() > .5 &&
           std::isfinite(panel.area) && std::isfinite(panel.suction) &&
           std::isfinite(panel.exponent))

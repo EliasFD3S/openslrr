@@ -80,16 +80,20 @@ struct GroundHit {
 using Terrain =
     std::function<bool(double x, double z, double from_y, GroundHit &)>;
 // Original aerodynamics, recovered from the MWM EXE (ENGINE_CONTRACT §11).
-// One CFG `wing` panel (type 4) in chassis-frame metres; `normal` is a unit
-// vector, `area` and `suction` are magnitudes.
+// One CFG `wing` panel of type 4 (surface) or 5 (wing) in chassis-frame
+// metres; `normal` is a unit vector, `area` and `suction` are magnitudes.
 struct AeroPanel {
   Vec3 position, normal;
   double area = 0, suction = 0, exponent = 1;
+  int type = 4;
 };
 // Signed force along the panel normal (N) for the panel point's velocity
-// component along that normal (m/s). A face moving into the air is pushed
-// back with the full area; a face moving away keeps the suction fraction.
-double aero_panel_force(const AeroPanel &panel, double normal_speed);
+// component along that normal (m/s) and its squared speed across the panel
+// (m²/s²). Type 4 pushes a face moving into the air back with the full area
+// and a face moving away with the suction fraction. Type 5 resists the
+// normal motion linearly and adds `suction × tangential²` along the normal.
+double aero_panel_force(const AeroPanel &panel, double normal_speed,
+                        double tangential_square = 0);
 struct Aerodynamics {
   // Chassis.C_drag: N per (m/s)^2, applied against the velocity of
   // drag_center (chassis frame) above 1 m/s.
