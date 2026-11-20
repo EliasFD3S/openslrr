@@ -137,8 +137,9 @@ All little-endian. Each item notes OpenSLRR's status.
 - `SDAT`, version `0x0100`, type 1 or 2, flags; payload from +8. Type 2 ends
   with a trailer of unsaved resources (kind 7 = image bytes) and the pack
   list. Saved RIDs use the file-local pack ordinal in the high word; `0` or
-  `0xffff` means transient. OpenSLRR implements the container
-  (`src/natives/natives_io.cpp:sdat_frame`).
+  `0xffff` means transient. OpenSLRR implements legacy container reads
+  (`src/natives/natives_io.cpp:sdat_take_payload`); new saves use JSON
+  (`src/natives/natives_io.cpp:json_frame`).
 - `Part.save` writes subclass tails of varying length, so only each class's
   own `load` can read a part; a flat parser fails. **source**
 

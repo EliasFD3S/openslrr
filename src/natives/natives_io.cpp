@@ -18,6 +18,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <charconv>
+#include <limits>
+#include <string_view>
+#include <unordered_set>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -152,9 +156,10 @@ int sdat_take_payload(RpkIndex& rpk, std::vector<uint8_t>& bytes,
                       std::vector<SdatBlobRef>& blobs) {
   packs.clear();
   blobs.clear();
-  if (bytes.size() < 8 || bytes[0] != 'S' || bytes[1] != 'D' ||
+  if (bytes.size() < 4 || bytes[0] != 'S' || bytes[1] != 'D' ||
       bytes[2] != 'A' || bytes[3] != 'T')
     return 0;
+  if (bytes.size() < 8) return kSdatCorrupt;
   const uint16_t version = static_cast<uint16_t>(bytes[4] | (bytes[5] << 8));
   const uint8_t type = bytes[6];
   if (version != 0x0100 || (type != 1 && type != 2)) return kSdatCorrupt;
@@ -237,35 +242,256 @@ int sdat_take_payload(RpkIndex& rpk, std::vector<uint8_t>& bytes,
   return 1;
 }
 
-std::vector<uint8_t> sdat_frame(const std::vector<uint8_t>& payload,
-                                const std::vector<SdatPackRef>& packs,
-                                const std::vector<SdatBlobRef>& blobs) {
-  std::vector<uint8_t> out;
-  out.reserve(payload.size() + 64);
-  const uint8_t header[8] = {'S', 'D', 'A', 'T', 0x00, 0x01, 0x02, 0x00};
-  out.insert(out.end(), header, header + 8);
-  out.insert(out.end(), payload.begin(), payload.end());
-  const size_t mark = out.size();
-  push_u32(out, static_cast<uint32_t>(blobs.size()));
-  for (const SdatBlobRef& blob : blobs) {
-    push_u32(out, static_cast<uint32_t>(blob.ordinal));
-    push_u32(out, static_cast<uint32_t>(blob.kind));
-    push_u32(out, static_cast<uint32_t>(blob.bytes.size()));
-    out.insert(out.end(), blob.bytes.begin(), blob.bytes.end());
+// Script strings are bytes, not UTF-8. U+0000..U+00FF encodes each byte
+// losslessly, including stock Windows-1252 text and arbitrary damage strings.
+std::string json_string(std::string_view bytes) {
+  constexpr char hex[] = "0123456789abcdef";
+  std::string out = "\"";
+  for (unsigned char c : bytes) {
+    if (c == '"' || c == '\\') { out += '\\'; out += c; }
+    else if (c < 32 || c >= 127) {
+      out += "\\u00"; out += hex[c >> 4]; out += hex[c & 15];
+    } else out += c;
   }
-  push_u32(out, static_cast<uint32_t>(packs.size()));
-  for (const SdatPackRef& pack : packs) {
-    push_u32(out, static_cast<uint32_t>(pack.ordinal));
-    const uint32_t plen =
-        pack.path.empty() ? 0u : static_cast<uint32_t>(pack.path.size() + 1);
-    push_u32(out, plen);
-    if (plen > 0) {
-      out.insert(out.end(), pack.path.begin(), pack.path.end());
-      out.push_back(0);
+  return out + '"';
+}
+
+void json_record(Object* self, const char* type, const std::string& value) {
+  auto& file = g_host_files.at(self);
+  if (!file.sdat) return;
+  if (!file.json_values.empty()) file.json_values += ",\n";
+  file.json_values += "    [" + json_string(type) + ", " + value + "]";
+}
+
+std::vector<uint8_t> json_frame(const HostFile& file) {
+  std::string out = "{\n  \"format\": \"OpenSLRR-save\",\n  \"version\": 1,\n  \"values\": [\n" +
+      file.json_values + "\n  ],\n  \"packs\": [";
+  bool first = true;
+  for (const auto& pack : file.sdat_packs) {
+    if (!first) out += ',';
+    first = false;
+    out += "\n    [" + std::to_string(pack.ordinal) + ", " + json_string(pack.path) + "]";
+  }
+  out += "\n  ],\n  \"blobs\": [";
+  first = true;
+  constexpr char hex[] = "0123456789abcdef";
+  for (const auto& blob : file.sdat_blobs) {
+    if (!first) out += ',';
+    first = false;
+    out += "\n    [" + std::to_string(blob.ordinal) + ", " + std::to_string(blob.kind) + ", \"";
+    for (uint8_t c : blob.bytes) { out += hex[c >> 4]; out += hex[c & 15]; }
+    out += "\"]";
+  }
+  out += "\n  ]\n}\n";
+  return {out.begin(), out.end()};
+}
+
+// A schema-specific, nonrecursive JSON reader. No generic object tree or new
+// dependency is needed; nesting and all accepted fields are fixed by version 1.
+struct SaveJsonReader {
+  std::string_view text;
+  size_t pos = 0;
+  void space() {
+    while (pos < text.size() && (text[pos] == ' ' || text[pos] == '\n' ||
+        text[pos] == '\r' || text[pos] == '\t')) ++pos;
+  }
+  bool take(char c) {
+    space();
+    if (pos == text.size() || text[pos] != c) return false;
+    ++pos; return true;
+  }
+  static int hex(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  }
+  bool string(std::string& out) {
+    out.clear();
+    if (!take('"')) return false;
+    while (pos < text.size()) {
+      unsigned char c = text[pos++];
+      if (c == '"') return true;
+      if (c < 32) return false;
+      if (c == '\\') {
+        if (pos == text.size()) return false;
+        c = text[pos++];
+        switch (c) {
+          case '"': case '\\': case '/': break;
+          case 'b': c = '\b'; break;
+          case 'f': c = '\f'; break;
+          case 'n': c = '\n'; break;
+          case 'r': c = '\r'; break;
+          case 't': c = '\t'; break;
+          case 'u': {
+            if (text.size() - pos < 4) return false;
+            unsigned code = 0;
+            for (int i = 0; i < 4; ++i) {
+              const int h = hex(text[pos++]);
+              if (h < 0) return false;
+              code = (code << 4) | h;
+            }
+            if (code > 255) return false;
+            c = static_cast<unsigned char>(code); break;
+          }
+          default: return false;
+        }
+      } else if (c >= 128) {
+        // Also accept literal UTF-8 for the byte-valued U+0080..U+00FF.
+        if ((c != 0xc2 && c != 0xc3) || pos == text.size()) return false;
+        const unsigned char next = text[pos++];
+        if ((next & 0xc0) != 0x80) return false;
+        c = static_cast<unsigned char>(((c & 3) << 6) | (next & 63));
+      }
+      out += c;
     }
+    return false;
   }
-  push_u32(out, static_cast<uint32_t>(out.size() - mark));
-  return out;
+  bool number(std::string_view& out) {
+    space();
+    const size_t start = pos;
+    if (pos < text.size() && text[pos] == '-') ++pos;
+    if (pos == text.size()) return false;
+    if (text[pos] == '0') ++pos;
+    else {
+      if (text[pos] < '1' || text[pos] > '9') return false;
+      while (pos < text.size() && text[pos] >= '0' && text[pos] <= '9') ++pos;
+    }
+    for (const char marker : {'.', 'e'}) {
+      if (pos == text.size() || (text[pos] != marker &&
+          !(marker == 'e' && text[pos] == 'E'))) continue;
+      ++pos;
+      if (marker == 'e' && pos < text.size() && (text[pos] == '+' || text[pos] == '-')) ++pos;
+      const size_t digits = pos;
+      while (pos < text.size() && text[pos] >= '0' && text[pos] <= '9') ++pos;
+      if (digits == pos) return false;
+    }
+    out = text.substr(start, pos - start); return true;
+  }
+  bool integer(int64_t& out, int64_t low, int64_t high) {
+    std::string_view token;
+    if (!number(token)) return false;
+    const auto result = std::from_chars(token.data(), token.data() + token.size(), out);
+    return result.ec == std::errc{} && result.ptr == token.data() + token.size() &&
+        out >= low && out <= high;
+  }
+  template<class Read> bool array(Read read) {
+    if (!take('[')) return false;
+    if (take(']')) return true;
+    do { if (!read()) return false; } while (take(','));
+    return take(']');
+  }
+};
+
+// Returns 0 for legacy input, 1 for JSON, -1 for a damaged/unknown JSON save.
+// Rebuild the same binary stream so existing Java readers need no changes.
+int json_take_payload(RpkIndex& rpk, HostFile& file) {
+  SaveJsonReader in{{reinterpret_cast<const char*>(file.bytes.data()), file.bytes.size()}};
+  if (in.text.starts_with("\xef\xbb\xbf")) in.pos = 3;
+  if (!in.take('{')) return 0;
+  in.space();
+  // Reserve the schema's opening keys, not every '{'-valued raw integer.
+  // Also recognize truncated canonical prefixes so damaged JSON fails closed.
+  SaveJsonReader probe = in;
+  std::string opening_key;
+  const bool complete_key = probe.string(opening_key);
+  const auto prefix = in.text.substr(in.pos);
+  bool is_json = false;
+  for (std::string_view key : {"format", "version", "values", "packs", "blobs"}) {
+    const std::string quoted = json_string(key);
+    if ((complete_key && opening_key == key) ||
+        (!complete_key && std::string_view(quoted).starts_with(prefix))) is_json = true;
+  }
+  if (!is_json) {
+    if (probe.take('}')) { probe.space(); if (probe.pos == probe.text.size()) return -1; }
+    return 0;
+  }
+  HostFile decoded;
+  unsigned seen = 0;
+  do {
+    std::string key;
+    if (!in.string(key) || !in.take(':')) return -1;
+    const unsigned field = key == "format" ? 1 : key == "version" ? 2 :
+        key == "values" ? 4 : key == "packs" ? 8 : key == "blobs" ? 16 : 0;
+    if (!field || (seen & field)) return -1;
+    seen |= field;
+    int64_t n = 0;
+    if (field == 1) {
+      std::string format;
+      if (!in.string(format) || format != "OpenSLRR-save") return -1;
+    } else if (field == 2) {
+      if (!in.integer(n, 1, 1)) return -1;
+    } else if (field == 4) {
+      if (!in.array([&]() {
+        std::string type;
+        if (!in.take('[') || !in.string(type) || !in.take(',')) return false;
+        if (type == "string") {
+          in.space();
+          if (in.text.substr(in.pos, 4) == "null") {
+            in.pos += 4; push_u32(decoded.bytes, 0);
+          } else {
+            std::string value;
+            if (!in.string(value) || value.size() >= UINT32_MAX ||
+                value.find('\0') != std::string::npos) return false;
+            push_u32(decoded.bytes, static_cast<uint32_t>(value.size() + 1));
+            decoded.bytes.insert(decoded.bytes.end(), value.begin(), value.end());
+            decoded.bytes.push_back(0);
+          }
+        } else if (type == "float") {
+          std::string_view token;
+          float value = 0;
+          if (!in.number(token)) return false;
+          const auto result = std::from_chars(token.data(), token.data() + token.size(), value);
+          if (result.ec != std::errc{} || result.ptr != token.data() + token.size() ||
+              !std::isfinite(value)) return false;
+          uint32_t bits; std::memcpy(&bits, &value, 4); push_u32(decoded.bytes, bits);
+        } else {
+          if (type != "int" && type != "resource" && type != "floatBits") return false;
+          if (!in.integer(n, type == "floatBits" ? 0 : INT32_MIN,
+                          type == "floatBits" ? UINT32_MAX : INT32_MAX)) return false;
+          push_u32(decoded.bytes, static_cast<uint32_t>(n));
+        }
+        return in.take(']');
+      })) return -1;
+    } else if (field == 8) {
+      std::unordered_set<int32_t> ordinals;
+      if (!in.array([&]() {
+        SdatPackRef pack;
+        if (!in.take('[') || !in.integer(n, 1, 0xfffe) || !in.take(',')) return false;
+        pack.ordinal = static_cast<int32_t>(n);
+        if (!ordinals.insert(pack.ordinal).second || !in.string(pack.path) ||
+            pack.path.size() > 1024 || under_game(rpk.game_root(), pack.path).empty() ||
+            !in.take(']')) return false;
+        decoded.sdat_packs.push_back(std::move(pack)); return true;
+      })) return -1;
+    } else {
+      std::unordered_set<int32_t> ordinals;
+      if (!in.array([&]() {
+        SdatBlobRef blob;
+        std::string hex;
+        if (!in.take('[') || !in.integer(n, 1, 0xffff) || !in.take(',')) return false;
+        blob.ordinal = static_cast<int32_t>(n);
+        if (!ordinals.insert(blob.ordinal).second || !in.integer(n, 0, INT32_MAX) ||
+            !in.take(',')) return false;
+        blob.kind = static_cast<int32_t>(n);
+        if (!in.string(hex) || hex.size() % 2 || !in.take(']')) return false;
+        for (size_t i = 0; i < hex.size(); i += 2) {
+          const int a = SaveJsonReader::hex(hex[i]), b = SaveJsonReader::hex(hex[i + 1]);
+          if (a < 0 || b < 0) return false;
+          blob.bytes.push_back(static_cast<uint8_t>((a << 4) | b));
+        }
+        decoded.sdat_blobs.push_back(std::move(blob)); return true;
+      })) return -1;
+    }
+  } while (in.take(','));
+  if (seen != 31 || !in.take('}')) return -1;
+  in.space();
+  if (in.pos != in.text.size()) return -1;
+  for (auto& pack : decoded.sdat_packs) pack.pack_id = sdat_resolve_pack(rpk, pack.path);
+  file.bytes = std::move(decoded.bytes);
+  file.sdat_packs = std::move(decoded.sdat_packs);
+  file.sdat_blobs = std::move(decoded.sdat_blobs);
+  return 1;
 }
 
 // File-local id for write(ResourceRef). A null ref is 0. A pack resource
@@ -659,7 +885,7 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         hf.path = p;
         hf.writing = mode != 0;
         if (hf.writing) {
-          // Payload only. close() writes the SDAT type 2 envelope.
+          // Keep the binary stream for callers; close() publishes typed JSON.
           hf.sdat = true;
         } else {
           // Specifying a mode replaces the ifstream default. Without in,
@@ -673,8 +899,9 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
                             std::istreambuf_iterator<char>());
           else
             return Value::make_int(0);
-          const int shaped =
-              sdat_take_payload(rpk, hf.bytes, hf.sdat_packs, hf.sdat_blobs);
+          int shaped = json_take_payload(rpk, hf);
+          if (shaped == 0)
+            shaped = sdat_take_payload(rpk, hf.bytes, hf.sdat_packs, hf.sdat_blobs);
           if (shaped < 0) return Value::make_int(0);
           hf.sdat = shaped > 0;
         }
@@ -689,9 +916,7 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         if (it != g_host_files.end() && it->second.writing &&
             !it->second.path.empty()) {
           const std::vector<uint8_t> framed =
-              it->second.sdat ? sdat_frame(it->second.bytes, it->second.sdat_packs,
-                                           it->second.sdat_blobs)
-                              : it->second.bytes;
+              it->second.sdat ? json_frame(it->second) : it->second.bytes;
           DWORD publish_error = ERROR_SUCCESS;
           const bool wrote = publish_save(it->second.path, framed, publish_error);
           const std::string key = save_key(it->second.path);
@@ -700,7 +925,7 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
           else
             g_unflushed_saves[key] = framed;
           std::printf(
-              "[native] File.close %s %zu bytes ok=%d kept=%d sdat=%d packs=%zu degraded_resources=%u error=%lu\n",
+              "[native] File.close %s %zu bytes ok=%d kept=%d json=%d packs=%zu degraded_resources=%u error=%lu\n",
               it->second.path.string().c_str(), framed.size(),
               wrote ? 1 : 0,
               g_unflushed_saves.count(key) ? 1 : 0, it->second.sdat ? 1 : 0,
@@ -719,6 +944,7 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
             v = static_cast<int32_t>(args[0].v.f);
         }
         if (!file_push(self, &v, 4)) return Value::make_int(0);
+        json_record(self, "int", std::to_string(v));
         return Value::make_int(4);
       });
   jvm.natives().register_method(
@@ -731,6 +957,15 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
             v = static_cast<float>(args[0].v.i);
         }
         if (!file_push(self, &v, 4)) return Value::make_int(0);
+        if (std::isfinite(v)) {
+          char text[64];
+          const auto result = std::to_chars(text, text + sizeof(text), v,
+              std::chars_format::general, std::numeric_limits<float>::max_digits10);
+          json_record(self, "float", std::string(text, result.ptr));
+        } else {
+          uint32_t bits; std::memcpy(&bits, &v, 4);
+          json_record(self, "floatBits", std::to_string(bits));
+        }
         return Value::make_int(4);
       });
   jvm.natives().register_method(
@@ -761,6 +996,7 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
                       static_cast<uint32_t>(id));
         }
         if (!file_push(self, &wired, 4)) return Value::make_int(0);
+        json_record(self, "resource", std::to_string(wired));
         return Value::make_int(degraded ? 0 : 4);
       });
   jvm.natives().register_method(
@@ -773,9 +1009,10 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         const char* c = s ? s->str.c_str() : nullptr;
         const int32_t len = c ? static_cast<int32_t>(std::strlen(c) + 1) : 0;
         if (!file_push(self, &len, 4)) return Value::make_int(0);
-        if (len <= 0) return Value::make_int(0);
+        if (len <= 0) { json_record(self, "string", "null"); return Value::make_int(0); }
         if (!file_push(self, c, static_cast<size_t>(len)))
           return Value::make_int(-1);
+        json_record(self, "string", json_string(std::string_view(c, len - 1)));
         return Value::make_int(len);
       });
   jvm.natives().register_method(
