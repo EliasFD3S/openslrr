@@ -1,4 +1,5 @@
 #include "host_input_mapping.hpp"
+#include "host_input_devices.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/host_game_options.hpp"
 
@@ -20,7 +21,6 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
-#include <xinput.h>
 #endif
 
 namespace slrr {
@@ -35,13 +35,7 @@ std::string history;
 // Keep this logical device ID available even when unplugged so a saved
 // profile can resolve its bindings before the controller is connected.
 constexpr int kPad = 2;
-constexpr const char* pad_axes[] = {
-    "Left Stick Left", "Left Stick Right", "Left Stick Up", "Left Stick Down",
-    "Right Stick Left", "Right Stick Right", "Right Stick Up", "Right Stick Down",
-    "LT", "RT", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right",
-    "Start", "Back", "Left Stick Click", "Right Stick Click", "LB", "RB",
-    "A", "B", "X", "Y"};
-std::array<float, std::size(pad_axes)> pad{};
+std::array<float, 24> pad{};
 std::array<float, 6> mouse{};
 
 struct Hotkey {
@@ -71,28 +65,12 @@ bool captures_binding(Object* focus) {
           group == read("redefineSuspGroup"));
 }
 
-#ifdef _WIN32
-XINPUT_GAMEPAD poll_gamepad() {
-  static DWORD slot = XUSER_MAX_COUNT;
-  static ULONGLONG next_scan = 0;
-  XINPUT_STATE state{};
-  if (slot < XUSER_MAX_COUNT && XInputGetState(slot, &state) == ERROR_SUCCESS)
-    return state.Gamepad;
-  slot = XUSER_MAX_COUNT;
-  const auto now = GetTickCount64();
-  if (now < next_scan) return {};
-  next_scan = now + 1000;
-  for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
-    if (XInputGetState(i, &state) != ERROR_SUCCESS) continue;
-    slot = i;
-    return state.Gamepad;
-  }
-  return {};
+bool physical_available(int device, int axis) {
+  return device < 2 || host_input_devices().available(device, axis);
 }
-#endif
 
 float mapped_axis(const ControllerInput& input, int axis) {
-  return input_mapping::mapped_axis(input, axis, host_input_physical_axis, pad);
+  return input_mapping::mapped_axis(input, axis, host_input_physical_axis, pad, physical_available);
 }
 
 bool hotkey_down(const Hotkey& hotkey, const Object* controller) {
@@ -165,30 +143,8 @@ void host_input_poll_keys() {
            float(held(VK_RBUTTON)), float(held(VK_MBUTTON))};
   in.cursor_x = in.cursor_y = 0.f;
 
-  const auto state = focused ? poll_gamepad() : XINPUT_GAMEPAD{};
-  const auto stick = [](int value, int deadzone) {
-    return std::clamp((value - deadzone) / (32767.f - deadzone), 0.f, 1.f);
-  };
-  const int lx = state.sThumbLX, ly = state.sThumbLY;
-  const int rx = state.sThumbRX, ry = state.sThumbRY;
-  const auto trigger = [](int value) {
-    return std::max(0.f, (value - XINPUT_GAMEPAD_TRIGGER_THRESHOLD) /
-                            (255.f - XINPUT_GAMEPAD_TRIGGER_THRESHOLD));
-  };
-  constexpr int left = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
-  constexpr int right = XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE;
-  pad = {stick(-lx, left), stick(lx, left), stick(ly, left), stick(-ly, left),
-         stick(-rx, right), stick(rx, right), stick(ry, right), stick(-ry, right),
-         trigger(state.bLeftTrigger), trigger(state.bRightTrigger)};
-  constexpr WORD buttons[] = {
-      XINPUT_GAMEPAD_DPAD_UP, XINPUT_GAMEPAD_DPAD_DOWN,
-      XINPUT_GAMEPAD_DPAD_LEFT, XINPUT_GAMEPAD_DPAD_RIGHT,
-      XINPUT_GAMEPAD_START, XINPUT_GAMEPAD_BACK,
-      XINPUT_GAMEPAD_LEFT_THUMB, XINPUT_GAMEPAD_RIGHT_THUMB,
-      XINPUT_GAMEPAD_LEFT_SHOULDER, XINPUT_GAMEPAD_RIGHT_SHOULDER,
-      XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_X, XINPUT_GAMEPAD_Y};
-  for (size_t i = 0; i < std::size(buttons); ++i)
-    pad[10 + i] = (state.wButtons & buttons[i]) ? 1.f : 0.f;
+  host_input_devices().poll(focused);
+  pad = host_input_devices().pad();
 #endif
 }
 
@@ -196,14 +152,12 @@ const char* host_input_device_name(int device) {
   switch (device) {
     case 0: return "SysKeyboard";
     case 1: return "SysMouse";
-    case kPad: return "XInput Gamepad";
-    default: return nullptr;
+    default: return host_input_devices().name(device);
   }
 }
 
 std::string host_input_axis_name(int device, int axis) {
-  if (device == kPad && axis >= 0 && axis < static_cast<int>(pad.size()))
-    return std::string("Pad ") + pad_axes[axis];
+  if (device >= kPad) return host_input_devices().axis_name(device, axis);
   constexpr const char* mouse_axes[] = {"Mouse X", "Mouse Y", "Mouse Wheel",
                                        "Mouse Left", "Mouse Right", "Mouse Middle"};
   if (device == 1 && axis >= 0 && axis < static_cast<int>(mouse.size()))
@@ -225,7 +179,7 @@ float host_input_physical_axis(int device, int axis) {
   const auto i = static_cast<size_t>(axis);
   if (device == 0 && i < keys.size()) return keys[i] || frame_pressed[i] ? 1.f : 0.f;
   if (device == 1 && i < mouse.size()) return mouse[i];
-  if (device == kPad && i < pad.size()) return pad[i];
+  if (device >= kPad) return host_input_devices().axis(device, axis);
   return 0.f;
 }
 
@@ -237,9 +191,8 @@ int host_input_active_axis(int device) {
     // Ignore pointer motion so clicking a row and moving away cannot bind X/Y.
     for (int i = 3; i < static_cast<int>(mouse.size()); ++i)
       if (mouse[i] > .5f) return i;
-  } else if (device == kPad) {
-    auto strongest = std::max_element(pad.begin(), pad.end());
-    if (*strongest > .55f) return static_cast<int>(strongest - pad.begin());
+  } else if (device >= kPad) {
+    return host_input_devices().active_axis(device);
   }
   return -1;
 }
@@ -285,7 +238,9 @@ void host_input_update_controller(Object* controller, float dt) {
   in.drive_steer_analog = false;
   if (controller && controller->input) {
     in.drive_steer_analog = input_mapping::steering_is_analog(
-        *controller->input, host_input_physical_axis, pad);
+        *controller->input, host_input_physical_axis, pad,
+        [](int device, int axis) { return host_input_devices().analog_axis(device, axis); },
+        physical_available);
   }
   in.drive_throttle = axis(28);
   in.drive_brake = axis(29);

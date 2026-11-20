@@ -2,7 +2,7 @@ param(
   [string]$BuildDir = "build",
   [string]$BaselineRef = "",
   [switch]$CorpusOnly,
-  [ValidateSet("save_io", "save_persistence", "scx_skin", "physics_position", "garage_shell", "map_props", "asset_bounds", "ped_crossing", "time_format", "night_props", "sun_cycle", "tree_numbers", "ui_lifetime", "resource_cache", "tufa_validation", "rpk_validation", "audio_recovery", "vm_lookup", "script_safety", "video_safety", "options_retry", "live_lookup", "driver_mask", "driver_selector", "pad_fallback", "class_lifetime", "static_increment", "inventory_transition", "map_views", "map_alpha", "physics_recovery", "findfile_paths", "splash_boot", "menu_debounce", "tooltip_render", "car_select_view", "trigger_markers", "trigger_volume", "gameref_alias", "osd_text_batch", "osd_text_gpu", "outline_font", "road_routes", "race_brain", "traffic_runtime", "race_vehicle", "frame_profiler", "render_programs_gpu", "scene_mesh_cache", "gc_runtime", "vehicle_contacts_runtime", "paint_texture")]
+  [ValidateSet("save_io", "save_persistence", "scx_skin", "physics_position", "garage_shell", "map_props", "asset_bounds", "ped_crossing", "time_format", "night_props", "sun_cycle", "tree_numbers", "ui_lifetime", "resource_cache", "tufa_validation", "rpk_validation", "audio_recovery", "vm_lookup", "script_safety", "video_safety", "options_retry", "live_lookup", "driver_mask", "driver_selector", "pad_fallback", "sdl_input", "class_lifetime", "static_increment", "inventory_transition", "map_views", "map_alpha", "physics_recovery", "findfile_paths", "splash_boot", "menu_debounce", "tooltip_render", "car_select_view", "trigger_markers", "trigger_volume", "gameref_alias", "osd_text_batch", "osd_text_gpu", "outline_font", "road_routes", "race_brain", "traffic_runtime", "race_vehicle", "frame_profiler", "render_programs_gpu", "scene_mesh_cache", "gc_runtime", "vehicle_contacts_runtime", "paint_texture")]
   [string]$Suite = "save_io"
 )
 $ErrorActionPreference = "Stop"
@@ -40,6 +40,10 @@ try {
   if ($Suite -in @('osd_text_gpu','outline_font','render_programs_gpu','scene_mesh_cache')) {
     $includePaths = $project.SelectSingleNode("//*[local-name()='ItemDefinitionGroup' and contains(@Condition,'Release|x64')]/*[local-name()='ClCompile']/*[local-name()='AdditionalIncludeDirectories']").InnerText
     $suiteIncludes = @('/Isrc/render', '/Zc:__cplusplus', '/Zc:preprocessor', '/DBX_CONFIG_DEBUG=0', '/DBGFX_CONFIG_DEBUG_ANNOTATION=0', '/DBGFX_CONFIG_MULTITHREADED=1', '/DBGFX_CONFIG_VIDEO=1', '/DNDEBUG') + @($includePaths.Split(';') | Where-Object { $_ -and -not $_.StartsWith('%(') } | ForEach-Object { "/I$_" })
+  }
+  if ($Suite -eq 'sdl_input') {
+    $includePaths = $project.SelectSingleNode("//*[local-name()='ItemDefinitionGroup' and contains(@Condition,'Release|x64')]/*[local-name()='ClCompile']/*[local-name()='AdditionalIncludeDirectories']").InnerText
+    $suiteIncludes = @($includePaths.Split(';') | Where-Object { $_ -and -not $_.StartsWith('%(') } | ForEach-Object { "/I$_" })
   }
   $label = 'after'
   if ($BaselineRef) {

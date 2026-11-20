@@ -951,6 +951,26 @@ the rebind listener, axes, hotkeys, and focus. Do not bypass the mapping with
 a key hardcoded in driving. The listener must allow primary and secondary
 commands and the other control menus.
 
+SDL3 owns joystick/gamepad discovery and polling on that same host thread;
+Win32 still owns the window, keyboard scan codes and mouse. Devices 0/1 remain
+`SysKeyboard`/`SysMouse`. Device 2 keeps the saved name `XInput Gamepad` and its
+24 split-positive channels/default controls as a compatibility alias for the
+primary SDL gamepad. Slots 3+ expose every peripheral's signed axes, then buttons,
+then four positive directions per hat (up/down/left/right). The primary pad is
+captured through the alias only. Explicit peripheral bindings replace the matching
+pad driving default; wheel axes use analog steering rather than keyboard ramps.
+Disconnected/unfocused bindings are skipped, not evaluated at signed zero.
+
+ControlSet saves exact device names and snapshots enumeration when constructed.
+Names include a GUID plus serial-or-path identity hash; slots remain reserved on
+disconnect and are reused on reconnect. Reopen control options after adding a new
+device. Without a serial, changing USB ports can change identity; indistinguishable
+same-model devices without a serial/path use discovery-order suffixes. Connect
+with controls released: raw-axis rebind detection compares with SDL's initial
+position so end-stop pedals do not block the listener. SDL haptics/force feedback
+are not implemented. Regression: `scripts/run_save_io_tests.ps1 -Suite sdl_input`
+uses virtual peripherals; real rig calibration remains a separate hardware check.
+
 Car instruments can come from the stock layout or from the CFG. `HudSlot`
 covers, among other things, gauges, needles, odometer, damage, nitro, and
 turbo. Preserve the expected size, aspect, and coordinates. A reference image

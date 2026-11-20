@@ -25,7 +25,7 @@ The modder documentation — natives, engine objects, and how to write a class, 
 
 Open SLRR brings the game's scripts, cars, and resources into a new engine. The project reimplements resource loading, script execution, rendering, the interface, and the native functions those scripts use.
 
-**You can assemble a car in the garage and drive it on the Test Track.** The host runs the stock menus, catalog, showrooms and track selection. The Test Track has keyboard and XInput driving, chase and cockpit cameras, vehicle instruments and a GPS map. The city, traffic and the full career loop are still in development.
+**You can assemble a car in the garage and drive it on the Test Track.** The host runs the stock menus, catalog, showrooms and track selection. The Test Track has keyboard and SDL3 peripheral input, chase and cockpit cameras, vehicle instruments and a GPS map. The city, traffic and the full career loop are still in development.
 
 Original game data is required and is not included. The reference version is **SLRR 2.2.1 MWM**; compatibility with other versions and mods is not guaranteed. This is an independent project, unaffiliated with the original game's developers or publishers.
 
@@ -83,7 +83,7 @@ The chart, the counts above and [native-coverage.json](assets/progress/native-co
 | Physics | ⏳ Fixed-step chassis, suspension and tyre contacts, differential lock, impact deformation and panel detachment. Handling and damage still need comparison with the original |
 | Audio and video | ✅ Effects, loops, FMV audio and four music playlists streamed with Media Foundation/XAudio2. Repeated effects and menu sounds have separate overlap limits |
 | Options | ✅ Game, Advanced Game and audio settings use `save/game/options`, writing JSON while still reading legacy SDAT saves. The patched OptionsDialog removes the pedestrian density slider and fixes the crowd at the original maximum (1.5). Traffic density is saved while its simulation is pending |
-| Driving | ⏳ Test Track driving with engine SFX tables, keyboard and XInput, stock and CFG-defined instruments, and GPS. Acceleration has been compared with stock Nonus and Einvagen telemetry, with differences remaining |
+| Driving | ⏳ Test Track driving with engine SFX tables, keyboard and SDL3 peripherals, stock and CFG-defined instruments, and GPS. Acceleration has been compared with stock Nonus and Einvagen telemetry, with differences remaining |
 | World and career | ⏳ City, traffic and complete career flow; vehicle purchase/save/load still need end-to-end validation |
 
 Engine loops use the scripts' SFX tables. Music playlists currently play in sequential order. The [roadmap](docs/NATIVE_AUDIT.md#roadmap) tracks the next steps for driving, collision and damage, navigation, garage actions and platform support.
@@ -139,6 +139,8 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 
 cmake --build build --config Release --target slrr_host --parallel
 ```
+
+CMake downloads the hash-pinned SDL 3.2.30 source and builds its peripheral support statically; no SDL DLL is needed. Offline builds can supply `-DFETCHCONTENT_SOURCE_DIR_SDL3=<SDL source directory>`.
 
 The executable is generated at `build/Release/slrr_host.exe`. The first build includes bgfx and its shader tools, so it may take a while.
 
@@ -204,7 +206,7 @@ Debug tuning and render settings last for the current session.
 
 Use **Game Options** for transmission, distance units, GPS mode, damage difficulty and driver assists. **Advanced Game Options** adjusts cockpit motion from steering, speed and acceleration. **Sound Options** controls the three audio volumes. The game restores these values from `save/game/options` at startup.
 
-In the garage, **right-click and drag**, the **arrow keys**, and the **scroll wheel** control the camera. From the garage, enter the **Test Track** to drive with your keyboard or XInput profile. **Escape** skips the intros.
+In the garage, **right-click and drag**, the **arrow keys**, and the **scroll wheel** control the camera. From the garage, enter the **Test Track** to drive with your keyboard or SDL3 peripherals. Connect wheels, separate pedals and shifters before opening the control options, then bind each device's axes/buttons there. Reopen the options after adding a new device. The primary gamepad retains the existing default driving controls and saved `XInput Gamepad` profile name; it is now polled through SDL3. **Escape** skips the intros.
 
 You can also set the game path with `$env:SLRR_GAME_ROOT`. The `--root` option takes priority. Without either, the host looks for `data/game`, then `game` and `../game`. Run `slrr_host.exe --help` for all options.
 
@@ -260,6 +262,7 @@ The project draws on community research to understand SLRR's formats and behavio
 | [slrr-reverse](https://github.com/EliasFD3S/slrr-reverse) | Additional reference for native contracts, engine behavior and suspension/link research |
 | [io_invo_scx](https://github.com/nonamesex/io_invo_scx) | SCX mesh structure |
 | [bgfx](https://github.com/bkaradzic/bgfx) and [bgfx.cmake](https://github.com/bkaradzic/bgfx.cmake) | Graphics rendering and CMake build integration |
+| [SDL3](https://github.com/libsdl-org/SDL) | Gamepad and multi-peripheral joystick input |
 
 Physics research is being integrated gradually: listing a reference does not mean the entire original simulation has already been reproduced. Thanks to the authors of these tools and research, and to the original game's creators.
 
