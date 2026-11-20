@@ -1,5 +1,6 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/slrr_font.hpp"
+#include "outline_font.hpp"
 
 #include "slrr/object.hpp"
 #include "slrr/osd_registry.hpp"
@@ -40,6 +41,8 @@ struct TextState {
   bool osd_suppressed = false;
   bool group_hidden = false;
   int32_t layer = 0;
+  SlrrFontEffects effects;
+  bool custom_effects = false;
 };
 std::unordered_map<void*, TextState> g_texts;
 std::vector<SlrrOsdText> g_osd_text;
@@ -337,6 +340,33 @@ bool slrr_font_load(void* key, const char* name) {
       return true;
     }
   }
+  auto try_outline = [&](const char* extension) {
+    const std::string path = join_root("frontend\\fonts\\" + n + extension);
+    std::vector<uint8_t> bytes;
+    if (!read_file(path, &bytes)) return false;
+    SlrrFont font;
+    font.name = n;
+    font.px_height = font_px_height_from_name(n);
+    if (!rasterize_outline_font(bytes, font)) {
+      std::printf("[font] outline decode fail %s; trying fallback\n", path.c_str());
+      return false;
+    }
+    font.distance_field = true;
+    if (up.rfind("SL", 0) == 0) {
+      font.effects.outline_px = 1.f;
+      font.effects.shadow_x = 1.f;
+      font.effects.shadow_y = 2.f;
+      font.effects.shadow_color = 0xc0000000u;
+    }
+    font.ready = true;
+    font.cache_key = asset_key;
+    g_fonts[key] = std::make_shared<const SlrrFont>(std::move(font));
+    g_font_assets[asset_key] = g_fonts[key];
+    std::printf("[font] outline %s glyphs=256 px=%d\n", path.c_str(), g_fonts[key]->px_height);
+    return true;
+  };
+  if (try_outline(".ttf") || try_outline(".otf")) return true;
+
   std::vector<uint8_t> scx_bytes, atlas_bytes;
   const std::string scx_path =
       join_root("frontend\\meshes\\Fonts\\" + n + ".scx");
@@ -444,9 +474,30 @@ void slrr_text_create(void* key, void* font, float x, float y) {
   t.align = 2;
   t.group = 0;
   t.font_slot = SlrrFontSlot::None;
+  t.effects = {};
+  t.custom_effects = false;
   t.text.clear();
   t.alive = true;
   t.visible = true;
+}
+
+void slrr_text_set_effects(void* key, const SlrrFontEffects& effects) {
+  auto it = g_texts.find(key);
+  if (it == g_texts.end()) return;
+  auto bounded = [](float value, float low, float high) {
+    return std::isfinite(value) ? std::clamp(value, low, high) : 0.f;
+  };
+  auto style = effects;
+  style.outline_px = bounded(style.outline_px, 0.f, 2.f);
+  style.shadow_x = bounded(style.shadow_x, -3.f, 3.f);
+  style.shadow_y = bounded(style.shadow_y, -3.f, 3.f);
+  it->second.effects = style;
+  it->second.custom_effects = true;
+  for (auto& line : g_osd_text) {
+    if (line.text_key != key) continue;
+    line.effects = style;
+    line.custom_effects = true;
+  }
 }
 
 void slrr_text_set_group(void* key, int32_t group) {
@@ -713,6 +764,8 @@ void slrr_text_update(void* key) {
   ot.osd_suppressed = t.osd_suppressed;
   ot.group_hidden = t.group_hidden;
   ot.layer = t.layer;
+  ot.effects = t.effects;
+  ot.custom_effects = t.custom_effects;
   g_osd_text.push_back(std::move(ot));
 }
 

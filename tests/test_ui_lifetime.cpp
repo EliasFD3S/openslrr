@@ -2,6 +2,7 @@
 #include "slrr/osd_registry.hpp"
 #include "slrr/slrr_font.hpp"
 #include "slrr/gc_roots.hpp"
+#include <cstdlib>
 using namespace slrr;
 int main() {
   Fixture f;
@@ -36,7 +37,8 @@ int main() {
   SLRR_REQUIRE(osd_widgets().empty());
   std::puts("PASS stable handles, hidden roots, destroyed roots and repeated compaction");
 
-  slrr_font_set_game_root(fs::absolute("game").string());
+  const char* font_root = std::getenv("SLRR_GAME_ROOT");
+  slrr_font_set_game_root(fs::absolute(font_root ? font_root : "data/game").string());
   auto* first=f.vm.new_object("java.util.resource.ResourceRef");
   auto* second=f.vm.new_object("java.util.resource.ResourceRef");
   SLRR_REQUIRE(slrr_font_load(first,"slii24")&&slrr_font_load(second,"SLII24"));

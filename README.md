@@ -203,6 +203,45 @@ In the garage, **right-click and drag**, the **arrow keys**, and the **scroll wh
 
 You can also set the game path with `$env:SLRR_GAME_ROOT`. The `--root` option takes priority. Without either, the host looks for `data/game`, then `game` and `../game`. Run `slrr_host.exe --help` for all options.
 
+### Outline fonts
+
+The text renderer prefers `frontend/fonts/<stem>.ttf`, then `.otf`, in the game
+root. Bake the nine stock text fonts from your own installation once (Python
+3.10+; these packages are conversion tools, not engine/build dependencies):
+
+```powershell
+py -m pip install Pillow fonttools
+py scripts/bake_slrr_fonts.py --root data/game
+```
+
+The converter traces the white glyph fill at quarter-pixel coverage resolution,
+strips baked black effects, and preserves the SCX byte mapping, advances and bearings. It produces real TrueType
+outlines, not embedded bitmap strikes. It does not recreate the original design
+curves: contours are traced from the available pixels. Generated fonts remain in
+your game copy; original game assets are not distributed in this repository.
+Missing/invalid outline fonts fall back to the stock SCX/atlas path, so existing
+installs and mods still work. Symbol-pointer icons and vehicle-instrument atlases
+keep their authored bitmap resources. Restart after replacing a font.
+
+TTF (TrueType outlines) and OTF (CFF outlines) share one SDF text shader with
+independent outline and drop-shadow colours/options. Stock SL/SLII fonts default to
+a black outline and shadow; other fonts default to plain fill. Engine callers
+can override a line with `slrr_text_set_effects`: outline width 0–2 pixels, shadow
+X/Y offsets −3–3 pixels, and ARGB effect colours (alpha zero disables an effect).
+These are engine-side text options, not new Java natives or saved game settings.
+Legacy bitmap fonts keep their authored effects. Text remains byte-indexed,
+without Unicode shaping or kerning. Replacement fonts are trusted local assets;
+the bundled stb font parser is not a sandbox for untrusted font files.
+
+Font regressions, after baking and building:
+
+```powershell
+py tests/test_bake_slrr_fonts.py
+py tests/test_bake_slrr_fonts.py --write-otf build/font-fixtures/test.otf
+powershell -File scripts/run_save_io_tests.ps1 -Suite outline_font
+powershell -File scripts/run_save_io_tests.ps1 -Suite osd_text_batch
+```
+
 ## Sources and credits
 
 The project draws on community research to understand SLRR's formats and behavior. Your installation's scripts and resources supply the classes, parts, and their parameters; the C++ engine reimplements the functions they expect.

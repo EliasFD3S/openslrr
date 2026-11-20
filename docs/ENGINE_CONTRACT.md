@@ -843,6 +843,21 @@ bindings or merge labels across the plates/icons that separate them. Long lines
 must rebase their 16-bit indices while retaining pen advance. See
 `src/render/osd_text_batch.hpp` and `LibBgfxBackend::draw_osd_line`.
 
+Font loading prefers `frontend/fonts/<stem>.ttf`, then `.otf`, with the legacy
+SCX/atlas loader as fallback. `scripts/bake_slrr_fonts.py` converts user-owned
+stock assets to outline TTFs, keeping the byte map, authored advances and top
+origin (zero hhea ascent). Ordinary replacement fonts use their hhea ascent as
+the baseline offset. Both outline formats rasterize to padded SDF atlases through
+the pinned dependency's stb_truetype; one shader composes fill, outline and
+shadow without extra glyph passes. Font assets/cache lifetime remain shared and
+weakly indexed as before. `slrr_text_set_effects` overrides a line's bounded
+outline width, shadow offsets and ARGB colours; effects do not affect measure,
+alignment or advance. They are not persistent options or Java APIs. Legacy
+atlases retain their baked effects and bypass SDF composition. The byte-based
+text contract is unchanged; this does not add Unicode shaping or kerning.
+Only trusted local font files are supported: SFNT table bounds are checked, but
+stb's parser does not provide comprehensive hostile-font validation.
+
 OSD surfaces have their own blending contract. Do not apply world lighting
 to them, or a global correction meant for the body.
 For trees and glass, check alpha test, blending, depth write, pass order,
