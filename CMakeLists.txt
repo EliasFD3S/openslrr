@@ -49,6 +49,7 @@ add_executable(slrr_host
   src/platform/host_game_options.cpp
   src/platform/host_cursor.cpp
   src/platform/job_system.cpp
+  src/platform/video_cinepak.cpp
   src/platform/video_fmv.cpp
   src/platform/video_fmv_vlc.cpp
   src/natives/native_registry.cpp
@@ -148,8 +149,7 @@ endif()
 
 if(WIN32)
   # strmiids = DirectShow GUIDs for FMV (GfxEngine.openVideo).
-  # vfw32 = Cinepak (prime.avi is cvid). The 32-bit codec does not connect
-  # through the Sample Grabber graph, so menu playback uses AVIFile.
+  # vfw32 = AVIFile fallback for movies the built-in Cinepak decoder rejects.
   target_link_libraries(slrr_host PRIVATE user32 gdi32 opengl32 winmm ole32 xinput
                                           oleaut32 strmiids vfw32 xaudio2 mfplat mfreadwrite mfuuid)
 endif()

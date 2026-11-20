@@ -174,7 +174,7 @@ current gaps to SLRR_rev code are in
 | Renderer | `src/render/bgfx_lib_backend.cpp:flush`, `src/render/bgfx_lighting.cpp:draw_instance`, `src/render/bgfx_shadows.cpp`, `src/render/bgfx_osd.cpp:draw_osd` | Frame, materials, shadows, OSD and HUD |
 | UI | `src/ui/osd_registry.cpp:osd_add_widget`, `src/ui/osd_registry.cpp:osd_on_field_write` | OSD widgets, hit-testing, modal state |
 | Map ambience | `src/resources/scene_ambience.cpp:scene_ambience_attach`, `src/resources/scene_ambience.cpp:scene_ambience_tick` | `sfx_loop`/`sfx_random` lines of map placements |
-| Platform | `src/platform/host_input.cpp`, `src/platform/host_sfx.cpp`, `src/platform/host_music.cpp`, `src/platform/video_fmv.cpp`, `src/platform/host_game_options.cpp` | Input, audio, FMV, options |
+| Platform | `src/platform/host_input.cpp`, `src/platform/host_sfx.cpp`, `src/platform/host_music.cpp`, `src/platform/video_fmv.cpp`, `src/platform/video_cinepak.cpp`, `src/platform/host_game_options.cpp` | Input, audio, FMV (built-in Cinepak AVI decoder), options |
 | Worker pool | `src/platform/job_system.cpp:jobs_parallel_for` | One worker per logical processor for loading work off the host thread (§6) |
 
 Code that exists but is not used:
@@ -1635,6 +1635,16 @@ video_safety suite checks cancellation both before opening a decoder and after
 opening a generated silent AVI; no later intro is opened. Immediate LibVLC
 cancellation can log demux errors in this fixture; actual rendered frames are
 not asserted. Release build and the suite pass.
+
+Video without VLC (#216): 64-bit Windows ships no Cinepak codec (only the
+32-bit `SysWOW64\iccvid.dll`), so without LibVLC both the AVIFile and the
+DirectShow paths failed and every intro and `prime.avi` was skipped.
+`video_fmv_open` now tries `src/platform/video_cinepak.cpp` first: it indexes
+the AVI, decodes Cinepak frames in order into BGRA and plays PCM audio through
+its own XAudio2 voice, whose position drives the frame clock. Files it rejects
+(another codec, or a first frame it cannot decode) still go to LibVLC, then
+AVIFile/DirectShow. The video_safety suite checks the decoder and a generated
+Cinepak AVI with PCM audio.
 
 
 ### Options save failure policy (#109)

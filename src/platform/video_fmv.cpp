@@ -1,4 +1,5 @@
 #include "slrr/video_fmv.hpp"
+#include "slrr/video_cinepak.hpp"
 #include "slrr/video_frame.hpp"
 
 #ifdef _WIN64
@@ -7,6 +8,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -71,9 +73,10 @@ bool g_playing = false;
 bool g_loop = false;
 bool g_non_exclusive = false;
 bool g_frame_ready = false;
+bool g_use_cinepak = false;
+uint64_t g_frame_serial = 0;
 #ifdef _WIN64
 bool g_use_vlc = false;
-uint64_t g_vlc_frame_serial = 0;
 #endif
 int g_w = 0;
 int g_h = 0;
@@ -664,6 +667,16 @@ int32_t video_fmv_open(const char *path, int32_t non_exclusive, int32_t loop) {
   if (wpath.empty())
     return -1;
 
+  // Every SLRR movie is Cinepak, which 64-bit Windows cannot decode.
+  if (cinepak_fmv_open(std::filesystem::path(wpath), loop != 0)) {
+    g_use_cinepak = true;
+    g_non_exclusive = non_exclusive != 0;
+    g_playing = true;
+    std::printf("[fmv] built-in Cinepak open %s loop=%d\n", resolved.c_str(),
+                loop != 0);
+    return 0;
+  }
+
 #ifdef _WIN64
   if (vlc_fmv_open(wpath, loop != 0)) {
     g_use_vlc = true;
@@ -772,6 +785,10 @@ int32_t video_fmv_open(const char *path, int32_t non_exclusive, int32_t loop) {
 void video_fmv_close() {
   g_audio_streams = 0;
 #ifdef _WIN32
+  if (g_use_cinepak) {
+    cinepak_fmv_close();
+    g_use_cinepak = false;
+  }
 #ifdef _WIN64
   if (g_use_vlc) {
     vlc_fmv_close();
@@ -784,6 +801,7 @@ void video_fmv_close() {
 }
 
 int32_t video_fmv_audio_stream_count() {
+  if (g_use_cinepak) return cinepak_fmv_audio_tracks();
 #ifdef _WIN64
   if (g_use_vlc) return vlc_fmv_audio_tracks();
 #endif
@@ -791,6 +809,7 @@ int32_t video_fmv_audio_stream_count() {
 }
 bool video_fmv_audio_running() {
 #ifdef _WIN32
+  if (g_use_cinepak) return cinepak_fmv_audio_running();
 #ifdef _WIN64
   if (g_use_vlc) return vlc_fmv_audio_running();
 #endif
@@ -814,6 +833,7 @@ bool g_block_osd = false;
 void video_fmv_set_block_osd(bool block) { g_block_osd = block; }
 
 bool video_fmv_block_osd() {
+  if (g_use_cinepak && g_playing && !g_non_exclusive) return true;
 #ifdef _WIN64
   if (g_use_vlc && g_playing && !g_non_exclusive) return true;
 #endif
@@ -832,6 +852,16 @@ void video_fmv_pump() {
 #ifdef _WIN32
   if (!g_playing)
     return;
+  if (g_use_cinepak) {
+    const auto frame = cinepak_fmv_pump(g_bgra, g_w, g_h);
+    if (frame == CinepakFrame::Stopped) {
+      video_fmv_close();
+    } else if (frame == CinepakFrame::Ready) {
+      g_frame_ready = true;
+      ++g_frame_serial;
+    }
+    return;
+  }
 #ifdef _WIN64
   if (g_use_vlc) {
     const auto frame = vlc_fmv_pump(g_bgra, g_w, g_h);
@@ -842,7 +872,7 @@ void video_fmv_pump() {
         std::printf("[fmv] LibVLC frame %dx%d audio=%d\n",
                     g_w, g_h, vlc_fmv_audio_tracks());
       g_frame_ready = true;
-      ++g_vlc_frame_serial;
+      ++g_frame_serial;
     }
     return;
   }
@@ -890,8 +920,9 @@ bool video_fmv_frame_ready() {
 }
 
 uint64_t video_fmv_frame_serial() {
+  if (g_use_cinepak) return g_frame_serial;
 #ifdef _WIN64
-  if (g_use_vlc) return g_vlc_frame_serial;
+  if (g_use_vlc) return g_frame_serial;
 #endif
   return 0;
 }
