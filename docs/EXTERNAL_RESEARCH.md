@@ -253,6 +253,23 @@ All little-endian. Each item notes OpenSLRR's status.
 - **Damage.** No deformation solver exists in the Java, and node-beam is not
   proven for SLRR. SLRR_rev's XPBD cages, thresholds and condition formula are
   invented, as are OpenSLRR's (`src/physics/deformation_cage.cpp`). **ext**
+- **Damage inputs in the MWM EXE.** The CFG keyword table at 0x60E100 maps
+  each keyword to its handler. A part's `damage <strength>` (346 stock lines:
+  lights 0.10, mirrors 0.20, rims/tyres 3.0, traffic templates 10.0; handler
+  0x46CF50) divides the condition it loses per impact, scaled by the
+  `external_damage` option (0x474E09, 0x458AE4); at zero condition the part
+  breaks off. `slotdmgmode` (680 lines) and `slotdeform` (54) set per-slot
+  behaviour; `damagedef` is an empty handler. OpenSLRR reads none of these
+  yet; its condition and detachment use the host cage and SLRR_rev
+  thresholds. The impact measure's units are not established. **exe**
+- **Aerodynamics in the MWM EXE.** `Chassis.C_drag` quadratic drag and the
+  CFG `wing` panels (529 stock lines, all type 4, suction ±0.25, exponent
+  0.666/0.667) act on the car body; ENGINE_CONTRACT §11 has the formulas.
+  OpenSLRR applies both. **exe**
+- **Anti-roll bars.** MWM `Swaybar.updatevariables` leaves its
+  `addrollbar` commands commented out, so stock anti-roll-bar parts change
+  nothing in the original. Only fake-racer and traffic templates have native
+  CFG `rollbar` lines (32). **source + corpus**
 - Button steering slews at 2 rad/s in the original. **source**
 
 ## 5. Maps, collision, traffic and pedestrians

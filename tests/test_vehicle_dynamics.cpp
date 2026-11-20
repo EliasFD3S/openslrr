@@ -321,6 +321,92 @@ SLRR_TEST(abs_releases_a_locked_wheel_while_the_road_moves) {
   SLRR_REQUIRE(cars[1].speed() < 20);
 }
 
+SLRR_TEST(aero_panels_follow_the_recovered_wing_law) {
+  AeroPanel panel;
+  panel.area = 10;
+  panel.suction = .25;
+  // Exponent 1 is linear: a face moving into the air gets the full area, a
+  // face moving away only the suction fraction, both against the motion.
+  SLRR_REQUIRE(std::abs(aero_panel_force(panel, 5) + 50) < 1e-9);
+  SLRR_REQUIRE(std::abs(aero_panel_force(panel, -5) - 12.5) < 1e-9);
+  // The stock exponent .666 acts on |v| / 100 and is scaled back by 100.
+  panel.exponent = .666;
+  const double expected = 10 * 100 * std::pow(.3, .666);
+  SLRR_REQUIRE(std::abs(aero_panel_force(panel, 30) + expected) < 1e-9);
+  SLRR_REQUIRE(std::abs(aero_panel_force(panel, -30) - expected * .25) < 1e-9);
+  // At most 0.1 mm/s, and for a non-positive exponent, the law stays linear.
+  SLRR_REQUIRE(std::abs(aero_panel_force(panel, 5e-5) + 5e-4) < 1e-12);
+  panel.exponent = 0;
+  SLRR_REQUIRE(std::abs(aero_panel_force(panel, 30) + 300) < 1e-9);
+}
+
+SLRR_TEST(chassis_drag_slows_a_coasting_car) {
+  const auto coast = [](double drag) {
+    Car car;
+    auto& drive = car.dynamics.drive;
+    drive.torque = [](double) { return 0.0; };
+    drive.gears = 0;
+    drive.ratios = {};
+    drive.starter = 0;
+    car.dynamics.engine_running = false;
+    car.dynamics.engine_omega = 0;
+    car.dynamics.aero.drag = drag;
+    car.run(1, 0, 0, 0);
+    car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -40});
+    for (auto& wheel : car.dynamics.state) wheel.spin = 40 / .31;
+    car.run(2, 0, 0, 0);
+    return car.speed();
+  };
+  // C v^2 / m = 0.4 * 40^2 / 1300 ~ 0.49 m/s^2 at the start of the coast.
+  const double lost = coast(0) - coast(.4);
+  SLRR_REQUIRE(lost > .75 && lost < 1.05);
+}
+
+SLRR_TEST(aero_impulses_never_reverse_the_motion) {
+  const Terrain air = [](double, double, double, GroundHit&) { return false; };
+  VehicleDynamics light;
+  light.body.configure(1, {-1, -1, -1}, {1, 1, 1}, {0, 0, 0}, {1, 1, 1});
+  Matrix frame{};
+  frame[0] = frame[5] = frame[10] = frame[15] = 1;
+  light.body.set_frame(frame);
+  light.body.velocity = {2, 0, 0};
+  light.aero.drag = 1e6;
+  light.advance(VehicleDynamics::timestep, air);
+  SLRR_REQUIRE(light.body.velocity.x > -1e-9 && light.body.velocity.x < 1e-6);
+  // A huge panel stops its point's normal motion but does not bounce it.
+  light.aero.drag = 0;
+  light.aero.panels = {{{0, 0, 0}, {1, 0, 0}, 1e6, .25, .666}};
+  light.body.velocity = {2, 0, 0};
+  light.advance(VehicleDynamics::timestep, air);
+  SLRR_REQUIRE(light.body.velocity.x > -1e-9 && light.body.velocity.x < 1e-6);
+}
+
+SLRR_TEST(a_forward_facing_panel_adds_drag_and_downforce) {
+  const Terrain air = [](double, double, double, GroundHit&) { return false; };
+  const auto step = [&](AeroPanel panel) {
+    VehicleDynamics car;
+    car.body.configure(1300, {-.85, .15, -2.2}, {.85, 1.4, 2.2}, {0, .45, .1},
+                       {550, 2300, 2200});
+    Matrix frame{};
+    frame[0] = frame[5] = frame[10] = frame[15] = 1;
+    car.body.set_frame(frame);
+    car.body.velocity = {0, 0, -30};  // forward is -Z
+    if (panel.area > 0) car.aero.panels = {panel};
+    car.advance(VehicleDynamics::timestep, air);
+    return car.body.velocity;
+  };
+  const Vec3 free = step({});
+  // A hood-like face, tilted towards the front: pushed down and back.
+  const Vec3 hood = step({{0, .45, .1}, Vec3{0, .978, -.208}.normalized(), 49.5, .25, .666});
+  SLRR_REQUIRE(hood.y < free.y - 1e-3);
+  SLRR_REQUIRE(hood.z > free.z + 1e-4);
+  // A rear face moving away from the air is drawn back with a quarter of it.
+  const Vec3 front = step({{0, .45, .1}, {0, 0, -1}, 10, .25, 1});
+  const Vec3 rear = step({{0, .45, .1}, {0, 0, 1}, 10, .25, 1});
+  SLRR_REQUIRE(front.z > free.z && rear.z > free.z);
+  SLRR_REQUIRE(std::abs((rear.z - free.z) / (front.z - free.z) - .25) < 1e-6);
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
       tyre_grip_follows_the_tyre_script,
@@ -337,6 +423,10 @@ int main() {
       a_car_without_an_engine_coasts_and_still_brakes,
       preapplied_brakes_hold_against_drive_in_both_directions,
       abs_releases_a_locked_wheel_while_the_road_moves,
+      aero_panels_follow_the_recovered_wing_law,
+      chassis_drag_slows_a_coasting_car,
+      aero_impulses_never_reverse_the_motion,
+      a_forward_facing_panel_adds_drag_and_downforce,
   };
   return slrr::standalone::run("vehicle_dynamics", tests);
 }

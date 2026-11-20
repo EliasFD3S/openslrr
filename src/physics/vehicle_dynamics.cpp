@@ -238,6 +238,47 @@ double suspension_force(double length, double speed, double rest, double max,
   return std::max(0.0, spring_force - speed * effective_damping);
 }
 
+double aero_panel_force(const AeroPanel &panel, double normal_speed) {
+  double speed = normal_speed;
+  // EXE 0x48EB3C: (|v| / 100)^exponent, scaled back so 1 stays linear.
+  if (panel.exponent > 0 && panel.exponent != 1 && std::abs(speed) > 1e-4)
+    speed = std::copysign(100 * std::pow(.01 * std::abs(speed), panel.exponent), speed);
+  return -panel.area * speed * (speed > 0 ? 1.0 : panel.suction);
+}
+
+// EXE 0x456A83 (Chassis.C_drag) and 0x48E880 (wing panels) act on the chassis
+// body. One step's impulse never exceeds the one that stops the point along
+// the force: the EXE clamps its drag so, and the same bound on each panel is
+// a host safeguard for the 120 Hz step against the steep low-speed power law.
+void VehicleDynamics::apply_aero() {
+  const auto stopping_force = [&](Vec3 point, Vec3 axis, double speed) {
+    const Vec3 arm = point - body.position;
+    const double inverse =
+        1 / body.mass + axis.dot(body.inverse_world_inertia(arm.cross(axis)).cross(arm));
+    return inverse > 0 ? std::abs(speed) / (inverse * timestep) : 0.0;
+  };
+  if (aero.drag > 0) {
+    const Vec3 point = body_point(body, aero.drag_center);
+    const Vec3 velocity = body.point_velocity(point);
+    const double square = velocity.dot(velocity);
+    if (square > 1) {
+      const double speed = std::sqrt(square);
+      const Vec3 direction = velocity / speed;
+      const double force =
+          std::min(aero.drag * square, stopping_force(point, direction, speed));
+      if (std::isfinite(force)) body.add_force(direction * -force, point);
+    }
+  }
+  for (const auto &panel : aero.panels) {
+    const Vec3 point = body_point(body, panel.position);
+    const Vec3 normal = body.orientation.rotate(panel.normal);
+    const double speed = body.point_velocity(point).dot(normal);
+    const double limit = stopping_force(point, normal, speed);
+    const double force = std::clamp(aero_panel_force(panel, speed), -limit, limit);
+    if (force != 0 && std::isfinite(force)) body.add_force(normal * force, point);
+  }
+}
+
 void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
                   const Terrain &terrain, double ceiling, double dt) {
   const Vec3 local_down = w.down.normalized();
@@ -754,6 +795,7 @@ void VehicleDynamics::step_drive() {
 }
 
 void VehicleDynamics::step(const Terrain &terrain) {
+  apply_aero();
   double ceiling = body.position.y;
   for (Vec3 p : body.corners())
     ceiling = std::max(ceiling, p.y);
