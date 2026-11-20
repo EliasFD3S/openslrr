@@ -210,6 +210,9 @@ class LibBgfxBackend final : public IRenderBackend {
   static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
   bgfx::TextureHandle tex_for_osd_icon(const std::string& path);
+  // Painter textures (paint_texture.hpp), uploaded again when their pixels
+  // change. tex_for_osd_icon routes their "paint:" paths here.
+  bgfx::TextureHandle paint_texture_handle(uint32_t id);
 
 
   void draw_osd_quad(const OsdWidget& w, float cr = 1.f, float cg = 1.f,
@@ -224,7 +227,7 @@ class LibBgfxBackend final : public IRenderBackend {
 
   // One OSD line. y is the glyph top (y+ down). align 1 centers on x.
   void draw_osd_line(void* font_key, const std::string& text, float x, float y,
-                     int align, uint32_t argb);
+                     int align, uint32_t argb, const SlrrFontEffects* effects = nullptr);
 
 
   // Osd.animate builds this after idleFor(1). The host never runs that
@@ -281,6 +284,9 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::VertexLayout layout_;
   bgfx::VertexLayout text_layout_;
   bgfx::ProgramHandle text_program_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_font_params_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_font_outline_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_font_shadow_ = BGFX_INVALID_HANDLE;
   std::vector<OsdTextVertex> text_vertices_;
   std::vector<uint16_t> text_indices_;
   bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
@@ -304,6 +310,13 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::UniformHandle u_mesh_base_uv_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_mesh_mix_uv_ = BGFX_INVALID_HANDLE;
   std::unordered_map<std::string, bgfx::TextureHandle> osd_tex_;
+  struct PaintTextureGpu {
+    bgfx::TextureHandle handle = BGFX_INVALID_HANDLE;
+    uint32_t revision = 0, width = 0, height = 0;
+    bool mips = false;
+  };
+  std::unordered_map<uint32_t, PaintTextureGpu> paint_tex_;
+  void release_paint_textures(bool all);
   std::unordered_map<std::string, bgfx::TextureHandle> font_tex_;
   bgfx::UniformHandle u_alpha_test_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_color_ = BGFX_INVALID_HANDLE;

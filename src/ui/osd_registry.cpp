@@ -1030,8 +1030,16 @@ void osd_on_field_write(Object* recv, const std::string& field) {
     // Camera.create also stores vp. That write must not replace the Osd
     // that Viewport.deactivate hides, or cancel hides the menu.
     if (!is_osd_class(recv)) return;
-    if (Object* vp = field_o(recv, "vp"))
+    if (Object* vp = field_o(recv, "vp")) {
       vp->fields["_osd"] = Value::make_obj(recv);
+      // A viewport draws and takes clicks only once activated (Osd.show).
+      // The garage builds the parts bin while painting; its never-shown
+      // slots took the decal picker's clicks.
+      const auto active = vp->fields.find("active");
+      if (active == vp->fields.end() || active->second.tag != ValueTag::Int ||
+          active->second.v.i == 0)
+        recv->fields["_host_hidden"] = Value::make_int(1);
+    }
     return;
   }
   if (field == "disabled") {
@@ -1087,7 +1095,7 @@ void osd_visit_gc_roots(const GcRootVisitor& visit) {
   for (const auto& w : g_widgets) {
     if (w.dead) continue;
     root(w.handler); root(w.owner); root(w.button); root(w.picture_source);
-    root(w.highlight_for); root(w.label_src); root(w.value_str); root(w.gadget); root(w.text_key);
+    root(w.event_source); root(w.highlight_for); root(w.label_src); root(w.value_str); root(w.gadget); root(w.text_key);
   }
 }
 }  // namespace slrr

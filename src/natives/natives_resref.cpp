@@ -6,6 +6,7 @@
 #include "slrr/scene_ambience.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/part_runtime.hpp"
+#include "slrr/paint_texture.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/osd_registry.hpp"
@@ -198,14 +199,25 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
   // Do NOT register <init> — let TUFA run those wrappers.
   constexpr const char* kResRef = "java.util.resource.ResourceRef";
   auto res_sync_id_field = [](Object* self, int32_t id) {
-    if (self) self->fields["id"] = Value::make_int(id);
+    if (!self) return;
+    self->fields["id"] = Value::make_int(id);
+    if (const auto* live = gameref_find_live(id)) {
+      const auto* owner = static_cast<Object*>(live->key);
+      const auto type = owner->fields.find("typeof");
+      if (type != owner->fields.end() && type->second.tag == ValueTag::Int)
+        self->fields["typeof"] = type->second;
+    }
   };
-  auto release_runtime_sound = [](Object* self) {
+  auto release_runtime_resource = [](Object* self) {
     const auto* sound = gameref_get(self);
-    if (sound && sound->key == self && !sound->sound_file.empty()) {
+    const auto type = self->fields.find("typeof");
+    const bool file_texture = self->fields.contains("_texpath") &&
+        type != self->fields.end() && type->second.tag == ValueTag::Int && type->second.v.i == 7;
+    if (sound && sound->key == self && (!sound->sound_file.empty() || file_texture)) {
       gameref_remove(self);
       self->fields.erase("loaded");
       self->fields.erase("typeof");
+      self->fields.erase("_texpath");
     }
   };
   jvm.natives().register_method(
@@ -227,7 +239,7 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
       });
   jvm.natives().register_method(
       kResRef, "set", "(I)V",
-      [&jvm, &rpk, res_sync_id_field, release_runtime_sound](Object* self, const std::vector<Value>& args) {
+      [&jvm, &rpk, res_sync_id_field, release_runtime_resource](Object* self, const std::vector<Value>& args) {
         if (!self) return Value::make_void();
         int32_t id = 0;
         if (!args.empty()) {
@@ -237,12 +249,12 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
             id = static_cast<int32_t>(args[0].v.f);
         }
         if(auto* live=gameref_find_live(id)) {
-          if (live->key != self) release_runtime_sound(self);
+          if (live->key != self) release_runtime_resource(self);
           gameref_bind_alias(self,live->key);
           res_sync_id_field(self,id);
           return Value::make_void();
         }
-        release_runtime_sound(self);
+        release_runtime_resource(self);
         GameRefState* st = gameref_upsert(self);
         if(st)st->binding=nullptr;
         if (st) {
@@ -253,6 +265,9 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
             if (e) {
               self->fields["typeof"] = Value::make_int(e->typeof_);
               self->str = e->alias;
+            } else if (paint_texture_exists(static_cast<uint32_t>(id))) {
+              // Painter texture: File.write saves it as a texture blob.
+              self->fields["typeof"] = Value::make_int(7);
             }
           }
         }
@@ -262,7 +277,7 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
       });
   jvm.natives().register_method(
       kResRef, "set", "(Ljava.util.resource.ResourceRef;)V",
-      [res_sync_id_field, release_runtime_sound](Object* self, const std::vector<Value>& args) {
+      [res_sync_id_field, release_runtime_resource](Object* self, const std::vector<Value>& args) {
         if (!self) return Value::make_void();
         Object* other =
             (!args.empty() && args[0].tag == ValueTag::Obj) ? args[0].v.o
@@ -270,7 +285,7 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
         if (other == self || (other && gameref_get(other) &&
                               gameref_get(other) == gameref_get(self)))
           return Value::make_void();
-        release_runtime_sound(self);
+        release_runtime_resource(self);
         if (!other) {
           // set(null) → clear bind (PE sub_545FC0(handle,0)).
           if (GameRefState* st = gameref_upsert(self)) {
@@ -309,6 +324,17 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           self->fields["loaded"] = Value::make_int(1);
           self->fields["typeof"] = Value::make_int(6);
           return Value::make_void();
+        }
+        if (const auto* runtime = gameref_get(self)) {
+          const auto* owner = static_cast<Object*>(runtime->key);
+          if (paint_texture_exists(static_cast<uint32_t>(runtime->type_id)) ||
+              (owner && owner->fields.contains("_texpath") &&
+               owner->fields.contains("typeof") && owner->fields.at("typeof").tag == ValueTag::Int &&
+               owner->fields.at("typeof").v.i == 7)) {
+            self->fields["loaded"] = Value::make_int(1);
+            self->fields["typeof"] = Value::make_int(7);
+            return Value::make_void();
+          }
         }
         GameRefState* st = gameref_upsert(self);
         int32_t id = st ? st->type_id : 0;
@@ -500,7 +526,7 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
   jvm.natives().register_method(
       kResRef, "makeTexture",
       "(Ljava.util.resource.ResourceRef;Ljava.lang.String;)V",
-      [&jvm](Object* self, const std::vector<Value>& args) {
+      [&jvm, release_runtime_resource](Object* self, const std::vector<Value>& args) {
         if (!self) return Value::make_void();
         std::string file;
         if (args.size() > 1 && args[1].tag == ValueTag::Obj && args[1].v.o)
@@ -514,13 +540,22 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           file = root + file;
         }
         Object* path = jvm.new_string(file);
+        release_runtime_resource(self);
         if (path) self->fields["_texpath"] = Value::make_obj(path);
+        // Decal passes only id() to Painter.doPaint. A filename without a
+        // runtime identity worked for OSD pictures but became brush id 0.
+        auto* texture = gameref_upsert(self);
+        texture->binding = nullptr;
+        gameref_set_type(*texture, 0);
+        texture->empty = false;
+        self->fields["id"] = Value::make_int(gameref_make_live(self));
+        self->fields["typeof"] = Value::make_int(7);
         return Value::make_void();
       });
   jvm.natives().register_method(
       kResRef, "makeSound",
       "(Ljava.util.resource.ResourceRef;Ljava.lang.String;)V",
-      [&jvm, res_sync_id_field](Object* self, const std::vector<Value>& args) {
+      [&jvm, res_sync_id_field, release_runtime_resource](Object* self, const std::vector<Value>& args) {
         if (!self || args.size() != 2 || args[0].tag != ValueTag::Obj ||
             args[1].tag != ValueTag::Obj || !args[0].v.o || !args[1].v.o ||
             args[0].v.o == self) return Value::make_void();
@@ -528,6 +563,7 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
         std::error_code ec;
         if (file.empty() || !std::filesystem::is_regular_file(file, ec))
           return Value::make_void();
+        release_runtime_resource(self);
         auto* sound = gameref_upsert(self);
         sound->binding = nullptr;
         gameref_set_type(*sound, 0);
@@ -568,8 +604,24 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           if (it != src->fields.end() && it->second.tag == ValueTag::Int)
             id = it->second.v.i;
         }
-        if (id != 0) {
+        // A file texture is an independent native resource when duplicated,
+        // not another wrapper carrying the source wrapper's live id.
+        const auto* source_state = gameref_get(src);
+        const auto* properties = source_state ? static_cast<Object*>(source_state->key) : src;
+        const auto file = properties->fields.find("_texpath");
+        const auto type = properties->fields.find("typeof");
+        if (file != properties->fields.end() && type != properties->fields.end() &&
+            type->second.tag == ValueTag::Int && type->second.v.i == 7) {
+          auto* dst = gameref_upsert(self);
+          dst->binding = nullptr;
+          gameref_set_type(*dst, 0);
+          self->fields["id"] = Value::make_int(gameref_make_live(self));
+          self->fields["typeof"] = Value::make_int(7);
+          self->fields["_texpath"] = file->second;
+        } else if (id != 0) {
           self->fields["id"] = Value::make_int(id);
+          if (paint_texture_exists(static_cast<uint32_t>(id)))
+            self->fields["typeof"] = Value::make_int(7);
           if (GameRefState* dst = gameref_upsert(self, GameRefKind::RenderRef)) {
             gameref_set_type(*dst, id);
             if (const auto* source = gameref_get(src)) {
@@ -582,6 +634,10 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
               dst->directional_light.flare = {};
             }
           }
+          // A duplicated render type is a new resource: id() names this copy,
+          // so RenderRef(parent, copy.id(), alias) keeps its replacements
+          // (Painter builds its decal-slot pictures that way).
+          if (self->class_name == "java.util.resource.RenderRef") gameref_make_live(self);
         }
         for (const char* k : {"_mw", "_mh", "_tid", "_texpath"}) {
           auto it = src->fields.find(k);

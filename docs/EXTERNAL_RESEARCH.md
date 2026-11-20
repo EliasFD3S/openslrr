@@ -137,8 +137,9 @@ All little-endian. Each item notes OpenSLRR's status.
 - `SDAT`, version `0x0100`, type 1 or 2, flags; payload from +8. Type 2 ends
   with a trailer of unsaved resources (kind 7 = image bytes) and the pack
   list. Saved RIDs use the file-local pack ordinal in the high word; `0` or
-  `0xffff` means transient. OpenSLRR implements the container
-  (`src/natives/natives_io.cpp:sdat_frame`).
+  `0xffff` means transient. OpenSLRR implements legacy container reads
+  (`src/natives/natives_io.cpp:sdat_take_payload`); new saves use JSON
+  (`src/natives/natives_io.cpp:json_frame`).
 - `Part.save` writes subclass tails of varying length, so only each class's
   own `load` can read a part; a flat parser fails. **source**
 
@@ -213,8 +214,17 @@ All little-endian. Each item notes OpenSLRR's status.
   follows an MSVC-style LCG (`SLRR_rev:docs/java-math.md`). **corpus**
 - `WheelRef.setLoadSmooth` writes coefficient 14; `setDamping(f)` sets
   rebound to 0.7 × bump. OpenSLRR matches (`SLRR_rev:docs/physics-reverse-port.md`). **ext**
-- Both projects still lack all `Painter` and `ParticleSystem` natives, the
-  `GroundRef` route queries, and `PhysicsRef.create`/`createSphere`.
+- At the historical `77b0fb6` snapshot SLRR_rev lacked the `Painter` and
+  `ParticleSystem` natives, the `GroundRef` route queries, and
+  `PhysicsRef.create`/`createSphere`. Its v221 commit
+  [dddbe21](https://github.com/nedobylskiy/SLRR_rev/commit/dddbe21a5acc290e29aaa3df1fafbc15bdd3afe5)
+  (19 November 2026) adds `paintPart`, `doPaint` and `xPaint` in
+  `SLRR_rev:src/runtime/part-native.ts`, keeping colours and strokes beside the
+  texture rather than drawing into it, and the `GII_CONTROL` `control(dt)`
+  hook that drives spray. It has no `Osd.createIcon` button path for the decal
+  picker. OpenSLRR binds the same natives (#64) from the slrr-reverse notes on
+  0x004827D0, 0x00482960 and 0x00482C00, but rasterizes paint into textures
+  (KNOWLEDGE_BASE.md, "Garage paint booth (#64)").
 
 ## 4. Game mechanics and telemetry
 
@@ -360,14 +370,15 @@ Where OpenSLRR gaps already have an SLRR_rev implementation (revision
 | Physical flaps (#42) | `SLRR_rev:docs/native-status.md` lists `Part.flap` as unregistered; `SLRR_rev:src/engine/deformable-panel.ts` pins a hood cage with two hinge clamps and a latch | No hinge to migrate. OpenSLRR's `include/slrr/flap_hinge.hpp` is its own design |
 
 At the historical `77b0fb6` snapshot these were also missing (the v221
-update below supersedes the road/traffic entries): all `Painter`
-and `ParticleSystem` natives, the `GroundRef` route queries (`findRoute`,
+updates in §3 and below supersede the Painter and road/traffic entries): all `Painter`
+(bound in OpenSLRR since #64) and `ParticleSystem` natives, the `GroundRef` route queries (`findRoute`,
 `getRouteLength`, `getRoutePos`, `getRouteDist`, `alignToRoad`,
 `getStartDirection`), `RenderRef.plotRoute`, `PhysicsRef.create` and
 `createSphere`, dynamic standalone `PhysicsRef` bodies and
 `haltTrafficCross`. OpenSLRR implements `pedestrianDistance` and
 `removePedestrianType` from the slrr-reverse notes on 0x00589BE0 and
-0x00484E20.
+0x00484E20, and the three `Painter` natives from its notes on 0x004827D0
+(`paintPart`), 0x00482960 (`doPaint`) and 0x00482C00 (`xPaint`).
 
 ### Vehicle dynamics baseline for PR #48
 
@@ -519,6 +530,25 @@ fields. `viewer.ts` instantiates a TrafficVehicle from that template's bounds,
 mass and wheels. OpenSLRR now preserves native ownership from its Part factory,
 rather than inferring the drive model from inline wheel meshes. This is a port
 integration fix, not a claim that every upstream Bot behavior has been translated already.
+
+### Consolidated #197 audit, 19 November 2026 (UTC)
+
+Refreshed v221 to `7441a697f3b7b2d0ff7ddbe3f20f2e29a03165aa`;
+traffic remains `bea8ce06eabef78ad0c25dde00e17a48765199b5`.
+The [remaining-work audit](TRAFFIC_RACE_AUDIT.md) compares current contacts,
+Bot/controller policy, native assembly, audio and driver seating against this
+snapshot. In particular, v221 vehicle-physics-world.ts / vehicle-pair-test.ts
+coordinate full-car pair contacts and deliver actual impulses to both damage
+owners. The #197 contact port preserves legacy wall callers while adding actual
+normal impulse and pre-impact rigid motion for finite-mass pairs. It reuses
+OpenSLRR's post-normal impulse friction and adds strict transactional validation,
+stable SAT tie order and bounded translational sweeping; those are host
+extensions, not recovered original collision behavior.
+Native traffic's traffic-audio.ts is a simplified positional idle fallback, not
+mechanical SfxTable parity. java-vehicles.ts binds mechanical racer drivers but
+explicitly omits native-only fake-racer seating. traffic-java-bridge.md still
+leaves full pursuit incomplete; no AI_spline/AI_params implementation was found
+in the refreshed source. These findings are not claims of new in-game acceptance.
 
 ## 8. Draft PR #3: what it contains and what applies to main
 

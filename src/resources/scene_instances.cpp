@@ -1,5 +1,6 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/paint_texture.hpp"
 #include "slrr/scene_collision.hpp"
 #include <limits>
 #include "slrr/gameref.hpp"
@@ -811,7 +812,19 @@ std::shared_ptr<const ScxGeometry> scene_instances_geometry(uint32_t resource) {
   return geometry(resource);
 }
 std::string scene_instances_texture(uint32_t resource) {
-  if (!resource || !g_resources) return {};
+  if (!resource) return {};
+  // Painter textures live in host memory; the renderer uploads them by id.
+  if (paint_texture_exists(resource)) return paint_texture_path(resource);
+  // ResourceRef.makeTexture/Decal names a file by a live native handle.
+  if (const auto* live = gameref_find_live(static_cast<int32_t>(resource))) {
+    const auto* owner = static_cast<Object*>(live->key);
+    const auto path = owner->fields.find("_texpath");
+    const auto type = owner->fields.find("typeof");
+    if (type != owner->fields.end() && type->second.tag == ValueTag::Int && type->second.v.i == 7 &&
+        path != owner->fields.end() && path->second.tag == ValueTag::Obj && path->second.v.o)
+      return path->second.v.o->str;
+  }
+  if (!g_resources) return {};
   if (const auto it = g_texture_paths.find(resource); it != g_texture_paths.end())
     return it->second;
   auto path = g_resources->texture_path_for_id(resource);
@@ -1933,7 +1946,7 @@ std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
     // SCRIPT_RUNTIME.md; original per-bit semantics are not established.
     uint32_t resource_flags = 0;
     scene_shadow_info(static_cast<uint32_t>(n->type_id), &resource_flags, nullptr);
-    if (n->kind == GameRefKind::RenderRef && !n->vehicle_material &&
+    if (root == g_world && n->kind == GameRefKind::RenderRef && !n->vehicle_material &&
         !part_render_owner(n->key) && (resource_flags & 0x280u) == 0x280u) {
       const float t = gameref_now();
       const float c = std::cos(t), s = std::sin(t);
@@ -2931,8 +2944,28 @@ bool scene_instances_pointer_ray(int px, int py, int width, int height,
   return true;
 }
 void *scene_instances_pick(const float origin[3], const float direction[3], float* point) {
-  if (!origin || !direction)
+  ScenePickSurface surface;
+  if (!scene_instances_pick_surface(origin, direction, &surface))
     return nullptr;
+  if (point)
+    std::copy(surface.world, surface.world + 3, point);
+  return surface.key;
+}
+
+bool scene_instances_pick_surface(const float origin[3], const float direction[3],
+                                  ScenePickSurface *surface) {
+  if (!origin || !direction || !surface)
+    return false;
+  *surface = ScenePickSurface{};
+  float screen_up[3] = {0.f, 1.f, 0.f}, eye[3], at[3];
+  if (gameref_world_camera(eye, at, nullptr, nullptr, nullptr, screen_up)) {
+    float f[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
+    const float fl2 = f[0]*f[0] + f[1]*f[1] + f[2]*f[2];
+    if (fl2 > 1e-8f) {
+      const float d = (f[0]*screen_up[0] + f[1]*screen_up[1] + f[2]*screen_up[2]) / fl2;
+      for (int k = 0; k < 3; ++k) screen_up[k] -= f[k] * d;
+    }
+  }
   float best = 1e9f;
   void *hit = nullptr;
   for (const SceneInstance &instance : scene_instances_collect_root(g_world)) {
@@ -2999,16 +3032,78 @@ void *scene_instances_pick(const float origin[3], const float direction[3], floa
         best = t;
         hit = instance.key;
         triangle = true;
+        // Face normal turned toward the viewer: winding is not a reliable
+        // side once the render reflection and mirrored parts are involved.
+        const float e1[3] = {v[1][0] - v[0][0], v[1][1] - v[0][1], v[1][2] - v[0][2]};
+        const float e2[3] = {v[2][0] - v[0][0], v[2][1] - v[0][1], v[2][2] - v[0][2]};
+        float n[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2],
+                      e1[0] * e2[1] - e1[1] * e2[0]};
+        const float nl = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        const float side = n[0] * d[0] + n[1] * d[1] + n[2] * d[2] > 0.f ? -1.f : 1.f;
+        surface->geometry = instance.geometry;
+        surface->paint_slot = instance.paint_slot;
+        surface->mirrored = matrix[0] * (matrix[5]*matrix[10] - matrix[6]*matrix[9])
+                          - matrix[4] * (matrix[1]*matrix[10] - matrix[2]*matrix[9])
+                          + matrix[8] * (matrix[1]*matrix[6] - matrix[2]*matrix[5]) < 0.f;
+        for (int k = 0; k < 3; ++k) {
+          surface->screen_up[k] = inv[k] * screen_up[0] + inv[3+k] * screen_up[1] + inv[6+k] * screen_up[2];
+          surface->world_up[k] = screen_up[k];
+          surface->local[k] = o[k] + d[k] * t;
+          surface->normal[k] = nl > 0.f ? side * n[k] / nl : 0.f;
+        }
+        for (int k = 0; k < 3; ++k)
+          surface->world_normal[k] = matrix[k] * surface->normal[0] +
+                                     matrix[4 + k] * surface->normal[1] +
+                                     matrix[8 + k] * surface->normal[2];
       }
     }
     if (!triangle && idx.empty() && tmin >= 0.f && tmin < best) {
       best = tmin;
       hit = instance.key;
+      surface->geometry = nullptr;
+      surface->paint_slot = -1;
     }
   }
-  if (hit && point)
-    for (int i = 0; i < 3; ++i) point[i] = origin[i] + direction[i] * best;
-  return hit;
+  if (!hit)
+    return false;
+  surface->key = hit;
+  for (int i = 0; i < 3; ++i) surface->world[i] = origin[i] + direction[i] * best;
+  return true;
+}
+
+std::vector<ScenePaintTarget> scene_instances_paint_targets(const float world[3], float radius) {
+  std::vector<ScenePaintTarget> out;
+  if (!world)
+    return out;
+  for (const SceneInstance &instance : scene_instances_collect_root(g_world)) {
+    if (instance.sky || !instance.geometry || !instance.key || instance.paint_slot < 0)
+      continue;
+    ScenePaintTarget target;
+    if (!scene_instances_script_matrix(instance.key, target.matrix) ||
+        !invert_columns(target.matrix, target.inverse))
+      continue;
+    const float *m = target.matrix, *inv = target.inverse;
+    const float p[3] = {world[0] - m[12], world[1] - m[13], world[2] - m[14]};
+    const float scale = instance.geometry->position_scale;
+    const ScxMeshInfo &info = instance.geometry->info;
+    bool near = true;
+    for (int k = 0; k < 3 && near; ++k) {
+      const float local = inv[k] * p[0] + inv[3 + k] * p[1] + inv[6 + k] * p[2];
+      float lo = info.bbox_min[k] * scale, hi = info.bbox_max[k] * scale;
+      if (lo > hi)
+        std::swap(lo, hi);
+      near = local >= lo - radius && local <= hi + radius;
+    }
+    if (!near)
+      continue;
+    target.key = instance.key;
+    target.geometry = instance.geometry;
+    target.paint_slot = instance.paint_slot;
+    target.mirrored = m[0] * (m[5] * m[10] - m[6] * m[9]) - m[4] * (m[1] * m[10] - m[2] * m[9]) +
+                      m[8] * (m[1] * m[6] - m[2] * m[5]) < 0.f;
+    out.push_back(std::move(target));
+  }
+  return out;
 }
 
 void scene_visit_gc_roots(const GcRootVisitor& visit) {

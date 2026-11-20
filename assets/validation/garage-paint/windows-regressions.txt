@@ -1,0 +1,329 @@
+test_paint_texture.cpp
+   Creating library C:\openslrr\body-paint\build\paint-texture-tests\paint-texture-after.lib and object C:\openslrr\body-paint\build\paint-texture-tests\paint-texture-after.exp
+[paint_texture] 8 passed, 0 failed
+Save I/O test exit code: 0 (log: C:\openslrr\body-paint\build\paint-texture-tests\after.log)
+test_save_io.cpp
+   Creating library C:\openslrr\body-paint\build\save-io-tests\save-io-after.lib and object C:\openslrr\body-paint\build\save-io-tests\save-io-after.exp
+[native] File.delete save/career ok=0
+[native] File.delete save/career/main ok=1
+[native] File.delete save/career ok=1
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-7552-5\save\career\J..R-1\main 24 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=0 error=0
+[native] File.delete save/career/J..R-1/main ok=1
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-7552-5\save\career\Mr...-1\main 24 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=0 error=0
+[native] File.delete save/career/Mr...-1/main ok=1
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-7552-5\save\career\normal-1\main 24 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=0 error=0
+[native] File.delete save/career/normal-1/main ok=1
+[sdat] resource 0x12340056 has no pack; writing null placeholder
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-7552-6\save\career\main 51 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=1 error=0
+[sdat] resource 0x00000056 has no pack; writing null placeholder
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-7552-7\save\career\main 51 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=1 error=0
+[sdat] resource 0xffff0056 has no pack; writing null placeholder
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-7552-8\save\career\main 51 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=1 error=0
+[rpk] openLib fixture.rpk -> 1 (no TOC)
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-7552-9\save\valid 52 bytes ok=1 kept=0 sdat=1 packs=1 degraded_resources=0 error=0
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-7552-10\save\raw 4 bytes ok=1 kept=0 sdat=0 packs=0 degraded_resources=0 error=0
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-7552-11\save\painted 148 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=0 error=0
+[sdat] resource 0xffff0001 has no pack; writing null placeholder
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-7552-11\save\dead 28 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=1 error=0
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-7552-13\save\decal 109 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=0 error=0
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[save_io] 13 passed, 0 failed
+Save I/O test exit code: 0 (log: C:\openslrr\body-paint\build\save-io-tests\after.log)
+test_save_persistence.cpp
+   Creating library C:\openslrr\body-paint\build\save-persistence-tests\save-persistence-after.lib and object C:\openslrr\body-paint\build\save-persistence-tests\save-persistence-after.exp
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-16808-1\save\main 24 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=0 error=0
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-16808-1\save\main 24 bytes ok=0 kept=1 sdat=1 packs=0 degraded_resources=0 error=5
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-16808-1\save\main 24 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=0 error=0
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-16808-2\save\pending 24 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=0 error=0
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-16808-2\save\pending 24 bytes ok=0 kept=1 sdat=1 packs=0 degraded_resources=0 error=5
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-16808-3\save\pending 24 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=0 error=0
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-16808-3\save\pending 24 bytes ok=0 kept=1 sdat=1 packs=0 degraded_resources=0 error=5
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-16808-4\save\pending 24 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=0 error=0
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-16808-4\save\pending 24 bytes ok=0 kept=1 sdat=1 packs=0 degraded_resources=0 error=5
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-16808-5\save\pending 24 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=0 error=0
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-16808-5\save\pending 24 bytes ok=0 kept=1 sdat=1 packs=0 degraded_resources=0 error=5
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-16808-5\save\destination 24 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=0 error=0
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-16808-6\save\pending 24 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=0 error=0
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-16808-6\save\pending 24 bytes ok=0 kept=1 sdat=1 packs=0 degraded_resources=0 error=5
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-16808-6\save\source 24 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=0 error=0
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-16808-7\save\pending 24 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=0 error=0
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-16808-7\save\pending 24 bytes ok=0 kept=1 sdat=1 packs=0 degraded_resources=0 error=5
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-16808-7\save\source 24 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=0 error=0
+[native] File.close C:\openslrr\body-paint\build\save-io-fixtures\test-16808-8\save\strings 42 bytes ok=1 kept=0 sdat=1 packs=0 degraded_resources=0 error=0
+[rpk] parsed part.rpk pack=1 deps=0 entries=1
+[rpk] openLib part.rpk -> 1
+[part] create id=0x70000000 type=0x10006 class=java.game.parts.Part slots=2 renders=0
+[rpk] parsed part.rpk pack=1 deps=0 entries=1
+[rpk] openLib part.rpk -> 1
+[part] create id=0x70000001 type=0x10006 class=java.game.parts.Part slots=2 renders=0
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] invoke_by_name: class java.game.parts.Part
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] invoke_by_name: class java.game.parts.Part
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[save_persistence] 10 passed, 0 failed
+Save I/O test exit code: 0 (log: C:\openslrr\body-paint\build\save-persistence-tests\after.log)
+test_car_select_view.cpp
+   Creating library C:\openslrr\body-paint\build\car-select-view-tests\car-select-view-after.lib and object C:\openslrr\body-paint\build\car-select-view-tests\car-select-view-after.exp
+[section] adopt java.game.Catalog
+PASS catalog inset retains script pose and preview camera; cursor hover cannot replace world; fullscreen showroom preserved
+PASS cursor-only UI cannot become the main 3D camera
+PASS tooltip layer does not lift catalog background over car, repeated show/hide and modal plates
+[car_select_view] 3 passed, 0 failed
+Save I/O test exit code: 0 (log: C:\openslrr\body-paint\build\car-select-view-tests\after.log)
+test_driver_selector.cpp
+   Creating library C:\openslrr\body-paint\build\driver-selector-tests\driver-selector-after.lib and object C:\openslrr\body-paint\build\driver-selector-tests\driver-selector-after.exp
+[rpk] parsed humans.rpk pack=1 deps=1 entries=82
+[rpk] openLib humans.rpk -> 1
+[rpk] model 0xc 'driver' src=humans\drivers\vin.SCX tex=1
+[scx] geometry C:\openslrr\body-paint\game\humans/drivers/vin.SCX v=4 verts=1691 tris=2058 groups=4 uvs=1691
+[scx]   group[0] tex=0 idx=0..+3318 'Material #106'
+[scx]   group[1] tex=0 idx=3318..+2532 'Material #106'
+[scx]   group[2] tex=0 idx=5850..+282 'Material #106'
+[scx]   group[3] tex=0 idx=6132..+42 'Material #106'
+[scene] resource=0x1000c source=C:\openslrr\body-paint\game\humans/drivers/vin.SCX vertices=1691
+PASS makeTexture/changeResource/duplicate/create reaches humans material; instance independence; hidden/destroyed viewport cameras excluded
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+Save I/O test exit code: 0 (log: C:\openslrr\body-paint\build\driver-selector-tests\after.log)
+test_gameref_alias.cpp
+   Creating library C:\openslrr\body-paint\build\gameref-alias-tests\gameref-alias-after.lib and object C:\openslrr\body-paint\build\gameref-alias-tests\gameref-alias-after.exp
+[gameref_alias] 3 passed, 0 failed
+Save I/O test exit code: 0 (log: C:\openslrr\body-paint\build\gameref-alias-tests\after.log)
+test_trigger_markers.cpp
+   Creating library C:\openslrr\body-paint\build\trigger-markers-tests\trigger-markers-after.lib and object C:\openslrr\body-paint\build\trigger-markers-tests\trigger-markers-after.exp
+[jobs] 19 worker threads + host thread
+[rpk] parsed cars\fake_racers\Badge.rpk pack=1 deps=8 entries=38
+[rpk] parsed cars\fake_racers\Ninja.rpk pack=2 deps=8 entries=38
+[rpk] parsed cars\fake_racers\Stallion.rpk pack=3 deps=8 entries=38
+[rpk] parsed cars\fake_racers\Sunset.rpk pack=4 deps=8 entries=38
+[rpk] parsed cars\fake_racers\Teg.rpk pack=5 deps=8 entries=38
+[rpk] parsed cars\fake_racers.rpk pack=6 deps=2 entries=18
+[rpk] parsed cars\misc\Police.rpk pack=7 deps=7 entries=47
+[rpk] parsed cars\misc.rpk pack=8 deps=2 entries=6
+[rpk] parsed cars\racers\Baiern.rpk pack=9 deps=8 entries=400
+[rpk] parsed cars\racers\Duhen.rpk pack=10 deps=7 entries=364
+[rpk] parsed cars\racers\Einvagen.rpk pack=11 deps=7 entries=334
+[rpk] parsed cars\racers\Enula.rpk pack=12 deps=7 entries=402
+[rpk] parsed cars\racers\Focer.rpk pack=13 deps=7 entries=291
+[rpk] parsed cars\racers\MC.rpk pack=14 deps=8 entries=309
+[rpk] parsed cars\racers\Nonus.rpk pack=15 deps=8 entries=310
+[rpk] parsed cars\racers\Prime.rpk pack=16 deps=7 entries=320
+[rpk] parsed cars\racers\SuperDuty.rpk pack=17 deps=7 entries=297
+[rpk] parsed cars\racers.rpk pack=18 deps=3 entries=32
+[rpk] parsed cars\traffic\Ambulance.rpk pack=19 deps=6 entries=22
+[rpk] parsed cars\traffic\ArmoredVan.rpk pack=20 deps=6 entries=34
+[rpk] parsed cars\traffic\CivilVan.rpk pack=21 deps=6 entries=34
+[rpk] parsed cars\traffic\Coach.rpk pack=22 deps=6 entries=18
+[rpk] parsed cars\traffic\Erbilac.rpk pack=23 deps=6 entries=30
+[rpk] parsed cars\traffic\FireEngine.rpk pack=24 deps=6 entries=19
+[rpk] parsed cars\traffic\Schoolbus.rpk pack=25 deps=6 entries=18
+[rpk] parsed cars\traffic\Taxi.rpk pack=26 deps=6 entries=18
+[rpk] parsed cars\traffic\Wagon.rpk pack=27 deps=6 entries=24
+[rpk] parsed cars\traffic\Wreck.rpk pack=28 deps=3 entries=14
+[rpk] parsed cars\traffic.rpk pack=29 deps=2 entries=20
+[rpk] parsed cars.rpk pack=30 deps=1 entries=110
+[rpk] parsed decals.rpk pack=31 deps=1 entries=7
+[rpk] parsed DestructionTools.rpk pack=32 deps=5 entries=88
+[rpk] parsed frontend.rpk pack=33 deps=3 entries=279
+[rpk] parsed humans.rpk pack=34 deps=1 entries=82
+[rpk] parsed maps\Addon_Maps\Car_Dealer.rpk pack=35 deps=1 entries=1
+[rpk] parsed maps\Addon_Maps\Caynon.rpk pack=36 deps=5 entries=16
+[rpk] parsed maps\Addon_Maps\DamageTrack.rpk pack=37 deps=1 entries=1
+[rpk] parsed maps\Addon_Maps\Dead_Island.rpk pack=38 deps=4 entries=18
+[rpk] parsed maps\Addon_Maps\Drag_Track.rpk pack=39 deps=4 entries=28
+[rpk] parsed maps\Addon_Maps\DriftTrack.rpk pack=40 deps=1 entries=1
+[rpk] parsed maps\Addon_Maps\MP1_Drift_Track.rpk pack=41 deps=1 entries=1
+[rpk] parsed maps\Addon_Maps\Nevada_Desert.rpk pack=42 deps=1 entries=1
+[rpk] parsed maps\Addon_Maps\Physic_Lab.rpk pack=43 deps=4 entries=18
+[rpk] parsed maps\Addon_Maps\Test_Track.rpk pack=44 deps=1 entries=1
+[rpk] parsed maps\Addon_Maps\Top_Gear_Track.rpk pack=45 deps=6 entries=21
+[rpk] parsed maps\Addon_Maps\Valo_City.rpk pack=46 deps=1 entries=1
+[rpk] parsed maps\city\smallmap.rpk pack=47 deps=2 entries=67
+[rpk] parsed maps\city.rpk pack=48 deps=4 entries=309
+[rpk] parsed maps\city2.rpk pack=49 deps=4 entries=362
+[rpk] parsed maps\DamageTrack.rpk pack=50 deps=3 entries=19
+[rpk] parsed maps\DriftTrack.rpk pack=51 deps=3 entries=31
+[rpk] parsed maps\MP1.rpk pack=52 deps=6 entries=8
+[rpk] parsed maps\MP1_objects.rpk pack=53 deps=2 entries=21
+[rpk] parsed maps\ROC_track\smallmap.rpk pack=54 deps=2 entries=67
+[rpk] parsed maps\ROC_track.rpk pack=55 deps=4 entries=38
+[rpk] parsed maps\skydome.rpk pack=56 deps=5 entries=59
+[rpk] parsed maps\test_track\smallmap.rpk pack=57 deps=2 entries=67
+[rpk] parsed maps\test_track.rpk pack=58 deps=7 entries=344
+[rpk] parsed maps\textures.rpk pack=59 deps=3 entries=548
+[rpk] parsed maps.rpk pack=60 deps=1 entries=6
+[rpk] parsed misc\carlot.rpk pack=61 deps=1 entries=35
+[rpk] parsed misc\catalog.rpk pack=62 deps=2 entries=15
+[rpk] parsed misc\dealer.rpk pack=63 deps=5 entries=37
+[rpk] parsed misc\dealer2.rpk pack=64 deps=5 entries=42
+[rpk] parsed misc\garage.rpk pack=65 deps=1 entries=135
+[rpk] parsed MW_Mod.rpk pack=66 deps=6 entries=77
+[rpk] parsed objects.rpk pack=67 deps=3 entries=1560
+[rpk] parsed particles.rpk pack=68 deps=3 entries=49
+[rpk] parsed parts\engines\Baiern_Emer.rpk pack=69 deps=5 entries=218
+[rpk] parsed parts\engines\Einvagen_Duhen_Ishima_Focer.rpk pack=70 deps=7 entries=326
+[rpk] parsed parts\engines\MC_Prime_SuperDuty.rpk pack=71 deps=6 entries=265
+[rpk] parsed parts\engines.rpk pack=72 deps=3 entries=5
+[rpk] parsed parts\interior.rpk pack=73 deps=6 entries=77
+[rpk] parsed parts\mufflers.rpk pack=74 deps=6 entries=88
+[rpk] parsed parts\wheels.rpk pack=75 deps=6 entries=1266
+[rpk] parsed parts\wings.rpk pack=76 deps=6 entries=44
+[rpk] parsed parts.rpk pack=77 deps=7 entries=864
+[rpk] parsed sl.rpk pack=78 deps=3 entries=2
+[rpk] parsed sound.rpk pack=79 deps=1 entries=43
+[rpk] parsed system.rpk pack=80 deps=0 entries=28
+[rpk] openLib cars\fake_racers\Badge.rpk -> 1
+[rpk] openLib cars\fake_racers\Ninja.rpk -> 2
+[rpk] openLib cars\fake_racers\Stallion.rpk -> 3
+[rpk] openLib cars\fake_racers\Sunset.rpk -> 4
+[rpk] openLib cars\fake_racers\Teg.rpk -> 5
+[rpk] openLib cars\fake_racers.rpk -> 6
+[rpk] openLib cars\misc\Police.rpk -> 7
+[rpk] openLib cars\misc.rpk -> 8
+[rpk] openLib cars\racers\Baiern.rpk -> 9
+[rpk] openLib cars\racers\Duhen.rpk -> 10
+[rpk] openLib cars\racers\Einvagen.rpk -> 11
+[rpk] openLib cars\racers\Enula.rpk -> 12
+[rpk] openLib cars\racers\Focer.rpk -> 13
+[rpk] openLib cars\racers\MC.rpk -> 14
+[rpk] openLib cars\racers\Nonus.rpk -> 15
+[rpk] openLib cars\racers\Prime.rpk -> 16
+[rpk] openLib cars\racers\SuperDuty.rpk -> 17
+[rpk] openLib cars\racers.rpk -> 18
+[rpk] openLib cars\traffic\Ambulance.rpk -> 19
+[rpk] openLib cars\traffic\ArmoredVan.rpk -> 20
+[rpk] openLib cars\traffic\CivilVan.rpk -> 21
+[rpk] openLib cars\traffic\Coach.rpk -> 22
+[rpk] openLib cars\traffic\Erbilac.rpk -> 23
+[rpk] openLib cars\traffic\FireEngine.rpk -> 24
+[rpk] openLib cars\traffic\Schoolbus.rpk -> 25
+[rpk] openLib cars\traffic\Taxi.rpk -> 26
+[rpk] openLib cars\traffic\Wagon.rpk -> 27
+[rpk] openLib cars\traffic\Wreck.rpk -> 28
+[rpk] openLib cars\traffic.rpk -> 29
+[rpk] openLib cars.rpk -> 30
+[rpk] openLib decals.rpk -> 31
+[rpk] openLib DestructionTools.rpk -> 32
+[rpk] openLib frontend.rpk -> 33
+[rpk] openLib humans.rpk -> 34
+[rpk] openLib maps\Addon_Maps\Car_Dealer.rpk -> 35
+[rpk] openLib maps\Addon_Maps\Caynon.rpk -> 36
+[rpk] openLib maps\Addon_Maps\DamageTrack.rpk -> 37
+[rpk] openLib maps\Addon_Maps\Dead_Island.rpk -> 38
+[rpk] openLib maps\Addon_Maps\Drag_Track.rpk -> 39
+[rpk] openLib maps\Addon_Maps\DriftTrack.rpk -> 40
+[rpk] openLib maps\Addon_Maps\MP1_Drift_Track.rpk -> 41
+[rpk] openLib maps\Addon_Maps\Nevada_Desert.rpk -> 42
+[rpk] openLib maps\Addon_Maps\Physic_Lab.rpk -> 43
+[rpk] openLib maps\Addon_Maps\Test_Track.rpk -> 44
+[rpk] openLib maps\Addon_Maps\Top_Gear_Track.rpk -> 45
+[rpk] openLib maps\Addon_Maps\Valo_City.rpk -> 46
+[rpk] openLib maps\city\smallmap.rpk -> 47
+[rpk] openLib maps\city.rpk -> 48
+[rpk] openLib maps\city2.rpk -> 49
+[rpk] openLib maps\DamageTrack.rpk -> 50
+[rpk] openLib maps\DriftTrack.rpk -> 51
+[rpk] openLib maps\MP1.rpk -> 52
+[rpk] openLib maps\MP1_objects.rpk -> 53
+[rpk] openLib maps\ROC_track\smallmap.rpk -> 54
+[rpk] openLib maps\ROC_track.rpk -> 55
+[rpk] openLib maps\skydome.rpk -> 56
+[rpk] openLib maps\test_track\smallmap.rpk -> 57
+[rpk] openLib maps\test_track.rpk -> 58
+[rpk] openLib maps\textures.rpk -> 59
+[rpk] openLib maps.rpk -> 60
+[rpk] openLib misc\carlot.rpk -> 61
+[rpk] openLib misc\catalog.rpk -> 62
+[rpk] openLib misc\dealer.rpk -> 63
+[rpk] openLib misc\dealer2.rpk -> 64
+[rpk] openLib misc\garage.rpk -> 65
+[rpk] openLib MW_Mod.rpk -> 66
+[rpk] openLib objects.rpk -> 67
+[rpk] openLib particles.rpk -> 68
+[rpk] openLib parts\engines\Baiern_Emer.rpk -> 69
+[rpk] openLib parts\engines\Einvagen_Duhen_Ishima_Focer.rpk -> 70
+[rpk] openLib parts\engines\MC_Prime_SuperDuty.rpk -> 71
+[rpk] openLib parts\engines.rpk -> 72
+[rpk] openLib parts\interior.rpk -> 73
+[rpk] openLib parts\mufflers.rpk -> 74
+[rpk] openLib parts\wheels.rpk -> 75
+[rpk] openLib parts\wings.rpk -> 76
+[rpk] openLib parts.rpk -> 77
+[rpk] openLib sl.rpk -> 78
+[rpk] openLib sound.rpk -> 79
+[rpk] openLib system.rpk -> 80
+[rpk] open_all 80 files, packs=81 entries=11367
+[rpk] model 0x70 'finishObject' src=frontend\meshes\arrow.SCX tex=0
+[scx] geometry C:\openslrr\body-paint\game\frontend/meshes/arrow.SCX v=3 verts=98 tris=52 groups=1 uvs=98
+[scx]   group[0] tex=65535 idx=0..+156 '1 - Default'
+[scene] resource=0x210070 source=C:\openslrr\body-paint\game\frontend/meshes/arrow.SCX vertices=98
+[rpk] model 0x70 'finishObject' src=frontend\meshes\arrow.SCX tex=0
+PASS marker remains visible
+PASS visual marker has no collision
+PASS cue rotates and bobs
+PASS cue alpha enabled
+PASS animation leaves script pose fixed
+PASS resource cue flags never rotate or float a vehicle mesh
+[rpk] model 0x24 '3d' src=DestructionTools\meshes\Marker.scx tex=1
+[scx] geometry C:\openslrr\body-paint\game\DestructionTools/meshes/Marker.scx v=4 verts=58 tris=54 groups=1 uvs=58
+[scx]   group[0] tex=0 idx=0..+162 'Metal'
+[scene] resource=0x200024 source=C:\openslrr\body-paint\game\DestructionTools/meshes/Marker.scx vertices=58
+[rpk] model 0x24 '3d' src=DestructionTools\meshes\Marker.scx tex=1
+PASS marker remains visible
+PASS visual marker has no collision
+[rpk] model 0x26 '3d' src=DestructionTools\meshes\Marker_Frame.scx tex=1
+[scx] geometry C:\openslrr\body-paint\game\DestructionTools/meshes/Marker_Frame.scx v=4 verts=120 tris=120 groups=1 uvs=120
+[scx]   group[0] tex=0 idx=0..+360 'Metal'
+[scene] resource=0x200026 source=C:\openslrr\body-paint\game\DestructionTools/meshes/Marker_Frame.scx vertices=120
+[rpk] model 0x26 '3d' src=DestructionTools\meshes\Marker_Frame.scx tex=1
+PASS marker remains visible
+PASS visual marker has no collision
+PASS paint-can pack available
+[rpk] model 0x21 'paintcan' src=frontend\meshes\spray.SCX tex=1
+[scx] geometry C:\openslrr\body-paint\game\frontend/meshes/spray.SCX v=3 verts=137 tris=108 groups=1 uvs=137
+[scx]   group[0] tex=0 idx=0..+324 '7 - Default'
+[scene] resource=0x210021 source=C:\openslrr\body-paint\game\frontend/meshes/spray.SCX vertices=137
+[rpk] model 0x21 'paintcan' src=frontend\meshes\spray.SCX tex=1
+PASS paint-can preview stays at script pose and opaque
+PASS paint-can preview stays at script pose and opaque
+PASS paint-can preview stays at script pose and opaque
+PASS physical body remains solid
+PASS sensor never becomes a solid body
+[rpk] parsed cars.rpk pack=1 deps=0 entries=4
+[rpk] openLib cars.rpk -> 1
+[rpk] model 0x7 '' src=good.scx tex=0
+[part] create id=0x70000000 type=0x10006 class=java.game.parts.Part slots=0 renders=1
+[compiler] attempted=3 succeeded=3 failed=0 classes=3 (restart for loaded classes)
+PASS native car enters/leaves sensor once, callback receives chassis live ID
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] invoke_by_name: class java.game.parts.Part
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+[jvm] load_class: classpath not ready
+Save I/O test exit code: 0 (log: C:\openslrr\body-paint\build\trigger-markers-tests\after.log)
+All paint-related regression suites passed

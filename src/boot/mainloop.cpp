@@ -370,6 +370,108 @@ void dispatch_mechanic_pointer(Jvm& jvm) {
   cursor(hover, buf);
 }
 
+// MouseCursor.addHandler(h) is h.addNotification(cursor, EVENT_CURSOR,
+// EVENT_SAME): stock world-pointer events come from the cursor GameRef with
+// the picked object as obj_ref. The Mechanic keeps its own dispatch above;
+// this one serves every other cursor handler (Painter, CarMarket, Garage).
+// It reports what the scripts read: EC_HOVER/EC_LEAVE over installed parts
+// (a hover with id 0 off them), EC_LDOWN/EC_LUP for a left press that
+// started on the 3D view, and EC_LCLICK on a part:
+//   "1 cursor obj obj x y z", "2 cursor obj obj", "15 cursor obj -1",
+//   "16 cursor obj", "5 cursor obj lx ly lz wx wy wz".
+// Picks run only when the pointer moves or the button changes.
+static Object* g_pointer_hover = nullptr;
+static bool g_pointer_hover_known = false;
+static int g_pointer_x = -1, g_pointer_y = -1;
+static int g_world_pointer_depth = 0;
+
+static void dispatch_world_pointer(Jvm& jvm) {
+  constexpr int kEventCursor = 0x00010000;
+  auto& in = host_input();
+  const bool press = in.world_press, release = in.world_release, click = in.part_click;
+  in.world_press = in.world_release = false;
+  auto forget = [&] {
+    g_pointer_hover = nullptr;
+    g_pointer_hover_known = false;
+    g_pointer_x = g_pointer_y = -1;
+  };
+  if (g_world_pointer_depth) return;
+  // The Mechanic consumes part_click itself.
+  if (g_spinning_mechanic || g_mechanic_pointer_depth) return forget();
+  in.part_click = false;
+  const Value input_cursor = jvm.get_static("java.io.Input", "cursor");
+  Object* cursor = input_cursor.tag == ValueTag::Obj ? field_obj(input_cursor.v.o, "cursor") : nullptr;
+  if (!cursor || !script_event_listening(jvm, cursor, kEventCursor) ||
+      video_fmv_block_osd() || osd_has_modal())
+    return forget();
+  if (!in.pointer_valid || in.view_w <= 0 || in.view_h <= 0) return;
+
+  struct Depth {
+    int& n;
+    explicit Depth(int& n) : n(n) { ++n; }
+    ~Depth() { --n; }
+  } guard(g_world_pointer_depth);
+  const int cursor_id = gameref_make_live(cursor);
+  auto emit = [&](Object* related, const char* param) {
+    script_event_emit(jvm, cursor, related, kEventCursor,
+                      Value::make_obj(jvm.new_string(param)));
+  };
+  auto pick = [&](int px, int py, ScenePickSurface& hit) -> Object* {
+    float origin[3], direction[3];
+    if (!scene_instances_pointer_ray(px, py, in.view_w, in.view_h, origin, direction) ||
+        !scene_instances_pick_surface(origin, direction, &hit))
+      return nullptr;
+    return part_render_owner(hit.key);
+  };
+
+  ScenePickSurface hit;
+  Object* under = nullptr;
+  bool picked = false;
+  const bool moved = in.pointer_x != g_pointer_x || in.pointer_y != g_pointer_y;
+  if (moved || press || release || !g_pointer_hover_known) {
+    float ox = 0.f, oy = 0.f;
+    osd_pixel_to_text(in.pointer_x, in.pointer_y, in.view_w, in.view_h, &ox, &oy);
+    under = osd_hit_index(ox, oy) >= 0 || in.rmb_down ? nullptr : pick(in.pointer_x, in.pointer_y, hit);
+    picked = true;
+    g_pointer_x = in.pointer_x;
+    g_pointer_y = in.pointer_y;
+  }
+  if (picked && (under != g_pointer_hover || !g_pointer_hover_known)) {
+    char buf[64];
+    if (g_pointer_hover && gameref_get(g_pointer_hover)) {
+      std::snprintf(buf, sizeof(buf), "16 %d %d", cursor_id, gameref_make_live(g_pointer_hover));
+      emit(g_pointer_hover, buf);
+    }
+    g_pointer_hover = under;
+    g_pointer_hover_known = true;
+    std::snprintf(buf, sizeof(buf), "15 %d %d -1", cursor_id, under ? gameref_make_live(under) : 0);
+    emit(under, buf);
+  }
+  if (press) {
+    char buf[160];
+    const int id = under ? gameref_make_live(under) : 0;
+    std::snprintf(buf, sizeof(buf), "1 %d %d %d %.3f %.3f %.3f", cursor_id, id, id,
+                  hit.world[0], hit.world[1], hit.world[2]);
+    emit(under, buf);
+  }
+  if (release) {
+    char buf[64];
+    const int id = under ? gameref_make_live(under) : 0;
+    std::snprintf(buf, sizeof(buf), "2 %d %d %d", cursor_id, id, id);
+    emit(under, buf);
+  }
+  if (click) {
+    ScenePickSurface at;
+    if (Object* part = pick(in.part_click_x, in.part_click_y, at)) {
+      char buf[192];
+      std::snprintf(buf, sizeof(buf), "5 %d %d %.3f %.3f %.3f %.3f %.3f %.3f", cursor_id,
+                    gameref_make_live(part), at.local[0], at.local[1], at.local[2],
+                    at.world[0], at.world[1], at.world[2]);
+      emit(part, buf);
+    }
+  }
+}
+
 MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
                                    SectionMachine& sections, double dt) {
   if (render.quit_requested()) {
@@ -429,6 +531,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     perf::Scope scope(perf::Zone::Scripts);
     script_callbacks_tick(jvm, frame_dt);
   }
+  painter_tick();
 
   auto& in = host_input();
   const float yaw = host_input_camera_axis(7);
@@ -808,6 +911,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   }
   gameref_advance_world_camera(frame_dt);
   dispatch_mechanic_pointer(jvm);
+  dispatch_world_pointer(jvm);
 
   // --- Present: AltPresentGate (FMV) else PresentFrame ---
   // Soft: backend flush pumps FMV SampleGrabber + Present (libbgfx path).
@@ -847,5 +951,6 @@ void mainloop_note_thread(Jvm& jvm, Object* thread, bool started) {
 
 void mainloop_visit_gc_roots(const GcRootVisitor& visit) {
   visit(g_spinning_mechanic); visit(g_mechanic_hover); visit(g_mechanic_thread);
+  visit(g_pointer_hover);
 }
 }  // namespace slrr

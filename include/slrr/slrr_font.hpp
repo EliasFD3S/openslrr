@@ -6,8 +6,17 @@
 
 namespace slrr {
 
+struct SlrrFontEffects {
+  // Pixel units; setters clamp to the SDF atlas padding budget.
+  float outline_px = 0.f;
+  float shadow_x = 0.f;
+  float shadow_y = 0.f;
+  uint32_t outline_color = 0xff000000u; // ARGB
+  uint32_t shadow_color = 0u;           // Alpha zero disables the shadow.
+};
+
 struct SlrrFontGlyph {
-  // Charset mesh quad, tenths of a pixel (PE FUN_0044bdc0). Y grows down.
+  // Pixel-space quad: converted SCX corners or padded SDF bounds. Y grows down.
   float px[4] = {};
   float py[4] = {};
   float tu[4] = {};
@@ -23,8 +32,10 @@ struct SlrrFont {
   int32_t atlas_h = 0;
   int32_t px_height = 20;
   std::vector<SlrrFontGlyph> glyphs;
-  // RGBA8 white RGB + coverage alpha (legacy A8R8G8B8 atlas).
+  // RGBA8: legacy colour/coverage, or white RGB with signed-distance alpha.
   std::vector<uint8_t> rgba;
+  bool distance_field = false;
+  SlrrFontEffects effects;
   bool ready = false;
 };
 
@@ -49,6 +60,8 @@ struct SlrrOsdText {
   int32_t layer = 0;
   // Credit scroller: drawn before the UI plates so the frame covers it.
   bool behind_ui = false;
+  SlrrFontEffects effects;
+  bool custom_effects = false;
 };
 
 void slrr_font_set_game_root(const std::string& root);
@@ -78,6 +91,9 @@ void slrr_text_set_default_color(uint32_t color);
 uint32_t slrr_text_default_color();
 void slrr_text_destroy(void* key);
 void slrr_text_set_color(void* key, uint32_t argb);
+// Per-line SDF options: outline 0..2px, shadow offsets -3..3px, ARGB colours.
+// Does not change advances/alignment; legacy atlases retain their baked effects.
+void slrr_text_set_effects(void* key, const SlrrFontEffects& effects);
 void slrr_text_set_align(void* key, int32_t align);
 void slrr_text_set_pos(void* key, float x, float y);
 void slrr_text_set_string(void* key, const char* utf8);

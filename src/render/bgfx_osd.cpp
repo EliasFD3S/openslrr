@@ -4,6 +4,7 @@
 
 #include "slrr/part_runtime.hpp"
 #include "slrr/dds_image.hpp"
+#include "slrr/paint_texture.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/host_sfx.hpp"
@@ -31,6 +32,8 @@ namespace slrr {
   bgfx::TextureHandle LibBgfxBackend::tex_for_osd_icon(const std::string& path)
 {
     if (path.empty()) return white_tex_;
+    if (const uint32_t paint = paint_texture_from_path(path))
+      return paint_texture_handle(paint);
     auto it = osd_tex_.find(path);
     if (it != osd_tex_.end()) return it->second;
     DdsImage img = load_texture_file(path);
@@ -67,6 +70,80 @@ namespace slrr {
   }
 #endif
 #ifdef _WIN32
+  bgfx::TextureHandle LibBgfxBackend::paint_texture_handle(uint32_t id)
+{
+    const PaintImage* image = paint_texture_image(id);
+    if (!image || !image->valid() || image->width > 4096 || image->height > 4096)
+      return white_tex_;
+    auto& gpu = paint_tex_[id];
+    const uint32_t revision = paint_texture_revision(id);
+    if (bgfx::isValid(gpu.handle) && gpu.revision == revision) return gpu.handle;
+    const auto pow2 = [](uint32_t v) { return v && !(v & (v - 1)); };
+    const bool mips = pow2(image->width) && pow2(image->height);
+    if (bgfx::isValid(gpu.handle) &&
+        (gpu.width != image->width || gpu.height != image->height || gpu.mips != mips)) {
+      bgfx::destroy(gpu.handle);
+      gpu.handle = BGFX_INVALID_HANDLE;
+    }
+    if (!bgfx::isValid(gpu.handle)) {
+      gpu.handle = bgfx::createTexture2D(static_cast<uint16_t>(image->width),
+                                         static_cast<uint16_t>(image->height), mips, 1,
+                                         bgfx::TextureFormat::RGBA8,
+                                         BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP, nullptr);
+      if (!bgfx::isValid(gpu.handle)) {
+        paint_tex_.erase(id);
+        return white_tex_;
+      }
+      gpu.width = image->width;
+      gpu.height = image->height;
+      gpu.mips = mips;
+    }
+    // Box-filtered mip chain; a painted panel is mostly seen smaller than
+    // its texture, and a texture without mips shimmers.
+    std::vector<uint8_t> level = image->rgba;
+    // Match PNG/PTX uploads: OSD uses premultiplied blending. Painted body
+    // textures are opaque; restored decal resources may have transparent RGB.
+    for (size_t i = 0; i < level.size(); i += 4)
+      for (int c = 0; c < 3; ++c)
+        level[i+c] = static_cast<uint8_t>((level[i+c] * level[i+3] + 127) / 255);
+    uint32_t w = image->width, h = image->height;
+    for (uint8_t mip = 0;; ++mip) {
+      bgfx::updateTexture2D(gpu.handle, 0, mip, 0, 0, static_cast<uint16_t>(w),
+                            static_cast<uint16_t>(h),
+                            bgfx::copy(level.data(), static_cast<uint32_t>(level.size())));
+      if (!mips || (w == 1 && h == 1)) break;
+      const uint32_t nw = std::max(1u, w / 2), nh = std::max(1u, h / 2);
+      std::vector<uint8_t> next(size_t(nw) * nh * 4);
+      for (uint32_t y = 0; y < nh; ++y)
+        for (uint32_t x = 0; x < nw; ++x)
+          for (int c = 0; c < 4; ++c) {
+            const uint32_t x0 = std::min(x * 2, w - 1), x1 = std::min(x * 2 + 1, w - 1);
+            const uint32_t y0 = std::min(y * 2, h - 1), y1 = std::min(y * 2 + 1, h - 1);
+            const uint32_t sum = level[(size_t(y0) * w + x0) * 4 + c] + level[(size_t(y0) * w + x1) * 4 + c] +
+                                 level[(size_t(y1) * w + x0) * 4 + c] + level[(size_t(y1) * w + x1) * 4 + c];
+            next[(size_t(y) * nw + x) * 4 + c] = static_cast<uint8_t>((sum + 2) / 4);
+          }
+      level.swap(next);
+      w = nw;
+      h = nh;
+    }
+    gpu.revision = revision;
+    return gpu.handle;
+  }
+
+  void LibBgfxBackend::release_paint_textures(bool all)
+{
+    if (all) paint_texture_take_released();
+    for (auto it = paint_tex_.begin(); it != paint_tex_.end();) {
+      if (all || !paint_texture_exists(it->first)) {
+        if (bgfx::isValid(it->second.handle)) bgfx::destroy(it->second.handle);
+        it = paint_tex_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+
   void LibBgfxBackend::draw_osd_quad(const OsdWidget& w, float cr, float cg,
                      float cb, float ca)
 {
@@ -154,8 +231,8 @@ namespace slrr {
         static_cast<uint16_t>(font->atlas_h), false, 1,
         bgfx::TextureFormat::RGBA8,
         BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
-            BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT |
-            BGFX_SAMPLER_MIP_POINT,
+            (font->distance_field ? uint64_t(0) :
+             BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT),
         mem);
     if (!bgfx::isValid(th)) return white_tex_;
     font_tex_[font->cache_key] = th;
@@ -182,7 +259,8 @@ namespace slrr {
       // even when the pointer is elsewhere. That color is the hover state.
       if (argb == 0xFFFFCB00u && !glow) argb = 0xFFC0C0C0u;
       if (glow) argb = 0xFFFFFFFFu;
-      draw_osd_line(t.font_key, t.text, t.x, t.y, t.align, argb);
+      draw_osd_line(t.font_key, t.text, t.x, t.y, t.align, argb,
+                    t.custom_effects ? &t.effects : nullptr);
     }
     const float white_c[4] = {1.f, 1.f, 1.f, 1.f};
     bgfx::setUniform(u_color_, white_c);
@@ -908,7 +986,7 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
 
 #ifdef _WIN32
   void LibBgfxBackend::draw_osd_line(void* font_key, const std::string& text, float x, float y,
-                     int align, uint32_t argb)
+                     int align, uint32_t argb, const SlrrFontEffects* effects)
 {
     if (!font_key || text.empty() || width_ <= 0 || height_ <= 0 ||
         !bgfx::isValid(text_program_)) return;
@@ -922,6 +1000,16 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     const float col[4] = {((argb >> 16) & 255) / 255.f,
                          ((argb >> 8) & 255) / 255.f,
                          (argb & 255) / 255.f, ((argb >> 24) & 255) / 255.f};
+    const auto& style = effects ? *effects : font->effects;
+    const float params[8] = {style.outline_px, style.shadow_x, style.shadow_y,
+                            font->distance_field ? 1.f : 0.f,
+                            1.f / font->atlas_w, 1.f / font->atlas_h, 0.f, 0.f};
+    auto rgba = [](uint32_t color) {
+      return std::array<float, 4>{((color >> 16) & 255) / 255.f,
+                                 ((color >> 8) & 255) / 255.f,
+                                 (color & 255) / 255.f, ((color >> 24) & 255) / 255.f};
+    };
+    const auto outline = rgba(style.outline_color), shadow = rgba(style.shadow_color);
     for (;;) {
       const auto capacity = osd_text_capacity(
           bgfx::getAvailTransientVertexBuffer(kOsdTextBatchGlyphs * 4, text_layout_),
@@ -938,6 +1026,9 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       bgfx::setVertexBuffer(0, &tvb); bgfx::setIndexBuffer(&tib);
       bgfx::setTexture(0, s_tex_, tex);
       bgfx::setUniform(u_color_, col);
+      bgfx::setUniform(u_font_params_, params, 2);
+      bgfx::setUniform(u_font_outline_, outline.data());
+      bgfx::setUniform(u_font_shadow_, shadow.data());
       bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                      BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
       bgfx::submit(osd_view_, text_program_);

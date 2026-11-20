@@ -359,6 +359,15 @@ See `ptx_image.cpp`.
 and children. A type resource is not its live instance. A script alias and
 reference wrappers do not justify duplicating the underlying object.
 
+Painter textures (#64) are host images with ids `0xFFFFxxxx`
+(`paint_texture.hpp`). A part shows one through its `Part.setTexture` value
+like a pack texture; it is drawn into only while that part alone shows it,
+and it is reclaimed after three host frames without a part, native resource
+wrapper or open save reader using it. `ResourceRef.makeTexture` file textures
+have live native handles; their pixels are embedded the same way on save.
+Painter textures are saved as
+type-7 blobs, never as pack references; see §15.
+
 `scene_instances_collect` produces the instances to draw for the selected
 world. Geometry can be shared. Pose, color, and texture replacements are
 instance properties. Avoid modifying shared geometry to fix a single car.
@@ -373,7 +382,8 @@ An active camera with a non-null viewport may render only while that viewport
 exists and is active. `Viewport.deactivate` / OSD hiding must stop an old
 preview even when the script retains its camera and scene. Reactivation may
 reuse those objects. Do not implement this by recognizing a mod's selector
-class or forcibly deleting its model.
+class or forcibly deleting its model. The same holds for OSD widgets: an Osd
+whose viewport has never been activated neither draws nor takes clicks.
 
 A map is not necessarily one SCX. `GroundMapData` distinguishes render and
 collision meshes, exterior packs, and placements. Valo City requires resolving
@@ -397,7 +407,7 @@ to a loose native body with its full CFG collision mesh and mass-weighted
 body-pose centre, and its static instances are hidden. The loose body sleeps
 until contact, reuses the loose-part solver for car and static-scene contacts,
 and updates every render slot, with its CFG render pose, from the simulated
-frame. Once it rests more than 40 m beyond the car's reach it becomes an
+frame. Once it rests more than 40 m beyond every active car's reach it becomes an
 ordinary prop again at the pose where it settled (for the rest of the
 session), so only props near the car are live. It returns to its map pose
 instead when it was pushed more than a 64 m prop cell away, falls below
@@ -409,7 +419,7 @@ remain on the exact static path.
 
 `PhysicsRef.setStatic(0)` hands a script body to the host free-body solver:
 it falls under gravity, rests on the scene, and exchanges impulses with the
-controlled car like a loose part, publishing its pose and velocities for
+active physical cars like a loose part, publishing its pose and velocities for
 `getPos`, `getOri`, `getVel` and `getAngVel`. `setMatrix` places it at rest,
 and `setStatic(1)` fixes it again. Created bodies stay fixed until then; the
 stock jack, lifts and showroom walls never call `setStatic`. A primitive has
@@ -572,6 +582,11 @@ mesh, mass and centre, starts asleep, wakes on car contact, and exchanges
 equal/opposite impulses with both car and static scene. A sleeping loose body
 skips the per-part car test unless its bounding sphere can reach the car's.
 Free `PhysicsRef` bodies (`setStatic(0)`) use the same loose-body contacts.
+Native/mechanical chassis also resolve unique finite-mass OBB pairs on shared
+120 Hz substeps. Dynamic-body reach, wake, contact and map-prop demotion consider
+all active physical cars, not just the controlled car; only a freshly detached
+engine temporarily ignores its original carrier. See the #197 audit for the
+bounded translational sweep, actual-impulse damage and remaining limits.
 This is a host loose-body approximation, not a general dynamic triangle-mesh
 engine: loose bodies collide with the car and the static scene, not with
 each other.
@@ -776,8 +791,8 @@ rpm. `configure_drive` gives it a neutral drive with a zero-torque engine
 that never starts; the tyre and brake paths stay active. This is the coasting
 mechanism, not a guarantee that strong-brake holding is correct in the new
 solver. Mechanical AI input is preserved as well as player input.
-Released mechanical cars (player or autonomous), engine-lost cars and native
-traffic enter chassis wall contact and damage; the latter uses the separate
+Released bodies keep wall collision, damage and distance accumulation
+regardless of engine or controller ownership; native traffic uses the separate
 `drive.native_traffic` force path without Java engine/gear data. Damage
 options still distinguish the player from other cars. Repair restores the
 mount but not the engine; fitting an engine again clears the state.
@@ -905,6 +920,21 @@ bindings or merge labels across the plates/icons that separate them. Long lines
 must rebase their 16-bit indices while retaining pen advance. See
 `src/render/osd_text_batch.hpp` and `LibBgfxBackend::draw_osd_line`.
 
+Font loading prefers `frontend/fonts/<stem>.ttf`, then `.otf`, with the legacy
+SCX/atlas loader as fallback. `scripts/bake_slrr_fonts.py` converts user-owned
+stock assets to outline TTFs, keeping the byte map, authored advances and top
+origin (zero hhea ascent). Ordinary replacement fonts use their hhea ascent as
+the baseline offset. Both outline formats rasterize to padded SDF atlases through
+the pinned dependency's stb_truetype; one shader composes fill, outline and
+shadow without extra glyph passes. Font assets/cache lifetime remain shared and
+weakly indexed as before. `slrr_text_set_effects` overrides a line's bounded
+outline width, shadow offsets and ARGB colours; effects do not affect measure,
+alignment or advance. They are not persistent options or Java APIs. Legacy
+atlases retain their baked effects and bypass SDF composition. The byte-based
+text contract is unchanged; this does not add Unicode shaping or kerning.
+Only trusted local font files are supported: SFNT table bounds are checked, but
+stb's parser does not provide comprehensive hostile-font validation.
+
 OSD surfaces have their own blending contract. Do not apply world lighting
 to them, or a global correction meant for the body.
 For trees and glass, check alpha test, blending, depth write, pass order,
@@ -971,6 +1001,35 @@ correctly separated according to the options.
 
 ## 15. Saves and transitions
 
+`java.io.File` writes versioned JSON at the existing script-selected paths
+(including career, car, controls and options files). Reads detect JSON first,
+then fall back to legacy SDAT type 1/type 2 and older raw host streams. JSON
+save opening keys are reserved for detection, rather than treating every raw
+integer beginning with `{` as JSON. Merely reading a legacy file does not
+rewrite it; its next normal save writes JSON.
+New saves cannot be read by the original game or earlier SDAT-only hosts.
+
+The version 1 object has `format: "OpenSLRR-save"`, `version: 1`, and three
+arrays. `values` is the ordered script stream of `[type, value]` pairs: `int`,
+`float`, `resource`, or `string` (including null). Finite floats use round-trip
+precision; `floatBits` stores a nonfinite float's unsigned 32-bit pattern.
+`packs` contains `[ordinal, game-relative path]`; `blobs` contains
+`[ordinal, kind, hex bytes]`. Resource values retain SDAT's file-local IDs, not
+session pack numbers. Dynamic resources retain the existing limitation: their
+metadata/bytes can be read, but they are not reinstantiated by the remounter,
+except Painter textures stored as PNG blobs (below).
+
+Script strings are byte strings: JSON U+0001..U+00FF represents the corresponding
+byte, not a UTF-8 transcoding of it. The writer escapes non-ASCII/control bytes;
+null and empty remain distinct, and the existing `strlen` write behavior is
+unchanged. The reader rebuilds the binary stream before script reads, preserving
+cross-type reads used by stock Config and skin scripts. Damaged/unsupported
+JSON saves make `File.open` return 0 rather than falling through to binary reads. Paths and
+atomic single-file publication (including pending in-memory saves after a
+failed replacement) keep their existing contracts. This is not a multi-file
+career transaction. Regressions: `scripts/run_save_io_tests.ps1 -Suite save_io`
+and `-Suite save_persistence`, after a Release build.
+
 The active section has an exit/enter cycle. `SectionMachine` can also adopt
 a state that Java has already transitioned: do not call exit/enter a second
 time in that case. Presentation state holds one full frame during some
@@ -985,6 +1044,12 @@ Resetting a section means inspecting, together: parent world, pose,
 velocities, the physics accumulator, contacts, assembly, camera, lights,
 reflections, shadows, and loading state. Do not keep the fallen pose of an
 old car as the initial pose of the next one.
+
+`File.write(ResourceRef)` stores a Painter texture as a PNG in its save blob
+(the SDAT trailer, or a JSON `blobs` entry). `readResID` turns the blob back
+into a new Painter texture; a blob the stock game left empty is read from its
+side file `<save>.<ordinal>` (JPEG). A texture id that is no longer live keeps
+an empty blob, like other dynamic resources, and reads back as null.
 
 A catalog/garage round trip does not necessarily recreate the same set of
 objects as a dealer round trip. A state repaired by the dealer but not by
@@ -1114,7 +1179,16 @@ outcome. Visible four-wheel native traffic, native racer doubles and scripted ri
 use the shared rigid-body/suspension solver. Native CFG wheel renders must use
 the same hub compression, steering and spin as physical contacts; inline wheels
 do not require scripted rim slots. Unsupported chassis retain an external-motion
-fallback. Java model weights, including weight-one registered rivals, determine
+fallback. Released bodies keep static-world response without requiring a live
+engine or controller. The 60 Hz host/control tick contains shared 120 Hz vehicle
+substeps; each unordered chassis OBB pair exchanges finite-mass impulses once,
+then all corrected bodies/wheels are published. Parked physical cars can wake on
+contact without a driver. Movable map props and free bodies query all active
+physical cars rather than only the controlled one. Pair impacts carry actual
+normal impulse and pre-hit motion for mount damage/detachment; legacy wall
+callers retain their default reconstruction. Bounded translational sweeping is
+not exact rotational CCD. See [the #197 audit](TRAFFIC_RACE_AUDIT.md).
+Java model weights, including weight-one registered rivals, determine
 the traffic/adversary share under the configured host population cap. Streaming visibility must exclude an entire
 car subtree from rendering, physics and triggers without destroying its Java
 identity. Incarnations prevent stale traffic/brain references after removal.

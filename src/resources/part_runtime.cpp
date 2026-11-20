@@ -13,6 +13,7 @@
 #include "slrr/wheel_mount.hpp"
 #include "slrr/host_sfx.hpp"
 #include "slrr/osd_registry.hpp"
+#include "slrr/paint_texture.hpp"
 #include "slrr/jvm.hpp"
 #include "slrr/rpk_index.hpp"
 #include "slrr/scene_instances.hpp"
@@ -21,6 +22,7 @@
 #include "slrr/skeleton.hpp"
 #include "slrr/suspension_geometry.hpp"
 #include "slrr/vehicle_dynamics.hpp"
+#include "slrr/vehicle_contacts.hpp"
 #include <algorithm>
 #include <cctype>
 #include <array>
@@ -303,6 +305,21 @@ Object *canonical(Object *object) {
 Record *record(Object *object) {
   auto found = records.find(canonical(object));
   return found == records.end() ? nullptr : &found->second;
+}
+// Painter textures belong to the parts that show them. One no live part
+// uses any more is freed (a copied texture may be shared by two parts).
+bool texture_in_use(uint32_t texture, const Object *except = nullptr) {
+  for (const auto &[part, rec] : records)
+    if (part != except && rec.state.texture == texture)
+      return true;
+  return false;
+}
+void assign_texture(Object *, Record &rec, uint32_t texture) {
+  rec.state.texture = texture;
+  for (auto *render : rec.renders)
+    if (auto *node = gameref_get(render))
+      node->paint_texture = texture;
+  // Reclaim after script callbacks, not in the middle of a part rebuild.
 }
 void repair_part(Object *part, Record &rec);
 bool flap_geometry_for(Object *part, Record &rec,
@@ -651,9 +668,15 @@ Object *add_part(Jvm &jvm, Object *parent, uint32_t resource,
     };
     rec->state.wear = field("wear", 1);
     rec->state.tear = field("tear", 1);
-    rec->state.texture = static_cast<uint32_t>(field("color", 0));
-    for (auto *render : rec->renders)
-      gameref_get(render)->paint_texture = rec->state.texture;
+    // A resource id, read as an integer: a Painter id (0xFFFFxxxx) is
+    // negative and does not survive a trip through float.
+    const auto color = descriptor->fields.find("color");
+    const uint32_t texture =
+        color == descriptor->fields.end() ? 0u
+        : color->second.tag == ValueTag::Int
+            ? static_cast<uint32_t>(color->second.v.i)
+            : static_cast<uint32_t>(field("color", 0));
+    assign_texture(child, *rec, texture);
     stock_parts(jvm, child, descriptor);
   }
   return child;
@@ -1558,10 +1581,7 @@ void paint_one(Object *part, uint32_t texture) {
   auto *rec = record(part);
   if (!rec || !rec->config->texture)
     return;
-  rec->state.texture = texture;
-  for (auto *render : rec->renders)
-    if (auto *node = gameref_get(render))
-      node->paint_texture = texture;
+  assign_texture(canonical(part), *rec, texture);
 }
 void paint_tree(Object *root, uint32_t texture) {
   std::vector<Object *> pending{root};
@@ -1904,6 +1924,32 @@ bool part_destroy(Object *part) {
   gameref_remove(part);
   return true;
 }
+bool part_paint_textures(Object *part, uint32_t *current, uint32_t *source) {
+  auto *rec = record(part);
+  if (!rec)
+    return false;
+  if (current)
+    *current = rec->state.texture;
+  if (source)
+    *source = rec->config->texture;
+  return true;
+}
+bool part_set_paint_texture(Object *part, uint32_t texture) {
+  auto *rec = record(part);
+  if (!rec || !rec->config->texture)
+    return false;
+  assign_texture(canonical(part), *rec, texture);
+  return true;
+}
+bool part_paint_texture_shared(uint32_t texture, Object *part) {
+  return texture_in_use(texture, canonical(part));
+}
+Object *part_showing_texture(uint32_t texture) {
+  for (const auto &[part, rec] : records)
+    if (texture && rec.state.texture == texture)
+      return part;
+  return nullptr;
+}
 std::vector<InstalledPart> part_installed_tree(Object *root) {
   std::vector<InstalledPart> out;
   std::unordered_set<Object *> seen;
@@ -1922,6 +1968,21 @@ std::vector<InstalledPart> part_installed_tree(Object *root) {
 namespace {
 bool finite_frame(const PartMatrix& frame) {
   return std::all_of(frame.begin(),frame.end(),[](float value){return std::isfinite(value);});
+}
+// Validate script-width motion before publishing any node fields. A finite
+// double solver value can still overflow the GameRef's float representation.
+std::array<float, 6> script_motion(const physics::RigidBody& body, const PartMatrix& parent) {
+  const std::array motion{body.velocity, body.omega()};
+  std::array<float, 6> out{};
+  for (size_t kind = 0; kind < motion.size(); ++kind)
+    for (int axis = 0; axis < 3; ++axis) {
+      const double value = parent[axis * 4] * motion[kind].x +
+          parent[axis * 4 + 1] * motion[kind].y + parent[axis * 4 + 2] * motion[kind].z;
+      if (!std::isfinite(value) || std::fabs(value) > std::numeric_limits<float>::max())
+        throw std::runtime_error("unrepresentable script rigid motion");
+      out[kind * 3 + axis] = static_cast<float>(value);
+    }
+  return out;
 }
 // Zero moments (no shaped body) keep the solid box of the bounds.
 bool initialize_loose_body(physics::RigidBody& body,double mass,
@@ -2091,6 +2152,9 @@ bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
   rec.physics_ready = true;
   rec.physics_dirty = false;
   rec.body_support_dirty = true;
+  // A successful explicit placement/reconfiguration retry restores contact
+  // eligibility too; the diagnostic latch must not make a recovered car ghost.
+  rec.physics_fault_reported = false;
   rec.physics_parent = gameref_get(chassis)->parent;
   if (!rec.physics_reported) {
     std::printf("[phys] dynamic type=0x%x mass=%.2f fixed=%uHz\n",
@@ -2272,11 +2336,13 @@ void dynamics_wheels(Record &rec) {
 void pose_wheels(Object *chassis, Record &rec);
 void finish_dynamics_sync(Object *chassis, Record &rec);
 void dynamics_sync(Object *chassis, Record &rec,
-                   const PartMatrix &parent_frame) {
+                   const PartMatrix &parent_frame, bool visuals = true) {
   auto *node = gameref_get(chassis);
   const auto world = rec.dynamics.body.frame();
   const auto local =
       part_matrix_multiply(part_matrix_inverse_rigid(parent_frame), world);
+  if (!finite_frame(local)) throw std::runtime_error("non-finite chassis publication frame");
+  const auto motion = script_motion(rec.dynamics.body, parent_frame);
   std::copy(local.begin(), local.end(), node->local_matrix);
   node->matrix_override = true;
   std::copy(local.begin() + 12, local.begin() + 15, node->pos);
@@ -2289,19 +2355,13 @@ void dynamics_sync(Object *chassis, Record &rec,
     node->ypr[0] = std::atan2(-local[2], local[0]);
     node->ypr[2] = 0;
   }
-  auto velocity = rec.dynamics.body.velocity;
-  node->vel[0] = static_cast<float>(parent_frame[0] * velocity.x +
-                                    parent_frame[1] * velocity.y +
-                                    parent_frame[2] * velocity.z);
-  node->vel[1] = static_cast<float>(parent_frame[4] * velocity.x +
-                                    parent_frame[5] * velocity.y +
-                                    parent_frame[6] * velocity.z);
-  node->vel[2] = static_cast<float>(parent_frame[8] * velocity.x +
-                                    parent_frame[9] * velocity.y +
-                                    parent_frame[10] * velocity.z);
+  std::copy(motion.begin(), motion.begin() + 3, node->vel);
+  std::copy(motion.begin() + 3, motion.end(), node->angular_vel);
   rec.published_frame = local;
-  pose_wheels(chassis, rec);
-  finish_dynamics_sync(chassis, rec);
+  if (visuals) {
+    pose_wheels(chassis, rec);
+    finish_dynamics_sync(chassis, rec);
+  }
 }
 void pose_wheels(Object *chassis, Record &rec) {
   rec.dynamic_frames = true;
@@ -3176,7 +3236,9 @@ void damage_wheel_mounts(Record& rec, const physics::VehicleDynamics::Impact& hi
                          physics::Vec3 local_hit, double internal,
                          std::vector<Object*>& released) {
   const double energy = internal > 0 && (hit.normal.y <= .65 || hit.speed >= 8)
-      ? physics::contact_impulse_energy(rec.dynamics.body, hit.point, hit.normal, hit.speed) * internal
+      ? (hit.normal_impulse >= 0
+             ? hit.normal_impulse * hit.normal_impulse / (2 * rec.dynamics.body.mass)
+             : physics::contact_impulse_energy(rec.dynamics.body, hit.point, hit.normal, hit.speed)) * internal
       : 0.0;
   if (!(energy > 0)) return;
   for (size_t corner = 0; corner < 4 && corner < rec.config->wheels.size(); ++corner) {
@@ -3305,10 +3367,12 @@ void damage_engine_mount(Object* chassis, Record& rec, const physics::VehicleDyn
                          physics::Vec3 local_hit, double internal,
                          std::vector<Object*>& released) {
   Object* engine = chassis_engine(rec);
-  if (!engine || !(internal > 0) || (hit.normal.y > .65 && hit.speed < 8)) return;
+  if (!engine || rec.engine_release == engine || !(internal > 0) ||
+      (hit.normal.y > .65 && hit.speed < 8)) return;
   const auto& body = rec.dynamics.body;
-  const double energy =
-      physics::contact_impulse_energy(body, hit.point, hit.normal, hit.speed) * internal;
+  const double energy = (hit.normal_impulse >= 0
+      ? hit.normal_impulse * hit.normal_impulse / (2 * body.mass)
+      : physics::contact_impulse_energy(body, hit.point, hit.normal, hit.speed)) * internal;
   const auto frame = part_matrix_multiply(part_matrix_inverse_rigid(world_matrix(chassis)),
                                           world_matrix(engine));
   rec.engine_mount = physics::wheel_mount_condition(
@@ -3318,8 +3382,9 @@ void damage_engine_mount(Object* chassis, Record& rec, const physics::VehicleDyn
   const physics::Vec3 at = body.position + body.orientation.rotate(
       physics::Vec3{frame[12], frame[13], frame[14]} - body.center);
   rec.engine_release = engine;
-  rec.engine_release_velocity =
-      physics::pre_contact_velocity(body, hit.point, hit.normal, hit.speed, at);
+  rec.engine_release_velocity = hit.has_pre_motion
+      ? hit.pre_velocity + hit.pre_omega.cross(at - body.position)
+      : physics::pre_contact_velocity(body, hit.point, hit.normal, hit.speed, at);
   released.push_back(engine);
 }
 
@@ -3491,7 +3556,7 @@ void detach_panel(Object* part, Record& rec, Object* chassis, Record& vehicle) {
       body.velocity = vehicle.engine_release_velocity;
     vehicle.engine_release = nullptr;
     vehicle.engine_lost = true;
-    loose.exit_ticks = physics::VehicleDynamics::update_frequency;
+    loose.exit_ticks = physics::VehicleDynamics::frequency;
   }
   if (runtime)
     for (const auto& descendant : part_installed_tree(part))
@@ -3512,12 +3577,16 @@ void detach_panel(Object* part, Record& rec, Object* chassis, Record& vehicle) {
   refresh_chassis(chassis);
 }
 
+physics::VehicleDynamics::Impact body_pair_impact(
+    const physics::RigidBody&, const physics::RigidBody&, physics::Vec3,
+    physics::Vec3, double, double);
 // SLRR_rev triangle-surface.ts. Sweep in the carrier's moving frame so a
 // stationary fragment can also be hit by the car.
 bool collide_loose_with_car(physics::RigidBody& body,
                             const std::array<physics::Vec3, 8>& previous,
                             physics::Vec3 before, Object* chassis, Record& vehicle,
-                            const PartMatrix& previous_carrier) {
+                            const PartMatrix& previous_carrier,
+                             physics::VehicleDynamics::Impact& car_hit) {
   using physics::Vec3;
   constexpr double radius = .035;
   const auto transform = [](const PartMatrix& frame, Vec3 p, double w) {
@@ -3555,7 +3624,11 @@ bool collide_loose_with_car(physics::RigidBody& body,
   if (hit.fraction >= 1) return false;
   body.position = before + (body.position - before) * hit.fraction +
                   normal * (hit.penetration + .002);
-  body.contact(point, normal, .12, .55, &carrier);
+  const auto carrier_before = carrier;
+  const double closing = std::max(0.0, -(body.point_velocity(point) -
+                                        carrier.point_velocity(point)).dot(normal));
+  const double impulse = body.contact(point, normal, .08, .55, &carrier);
+  car_hit = body_pair_impact(carrier_before, carrier, point, -normal, impulse, closing);
   return true;
 }
 
@@ -3710,7 +3783,7 @@ Object* part_add_dynamic_native(const PartConfig& config,
   }
   loose.render_offsets = std::move(offsets);
   loose.vehicle = controlled_vehicle;
-  loose.quiet_ticks = physics::VehicleDynamics::update_frequency / 2;
+  loose.quiet_ticks = physics::VehicleDynamics::frequency / 2;
   if (auto* chassis = part_controlled_chassis()) {
     if (auto* vehicle = record(chassis))
       loose.carrier_frame = vehicle->dynamics.body.frame();
@@ -3727,7 +3800,7 @@ namespace {
 constexpr double kSettleDistance = 40.0;
 // One that is still moving out there after this long (fell off the map, keeps
 // rolling) goes back to where the map placed it, and so does one below this.
-constexpr unsigned kLostTicks = physics::VehicleDynamics::update_frequency * 10;
+constexpr unsigned kLostTicks = physics::VehicleDynamics::frequency * 10;
 constexpr double kLostHeight = -500.0;
 
 // A body released from deep inside the car starts overlapping its collision
@@ -3744,7 +3817,107 @@ bool leaving_carrier(const physics::RigidBody& body, const physics::RigidBody& c
   return false;
 }
 
-void advance_loose_panels() {
+// Host-owned snapshot for one shared 120 Hz contact substep. No VM calls or
+// registry mutation occurs while these pointers are consumed. Incarnations and
+// the full parent visibility chain exclude recycled/hidden/other-world cars.
+struct ContactVehicle {
+  Object* chassis;
+  Record* rec;
+  uint64_t incarnation;
+  physics::RigidBody previous;
+  PartMatrix parent;
+};
+bool contact_visible(Object* chassis) {
+  unsigned depth = 0;
+  for (void* key = chassis; key && ++depth <= 128;) {
+    const auto* node = gameref_get(key);
+    if (!node || node->empty || node->streamed_hidden) return false;
+    if (key == scene_instances_world()) return true;
+    if (node->flags & (kWorldTreeRoot | kWorldTreeLeaf)) return false;
+    key = node->parent;
+  }
+  return false;
+}
+bool contact_live(const ContactVehicle& vehicle) {
+  const auto* node = gameref_get(vehicle.chassis);
+  return node && node->incarnation == vehicle.incarnation &&
+         record(vehicle.chassis) == vehicle.rec && vehicle.rec->physics_ready &&
+         !vehicle.rec->physics_fault_reported && contact_visible(vehicle.chassis);
+}
+void suspend_contact_vehicle(const ContactVehicle& vehicle, const char* reason) {
+  auto& rec = *vehicle.rec;
+  if (!rec.physics_fault_reported)
+    std::fprintf(stderr, "[phys] suspended contact chassis type=0x%x: %s\n",
+                 rec.state.resource, reason);
+  rec.physics_fault_reported = true;
+  rec.physics_suspended = true;
+  rec.physics_pending_placement = rec.physics_ready = false;
+  rec.engine_running = rec.render_blend = false;
+  rec.dynamics.body.velocity = rec.dynamics.body.momentum = {};
+  rec.dynamics.reset_clock();
+  rec.dynamics.reset_drive();
+  if (auto* node = gameref_get(vehicle.chassis)) {
+    node->render_pose = false;
+    std::fill(std::begin(node->vel), std::end(node->vel), 0.f);
+    std::fill(std::begin(node->angular_vel), std::end(node->angular_vel), 0.f);
+  }
+}
+bool contact_near(const physics::RigidBody& body, const ContactVehicle& vehicle,
+                  double padding = 0) {
+  const auto& car = vehicle.rec->dynamics.body;
+  const auto gap = body.position - car.position;
+  const double reach = ((car.maximum - car.minimum).length() +
+                         (body.maximum - body.minimum).length()) * .5 + 1 + padding +
+      (car.velocity.length() + body.velocity.length()) * physics::VehicleDynamics::timestep * 2;
+  return gap.dot(gap) < reach * reach;
+}
+physics::VehicleDynamics::Impact body_pair_impact(
+    const physics::RigidBody& before, const physics::RigidBody& after,
+    physics::Vec3 point, physics::Vec3 normal, double impulse, double closing) {
+  // Translate a finite-mass impulse into this body's equivalent wall severity
+  // for legacy deformation/wear, while mounts consume the actual impulse.
+  const auto arm = point - after.position;
+  const double inverse_mass = 1 / before.mass +
+      normal.dot(before.inverse_world_inertia(arm.cross(normal)).cross(arm));
+  physics::VehicleDynamics::Impact hit{point, normal,
+      impulse * inverse_mass / (closing > .8 ? 1.08 : 1)};
+  hit.normal_impulse = impulse;
+  hit.pre_velocity = before.velocity;
+  hit.pre_omega = before.omega();
+  hit.has_pre_motion = true;
+  return hit;
+}
+void validate_contact_exchange(
+    const physics::RigidBody& body,
+    const std::vector<std::pair<Record*, physics::RigidBody>>& carriers,
+    const std::vector<std::pair<const ContactVehicle*, physics::VehicleDynamics::Impact>>& impacts) {
+  physics::validate_vehicle_contact_body(body);
+  for (const auto& carrier : carriers)
+    physics::validate_vehicle_contact_body(carrier.first->dynamics.body);
+  for (const auto& event : impacts) {
+    const auto& hit = event.second;
+    script_motion(event.first->rec->dynamics.body, event.first->parent);
+    if (!hit.point.finite() || !hit.normal.finite() || !std::isfinite(hit.speed) ||
+        hit.speed < 0 || !std::isfinite(hit.normal_impulse) || hit.normal_impulse < 0 ||
+        !hit.pre_velocity.finite() || !hit.pre_omega.finite())
+      throw std::runtime_error("non-finite dynamic contact impact");
+  }
+}
+void commit_vehicle_impacts(
+    const std::vector<std::pair<const ContactVehicle*, physics::VehicleDynamics::Impact>>& impacts,
+    std::vector<Object*>& released) {
+  for (const auto& [vehicle, hit] : impacts) if (contact_live(*vehicle)) {
+    if (hit.normal_impulse > 1) {
+      vehicle->rec->physics_released = true;
+      vehicle->rec->physics_suspended = false;
+      vehicle->rec->physics_pending_placement = false;
+    }
+    damage_chassis(vehicle->chassis, *vehicle->rec, hit,
+                   vehicle->chassis == part_controlled_chassis(), released);
+  }
+}
+void advance_loose_panels(const std::vector<ContactVehicle>& vehicles,
+                          std::vector<Object*>& released) {
   using physics::Vec3;
   std::vector<std::pair<Object*, bool>> settled;  // keep the current pose?
   for (auto it = loose_panels.begin(); it != loose_panels.end();) {
@@ -3754,8 +3927,9 @@ void advance_loose_panels() {
     auto* node = gameref_get(part);
     auto* rec = record(part);
     const bool native_dynamic = rec && rec->config->native_kind == "native_dynamic";
-    Record* collision_vehicle = nullptr;
-    physics::RigidBody carrier_before;
+    std::vector<std::pair<Record*, physics::RigidBody>> carrier_backups;
+    std::vector<std::pair<const ContactVehicle*, physics::VehicleDynamics::Impact>> impacts;
+    bool completed = false;
     try {
     PartMatrix parent_frame;
     if (!node || !node->parent) {
@@ -3776,44 +3950,21 @@ void advance_loose_panels() {
       part_destroy(part);
       continue;
     }
-    if (native_dynamic && loose.vehicle != controlled_vehicle)
-      loose.vehicle = controlled_vehicle;
-    auto* owner = gameref_find_live(loose.vehicle);
-    if (native_dynamic && (!owner || owner->parent != node->parent)) {
-      continue;
-    }
-    if (!owner) {
-      loose_panels.erase(current);
-      part_destroy(part);
-      continue;
-    }
-    auto* chassis = static_cast<Object*>(owner->key);
-    auto* vehicle = record(chassis);
-    if (!vehicle || !vehicle->physics_ready) continue;
-    collision_vehicle = vehicle;
-    carrier_before = vehicle->dynamics.body;
     if (native_dynamic && !rec->physics_ready) {
-      // The first active tick supplies the real ground-shell transform. The
-      // placement was created before scene_instances_select was guaranteed.
+      // Placement ownership is the map, not whichever car was controlled when
+      // the prop woke. The first tick resolves its ground-shell transform.
       loose.body.set_frame(part_matrix_multiply(parent_frame, rec->published_frame));
-      loose.carrier_frame = vehicle->dynamics.body.frame();
       rec->physics_ready = true;
     }
-    const auto previous_carrier = loose.carrier_frame;
-    loose.carrier_frame = vehicle->dynamics.body.frame();
-    constexpr unsigned rest_ticks = physics::VehicleDynamics::update_frequency / 2;
+    constexpr unsigned rest_ticks = physics::VehicleDynamics::frequency / 2;
     const bool sleeping = loose.quiet_ticks >= rest_ticks;
     auto& body = loose.body;
-    // The per-part car test is the expensive step. Skip it unless the two
-    // bounding spheres, padded by this tick's travel, can touch.
-    const auto& car = vehicle->dynamics.body;
-    const Vec3 gap = body.position - car.position;
-    const double reach = ((car.maximum - car.minimum).length() +
-                          (body.maximum - body.minimum).length()) * .5 + 1.0 +
-                         (car.velocity.length() + body.velocity.length()) * kPhysicsTick * 2.0;
-    const bool near = gap.dot(gap) < reach * reach;
+    bool near = false, far = true;
+    for (const auto& vehicle : vehicles) if (contact_live(vehicle)) {
+      near |= contact_near(body, vehicle);
+      far &= !contact_near(body, vehicle, kSettleDistance);
+    }
     if (native_dynamic) {
-      const bool far = gap.dot(gap) > (reach + kSettleDistance) * (reach + kSettleDistance);
       loose.far_awake_ticks = far && !sleeping ? loose.far_awake_ticks + 1 : 0;
       if (far && sleeping) {
         settled.push_back({part, true});
@@ -3827,11 +3978,26 @@ void advance_loose_panels() {
     if (sleeping && !near) continue;
     const Vec3 before = body.position;
     const auto previous = body.corners();
-    if (!sleeping) body.integrate(kPhysicsTick);
-    if (loose.exit_ticks && !leaving_carrier(body, vehicle->dynamics.body)) loose.exit_ticks = 0;
-    if (loose.exit_ticks) --loose.exit_ticks;
-    const bool carrier_contact = near && !loose.exit_ticks && collide_loose_with_car(
-        body, previous, before, chassis, *vehicle, previous_carrier);
+    if (!sleeping) body.integrate(physics::VehicleDynamics::timestep);
+    if (loose.exit_ticks) {
+      const auto* owner = gameref_find_live(loose.vehicle);
+      const auto* carrier = owner ? record(static_cast<Object*>(owner->key)) : nullptr;
+      if (!carrier || !leaving_carrier(body, carrier->dynamics.body)) loose.exit_ticks = 0;
+      else --loose.exit_ticks;
+    }
+    bool carrier_contact = false;
+    for (const auto& vehicle : vehicles) {
+      if (!contact_live(vehicle) || !contact_near(body, vehicle)) continue;
+      const auto* state = gameref_get(vehicle.chassis);
+      if (loose.exit_ticks && state->live_id == loose.vehicle) continue;
+      carrier_backups.emplace_back(vehicle.rec, vehicle.rec->dynamics.body);
+      physics::VehicleDynamics::Impact hit;
+      if (collide_loose_with_car(body, previous, before, vehicle.chassis,
+                                *vehicle.rec, vehicle.previous.frame(), hit)) {
+        carrier_contact = true;
+        impacts.emplace_back(&vehicle, hit);
+      }
+    }
     if (sleeping && !carrier_contact) continue;
     const auto support = collide_loose_with_scene(body, before, part);
     if (native_dynamic) {
@@ -3843,6 +4009,7 @@ void advance_loose_panels() {
       loose.quiet_ticks = quiet ? loose.quiet_ticks + 1 : 0;
     }
     if (loose.quiet_ticks >= rest_ticks) body.velocity = body.momentum = {};
+    validate_contact_exchange(body, carrier_backups, impacts);
     const auto local = part_matrix_multiply(part_matrix_inverse_rigid(parent_frame), body.frame());
     if (!finite_frame(local)) throw std::runtime_error("non-finite loose-body frame");
     if (native_dynamic) {
@@ -3854,13 +4021,15 @@ void advance_loose_panels() {
     } else {
       std::copy(local.begin(), local.end(), node->local_matrix);
     }
+    completed = true;
     } catch (const std::exception& error) {
-      if (collision_vehicle) collision_vehicle->dynamics.body = carrier_before;
+      for (const auto& [vehicle, before] : carrier_backups) vehicle->dynamics.body = before;
       std::fprintf(stderr,"[phys] removed loose body type=0x%x: %s\n",rec?rec->state.resource:0,error.what());
       if (native_dynamic) scene_instances_settle_dynamic(part,nullptr);
       loose_panels.erase(part);
       part_destroy(part);
     }
+    if (completed) commit_vehicle_impacts(impacts, released);
   }
   for (const auto& [part, keep_pose] : settled) {
     const auto found = loose_panels.find(part);
@@ -3938,6 +4107,8 @@ bool configure_free_body(const GameRefState& state, physics::RigidBody& body) {
 void publish_free_body(GameRefState& state, FreeBody& free, const PartMatrix& parent_frame) {
   const auto local = part_matrix_multiply(part_matrix_inverse_rigid(parent_frame),
                                           free.body.frame());
+  if (!finite_frame(local)) throw std::runtime_error("non-finite PhysicsRef publication frame");
+  const auto motion = script_motion(free.body, parent_frame);
   state.matrix_override = false;
   std::copy(local.begin() + 12, local.begin() + 15, state.pos);
   // The inverse of local_matrix(): yaw about Y, then pitch, then roll.
@@ -3950,32 +4121,17 @@ void publish_free_body(GameRefState& state, FreeBody& free, const PartMatrix& pa
     state.ypr[0] = std::atan2(-local[2], local[0]);
     state.ypr[2] = 0;
   }
-  const auto to_parent = [&](physics::Vec3 v, float out[3]) {
-    for (int axis = 0; axis < 3; ++axis)
-      out[axis] = static_cast<float>(parent_frame[axis * 4] * v.x +
-                                     parent_frame[axis * 4 + 1] * v.y +
-                                     parent_frame[axis * 4 + 2] * v.z);
-  };
-  to_parent(free.body.velocity, state.vel);
-  to_parent(free.body.omega(), state.angular_vel);
+  std::copy(motion.begin(), motion.begin() + 3, state.vel);
+  std::copy(motion.begin() + 3, motion.end(), state.angular_vel);
   std::copy(state.pos, state.pos + 3, free.pos);
   std::copy(state.ypr, state.ypr + 3, free.ypr);
 }
 
-// Free PhysicsRef bodies fall, rest on the scene and exchange impulses with
-// the controlled car, like loose panels. Bodies outside the active world wait.
-void advance_free_bodies() {
+// Free PhysicsRef bodies share contacts with every active physical car.
+// Bodies outside the active world wait; control handoff changes no ownership.
+void advance_free_bodies(const std::vector<ContactVehicle>& vehicles,
+                         std::vector<Object*>& released) {
   using physics::Vec3;
-  // Controlled vehicle and its script frame are invariant across this pass.
-  Object* chassis = nullptr;
-  Record* vehicle = nullptr;
-  if (const auto* owner = gameref_find_live(controlled_vehicle)) {
-    chassis = static_cast<Object*>(owner->key);
-    vehicle = record(chassis);
-    PartMatrix car_frame;
-    if (!vehicle || !vehicle->physics_ready ||
-        !scene_instances_script_matrix(chassis, car_frame.data())) vehicle = nullptr;
-  }
   std::unordered_set<void*> live;
   for (auto* state : gameref_simulated_bodies()) {
     void* key = state->key;
@@ -3991,7 +4147,9 @@ void advance_free_bodies() {
     const auto saved_ypr = free.configured
         ? std::array{free.ypr[0],free.ypr[1],free.ypr[2]}
         : std::array{state->ypr[0],state->ypr[1],state->ypr[2]};
-    const auto carrier_before = vehicle ? vehicle->dynamics.body : physics::RigidBody{};
+    std::vector<std::pair<Record*, physics::RigidBody>> carrier_backups;
+    std::vector<std::pair<const ContactVehicle*, physics::VehicleDynamics::Impact>> impacts;
+    bool completed = false;
     try {
     const bool moved = !std::equal(free.pos, free.pos + 3, state->pos) ||
                        !std::equal(free.ypr, free.ypr + 3, state->ypr);
@@ -4016,27 +4174,43 @@ void advance_free_bodies() {
       std::copy(state->pos, state->pos + 3, free.pos);
       std::copy(state->ypr, state->ypr + 3, free.ypr);
     }
-    constexpr unsigned rest_ticks = physics::VehicleDynamics::update_frequency / 2;
+    constexpr unsigned rest_ticks = physics::VehicleDynamics::frequency / 2;
     const bool sleeping = free.quiet_ticks >= rest_ticks;
     auto& body = free.body;
     bool near = false;
-    PartMatrix previous_carrier = free.carrier_frame;
-    if (vehicle) {
-      const auto& car = vehicle->dynamics.body;
-      const Vec3 gap = body.position - car.position;
-      const double reach = ((car.maximum - car.minimum).length() +
-                            (body.maximum - body.minimum).length()) * .5 + 1.0 +
-                           (car.velocity.length() + body.velocity.length()) * kPhysicsTick * 2.0;
-      near = gap.dot(gap) < reach * reach;
-      if (!near || free.carrier_frame == PartMatrix{}) previous_carrier = car.frame();
-      free.carrier_frame = car.frame();
-    }
+    for (const auto& vehicle : vehicles)
+      if (contact_live(vehicle) && contact_near(body, vehicle)) near = true;
     if (sleeping && !near) continue;
     const Vec3 before = body.position;
+    const auto previous_body = body;
     const auto previous = body.corners();
-    if (!sleeping) body.integrate(kPhysicsTick);
-    const bool carrier_contact =
-        near && collide_loose_with_car(body, previous, before, chassis, *vehicle, previous_carrier);
+    if (!sleeping) body.integrate(physics::VehicleDynamics::timestep);
+    bool carrier_contact = false;
+    for (const auto& vehicle : vehicles) {
+      if (!contact_live(vehicle) || !contact_near(body, vehicle)) continue;
+      auto& car = vehicle.rec->dynamics.body;
+      const auto car_before = car;
+      carrier_backups.emplace_back(vehicle.rec, car_before);
+      physics::VehicleDynamics::Impact hit;
+      bool contact = false;
+      if (state->physics_shape == PhysicsShape::Box || state->physics_shape == PhysicsShape::Sphere) {
+        // SLRR_rev v221 vehicle-3d.ts freeContactsCore: unshaped bodies use
+        // the chassis OBB. Corner-only mesh probes miss a box whose upper and
+        // lower corners straddle the whole car shell.
+        if (const auto pair = physics::resolve_swept_vehicle_contact(body, car, previous_body, vehicle.previous)) {
+          hit = body_pair_impact(car_before, car, pair->point, -pair->normal,
+                                 pair->normal_impulse, pair->speed);
+          contact = true;
+        }
+      } else {
+        contact = collide_loose_with_car(body, previous, before, vehicle.chassis,
+                                        *vehicle.rec, vehicle.previous.frame(), hit);
+      }
+      if (contact) {
+        carrier_contact = true;
+        impacts.emplace_back(&vehicle, hit);
+      }
+    }
     if (sleeping && !carrier_contact) continue;
     const auto support = collide_loose_with_scene(body, before, key);
     free.quiet_ticks = map_object_quiet_ticks(body, !carrier_contact && support.touching,
@@ -4045,9 +4219,11 @@ void advance_free_bodies() {
     const auto frame = body.frame();
     if (!std::all_of(frame.begin(),frame.end(),[](float v){return std::isfinite(v);}))
       throw std::runtime_error("non-finite free-body frame");
+    validate_contact_exchange(body, carrier_backups, impacts);
     publish_free_body(*state, free, parent_frame);
+    completed = true;
     } catch (const std::exception& error) {
-      if (vehicle) vehicle->dynamics.body = carrier_before;
+      for (const auto& [vehicle, before] : carrier_backups) vehicle->dynamics.body = before;
       std::fprintf(stderr,"[phys] disabled PhysicsRef id=%d: %s\n",state->live_id,error.what());
       state->matrix_override = false;
       if (!std::all_of(saved_pos.begin(),saved_pos.end(),[](float v){return std::isfinite(v);}) ||
@@ -4060,23 +4236,28 @@ void advance_free_bodies() {
       gameref_set_physics_simulated(key,false);
       free_bodies.erase(key);
     }
+    if (completed) commit_vehicle_impacts(impacts, released);
   }
   std::erase_if(free_bodies, [&](const auto& entry) { return !live.contains(entry.first); });
 }
 }  // namespace
 
 void advance_chassis_tick() {
-  advance_loose_panels();
-  advance_free_bodies();
   std::vector<Object*> released;
   const auto* target = gameref_find_live(controlled_vehicle);
   Object* controlled = target ? as_part(static_cast<Object*>(target->key)) : nullptr;
+  // SLRR_rev v221 7441a697 vehicle-physics-world.ts: all bodies share
+  // substeps, each unordered pair is resolved once, then every changed body is
+  // published before scripts/rendering can observe the tick.
+  for (unsigned substep = 0; substep < physics::VehicleDynamics::frequency /
+                                         physics::VehicleDynamics::update_frequency; ++substep) {
+  std::vector<ContactVehicle> vehicles;
+  vehicles.reserve(100);
   for (auto &entry : records) {
     Object *chassis = entry.first;
     auto &rec = entry.second;
     if (rec.config->native_kind != "car" && rec.deformation && rec.deformation->active()) {
-      if (advance_deformation(chassis, rec, physics::VehicleDynamics::frequency /
-                                           physics::VehicleDynamics::update_frequency)) {
+      if (advance_deformation(chassis, rec, 1)) {
         if (++rec.deformation_upload_ticks >= 3 || !rec.deformation->active()) {
           publish_deformation(chassis, rec);
           rec.deformation_upload_ticks = 0;
@@ -4086,13 +4267,15 @@ void advance_chassis_tick() {
         if (rec.state.parent && rec.deformation->released()) released.push_back(chassis);
       }
     }
-    rec.engine_running = false;
-    rec.render_blend = false;
+    if (substep == 0) {
+      rec.engine_running = false;
+      rec.render_blend = false;
+    }
     if (rec.external_motion || rec.config->native_kind != "car" || rec.state.parent ||
         (rec.physics_suspended && !rec.physics_pending_placement))
       continue;
     auto *node = gameref_get(chassis);
-    if (!node || node->streamed_hidden)
+    if (!node || !contact_visible(chassis))
       continue;
     const auto saved_body = rec.dynamics.body;
     const auto saved_local = node_local(chassis);
@@ -4116,9 +4299,11 @@ void advance_chassis_tick() {
     if (!rec.physics_ready || rec.physics_dirty)
       if (!dynamics_configure(chassis, rec, frame))
         continue;
-    dynamics_wheels(rec);
+    if (substep == 0) {
+      dynamics_wheels(rec);
+      configure_drive(chassis, rec, chassis == controlled);
+    }
     if (rec.body_support_dirty) rebuild_body_support(chassis, rec);
-    configure_drive(chassis, rec, chassis == controlled);
     // An unreleased chassis (catalog, before start) may drop onto a floor.
     // With no floor the step only applies gravity, and the car leaves the shot.
     if (!rec.physics_released && rec.physics_pending_placement) {
@@ -4138,14 +4323,15 @@ void advance_chassis_tick() {
       ground.normal = {hit.normal[0], hit.normal[1], hit.normal[2]};
       return true;
     };
-    // Two fixed 120 Hz substeps per host vehicle update.
-    const auto before = rec.dynamics.body.position;
+    // One shared 120 Hz substep; controls remain on their existing 60 Hz tick.
+    const auto before_body = rec.dynamics.body;
+    const auto before = before_body.position;
     const auto orientation_before = rec.dynamics.body.orientation;
     const auto velocity_before = rec.dynamics.body.velocity;
-    const auto steps = rec.dynamics.advance(kPhysicsTick, terrain);
-    // Engine-less cars and native traffic still collide with the world.
-    if (rec.physics_released &&
-        (rec.dynamics.drive.torque || rec.engine_lost || rec.dynamics.drive.native_traffic)) {
+    const auto steps = rec.dynamics.advance(physics::VehicleDynamics::timestep, terrain);
+    // Collision belongs to the released body, not its engine/controller. A
+    // coasting car still hits the world after its driver leaves or is removed.
+    if (rec.physics_released) {
       const auto wall = collide_chassis(rec, before);
       const auto& ground = rec.dynamics.ground_impact;
       damage_chassis(chassis, rec, wall.speed >= ground.speed ? wall : ground,
@@ -4161,7 +4347,8 @@ void advance_chassis_tick() {
             0,
             std::clamp(body.velocity.length() * .0015 * options.head_velocity -
                            local_acceleration.z * .004 * options.head_acceleration, -.15, .15)};
-        rec.cockpit_offset += (lean - rec.cockpit_offset) * -std::expm1(-kPhysicsTick / .14);
+        rec.cockpit_offset += (lean - rec.cockpit_offset) *
+            -std::expm1(-physics::VehicleDynamics::timestep / .14);
       }
       const auto delta = rec.dynamics.body.position - before;
       rec.mileage += static_cast<float>(std::hypot(delta.x, delta.z) * .1);
@@ -4173,10 +4360,14 @@ void advance_chassis_tick() {
     if (!finite_frame(rec.dynamics.body.frame()))
       throw std::runtime_error("non-finite chassis output");
     if (steps) {
-      dynamics_sync(chassis, rec, parent);
+      dynamics_sync(chassis, rec, parent, false);
+      if (substep == 0 || !rec.render_blend) {
+        // A passive car can first wake in the second substep. Its first drawn
+        // interval must start here, never from an uninitialized world origin.
+        rec.render_from_position = before;
+        rec.render_from_orientation = orientation_before;
+      }
       rec.render_blend = true;
-      rec.render_from_position = before;
-      rec.render_from_orientation = orientation_before;
       rec.render_parent = parent;
     } else {
       rec.published_frame = local;
@@ -4215,6 +4406,7 @@ void advance_chassis_tick() {
         }
       }
     }
+    vehicles.push_back({chassis, &rec, node->incarnation, before_body, parent});
     } catch (const std::exception& error) {
       if (!rec.physics_fault_reported) {
         std::fprintf(stderr,"[phys] suspended chassis type=0x%x: %s\n",rec.state.resource,error.what());
@@ -4251,7 +4443,102 @@ void advance_chassis_tick() {
       std::fill(std::begin(node->angular_vel),std::end(node->angular_vel),0.f);
     }
   }
-  // After the records loop: creating a loose body inserts into `records`.
+  // Settled parked cars are passive participants. Two parked showroom cars do
+  // not collide, but a released car can wake one without inventing a driver.
+  for (auto& [chassis, rec] : records) {
+    if (rec.config->native_kind != "car" || rec.state.parent || rec.external_motion ||
+        rec.physics_fault_reported || !contact_visible(chassis) ||
+        (!rec.physics_ready && rec.physics_pending_placement)) continue;
+    if (std::any_of(vehicles.begin(), vehicles.end(), [&](const auto& v) { return v.chassis == chassis; })) continue;
+    auto* node = gameref_get(chassis);
+    PartMatrix parent = eye_matrix(), frame;
+    if (node->parent && !scene_instances_script_matrix(node->parent, parent.data())) continue;
+    if (!scene_instances_script_matrix(chassis, frame.data())) continue;
+    const auto local = node_local(chassis);
+    const bool external = node->parent != rec.physics_parent || local != rec.published_frame;
+    // setMatrix/park has authority over an asleep car too. Never publish a
+    // stale solver body back over a new scripted placement.
+    if (external || !rec.physics_ready || rec.physics_dirty) {
+      if (!dynamics_configure(chassis, rec, frame)) continue;
+      rec.dynamics.body.velocity = rec.dynamics.body.momentum = {};
+      rec.published_frame = local;
+    }
+    ContactVehicle passive{chassis, &rec, node->incarnation, rec.dynamics.body, parent};
+    try { physics::validate_vehicle_contact_body(rec.dynamics.body); }
+    catch (const std::exception& error) { suspend_contact_vehicle(passive, error.what()); continue; }
+    vehicles.push_back(passive);
+  }
+  for (const auto& vehicle : vehicles) gameref_make_live(vehicle.chassis);
+  std::sort(vehicles.begin(), vehicles.end(), [](const auto& a, const auto& b) {
+    return gameref_get(a.chassis)->live_id < gameref_get(b.chassis)->live_id;
+  });
+  for (size_t i = 0; i < vehicles.size(); ++i) {
+    auto& a = vehicles[i];
+    if (!contact_live(a)) continue;
+    for (size_t j = i + 1; j < vehicles.size(); ++j) {
+      if (!contact_live(a)) break;
+      auto& b = vehicles[j];
+      if (!contact_live(b) || (!a.rec->physics_released && !b.rec->physics_released)) continue;
+      auto& body_a = a.rec->dynamics.body;
+      auto& body_b = b.rec->dynamics.body;
+      const auto before_a = body_a, before_b = body_b;
+      std::optional<physics::VehicleContact> hit;
+      try {
+        hit = physics::resolve_swept_vehicle_contact(body_a, body_b, a.previous, b.previous);
+        if (hit) {
+          script_motion(body_a, a.parent);
+          script_motion(body_b, b.parent);
+          if (!finite_frame(body_a.frame()) || !finite_frame(body_b.frame()))
+            throw std::runtime_error("unrepresentable vehicle contact frame");
+        }
+      } catch (const std::exception& error) {
+        body_a = before_a;
+        body_b = before_b;
+        bool bad_a = false, bad_b = false;
+        try { physics::validate_vehicle_contact_body(body_a); } catch (...) { bad_a = true; }
+        try { physics::validate_vehicle_contact_body(body_b); } catch (...) { bad_b = true; }
+        // The kernel is transactional. Isolate a malformed passive car, not
+        // its healthy peer. Finite-body arithmetic failure belongs to this
+        // pair only; unrelated cars and the host/native pump continue.
+        if (bad_a || !bad_b) suspend_contact_vehicle(a, error.what());
+        if (bad_b || !bad_a) suspend_contact_vehicle(b, error.what());
+        continue;
+      }
+      if (!hit) continue;
+      if (hit->normal_impulse > 1) {
+        for (auto* vehicle : {&a, &b}) {
+          vehicle->rec->physics_released = true;
+          vehicle->rec->physics_suspended = false;
+          vehicle->rec->physics_pending_placement = false;
+        }
+        // Publish both corrected carrier frames before evaluating installed
+        // damage geometry; scripts/render callbacks cannot run in this pass.
+        dynamics_sync(a.chassis, *a.rec, a.parent, false);
+        dynamics_sync(b.chassis, *b.rec, b.parent, false);
+        damage_chassis(a.chassis, *a.rec,
+            body_pair_impact(before_a, body_a, hit->point, hit->normal,
+                             hit->normal_impulse, hit->speed), a.chassis == controlled, released);
+        damage_chassis(b.chassis, *b.rec,
+            body_pair_impact(before_b, body_b, hit->point, -hit->normal,
+                             hit->normal_impulse, hit->speed), b.chassis == controlled, released);
+      }
+    }
+  }
+  advance_loose_panels(vehicles, released);
+  advance_free_bodies(vehicles, released);
+  for (const auto& vehicle : vehicles) if (contact_live(vehicle)) {
+    try {
+      physics::validate_vehicle_contact_body(vehicle.rec->dynamics.body);
+      vehicle.rec->dynamics.sync_wheels();
+      dynamics_sync(vehicle.chassis, *vehicle.rec, vehicle.parent,
+                    substep + 1 == physics::VehicleDynamics::frequency /
+                                       physics::VehicleDynamics::update_frequency);
+    } catch (const std::exception& error) {
+      suspend_contact_vehicle(vehicle, error.what());
+    }
+  }
+  } // shared substeps
+  // After all contact iteration: creating a loose body inserts into `records`.
   scene_instances_promote_dynamics();
   // Wheels whose mounts failed when a chassis cage settled (advance_deformation).
   released.insert(released.end(), settled_wheel_releases.begin(), settled_wheel_releases.end());
@@ -5669,6 +5956,7 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   runtime = &jvm;
   for (auto &[key, rec] : records) release_side(rec);
   records.clear();
+  paint_texture_clear_all();
   repair_relink_pending.clear();
   // Dyno sessions belong to the old world's Java objects. The registry is
   // deliberately weak during GC, so world teardown must release it explicitly.
@@ -5741,6 +6029,11 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
       if (controller && target && as_part(static_cast<Object*>(target->key)) == as_part(self))
         return Value::make_int(gameref_make_live(controller));
     }
+    // GII_CATEGORY: installed and loose parts, the chassis included, are
+    // GIR_CAT_PART (9). Painter, CarMarket and the garage drop test it on
+    // the picked object. GIR_CAT_VEHICLE (5) is not reported yet.
+    if (query == 7)
+      return Value::make_int(p ? 9 : 0);
     if (query == 5 || query == 1)
       return Value::make_int(state->live_id);
     if (query == 6)
@@ -6100,13 +6393,12 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
     // 0, and anything that is not a texture record, leaves the part as it
     // is. A loaded car writes 0 for an unpainted piece and a factory color
     // for the rest; clearing the render there made the panels vanish.
+    // A Painter texture (and one a save or skin file brought back) is a
+    // texture too, though no pack holds it.
     const RpkEntry *entry = id && index ? index->resolve(id) : nullptr;
-    if (!entry || entry->typeof_ != 7)
+    if (!paint_texture_exists(id) && (!entry || entry->typeof_ != 7))
       return Value::make_int(old);
-    p->state.texture = static_cast<int>(id);
-    for (auto *render : p->renders)
-      if (auto *node = gameref_get(render))
-        node->paint_texture = p->state.texture;
+    assign_texture(canonical(s), *p, id);
     return Value::make_int(old);
   });
   bind(

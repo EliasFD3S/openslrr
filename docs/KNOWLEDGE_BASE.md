@@ -447,7 +447,12 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
 - Enhanced options (MSAA, reflections, clouds, sunlight, local lights) are
   session-only and exposed through `OptionsDialog.get/setRendererOption`
   (`src/natives/natives_script.cpp:register_script_natives`).
-- Car saves use the SDAT container (`src/natives/natives_io.cpp:sdat_frame`).
+- File saves now write versioned typed JSON at the existing paths, with SDAT
+  type 1/type 2 and raw-stream read fallback. Resource paths remount independently
+  of session pack order; scripts keep binary cross-type read semantics. See
+  ENGINE_CONTRACT §15 (`src/natives/natives_io.cpp:json_frame`,
+  `src/natives/natives_io.cpp:json_take_payload`,
+  `src/natives/natives_io.cpp:sdat_take_payload`).
 
 ### 5.10 Threads and the worker pool
 
@@ -724,8 +729,10 @@ signatures, 339 have a body, 3 are explicit no-ops and 34 are missing.
 | --- | ---: | --- |
 | `GroundRef` routes, traffic, water | 19 | Navigation, traffic |
 | `ParticleSystem` | 9 | Smoke, sparks and other effects |
-| `Painter` | 3 | Paint booth: `doPaint`, `paintPart`, `xPaint` |
 | Leftovers (`Welder`) | 3 | No stock caller found |
+
+The three `Painter` natives that this table listed are bound since #64;
+see "Garage paint booth (#64)" below.
 
 Explicit no-ops: `System.analyze` ×3 (faithful).
 `GameRef.setActiveCollision` has a body since PR #22 (§12). Two host-only
@@ -754,7 +761,7 @@ run time.
 | DirectShow dynamic media-format renegotiation is not supported; malformed/short RGB32 frames are rejected | `src/platform/video_fmv.cpp` (`grab_frame`) |
 | `FindFile` still bypasses shared path confinement. The File native path validator now checks canonical components, rejects the root and accepts dots within names; File.delete is nonrecursive (#68, #71). Invalid SDAT resource writes preserve field alignment with a null placeholder (#70); see [SAVE_IO_FIXES.md](SAVE_IO_FIXES.md) | `src/natives/natives_boot.cpp:under_game`, `src/natives/natives_io.cpp:register_io_natives` |
 | Boot adopts the section already entered by Java Init without replaying lifecycle (#76). Windowed startup retains a timer-only reset so startup work cannot consume the splash display interval. | `src/boot/boot.cpp:boot_game`, `src/boot/mainloop.cpp:mainloop_adopt_section` |
-| Wall collision, impact damage and mileage run only for the player-controlled car with an engine | `src/resources/part_runtime.cpp:advance_chassis_tick` |
+| Released cars retain static-world contacts without a driver/engine. Shared chassis OBB pairs and all-car movable-body contacts now use impulse-aware damage/detachment; full Bot recovery/audio/seating remain partial. See [traffic/race audit](TRAFFIC_RACE_AUDIT.md). | `src/resources/part_runtime.cpp:advance_chassis_tick`, `src/resources/part_runtime.cpp:advance_loose_panels`, `src/resources/part_runtime.cpp:advance_free_bodies` |
 | Gamepad fallback is now per driving axis and unclaimed physical channel; hardware validation remains separate | `src/platform/host_input.cpp`, `src/platform/host_input_mapping.hpp` |
 | The unused offscreen scene target, HiZ pyramid/readback and legacy projected car shadows are removed (#105). World rendering uses the swap chain; the retained projected-size filter does not perform occlusion. Shader creation releases caller handles on success and failure. | `src/render/bgfx_lib_backend.cpp:LibBgfxBackend::open`, `src/render/bgfx_program.hpp:create_owned_program` |
 
@@ -2199,7 +2206,11 @@ Sources and host limits: EXTERNAL_RESEARCH v221 section and SCRIPT_RUNTIME share
 race section. Tests: road_routes, race_brain, traffic_runtime and race_vehicle.
 A real assembled Baiern moves under original Bot.startRace commands in an
 isolated fixture; this is not proof of finished career day/night/ROC sessions.
-The tracker and original issues remain open pending each gameplay check.
+The original issues and #179 were closed for consolidation, not gameplay acceptance;
+#197 retains the remaining work. The [current audit](TRAFFIC_RACE_AUDIT.md)
+records the baseline's missing chassis pairs/player-only movable contacts, the
+shared-contact implementation and remaining physical/kinematic, seating/audio
+limits. Contact integration is not acceptance of the complete #197 checklist.
 
 
 ## Inactive renderer passes cleanup (#105)
@@ -2267,3 +2278,113 @@ locals/arguments on a suspended cooperative stack. The 60,000 mixed-object
 fixture takes about 11ms to collect versus 168-171ms before; allocation costs
 26-29ms versus 23ms before. The baseline/current logs and limits are recorded in
 assets/validation/gc-lookup-epochs.txt. This is not a gameplay FPS measurement.
+
+## Garage paint booth (#64)
+
+Body paint, spray and decals were inert: the three `Painter` natives were
+unbound, and no world-pointer event ever reached `Painter.handleEvent`, because
+only the Mechanic received part clicks.
+
+Events. `MouseCursor.addHandler` registers `EVENT_CURSOR` on the cursor
+GameRef. `src/boot/mainloop.cpp:dispatch_world_pointer` now emits `EC_HOVER`,
+`EC_LEAVE`, `EC_LDOWN`, `EC_LUP` and `EC_LCLICK` from that GameRef whenever
+the Mechanic thread is not running (see SCRIPT_RUNTIME.md). The
+press/release edges come from `HostInput::world_press` / `world_release`,
+set only for a left press that missed every OSD widget. `GameRef.getInfo`
+answers `GII_CATEGORY` (7) with `GIR_CAT_PART` (9) for parts, which the
+Painter, CarMarket and garage drop handlers test. Vehicles are not yet
+reported as `GIR_CAT_VEHICLE`.
+
+Natives. `src/natives/natives_painter.cpp:register_painter_natives` binds
+`paintPart`, `doPaint` and `xPaint`. Each picks the part under the pointer
+with `src/resources/scene_instances.cpp:scene_instances_pick_surface`, which
+also returns the hit mesh, its paint slot and the hit point and normal in the
+mesh frame. The executable (slrr-reverse notes on 0x004827D0, 0x00482960,
+0x00482C00) queues `paint 0 0 <color> 0 -1` and `bigdecal ...` commands on the
+picked part; the host draws directly instead:
+
+- `paintPart` fills the part's own texture with the can colour.
+- `doPaint` projects the brush (`misc.garage:0x0102`, a soft dot) or a decal
+  with `src/resources/paint_texture.cpp:paint_stamp_mesh`: a square `size`
+  metres wide, along the hit normal, oriented to screen up (including
+  mirrored part frames), turned by
+  `rot` and mirrored by `flip`. Only paint-slot triangles facing the stamp
+  inside a depth slab are painted; each texel blends once per stamp. Other
+  panels whose bounds the stamp reaches
+  (`src/resources/scene_instances.cpp:scene_instances_paint_targets`) and
+  whose triangles it covers (`src/resources/paint_texture.cpp:paint_stamp_reaches`)
+  are painted too, in their own frames, so a decal across a door seam lands
+  on both parts. A preview can therefore span several textures.
+  `temp = 1` (the decal preview) is drawn over a copy and replaced by the next
+  preview.
+- `xPaint` and `painter_tick` (two host frames without a refresh) take the preview off.
+  A texture created only for a preview gives the part its previous texture
+  back.
+
+These orientation, size and expiry rules are host approximations.
+
+Textures. `paint_texture.hpp` keeps Painter textures in host memory with ids
+`0xFFFFxxxx`. `src/resources/part_runtime.cpp:assign_texture` shows them in
+the part's paint slot like a pack colour (`Part.setTexture` accepts them) and
+reclaims one after three host frames without a live part, resource wrapper
+or open save reader using it. This also reclaims unused loaded-skin textures and preserves
+ids through synchronous part rebuilds. A part draws on a copy when it
+shares its texture. `scene_instances_texture` maps the id to a `paint:` path;
+`src/render/bgfx_osd.cpp:paint_texture_handle` uploads it with a box-filtered
+mip chain and again on each change. Images start from the part's current
+paint (DXT/DDS/PNG/PTX decoded by `paint_image_from_texture`).
+
+File-backed decals. Stock `Decal(String)` calls `ResourceRef.makeTexture`,
+then Painter receives only `brush.id()`. Previously `makeTexture` stored a
+filename but left that ID at zero. It now allocates a live native texture ID
+and type 7. `scene_instances_texture` resolves its canonical wrapper's file;
+file-texture duplication creates an independent handle, and aliases carry the
+type so career saves can serialize purchased decal sets. The PNG serializer
+also accepts these file resources. Loaded image resources stay alive while
+native resource wrappers refer to them (`gameref_uses_resource`).
+
+Saves. `Part.save` and `Vehicle.saveSkin` write the texture through
+`File.write(ResourceRef)`: `ResourceRef.set` types it 7 and its save blob
+(SDAT trailer or JSON `blobs` entry) carries a PNG (`paint_png_encode`,
+fixed-Huffman deflate).
+`src/natives/natives_io.cpp:sdat_load_texture_blob` restores it on
+`readResID`; an empty stock blob reads the JPEG side file `<save>.<ordinal>`
+that the original game writes. Stock MWM saves with painted parts therefore
+load their paint. OpenSLRR saves are not meant to be read by the original
+executable.
+
+Paint-can preview follow-up. Paint cans share the resource flags (640) used
+by the host's reconstructed world-cue animation. Applying its half-metre bob
+and transparency in the tiny inventory cells moved the cans partly or entirely
+offscreen. `src/resources/scene_instances.cpp:collect_root` now applies that
+world-space animation only when collecting the active world, not the separate
+local worlds of inventory previews. The stock script's preview camera remains
+authoritative. The real-asset `trigger_markers` regression checks stationary,
+opaque paint cans in a local preview and preserves the active-world marker's
+rotation/bobbing and sensor behavior.
+
+Decal picker. Painter is the only stock user of the legacy
+`Osd.createButton(rid, ...)`: `Osd.createIcon` creates a `native button`
+type (`misc.garage:0x008C`) in the Osd group and `Osd.event_handler` turns its
+`EC_LCLICK` into `osdCommand(CMD_DECALBUTTONS + i)` by matching the object's
+`id()`. `src/natives/natives_gameref.cpp:bind_icon_button` gives that GameRef
+a live id and a hit-only OSD widget sized from the cfg render mesh; the click
+handler in `src/boot/boot.cpp` emits `EC_LCLICK` from the icon instead of an
+osdCommand. Before this the slots took no clicks, so only the first decal of
+the shown page could be painted.
+
+The garage builds the Mechanic's parts bin even when it reopens straight
+into body paint. Its never-shown `InventoryPanel` Osds had visible hit boxes
+at layer 15 over the paint-can and decal slots, so after a catalog visit those
+clicks reached the parts bin. `osd_on_field_write("vp")` now keeps an Osd's
+widgets hidden until its viewport is activated (ENGINE_CONTRACT.md).
+
+Decal thumbnails. `setDecalButtons` duplicates the button render type,
+swaps its texture for the decal and creates
+`RenderRef(slot, copy.id(), "decal button")`. A duplicated render type is now
+a live resource (`ResourceRef.duplicate` in `src/natives/natives_resref.cpp`),
+so `copy.id()` aliases the copy and the instance inherits its replacement.
+`RenderRef.create` (`src/natives/natives_renderref.cpp`) then draws that
+texture as a flat picture over the slot's hit box, and destroying the instance
+removes it. The button mesh itself is not drawn.
+Projection/preview behavior remains the host approximation described above.

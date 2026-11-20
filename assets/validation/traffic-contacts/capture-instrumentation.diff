@@ -1,0 +1,78 @@
+--- baseline/src/boot/boot.cpp
++++ gate-baseline/src/boot/boot.cpp
+@@ -39,6 +39,7 @@
+ namespace slrr {
+ 
+ void start_init(Jvm& jvm);
++void validation_dump_bench_ground_topology();
+ 
+ namespace {
+ 
+@@ -520,6 +521,8 @@
+     constexpr int kBenchSettle = 2 * kBenchRate;
+     bool bench_map_started = opt.bench_map.empty();
+     int bench_shot = 0;
++    std::chrono::steady_clock::time_point bench_gate_map_wall{}; // Diagnostic output only.
++    unsigned bench_gate_sample = 0;
+     while (until_quit || frames < opt.max_frames) {
+       // Soft PollWindowQuit adjacency — pump before Input/sim like stock
+       // neighbors (Input_tick still inside mainloop_frame).
+@@ -578,6 +581,25 @@
+         }
+       }
+       if (opt.bench_drive_seconds > 0.f) {
++        if (bench_map_started) {
++          const auto validation_now = std::chrono::steady_clock::now();
++          if (bench_gate_map_wall.time_since_epoch().count() == 0) bench_gate_map_wall = validation_now;
++          const double validation_wall = std::chrono::duration<double>(validation_now - bench_gate_map_wall).count();
++          constexpr double validation_samples[] = {2., 10., 30.};
++          if (bench_gate_sample < 3 && validation_wall >= validation_samples[bench_gate_sample]) {
++            ++bench_gate_sample;
++            auto* validation_car = part_controlled_chassis();
++            const auto* validation_node = validation_car ? gameref_get(validation_car) : nullptr;
++            const auto& validation_overlay = osd_loading_overlay();
++            std::fprintf(stderr, "[validation-gate] wall=%.3f frame=%d running=%d section=%s controlled=%p car-live=%d car-parent=%p world=%p props=%d transition=%d loading-dialog=%d overlay-empty=%d overlay=%s\n", validation_wall, frames, int(bench_running), sections.actual() ? sections.actual()->class_name.c_str() : "<none>", static_cast<void*>(validation_car), validation_node ? validation_node->live_id : 0, validation_node ? validation_node->parent : nullptr, scene_instances_world(), int(scene_instances_has_ground_props()), int(scene_transition_active()), int(osd_loading_dialog()), int(validation_overlay.empty()), validation_overlay.c_str());
++            validation_dump_bench_ground_topology();
++            if (bench_gate_sample == 2 && !opt.bench_shots.empty()) {
++              const auto validation_path = opt.bench_shots + "\\gate-10s";
++              std::fprintf(stderr, "[validation-capture] requested=%d path=%s\n", int(render.request_screenshot(validation_path)), validation_path.c_str());
++            }
++            std::fflush(stderr);
++          }
++        }
+         auto& input = host_input();
+         if (!bench_running && part_controlled_chassis() &&
+             scene_instances_has_ground_props() && !scene_transition_active() &&
+--- baseline/src/resources/scene_instances.cpp
++++ gate-baseline/src/resources/scene_instances.cpp
+@@ -2200,6 +2200,30 @@
+ }
+ }
+ 
++void validation_dump_bench_ground_topology() {
++  const auto* root = gameref_get(g_world);
++  std::fprintf(stderr, "[validation-world] world=%p children=%zu cache-types=%zu\n", g_world, root ? root->children.size() : 0, g_ground_props.size());
++  unsigned keys = 0;
++  for (const auto& entry : g_ground_props) {
++    if (keys++ >= 16) break;
++    std::fprintf(stderr, "[validation-cache] type=0x%x\n", entry.first);
++  }
++  unsigned visited = 0, printed = 0, matches = 0;
++  const auto visit = [&](auto&& self, void* key, unsigned depth) -> void {
++    const auto* node = gameref_get(key);
++    if (!node || visited++ >= 2048) return;
++    const bool cached = g_ground_props.contains(static_cast<uint32_t>(node->type_id));
++    if (cached) ++matches;
++    if ((depth <= 1 || cached) && printed++ < 80)
++      std::fprintf(stderr, "[validation-node] depth=%u key=%p parent=%p kind=%d type=0x%x flags=0x%x empty=%d children=%zu cached=%d\n", depth, key, node->parent, int(node->kind), unsigned(node->type_id), unsigned(node->flags), int(node->empty), node->children.size(), int(cached));
++    if (depth < 4)
++      for (void* child : node->children) self(self, child, depth + 1);
++  };
++  visit(visit, g_world, 0);
++  std::fprintf(stderr, "[validation-world] visited=%u cache-matches-in-subtree=%u\n", visited, matches);
++  std::fflush(stderr);
++}
++
+ bool scene_instances_has_ground_props() {
+   const auto* world = gameref_get(g_world);
+   if (!world || g_ground_props.empty()) return false;

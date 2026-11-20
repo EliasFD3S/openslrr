@@ -42,6 +42,15 @@ void script_callbacks_tick(Jvm& vm,float dt){
     vm.invoke(h.object->class_name,method,mode==8?"(F)V":"()V",args,false);
   }
 }
+bool script_event_listening(Jvm& vm,Object* source,int event){
+  auto i=states.find(&vm);if(!source||i==states.end())return false;source=canonical(source);
+  for(const auto& w:i->second.watches){
+    if(w.source!=source||!(w.type&uint32_t(event)))continue;
+    const int forwarded=(w.alias&0x0fffffffu)?int(w.alias&0x0fffffffu):event;
+    if(auto* target=gameref_get(w.listener);target&&(target->event_mask&forwarded))return true;
+  }
+  return false;
+}
 int script_event_emit(Jvm& vm,Object* source,Object* related,int event,Value param,bool related_event){
   if(!source)return 0;auto& s=states[&vm];if(s.depth>=32)return 0;
   ++s.depth;struct Guard{int& n;~Guard(){--n;}} guard{s.depth};
