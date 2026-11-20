@@ -243,8 +243,12 @@ SLRR_TEST(a_brake_stronger_than_the_drive_holds_its_wheels) {
 
 SLRR_TEST(the_engine_beating_weak_rear_brakes_spins_the_driven_wheels) {
   // A burnout: throttle with only the front brakes holding the car. The rear
-  // wheels spin far faster than the car moves.
+  // wheels spin far faster than the car moves. Use an explicit 470 Nm net
+  // engine here: the default 235 Nm curve no longer has a hidden x2 gain.
   Car car;
+  car.dynamics.drive.torque = [](double rpm) {
+    return std::clamp(300 + rpm * .04, 0., 470.);
+  };
   for (int i = 0; i < 2; ++i) car.dynamics.drive.wheels[i].brake = 6000;
   for (int i = 2; i < 4; ++i) car.dynamics.drive.wheels[i].brake = 150;
   car.run(1, 0, 0, 0);

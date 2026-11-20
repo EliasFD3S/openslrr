@@ -732,6 +732,31 @@ including nitro. Do not mix an old nitro bank with a new RPM step or a new
 geometry. Bound indices before the integer conversion. The last exact sample
 must remain reachable.
 
+#203 defines dyno torque and `DriveInput::torque` as **net open-throttle crank
+Nm**. A four-stroke cycle contributes N·work/(4π), minus the shared recovered
+mechanical friction torque (`engine_friction_torque` in
+[dyno_model.hpp](../include/slrr/dyno_model.hpp)). Power is torque × angular speed,
+including between samples and for nitrous blends. The stock `getHP` native still
+returns watts, while `maxHP` remains mechanical horsepower. Driving has no ×2
+gain: it recovers indicated torque before pedal/combustion limiting and subtracts
+mechanical friction once. The previous drag curve is incremental closed-throttle
+pumping scaled by (1 − effective pedal); it is not subtracted again at WOT.
+Fuel cut retains friction, and existing starter/idle/clutch behavior remains.
+These loss curves are empirical, not a new manifold or combustion calibration.
+Stock outputs intentionally change under the issue owner's physical-consistency
+direction; see [the investigation](PHYSICS_TICK_SPIKE.md).
+
+The #203 Java port patch computes `in/out_min/max` from capped curtain area:
+`c = clamp(efficiency * discharge * A_eff * U_ref * 0.001 / V_swept, 0, 1)`
+in SI. The declared ideal-air M=1 reference has `U_ref = 198.629616711 m/s`.
+The existing 0.9 breather factor stays empirical; this does not make the native
+linear pressure relaxation an exact compressible valve solver. The shared
+CylinderHead helper must ship with both updated block classes; DOHC/SOHC/OHV
+continue supplying the same disk-area/lift proxy, and Vee averaging is unchanged.
+Efficiency now restricts minimum as well as maximum flow multiplicatively, so
+authored nonzero closed lifts can change leakage. No DynoData field/schema or
+native signature changes. See [patch installation/reproduction](../patch/README.md#port-flow-normalization-203).
+
 Mass distribution and crush zones are separate models. The car's mass,
 centre of mass and inertia come from the installed parts' CFG `body` lines
 (`assembly_mass_properties`): each line's mass is spread over its own shape (a

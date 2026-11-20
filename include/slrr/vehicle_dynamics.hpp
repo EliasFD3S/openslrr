@@ -137,17 +137,26 @@ struct DriveInput {
   double differential_lock = 0;
   double inertia = 0, idle = 0, limit = 0, starter = 0;
   double clutch = 1;
+  // Net open-throttle crank torque (Nm) at the requested rpm, including
+  // the shared mechanical friction loss; the solver applies no extra gain.
   std::function<double(double)> torque;
 };
 double suspension_force(double length, double velocity, double rest,
                         double maximum, double spring, double bump,
                         double rebound);
 
+// Compile all consumers with the same experimental solver rate (#203).
+// The game additionally requires a multiple of its 60 Hz shared-world tick.
+#ifndef SLRR_VEHICLE_PHYSICS_HZ
+#define SLRR_VEHICLE_PHYSICS_HZ 120
+#endif
+
 class VehicleDynamics {
 public:
-  // SLRR_rev physics-timing.ts driving frequency.
-  static constexpr unsigned frequency = 120;
+  // SLRR_rev physics-timing.ts driving frequency; shipped default is 120 Hz.
+  static constexpr unsigned frequency = SLRR_VEHICLE_PHYSICS_HZ;
   static constexpr unsigned update_frequency = 60;
+  static_assert(SLRR_VEHICLE_PHYSICS_HZ >= 60, "solver rate must be at least 60 Hz");
   static constexpr double timestep = 1.0 / frequency;
   RigidBody body;
   struct Impact {

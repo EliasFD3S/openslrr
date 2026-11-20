@@ -137,6 +137,15 @@ set_property(SOURCE src/boot/boot.cpp APPEND PROPERTY
 
 target_include_directories(slrr_host PRIVATE include "${CMAKE_BINARY_DIR}/generated")
 
+# Investigation-only solver-rate override (#203); preserve the shipped default.
+# The shared-world caller uses integer substeps per 60 Hz host tick.
+set(SLRR_VEHICLE_PHYSICS_HZ 120 CACHE STRING "Experimental solver rate (multiple of 60 Hz)")
+math(EXPR _slrr_tick_remainder "${SLRR_VEHICLE_PHYSICS_HZ} % 60")
+if(SLRR_VEHICLE_PHYSICS_HZ LESS 60 OR NOT _slrr_tick_remainder EQUAL 0)
+  message(FATAL_ERROR "SLRR_VEHICLE_PHYSICS_HZ must be a positive multiple of 60; exactly 1000 Hz needs a shared-world scheduler change.")
+endif()
+target_compile_definitions(slrr_host PRIVATE SLRR_VEHICLE_PHYSICS_HZ=${SLRR_VEHICLE_PHYSICS_HZ})
+
 # The standard headers most sources include, parsed once instead of per file.
 target_precompile_headers(slrr_host PRIVATE
   <algorithm> <array> <chrono> <cmath> <cstdint> <cstdio> <cstring> <filesystem>

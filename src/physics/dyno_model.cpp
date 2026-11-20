@@ -310,10 +310,14 @@ bool step(Bank& s) {
     const double swept = s.get(kVmax) - s.get(kVmin);
     s.set(kMeanPressure, swept <= 1e-8 ? 0.0 : s.get(kPreviousWork) / swept);
     const double pressure_work = s.get(kMeanPressure) * swept;
-    s.set(kTorque, s.get(kCylinders) * pressure_work * 0.125);
-    s.set(kGrossPower, s.get(kRpm) * pressure_work * 0.01666666753590107 * s.get(kCylinders));
-    s.set(kFrictionPower, s.get(kRpm) * s.get(kRpm) * s.get(kRpm) * 2e-8);
-    s.set(kNetPower, s.get(kGrossPower) - s.get(kFrictionPower));
+    // One four-stroke cycle turns the crank through 4*pi radians.
+    const double omega = s.get(kRpm) * engine_rpm_to_rad;
+    const double indicated_torque = s.get(kCylinders) * pressure_work / (4 * std::numbers::pi);
+    const double friction = engine_friction_torque(s.get(kRpm));
+    s.set(kTorque, indicated_torque - friction);
+    s.set(kGrossPower, indicated_torque * omega);
+    s.set(kFrictionPower, friction * omega);
+    s.set(kNetPower, s.get(kTorque) * omega);
     s.set(kHorsepower, s.get(kNetPower) * 0.001341);
   }
   s.set(kAngle, s.get(kAngle) + s.get(kAngularSpeed) * s.get(kDt));
@@ -483,6 +487,8 @@ bool table(Bank& s, int step_rpm, std::vector<float>* torque, std::vector<float>
     if (s.get(kPeakPressure) < s.get(kMeanPressure)) {
       s.set(kPeakPressure, s.get(kMeanPressure));
       s.set(kPeakPressureRpm, s.get(kRpm));
+    }
+    if (s.get(kPeakTorque) < s.get(kTorque)) {
       s.set(kPeakTorqueRpm, s.get(kRpm));
       s.set(kPeakTorque, s.get(kTorque));
     }
@@ -660,10 +666,13 @@ float sample_curve(const Curve& curve, float rpm, float nitro, bool watts) {
     const float fraction = static_cast<float>(position - std::floor(position));
     return table[index] * (1.f - fraction) + table[index + 1] * fraction;
   };
-  const float primary = sample(watts ? curve.watts : curve.torque);
-  const std::vector<float>& secondary = watts ? curve.nitro_watts : curve.nitro_torque;
-  if (secondary.empty()) return primary;
-  return primary * (1.f - nitro) + sample(secondary) * nitro;
+  const float primary = sample(curve.torque);
+  const float torque = curve.nitro_torque.empty()
+      ? primary
+      : primary * (1.f - nitro) + sample(curve.nitro_torque) * nitro;
+  // Interpolate torque first: interpolating watts independently violates
+  // P=T*omega between table nodes, including blended nitrous curves.
+  return watts ? static_cast<float>(torque * (rpm * engine_rpm_to_rad)) : torque;
 }
 
 bool near(double got, double want, double tolerance) {
@@ -722,10 +731,14 @@ bool dyno_self_check(char* msg, std::size_t msg_cap) {
   const Curve& curve = fresh.curve;
   if (curve.rpm_step != 437.f || curve.torque.size() != 16 || curve.watts.size() != 16)
     return fail("dyno table shape");
+  // Preserve the recovered cycle-work witness, not its legacy non-SI scales.
+  constexpr double witness_work = 82.08709716796875 * 8;
+  const double witness_torque = witness_work / (4 * std::numbers::pi) -
+                                engine_friction_torque(437);
   if (!near(fresh.stats.displacement, 0.0019011663971468806, 1e-9) ||
       !near(fresh.stats.compression, 10.50583267211914, 2e-6) ||
-      !near(curve.torque[1], 82.08709716796875, 0.002) ||
-      !near(curve.watts[1], 4781.27294921875, 0.05)) {
+      !near(curve.torque[1], witness_torque, 0.002) ||
+      !near(curve.watts[1], witness_torque * 437 * engine_rpm_to_rad, 0.05)) {
     if (msg && msg_cap)
       std::snprintf(msg, msg_cap,
                     "dyno witness fail torque=%.6f watts=%.4f disp=%.12g comp=%.8g",

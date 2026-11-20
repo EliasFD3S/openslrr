@@ -195,6 +195,8 @@ and GPU counters. A large GPU reading alone does not identify the whole frame's
 bottleneck.
 
 `--perf-log` prints one `[perf]` line per simulated second and writes the same fields to the CSV file. Add `--bench-shots DIR` to capture the window every 10 seconds. The run writes `save/game/options` on exit like a normal session.
+The CSV's `interpolation_ms` field measures render-pose publication inside Physics, not downstream pose readers or scene-cache work. Do not add it to the inclusive Physics total.
+
 Select a visible vehicle or a preview in **Vehicle**, or use **Freeze
 telemetry** to hold a sample. **Tuning** changes tyre parameters and
 simulation speed live. **Renderer** has visual toggles. **Section** shows

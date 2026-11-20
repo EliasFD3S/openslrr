@@ -25,6 +25,7 @@ enum class Zone : uint8_t {
   Pedestrians, // pedestrian publication/stepping, nested inside Physics
   Collision,   // scene collision preparation, nested inside Physics
   Gc,          // end-of-frame VM collection
+  Interpolation, // render-pose publication, nested inside Physics
   Count
 };
 

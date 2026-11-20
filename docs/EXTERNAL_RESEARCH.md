@@ -243,9 +243,12 @@ All little-endian. Each item notes OpenSLRR's status.
   OpenSLRR keeps the last sample reachable and blends the nitro bank
   (`src/physics/dyno_model.cpp:dyno_sample`). The nitro blend only affects
   the `getTorque`/`getHP` natives; driving always samples with nitro 0. One
-  side is wrong for the target EXE; settle it against the binary. Both
-  reproduce the witness value for default DynoData, about 82.087 N·m at the
-  437 RPM step (`src/physics/dyno_model.cpp:dyno_self_check`). **ext**
+  side is wrong for the target EXE; settle it against the binary. The pre-#203
+  OpenSLRR and upstream outputs reproduced about 82.087 N·m at the 437 RPM
+  default-DynoData witness. #203 intentionally preserves the recovered cycle
+  work but converts torque/power to SI net crank output under the owner's
+  physical-consistency direction; see [the audit](PHYSICS_TICK_SPIKE.md).
+  `src/physics/dyno_model.cpp:dyno_self_check` now checks that converted witness. **ext + design**
 - **Clutch pitfall.** `ClutchF` is not a torque cap in N·m, and both sides of
   the clutch exchange must share one wheel inertia, or energy is created
   (`SLRR_rev:docs/engine-telemetry-calibration.md`). **obs + design**

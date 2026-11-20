@@ -837,6 +837,22 @@ These are entry points, not fixes. Each needs its own reproduction.
   follow-up overlapped the chained `city2` parse with `city`'s props, indexed
   large collision meshes on the pool and kept the log order serial: the warm
   load is now under 1 s.
+- **#203 physics-clock/engine-math spike.** The default remains 60 Hz host
+  ticks with 120 Hz shared-world substeps and interpolated drawing. Fixed
+  stepping is not independent wall-clock scheduling: excess frame time is
+  discarded. The integer shared-world loop would lose 4% of simulated time
+  with a bare 1000 Hz override. Rate experiments, throttle integration boundaries,
+  adaptive-setting references and dyno/Java compression couplings are recorded
+  in [PHYSICS_TICK_SPIKE.md](PHYSICS_TICK_SPIKE.md). The owner permits changed
+  engine outputs: cycle torque is now SI net crank Nm, sampled power is T·ω,
+  and driving consumes that curve without the legacy ×2 gain or duplicate WOT
+  loss. The shipped Java head/Inline/Vee patch normalizes capped curtain area by
+  a declared 1-ms ideal-air reference exchange volume, replacing X²/V. Native
+  DynoData fields remain unchanged; full pressure-dependent flow, fuel calibration
+  and independent-thread ownership remain open. The actual-solver throttle
+  experiment covers digital/analog plate response, cut hysteresis and latched
+  BOV events without enabling new production controls. `interpolation_ms`
+  measures pose publication inside Physics, not downstream renderer caches.
 
 ## 12. Self-check
 
