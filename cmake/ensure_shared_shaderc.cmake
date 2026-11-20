@@ -1,0 +1,52 @@
+# Ensures that a shaderc built from the same bgfx sources and compiler exists in
+# SHADERC_DIR/bin. The first checkout to ask builds it while holding a lock; the
+# others wait for it and reuse it. Run with cmake -P from the slrr_shaderc target.
+foreach(_var IN ITEMS SHADERC_DIR BGFX_CMAKE_DIR BGFX_DIR BIMG_DIR BX_DIR MINI_SOURCE_DIR GENERATOR)
+  if(NOT DEFINED ${_var})
+    message(FATAL_ERROR "ensure_shared_shaderc: ${_var} is not set")
+  endif()
+endforeach()
+
+set(_bin "${SHADERC_DIR}/bin")
+if(EXISTS "${_bin}/shaderc.exe")
+  return()
+endif()
+
+file(MAKE_DIRECTORY "${SHADERC_DIR}")
+message(STATUS "Waiting for the shared shaderc lock: ${SHADERC_DIR}")
+file(LOCK "${SHADERC_DIR}/.lock" TIMEOUT 7200 RESULT_VARIABLE _locked)
+if(NOT _locked EQUAL 0)
+  message(FATAL_ERROR "Could not lock ${SHADERC_DIR}: ${_locked}")
+endif()
+if(EXISTS "${_bin}/shaderc.exe")
+  return()
+endif()
+
+message(STATUS "Building the shared shaderc once (${SHADERC_DIR})")
+set(_build "${SHADERC_DIR}/build")
+file(REMOVE_RECURSE "${_build}" "${_bin}.tmp")
+set(_configure -S "${MINI_SOURCE_DIR}" -B "${_build}" -G "${GENERATOR}"
+  "-DSLRR_BGFX_CMAKE_DIR=${BGFX_CMAKE_DIR}" "-DBGFX_DIR=${BGFX_DIR}"
+  "-DBIMG_DIR=${BIMG_DIR}" "-DBX_DIR=${BX_DIR}")
+if(PLATFORM)
+  list(APPEND _configure -A "${PLATFORM}")
+endif()
+if(TOOLSET)
+  list(APPEND _configure -T "${TOOLSET}")
+endif()
+execute_process(COMMAND "${CMAKE_COMMAND}" ${_configure} RESULT_VARIABLE _result)
+if(NOT _result EQUAL 0)
+  message(FATAL_ERROR "Configuring the shared shaderc failed (${_result})")
+endif()
+execute_process(COMMAND "${CMAKE_COMMAND}" --build "${_build}" --config Release
+  --target slrr_shaderc_only --parallel RESULT_VARIABLE _result)
+if(NOT _result EQUAL 0)
+  message(FATAL_ERROR "Building the shared shaderc failed (${_result})")
+endif()
+file(GLOB _outputs "${_build}/out/*")
+file(COPY ${_outputs} DESTINATION "${_bin}.tmp")
+if(NOT EXISTS "${_bin}.tmp/shaderc.exe")
+  message(FATAL_ERROR "The shared shaderc build produced no shaderc.exe in ${_build}/out")
+endif()
+file(RENAME "${_bin}.tmp" "${_bin}")
+file(REMOVE_RECURSE "${_build}")

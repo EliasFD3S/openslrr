@@ -13,6 +13,13 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake/CMakeLists.txt
   message(FATAL_ERROR "Missing third_party/bgfx.cmake. See README.md for setup.")
 endif()
 
+# Visual Studio compiles the files of one project one after the other unless
+# /MP is set, which left most cores idle. It covers bgfx.cmake's targets too.
+# SLRR_COMPILE_JOBS caps the cl.exe processes per project; empty uses every core.
+set(SLRR_COMPILE_JOBS "" CACHE STRING "cl.exe processes per project (/MP<n>); empty uses all logical processors")
+string(APPEND CMAKE_C_FLAGS " /MP${SLRR_COMPILE_JOBS}")
+string(APPEND CMAKE_CXX_FLAGS " /MP${SLRR_COMPILE_JOBS}")
+
 add_library(slrr_script_compiler STATIC
   third_party/slrrc/classes.cpp third_party/slrrc/classfile.cpp
   third_party/slrrc/decl.cpp third_party/slrrc/diag.cpp
@@ -146,7 +153,64 @@ set(BGFX_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BGFX_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(BGFX_INSTALL OFF CACHE BOOL "" FORCE)
 set(BGFX_CUSTOM_TARGETS OFF CACHE BOOL "" FORCE)
+
+# shaderc (with glslang, SPIRV-Tools and Tint) is most of bgfx's build time and
+# is identical for every checkout. When SLRR_TOOLS_CACHE_DIR (or the environment
+# variable of that name) is set, it is built once into that directory and every
+# checkout reuses it. Otherwise shaderc is built in this build tree.
+set(SLRR_TOOLS_CACHE_DIR "" CACHE PATH "Directory shared between checkouts for prebuilt tools (shaderc); empty builds them locally")
+if(NOT SLRR_TOOLS_CACHE_DIR AND DEFINED ENV{SLRR_TOOLS_CACHE_DIR})
+  set(SLRR_TOOLS_CACHE_DIR "$ENV{SLRR_TOOLS_CACHE_DIR}")
+endif()
+if(SLRR_TOOLS_CACHE_DIR)
+  set(BGFX_BUILD_TOOLS_SHADER OFF CACHE BOOL "" FORCE)
+else()
+  set(BGFX_BUILD_TOOLS_SHADER ON CACHE BOOL "" FORCE)
+endif()
 add_subdirectory(third_party/bgfx.cmake EXCLUDE_FROM_ALL)
+
+if(SLRR_TOOLS_CACHE_DIR)
+  # Key the cached shaderc by every input that changes it: the revisions of
+  # bgfx.cmake, bgfx, bimg and bx, and the compiler and toolset.
+  find_package(Git REQUIRED)
+  set(_slrr_shaderc_key "${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} ${CMAKE_GENERATOR_TOOLSET}")
+  foreach(_slrr_dep IN ITEMS BGFX BIMG BX)
+    get_directory_property(${_slrr_dep}_DIR
+      DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake"
+      DEFINITION ${_slrr_dep}_DIR)
+  endforeach()
+  foreach(_slrr_path IN ITEMS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake" "${BGFX_DIR}" "${BIMG_DIR}" "${BX_DIR}")
+    execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${_slrr_path}" rev-parse HEAD
+      OUTPUT_VARIABLE _slrr_rev RESULT_VARIABLE _slrr_rev_result OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(NOT _slrr_rev_result EQUAL 0 OR _slrr_rev STREQUAL "")
+      message(FATAL_ERROR "SLRR_TOOLS_CACHE_DIR needs a git revision for ${_slrr_path}; unset it to build shaderc locally.")
+    endif()
+    string(APPEND _slrr_shaderc_key " ${_slrr_rev}")
+  endforeach()
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/shaderc_cache/CMakeLists.txt")
+  file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/cmake/shaderc_cache/CMakeLists.txt" _slrr_mini_hash)
+  string(SHA256 _slrr_shaderc_key "${_slrr_shaderc_key} ${_slrr_mini_hash}")
+  string(SUBSTRING "${_slrr_shaderc_key}" 0 16 _slrr_shaderc_key)
+  set(_slrr_shaderc_dir "${SLRR_TOOLS_CACHE_DIR}/shaderc-${_slrr_shaderc_key}")
+  file(TO_CMAKE_PATH "${_slrr_shaderc_dir}" _slrr_shaderc_dir)
+
+  add_custom_target(slrr_shaderc
+    BYPRODUCTS "${_slrr_shaderc_dir}/bin/shaderc.exe"
+    COMMAND "${CMAKE_COMMAND}"
+            "-DSHADERC_DIR=${_slrr_shaderc_dir}"
+            "-DBGFX_CMAKE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake"
+            "-DBGFX_DIR=${BGFX_DIR}" "-DBIMG_DIR=${BIMG_DIR}" "-DBX_DIR=${BX_DIR}"
+            "-DMINI_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/cmake/shaderc_cache"
+            "-DGENERATOR=${CMAKE_GENERATOR}" "-DPLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+            "-DTOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ensure_shared_shaderc.cmake"
+    VERBATIM)
+  add_dependencies(slrr_host slrr_shaderc)
+  # bgfxToolUtils.cmake defines its helpers only when this target exists.
+  add_executable(bgfx::shaderc IMPORTED)
+  set_target_properties(bgfx::shaderc PROPERTIES IMPORTED_LOCATION "${_slrr_shaderc_dir}/bin/shaderc.exe")
+endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake/cmake/bgfxToolUtils.cmake")
 
 set(SLRR_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders")
