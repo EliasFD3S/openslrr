@@ -2268,7 +2268,12 @@ picked part; the host draws directly instead:
   metres wide, along the hit normal, oriented to screen up (including
   mirrored part frames), turned by
   `rot` and mirrored by `flip`. Only paint-slot triangles facing the stamp
-  inside a depth slab are painted; each texel blends once per stamp.
+  inside a depth slab are painted; each texel blends once per stamp. Other
+  panels whose bounds the stamp reaches
+  (`src/resources/scene_instances.cpp:scene_instances_paint_targets`) and
+  whose triangles it covers (`src/resources/paint_texture.cpp:paint_stamp_reaches`)
+  are painted too, in their own frames, so a decal across a door seam lands
+  on both parts. A preview can therefore span several textures.
   `temp = 1` (the decal preview) is drawn over a copy and replaced by the next
   preview.
 - `xPaint` and `painter_tick` (two host frames without a refresh) take the preview off.

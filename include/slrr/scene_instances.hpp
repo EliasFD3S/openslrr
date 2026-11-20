@@ -135,10 +135,25 @@ struct ScenePickSurface {
   float local[3] = {0.f, 0.f, 0.f};
   float normal[3] = {0.f, 0.f, 0.f};
   float screen_up[3] = {0.f, 1.f, 0.f};
+  // The same normal and screen up in script world space.
+  float world_normal[3] = {0.f, 0.f, 0.f};
+  float world_up[3] = {0.f, 1.f, 0.f};
   bool mirrored = false;
 };
 bool scene_instances_pick_surface(const float origin[3], const float direction[3],
                                   ScenePickSurface *surface);
+// Active-world meshes with a paint slot whose scaled bounds come within
+// `radius` of a world point: a stamp there also reaches neighbouring panels.
+// `inverse` maps world offsets from the matrix origin into the mesh frame.
+struct ScenePaintTarget {
+  void *key = nullptr;
+  std::shared_ptr<const ScxGeometry> geometry;
+  int paint_slot = -1;
+  float matrix[16] = {};
+  float inverse[9] = {};
+  bool mirrored = false;
+};
+std::vector<ScenePaintTarget> scene_instances_paint_targets(const float world[3], float radius);
 bool scene_instances_pointer_ray(int px, int py, int width, int height,
                                  float origin[3], float direction[3]);
 // A typeof-1 ground tree can include render triangles, collision triangles

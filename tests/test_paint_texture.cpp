@@ -158,6 +158,31 @@ SLRR_TEST(stamp_paints_the_facing_paint_slot_under_the_brush_only) {
   SLRR_REQUIRE(slrr::paint_stamp_mesh(untouched, geometry, 0, brush, far) == 0);
 }
 
+SLRR_TEST(stamp_reach_matches_the_panels_it_would_paint) {
+  const auto geometry = quad();
+  slrr::PaintStamp stamp;
+  stamp.normal[2] = 1.f;
+  stamp.size = 1.f;
+  // A stamp centred just past the quad's edge still overlaps it: the
+  // neighbouring panel of a seam gets its share.
+  stamp.hit[0] = 1.3f;
+  SLRR_REQUIRE(slrr::paint_stamp_reaches(geometry, 0, stamp));
+  PaintImage target = image(64, 64, 0xffffffffu);
+  const PaintImage brush = image(4, 4, 0xffffffffu);
+  SLRR_REQUIRE(slrr::paint_stamp_mesh(target, geometry, 0, brush, stamp) > 0);
+  // Beyond its half width, behind, off the surface or on another slot it does not.
+  slrr::PaintStamp clear = stamp;
+  clear.hit[0] = 1.6f;
+  SLRR_REQUIRE(!slrr::paint_stamp_reaches(geometry, 0, clear));
+  slrr::PaintStamp behind = stamp;
+  behind.normal[2] = -1.f;
+  SLRR_REQUIRE(!slrr::paint_stamp_reaches(geometry, 0, behind));
+  slrr::PaintStamp far = stamp;
+  far.hit[2] = 3.f;
+  SLRR_REQUIRE(!slrr::paint_stamp_reaches(geometry, 0, far));
+  SLRR_REQUIRE(!slrr::paint_stamp_reaches(geometry, 1, stamp));
+}
+
 SLRR_TEST(stamp_blends_each_texel_once_and_orients_the_brush) {
   const auto geometry = quad(false);
   PaintImage target = image(32, 32, 0xff000000u);
@@ -250,6 +275,7 @@ int main() {
       dxt_textures_decode_to_straight_rgba,
       paint_texture_ids_temp_strokes_and_release,
       stamp_paints_the_facing_paint_slot_under_the_brush_only,
+      stamp_reach_matches_the_panels_it_would_paint,
       stamp_blends_each_texel_once_and_orients_the_brush,
       stamp_rejects_invalid_coordinates_before_rasterization,
       unused_textures_have_rebuild_grace_and_are_then_reclaimed,

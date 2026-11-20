@@ -83,5 +83,10 @@ struct PaintStamp {
 size_t paint_stamp_mesh(PaintImage& target, const ScxGeometry& geometry,
                         int paint_slot, const PaintImage& brush,
                         const PaintStamp& stamp);
+// Whether that stamp would reach any paint-slot triangle of the mesh (the
+// same culling, no rasterizing): neighbouring panels only take a texture
+// when a stamp across their seam actually covers them.
+bool paint_stamp_reaches(const ScxGeometry& geometry, int paint_slot,
+                         const PaintStamp& stamp);
 
 }  // namespace slrr

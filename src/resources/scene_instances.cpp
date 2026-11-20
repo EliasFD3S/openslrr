@@ -3047,9 +3047,14 @@ bool scene_instances_pick_surface(const float origin[3], const float direction[3
                           + matrix[8] * (matrix[1]*matrix[6] - matrix[2]*matrix[5]) < 0.f;
         for (int k = 0; k < 3; ++k) {
           surface->screen_up[k] = inv[k] * screen_up[0] + inv[3+k] * screen_up[1] + inv[6+k] * screen_up[2];
+          surface->world_up[k] = screen_up[k];
           surface->local[k] = o[k] + d[k] * t;
           surface->normal[k] = nl > 0.f ? side * n[k] / nl : 0.f;
         }
+        for (int k = 0; k < 3; ++k)
+          surface->world_normal[k] = matrix[k] * surface->normal[0] +
+                                     matrix[4 + k] * surface->normal[1] +
+                                     matrix[8 + k] * surface->normal[2];
       }
     }
     if (!triangle && idx.empty() && tmin >= 0.f && tmin < best) {
@@ -3064,6 +3069,41 @@ bool scene_instances_pick_surface(const float origin[3], const float direction[3
   surface->key = hit;
   for (int i = 0; i < 3; ++i) surface->world[i] = origin[i] + direction[i] * best;
   return true;
+}
+
+std::vector<ScenePaintTarget> scene_instances_paint_targets(const float world[3], float radius) {
+  std::vector<ScenePaintTarget> out;
+  if (!world)
+    return out;
+  for (const SceneInstance &instance : scene_instances_collect_root(g_world)) {
+    if (instance.sky || !instance.geometry || !instance.key || instance.paint_slot < 0)
+      continue;
+    ScenePaintTarget target;
+    if (!scene_instances_script_matrix(instance.key, target.matrix) ||
+        !invert_columns(target.matrix, target.inverse))
+      continue;
+    const float *m = target.matrix, *inv = target.inverse;
+    const float p[3] = {world[0] - m[12], world[1] - m[13], world[2] - m[14]};
+    const float scale = instance.geometry->position_scale;
+    const ScxMeshInfo &info = instance.geometry->info;
+    bool near = true;
+    for (int k = 0; k < 3 && near; ++k) {
+      const float local = inv[k] * p[0] + inv[3 + k] * p[1] + inv[6 + k] * p[2];
+      float lo = info.bbox_min[k] * scale, hi = info.bbox_max[k] * scale;
+      if (lo > hi)
+        std::swap(lo, hi);
+      near = local >= lo - radius && local <= hi + radius;
+    }
+    if (!near)
+      continue;
+    target.key = instance.key;
+    target.geometry = instance.geometry;
+    target.paint_slot = instance.paint_slot;
+    target.mirrored = m[0] * (m[5] * m[10] - m[6] * m[9]) - m[4] * (m[1] * m[10] - m[2] * m[9]) +
+                      m[8] * (m[1] * m[6] - m[2] * m[5]) < 0.f;
+    out.push_back(std::move(target));
+  }
+  return out;
 }
 
 void scene_visit_gc_roots(const GcRootVisitor& visit) {

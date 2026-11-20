@@ -482,32 +482,43 @@ void paint_fill(PaintImage& image, uint32_t argb) {
   for (size_t i = 0; i + 3 < image.rgba.size(); i += 4) std::memcpy(&image.rgba[i], px, 4);
 }
 
-size_t paint_stamp_mesh(PaintImage& target, const ScxGeometry& geometry, int paint_slot,
-                        const PaintImage& brush, const PaintStamp& stamp) {
-  if (!target.valid() || !brush.valid() || paint_slot < 0 || !(stamp.size > 1e-4f) ||
-      !std::isfinite(stamp.size) || !std::isfinite(stamp.rotation))
-    return 0;
-  float n[3] = {stamp.normal[0], stamp.normal[1], stamp.normal[2]};
-  if (!normalize3(n)) return 0;
+namespace {
+
+// The stamp's surface frame in the mesh: normal n, decal right t and up b.
+bool stamp_frame(const PaintStamp& stamp, float n[3], float t[3], float b[3]) {
+  if (!(stamp.size > 1e-4f) || !std::isfinite(stamp.size) || !std::isfinite(stamp.rotation))
+    return false;
+  n[0] = stamp.normal[0]; n[1] = stamp.normal[1]; n[2] = stamp.normal[2];
+  if (!normalize3(n)) return false;
+
   // Project screen up (expressed in this mesh frame) onto the surface.
   // The fallback handles a view looking exactly along that up vector.
   float up[3] = {stamp.up[0], stamp.up[1], stamp.up[2]};
-  if (!normalize3(up)) return 0;
+  if (!normalize3(up)) return false;
   if (std::fabs(dot3(up, n)) > .99f) {
     up[0] = 0.f; up[1] = std::fabs(n[1]) > .9f ? 0.f : 1.f;
     up[2] = up[1] ? 0.f : 1.f;
   }
   const float d = dot3(up, n);
   float b0[3] = {up[0] - n[0] * d, up[1] - n[1] * d, up[2] - n[2] * d};
-  if (!normalize3(b0)) return 0;
+  if (!normalize3(b0)) return false;
   float t0[3];
   cross3(b0, n, t0);
   const float c = std::cos(stamp.rotation), s = std::sin(stamp.rotation);
-  float t[3], b[3];
   for (int i = 0; i < 3; ++i) {
     t[i] = t0[i] * c + b0[i] * s;
     b[i] = b0[i] * c - t0[i] * s;
   }
+  return true;
+}
+
+}  // namespace
+
+size_t paint_stamp_mesh(PaintImage& target, const ScxGeometry& geometry, int paint_slot,
+                        const PaintImage& brush, const PaintStamp& stamp) {
+  float n[3], t[3], b[3];
+  if (!target.valid() || !brush.valid() || paint_slot < 0 || !stamp_frame(stamp, n, t, b))
+    return 0;
   const float depth = std::max(stamp.size * .5f, .05f);
   const float color[4] = {float((stamp.argb >> 16) & 255), float((stamp.argb >> 8) & 255),
                           float(stamp.argb & 255), float(stamp.argb >> 24)};
@@ -632,6 +643,59 @@ size_t paint_stamp_mesh(PaintImage& target, const ScxGeometry& geometry, int pai
     }
   }
   return changed;
+}
+
+bool paint_stamp_reaches(const ScxGeometry& geometry, int paint_slot, const PaintStamp& stamp) {
+  float n[3], t[3], b[3];
+  if (paint_slot < 0 || !stamp_frame(stamp, n, t, b)) return false;
+  // The same triangle culling as paint_stamp_mesh, without a texture.
+  const float depth = std::max(stamp.size * .5f, .05f);
+  const float scale = geometry.position_scale;
+  const auto& pos = geometry.positions;
+  const auto& normals = geometry.normals;
+  const bool vertex_normals = normals.size() == pos.size();
+  const size_t vertices = pos.size() / 3;
+  for (const ScxGroup& group : geometry.groups) {
+    if (group.texture_index != static_cast<uint32_t>(paint_slot)) continue;
+    const uint32_t end = std::min<uint32_t>(group.index_start + group.index_count,
+                                            static_cast<uint32_t>(geometry.indices.size()));
+    for (uint32_t tri = group.index_start; tri + 2 < end; tri += 3) {
+      uint32_t vi[3];
+      bool bad = false;
+      for (int k = 0; k < 3; ++k) {
+        vi[k] = geometry.indices[tri + k];
+        bad |= vi[k] >= vertices;
+      }
+      if (bad) continue;
+      float p[3][3], s[3], u[3], dist[3];
+      for (int k = 0; k < 3; ++k) {
+        for (int a = 0; a < 3; ++a) p[k][a] = pos[vi[k] * 3 + a] * scale - stamp.hit[a];
+        s[k] = dot3(p[k], t) / stamp.size + .5f;
+        u[k] = .5f - dot3(p[k], b) / stamp.size;
+        dist[k] = dot3(p[k], n);
+        bad |= !std::isfinite(s[k]) || !std::isfinite(u[k]) || !std::isfinite(dist[k]);
+      }
+      if (bad) continue;
+      auto all = [&](auto pred) { return pred(0) && pred(1) && pred(2); };
+      if (all([&](int k) { return dist[k] > depth; }) ||
+          all([&](int k) { return dist[k] < -depth; }) ||
+          all([&](int k) { return s[k] < 0.f; }) || all([&](int k) { return s[k] > 1.f; }) ||
+          all([&](int k) { return u[k] < 0.f; }) || all([&](int k) { return u[k] > 1.f; }))
+        continue;
+      float facing = 0.f;
+      if (vertex_normals) {
+        for (int k = 0; k < 3; ++k) facing += dot3(&normals[vi[k] * 3], n);
+        facing /= 3.f;
+      } else {
+        float e1[3], e2[3], fn[3];
+        for (int a = 0; a < 3; ++a) e1[a] = p[1][a] - p[0][a], e2[a] = p[2][a] - p[0][a];
+        cross3(e1, e2, fn);
+        facing = normalize3(fn) ? std::fabs(dot3(fn, n)) : 0.f;
+      }
+      if (facing >= .2f) return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace slrr
