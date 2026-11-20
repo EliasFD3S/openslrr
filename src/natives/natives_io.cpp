@@ -500,7 +500,7 @@ int json_take_payload(RpkIndex& rpk, HostFile& file) {
 // becomes (ordinal << 16) | local. An unsaved id (high word 0xFFFF, type
 // 5 or 7) becomes its session ordinal, with a blob in the trailer. A
 // Painter texture's blob holds its committed pixels as a PNG; a type-7 id
-// that is no longer a live texture cannot be saved.
+// that is no longer a live texture keeps an empty blob, which loads as null.
 bool sdat_wire_resource(RpkIndex& rpk, HostFile& file, int32_t host_id,
                         int32_t restype, int32_t* wired) {
   if (!wired) return false;
@@ -528,9 +528,10 @@ bool sdat_wire_resource(RpkIndex& rpk, HostFile& file, int32_t host_id,
         if (!path.empty() && paint_image_from_texture(load_texture_file(path), &decoded))
           image = &decoded;
       }
-      if (!image) return false;
-      blob.bytes = paint_png_encode(*image);
-      if (blob.bytes.empty()) return false;
+      if (image) {
+        blob.bytes = paint_png_encode(*image);
+        if (blob.bytes.empty()) return false;
+      }
     }
     blob.ordinal = static_cast<int32_t>(file.sdat_blobs.size() + 1);
     blob.kind = restype;

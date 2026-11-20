@@ -949,7 +949,8 @@ precision; `floatBits` stores a nonfinite float's unsigned 32-bit pattern.
 `packs` contains `[ordinal, game-relative path]`; `blobs` contains
 `[ordinal, kind, hex bytes]`. Resource values retain SDAT's file-local IDs, not
 session pack numbers. Dynamic resources retain the existing limitation: their
-metadata/bytes can be read, but they are not reinstantiated by the remounter.
+metadata/bytes can be read, but they are not reinstantiated by the remounter,
+except Painter textures stored as PNG blobs (below).
 
 Script strings are byte strings: JSON U+0001..U+00FF represents the corresponding
 byte, not a UTF-8 transcoding of it. The writer escapes non-ASCII/control bytes;
@@ -977,11 +978,11 @@ velocities, the physics accumulator, contacts, assembly, camera, lights,
 reflections, shadows, and loading state. Do not keep the fallen pose of an
 old car as the initial pose of the next one.
 
-`File.write(ResourceRef)` stores a Painter texture as a PNG inside the SDAT
-blob trailer. `readResID` turns the blob back into a new Painter texture; a
-blob the stock game left empty is read from its side file
-`<save>.<ordinal>` (JPEG). A texture id that is no longer live is written as
-a null placeholder rather than an empty blob.
+`File.write(ResourceRef)` stores a Painter texture as a PNG in its save blob
+(the SDAT trailer, or a JSON `blobs` entry). `readResID` turns the blob back
+into a new Painter texture; a blob the stock game left empty is read from its
+side file `<save>.<ordinal>` (JPEG). A texture id that is no longer live keeps
+an empty blob, like other dynamic resources, and reads back as null.
 
 A catalog/garage round trip does not necessarily recreate the same set of
 objects as a dealer round trip. A state repaired by the dealer but not by

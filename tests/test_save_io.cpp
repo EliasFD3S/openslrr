@@ -122,9 +122,10 @@ SLRR_TEST(painter_texture_roundtrips_through_the_save_trailer) {
   f.close();
   slrr::paint_texture_release(restored);
 
-  // A dead Painter id is a null placeholder, keeping later fields aligned.
+  // A dead Painter id keeps an empty blob (the dynamic-resource contract)
+  // that loads as null, keeping later fields aligned.
   SLRR_REQUIRE(f.open("save/dead", 1) == 1);
-  SLRR_REQUIRE(f.write_resource(int32_t(id), 7) == 0);
+  SLRR_REQUIRE(f.write_resource(int32_t(id), 7) == 4);
   SLRR_REQUIRE(f.write_int(5) == 4);
   f.close();
   SLRR_REQUIRE(f.open("save/dead", 0) == 1);

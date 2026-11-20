@@ -2308,8 +2308,9 @@ also accepts these file resources. Loaded image resources stay alive while
 native resource wrappers refer to them (`gameref_uses_resource`).
 
 Saves. `Part.save` and `Vehicle.saveSkin` write the texture through
-`File.write(ResourceRef)`: `ResourceRef.set` types it 7 and the SDAT trailer
-blob carries a PNG (`paint_png_encode`, fixed-Huffman deflate).
+`File.write(ResourceRef)`: `ResourceRef.set` types it 7 and its save blob
+(SDAT trailer or JSON `blobs` entry) carries a PNG (`paint_png_encode`,
+fixed-Huffman deflate).
 `src/natives/natives_io.cpp:sdat_load_texture_blob` restores it on
 `readResID`; an empty stock blob reads the JPEG side file `<save>.<ordinal>`
 that the original game writes. Stock MWM saves with painted parts therefore
