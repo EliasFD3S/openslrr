@@ -79,28 +79,28 @@ struct GroundHit {
 // from_y is a ray origin/ceiling, not a default ground height. False = air.
 using Terrain =
     std::function<bool(double x, double z, double from_y, GroundHit &)>;
-// Original aerodynamics, recovered from the MWM EXE (ENGINE_CONTRACT §11).
-// One CFG `wing` panel of type 4 (surface) or 5 (wing) in chassis-frame
-// metres; `normal` is a unit vector, `area` and `suction` are magnitudes.
-struct AeroPanel {
+// Real-life aerodynamics (ENGINE_CONTRACT §11): ½ρv² forces from the air
+// velocity relative to the car, with typical road-car coefficients.
+struct AeroWing {
+  // One face of a wing in chassis-frame metres: unit normal, planform m².
   Vec3 position, normal;
-  double area = 0, suction = 0, exponent = 1;
-  int type = 4;
+  double area = 0;
 };
-// Signed force along the panel normal (N) for the panel point's velocity
-// component along that normal (m/s) and its squared speed across the panel
-// (m²/s²). Type 4 pushes a face moving into the air back with the full area
-// and a face moving away with the suction fraction. Type 5 resists the
-// normal motion linearly and adds `suction × tangential²` along the normal.
-double aero_panel_force(const AeroPanel &panel, double normal_speed,
-                        double tangential_square = 0);
 struct Aerodynamics {
-  // Chassis.C_drag: N per (m/s)^2, applied against the velocity of
-  // drag_center (chassis frame) above 1 m/s.
+  // Chassis.C_drag (kg/m): the extra drag of missing body panels, against
+  // the velocity of drag_center (chassis frame) above 1 m/s.
   double drag = 0;
   Vec3 drag_center;
-  std::vector<AeroPanel> panels;
+  // Drag and lift of the body, sized by the rigid body's bounds.
+  bool body = false;
+  std::vector<AeroWing> wings;
 };
+// Resultant aerodynamic force (world) and its torque about the centre of
+// mass for one step of `dt`, as VehicleDynamics applies it.
+struct AeroLoad {
+  Vec3 force, torque;
+};
+AeroLoad aero_load(const Aerodynamics &aero, const RigidBody &body, double dt);
 struct WheelConfig {
   bool enabled = false;
   // Fixed suspension travel with compliant tyre/bump-stop support.

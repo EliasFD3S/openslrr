@@ -102,6 +102,23 @@ bool part_parked_spring_length(float rest, float minimum, float maximum,
   return true;
 }
 
+namespace {
+// The SLRR method's exponents: 0.666 for surfaces, 0.667 for wings.
+bool slrr_method(const PartWing &wing) {
+  return std::abs(wing.exponent - .6665f) < .002f;
+}
+} // namespace
+
+bool part_wing_is_airfoil(const PartWing &wing) {
+  return wing.type == 5 || (wing.type == 4 && std::abs(wing.exponent - .667f) < 5e-4f);
+}
+
+float part_wing_area(const PartWing &wing) {
+  if (slrr_method(wing))
+    return wing.area / (part_wing_is_airfoil(wing) ? 90.f : 30.f);
+  return wing.area / 1.27f;
+}
+
 bool part_slot_matrix(const PartConfig &config, const PartSlot &slot,
                       PartMatrix &matrix) {
   PartMatrix frame = identity();

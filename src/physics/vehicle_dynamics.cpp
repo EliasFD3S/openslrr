@@ -238,31 +238,29 @@ double suspension_force(double length, double speed, double rest, double max,
   return std::max(0.0, spring_force - speed * effective_damping);
 }
 
-double aero_panel_force(const AeroPanel &panel, double normal_speed,
-                        double tangential_square) {
-  // EXE 0x48ED73 (type 5): linear normal resistance plus lift along the
-  // normal from the flow across the panel. The exponent is not read.
-  if (panel.type == 5)
-    return -panel.area * normal_speed + panel.suction * std::max(0.0, tangential_square);
-  double speed = normal_speed;
-  // EXE 0x48EB3C (type 4): (|v| / 100)^exponent, scaled back so 1 stays linear.
-  if (panel.exponent > 0 && panel.exponent != 1 && std::abs(speed) > 1e-4)
-    speed = std::copysign(100 * std::pow(.01 * std::abs(speed), panel.exponent), speed);
-  return -panel.area * speed * (speed > 0 ? 1.0 : panel.suction);
-}
+namespace {
+// Typical real-world values, not recovered from the original game.
+constexpr double air_density = 1.225;      // kg/m³, ISA sea level at 15 °C
+constexpr double frontal_fill = .85;       // frontal area / (width × height)
+constexpr double body_drag = .32;          // road-car Cd on the frontal area
+constexpr double body_cross_drag = 1.0;    // Cd of the side and plan views
+constexpr double body_lift = .25;          // road-car CL on the frontal area
+constexpr double wing_lift_slope = 4.2;    // per radian, 2π·A/(A+2) at A = 4
+constexpr double wing_normal_limit = 1.5;  // stalled single-element wing
+constexpr double wing_profile_drag = .05;
 
-// EXE 0x456A83 (Chassis.C_drag) and 0x48E880 (wing panels) act on the chassis
-// body. One step's impulse never exceeds the one that stops the point along
-// the force: the EXE clamps its drag so, and the same bound on each panel's
-// resistance is a host safeguard for the 120 Hz step against the steep
-// low-speed power law. A type 5 panel's lift is added after that bound.
-void VehicleDynamics::apply_aero() {
+// Calls apply(force, point) with world vectors for each aerodynamic force.
+template <class Apply>
+void each_aero_force(const Aerodynamics &aero, const RigidBody &body, double dt,
+                     Apply &&apply) {
+  // One step's impulse never stops a point past rest along a drag force.
   const auto stopping_force = [&](Vec3 point, Vec3 axis, double speed) {
     const Vec3 arm = point - body.position;
     const double inverse =
         1 / body.mass + axis.dot(body.inverse_world_inertia(arm.cross(axis)).cross(arm));
-    return inverse > 0 ? std::abs(speed) / (inverse * timestep) : 0.0;
+    return inverse > 0 ? std::abs(speed) / (inverse * dt) : 0.0;
   };
+  // EXE 0x456A83: Chassis.C_drag as -C |v| v above 1 m/s.
   if (aero.drag > 0) {
     const Vec3 point = body_point(body, aero.drag_center);
     const Vec3 velocity = body.point_velocity(point);
@@ -270,22 +268,67 @@ void VehicleDynamics::apply_aero() {
     if (square > 1) {
       const double speed = std::sqrt(square);
       const Vec3 direction = velocity / speed;
-      const double force =
-          std::min(aero.drag * square, stopping_force(point, direction, speed));
-      if (std::isfinite(force)) body.add_force(direction * -force, point);
+      apply(direction * -std::min(aero.drag * square,
+                                  stopping_force(point, direction, speed)),
+            point);
     }
   }
-  for (const auto &panel : aero.panels) {
-    const Vec3 point = body_point(body, panel.position);
-    const Vec3 normal = body.orientation.rotate(panel.normal);
+  // The body: drag over the projected bounds, lift from the flow along the
+  // car, both at the centre of the bounds.
+  if (aero.body) {
+    const Vec3 size = body.maximum - body.minimum;
+    const Vec3 point = body_point(body, (body.minimum + body.maximum) * .5);
     const Vec3 velocity = body.point_velocity(point);
-    const double speed = velocity.dot(normal);
-    const double limit = stopping_force(point, normal, speed);
-    double force = std::clamp(aero_panel_force(panel, speed), -limit, limit);
-    if (panel.type == 5)
-      force += aero_panel_force(panel, 0, velocity.dot(velocity) - speed * speed);
-    if (force != 0 && std::isfinite(force)) body.add_force(normal * force, point);
+    const Vec3 local = body.orientation.inverse_rotate(velocity);
+    const double square = local.dot(local);
+    if (square > 1e-6) {
+      const double speed = std::sqrt(square);
+      const Vec3 c = local / speed;
+      const double frontal = frontal_fill * size.x * size.y;
+      const double area = body_drag * frontal * std::abs(c.z) +
+                          body_cross_drag * frontal_fill *
+                              (size.z * size.y * std::abs(c.x) + size.x * size.z * std::abs(c.y));
+      const Vec3 direction = velocity / speed;
+      apply(direction * -std::min(.5 * air_density * area * square,
+                                  stopping_force(point, direction, speed)),
+            point);
+      apply(body.orientation.rotate({0, 1, 0}) *
+                (.5 * air_density * body_lift * frontal * local.z * local.z),
+            point);
+    }
   }
+  // Wings: the face meeting the air carries the normal force of the whole
+  // element, rising with incidence until it stalls, plus its profile drag.
+  for (const auto &wing : aero.wings) {
+    const Vec3 point = body_point(body, wing.position);
+    const Vec3 normal = body.orientation.rotate(wing.normal);
+    const Vec3 velocity = body.point_velocity(point);
+    const double square = velocity.dot(velocity);
+    if (!(square > 1e-6)) continue;
+    const double speed = std::sqrt(square);
+    const double incidence = velocity.dot(normal) / speed;  // sin α
+    if (incidence <= 0) continue;
+    const double pressure = .5 * air_density * wing.area * square;
+    apply(normal * -(pressure * std::min(wing_lift_slope * incidence, wing_normal_limit)) -
+              velocity / speed * (pressure * wing_profile_drag),
+          point);
+  }
+}
+} // namespace
+
+AeroLoad aero_load(const Aerodynamics &aero, const RigidBody &body, double dt) {
+  AeroLoad load;
+  each_aero_force(aero, body, dt, [&](Vec3 force, Vec3 point) {
+    load.force += force;
+    load.torque += (point - body.position).cross(force);
+  });
+  return load;
+}
+
+void VehicleDynamics::apply_aero() {
+  each_aero_force(aero, body, timestep, [&](Vec3 force, Vec3 point) {
+    if (force.finite()) body.add_force(force, point);
+  });
 }
 
 void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
