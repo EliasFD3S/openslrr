@@ -970,7 +970,9 @@ light that corner's wheel blip. Do not key this on car or part names.
 The stock store is `save/game/options`. Applying a resolution live must
 synchronize Config, the host mode, framebuffer dimensions, the viewport, and
 size-dependent resources. Rereading an old value when a menu opens must not
-put the game back to 800×600.
+put the game back to 800×600. A mode equal to the monitor size (for example
+1920×1080 on a 1080p screen) gets a borderless window even in windowed mode,
+because a framed window of that size cannot fit on the screen.
 
 `EnhancedGraphics` holds the extra options shared with the menus and debug.
 Every new option native must have a stable descriptor, bounded behavior, a

@@ -426,8 +426,10 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
     const RECT screen = monitor.rcMonitor;
     // A legacy fullscreen flag can accompany a small saved resolution. Keep
     // that mode resizable; a borderless window only makes sense at monitor size.
-    const bool fullscreen = !mode.windowed &&
-        mode.width == screen.right - screen.left &&
+    // A framed window of exactly the monitor size cannot fit (title bar, frame
+    // and taskbar push it off the screen, hiding the bottom of the picture),
+    // so that size is borderless whatever the windowed flag says.
+    const bool fullscreen = mode.width == screen.right - screen.left &&
         mode.height == screen.bottom - screen.top;
     const DWORD style = fullscreen ? WS_POPUP : WS_OVERLAPPEDWINDOW;
     const auto previous = GetWindowLongPtrW(hwnd_, GWL_STYLE);
