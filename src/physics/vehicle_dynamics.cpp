@@ -239,9 +239,14 @@ double suspension_force(double length, double speed, double rest, double max,
   return std::max(0.0, spring_force - speed * effective_damping);
 }
 
-double aero_panel_force(const AeroPanel &panel, double normal_speed) {
+double aero_panel_force(const AeroPanel &panel, double normal_speed,
+                        double tangential_square) {
+  // EXE 0x48ED73 (type 5): linear normal resistance plus lift along the
+  // normal from the flow across the panel. The exponent is not read.
+  if (panel.type == 5)
+    return -panel.area * normal_speed + panel.suction * std::max(0.0, tangential_square);
   double speed = normal_speed;
-  // EXE 0x48EB3C: (|v| / 100)^exponent, scaled back so 1 stays linear.
+  // EXE 0x48EB3C (type 4): (|v| / 100)^exponent, scaled back so 1 stays linear.
   if (panel.exponent > 0 && panel.exponent != 1 && std::abs(speed) > 1e-4)
     speed = std::copysign(100 * std::pow(.01 * std::abs(speed), panel.exponent), speed);
   return -panel.area * speed * (speed > 0 ? 1.0 : panel.suction);
@@ -249,8 +254,9 @@ double aero_panel_force(const AeroPanel &panel, double normal_speed) {
 
 // EXE 0x456A83 (Chassis.C_drag) and 0x48E880 (wing panels) act on the chassis
 // body. One step's impulse never exceeds the one that stops the point along
-// the force: the EXE clamps its drag so, and the same bound on each panel is
-// a host safeguard for the 120 Hz step against the steep low-speed power law.
+// the force: the EXE clamps its drag so, and the same bound on each panel's
+// resistance is a host safeguard for the 120 Hz step against the steep
+// low-speed power law. A type 5 panel's lift is added after that bound.
 void VehicleDynamics::apply_aero() {
   const auto stopping_force = [&](Vec3 point, Vec3 axis, double speed) {
     const Vec3 arm = point - body.position;
@@ -273,9 +279,12 @@ void VehicleDynamics::apply_aero() {
   for (const auto &panel : aero.panels) {
     const Vec3 point = body_point(body, panel.position);
     const Vec3 normal = body.orientation.rotate(panel.normal);
-    const double speed = body.point_velocity(point).dot(normal);
+    const Vec3 velocity = body.point_velocity(point);
+    const double speed = velocity.dot(normal);
     const double limit = stopping_force(point, normal, speed);
-    const double force = std::clamp(aero_panel_force(panel, speed), -limit, limit);
+    double force = std::clamp(aero_panel_force(panel, speed), -limit, limit);
+    if (panel.type == 5)
+      force += aero_panel_force(panel, 0, velocity.dot(velocity) - speed * speed);
     if (force != 0 && std::isfinite(force)) body.add_force(normal * force, point);
   }
 }
