@@ -134,6 +134,11 @@ set_property(SOURCE src/boot/boot.cpp APPEND PROPERTY
 
 target_include_directories(slrr_host PRIVATE include "${CMAKE_BINARY_DIR}/generated")
 
+# The standard headers most sources include, parsed once instead of per file.
+target_precompile_headers(slrr_host PRIVATE
+  <algorithm> <array> <chrono> <cmath> <cstdint> <cstdio> <cstring> <filesystem>
+  <fstream> <functional> <memory> <optional> <string> <unordered_map> <vector>)
+
 if(MSVC)
   target_compile_options(slrr_host PRIVATE /W3 /utf-8)
   target_compile_definitions(slrr_host PRIVATE _CRT_SECURE_NO_WARNINGS)
@@ -170,29 +175,47 @@ endif()
 add_subdirectory(third_party/bgfx.cmake EXCLUDE_FROM_ALL)
 
 if(SLRR_TOOLS_CACHE_DIR)
-  # Key the cached shaderc by every input that changes it: the revisions of
-  # bgfx.cmake, bgfx, bimg and bx, and the compiler and toolset.
-  find_package(Git REQUIRED)
+  # Key the cached shaderc by every input that changes it: the revisions and
+  # uncommitted changes of bgfx.cmake, bgfx, bimg and bx, the compiler and the
+  # toolset. Sources that are not git checkouts cannot be keyed, so shaderc is
+  # then built once inside this build tree instead of the shared directory.
+  find_package(Git QUIET)
   set(_slrr_shaderc_key "${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} ${CMAKE_GENERATOR_TOOLSET}")
   foreach(_slrr_dep IN ITEMS BGFX BIMG BX)
     get_directory_property(${_slrr_dep}_DIR
       DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake"
       DEFINITION ${_slrr_dep}_DIR)
   endforeach()
+  set(_slrr_shaderc_keyed TRUE)
   foreach(_slrr_path IN ITEMS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake" "${BGFX_DIR}" "${BIMG_DIR}" "${BX_DIR}")
-    execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${_slrr_path}" rev-parse HEAD
-      OUTPUT_VARIABLE _slrr_rev RESULT_VARIABLE _slrr_rev_result OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-    if(NOT _slrr_rev_result EQUAL 0 OR _slrr_rev STREQUAL "")
-      message(FATAL_ERROR "SLRR_TOOLS_CACHE_DIR needs a git revision for ${_slrr_path}; unset it to build shaderc locally.")
+    set(_slrr_rev "")
+    set(_slrr_rev_result 1)
+    if(GIT_FOUND)
+      execute_process(COMMAND "${GIT_EXECUTABLE}" --no-optional-locks -C "${_slrr_path}" rev-parse HEAD
+        OUTPUT_VARIABLE _slrr_rev RESULT_VARIABLE _slrr_rev_result OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+      execute_process(COMMAND "${GIT_EXECUTABLE}" --no-optional-locks -C "${_slrr_path}" diff HEAD
+        OUTPUT_VARIABLE _slrr_changes ERROR_QUIET)
+      execute_process(COMMAND "${GIT_EXECUTABLE}" --no-optional-locks -C "${_slrr_path}" ls-files --others --exclude-standard
+        OUTPUT_VARIABLE _slrr_untracked ERROR_QUIET)
+      string(SHA256 _slrr_changes "${_slrr_changes}${_slrr_untracked}")
     endif()
-    string(APPEND _slrr_shaderc_key " ${_slrr_rev}")
+    if(NOT _slrr_rev_result EQUAL 0 OR _slrr_rev STREQUAL "")
+      set(_slrr_shaderc_keyed FALSE)
+      break()
+    endif()
+    string(APPEND _slrr_shaderc_key " ${_slrr_rev} ${_slrr_changes}")
   endforeach()
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/shaderc_cache/CMakeLists.txt")
   file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/cmake/shaderc_cache/CMakeLists.txt" _slrr_mini_hash)
   string(SHA256 _slrr_shaderc_key "${_slrr_shaderc_key} ${_slrr_mini_hash}")
   string(SUBSTRING "${_slrr_shaderc_key}" 0 16 _slrr_shaderc_key)
-  set(_slrr_shaderc_dir "${SLRR_TOOLS_CACHE_DIR}/shaderc-${_slrr_shaderc_key}")
+  if(_slrr_shaderc_keyed)
+    set(_slrr_shaderc_dir "${SLRR_TOOLS_CACHE_DIR}/shaderc-${_slrr_shaderc_key}")
+  else()
+    message(WARNING "bgfx sources are not git checkouts: building shaderc once in this build tree instead of ${SLRR_TOOLS_CACHE_DIR}")
+    set(_slrr_shaderc_dir "${CMAKE_BINARY_DIR}/shaderc-local")
+  endif()
   file(TO_CMAKE_PATH "${_slrr_shaderc_dir}" _slrr_shaderc_dir)
 
   add_custom_target(slrr_shaderc
