@@ -753,7 +753,6 @@ reads, and `Part.setSfxLoopParams` stores values without applying them.
 
 | Statement | Code reality |
 | --- | --- |
-| HOST_NATIVE_UTILITIES: engine-loop audio not yet implemented | `update_engine_audio` runs every physics frame |
 | Stale comments: "no green-thread budget yet" in `src/boot/mainloop.cpp`, "240 Hz tick" in `src/resources/scene_instances.cpp` | Fibers have budgets, physics is 120/60 Hz |
 
 ## 10. Open risk register
@@ -778,11 +777,11 @@ lifetime and sampling, and the `Vehicle.getHorn` / `hasCrime` registrations.
 
 These are entry points, not fixes. Each needs its own reproduction.
 
-- **#15 HUD too small** (PR #20 open). Every stock HUD element comes from the
+- **#15 HUD too small** (closed; PR #20 merged). Every stock HUD element comes from the
   table in `src/render/bgfx_osd.cpp:draw_vehicle_hud`. Speed, gear and
   mileage are drawn left-aligned at their anchor, so centring needs the
   string width. CFG `osd_*` overrides take separate branches.
-- **#16 car drives through trees (PR #22).** `ground_prop_config` now keeps
+- **#16 car drives through trees** (closed; PR #22 merged). `ground_prop_config` now keeps
   native CFG bodies. Placements use cached triangle and exact box/sphere
   collision paths, including a full chassis volume test for thin trunks.
   `PhysicsRef` has its seven missing signatures, and `setActiveCollision`
