@@ -37,7 +37,7 @@ try {
     Where-Object { $_.Name -ne 'main.obj' }).FullName
   if (-not $objects) { throw "Build slrr_host Release first" }
   $suiteIncludes = @()
-  if ($Suite -in @('audio_recovery','osd_text_gpu','outline_font','render_programs_gpu','scene_mesh_cache')) {
+  if ($Suite -in @('audio_recovery','video_safety','osd_text_gpu','outline_font','render_programs_gpu','scene_mesh_cache')) {
     $includePaths = $project.SelectSingleNode("//*[local-name()='ItemDefinitionGroup' and contains(@Condition,'Release|x64')]/*[local-name()='ClCompile']/*[local-name()='AdditionalIncludeDirectories']").InnerText
     $suiteIncludes = @('/Isrc/render', '/Zc:__cplusplus', '/Zc:preprocessor', '/DBX_CONFIG_DEBUG=0', '/DBGFX_CONFIG_DEBUG_ANNOTATION=0', '/DBGFX_CONFIG_MULTITHREADED=1', '/DBGFX_CONFIG_VIDEO=1', '/DNDEBUG') + @($includePaths.Split(';') | Where-Object { $_ -and -not $_.StartsWith('%(') } | ForEach-Object { "/I$_" })
     # CMake emits imported SDK includes as /external:I, not normal includes.

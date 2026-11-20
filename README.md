@@ -81,7 +81,7 @@ The chart, the counts above and [native-coverage.json](assets/progress/native-co
 | Cars | ✅ Assembly from scripts and CFG files; reference Baiern with 76 parts. Showroom camera orbit, vehicle information, powertrain layout, gear ratios and dyno calculations |
 | Workshop | ✅ Point at a part to read its name, hide the body or the engine, open panels with interpolated motion and adjust tunable parts. Remove or fit attached assemblies, and drag inventory parts onto Repair/Sell. Detached suspension parts regain their rest pose in the inventory |
 | Physics | ⏳ Fixed-step chassis, suspension and tyre contacts, differential lock, impact deformation and panel detachment. Handling and damage still need comparison with the original |
-| Audio and video | ✅ Effects, loops and four streamed music playlists mixed with FMOD Core. FMV keeps its own audio backend. Repeated effects and menu sounds have separate overlap limits |
+| Audio and video | ✅ Effects, loops, stock Cinepak FMV audio and four streamed music playlists mixed with FMOD Core. Repeated effects and menu sounds have separate overlap limits |
 | Options | ✅ Game, Advanced Game and audio settings use `save/game/options`, writing JSON while still reading legacy SDAT saves. The patched OptionsDialog removes the pedestrian density slider and fixes the crowd at the original maximum (1.5). Traffic density is saved while its simulation is pending |
 | Driving | ⏳ Test Track driving with engine SFX tables, keyboard and XInput, stock and CFG-defined instruments, and GPS. Acceleration has been compared with stock Nonus and Einvagen telemetry, with differences remaining |
 | World and career | ⏳ City, traffic and complete career flow; vehicle purchase/save/load still need end-to-end validation |
@@ -98,7 +98,7 @@ Engine loops use the scripts' SFX tables. Music playlists currently play in sequ
 - Added GameType notification replacement/removal, event aliases/custom handlers/one-shot delivery, and control/drive/animate registrations.
 
 - Added an engine-owned Config instance, audio sliders, and debounced option saving, with a final save on normal shutdown.
-- Effects and streamed music now share an FMOD Core mixer, preserving separate volumes, bounded effects and playlist recovery. FMV keeps its independent audio backend.
+- Effects, streamed music and stock Cinepak FMV now share an FMOD Core mixer, preserving separate volumes, bounded effects and playlist recovery. Optional VLC/Windows video-codec fallbacks keep their library-owned audio.
 - Fixed `Input.createHotkey` being misrouted to Osd, slider track hit-testing, and tuning events carrying the actual slider to the part. Modal dialogs block clicks into the car behind them.
 - Fixed reference casts used by tuning scripts, so mixture-ratio and similar assignments update the part instance.
 
@@ -159,6 +159,8 @@ cmake --build build --config Release --target audio_recovery --parallel
 ctest --test-dir build -C Release --output-on-failure
 # Optional: also start all four playlists from a private game copy.
 .\build\Release\audio_recovery.exe --root data\game
+# Cinepak PCM, clock fallback, looping and video cancellation regressions.
+powershell -File scripts/run_save_io_tests.ps1 -Suite video_safety
 ```
 
 #### Faster builds

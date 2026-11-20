@@ -469,7 +469,7 @@ this section is the working guide.
 | Worker pool, one per logical CPU minus one | `src/platform/job_system.cpp:jobs_parallel_for` | Data-parallel batches started by the host thread |
 | Exterior map parser | `src/natives/natives_resref.cpp:spawn_ground_shell` (`std::async`) | `scene_instances_ground_map` for the next chained map file |
 | Pedestrian stepper | `src/resources/part_runtime.cpp:PedSim` | Walker steering on copies of the walker records |
-| Audio and video | FMOD Core (effects/music), XAudio2 (Cinepak), VLC | Their own decode and output threads |
+| Audio and video | FMOD Core (effects/music/Cinepak PCM), optional VLC/Windows codecs | Their own decode and output threads |
 
 **API** (`include/slrr/job_system.hpp`).
 
@@ -1647,7 +1647,12 @@ Video without VLC (#216): 64-bit Windows ships no Cinepak codec (only the
 DirectShow paths failed and every intro and `prime.avi` was skipped.
 `video_fmv_open` now tries `src/platform/video_cinepak.cpp` first: it indexes
 the AVI, decodes Cinepak frames in order into BGRA and plays PCM audio through
-its own XAudio2 voice, whose position drives the frame clock. Files it rejects
+a dedicated FMOD channel/group, whose position drives the frame clock.
+The FMV pump updates the shared mixer during boot intros, and EOF/channel
+failure falls back to wall time from the last valid position without jumping
+the picture. PCM is staged in a WAV memory sample (unsigned 8-bit or signed
+16-bit, mono/stereo) and released before its shared mixer owner. Looping
+replays the same sound with a fresh channel. Files it rejects
 (another codec, or a first frame it cannot decode) still go to LibVLC, then
 AVIFile/DirectShow. The video_safety suite checks the decoder and a generated
 Cinepak AVI with PCM audio.

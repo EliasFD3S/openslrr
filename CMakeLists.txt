@@ -169,9 +169,9 @@ endif()
 
 if(WIN32)
   # strmiids = DirectShow GUIDs for FMV (GfxEngine.openVideo).
-  # vfw32 = AVIFile fallback; xaudio2 remains for built-in Cinepak FMV sound.
+  # vfw32 = AVIFile fallback; stock Cinepak PCM is mixed through FMOD.
   target_link_libraries(slrr_host PRIVATE user32 gdi32 opengl32 winmm ole32 xinput
-                                          oleaut32 strmiids vfw32 xaudio2 FMOD::Core)
+                                          oleaut32 strmiids vfw32 FMOD::Core)
 endif()
 
 # bgfx is the game's renderer.

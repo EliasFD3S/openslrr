@@ -19,6 +19,7 @@ bool host_audio_check(FMOD_RESULT result, const char* operation) {
 HostAudio::~HostAudio() {
   if (effects) effects->release();
   if (music) music->release();
+  if (fmv) fmv->release();
   if (system) system->release();
 }
 
@@ -30,7 +31,8 @@ std::shared_ptr<HostAudio> host_audio_acquire() {
       // before retiring its victim, without FMOD stealing an existing loop.
       !host_audio_check(audio->system->init(64, FMOD_INIT_NORMAL, nullptr), "init") ||
       !host_audio_check(audio->system->createChannelGroup("effects", &audio->effects), "effects group") ||
-      !host_audio_check(audio->system->createChannelGroup("music", &audio->music), "music group")) return {};
+      !host_audio_check(audio->system->createChannelGroup("music", &audio->music), "music group") ||
+      !host_audio_check(audio->system->createChannelGroup("fmv", &audio->fmv), "FMV group")) return {};
   shared_audio() = audio;
   std::fprintf(stderr, "[audio] FMOD Core %08x initialized\n", FMOD_VERSION);
   return audio;

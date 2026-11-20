@@ -69,6 +69,7 @@ int main(int argc,char** argv){
  host_music_set_volume(.2f);
  SLRR_REQUIRE(audio->music->getVolume(&value)==FMOD_OK&&std::abs(value-.2f)<.001f);
  SLRR_REQUIRE(audio->effects->getVolume(&value)==FMOD_OK&&value==0);
+ SLRR_REQUIRE(audio->fmv->getVolume(&value)==FMOD_OK&&value==1.f);
  host_sfx_pause_loop(id,false);SLRR_REQUIRE(channel->getPaused(&paused)==FMOD_OK&&!paused);
  host_sfx_stop(id);SLRR_REQUIRE(!host_sfx_is_playing(id));
  host_music_set_volume(0);

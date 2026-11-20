@@ -21,8 +21,11 @@ Music uses FMOD streams rather than loading complete songs, retaining the
 MP3/WAV/WMA playlist scan, sequential order and bounded bad-track recovery.
 The shared mixer is updated in modal script pumps as well as the main loop,
 even with music stopped. Startup logs list scan counts and track starts;
-FMOD failures include the operation and error text. FMV keeps its separate
-backends and volume. No Studio banks or authored events are required.
+FMOD failures include the operation and error text. Stock Cinepak FMV PCM
+uses a separate FMOD group and updates the mixer during boot intros too;
+its audio position drives video timing, falling back continuously to wall
+time on EOF or channel failure. Other VLC/Windows codec fallbacks retain
+their own audio outputs. No Studio banks or authored events are required.
 
 ## Audio options
 
