@@ -796,6 +796,13 @@ These are entry points, not fixes. Each needs its own reproduction.
   follow-up overlapped the chained `city2` parse with `city`'s props, indexed
   large collision meshes on the pool and kept the log order serial: the warm
   load is now under 1 s.
+- **#203 physics-clock/engine-math spike.** The default remains 60 Hz host
+  ticks with 120 Hz shared-world substeps and interpolated drawing. Fixed
+  stepping is not independent wall-clock scheduling: excess frame time is
+  discarded. The integer shared-world loop would lose 4% of simulated time
+  with a bare 1000 Hz override. Rate experiments, throttle integration boundaries,
+  adaptive-setting references and dyno/Java compression couplings are recorded
+  in [PHYSICS_TICK_SPIKE.md](PHYSICS_TICK_SPIKE.md); production decisions remain open.
 
 ## 12. Self-check
 
