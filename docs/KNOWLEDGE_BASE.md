@@ -446,7 +446,12 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
 - Enhanced options (MSAA, reflections, clouds, sunlight, local lights) are
   session-only and exposed through `OptionsDialog.get/setRendererOption`
   (`src/natives/natives_script.cpp:register_script_natives`).
-- Car saves use the SDAT container (`src/natives/natives_io.cpp:sdat_frame`).
+- File saves now write versioned typed JSON at the existing paths, with SDAT
+  type 1/type 2 and raw-stream read fallback. Resource paths remount independently
+  of session pack order; scripts keep binary cross-type read semantics. See
+  ENGINE_CONTRACT §15 (`src/natives/natives_io.cpp:json_frame`,
+  `src/natives/natives_io.cpp:json_take_payload`,
+  `src/natives/natives_io.cpp:sdat_take_payload`).
 
 ### 5.10 Threads and the worker pool
 

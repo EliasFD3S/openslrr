@@ -82,7 +82,7 @@ The chart, the counts above and [native-coverage.json](assets/progress/native-co
 | Workshop | ✅ Point at a part to read its name, hide the body or the engine, open panels with interpolated motion and adjust tunable parts. Remove or fit attached assemblies, and drag inventory parts onto Repair/Sell. Detached suspension parts regain their rest pose in the inventory |
 | Physics | ⏳ Fixed-step chassis, suspension and tyre contacts, differential lock, impact deformation and panel detachment. Handling and damage still need comparison with the original |
 | Audio and video | ✅ Effects, loops, FMV audio and four music playlists streamed with Media Foundation/XAudio2. Repeated effects and menu sounds have separate overlap limits |
-| Options | ✅ Game, Advanced Game and audio settings use the stock `save/game/options` format. The patched OptionsDialog removes the pedestrian density slider and fixes the crowd at the original maximum (1.5). Traffic density is saved while its simulation is pending |
+| Options | ✅ Game, Advanced Game and audio settings use `save/game/options`, writing JSON while still reading legacy SDAT saves. The patched OptionsDialog removes the pedestrian density slider and fixes the crowd at the original maximum (1.5). Traffic density is saved while its simulation is pending |
 | Driving | ⏳ Test Track driving with engine SFX tables, keyboard and XInput, stock and CFG-defined instruments, and GPS. Acceleration has been compared with stock Nonus and Einvagen telemetry, with differences remaining |
 | World and career | ⏳ City, traffic and complete career flow; vehicle purchase/save/load still need end-to-end validation |
 
@@ -141,6 +141,11 @@ cmake --build build --config Release --target slrr_host --parallel
 ```
 
 The executable is generated at `build/Release/slrr_host.exe`. The first build includes bgfx and its shader tools, so it may take a while.
+
+#### Faster builds
+
+- Every target compiles its files in parallel (`/MP`). Set `-DSLRR_COMPILE_JOBS=<n>` to cap the `cl.exe` processes per project; the default uses all logical processors. `slrr_host` also precompiles the standard headers most sources include.
+- The shader compiler `shaderc` (with glslang, SPIRV-Tools and Tint) is most of bgfx's build time and is the same for every checkout. To build it once and reuse it from any number of checkouts or worktrees, set `-DSLRR_TOOLS_CACHE_DIR=<dir>` or the environment variable of that name. The first build fills `<dir>/shaderc-<key>` under a lock while other builds wait; the key covers the revisions and uncommitted changes of bgfx.cmake, bgfx, bimg and bx and the compiler, so a changed pin, edit or toolchain builds a new copy. Leave it unset to build `shaderc` inside the build directory. See [AGENTS.md](AGENTS.md#build-speed-and-its-edge-cases) for edge cases.
 
 Dependency locations follow the paths selected by the pinned `bgfx.cmake`:
 its in-tree `bgfx`/`bimg`/`bx` checkouts, explicit `BGFX_DIR`/`BIMG_DIR`/`BX_DIR`,
