@@ -359,6 +359,15 @@ See `ptx_image.cpp`.
 and children. A type resource is not its live instance. A script alias and
 reference wrappers do not justify duplicating the underlying object.
 
+Painter textures (#64) are host images with ids `0xFFFFxxxx`
+(`paint_texture.hpp`). A part shows one through its `Part.setTexture` value
+like a pack texture; it is drawn into only while that part alone shows it,
+and it is reclaimed after three host frames without a part, native resource
+wrapper or open save reader using it. `ResourceRef.makeTexture` file textures
+have live native handles; their pixels are embedded the same way on save.
+Painter textures are saved as
+type-7 blobs, never as pack references; see §15.
+
 `scene_instances_collect` produces the instances to draw for the selected
 world. Geometry can be shared. Pose, color, and texture replacements are
 instance properties. Avoid modifying shared geometry to fix a single car.
@@ -373,7 +382,8 @@ An active camera with a non-null viewport may render only while that viewport
 exists and is active. `Viewport.deactivate` / OSD hiding must stop an old
 preview even when the script retains its camera and scene. Reactivation may
 reuse those objects. Do not implement this by recognizing a mod's selector
-class or forcibly deleting its model.
+class or forcibly deleting its model. The same holds for OSD widgets: an Osd
+whose viewport has never been activated neither draws nor takes clicks.
 
 A map is not necessarily one SCX. `GroundMapData` distinguishes render and
 collision meshes, exterior packs, and placements. Valo City requires resolving
@@ -868,6 +878,21 @@ bindings or merge labels across the plates/icons that separate them. Long lines
 must rebase their 16-bit indices while retaining pen advance. See
 `src/render/osd_text_batch.hpp` and `LibBgfxBackend::draw_osd_line`.
 
+Font loading prefers `frontend/fonts/<stem>.ttf`, then `.otf`, with the legacy
+SCX/atlas loader as fallback. `scripts/bake_slrr_fonts.py` converts user-owned
+stock assets to outline TTFs, keeping the byte map, authored advances and top
+origin (zero hhea ascent). Ordinary replacement fonts use their hhea ascent as
+the baseline offset. Both outline formats rasterize to padded SDF atlases through
+the pinned dependency's stb_truetype; one shader composes fill, outline and
+shadow without extra glyph passes. Font assets/cache lifetime remain shared and
+weakly indexed as before. `slrr_text_set_effects` overrides a line's bounded
+outline width, shadow offsets and ARGB colours; effects do not affect measure,
+alignment or advance. They are not persistent options or Java APIs. Legacy
+atlases retain their baked effects and bypass SDF composition. The byte-based
+text contract is unchanged; this does not add Unicode shaping or kerning.
+Only trusted local font files are supported: SFNT table bounds are checked, but
+stb's parser does not provide comprehensive hostile-font validation.
+
 OSD surfaces have their own blending contract. Do not apply world lighting
 to them, or a global correction meant for the body.
 For trees and glass, check alpha test, blending, depth write, pass order,
@@ -934,6 +959,35 @@ correctly separated according to the options.
 
 ## 15. Saves and transitions
 
+`java.io.File` writes versioned JSON at the existing script-selected paths
+(including career, car, controls and options files). Reads detect JSON first,
+then fall back to legacy SDAT type 1/type 2 and older raw host streams. JSON
+save opening keys are reserved for detection, rather than treating every raw
+integer beginning with `{` as JSON. Merely reading a legacy file does not
+rewrite it; its next normal save writes JSON.
+New saves cannot be read by the original game or earlier SDAT-only hosts.
+
+The version 1 object has `format: "OpenSLRR-save"`, `version: 1`, and three
+arrays. `values` is the ordered script stream of `[type, value]` pairs: `int`,
+`float`, `resource`, or `string` (including null). Finite floats use round-trip
+precision; `floatBits` stores a nonfinite float's unsigned 32-bit pattern.
+`packs` contains `[ordinal, game-relative path]`; `blobs` contains
+`[ordinal, kind, hex bytes]`. Resource values retain SDAT's file-local IDs, not
+session pack numbers. Dynamic resources retain the existing limitation: their
+metadata/bytes can be read, but they are not reinstantiated by the remounter,
+except Painter textures stored as PNG blobs (below).
+
+Script strings are byte strings: JSON U+0001..U+00FF represents the corresponding
+byte, not a UTF-8 transcoding of it. The writer escapes non-ASCII/control bytes;
+null and empty remain distinct, and the existing `strlen` write behavior is
+unchanged. The reader rebuilds the binary stream before script reads, preserving
+cross-type reads used by stock Config and skin scripts. Damaged/unsupported
+JSON saves make `File.open` return 0 rather than falling through to binary reads. Paths and
+atomic single-file publication (including pending in-memory saves after a
+failed replacement) keep their existing contracts. This is not a multi-file
+career transaction. Regressions: `scripts/run_save_io_tests.ps1 -Suite save_io`
+and `-Suite save_persistence`, after a Release build.
+
 The active section has an exit/enter cycle. `SectionMachine` can also adopt
 a state that Java has already transitioned: do not call exit/enter a second
 time in that case. Presentation state holds one full frame during some
@@ -948,6 +1002,12 @@ Resetting a section means inspecting, together: parent world, pose,
 velocities, the physics accumulator, contacts, assembly, camera, lights,
 reflections, shadows, and loading state. Do not keep the fallen pose of an
 old car as the initial pose of the next one.
+
+`File.write(ResourceRef)` stores a Painter texture as a PNG in its save blob
+(the SDAT trailer, or a JSON `blobs` entry). `readResID` turns the blob back
+into a new Painter texture; a blob the stock game left empty is read from its
+side file `<save>.<ordinal>` (JPEG). A texture id that is no longer live keeps
+an empty blob, like other dynamic resources, and reads back as null.
 
 A catalog/garage round trip does not necessarily recreate the same set of
 objects as a dealer round trip. A state repaired by the dealer but not by

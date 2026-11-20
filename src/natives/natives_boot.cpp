@@ -121,10 +121,9 @@ bool rd_f32(const std::vector<uint8_t>& b, size_t& p, float* out) {
 
 // Soft File.write: 4 raw LE bytes, or for String a length (strlen+1) then
 // the bytes including the trailing NUL. ResourceRef is rewritten to a
-// file-local pack ordinal; File.close wraps the buffer in an SDAT type 2
-// trailer. readResID maps that ordinal back through the pack path. A file
-// that is not SDAT is still the raw payload (saves written before the
-// envelope) and readResID returns the stored id unchanged.
+// file-local pack ordinal; File.close publishes typed JSON with remount tables.
+// JSON and legacy SDAT readers reconstruct this stream; readResID maps the
+// ordinal back through the pack path. Older raw payloads keep stored IDs.
 int32_t res_id_of(Object* o) {
   if (!o) return 0;
   auto it = o->fields.find("id");
@@ -606,6 +605,7 @@ void register_boot_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   register_script_natives(jvm, rpk, sections);
   register_part_natives(jvm,rpk);
   register_race_natives(jvm,rpk,sections);
+  register_painter_natives(jvm);
   install_osd_script_hover(jvm);
 
   // Statics

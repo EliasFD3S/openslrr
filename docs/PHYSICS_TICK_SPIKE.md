@@ -98,8 +98,9 @@ an arithmetic inventory. End-to-end interpolation-related rendering overhead is
 not isolated; repeated Classic/Adaptive totals would also include scene/cache
 and visibility differences.
 
-With the updated engine and installed three-class port patch at default 120 Hz,
-one reset 40-s run each of Baiern (Inline) and MC (Vee) completed. Excluding warm-up
+Before later upstream font/paint integration (engine/patch source of `5f22eca`),
+at default 120 Hz with the three-class patch, one reset 40-s run each of
+Baiern (Inline) and MC (Vee) completed. Excluding warm-up
 and using 39 complete 60-frame windows per run, publication averaged **0.0043 ms**
 (Baiern, per-window range 0.003–0.007 ms) and **0.0051 ms** (MC, 0.004–0.006 ms).
 CSV samples round to 0.001 ms. These are single shared-desktop scenario measurements,

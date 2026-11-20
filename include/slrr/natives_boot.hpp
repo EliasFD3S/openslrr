@@ -11,6 +11,10 @@ namespace slrr {
 // Registers System / File / FindFile / GameLogic / OSD stubs for career boot.
 void register_boot_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections);
 void register_gc_natives(Jvm& jvm);
+// java.game.Painter (natives_painter.cpp). painter_tick, once a frame,
+// expires a decal preview the script stopped refreshing.
+void register_painter_natives(Jvm& jvm);
+void painter_tick();
 
 // Object.wait pumps this until notify. Empty pump: wait returns at once
 // (boot paths that run before the window loop).

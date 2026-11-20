@@ -45,6 +45,15 @@ bool part_car_script_pos(void *key, float *x, float *y, float *z);
 bool part_lamp_lit(void *part, uint32_t flags, bool preview);
 // Render node or one of its parents, when that node is an installed part.
 Object *part_render_owner(void *key);
+// Part.getTexture and the cfg `texture` (the paint slot; 0 = unpaintable).
+bool part_paint_textures(Object *part, uint32_t *current, uint32_t *source);
+// Part.setTexture for a pack texture or a Painter texture (paint_texture.hpp).
+// Unused Painter textures are reclaimed after the script frame.
+bool part_set_paint_texture(Object *part, uint32_t texture);
+// True when another live part than `part` shows this texture.
+bool part_paint_texture_shared(uint32_t texture, Object *part);
+// A live part showing this texture, or null.
+Object *part_showing_texture(uint32_t texture);
 // World height of the tyre contact under a car. The camera's `move` spring
 // hangs on this point; `look` stays on the chassis origin.
 bool part_car_ground(void *key, float *y);

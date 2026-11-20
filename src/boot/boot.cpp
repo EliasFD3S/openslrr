@@ -19,6 +19,7 @@
 #include "slrr/scene_instances.hpp"
 #include "slrr/scene_presentation.hpp"
 #include "slrr/scene_sun.hpp"
+#include "slrr/script_events.hpp"
 #include "slrr/section_machine.hpp"
 #include "slrr/video_fmv.hpp"
 #include "slrr_version.h"
@@ -487,7 +488,13 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     if (video_fmv_block_osd()) return;
     if (w.button && jvm.tree_instance_of(w.button, "java.render.osd.MultiChoice"))
       jvm.invoke(w.button->class_name, "click", "()V", {Value::make_obj(w.button)}, false);
-    else
+    else if (w.event_source) {
+      // Osd.event_handler reads only EC_LCLICK (5) and matches the icon's id.
+      const std::string click = "5 0 " + std::to_string(gameref_make_live(w.event_source));
+      std::printf("[osd] icon click delivered=%d\n",
+                  script_event_emit(jvm, w.event_source, nullptr, 0x00010000,
+                                    Value::make_obj(jvm.new_string(click))));
+    } else
       sections.dispatch_osd_command(w.handler, w.cmd);
     mainloop_adopt_section(jvm, sections);
     mainloop_sync_section_render(render, sections);

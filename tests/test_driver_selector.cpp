@@ -21,6 +21,13 @@ int main() {
  call("java.util.resource.RenderRef","changeResource","(Ljava.util.resource.ResourceRef;Ljava.util.resource.ResourceRef;)V",&tmp,{Value::make_obj(&original),Value::make_obj(&texture)});
  SLRR_REQUIRE(gameref_get(&tmp)->texture_file_replacements.size()==1);
  const auto expected=gameref_get(&tmp)->texture_file_replacements[0].second;
+ Object file_copy;
+ const auto file_id=call("java.util.resource.ResourceRef","id","()I",&texture).v.i;
+ call("java.util.resource.ResourceRef","duplicate","(Ljava.util.resource.ResourceRef;)V",&file_copy,{Value::make_obj(&texture)});
+ const auto copy_id=call("java.util.resource.ResourceRef","id","()I",&file_copy).v.i;
+ SLRR_REQUIRE(file_id>=0x70000000 && copy_id>=0x70000000 && file_id!=copy_id);
+ SLRR_REQUIRE(scene_instances_texture(uint32_t(file_id))==expected);
+ SLRR_REQUIRE(scene_instances_texture(uint32_t(copy_id))==expected);
  call("java.util.resource.RenderRef","create","(Ljava.util.resource.ResourceRef;Ljava.util.resource.RenderRef;Ljava.lang.String;)V",&render,{Value::make_obj(&parent),Value::make_obj(&tmp),Value::make_obj(nullptr)});
  call("java.util.resource.ResourceRef","duplicate","(Ljava.util.resource.ResourceRef;)V",&copy,{Value::make_obj(&tmp)});
  SLRR_REQUIRE(gameref_get(&copy)->texture_file_replacements==gameref_get(&tmp)->texture_file_replacements);
@@ -30,6 +37,16 @@ int main() {
    for(const auto& entry:instance.texture_replacements)if(entry.second==expected)replaced=true;
  }
  SLRR_REQUIRE(replaced);
+ // A duplicated RenderRef type is its own resource: a render created from
+ // copy.id() (Painter's decal slots) keeps the copy's replacement.
+ Object slot_type,slot_handle,slot_render;slot_type.class_name="java.util.resource.RenderRef";
+ call("java.util.resource.ResourceRef","duplicate","(Ljava.util.resource.ResourceRef;)V",&slot_type,{Value::make_obj(&tmp)});
+ const auto slot_id=call("java.util.resource.ResourceRef","id","()I",&slot_type).v.i;
+ SLRR_REQUIRE(slot_id>=0x70000000);
+ call("java.util.resource.ResourceRef","set","(I)V",&slot_handle,{Value::make_int(slot_id)});
+ call("java.util.resource.RenderRef","create","(Ljava.util.resource.ResourceRef;Ljava.util.resource.RenderRef;Ljava.lang.String;)V",&slot_render,{Value::make_obj(&parent),Value::make_obj(&slot_handle),Value::make_obj(nullptr)});
+ SLRR_REQUIRE(gameref_get(&slot_render)->type_id==gameref_get(&tmp)->type_id);
+ SLRR_REQUIRE(gameref_get(&slot_render)->texture_file_replacements==gameref_get(&tmp)->texture_file_replacements);
  // Later changes must not mutate the already-created instance or the original mesh.
  path.str="skin-b.dds";
  call("java.util.resource.ResourceRef","makeTexture","(Ljava.util.resource.ResourceRef;Ljava.lang.String;)V",&texture,{Value::make_obj(nullptr),Value::make_obj(&path)});
@@ -37,6 +54,10 @@ int main() {
  SLRR_REQUIRE(gameref_get(&tmp)->texture_file_replacements.size()==1);
  SLRR_REQUIRE(gameref_get(&tmp)->texture_file_replacements[0].second!=expected);
  SLRR_REQUIRE(gameref_get(&render)->texture_file_replacements[0].second==expected);
+ SLRR_REQUIRE(scene_instances_texture(uint32_t(copy_id))==expected);
+ const auto changed_id=call("java.util.resource.ResourceRef","id","()I",&texture).v.i;
+ SLRR_REQUIRE(changed_id!=file_id);
+ SLRR_REQUIRE(scene_instances_texture(uint32_t(changed_id))!=expected);
  SLRR_REQUIRE(mesh.fields["id"].v.i==int32_t(RpkIndex::make_full_id(humans,0xC)));
  Object viewport,camera;
  call("java.render.Viewport","create","(IFFFF)V",&viewport,{Value::make_int(1),Value::make_float(0),Value::make_float(0),Value::make_float(1),Value::make_float(1)});

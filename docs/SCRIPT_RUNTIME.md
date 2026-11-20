@@ -64,6 +64,19 @@ events, and to trigger volumes: `scene_triggers_tick` emits
 collision and traffic producers must still emit their events when
 implemented. Legacy UI input paths remain.
 
+World pointer events (#64): `MouseCursor.addHandler(h)` is stock Java for
+`h.addNotification(cursor, EVENT_CURSOR, EVENT_SAME)`, so `EVENT_CURSOR`
+(0x10000) events come from the cursor GameRef with the picked object as
+`obj_ref`. While the Mechanic thread is not running, `dispatch_world_pointer`
+in `mainloop.cpp` emits them to every such handler: `EC_HOVER` (15) and
+`EC_LEAVE` (16) over installed parts (a hover with id 0 off them),
+`EC_LDOWN` (1) and `EC_LUP` (2) for a left press that started on the 3D
+view, and `EC_LCLICK` (5) on a part, with tokens
+`ec cursor obj [obj] [x y z ...]`. It picks only when the pointer moves or
+the button changes. The Mechanic keeps its direct dispatch. Painter is the
+main consumer; CarMarket's click selection and the Garage handler receive the
+same events.
+
 Callback modes 8, 9 and 28 correspond to `control(float)`, `drive()` and
 `animate()`. They have separate ordered lists, idempotent registration and
 per-object unregistration. Snapshot iteration plus registration IDs permits
@@ -239,8 +252,11 @@ the cue uses the transparent pass. User comparison with original MWM confirms
 both movements. The 1 rad/s turn, 0.5 m bob at 2 rad/s and opacity 0.65 are
 host compatibility defaults, not recovered original constants or proven
 independent meanings for the two flag bits. The other matching frontend
-resource (paintcan) shares this profile. Compare its presentation in game too.
-MWM's explicit script animation of the weight/frame remains authoritative.
+resource (paintcan) shares these flags, but world-space cue animation is not
+applied in separate inventory preview worlds (#64): its half-metre bob made
+cans bounce out of their small cells. Local preview cameras and script poses
+remain authoritative. MWM's explicit script animation of the weight/frame
+remains authoritative.
 
 Research consulted nedobylskiy/SLRR_rev at
 4ca11c265e0b9b3dad09a7f23d4a2af7740d626b and EliasFD3S/slrr-reverse at

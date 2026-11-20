@@ -1,7 +1,7 @@
 # Native audit and roadmap
 
 Baseline snapshot from 9 November 2026, incrementally updated 18 November 2026.
-`Camera.setFog` is registered. The remaining `PhysicsRef` signatures are
+The three `Painter` natives are registered (#64). `Camera.setFog` is registered. The remaining `PhysicsRef` signatures are
 bound, and `GameRef.setActiveCollision` is no longer an explicit no-op.
 Earlier increments covered the resource and vehicle bindings, the Language
 work described in [SCRIPT_COMPILER.md](SCRIPT_COMPILER.md), and the Leftovers classification.
@@ -19,9 +19,9 @@ implementations and following selected calls to their consumers.
 
 | Status | Stock signatures |
 | --- | ---: |
-| Registered with a body | 355 |
+| Registered with a body | 358 |
 | Registered with the explicit `native_noop` handler | 3 |
-| Absent from the registry | 18 |
+| Absent from the registry | 15 |
 | **Total** | **376** |
 
 The first category includes constant responses, inline empty bodies and
@@ -49,8 +49,8 @@ that category. It is not a compatibility score or a complete runtime trace.
 | `System.isLoading`, `isLoadingReset`, `setLdPriority` | Track active RPK scans and measured pack-work history; reset seeds the 32-sample ring without clearing ongoing scans. Priority changes scan cadence. Mesh/texture streaming has no corresponding queue. |
 | `System.compileAll` | Embedded C++ compiler writes validated TUFA containers for source units, including multiple classes per file. Existing loaded classes require a restart. See SCRIPT_COMPILER.md. |
 | `System.info` | Selector 5 returns the live host VM heap count. Other selectors return an empty string. |
-| `ResourceRef.makeTexture` | Resolves the filename under the game root and exposes a file-backed texture path. `RenderRef.changeResource` consumes it for per-instance materials; standalone dynamic texture ID queries are still incomplete. |
-| `ResourceRef.duplicate`, `RenderRef.create` | Copy both RPK and file-backed texture replacements by value. Later skin selections do not mutate previously created render instances or shared geometry. |
+| `ResourceRef.makeTexture` | Resolves the filename and gives the file-backed texture a live native ID and type 7. Decal passes that ID to Painter; OSD/material replacement resolves its path too. `duplicate` gives a file texture an independent handle, and aliases retain its type. Saving embeds its pixels as a type-7 PNG blob. |
+| `ResourceRef.duplicate`, `RenderRef.create` | Copy both RPK and file-backed texture replacements by value. Later skin selections do not mutate previously created render instances or shared geometry. A duplicated `RenderRef` type gets a live id, so creating a render from `copy.id()` keeps its replacements (Painter's decal slots). |
 | `RenderRef.changeResource` | Supports RPK texture replacements and file paths from `makeTexture`, matching the original texture resource to the mesh material slot. A new selection replaces the previous file override for that source; an RPK replacement clears it. |
 | `Viewport.activate`, `deactivate`, `destroy`; camera selection | Active cameras with a viewport are eligible only while that viewport exists and is active. Hiding an OSD stops its preview without requiring scripts to destroy all scene objects. Reactivation restores eligibility; null-viewport camera behavior is unchanged. With a selected scene, camera ownership follows world ancestry rather than viewport size: a full-screen Navigator local world stays separate from the resized driving view. Renderer passes respect that rectangle and viewport priority (#65); visual validation is pending. |
 | `Animation` | The constructor is registered with the dotted TUFA descriptor; the earlier slash form never matched, so script `Animation`s stayed unbound. It binds a `.matrixdata` clip to the render named by the constructor. `play` / `loopPlay` / `pause` / `seek` / `getPos` / `setSpeed` sample it on the skeleton declared by that render. `setFade` blends the clip in from the bind pose. Each render keeps its own pose. |
@@ -74,6 +74,7 @@ that category. It is not a compatibility score or a complete runtime trace.
 | `Part.setSfxLoopParams` | Stores the two parameters without applying them to a voice. Native car CFG sfx_loop declarations are not retained by PartConfig; mechanical AI already updates its SfxTables. Vehicle engine loops currently have no listener-distance input. |
 | `Chassis.setHornSFX` | Stores all indexed sounds. The current player input plays the index 1 sample once per press. |
 | `GameRef.create_native` on native cars | Builds the CFG-backed native assembly, skips a chassis-specific Java constructor and binds the Java reference to its live chassis. Tested with the real fake_racers staging/traffic flow; other native resource kinds retain their existing path. |
+| `Painter.paintPart`, `doPaint`, `xPaint` | Pick the installed part under the pointer and draw into that part's own runtime texture (`paint_texture.hpp`), shown in its cfg `texture` paint slot. `paintPart` fills it with one colour; `doPaint` projects the spray brush or a decal as a square `size` metres wide onto the paint-slot triangles that face it; a temporary (`temp`) decal preview is replaced by the next one and removed by `xPaint`, by a committed stroke or two host frames after the script stops refreshing it. The executable queues `paint`/`bigdecal` part commands instead; the projection, orientation and preview expiry are host approximations. `File.write(ResourceRef)` saves such a texture as a PNG in its save blob (SDAT trailer or JSON `blobs`); `readResID` restores it, or reads the JPEG the stock game wrote beside the save as `<file>.<ordinal>`. See KNOWLEDGE_BASE.md, "Garage paint booth (#64)". |
 | `GameRef.getInfo`, `queueEvent` | Implement selected queries and commands. `repair` performs the native per-part deformation, damage-associated slot/wheel and CFG mount/base-mesh reset; stock Java owns the installed-tree recursion and wear/tear caps, with a native fallback only for detached assembly children omitted from `attachedParts`. Unhandled queries return zero. Other command paths still need coverage as new sections are exercised. |
 | `GameType.registerCallback`, notifications | Control, drive and animate callbacks run. Notifications have event routing and GC roots. Other callback modes and event producers still need verification. |
 | `Input.getAxis`, `activeAxis`, `Controller.user_SetAxisSmooth` | Keyboard, mouse and one logical XInput pad are wired. Pointer movement is excluded from rebinding. Negative mouse axis requests reset deltas, while their sensitivity argument remains unused. Default pad driving controls are retained per axis unless explicitly overridden or their physical channel is assigned elsewhere. Steering fallback and analog classification share that policy. Smoothing uses a host time-based approximation. Menu/cancel hotkey presses share a 250 ms UI debounce across command changes; select has a separate gate. Releases and driving axes remain immediate. |
@@ -106,9 +107,8 @@ being replaced by success-returning mocks.
 | --- | ---: | --- |
 | `GroundRef` | 3 | `setWater` (2 overloads), `addWaterLimit` |
 | `ParticleSystem` | 9 | `init`, `stop`, `setFreq`, `setDirectSource`, `setSource`, `setCounter`, `getCounter`, `delAction`, `modePermanent` |
-| `Painter` | 3 | `doPaint`, `paintPart`, `xPaint` |
 
-There are 15 missing active signatures and 3 missing leftovers, for 18 total.
+There are 12 missing active signatures and 3 missing leftovers, for 15 total.
 No PhysicsRef signature remains absent from the stock table.
 
 ## Roadmap
@@ -129,9 +129,10 @@ No PhysicsRef signature remains absent from the stock table.
    for #179. Verify daytime challenges, the night meeting, ROC spline finish,
    timing/results and repeat entry in game. Complete the documented traffic
    behaviour, pursuit and contact limitations. Pedestrians already walk the `city.walk` sidewalk rows near the player; they do not use the road graph.
-4. **Complete garage actions and effects.** Implement the `Painter` natives
-   and resource-created sound, then animation, particles, flares and fog.
-   Verify paint and installed-part state through a career save and reload.
+4. **Complete garage actions and effects.** The `Painter` natives are bound
+   (#64); continue with resource-created sound, then animation, particles,
+   flares and fog. Verify paint and installed-part state through a career
+   save and reload.
 5. **Complete platform and optional systems.** Enumerate display modes,
    complete controller options and loader state, then assess networking and
    additional debug behavior when needed by the supported workflows.

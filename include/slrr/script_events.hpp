@@ -7,6 +7,8 @@ void script_callback_set(Jvm&,Object*,int mode,bool enabled);
 void script_callbacks_remove(Jvm&,Object*);
 bool script_callback_registered(Jvm&,Object*,int mode);
 void script_callbacks_tick(Jvm&,float dt);
+// True when script_event_emit(source, event) would reach a listener now.
+bool script_event_listening(Jvm&,Object* source,int event);
 int script_event_emit(Jvm&,Object* source,Object* related,int event,Value param,bool related_event=false);
 void script_events_roots(Jvm&,const GcRootVisitor&);
 void script_events_destroy(Object*);

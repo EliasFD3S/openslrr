@@ -81,7 +81,7 @@ inline void native_arraycopy(Object* src, int32_t src_pos, Object* dst,
   for (size_t i = 0; i < count; ++i) dst->slots[destination_pos + i] = tmp[i];
 }
 
-// One row of an SDAT trailer. ordinal is the file-local pack slot;
+// One row of a save remount table (JSON or SDAT). ordinal is the file-local pack slot;
 // pack_id is the host slot the path resolved to.
 struct SdatPackRef {
   int32_t ordinal = 0;
@@ -102,9 +102,12 @@ struct HostFile {
   std::vector<uint8_t> bytes;
   size_t pos = 0;
   bool writing = false;
-  // True when bytes is the Java payload of an SDAT container. A raw file
-  // left by an older host stays false, so readResID returns the stored id.
+  // True for JSON saves and legacy SDAT containers: resource IDs use the
+  // file-local remount tables. Older raw files keep their stored IDs.
   bool sdat = false;
+  // Ordered typed JSON records collected by File.write; bytes retains the
+  // script's binary stream contract (including cross-type reads).
+  std::string json_values;
   // Unrepresentable resources are written as null, keeping the stream aligned.
   uint32_t degraded_resources = 0;
   std::filesystem::path path;

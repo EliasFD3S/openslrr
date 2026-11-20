@@ -212,6 +212,8 @@ void gameref_clear();
 GameRefState* gameref_upsert(void* key, GameRefKind kind = GameRefKind::Generic);
 GameRefState* gameref_get(void* key);
 GameRefState* gameref_find_live(int32_t id);
+// Runtime resource wrappers keep their type alive even before a part uses it.
+bool gameref_uses_resource(uint32_t id);
 int32_t gameref_make_live(void* key);
 bool gameref_bind_alias(void* reference, void* target);
 void gameref_remove(void* key);

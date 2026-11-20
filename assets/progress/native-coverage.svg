@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="465" viewBox="0 0 1120 465" role="img" aria-labelledby="title desc">
 <title id="title">Open SLRR native binding coverage</title>
-<desc id="desc">355 with a body, 3 no-op, 18 missing, out of 376. Bars show counts, not percentages of game completion.</desc>
+<desc id="desc">358 with a body, 3 no-op, 15 missing, out of 376. Bars show counts, not percentages of game completion.</desc>
 <rect width="1120" height="465" rx="12" fill="#0d1117"/>
 <g font-family="Segoe UI,Arial,sans-serif">
 <text x="28" y="34" font-size="21" fill="#f0f6fc" text-anchor="start">Native binding coverage</text>
-<text x="28" y="58" font-size="13" fill="#c9d1d9" text-anchor="start">355 with a body  /  3 no-op  /  18 missing  ·  376 stock natives</text>
+<text x="28" y="58" font-size="13" fill="#c9d1d9" text-anchor="start">358 with a body  /  3 no-op  /  15 missing  ·  376 stock natives</text>
 <line x1="170" x2="170" y1="80" y2="361" stroke="#21262d"/>
 <text x="170" y="381" font-size="12" fill="#8b949e" text-anchor="middle">0</text>
 <line x1="387.5" x2="387.5" y1="80" y2="361" stroke="#21262d"/>
@@ -27,9 +27,8 @@
 <rect x="761.6" y="120" width="26.1" height="25" fill="#d39338"><title>Language: 3 no-op</title></rect>
 <text x="797.7" y="137" font-size="12" fill="#8b949e" text-anchor="start">71</text>
 <text x="156" y="172" font-size="13" fill="#c9d1d9" text-anchor="end">Sound &amp; scripts</text>
-<rect x="170" y="155" width="130.5" height="25" fill="#49a58d"><title>Sound &amp; scripts: 15 with a body</title></rect>
-<text x="235.25" y="172" font-size="12" fill="#ffffff" text-anchor="middle">15</text>
-<rect x="300.5" y="155" width="26.1" height="25" fill="#ab474b"><title>Sound &amp; scripts: 3 missing</title></rect>
+<rect x="170" y="155" width="156.6" height="25" fill="#49a58d"><title>Sound &amp; scripts: 18 with a body</title></rect>
+<text x="248.3" y="172" font-size="12" fill="#ffffff" text-anchor="middle">18</text>
 <text x="336.6" y="172" font-size="12" fill="#8b949e" text-anchor="start">18</text>
 <text x="156" y="207" font-size="13" fill="#c9d1d9" text-anchor="end">Resources</text>
 <rect x="170" y="190" width="495.9" height="25" fill="#49a58d"><title>Resources: 57 with a body</title></rect>
