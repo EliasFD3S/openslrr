@@ -2,6 +2,7 @@
 #include "save_io_fixture.hpp"
 #include "slrr/scene_presentation.hpp"
 #include "../src/render/bgfx_lib_backend.hpp"
+#include <cstdlib>
 using namespace slrr;
 int main(int argc,char** argv) {
   std::setvbuf(stdout,nullptr,_IONBF,0);
@@ -9,7 +10,8 @@ int main(int argc,char** argv) {
   try {
     osd_clear_widgets();slrr_text_clear_all();
     OsdWidget sentinel; sentinel.hidden=true; osd_add_widget(sentinel); // Same touched OSD views in empty/full frames.
-    slrr_font_set_game_root(fs::absolute("game").string());
+    const char* font_root = std::getenv("SLRR_GAME_ROOT");
+    slrr_font_set_game_root(fs::absolute(font_root ? font_root : "data/game").string());
     Object font;
     SLRR_REQUIRE(slrr_font_load(&font,"slii24"));
     SLRR_REQUIRE(backend.open(1280,800,"OSD text batch regression"));
@@ -28,6 +30,11 @@ int main(int argc,char** argv) {
       slrr_text_set_string(&lines[i],std::string(50,'A').c_str());
       slrr_text_set_color(&lines[i],i%2?0x80ffd040u:0xff60a0ffu);
       slrr_text_set_osd(&lines[i],&owners[i%3]);
+      SlrrFontEffects effects;
+      effects.outline_px = i%2 ? 1.5f : 0.f;
+      effects.shadow_x = effects.shadow_y = i%4 >= 2 ? 2.f : 0.f;
+      effects.shadow_color = i%4 >= 2 ? 0xc0000000u : 0u;
+      slrr_text_set_effects(&lines[i], effects);
       slrr_text_update(&lines[i]);
     }
     std::printf("registered=%zu font=%d ready=%d\n",slrr_osd_texts().size(),slrr_font_ready(&font),backend.ready());

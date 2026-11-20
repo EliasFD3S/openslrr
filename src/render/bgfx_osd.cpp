@@ -231,8 +231,8 @@ namespace slrr {
         static_cast<uint16_t>(font->atlas_h), false, 1,
         bgfx::TextureFormat::RGBA8,
         BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
-            BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT |
-            BGFX_SAMPLER_MIP_POINT,
+            (font->distance_field ? uint64_t(0) :
+             BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT),
         mem);
     if (!bgfx::isValid(th)) return white_tex_;
     font_tex_[font->cache_key] = th;
@@ -259,7 +259,8 @@ namespace slrr {
       // even when the pointer is elsewhere. That color is the hover state.
       if (argb == 0xFFFFCB00u && !glow) argb = 0xFFC0C0C0u;
       if (glow) argb = 0xFFFFFFFFu;
-      draw_osd_line(t.font_key, t.text, t.x, t.y, t.align, argb);
+      draw_osd_line(t.font_key, t.text, t.x, t.y, t.align, argb,
+                    t.custom_effects ? &t.effects : nullptr);
     }
     const float white_c[4] = {1.f, 1.f, 1.f, 1.f};
     bgfx::setUniform(u_color_, white_c);
@@ -985,7 +986,7 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
 
 #ifdef _WIN32
   void LibBgfxBackend::draw_osd_line(void* font_key, const std::string& text, float x, float y,
-                     int align, uint32_t argb)
+                     int align, uint32_t argb, const SlrrFontEffects* effects)
 {
     if (!font_key || text.empty() || width_ <= 0 || height_ <= 0 ||
         !bgfx::isValid(text_program_)) return;
@@ -999,6 +1000,16 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     const float col[4] = {((argb >> 16) & 255) / 255.f,
                          ((argb >> 8) & 255) / 255.f,
                          (argb & 255) / 255.f, ((argb >> 24) & 255) / 255.f};
+    const auto& style = effects ? *effects : font->effects;
+    const float params[8] = {style.outline_px, style.shadow_x, style.shadow_y,
+                            font->distance_field ? 1.f : 0.f,
+                            1.f / font->atlas_w, 1.f / font->atlas_h, 0.f, 0.f};
+    auto rgba = [](uint32_t color) {
+      return std::array<float, 4>{((color >> 16) & 255) / 255.f,
+                                 ((color >> 8) & 255) / 255.f,
+                                 (color & 255) / 255.f, ((color >> 24) & 255) / 255.f};
+    };
+    const auto outline = rgba(style.outline_color), shadow = rgba(style.shadow_color);
     for (;;) {
       const auto capacity = osd_text_capacity(
           bgfx::getAvailTransientVertexBuffer(kOsdTextBatchGlyphs * 4, text_layout_),
@@ -1015,6 +1026,9 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       bgfx::setVertexBuffer(0, &tvb); bgfx::setIndexBuffer(&tib);
       bgfx::setTexture(0, s_tex_, tex);
       bgfx::setUniform(u_color_, col);
+      bgfx::setUniform(u_font_params_, params, 2);
+      bgfx::setUniform(u_font_outline_, outline.data());
+      bgfx::setUniform(u_font_shadow_, shadow.data());
       bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                      BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
       bgfx::submit(osd_view_, text_program_);

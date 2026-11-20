@@ -173,6 +173,9 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
     text_program_ = create_owned_program(
         bgfx::createEmbeddedShader(k_text, rt, "vs_osd_text"),
         bgfx::createEmbeddedShader(k_text, rt, "fs_osd_text"));
+    u_font_params_ = bgfx::createUniform("u_fontParams", bgfx::UniformType::Vec4, 2);
+    u_font_outline_ = bgfx::createUniform("u_fontOutline", bgfx::UniformType::Vec4);
+    u_font_shadow_ = bgfx::createUniform("u_fontShadow", bgfx::UniformType::Vec4);
     skin_program_ = create_owned_program(
         bgfx::createEmbeddedShader(k_skin, rt, "vs_skin"),
         bgfx::createEmbeddedShader(k_fs, rt, "fs_mesh"));
@@ -276,6 +279,10 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
 {
     if (bgfx::isValid(text_program_)) bgfx::destroy(text_program_);
     text_program_ = BGFX_INVALID_HANDLE;
+    for (auto* uniform : {&u_font_params_, &u_font_outline_, &u_font_shadow_}) {
+      if (bgfx::isValid(*uniform)) bgfx::destroy(*uniform);
+      *uniform = BGFX_INVALID_HANDLE;
+    }
     text_vertices_.clear(); text_indices_.clear();
     debug_overlay_.shutdown();
     debug_was_visible_ = false;

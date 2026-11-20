@@ -227,7 +227,7 @@ class LibBgfxBackend final : public IRenderBackend {
 
   // One OSD line. y is the glyph top (y+ down). align 1 centers on x.
   void draw_osd_line(void* font_key, const std::string& text, float x, float y,
-                     int align, uint32_t argb);
+                     int align, uint32_t argb, const SlrrFontEffects* effects = nullptr);
 
 
   // Osd.animate builds this after idleFor(1). The host never runs that
@@ -284,6 +284,9 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::VertexLayout layout_;
   bgfx::VertexLayout text_layout_;
   bgfx::ProgramHandle text_program_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_font_params_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_font_outline_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_font_shadow_ = BGFX_INVALID_HANDLE;
   std::vector<OsdTextVertex> text_vertices_;
   std::vector<uint16_t> text_indices_;
   bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
