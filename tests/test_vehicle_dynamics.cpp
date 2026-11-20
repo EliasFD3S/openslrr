@@ -354,51 +354,99 @@ SLRR_TEST(nitrous_blends_the_wet_bank_without_changing_dry_drive) {
   SLRR_REQUIRE(injected.dynamics.engine_omega > released.dynamics.engine_omega);
 }
 
-SLRR_TEST(aero_panels_follow_the_recovered_wing_law) {
-  AeroPanel panel;
-  panel.area = 10;
-  panel.suction = .25;
-  // Exponent 1 is linear: a face moving into the air gets the full area, a
-  // face moving away only the suction fraction, both against the motion.
-  SLRR_REQUIRE(std::abs(aero_panel_force(panel, 5) + 50) < 1e-9);
-  SLRR_REQUIRE(std::abs(aero_panel_force(panel, -5) - 12.5) < 1e-9);
-  // The stock exponent .666 acts on |v| / 100 and is scaled back by 100.
-  panel.exponent = .666;
-  const double expected = 10 * 100 * std::pow(.3, .666);
-  SLRR_REQUIRE(std::abs(aero_panel_force(panel, 30) + expected) < 1e-9);
-  SLRR_REQUIRE(std::abs(aero_panel_force(panel, -30) - expected * .25) < 1e-9);
-  // At most 0.1 mm/s, and for a non-positive exponent, the law stays linear.
-  SLRR_REQUIRE(std::abs(aero_panel_force(panel, 5e-5) + 5e-4) < 1e-12);
-  panel.exponent = 0;
-  SLRR_REQUIRE(std::abs(aero_panel_force(panel, 30) + 300) < 1e-9);
-  // Type 5: linear resistance on both sides, plus suction × the squared
-  // speed across the panel, along its normal; the exponent is ignored.
-  panel.type = 5;
-  panel.exponent = 1.5;
-  SLRR_REQUIRE(std::abs(aero_panel_force(panel, 3, 400) - (-30 + 100)) < 1e-9);
-  SLRR_REQUIRE(std::abs(aero_panel_force(panel, -3, 0) - 30) < 1e-9);
+namespace {
+// The Car test body (1.7 × 1.25 × 4.4 m bounds), alone in the air.
+VehicleDynamics aero_body(Vec3 velocity) {
+  VehicleDynamics car;
+  car.body.configure(1300, {-.85, .15, -2.2}, {.85, 1.4, 2.2}, {0, .45, .1},
+                     {550, 2300, 2200});
+  Matrix frame{};
+  frame[0] = frame[5] = frame[10] = frame[15] = 1;
+  car.body.set_frame(frame);
+  car.body.velocity = velocity;
+  car.aero.body = true;
+  return car;
+}
+constexpr double half_rho = .5 * 1.225;
+}  // namespace
+
+SLRR_TEST(body_drag_and_lift_follow_half_rho_v_squared) {
+  const double frontal = .85 * 1.7 * 1.25;
+  for (double speed : {20.0, 40.0}) {
+    const auto car = aero_body({0, 0, -speed});  // forward is -Z
+    const auto load = aero_load(car.aero, car.body, VehicleDynamics::timestep);
+    SLRR_REQUIRE(std::abs(load.force.z - half_rho * .32 * frontal * speed * speed) < 1e-6);
+    SLRR_REQUIRE(std::abs(load.force.y - half_rho * .25 * frontal * speed * speed) < 1e-6);
+    SLRR_REQUIRE(std::abs(load.force.x) < 1e-9);
+  }
+  // Without the body flag (native traffic) only C_drag remains.
+  auto bare = aero_body({0, 0, -30});
+  bare.aero.body = false;
+  SLRR_REQUIRE(aero_load(bare.aero, bare.body, VehicleDynamics::timestep).force.length() == 0);
 }
 
-SLRR_TEST(a_type_5_wing_presses_along_its_normal_without_drag) {
-  const Terrain air = [](double, double, double, GroundHit&) { return false; };
-  const auto step = [&](bool wing) {
-    VehicleDynamics car;
-    car.body.configure(1300, {-.85, .15, -2.2}, {.85, 1.4, 2.2}, {0, .45, .1},
-                       {550, 2300, 2200});
-    Matrix frame{};
-    frame[0] = frame[5] = frame[10] = frame[15] = 1;
-    car.body.set_frame(frame);
-    car.body.velocity = {0, 0, -30};
-    AeroPanel panel{{0, .45, .1}, {0, -1, 0}, 20, 2, 1.5};
-    panel.type = 5;
-    if (wing) car.aero.panels = {panel};
-    car.advance(VehicleDynamics::timestep, air);
-    return car.body.velocity;
+SLRR_TEST(sliding_sideways_meets_the_side_area_without_lift) {
+  const auto ahead = aero_body({0, 0, -30}), sideways = aero_body({30, 0, 0});
+  const auto front = aero_load(ahead.aero, ahead.body, VehicleDynamics::timestep);
+  const auto side = aero_load(sideways.aero, sideways.body, VehicleDynamics::timestep);
+  SLRR_REQUIRE(std::abs(side.force.x + half_rho * 1.0 * .85 * 4.4 * 1.25 * 900) < 1e-6);
+  SLRR_REQUIRE(std::abs(side.force.x) > 5 * std::abs(front.force.z));
+  SLRR_REQUIRE(std::abs(side.force.y) < 1e-9);
+}
+
+SLRR_TEST(a_wing_face_meeting_the_air_makes_downforce_until_it_stalls) {
+  const Vec3 tilted = Vec3{0, .94, -.34}.normalized();  // up, towards the front
+  const auto wing_force = [&](Vec3 normal, double speed) {
+    auto car = aero_body({0, 0, -speed});
+    const auto body = aero_load(car.aero, car.body, VehicleDynamics::timestep);
+    car.aero.wings = {{{0, .45, .1}, normal, .3}};
+    const auto both = aero_load(car.aero, car.body, VehicleDynamics::timestep);
+    return both.force - body.force;
   };
-  const Vec3 free = step(false), wing = step(true);
-  // 2 × 30² N down on 1300 kg for one 120 Hz step; no force along the flow.
-  SLRR_REQUIRE(std::abs((free.y - wing.y) - 1800.0 / 1300 * VehicleDynamics::timestep) < 1e-6);
-  SLRR_REQUIRE(std::abs(wing.z - free.z) < 1e-9);
+  // sin α = 0.34: normal coefficient 4.2 · 0.34, along -normal, plus 0.05
+  // profile drag along the flow.
+  const Vec3 at30 = wing_force(tilted, 30);
+  const double normal = half_rho * .3 * 900 * 4.2 * tilted.dot({0, 0, 1}) * -1;
+  SLRR_REQUIRE(std::abs(at30.y - (-normal * tilted.y)) < 1e-6);
+  SLRR_REQUIRE(std::abs(at30.z - (-normal * tilted.z + half_rho * .3 * 900 * .05)) < 1e-6);
+  SLRR_REQUIRE(at30.y < -150 && at30.z > 0);  // downforce and drag
+  // It scales with speed squared.
+  SLRR_REQUIRE(std::abs(wing_force(tilted, 60).y - 4 * at30.y) < 1e-6);
+  // The face turned away from the air carries nothing (the other face of
+  // the same element does).
+  SLRR_REQUIRE(wing_force(-tilted, 30).length() < 1e-9);
+  // A steep face is stalled at a normal coefficient of 1.5.
+  const Vec3 steep = Vec3{0, .5, -.866}.normalized();
+  SLRR_REQUIRE(std::abs(wing_force(steep, 30).y + half_rho * .3 * 900 * 1.5 * steep.y) < 1e-6);
+}
+
+SLRR_TEST(a_rear_wing_moves_load_to_the_rear_axle) {
+  const auto loads = [](bool wing) {
+    Car car;
+    auto& drive = car.dynamics.drive;
+    drive.torque = [](double) { return 0.0; };
+    drive.gears = 0;
+    drive.ratios = {};
+    drive.starter = 0;
+    car.dynamics.engine_running = false;
+    car.dynamics.engine_omega = 0;
+    car.dynamics.aero.body = true;
+    if (wing)  // behind the rear axle (z = 1.35)
+      car.dynamics.aero.wings = {{{0, 1.3, 2.0}, Vec3{0, .94, -.34}.normalized(), .4}};
+    car.run(1, 0, 0, 0);
+    car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -40});
+    for (auto& wheel : car.dynamics.state) wheel.spin = 40 / .31;
+    car.run(1.5, 0, 0, 0);
+    const auto& s = car.dynamics.state;
+    return std::pair{s[0].force + s[1].force, s[2].force + s[3].force};
+  };
+  const auto [front_plain, rear_plain] = loads(false);
+  const auto [front_wing, rear_wing] = loads(true);
+  // About 0.6 kN of downforce at the wing: more than all of it on the rear
+  // axle, and the front lifted by the pitch moment.
+  SLRR_REQUIRE(rear_wing - rear_plain > 500);
+  SLRR_REQUIRE(front_wing < front_plain);
+  SLRR_REQUIRE((front_wing + rear_wing) - (front_plain + rear_plain) > 300);
 }
 
 SLRR_TEST(chassis_drag_slows_a_coasting_car) {
@@ -423,7 +471,7 @@ SLRR_TEST(chassis_drag_slows_a_coasting_car) {
   SLRR_REQUIRE(lost > .75 && lost < 1.05);
 }
 
-SLRR_TEST(aero_impulses_never_reverse_the_motion) {
+SLRR_TEST(chassis_drag_never_reverses_the_motion) {
   const Terrain air = [](double, double, double, GroundHit&) { return false; };
   VehicleDynamics light;
   light.body.configure(1, {-1, -1, -1}, {1, 1, 1}, {0, 0, 0}, {1, 1, 1});
@@ -434,38 +482,6 @@ SLRR_TEST(aero_impulses_never_reverse_the_motion) {
   light.aero.drag = 1e6;
   light.advance(VehicleDynamics::timestep, air);
   SLRR_REQUIRE(light.body.velocity.x > -1e-9 && light.body.velocity.x < 1e-6);
-  // A huge panel stops its point's normal motion but does not bounce it.
-  light.aero.drag = 0;
-  light.aero.panels = {{{0, 0, 0}, {1, 0, 0}, 1e6, .25, .666}};
-  light.body.velocity = {2, 0, 0};
-  light.advance(VehicleDynamics::timestep, air);
-  SLRR_REQUIRE(light.body.velocity.x > -1e-9 && light.body.velocity.x < 1e-6);
-}
-
-SLRR_TEST(a_forward_facing_panel_adds_drag_and_downforce) {
-  const Terrain air = [](double, double, double, GroundHit&) { return false; };
-  const auto step = [&](AeroPanel panel) {
-    VehicleDynamics car;
-    car.body.configure(1300, {-.85, .15, -2.2}, {.85, 1.4, 2.2}, {0, .45, .1},
-                       {550, 2300, 2200});
-    Matrix frame{};
-    frame[0] = frame[5] = frame[10] = frame[15] = 1;
-    car.body.set_frame(frame);
-    car.body.velocity = {0, 0, -30};  // forward is -Z
-    if (panel.area > 0) car.aero.panels = {panel};
-    car.advance(VehicleDynamics::timestep, air);
-    return car.body.velocity;
-  };
-  const Vec3 free = step({});
-  // A hood-like face, tilted towards the front: pushed down and back.
-  const Vec3 hood = step({{0, .45, .1}, Vec3{0, .978, -.208}.normalized(), 49.5, .25, .666});
-  SLRR_REQUIRE(hood.y < free.y - 1e-3);
-  SLRR_REQUIRE(hood.z > free.z + 1e-4);
-  // A rear face moving away from the air is drawn back with a quarter of it.
-  const Vec3 front = step({{0, .45, .1}, {0, 0, -1}, 10, .25, 1});
-  const Vec3 rear = step({{0, .45, .1}, {0, 0, 1}, 10, .25, 1});
-  SLRR_REQUIRE(front.z > free.z && rear.z > free.z);
-  SLRR_REQUIRE(std::abs((rear.z - free.z) / (front.z - free.z) - .25) < 1e-6);
 }
 
 int main() {
@@ -485,11 +501,12 @@ int main() {
       preapplied_brakes_hold_against_drive_in_both_directions,
       abs_releases_a_locked_wheel_while_the_road_moves,
       nitrous_blends_the_wet_bank_without_changing_dry_drive,
-      aero_panels_follow_the_recovered_wing_law,
+      body_drag_and_lift_follow_half_rho_v_squared,
+      sliding_sideways_meets_the_side_area_without_lift,
+      a_wing_face_meeting_the_air_makes_downforce_until_it_stalls,
+      a_rear_wing_moves_load_to_the_rear_axle,
       chassis_drag_slows_a_coasting_car,
-      aero_impulses_never_reverse_the_motion,
-      a_forward_facing_panel_adds_drag_and_downforce,
-      a_type_5_wing_presses_along_its_normal_without_drag,
+      chassis_drag_never_reverses_the_motion,
   };
   return slrr::standalone::run("vehicle_dynamics", tests);
 }

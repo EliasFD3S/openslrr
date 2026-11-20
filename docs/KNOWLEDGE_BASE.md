@@ -340,14 +340,15 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
    The renderer, chase and cockpit cameras and car shadows draw that pose;
    scripts and physics still read the ticked one
    (`src/resources/scene_instances.cpp:chain_matrix`).
-11. Aerodynamics follow the MWM EXE: `Chassis.C_drag` quadratic drag at
-   `drag_center`, read by `src/resources/part_runtime.cpp:configure_drive`, and
-   every installed part's CFG `wing` panels
-   (`src/resources/part_config.cpp:parse_part_config`), collected in chassis
-   coordinates by `src/resources/part_runtime.cpp:rebuild_aero_panels`. Both
-   act in `src/physics/vehicle_dynamics.cpp:VehicleDynamics::apply_aero`; the
-   panel law is `src/physics/vehicle_dynamics.cpp:aero_panel_force`.
-   ENGINE_CONTRACT §11 has the recovered formulas and addresses.
+11. Aerodynamics are real-life `½ρCAv²` forces: body drag and lift over the
+   chassis bounds, `Chassis.C_drag` at `drag_center` (read by
+   `src/resources/part_runtime.cpp:configure_drive`), and wing faces from the
+   installed parts' CFG `wing` lines
+   (`src/resources/part_config.cpp:parse_part_config`,
+   `src/resources/part_config.cpp:part_wing_area`), collected in chassis
+   coordinates by `src/resources/part_runtime.cpp:rebuild_aerodynamics`. All
+   act in `src/physics/vehicle_dynamics.cpp:VehicleDynamics::apply_aero`.
+   ENGINE_CONTRACT §11 has the coefficients and the original formulas.
 
 ### 5.6 Maps and world
 

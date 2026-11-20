@@ -162,4 +162,11 @@ bool part_slot_matrix(const PartConfig &config, const PartSlot &slot,
 // `force` is the spring rate in N/m. Returns false when the spring is unset.
 bool part_parked_spring_length(float rest, float minimum, float maximum,
                                float force, float mass_on_wheel, float &length);
+// How the original Invictus Aero calculator authored a `wing` line: a wing
+// (airfoil) face or a body surface, and the face's flattened area in m².
+// Its SLRR method stores 30× that area for surfaces and 90× for wings
+// (exponent 0.667); its CRC and Experimental methods store about 1.27× and
+// write wings as type 5.
+bool part_wing_is_airfoil(const PartWing &wing);
+float part_wing_area(const PartWing &wing);
 } // namespace slrr

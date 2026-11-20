@@ -2400,39 +2400,35 @@ void rebuild_body_support(Object* chassis, Record& rec) {
   rec.body_support_dirty = false;
 }
 
-// Every installed part's CFG `wing` panels act on the car body, as the EXE's
-// per-part wing nodes do (0x44B48C, 0x48E880), in their current mount pose.
-// Type 4 is the stock surface; type 5 is the wing the Invictus Aero
-// calculator writes for its CRC and Experimental methods. The EXE's other
-// types stay inactive.
-void rebuild_aero_panels(Object* chassis, Record& rec) {
-  auto& panels = rec.dynamics.aero.panels;
-  panels.clear();
+// The car body gets real-life drag and lift; installed parts' CFG `wing`
+// lines authored as wings act as airfoils in their current mount pose, as the
+// EXE's per-part wing nodes follow their parts (0x44B48C, 0x48E880). Body
+// surface lines only describe the shape the body model already covers.
+void rebuild_aerodynamics(Object* chassis, Record& rec) {
+  auto& aero = rec.dynamics.aero;
+  aero.wings.clear();
+  aero.body = !rec.native_vehicle;
   if (rec.native_vehicle) return;
   const auto to_chassis = part_matrix_inverse_rigid(world_matrix(chassis));
   for (const auto& item : part_installed_tree(chassis)) {
     const auto* part = record(item.object);
     if (!part || !part->config || part->config->wings.empty()) continue;
     const auto m = part_matrix_multiply(to_chassis, world_matrix(item.object));
-    for (const auto& wing : part->config->wings) {
-      if (wing.type != 4 && wing.type != 5) continue;
-      const auto& p = wing.position;
-      const auto& n = wing.normal;
-      physics::AeroPanel panel;
-      panel.position = {m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12],
-                        m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13],
-                        m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]};
-      panel.normal = physics::Vec3{m[0] * n[0] + m[4] * n[1] + m[8] * n[2],
-                                   m[1] * n[0] + m[5] * n[1] + m[9] * n[2],
-                                   m[2] * n[0] + m[6] * n[1] + m[10] * n[2]}.normalized();
-      panel.area = wing.area;
-      panel.suction = wing.suction;
-      panel.exponent = wing.exponent;
-      panel.type = wing.type;
-      if (panel.position.finite() && panel.normal.length() > .5 &&
-          std::isfinite(panel.area) && std::isfinite(panel.suction) &&
-          std::isfinite(panel.exponent))
-        panels.push_back(panel);
+    for (const auto& line : part->config->wings) {
+      if (!part_wing_is_airfoil(line)) continue;
+      const auto& p = line.position;
+      const auto& n = line.normal;
+      physics::AeroWing wing;
+      wing.position = {m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12],
+                       m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13],
+                       m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]};
+      wing.normal = physics::Vec3{m[0] * n[0] + m[4] * n[1] + m[8] * n[2],
+                                  m[1] * n[0] + m[5] * n[1] + m[9] * n[2],
+                                  m[2] * n[0] + m[6] * n[1] + m[10] * n[2]}.normalized();
+      wing.area = part_wing_area(line);
+      if (wing.position.finite() && wing.normal.length() > .5 &&
+          std::isfinite(wing.area) && wing.area > 0)
+        aero.wings.push_back(wing);
     }
   }
 }
@@ -5147,7 +5143,7 @@ SimBatch prepare_batch(unsigned ticks) {
         car.drive = configure_drive(chassis, rec, chassis == controlled);
         car.configured = true;
         if (rec.body_support_dirty) {
-          rebuild_aero_panels(chassis, rec);
+          rebuild_aerodynamics(chassis, rec);
           rebuild_body_support(chassis, rec);
         }
         car.local = local;

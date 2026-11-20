@@ -104,12 +104,29 @@ SLRR_TEST(part_config_reads_wing_panels_like_the_exe) {
   SLRR_REQUIRE(config.wings[3].type == 4);
 }
 
+SLRR_TEST(part_config_recovers_wing_faces_and_areas_like_the_calculator) {
+  const auto config = slrr::parse_part_config(
+      "wing 4 0 0 0 0 1 0 15.0 -0.250 0.666\n"   // SLRR surface: 30 × m²
+      "wing 4 0 0 0 0 1 0 18.0 0.250 0.667\n"    // SLRR wing: 90 × m²
+      "wing 4 0 0 0 0 1 0 1.27 -0.3 2.0\n"       // CRC surface: 1.27 × m²
+      "wing 5 0 0 0 0 1 0 2.54 -2.54 1.5\n"      // CRC wing
+      "render 0x123\n");
+  SLRR_REQUIRE(config.wings.size() == 4);
+  const bool airfoil[] = {false, true, false, true};
+  const float area[] = {.5f, .2f, 1.f, 2.f};
+  for (size_t i = 0; i < 4; ++i) {
+    SLRR_REQUIRE(slrr::part_wing_is_airfoil(config.wings[i]) == airfoil[i]);
+    SLRR_REQUIRE(std::fabs(slrr::part_wing_area(config.wings[i]) - area[i]) < 1e-5f);
+  }
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
       part_config_reads_native_box_sphere_and_mesh_bodies,
       part_config_keeps_the_mass_of_malformed_native_primitives,
       part_config_keeps_unknown_body_shapes_compatible,
       part_config_reads_wing_panels_like_the_exe,
+      part_config_recovers_wing_faces_and_areas_like_the_calculator,
   };
   return slrr::standalone::run("part_config", tests);
 }
