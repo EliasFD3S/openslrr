@@ -4422,6 +4422,7 @@ void advance_chassis_tick() {
 // ticks instead, by the fraction of a tick that is still unsimulated. Classic
 // keeps drawing the last tick. Scripts and physics keep the ticked pose.
 void publish_render_poses(double alpha) {
+  perf::Scope timing(perf::Zone::Interpolation);
   alpha = std::clamp(alpha, 0., 1.);
   const bool adaptive = host_framerate_mode() == FramerateMode::Adaptive;
   for (auto& [chassis, rec] : records) {

@@ -2,7 +2,7 @@ param(
   [string]$BuildDir = "build",
   [string]$BaselineRef = "",
   [switch]$CorpusOnly,
-  [ValidateSet("save_io", "save_persistence", "scx_skin", "physics_position", "garage_shell", "map_props", "asset_bounds", "ped_crossing", "time_format", "night_props", "sun_cycle", "tree_numbers", "ui_lifetime", "resource_cache", "tufa_validation", "rpk_validation", "audio_recovery", "vm_lookup", "script_safety", "video_safety", "options_retry", "live_lookup", "driver_mask", "driver_selector", "pad_fallback", "class_lifetime", "static_increment", "inventory_transition", "map_views", "map_alpha", "physics_recovery", "findfile_paths", "splash_boot", "menu_debounce", "tooltip_render", "car_select_view", "trigger_markers", "trigger_volume", "gameref_alias", "osd_text_batch", "osd_text_gpu", "road_routes", "race_brain", "traffic_runtime", "race_vehicle", "frame_profiler", "render_programs_gpu", "scene_mesh_cache", "gc_runtime", "vehicle_contacts_runtime")]
+  [ValidateSet("save_io", "save_persistence", "scx_skin", "physics_position", "garage_shell", "map_props", "asset_bounds", "ped_crossing", "time_format", "night_props", "sun_cycle", "tree_numbers", "ui_lifetime", "resource_cache", "tufa_validation", "rpk_validation", "audio_recovery", "vm_lookup", "script_safety", "video_safety", "options_retry", "live_lookup", "driver_mask", "driver_selector", "pad_fallback", "class_lifetime", "static_increment", "inventory_transition", "map_views", "map_alpha", "physics_recovery", "findfile_paths", "splash_boot", "menu_debounce", "tooltip_render", "car_select_view", "trigger_markers", "trigger_volume", "gameref_alias", "osd_text_batch", "osd_text_gpu", "road_routes", "race_brain", "traffic_runtime", "race_vehicle", "frame_profiler", "render_programs_gpu", "scene_mesh_cache", "gc_runtime", "vehicle_contacts_runtime", "port_flow")]
   [string]$Suite = "save_io"
 )
 $ErrorActionPreference = "Stop"
@@ -65,13 +65,17 @@ try {
   & $compiler /nologo /std:c++20 /EHsc /MD /O2 /utf-8 /D_CRT_SECURE_NO_WARNINGS /Iinclude /Isrc/natives @suiteIncludes "tests/test_$Suite.cpp" "/Fe:$executable" "/Fo:$testObject" @objects @libraries
   if ($LASTEXITCODE -ne 0) { throw "Save I/O regression link failed" }
   $log = Join-Path $outputRoot "$label.log"
+  # PowerShell 5 treats redirected native stderr as terminating errors under
+  # Stop, even when a successful standalone suite writes its summary there.
+  $start = @{ FilePath = $executable; WorkingDirectory = $repoRoot; Wait = $true; PassThru = $true;
+              RedirectStandardOutput = $log; RedirectStandardError = "$log.stderr" }
   if ($CorpusOnly) {
     if ($Suite -notin @('tufa_validation','rpk_validation')) { throw "CorpusOnly requires a validation suite" }
-    & $executable --corpus *> $log
-  } else {
-    & $executable *> $log
+    $start.ArgumentList = @('--corpus')
   }
-  $testExit = $LASTEXITCODE
+  $process = Start-Process @start
+  $testExit = $process.ExitCode
+  Get-Content "$log.stderr" | Add-Content $log
   Get-Content $log
   Write-Output "Save I/O test exit code: $testExit (log: $log)"
   exit $testExit

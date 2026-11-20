@@ -97,6 +97,34 @@ struct Car {
   double rpm() const { return dynamics.engine_omega * kRpmPerRad; }
 };
 
+// Spike-only input/airflow prototype, fed UNFILTERED pedal samples. The host
+// Controller already filters pedals; adopting this must bypass that stage,
+// not run a second keyboard filter. Crank/clutch/idle stay in VehicleDynamics.
+struct ThrottlePrototype {
+  double shaped = 0, plate = 0, load = 0;
+  bool rev_cut = false, bov_latched = false, closure_reported = false;
+  void step(double dt, double raw, bool digital, double rpm, double boost_ratio) {
+    raw = std::clamp(raw, 0.0, 1.0);
+    shaped = digital ? shaped + std::clamp(raw - shaped, -3.5 * dt, 3.5 * dt) : raw;
+    const double previous = plate;
+    plate += -std::expm1(-dt / .04) * (shaped - plate);
+    if (shaped > plate + 1e-6) closure_reported = false;
+    // Below the 3.5/s digital release rate, so keyboard lifts can vent too.
+    if (!closure_reported && (plate - previous) / dt < -2.5 && boost_ratio > 1.15) {
+      bov_latched = closure_reported = true;
+    }
+    const double normalized = std::clamp((rpm - kIdle) / (kLimit - kIdle), 0.0, 1.0);
+    load = std::pow(std::clamp(plate, 0.0, 1.0), 1.4 - .4 * normalized);
+    if (rpm >= kLimit) rev_cut = true;
+    else if (rpm <= kLimit - 150) rev_cut = false;
+  }
+  bool consume_bov() {
+    const bool event = bov_latched;
+    bov_latched = false;
+    return event;
+  }
+};
+
 // Normal WOT integrates the sampled net crank torque, with no second gain
 // or friction subtraction. Idle is inactive in the limiter region.
 double max_rpm_per_step(double inertia) {
@@ -331,6 +359,77 @@ SLRR_TEST(dyno_heat_and_power_audit) {
   }
 }
 
+SLRR_TEST(throttle_prototype_runs_inside_the_actual_solver_tick) {
+  const double dt = VehicleDynamics::timestep;
+  ThrottlePrototype analog, keyboard;
+  analog.step(dt, 1, false, kIdle, 1);
+  keyboard.step(dt, 1, true, kIdle, 1);
+  SLRR_REQUIRE(analog.shaped == 1 && keyboard.shaped < 1);
+  SLRR_REQUIRE(analog.plate > keyboard.plate && analog.plate < 1);
+  SLRR_REQUIRE(analog.load < analog.plate); // nonlinear flow near idle
+  ThrottlePrototype na_lift;
+  na_lift.shaped = na_lift.plate = 1;
+  na_lift.step(dt, 0, false, kIdle, 1);
+  SLRR_REQUIRE(!na_lift.consume_bov());
+  for (bool digital : {false, true}) {
+    for (double inertia : {.10, .22, .28, .38, .60}) {
+      Car car(inertia);
+      car.dynamics.drive.engaged = false;
+      ThrottlePrototype response;
+      // A cut engine's net curve is motoring friction only. Recovering the
+      // indicated curve inside step_drive then gives zero combustion, while
+      // the actual plate/load (and hence pumping) stays open during fuel cut.
+      car.dynamics.drive.torque = [&](double rpm) {
+        return response.rev_cut ? -slrr::engine_friction_torque(rpm) : kPeakTorque;
+      };
+      const Terrain flat = [](double, double, double, GroundHit& hit) {
+        hit = {};
+        return true;
+      };
+      bool cut_seen = false;
+      unsigned bov_events = 0, host_frame = 0;
+      double peak = 0;
+      const long steps = 9 * VehicleDynamics::frequency;
+      for (long i = 0; i < steps; ++i) {
+        const double time = double(i) / VehicleDynamics::frequency;
+        const double pedal = time >= 1 && time < 5 ? 1 : 0;
+        response.step(dt, pedal, digital, car.rpm(), 1.4);
+        car.dynamics.drive.throttle = response.load;
+        car.dynamics.advance(dt, flat); // one actual high-frequency crank step
+        peak = std::max(peak, car.rpm());
+        cut_seen = cut_seen || response.rev_cut;
+        SLRR_REQUIRE(car.dynamics.engine_running && std::isfinite(car.rpm()));
+        const unsigned frame = unsigned((i + 1.) * 60 / VehicleDynamics::frequency);
+        if (frame != host_frame) {
+          bov_events += response.consume_bov();
+          host_frame = frame;
+        }
+      }
+      bov_events += response.consume_bov();
+      SLRR_REQUIRE(cut_seen && peak <= kLimit + max_rpm_per_step(inertia) * 1.05 + 1);
+      SLRR_REQUIRE(bov_events == 1); // latched across substeps, not a repeated pulse
+      SLRR_REQUIRE(response.plate < .001 && response.load < .001);
+      std::printf("[throttle_prototype] %u Hz %s I=%.2f peak=%.0f rpm, one BOV event\n",
+                  VehicleDynamics::frequency, digital ? "digital" : "analog", inertia, peak);
+    }
+  }
+  // The loaded prototype uses the real clutch/gears/wheels, not a second
+  // crank integrator or an invented external-load scalar.
+  Car loaded;
+  ThrottlePrototype response;
+  const Terrain flat = [](double, double, double, GroundHit& hit) {
+    hit = {};
+    return true;
+  };
+  for (unsigned i = 0; i < 3 * VehicleDynamics::frequency; ++i) {
+    response.step(dt, 1, true, loaded.rpm(), 1);
+    loaded.dynamics.drive.throttle = response.load;
+    loaded.dynamics.advance(dt, flat);
+  }
+  SLRR_REQUIRE(loaded.dynamics.engine_running && loaded.dynamics.gear > 0);
+  SLRR_REQUIRE(std::isfinite(loaded.rpm()) && loaded.dynamics.body.velocity.z < -1);
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
       accumulator_ticks_split_into_whole_substeps,
@@ -341,6 +440,7 @@ int main() {
       wot_uses_net_curve_once_and_fuel_cut_still_decelerates,
       starter_and_engineless_states_survive_the_loss_change,
       sampled_power_follows_torque_between_nodes_and_with_nitrous,
+      throttle_prototype_runs_inside_the_actual_solver_tick,
   };
   return slrr::standalone::run("physics_tick_rate", tests);
 }

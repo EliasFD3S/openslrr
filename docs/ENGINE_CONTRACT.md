@@ -678,6 +678,17 @@ These loss curves are empirical, not a new manifold or combustion calibration.
 Stock outputs intentionally change under the issue owner's physical-consistency
 direction; see [the investigation](PHYSICS_TICK_SPIKE.md).
 
+The #203 Java port patch computes `in/out_min/max` from capped curtain area:
+`c = clamp(efficiency * discharge * A_eff * U_ref * 0.001 / V_swept, 0, 1)`
+in SI. The declared ideal-air M=1 reference has `U_ref = 198.629616711 m/s`.
+The existing 0.9 breather factor stays empirical; this does not make the native
+linear pressure relaxation an exact compressible valve solver. The shared
+CylinderHead helper must ship with both updated block classes; DOHC/SOHC/OHV
+continue supplying the same disk-area/lift proxy, and Vee averaging is unchanged.
+Efficiency now restricts minimum as well as maximum flow multiplicatively, so
+authored nonzero closed lifts can change leakage. No DynoData field/schema or
+native signature changes. See [patch installation/reproduction](../patch/README.md#port-flow-normalization-203).
+
 Mass distribution and crush zones are separate models. The car's mass,
 centre of mass and inertia come from the installed parts' CFG `body` lines
 (`assembly_mass_properties`): each line's mass is spread over its own shape (a

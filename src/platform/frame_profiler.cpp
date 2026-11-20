@@ -12,7 +12,7 @@ namespace {
 constexpr const char *kZoneNames[] = {
     "scripts",  "physics",     "flush",     "collect", "shadows",
     "refl",     "world",       "osd",       "present", "traffic",
-    "vehicles", "pedestrians", "collision", "gc"};
+    "vehicles", "pedestrians", "collision", "gc", "interpolation"};
 static_assert(std::size(kZoneNames) == static_cast<size_t>(Zone::Count));
 
 struct State {

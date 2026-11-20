@@ -1,6 +1,6 @@
 # OpenSLRR Enhanced
 
-Copy the `sl` folder from this patch into the game root and accept the replacement of `OptionsDialog.class` and `Garage.class`. The OptionsDialog Java source is shipped with its compiled class. Use the Enhanced v3 Release.
+Copy the `sl` and `parts` folders from this patch into the game root and accept replacement of the included classes. The Java sources are shipped with their compiled classes (except the targeted Garage bytecode patch below). Install the three port-flow classes together: the block classes call the updated CylinderHead helper. Use the Enhanced v3 Release.
 
 The **Video Options** menu applies the resolution and the Enhanced settings in game. Exterior scenery range is 3 km. The scenery shadow map and the vehicle shadow map each use a resolution of 2048 × 2048. **Ctrl+F12 → Renderer** also sets how many reflection faces are computed per frame.
 
@@ -55,3 +55,34 @@ in its own `CMD_MAINMENU` Java handler and use that mod's compiler.
 In-game check: buy several parts, return to the main menu from the garage,
 reload the career, and confirm every purchased part remains in the strip.
 Repeat after a second purchase and also check normal Exit Game saving.
+
+## Port-flow normalization (#203)
+
+Install the complete `parts` subtree, including `CylinderHead.class`,
+`Block_Inline.class` and `Block_Vee.class`, then restart. The shared head helper
+replaces squared disk-area/lift volume with capped valve-curtain area times a
+nominal ideal-air flow speed and the existing 1-ms reference interval, divided
+by cylinder swept volume. Both Vee banks use it before averaging. Native DynoData
+field meanings and fuel/save schemas are unchanged.
+
+The reference speed is derived from NASA's M=1 nozzle capacity at 293.15 K,
+not fitted to stock horsepower. The stock 0.9 breather factor remains empirical.
+This is a dimensional correction inside the legacy pressure-relaxation model,
+not a complete pressure-dependent compressible valve solver. Existing nonzero
+closed lifts now imply area-based leakage too; SuperDuty's authored 1.27-mm
+minimum therefore changes noticeably. Outputs and tuning behavior change.
+See [derivation, provenance and numeric examples](../docs/PHYSICS_TICK_SPIKE.md#derived-correction-now-shipped).
+
+To reproduce the included TUFA with the embedded Windows compiler, first follow
+the [build recipe](../README.md#build) and build target `compile_game_sources`.
+Copy the patch's `parts` subtree into a **private** game copy, then run:
+
+```powershell
+.\build\Release\compile_game_sources.exe data\game parts/scripts/enginepart/slidingenginepart/reciprocatingenginepart
+.\build\Release\compile_game_sources.exe data\game parts/scripts/enginepart/block
+powershell -File scripts/run_save_io_tests.ps1 -Suite port_flow
+```
+
+The compiler reports one head class and two block classes. The tests execute the
+shipped helper in the VM and cover SI/script-unit agreement, low-lift linearity,
+throat saturation, volume/valve-count/wear/efficiency scaling and zero geometry.

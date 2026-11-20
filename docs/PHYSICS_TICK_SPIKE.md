@@ -5,21 +5,23 @@ on `d60b907`, including #205's shared-world collision changes. The
 [owner's follow-up](https://github.com/EliasFD3S/openslrr/issues/203#issuecomment-7030114967)
 allows changed stock outputs for physically consistent torque/power. This branch
 corrects those units and the driving loss path; **handling/output changes are
-intentional**. The default clock remains 120 Hz, with no Java/native API change.
+intentional**. The default clock remains 120 Hz; native APIs are unchanged.
+The included Java head/block patch also corrects port-flow normalization.
 The compile-time rate override and
 [standalone experiment](../tests/test_physics_tick_rate.cpp) support further work.
-This is not completion of the broader thread, throttle, port and fuel redesign.
+These are spike findings and focused engine/port corrections, not a rollout of
+an independently owned physics thread, new default controls or calibrated fuels.
 
 ## Findings and remaining work
 
 | Goal | Finding | Remaining |
 | --- | --- | --- |
 | Clock decoupling | Fixed 60 Hz host ticks, 120 Hz shared-world substeps and interpolated drawing already exist on the host thread. Catch-up is bounded, not independent of wall-clock stalls. | Independent scheduling requires world ownership and input/output snapshots. A 1000 Hz constant alone loses 4% of simulation time in the current caller. |
-| CPU cost | Compare 120 and 960 Hz in the same Valo City drive below. | Interpolation's end-to-end cost is not isolated; no physics-thread prototype. |
+| CPU cost | Compare 120 and 960 Hz in the same Valo City drive below; the new `interpolation_ms` subzone measures actual pose publication. | Pose-reader/scene-cache overhead is not isolated; no independently owned physics-thread implementation. |
 | Adaptive setting | Only selects render interpolation; it never selects a physics clock. References listed below. | Removing Classic is a separate UI/compatibility decision. |
-| Throttle | Existing torque integration, input filtering, starter, idle, boost curve and clutch exchange must be retained. The issue prototype duplicates some of them and can stick at its limiter. | No plate/airflow prototype or new TUFA hooks in this change. |
+| Throttle | A spike-only digital/analog shaping, plate/airflow, hysteresis and latched-BOV prototype runs inside the actual solver's high-frequency test loop, retaining the existing crank/idle/clutch. | It is not enabled in production controls; stock TUFA lacks the named telemetry declarations, and boost fraction is not absolute manifold pressure. |
 | Torque/power | Corrected cycle work to SI net crank torque, derived sampled watts from torque × ω, selected net torque peaks and removed the runtime ×2 gain/duplicate WOT loss. | Stock outputs change with owner authorization. Thermochemistry, friction and stock-car calibration remain empirical. |
-| Port flow | Located the squared valve-area/lift volume law in both Inline and Vee scripts. It is an empirical pressure-relaxation coefficient, not geometric optimal port volume. | A physical replacement and stock-engine calibration are not established. |
+| Port flow | Replaced squared lift-volume normalization with capped valve-curtain area × reference exchange speed × 1 ms / swept volume, shared by Inline and both Vee banks. Compiled script patch is included. | This is a declared nominal-flow normalization, not a full compressible valve solver or measured stock calibration. |
 | Fuel heat | Raw 95-octane H is 1.0995 MJ/kg; effective mixture heat is 1.704225 MJ/kg at the script's optimal AFR 12.5. Heat also sets allowed compression bounds. | A constant-only change can reject stock engines. No Java patch or recalibration here. |
 | Stability | Neutral idle/limiter/lift and one synthetic launch are sampled at 120–1000 Hz and five inertias. | These fixtures do not establish stability for every car, collision, terrain, input or rendering cadence. |
 
@@ -89,11 +91,21 @@ that are not positive multiples of 60; the standalone kernel experiment permits
 O(cars/frame), independent of substep count. Consumption also involves
 [GameRef checks](../src/resources/gameref.cpp),
 [scene hierarchy traversal](../src/resources/scene_instances.cpp) and cameras.
-**End-to-end interpolation cost has not been isolated.** Physics profiler time
-includes pose publication; its Vehicles subzone does not. The arithmetic
-inventory is not timing evidence. Repeated Classic/Adaptive comparisons could
-estimate incremental overhead under controlled identical workloads, but none is
-claimed here.
+The new opt-in `interpolation_ms` CSV subzone scopes **actual pose publication**
+inside Physics (not Vehicles); it does not time downstream reader/cache work.
+It includes record traversal and pose generation, rather than inferring cost from
+an arithmetic inventory. End-to-end interpolation-related rendering overhead is
+not isolated; repeated Classic/Adaptive totals would also include scene/cache
+and visibility differences.
+
+With the updated engine and installed three-class port patch at default 120 Hz,
+one reset 40-s run each of Baiern (Inline) and MC (Vee) completed. Excluding warm-up
+and using 39 complete 60-frame windows per run, publication averaged **0.0043 ms**
+(Baiern, per-window range 0.003–0.007 ms) and **0.0051 ms** (MC, 0.004–0.006 ms).
+CSV samples round to 0.001 ms. These are single shared-desktop scenario measurements,
+not an isolated-machine guarantee or a paired engine-performance comparison.
+Both assemblies rendered and moved; ten-second captures were inspected. This
+smoke test is not stock-output calibration or validation of every mod/engine.
 
 **Pre-math-fix rate comparison:** baseline `d60b907` versus the experimental
 rate hook at `cdced33`. These are not timings of the later corrected engine.
@@ -166,8 +178,25 @@ The current chain is:
 4. [HUD/audio](../src/resources/part_runtime.cpp) consume live rpm and pedal.
    Turbo gauge response is `dyno_boost_fraction × pedal`.
 
-A plate/airflow state should be evaluated inside the existing substep drivetrain,
-not in a second crank integrator. The issue prototype's external load-torque
+The [spike-only prototype](../tests/test_physics_tick_rate.cpp) evaluates
+raw-pedal shaping and plate/airflow immediately before each real solver substep,
+not in a second crank integrator. It uses 3.5/s digital slew versus direct analog,
+exact first-order 40-ms plate lag, the issue's RPM-dependent nonlinear flow curve,
+a 150-rpm cut hysteresis and one latched BOV event consumed at a 60-Hz host cadence.
+The existing feed-forward/feedback idle bypass is retained instead of adding the
+reference's proportional-only idle controller a second time. Fuel cut is represented
+by a motoring net curve `−F`, so indicated combustion becomes zero while friction
+and the real plate/pumping state remain active. A loaded launch uses the actual
+clutch/gears/wheels rather than inventing an external load-torque integrator.
+The prototype also checks that an NA lift produces no BOV event.
+
+This is an **experiment**, not a silent production input change. Its input must
+be unfiltered; adopting it would bypass existing Controller smoothing, then publish
+plate/load/rpm and latched events once at the host boundary. The manifold ratio
+is supplied explicitly only for BOV detection; it never multiplies an already
+boosted torque curve. Existing native declarations/callers remain unchanged.
+
+The original issue prototype would need the same integration boundary: The issue prototype's external load-torque
 argument does not match the current clutch impulse exchange. Its full-load limiter
 sets WOT torque to zero while weighting drag by `1 − load`; with load 1 and no
 external load, rpm cannot fall below redline. Its proportional-only idle controller
@@ -241,12 +270,79 @@ port/cylinder volume ratio grows with cylinder size. For wear/efficiency 1,
 two 33 mm valves, 10 mm lift and 417 cm³ give c = 0.6315; the clamp needs
 12.58 mm lift. This is algebra, not a measured stock head.
 
-Replacing it with `k × efficiency × X/V` is dimensionless but not automatically
-physical. Matching one old head requires `k = 0.9 × X`; a single k cannot preserve
-all heads/lifts. A real flow model needs valve curtain area, discharge coefficient,
-pressure/density dependence and calibration. No verified intended replacement was
-found; a Java formula change must ship as a compiled [patch](ENGINE_CONTRACT.md#java-changes),
-not merely edit the private game copy.
+#### Derived correction, now shipped
+
+The [follow-up instruction](https://github.com/EliasFD3S/openslrr/issues/203#issuecomment-7030583795)
+is to find/derive the formula. Scoped public-source/history searches found the
+same squared law in [canonical scripts](https://github.com/imagecode-git/slrr-javas/blob/7e622de774c46c57b6598f79ad8dc065975b3a0a/parts/scripts/enginepart/block/SRC/Block_Inline.java)
+and their inspected forks, not an established corrected SLRR law. The replacement
+below is therefore an explicit, physics-motivated model, not a claimed recovery.
+
+Continuity gives mass flow `ṁ = ρ A u`. For n valves of diameter d and lift L,
+curtain area is `A_c = w n π d L`, not valve-disk area multiplied by lift and
+squared. The available head fields retain enough geometry **before** block
+normalization: `A_c = 4X/d`, `A_d = w n π d²/4`, and
+`A_eff = min(A_c, A_d)`. Disk area is the available throat **proxy**, not a measured
+runner/seat/stem flow area. Wear w is already present once in X and A_d.
+
+[NASA's compressible mass-flow equation](https://www.grc.nasa.gov/www/k-12/airplane/mflchk.html)
+at its M=1 maximum, divided by upstream density, gives reference volume speed
+
+```text
+U* = sqrt(γ R T) × [2/(γ+1)]^[(γ+1)/(2(γ−1))]
+V_exchange = η Cd A_eff U* t0
+c = clamp(V_exchange / V_swept, 0, 1)
+```
+
+Take the legacy reference interval `t0 = 0.001 s` and declared ideal-air reference
+`γ=1.4, R=287.05 J/(kg K), T=293.15 K`, giving `U*=198.629616711 m/s`.
+In the scripts' cm²/cm³/mm units this is:
+
+```text
+A_eff_cm² = min(tunnel_area_cm², 4 X_cm³ / (0.1 d_mm))
+c = clamp(19.8629616711 × η × Cd × A_eff_cm² / V_swept_cm³, 0, 1)
+```
+
+There is no fitted global horsepower multiplier. The existing `breather_magic`
+(default 0.9) is retained as an **empirical nominal discharge factor**, not a
+measured Cd. Manifold/header flow efficiency η multiplies both minimum and maximum
+flow; it no longer increases minimum leakage when placed in a denominator. Tuning
+can make η exceed 1, so ηCd is not asserted to be a strict physical bound.
+
+The shared [CylinderHead helper](../patch/parts/scripts/enginepart/slidingenginepart/reciprocatingenginepart/src/CylinderHead.java)
+serves DOHC/SOHC/OHV proxies without subtype exceptions. Both
+[Inline](../patch/parts/scripts/enginepart/block/src/Block_Inline.java) and
+[Vee banks](../patch/parts/scripts/enginepart/block/src/Block_Vee.java) call it,
+then retain the existing Vee average. Intake/exhaust zero geometry or efficiency
+is handled independently. Sources **and compiled TUFA** ship in [the patch](../patch/README.md).
+No new DynoData schema/native API is needed; the earlier draft's claim that every
+curtain-based correction needed one was too broad.
+
+At low lift, doubling lift or valve count now doubles capacity rather than
+quadrupling it. Raising lift beyond d/4 no longer invents extra throat area;
+31-mm valves reach the disk proxy at 7.75 mm, not an artificial oversized cam.
+At fixed gas state, doubling all lengths halves the 1-ms capacity/volume ratio;
+the old squared law instead multiplied it by eight.
+
+Actual authored geometry (wear=1; source π=3.1416), verified by executing the
+compiled Java helper in [VM tests](../tests/test_port_flow.cpp):
+
+| Intake | Bore/stroke mm | d / lift mm | η | Legacy c | New c |
+| --- | --- | --- | --- | --- | --- |
+| Kraftwerk | 80 / 90 | 31 / 11.9 | .75 | .481474 | .447382 |
+| DevilSport | 93 / 88 | 33 / 11.9 | .9375 | .584879 | .479587 |
+| SuperDuty open | 90 / 106 | 42.5 / 19 | .92 | 1 (clipped) | .691976 |
+| SuperDuty closed | 90 / 106 | 42.5 / 1.27 | .92 | .018836 | .082712 |
+
+**Limitations:** this normalizes the legacy *linear pressure relaxation* with a
+nominal choked exchange capacity. Unchoked orifice flow scales with
+`A sqrt(ρ |Δp|)`; its square root belongs to the pressure difference, not to area
+or cam lift. This is not a pressure-ratio-dependent compressible mass/enthalpy
+solver or a flowbench calibration. Native min/max rectangular valve
+timing is unchanged. Authored nonzero closed lifts are treated as leakage;
+SuperDuty's 1.27-mm minimum changes substantially and may need data retuning.
+The physical gas-state/seat/discharge details and absolute stock-car outputs remain
+unvalidated; these limitations do not justify retaining a unit-dependent X²/V law.
 
 ### Fuel heat and compression coupling
 
@@ -297,7 +393,7 @@ flywheel inertias (0.10, 0.22, 0.28, 0.38 and 0.60 kg·m²), plus one automatic
 rear-drive launch on flat analytic ground. The host's 0.28 floor means the two
 smallest inertias are intentionally below normal game configurations.
 
-MSVC `/O2`, corrected net-torque integration, eight checks passing at each
+MSVC `/O2`, corrected net-torque integration, nine checks passing at each
 of the five compiled rates:
 
 | Rate | Inertia kg·m² | Idle ripple ± rpm | Peak / steady limiter band rpm | 6 s launch km/h |
@@ -332,8 +428,11 @@ checks passing do not mean that the existing regression suite passes.
 
 These are bounded fixture results, not universal numerical stability or
 original-game compatibility. They exclude mixed dynamic contacts, full terrain,
-render-rate/input variation, stalls/catch-up, time warp and the issue's unintegrated
-throttle prototype. The 1000 Hz kernel result does not validate its game scheduler.
+render-rate/input variation, stalls/catch-up and time warp. The separate prototype
+adds 50 digital/analog/inertia/rate sweeps with bounded RPM and one BOV event per
+boosted lift, plus a loaded launch at each rate. It is not a claim that new TUFA
+bindings or production control integration are shipped. The 1000 Hz kernel result
+does not validate the game's integer shared-world scheduler.
 
 ## 6. Remaining contract/design work
 
@@ -341,19 +440,22 @@ The output-compatibility question is resolved: the owner explicitly permits
 changed torque/power, and the focused C++ correction is implemented. It is not a
 newly calibrated stock engine, manifold, fuel or port-flow model.
 
-The remaining physical port/fuel work cannot be a local coefficient fix. The
-Java head→block→DynoData chain clips and averages empirical coefficients before
-C++ sees them, losing valve dimensions; a curtain-flow model needs a new input
-contract across head/block scripts and the native cycle. Fuel heat also changes
-saved AFR/fuel behavior and driveability through compression gates, so values
-cannot be rescaled blindly in C++ without fuel identity. No verified replacement
-model/calibration was established in the inspected references.
+The narrow port normalization is now corrected in Java, **before** clipping and
+bank averaging lose the head geometry; it needs no new DynoData schema. A full
+instantaneous pressure-dependent valve solver is a separate extension, not claimed
+by the nominal reference-flow correction. Fuel heat still changes saved AFR/fuel
+behavior and driveability through compression gates, so no blind C++ heat rescale
+is made. Historical [Fuel Revamp 1.2](https://github.com/Gorgoil/slrr-javas/commit/f1d91cf826987f24dd53aa138d57965a43d72b26)
+did decouple heat from compression gates; its numeric fuel calibration is not
+independently validated or copied here.
 
 Independent-thread ownership likewise needs a coordinated shared-world/VM
 mutation and publication contract; moving the current live-GameRef tick locally
-would be unsafe. The throttle-plate/TUFA prototype and isolated interpolation
-measurement remain incomplete. No default-rate, Classic-mode, Java or native API
-change is made here; these remaining goals are not marked completed.
+would be unsafe. The tested throttle experiment and scoped pose-publication timing
+inform that next stage; production raw-input/telemetry publication and full renderer
+interpolation overhead remain future work, not claimed by the prototype. No
+default-rate, Classic-mode or native API change is made here. The three-class Java
+port patch is required for its correction; the larger rollout is not marked complete.
 
 ## Reproduce
 
