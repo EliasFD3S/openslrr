@@ -37,9 +37,12 @@ try {
     Where-Object { $_.Name -ne 'main.obj' }).FullName
   if (-not $objects) { throw "Build slrr_host Release first" }
   $suiteIncludes = @()
-  if ($Suite -in @('osd_text_gpu','outline_font','render_programs_gpu','scene_mesh_cache')) {
+  if ($Suite -in @('audio_recovery','osd_text_gpu','outline_font','render_programs_gpu','scene_mesh_cache')) {
     $includePaths = $project.SelectSingleNode("//*[local-name()='ItemDefinitionGroup' and contains(@Condition,'Release|x64')]/*[local-name()='ClCompile']/*[local-name()='AdditionalIncludeDirectories']").InnerText
     $suiteIncludes = @('/Isrc/render', '/Zc:__cplusplus', '/Zc:preprocessor', '/DBX_CONFIG_DEBUG=0', '/DBGFX_CONFIG_DEBUG_ANNOTATION=0', '/DBGFX_CONFIG_MULTITHREADED=1', '/DBGFX_CONFIG_VIDEO=1', '/DNDEBUG') + @($includePaths.Split(';') | Where-Object { $_ -and -not $_.StartsWith('%(') } | ForEach-Object { "/I$_" })
+    # CMake emits imported SDK includes as /external:I, not normal includes.
+    $options = $project.SelectSingleNode("//*[local-name()='ItemDefinitionGroup' and contains(@Condition,'Release|x64')]/*[local-name()='ClCompile']/*[local-name()='AdditionalOptions']").InnerText
+    $suiteIncludes += @([regex]::Matches($options, '/external:I\s+"([^"]+)"') | ForEach-Object { "/I$($_.Groups[1].Value)" })
   }
   $label = 'after'
   if ($BaselineRef) {
@@ -64,6 +67,9 @@ try {
   $testObject = Join-Path $outputRoot "$suiteName-$label.obj"
   & $compiler /nologo /std:c++20 /EHsc /MD /O2 /utf-8 /D_CRT_SECURE_NO_WARNINGS /Iinclude /Isrc/natives @suiteIncludes "tests/test_$Suite.cpp" "/Fe:$executable" "/Fo:$testObject" @objects @libraries
   if ($LASTEXITCODE -ne 0) { throw "Save I/O regression link failed" }
+  # Every suite links the host objects, including the FMOD import library.
+  $fmod = Join-Path $buildRoot 'Release/fmod.dll'
+  if (Test-Path -LiteralPath $fmod) { Copy-Item -LiteralPath $fmod -Destination $outputRoot -Force }
   $log = Join-Path $outputRoot "$label.log"
   if ($CorpusOnly -and $Suite -notin @('tufa_validation','rpk_validation')) { throw "CorpusOnly requires a validation suite" }
   # Windows PowerShell 5 treats redirected native stderr as ErrorRecords, even

@@ -14,15 +14,15 @@ contracts documented in `repos/slrr-reverse/engine/Runtime/Render/RenderNatives.
 | `Sound.changeMusicSet` | Selects Garage_Shop, Roam_ride, Race_chase or Main_menu under the game's music directory. Invalid set/NONE stops music. Re-selecting the current set does not restart it. |
 | `Sound.nextTrack`, `prevTrack` | Wrap around the active playlist and actually switch the streamed track. |
 | `Sound.getMode`, `setMode` | Per-playlist mode state (initially 3). Accept 0..3, preserve the old mode for invalid values. No active set: get returns -1, set returns its input, matching the reference native. Specific shuffle/repeat policies for these mode values have not been established; the host currently advances sequentially at EOF. |
-| `Sound.has3DHardware`, `hasMixHardware` | Zero: the XAudio2 backend does not provide the legacy DirectSound hardware-buffer capabilities. This does not mean sound is unavailable. |
+| `Sound.has3DHardware`, `hasMixHardware` | Zero: the software mixer does not provide the legacy DirectSound hardware-buffer capabilities. This does not mean sound is unavailable. |
 
-Music uses Media Foundation to decode MP3/WAV/WMA and a separate XAudio2
-streaming voice. MCI and DirectShow failed to open the stock menu MP3 on the
-host machine; the replacement successfully decodes and starts playback.
-At most 24 decoded chunks are queued, rather than loading complete songs.
-The music voice is independent of FMV and effects volume, and is refilled
-in modal script pumps as well as the main loop. Startup logs list scan counts
-and track starts; decoding failures include their HRESULT.
+Effects and music share one FMOD Core system with separate channel groups.
+Music uses FMOD streams rather than loading complete songs, retaining the
+MP3/WAV/WMA playlist scan, sequential order and bounded bad-track recovery.
+The shared mixer is updated in modal script pumps as well as the main loop,
+even with music stopped. Startup logs list scan counts and track starts;
+FMOD failures include the operation and error text. FMV keeps its separate
+backends and volume. No Studio banks or authored events are required.
 
 ## Audio options
 
@@ -57,7 +57,7 @@ device or screenshot implementation was taken from it.
 
 ## Repeated effects and UI bursts
 
-Transient XAudio2 effects are grouped by normalized WAV path. Requests closer
+Transient FMOD effects are grouped by normalized WAV path. Requests closer
 than 35 ms are coalesced before reading/allocating another voice. At most two
 copies of one transient cue may overlap; their gains are divided by the copy
 count so correlated waveforms cannot multiply that cue's peak amplitude.

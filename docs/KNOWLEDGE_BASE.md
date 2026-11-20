@@ -174,7 +174,7 @@ current gaps to SLRR_rev code are in
 | Renderer | `src/render/bgfx_lib_backend.cpp:flush`, `src/render/bgfx_lighting.cpp:draw_instance`, `src/render/bgfx_shadows.cpp`, `src/render/bgfx_osd.cpp:draw_osd` | Frame, materials, shadows, OSD and HUD |
 | UI | `src/ui/osd_registry.cpp:osd_add_widget`, `src/ui/osd_registry.cpp:osd_on_field_write` | OSD widgets, hit-testing, modal state |
 | Map ambience | `src/resources/scene_ambience.cpp:scene_ambience_attach`, `src/resources/scene_ambience.cpp:scene_ambience_tick` | `sfx_loop`/`sfx_random` lines of map placements |
-| Platform | `src/platform/host_input.cpp`, `src/platform/host_sfx.cpp`, `src/platform/host_music.cpp`, `src/platform/video_fmv.cpp`, `src/platform/video_cinepak.cpp`, `src/platform/host_game_options.cpp` | Input, audio, FMV (built-in Cinepak AVI decoder), options |
+| Platform | `src/platform/host_input.cpp`, `src/platform/host_audio.cpp`, `src/platform/host_sfx.cpp`, `src/platform/host_music.cpp`, `src/platform/video_fmv.cpp`, `src/platform/video_cinepak.cpp`, `src/platform/host_game_options.cpp` | Input, audio, FMV (built-in Cinepak AVI decoder), options |
 | Worker pool | `src/platform/job_system.cpp:jobs_parallel_for` | One worker per logical processor for loading work off the host thread (§6) |
 
 Code that exists but is not used:
@@ -469,7 +469,7 @@ this section is the working guide.
 | Worker pool, one per logical CPU minus one | `src/platform/job_system.cpp:jobs_parallel_for` | Data-parallel batches started by the host thread |
 | Exterior map parser | `src/natives/natives_resref.cpp:spawn_ground_shell` (`std::async`) | `scene_instances_ground_map` for the next chained map file |
 | Pedestrian stepper | `src/resources/part_runtime.cpp:PedSim` | Walker steering on copies of the walker records |
-| Audio and video | XAudio2, Media Foundation, VLC | Their own decode and output threads |
+| Audio and video | FMOD Core (effects/music), XAudio2 (Cinepak), VLC | Their own decode and output threads |
 
 **API** (`include/slrr/job_system.hpp`).
 
@@ -1507,21 +1507,27 @@ coalescing is retained. Rejected loop requests increment diagnostics without
 reading their WAV. This is a common loop budget, not new engine-vs-ambient
 priority; a 25th loop can still be denied until another loop stops.
 
-Decoded immutable WAV format/PCM is shared between voices and held in a
-16 MiB / 64-entry LRU cache. Playing voices retain their buffer even after
-cache eviction; root reset stops voices and clears cached data/counters.
-Oversized valid WAVs can play but are not added to that cache. Loop pitch
+FMOD decoded sample sounds are shared between voices and held in a
+16 MiB decoded-PCM / 64-entry LRU cache. Samples are prepared for looping at
+load time; each channel selects loop or one-shot playback independently.
+Playing voices retain their sound even after cache eviction; root reset
+stops voices and clears cached data/counters. `host_audio` owns the shared
+FMOD mixer with independent effects/music groups; music streams are updated
+through the existing frame pump even when only effects are playing.
+Sounds above the cache limit can play up to the 64 MiB per-effect bound,
+checked with an open-only metadata probe before full decode. `wave_reads`
+counts uncached load attempts (probe plus decode), not OS file reads. Loop pitch
 and gain updates now reject non-finite inputs via the same finite defaults
 as play_file. HostSfxStats exposes rejection/read/hit/cache diagnostics.
 
 `src/platform/host_music.cpp` tries at most one playlist pass when opening
-a track fails, preserving next/previous direction. A fill() failure advances
+a track fails, preserving next/previous direction. A stream failure advances
 through the same bounded recovery path. A wholly unreadable set remains
 stopped; update does not continuously retry it. Explicit change/next can
 retry later. HostMusicStats exposes attempts/failures/current track for
 diagnostics. No Java native or music-set/mode contract is added.
 
-Validation: Release host compiles. audio_recovery creates only digital-silence
+Pre-FMOD validation: Release host compiles. audio_recovery creates only digital-silence
 PCM WAVs in an isolated fixture and mutes playback. Actual XAudio2/Media
 Foundation checks pass: 24 loops share one disk read; the next loop is
 rejected before I/O; nine distinct one-shots are admitted with 32 total

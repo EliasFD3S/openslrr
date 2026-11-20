@@ -13,6 +13,25 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake/CMakeLists.txt
   message(FATAL_ERROR "Missing third_party/bgfx.cmake. See README.md for setup.")
 endif()
 
+# FMOD Core is an external Windows x64 SDK; never download or vendor it.
+set(_slrr_fmod_default "C:/Program Files (x86)/FMOD SoundSystem/FMOD Studio API Windows")
+if(DEFINED ENV{SLRR_FMOD_SDK_DIR} AND NOT "$ENV{SLRR_FMOD_SDK_DIR}" STREQUAL "")
+  set(_slrr_fmod_default "$ENV{SLRR_FMOD_SDK_DIR}")
+endif()
+set(SLRR_FMOD_SDK_DIR "${_slrr_fmod_default}" CACHE PATH "FMOD Studio API Windows SDK root (Core 2.04)")
+file(TO_CMAKE_PATH "${SLRR_FMOD_SDK_DIR}" _slrr_fmod_dir)
+foreach(_slrr_fmod_file IN ITEMS api/core/inc/fmod.hpp api/core/inc/fmod.h
+    api/core/lib/x64/fmod_vc.lib api/core/lib/x64/fmod.dll)
+  if(NOT EXISTS "${_slrr_fmod_dir}/${_slrr_fmod_file}")
+    message(FATAL_ERROR "Missing FMOD Core SDK file: ${_slrr_fmod_dir}/${_slrr_fmod_file}. Install the Windows x64 FMOD Studio API SDK and set SLRR_FMOD_SDK_DIR (CMake cache or environment) to its root.")
+  endif()
+endforeach()
+add_library(FMOD::Core SHARED IMPORTED)
+set_target_properties(FMOD::Core PROPERTIES
+  IMPORTED_IMPLIB "${_slrr_fmod_dir}/api/core/lib/x64/fmod_vc.lib"
+  IMPORTED_LOCATION "${_slrr_fmod_dir}/api/core/lib/x64/fmod.dll"
+  INTERFACE_INCLUDE_DIRECTORIES "${_slrr_fmod_dir}/api/core/inc")
+
 # Visual Studio compiles the files of one project one after the other unless
 # /MP is set, which left most cores idle. It covers bgfx.cmake's targets too.
 # SLRR_COMPILE_JOBS caps the cl.exe processes per project; empty uses every core.
@@ -44,6 +63,7 @@ add_executable(slrr_host
   src/platform/game_root.cpp
   src/platform/frame_profiler.cpp
   src/platform/host_input.cpp
+  src/platform/host_audio.cpp
   src/platform/host_sfx.cpp
   src/platform/host_music.cpp
   src/platform/host_game_options.cpp
@@ -149,9 +169,9 @@ endif()
 
 if(WIN32)
   # strmiids = DirectShow GUIDs for FMV (GfxEngine.openVideo).
-  # vfw32 = AVIFile fallback for movies the built-in Cinepak decoder rejects.
+  # vfw32 = AVIFile fallback; xaudio2 remains for built-in Cinepak FMV sound.
   target_link_libraries(slrr_host PRIVATE user32 gdi32 opengl32 winmm ole32 xinput
-                                          oleaut32 strmiids vfw32 xaudio2 mfplat mfreadwrite mfuuid)
+                                          oleaut32 strmiids vfw32 xaudio2 FMOD::Core)
 endif()
 
 # bgfx is the game's renderer.
@@ -308,4 +328,26 @@ target_link_libraries(slrr_host PRIVATE bgfx bx bimg slrr_script_compiler)
 target_compile_features(slrr_host PRIVATE cxx_std_20)
 message(STATUS "slrr_host: libbgfx + mesh shaders enabled")
 
+option(BUILD_TESTING "Build regression tests" OFF)
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(audio_recovery tests/test_audio_recovery.cpp
+    src/platform/host_audio.cpp src/platform/host_sfx.cpp src/platform/host_music.cpp)
+  target_include_directories(audio_recovery PRIVATE include)
+  target_compile_options(audio_recovery PRIVATE /W3 /utf-8)
+  target_compile_definitions(audio_recovery PRIVATE _CRT_SECURE_NO_WARNINGS)
+  target_link_libraries(audio_recovery PRIVATE FMOD::Core)
+  add_test(NAME audio_recovery COMMAND audio_recovery)
+endif()
+
+foreach(_slrr_audio_target IN ITEMS slrr_host audio_recovery)
+  if(TARGET ${_slrr_audio_target})
+    add_custom_command(TARGET ${_slrr_audio_target} POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "$<TARGET_FILE:FMOD::Core>" "$<TARGET_FILE_DIR:${_slrr_audio_target}>"
+      VERBATIM)
+  endif()
+endforeach()
+
 install(TARGETS slrr_host RUNTIME DESTINATION bin)
+install(FILES "$<TARGET_FILE:FMOD::Core>" DESTINATION bin)

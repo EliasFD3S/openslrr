@@ -81,7 +81,7 @@ The chart, the counts above and [native-coverage.json](assets/progress/native-co
 | Cars | ✅ Assembly from scripts and CFG files; reference Baiern with 76 parts. Showroom camera orbit, vehicle information, powertrain layout, gear ratios and dyno calculations |
 | Workshop | ✅ Point at a part to read its name, hide the body or the engine, open panels with interpolated motion and adjust tunable parts. Remove or fit attached assemblies, and drag inventory parts onto Repair/Sell. Detached suspension parts regain their rest pose in the inventory |
 | Physics | ⏳ Fixed-step chassis, suspension and tyre contacts, differential lock, impact deformation and panel detachment. Handling and damage still need comparison with the original |
-| Audio and video | ✅ Effects, loops, FMV audio and four music playlists streamed with Media Foundation/XAudio2. Repeated effects and menu sounds have separate overlap limits |
+| Audio and video | ✅ Effects, loops and four streamed music playlists mixed with FMOD Core. FMV keeps its own audio backend. Repeated effects and menu sounds have separate overlap limits |
 | Options | ✅ Game, Advanced Game and audio settings use `save/game/options`, writing JSON while still reading legacy SDAT saves. The patched OptionsDialog removes the pedestrian density slider and fixes the crowd at the original maximum (1.5). Traffic density is saved while its simulation is pending |
 | Driving | ⏳ Test Track driving with engine SFX tables, keyboard and XInput, stock and CFG-defined instruments, and GPS. Acceleration has been compared with stock Nonus and Einvagen telemetry, with differences remaining |
 | World and career | ⏳ City, traffic and complete career flow; vehicle purchase/save/load still need end-to-end validation |
@@ -98,7 +98,7 @@ Engine loops use the scripts' SFX tables. Music playlists currently play in sequ
 - Added GameType notification replacement/removal, event aliases/custom handlers/one-shot delivery, and control/drive/animate registrations.
 
 - Added an engine-owned Config instance, audio sliders, and debounced option saving, with a final save on normal shutdown.
-- Replaced the failing MCI music player with bounded PCM streaming through Media Foundation and XAudio2. Music volume is independent of effects and FMV.
+- Effects and streamed music now share an FMOD Core mixer, preserving separate volumes, bounded effects and playlist recovery. FMV keeps its independent audio backend.
 - Fixed `Input.createHotkey` being misrouted to Osd, slider track hit-testing, and tuning events carrying the actual slider to the part. Modal dialogs block clicks into the car behind them.
 - Fixed reference casts used by tuning scripts, so mixture-ratio and similar assignments update the part instance.
 
@@ -111,7 +111,7 @@ Headless diagnostics cover all four music sets (muted), audio-volume save/reload
 - **Windows x64** and **Visual Studio 2022**, with the **Desktop development with C++** workload and the Windows SDK.
 - **CMake 3.21 or later** and **Git**, available in your terminal.
 - An installation of **SLRR 2.2.1 MWM**, containing `system/Scripts/lang/System.class`.
-- Windows Media Foundation for music decoding (included in standard Windows installations; Windows N editions need the Media Feature Pack).
+- **FMOD Studio API for Windows 2.04**, from the [FMOD downloads page](https://www.fmod.com/download). Only the Core API's x64 headers, import library and runtime are used.
 - An Internet connection while preparing and initially configuring dependencies.
 
 Open SLRR builds for Windows x64 with an MSVC-compatible compiler and uses bgfx for rendering. CMake rejects non-MSVC toolchains (including MinGW), x86 and ARM64 before adding targets. It loads the original game scripts and assets.
@@ -141,6 +141,25 @@ cmake --build build --config Release --target slrr_host --parallel
 ```
 
 The executable is generated at `build/Release/slrr_host.exe`. The first build includes bgfx and its shader tools, so it may take a while.
+
+CMake finds FMOD in `C:/Program Files (x86)/FMOD SoundSystem/FMOD Studio API Windows`.
+For another location, pass `-DSLRR_FMOD_SDK_DIR="C:/path/to/FMOD Studio API Windows"`
+at configure time, or set the `SLRR_FMOD_SDK_DIR` environment variable before
+first configuring. The folder must contain `api/core/inc` and `api/core/lib/x64`.
+Build and install copy `fmod.dll` beside the executable. FMOD is proprietary,
+is not vendored or downloaded by this project, and is not covered by our MIT
+license; obtain the SDK and comply with [FMOD's licensing terms](https://www.fmod.com/licensing)
+before distributing builds.
+
+Audio regressions (muted, using the real FMOD runtime):
+
+```powershell
+cmake -S . -B build -DBUILD_TESTING=ON
+cmake --build build --config Release --target audio_recovery --parallel
+ctest --test-dir build -C Release --output-on-failure
+# Optional: also start all four playlists from a private game copy.
+.\build\Release\audio_recovery.exe --root data\game
+```
 
 #### Faster builds
 

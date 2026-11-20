@@ -981,8 +981,13 @@ announce a persistent option before testing a restart.
 
 ## 14. Audio and video
 
-`host_sfx` handles effects. `host_music` handles playlists. `video_fmv*`
-handles video playback. Engine loops use the scripts' SfxTables.
+`host_sfx` handles effects. `host_music` handles playlists. Both use one
+`host_audio` FMOD Core system with separate effects/music channel groups;
+`host_music_update` updates it in the normal and modal frame pumps even when
+music is stopped. Sound owners retain the shared system through shutdown.
+`video_fmv*` keeps its existing independent video/audio backends (Cinepak PCM
+uses XAudio2); FMV volume is not routed through either FMOD group.
+Engine loops use the scripts' SfxTables.
 `scene_ambience` plays the `sfx_loop`/`sfx_random` lines of map placements
 through `host_sfx`; it owns those voices and stops them when their ground
 shell leaves the active world.
