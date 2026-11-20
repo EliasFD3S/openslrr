@@ -2400,6 +2400,40 @@ void rebuild_body_support(Object* chassis, Record& rec) {
   rec.body_support_dirty = false;
 }
 
+// Every installed part's CFG `wing` panels act on the car body, as the EXE's
+// per-part wing nodes do (0x44B48C, 0x48E880), in their current mount pose.
+// Only type 4 occurs in the stock CFGs; the EXE's other types stay inactive.
+void rebuild_aero_panels(Object* chassis, Record& rec) {
+  auto& panels = rec.dynamics.aero.panels;
+  panels.clear();
+  if (rec.native_vehicle) return;
+  const auto to_chassis = part_matrix_inverse_rigid(world_matrix(chassis));
+  for (const auto& item : part_installed_tree(chassis)) {
+    const auto* part = record(item.object);
+    if (!part || !part->config || part->config->wings.empty()) continue;
+    const auto m = part_matrix_multiply(to_chassis, world_matrix(item.object));
+    for (const auto& wing : part->config->wings) {
+      if (wing.type != 4) continue;
+      const auto& p = wing.position;
+      const auto& n = wing.normal;
+      physics::AeroPanel panel;
+      panel.position = {m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12],
+                        m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13],
+                        m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]};
+      panel.normal = physics::Vec3{m[0] * n[0] + m[4] * n[1] + m[8] * n[2],
+                                   m[1] * n[0] + m[5] * n[1] + m[9] * n[2],
+                                   m[2] * n[0] + m[6] * n[1] + m[10] * n[2]}.normalized();
+      panel.area = wing.area;
+      panel.suction = wing.suction;
+      panel.exponent = wing.exponent;
+      if (panel.position.finite() && panel.normal.length() > .5 &&
+          std::isfinite(panel.area) && std::isfinite(panel.suction) &&
+          std::isfinite(panel.exponent))
+        panels.push_back(panel);
+    }
+  }
+}
+
 bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame,
                         bool preserve_parked_wheels = false) {
   auto unavailable = [&](const char *reason) {
@@ -3016,6 +3050,21 @@ struct DriveRefresh {
 };
 DriveRefresh configure_drive(Object *chassis, Record &rec, bool controlled) {
   DriveRefresh refresh;
+  // Chassis.updatevariables leaves C_drag (fully_stripped_drag less the
+  // drag_reduction of each body part on its slots) and drag_center for the
+  // EXE's quadratic drag (read at 0x448CD2, applied at 0x456A83). It acts
+  // on every scripted car, driven or not.
+  auto &aero = rec.dynamics.aero;
+  aero.drag = 0;
+  aero.drag_center = {};
+  if (!rec.native_vehicle) {
+    const float drag = comp(chassis, "C_drag");
+    aero.drag = std::isfinite(drag) ? std::max(0.f, drag) : 0.f;
+    if (auto *center = part_field(chassis, "drag_center")) {
+      const physics::Vec3 point{comp(center, "x"), comp(center, "y"), comp(center, "z")};
+      if (point.finite()) aero.drag_center = point;
+    }
+  }
   auto &drive = rec.dynamics.drive;
   drive.torque = {};
   drive.nitro_torque = {};
@@ -5094,7 +5143,10 @@ SimBatch prepare_batch(unsigned ticks) {
         dynamics_wheels(rec);
         car.drive = configure_drive(chassis, rec, chassis == controlled);
         car.configured = true;
-        if (rec.body_support_dirty) rebuild_body_support(chassis, rec);
+        if (rec.body_support_dirty) {
+          rebuild_aero_panels(chassis, rec);
+          rebuild_body_support(chassis, rec);
+        }
         car.local = local;
       } catch (const std::exception& error) {
         suspend_chassis(chassis, rec, *node, saved_body, saved_local, was_ready, error.what());

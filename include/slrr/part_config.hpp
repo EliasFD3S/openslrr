@@ -40,6 +40,18 @@ struct PartWheelSpring {
   float mass = 0.f;
   bool authored = false;
 };
+// `wing type x y z nx ny nz area suction exponent`: one aerodynamic panel in
+// the part's frame. As the MWM EXE's CFG handler (0x4443C0) does, the normal
+// is stored normalised, the area and suction factor as magnitudes, and a
+// missing exponent is 1. Only type 4 occurs in the stock CFGs.
+struct PartWing {
+  int type = 0;
+  std::array<float, 3> position{};
+  std::array<float, 3> normal{};
+  float area = 0.f;
+  float suction = 0.f;
+  float exponent = 1.f;
+};
 struct PartSlotLink {
   uint32_t resource = 0;
   int slot = 0;
@@ -103,6 +115,8 @@ struct PartConfig {
   int category = 0;
   float mass = 0;
   std::vector<PartBody> bodies;
+  // At most 16, the EXE's per-part capacity.
+  std::vector<PartWing> wings;
   std::vector<PartWheelSpring> wheel_springs;
   uint32_t render = 0, mesh = 0, texture = 0;
   PartPose render_pose;

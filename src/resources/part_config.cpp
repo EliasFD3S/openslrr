@@ -403,6 +403,33 @@ PartConfig parse_part_config(const std::string &source,
         }
         out.bodies.push_back(body);
         out.mass += body.mass;
+      } else if (command == "wing") {
+        // EXE sscanf "%d %f..." (0x4443C0): the values after the first one
+        // that fails keep their defaults, so a malformed line never
+        // invalidates the part. Fields after the exponent are read but unused.
+        float value[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+        size_t parsed = 0;
+        for (; parsed < std::size(value) && parsed + 1 < t.size(); ++parsed) {
+          try {
+            value[parsed] = number(t, parsed + 1);
+          } catch (const std::exception &) {
+            break;
+          }
+        }
+        if (parsed > 0 && std::floor(value[0]) == value[0] &&
+            std::abs(value[0]) <= 65535 && out.wings.size() < 16) {
+          PartWing wing;
+          wing.type = static_cast<int>(value[0]);
+          const float length = std::hypot(value[4], value[5], value[6]);
+          for (size_t i = 0; i < 3; ++i) {
+            wing.position[i] = value[1 + i];
+            wing.normal[i] = length > 0.f ? value[4 + i] / length : 0.f;
+          }
+          wing.area = std::abs(value[7]);
+          wing.suction = std::abs(value[8]);
+          wing.exponent = value[9];
+          out.wings.push_back(wing);
+        }
       } else if (command == "nocollision" && !out.bodies.empty()) {
         out.bodies.back().collision = false;
         out.bodies.back().collision_mesh.clear();

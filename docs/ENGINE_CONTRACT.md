@@ -700,6 +700,34 @@ The active tire code is in `tire_model.cpp`, integrated in
 `vehicle_dynamics.cpp`. The presence of `sl2_pacejka.cpp` in the repository
 does not mean the whole driving model uses that older model.
 
+Aerodynamics follow the MWM EXE (build 606; addresses are for that binary).
+`VehicleDynamics::apply_aero` adds two forces to the chassis body each substep:
+
+- **Chassis drag.** `Chassis.updatevariables` sets `C_drag` to
+  `fully_stripped_drag` minus the `drag_reduction` of each body part on the
+  chassis slots, floored at 0; the EXE reads it with `drag_center` (0x448CD2).
+  Above 1 m/s it applies `-C_drag |v|² v̂` at `drag_center`, with `v` that
+  point's velocity, and clamps the step's impulse to the one that stops the
+  point along `v̂` (0x456A83). A complete car can sit at 0: its panels drag.
+- **Wing panels.** Every installed part's CFG `wing type x y z nx ny nz area
+  suction exponent` line (handler 0x4443C0, 16 per part) is a panel in that
+  part's frame; the EXE normalises the normal and keeps `|area|` and
+  `|suction|`. For type 4, the only stock type, with `d` the panel point's
+  velocity along its normal in body axes, `d' = sign(d) · 100 (|d|/100)^exponent`
+  when `exponent > 0`, `exponent ≠ 1` and `|d| > 10⁻⁴` (else `d' = d`), and the
+  force along the normal is `-area · d' · (d' > 0 ? 1 : suction)` (0x48EB3C).
+  Stock lines use exponent 0.666 and suction 0.25, so the force grows with
+  `|d|^0.666`, not `|d|²`. The EXE does not clamp panels; OpenSLRR applies the
+  drag's stopping bound to each panel as a safeguard for its 120 Hz step.
+
+`part_runtime` reads `C_drag`/`drag_center` with the drive inputs and
+collects the panels in chassis coordinates when the body support is rebuilt
+(assembly change, deformation, repair), at the parts' poses at that moment.
+A swinging hinged panel keeps the pose it had then; a detached part takes its
+panels with it but loose bodies get no aerodynamics; native traffic templates
+keep their separate force policy without aerodynamics. The EXE's wing types
+1–3, 5 and 6 are not implemented (no stock CFG uses them).
+
 ### Intended driving model: revision `8ac2ba9`
 
 The maintainer's `8ac2ba9601300b36efca54dd81031fb6bc9de98b` revision is the
@@ -738,7 +766,10 @@ not read by the solver. Likewise, `setInstantCenter` values and the
 `WheelState::jacking` field are retained but have no active load effect:
 there is no instant-centre anti-dive/anti-squat force or jacking feedback.
 Wheel YPR and the existing arm/hub kinematics still affect contact geometry.
-The proposed anti-roll-bar loop is commented out, not implemented.
+The proposed anti-roll-bar loop is commented out, not implemented. The
+original has no effect from stock anti-roll-bar parts either: MWM
+`Swaybar.updatevariables` has its `addrollbar` commands commented out. Only
+the native CFG `rollbar` lines of fake-racer and traffic templates carry one.
 
 The approved migration keeps that tyre law but corrects brake coupling.
 After the drivetrain impulse, one bearing/service/handbrake impulse budget

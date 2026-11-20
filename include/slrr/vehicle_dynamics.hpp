@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 namespace slrr::physics {
 // Script-space metres, kilograms and seconds. Renderer handedness stays
@@ -78,6 +79,24 @@ struct GroundHit {
 // from_y is a ray origin/ceiling, not a default ground height. False = air.
 using Terrain =
     std::function<bool(double x, double z, double from_y, GroundHit &)>;
+// Original aerodynamics, recovered from the MWM EXE (ENGINE_CONTRACT §11).
+// One CFG `wing` panel (type 4) in chassis-frame metres; `normal` is a unit
+// vector, `area` and `suction` are magnitudes.
+struct AeroPanel {
+  Vec3 position, normal;
+  double area = 0, suction = 0, exponent = 1;
+};
+// Signed force along the panel normal (N) for the panel point's velocity
+// component along that normal (m/s). A face moving into the air is pushed
+// back with the full area; a face moving away keeps the suction fraction.
+double aero_panel_force(const AeroPanel &panel, double normal_speed);
+struct Aerodynamics {
+  // Chassis.C_drag: N per (m/s)^2, applied against the velocity of
+  // drag_center (chassis frame) above 1 m/s.
+  double drag = 0;
+  Vec3 drag_center;
+  std::vector<AeroPanel> panels;
+};
 struct WheelConfig {
   bool enabled = false;
   // Fixed suspension travel with compliant tyre/bump-stop support.
@@ -178,6 +197,7 @@ public:
   std::array<Vec3, 8> body_supports{};
   std::size_t body_support_count = 0;
   DriveInput drive;
+  Aerodynamics aero;
   double engine_omega = 0;
   bool engine_running = false;
   int gear = 0;
@@ -200,6 +220,7 @@ private:
   bool accelerator_down_ = false, forced_reverse_ = false;
   bool launch_active_ = false;
   void step(const Terrain &terrain);
+  void apply_aero();
   void step_drive();
   void update_gear(double rpm, double shaft, double road_shaft);
 };
