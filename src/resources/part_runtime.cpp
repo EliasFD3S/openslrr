@@ -194,6 +194,7 @@ struct Record {
   std::array<bool, 4> geometry_solved{};
   physics::VehicleDynamics dynamics;
   bool physics_ready = false, physics_dirty = true, physics_suspended = false;
+  bool body_support_dirty = true;
   bool physics_reported = false, physics_fault_reported = false;
   int reported_contacts = -1, physics_status_lines = 0;
   void *physics_parent = nullptr;
@@ -412,6 +413,8 @@ PartMatrix node_local(Object *obj) {
   std::copy(n->ypr, n->ypr + 3, pose.rotation.begin());
   return part_pose_matrix(pose);
 }
+// Part-assembly transform (not a generic scene-node transform). A RenderRef
+// has no Record; compose its node_local matrix with its owning part instead.
 PartMatrix world_matrix(Object *obj) {
   std::vector<PartMatrix> chain;
   for (int i = 0; obj && i < 32; ++i) {
@@ -902,7 +905,7 @@ bool link_rig(Record::LinkVisual &vis, const GameRefState &node) {
 }
 void relink_one(Object *part) {
   auto *rec = record(part);
-  if (!rec)
+  if (!rec || rec->links.empty())
     return;
   const bool mounted = car(part) != nullptr;
   for (auto &vis : rec->links) {
@@ -1895,6 +1898,11 @@ bool part_destroy(Object *part) {
   // A promoted map prop that is removed any other way (world change, lost
   // ground shell) reappears as scenery where it last rested.
   if (rec->config->native_kind == "native_dynamic") scene_instances_settle_dynamic(part, nullptr);
+  if (auto* chassis = car(part); chassis && chassis != part)
+    if (auto* vehicle = record(chassis)) {
+      vehicle->physics_dirty = true;
+      vehicle->body_support_dirty = true;
+    }
   loose_panels.erase(part);
   repair_relink_pending.erase(part);
   if (auto camera = part->fields.find("_hostCockpitCamera"); camera != part->fields.end())
@@ -1993,7 +2001,75 @@ bool initialize_loose_body(physics::RigidBody& body,double mass,
   }
 }
 
-bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
+void invalidate_body_support(Object* part) {
+  if (auto* chassis = car(part))
+    if (auto* rec = record(chassis)) rec->body_support_dirty = true;
+}
+
+void rebuild_body_support(Object* chassis, Record& rec) {
+  using physics::Vec3;
+  auto& dynamics = rec.dynamics;
+  dynamics.body_support_count = 0;
+  std::array<Vec3, 8> lowest{};
+  std::array<double, 8> height;
+  height.fill(std::numeric_limits<double>::infinity());
+  const auto to_chassis = part_matrix_inverse_rigid(world_matrix(chassis));
+  const auto transform = [](const PartMatrix& m, Vec3 p) {
+    return Vec3{m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12],
+                m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13],
+                m[2] * p.x + m[6] * p.y + m[10] * p.z + m[14]};
+  };
+  for (const auto& item : part_installed_tree(chassis)) {
+    auto* part = record(item.object);
+    if (!part) continue;
+    if (item.object != chassis) {
+      auto* branch = part;
+      int depth = 0;
+      while (branch && branch->state.parent != chassis && ++depth < 64)
+        branch = record(branch->state.parent);
+      if (!branch || branch->state.parent != chassis) continue;
+      const auto mount = std::find_if(rec.config->slots.begin(), rec.config->slots.end(),
+          [&](const auto& slot) { return slot.id == branch->state.parent_slot; });
+      // Running gear already has its wheel contact. Hinged panels keep their
+      // existing no-floor-contact policy; do not freeze a swinging door here.
+      if (mount != rec.config->slots.end() && (corner_gear(mount->type) || mount->has_flap))
+        continue;
+    }
+    const auto part_frame = world_matrix(item.object);
+    const auto from_part = part_matrix_multiply(to_chassis, part_frame);
+    for (auto* render : part->renders) {
+      const auto* node = gameref_get(render);
+      if (!node || node->light_flags) continue;
+      const auto mesh = scene_instances_geometry(static_cast<uint32_t>(node->type_id));
+      if (!mesh) continue;
+      // RenderRefs are already local to their owning part. world_matrix
+      // only follows native Part records, not a RenderRef's scene parent.
+      const auto mesh_to_part = node_local(render);
+      for (size_t v = 0; v + 2 < mesh->positions.size(); v += 3) {
+        Vec3 p = transform(mesh_to_part, {mesh->positions[v] * mesh->position_scale,
+            mesh->positions[v + 1] * mesh->position_scale,
+            mesh->positions[v + 2] * mesh->position_scale});
+        if (part->deformation) p += part->deformation->displacement(p);
+        p = transform(from_part, p);
+        if (!p.finite()) continue;
+        const double z = (p.z - dynamics.body.minimum.z) /
+            std::max(.01, dynamics.body.maximum.z - dynamics.body.minimum.z);
+        const size_t sector = (p.x >= dynamics.body.center.x ? 4 : 0) +
+            static_cast<size_t>(std::clamp(z * 4, 0.0, 3.0));
+        if (p.y < height[sector]) {
+          height[sector] = p.y;
+          lowest[sector] = p;
+        }
+      }
+    }
+  }
+  for (size_t i = 0; i < lowest.size(); ++i)
+    if (std::isfinite(height[i])) dynamics.body_supports[dynamics.body_support_count++] = lowest[i];
+  rec.body_support_dirty = false;
+}
+
+bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame,
+                        bool preserve_parked_wheels = false) {
   auto unavailable = [&](const char *reason) {
     if (!rec.physics_reported) {
       std::printf("[phys] unavailable type=0x%x: %s\n", rec.state.resource,
@@ -2071,11 +2147,14 @@ bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame) {
     rec.dynamics.body.velocity = velocity;
     rec.dynamics.body.set_omega(omega);
   } else {
-    rec.dynamics.release_wheels();
+    // A passive body's first configuration must keep park_chassis's loaded
+    // suspension. It will not step to seed wheel lengths before publication.
+    if (!preserve_parked_wheels) rec.dynamics.release_wheels();
     rec.dynamics.reset_clock();
   }
   rec.physics_ready = true;
   rec.physics_dirty = false;
+  rec.body_support_dirty = true;
   // A successful explicit placement/reconfiguration retry restores contact
   // eligibility too; the diagnostic latch must not make a recovered car ghost.
   rec.physics_fault_reported = false;
@@ -2125,7 +2204,7 @@ double corner_hardware_reach(Record &rec, size_t corner) {
           hub_frame, part_matrix_multiply(from_hub, world_matrix(item.object)));
       for (auto *render : part->renders) {
         const auto *node = gameref_get(render);
-        if (!node || node->empty || node->light_flags)
+        if (!node || node->light_flags)
           continue;
         const auto mesh = scene_instances_geometry(static_cast<uint32_t>(node->type_id));
         if (!mesh)
@@ -2148,17 +2227,19 @@ void dynamics_wheels(Record &rec) {
     const auto &live = rec.wheels[i];
     cfg.enabled = false;
     cfg.rigid_contact = false;
+    cfg.metal_contact = false;
     if (i >= rec.config->wheels.size())
       continue;
     // The scripts size the wheel of the stock rim slot (Chassis.updatevariables
     // uses partOnSlot(101 + i)). Other wheel-type slots, such as an outer
     // dually wheel, carry no radius of their own.
     const int rim_slot = 101 + static_cast<int>(i);
-    bool has_rim_slot = false;
+    bool has_rim_slot = false, has_any_rim = false;
     const PartSlot *mount = nullptr;
     for (const auto &slot : rec.config->slots)
       if (slot.type == rim_slot) {
         has_rim_slot = has_rim_slot || slot.id == rim_slot;
+        has_any_rim = has_any_rim || rec.children.count(slot.id);
         if (!mount && rec.children.count(slot.id))
           mount = &slot;
       }
@@ -2197,6 +2278,7 @@ void dynamics_wheels(Record &rec) {
          physics::Quaternion{std::sin(ypr[1] * .5), 0, 0, std::cos(ypr[1] * .5)} *
          physics::Quaternion{0, 0, std::sin(ypr[2] * .5), std::cos(ypr[2] * .5)}).normalized();
     cfg.radius = inline_wheel ? fallback.radius : !mount ? reach : live.radius > 0 ? live.radius : fallback.radius;
+    cfg.metal_contact = !inline_wheel && !has_any_rim;
     cfg.rest = live.rest;
     cfg.anchor = fallback.base + fallback.travel;
     cfg.minimum = std::max(0.f, live.min_len);
@@ -2247,7 +2329,8 @@ void dynamics_wheels(Record &rec) {
         !(cfg.rest > 0 && cfg.maximum > cfg.minimum && cfg.spring > 0);
     if (cfg.rigid_contact) {
       // A mounted wheel without a working spring rests at its bump stop.
-      const double stop = live.min_len > 0 ? live.min_len : fallback.base;
+      const double stop = live.min_len > 0 ? live.min_len :
+          std::max(0.0, double(fallback.base - fallback.travel));
       cfg.minimum = cfg.maximum = cfg.rest = stop;
       cfg.spring = 0;
     }
@@ -2692,6 +2775,12 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
     out.tyre.longitudinal_grip = wheel.frictn_x;
     // setCPatch stores the sine of the scripted patch angle.
     out.tyre.patch_angle = std::asin(std::clamp(wheel.cpatch_ang, 0.f, 1.f));
+    if (rec.dynamics.wheels[i].metal_contact) {
+      // The missing rim's script no longer refreshes its tyre parameters.
+      // Do not copy them into a contact on the remaining disc/caliper.
+      out.tyre = {};
+      out.rolling_resistance = .04;
+    }
   }
 }
 
@@ -2939,6 +3028,7 @@ const ScxGeometry& part_collision_mesh(Record& rec) {
 
 void publish_deformation(Object* part, Record& rec) {
   using physics::Vec3;
+  invalidate_body_support(part);
   part_collision_mesh(rec);
   if (!rec.collision->indices.empty()) {
     if (!rec.deformed_collision)
@@ -3001,6 +3091,7 @@ void publish_deformation(Object* part, Record& rec) {
 }
 
 void restore_deformation(Object* part, Record& rec) {
+  invalidate_body_support(part);
   // Repair must also clear stale render/collision data if the cage is already gone.
   rec.deformation.reset();
   rec.deformed_collision.reset();
@@ -4215,6 +4306,7 @@ void advance_chassis_tick() {
       dynamics_wheels(rec);
       configure_drive(chassis, rec, chassis == controlled);
     }
+    if (rec.body_support_dirty) rebuild_body_support(chassis, rec);
     // An unreleased chassis (catalog, before start) may drop onto a floor.
     // With no floor the step only applies gravity, and the car leaves the shot.
     if (!rec.physics_released && rec.physics_pending_placement) {
@@ -4370,7 +4462,7 @@ void advance_chassis_tick() {
     // setMatrix/park has authority over an asleep car too. Never publish a
     // stale solver body back over a new scripted placement.
     if (external || !rec.physics_ready || rec.physics_dirty) {
-      if (!dynamics_configure(chassis, rec, frame)) continue;
+      if (!dynamics_configure(chassis, rec, frame, true)) continue;
       rec.dynamics.body.velocity = rec.dynamics.body.momentum = {};
       rec.published_frame = local;
     }
@@ -6392,6 +6484,7 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
            place_child(p->state.parent, p->state.parent_slot);
          else
            place_child(canonical(s), slot);
+          invalidate_body_support(canonical(s));
          return Value::make_void();
        });
   bind("setSlotPos", "(ILjava.lang.Vector3;Ljava.lang.Ypr;)V",
@@ -6428,6 +6521,7 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
            place_child(p->state.parent, p->state.parent_slot);
          else
            place_child(canonical(s), slot);
+          invalidate_body_support(canonical(s));
          return Value::make_void();
        });
   bind("getMesh", "()I", [](Object *s, const std::vector<Value> &) {

@@ -636,38 +636,96 @@ The active tire code is in `tire_model.cpp`, integrated in
 `vehicle_dynamics.cpp`. The presence of `sl2_pacejka.cpp` in the repository
 does not mean the whole driving model uses that older model.
 
-The tyre curve is built from the values the tyre script writes through
-`WheelRef` (stock `Tyre.java`), not from a fixed reference tyre: peak friction
-is `setFriction / kFrictionUnits` (1.68, so the stock 205 sport tyre peaks
-near 1.05), the slope at zero slip is `setStiffness` per unit slip and per
-newton, the sliding force is `setSliction` of the peak, `setMaxLoad` and
-`setLoadSmooth` saturate the load with the SL2 arctangent blend,
-`setFrictn_x` scales the longitudinal force, `setRollRes` is the rolling
-resistance and the `setCPatch` angle is the camber the full patch tolerates.
-Width, compound, profile and inflation therefore reach the road only through
-the numbers the script derives from them. Slip is combined: wheelspin or a
-locked wheel uses up cornering grip. A host-side impulse bound keeps the
-explicit step from reversing a slide within one tick, longitudinally per
-wheel and sideways shared by the tyres in contact.
+### Intended driving model: revision `8ac2ba9`
 
-`WheelRef.setInstantCenter` (`Suspension.setRollCenter`) gives each corner a
-front-view and a side-view instant centre, relative to the wheel centre.
-The links carry the tyre force along the line from the contact patch through
-that centre, so its vertical part lifts or pulls the body at the patch
-instead of compressing the spring (roll centre, anti-dive, anti-squat), and
-the tyre load is the spring force plus that lift. The stock 10000 values mean
-no centre. The centres stay at their static position; their travel with the
-suspension is not modelled. The lift feeds the next step's tyre load, so the
-link slope is limited to 0.5 and the lift to the spring's own support, which
-keeps that loop stable for any scripted tyre.
+The maintainer's `8ac2ba9601300b36efca54dd81031fb6bc9de98b` revision is the
+intended model for PR #48. It supersedes that PR's earlier script-derived
+curve and instant-centre load path. It is OpenSLRR tuning, not recovered
+stock physics; do not restore the earlier solver just to make its old tests
+pass. The follow-up work awaiting approval is in
+[the vehicle-dynamics migration plan](VEHICLE_DYNAMICS_PLAN.md).
 
-Bearing friction, the service brake and the handbrake act on a wheel's spin
-after the drive impulse and before the tyre force. A brake stronger than the
-drive keeps its wheel locked and the tyre slides; a weaker one lets the drive
-spin it. With the automatic gearbox and clutch, throttle in first or reverse
-raises the take-up speed even while the service brake is held, like a torque
-converter at stall, so the driven wheels spin when the engine beats their
-brakes and grip.
+`configure_drive` copies the tyre script's `WheelRef` values, but the active
+curve scales a reference tyre rather than interpreting those values as exact
+force-curve coefficients:
+
+- Friction, stiffness and sliction are divided by `TireParameters` defaults
+  (1.76863, 17.6839 and 0.814), then clamped respectively to 0.2–2.5,
+  0.4–2.5 and 0.3–1.5. Width, compound, profile and inflation enter through
+  these script-derived inputs, not through independent width parameters.
+- Slip ratio uses the greater of 1.5 m/s, road speed and wheel surface speed;
+  slip angle uses road speed with a 1.5 m/s floor. The base lateral Magic
+  Formula has B=11.5, C=1.32, E=0.35; the longitudinal one B=14, C=1.55,
+  E=0.45. Stiffness scales B, not an exact `stiffness × load` zero-slip slope.
+- `setMaxLoad` introduces progressive load efficiency above half capacity.
+  An arctangent factor blended by `setLoadSmooth × load_sensitivity` further
+  scales the lateral peak. The nominal lateral/longitudinal peak multipliers
+  are 1.42 and `0.85 × 1.76863`, before load efficiency, sliding, tuning and
+  `setFrictn_x` (longitudinal only); neither is a guaranteed measured peak mu.
+- Sliction scales the grip as combined slip grows; longitudinal slip also
+  reduces lateral B. A final friction ellipse bounds combined demand.
+  Low-slip forces are additionally capped in proportion to slip speed and
+  load. `TireTuning` exposes lateral grip/response, longitudinal grip and load
+  sensitivity. `setRollRes` supplies the wheel's rolling torque.
+
+Wheel alignment now scales load by the square of the hub-down/road-normal
+cosine, with a 0.25 floor. The copied `setCPatch` tolerance (`patch_angle`) is
+not read by the solver. Likewise, `setInstantCenter` values and the
+`WheelState::jacking` field are retained but have no active load effect:
+there is no instant-centre anti-dive/anti-squat force or jacking feedback.
+Wheel YPR and the existing arm/hub kinematics still affect contact geometry.
+The proposed anti-roll-bar loop is commented out, not implemented.
+
+The approved migration keeps that tyre law but corrects brake coupling.
+After the drivetrain impulse, one bearing/service/handbrake impulse budget
+is consumed before tyre force sees the spin. Its unused portion holds a
+locked wheel against the subsequent tyre reaction; it is not a second full
+brake application. ABS reduces the service budget and can release an
+already-locked wheel while the road moves. Only longitudinal force retains
+the per-wheel no-slip-reversal bound; the earlier shared lateral impulse
+bound is absent. Automatic first/reverse launch take-up is still raised
+only while both service brake and handbrake are below 0.05, not while
+holding the service brake. Previous burnout measurements do not validate
+this revision. The `8ac2ba9` brake-hold reproducer (traction despite zero
+final wheel spin) is covered by forward/reverse and weak/strong brake tests.
+
+The approved support migration replaces the spring-less corner's old
+previous-load/post-step-impulse path with a same-substep compliant tyre /
+bump-stop load. Fixed-travel corners and up to eight installed-body low
+points solve their implicit normal impulses jointly on a predicted body;
+the resulting loads reach the tyre law before integration. Stiffness scales
+with mass, the installed damper is retained, and a deep-penetration safety
+stop remains. An absent scripted compression limit falls back to CFG spring
+`base - travel`, not `base` (which could prop up the missing-spring corner).
+
+`rebuild_body_support` extracts actual low mesh vertices across left/right
+and four longitudinal sectors. It excludes running gear (already represented
+by wheels) and hinged panels (whose floor contact remains unsupported),
+respects slot poses/deformation, and refreshes after assembly changes,
+damage and repair. Hiding a mesh does not remove its physical support. In an
+upright car these samples replace fictitious underside AABB corners; the
+old box remains the fallback for callers without samples and after rollover.
+Floor-only support does not turn a low panel rubbing the ground into a
+chassis wall-impact damage event.
+
+A rim-less corner with only hub hardware uses a metal friction disk (0.4)
+and rolling-resistance factor 0.04, not the lost tyre's script values. An
+installed outer dually remains a rubber contact. Parked tyres use a 0.8
+friction upper bound; body and metal contacts use 0.4. These are host tuning.
+Rubber sticking is additionally bounded by the intended model's zero-slip
+friction-ellipse axes (`tire_friction_limits`), including script grip,
+alignment, progressive load efficiency and lateral smoothing. A zero
+longitudinal grip cannot be replaced with free parking friction. The same
+capacity equations are shared with the dynamic curve; its forces do not
+change. Native traffic keeps its separate force policy.
+A projected friction solve acts after forces/gravity but before advancing
+the pose, allowing real sticking instead of permanent tiny sliding steps.
+A mechanical brake's longitudinal hold additionally cannot spend more than
+its remaining brake/bearing impulse budget; lateral grip is independent of
+brake torque. The remaining friction ellipse still permits slipping when
+support is insufficient; no general chassis sleep state or new wake-state
+machine is introduced. `RigidBody::integrate` keeps its existing behaviour;
+the vehicle owner uses its force/pose split to insert the constraints.
 
 For the dyno, a new configuration must rebuild the matching curve banks,
 including nitro. Do not mix an old nitro bank with a new RPM step or a new
@@ -707,9 +765,15 @@ hull's bounds), and the pieces are summed in the chassis frame with the
 parallel-axis theorem. The stock game only sums point masses and has no
 authored centre; this is a host model, and the products of inertia are dropped
 because the rigid body takes principal moments along the chassis axes
-(`dynamics_configure` passes them to `RigidBody::configure`; no axis drops
-below 30 % of the solid box of the chassis render bounds, which stays the
-fallback). Parts
+(`dynamics_configure` passes them to `RigidBody::configure`; each supplied
+axis is floored at 30 % of the full-bounds box moment). In `8ac2ba9` the
+explicit-moment overload accepts the vector only when all three components
+are positive and finite; otherwise all three axes use the default. That
+default uses a box with dimensions 0.75 times the bounds, so its moments are
+0.5625 times the full-bounds box values. This generic fallback also affects
+loose bodies and native traffic, not just the player car. The collision
+bounds themselves are not shrunk. Angular momentum is damped by
+`exp(-0.015 × dt)` each substep. Parts
 without bodies (stock running gear, rims and tyres) add no mass. Crush zones
 are not those meshes: a deformation cage is generated over the part's visible
 render shell, as SLRR_rev (77b0fb6, `vehicle-3d.ts`) does, and its cage mass is
@@ -736,8 +800,9 @@ of new impact energy. Repair clears the dent, the baseline and the mount.
 The engine breaks off on a much bigger impact. Its mount takes the same impact
 energy weighted by 0.5 exp(-(d/1.1 m)²) of the horizontal distance to the engine
 and fails at 120 kJ, so 240 kJ at the engine itself (SLRR_rev `damageImpact` and
-its block release; not stock values). On the Baiern a 74 km/h frontal tree hit
-leaves it at about a third; a hit near 95 km/h or more breaks it. The engine is
+its block release; not stock values). Earlier Baiern captures retained the
+engine at 73–74 km/h and released it near 95 km/h; those approach speeds and
+outcomes have not been revalidated with the `8ac2ba9` solver. The engine is
 the chassis child that carries the `dynodata` (the stock `Block`), found as
 `configure_drive` finds it, and everything installed on it goes too. It leaves
 as one loose body with its pre-impact velocity, so it carries on out of the car;
@@ -746,14 +811,16 @@ none of its corners is inside the car's bounds (at most 1 s). Whenever a part
 breaks off, the reconfigured chassis keeps its velocity and angular velocity, as
 SLRR_rev does, not its angular momentum: with less inertia the same momentum
 would spin it up (a car that lost its engine pitched over).
-The car then has no dyno, so no drive torque, engine audio or rpm. Released
-bodies keep wall collision, damage and distance accumulation regardless of
-engine or controller ownership.
-`configure_drive` gives it a drive in neutral with a zero-torque engine that
-never starts, so it coasts on its tyres and its brakes still work, instead of
-the parked-tyre friction that stops a car without a drive. Repair
-restores the mount but not the engine; fitting an engine again clears the
-state.
+The mechanical car then has no dyno, so no drive torque, engine audio or
+rpm. `configure_drive` gives it a neutral drive with a zero-torque engine
+that never starts; the tyre and brake paths stay active. This is the coasting
+mechanism, not a guarantee that strong-brake holding is correct in the new
+solver. Mechanical AI input is preserved as well as player input.
+Released bodies keep wall collision, damage and distance accumulation
+regardless of engine or controller ownership; native traffic uses the separate
+`drive.native_traffic` force path without Java engine/gear data. Damage
+options still distinguish the player from other cars. Repair restores the
+mount but not the engine; fitting an engine again clears the state.
 
 Deformation and detached parts need consistency between the impact, the local
 frame, the deformed mesh, the part state, and collision. Check separately:
@@ -928,7 +995,9 @@ light that corner's wheel blip. Do not key this on car or part names.
 The stock store is `save/game/options`. Applying a resolution live must
 synchronize Config, the host mode, framebuffer dimensions, the viewport, and
 size-dependent resources. Rereading an old value when a menu opens must not
-put the game back to 800×600.
+put the game back to 800×600. A mode equal to the monitor size (for example
+1920×1080 on a 1080p screen) gets a borderless window even in windowed mode,
+because a framed window of that size cannot fit on the screen.
 
 `EnhancedGraphics` holds the extra options shared with the menus and debug.
 Every new option native must have a stable descriptor, bounded behavior, a

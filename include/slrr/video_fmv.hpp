@@ -6,8 +6,9 @@
 
 namespace slrr {
 
-// GfxEngine.openVideo uses the host framebuffer with LibVLC, or the
-// legacy Windows codec path. Non-exclusive clips can serve as UI backdrops.
+// GfxEngine.openVideo uses the host framebuffer with the built-in Cinepak
+// decoder, then LibVLC when installed, then the legacy Windows codec path.
+// Non-exclusive clips can serve as UI backdrops.
 
 void video_fmv_set_game_root(const std::string& root);
 void video_fmv_set_hwnd(void* hwnd);

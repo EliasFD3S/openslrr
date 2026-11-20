@@ -421,11 +421,13 @@ peak selection. The fixture also prints timing for a 20-s one-car analytic-groun
 workload; it includes per-step call/callback overhead, excludes production terrain
 and shared-world bookkeeping, and is not a portable performance guarantee.
 
-The existing standalone vehicle-dynamics regression could **not** be linked on
-the unmodified base: MSVC LNK2019 reports missing `tire_effective_load`, declared
-in [tire_model.hpp](../include/slrr/tire_model.hpp) but not implemented under
-`src/`. This pre-existing defect is not repaired by this spike. New experiment
-checks passing do not mean that the existing regression suite passes.
+The original `d60b907` baseline regression could not link its obsolete
+`tire_effective_load` call. Main's later #48 migration replaced that test/API;
+after integrating `7f629d5`, the current vehicle-dynamics, missing-support and
+wheel-mount suites pass 14, 16 and 7 checks respectively. The burnout-only fixture
+now explicitly supplies a 470 Nm **net** curve: its former 235 Nm input relied on
+the removed hidden ×2 gain. The normal 235 Nm fixture and main's brake/support/
+tyre model remain unchanged.
 
 These are bounded fixture results, not universal numerical stability or
 original-game compatibility. They exclude mixed dynamic contacts, full terrain,
@@ -434,6 +436,25 @@ adds 50 digital/analog/inertia/rate sweeps with bounded RPM and one BOV event pe
 boosted lift, plus a loaded launch at each rate. It is not a claim that new TUFA
 bindings or production control integration are shipped. The 1000 Hz kernel result
 does not validate the game's integer shared-world scheduler.
+
+### Real-time pacing check after main integration
+
+The PR follow-up requested current main and fixes for observed stutters. After
+integrating `7f629d5`, two reset-private-root 40-second Baiern/Valo City drives
+used `--bench-realtime --no-vsync --bench-time 13`, with the parts patch installed.
+Unlike the earlier fixed-delta throughput experiment, these retain wall-clock
+stalls/catch-up. Neither run took screenshots or ran alongside this ticket's
+build/tests. Loading/settle rows before the profiler restart were excluded.
+
+Each emitted 39 complete wall-second windows: 6,713 and 7,614 measured frames.
+Maximum frame times were 23.205 and 24.204 ms; the highest per-window p95 values
+were 15.050 and 14.539 ms. Neither run contained a measured frame over 33.333 ms.
+No repeatable driving hitch was reproduced, so no speculative runtime stutter
+patch is added. The separate clean-main screenshot run had 55–62 ms maxima;
+capture/loading and changed trajectories make it unsuitable as a no-capture
+hitch comparison. These shared-desktop runs do not establish universal smoothness
+or isolate GPU/presentation contention, manual input, career transitions or every
+vehicle/route. CSV zone values are window means, not hitch-frame attribution.
 
 ## 6. Remaining contract/design work
 

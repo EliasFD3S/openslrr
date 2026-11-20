@@ -174,7 +174,7 @@ current gaps to SLRR_rev code are in
 | Renderer | `src/render/bgfx_lib_backend.cpp:flush`, `src/render/bgfx_lighting.cpp:draw_instance`, `src/render/bgfx_shadows.cpp`, `src/render/bgfx_osd.cpp:draw_osd` | Frame, materials, shadows, OSD and HUD |
 | UI | `src/ui/osd_registry.cpp:osd_add_widget`, `src/ui/osd_registry.cpp:osd_on_field_write` | OSD widgets, hit-testing, modal state |
 | Map ambience | `src/resources/scene_ambience.cpp:scene_ambience_attach`, `src/resources/scene_ambience.cpp:scene_ambience_tick` | `sfx_loop`/`sfx_random` lines of map placements |
-| Platform | `src/platform/host_input.cpp`, `src/platform/host_sfx.cpp`, `src/platform/host_music.cpp`, `src/platform/video_fmv.cpp`, `src/platform/host_game_options.cpp` | Input, audio, FMV, options |
+| Platform | `src/platform/host_input.cpp`, `src/platform/host_sfx.cpp`, `src/platform/host_music.cpp`, `src/platform/video_fmv.cpp`, `src/platform/video_cinepak.cpp`, `src/platform/host_game_options.cpp` | Input, audio, FMV (built-in Cinepak AVI decoder), options |
 | Worker pool | `src/platform/job_system.cpp:jobs_parallel_for` | One worker per logical processor for loading work off the host thread (§6) |
 
 Code that exists but is not used:
@@ -271,12 +271,13 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
    dynamics and calls `VehicleDynamics::advance` for two 120 Hz substeps
    (`include/slrr/vehicle_dynamics.hpp:VehicleDynamics`). At most four host
    ticks run per frame; excess time is dropped.
-4. Wall contact is `collide_chassis`: four 0.18 m spheres against the static
-   index. It runs only for a released chassis whose `drive.torque` is set
-   or whose engine flew out (`engine_lost`), and `configure_drive` sets the
-   torque only for the player-controlled car with gear ratios, a dyno and a
-   positive maximum RPM. Other cars get no wall
-   collision, impact damage or mileage
+4. Wall contact is `collide_chassis`: four 0.18 m sphere probes plus oriented
+   chassis-box contacts against the static index. A released car enters it
+   when `drive.torque`, `engine_lost` or `drive.native_traffic` is set.
+   `configure_drive` handles player and autonomous mechanical cars, an
+   engine-lost car's zero-torque neutral drive, and the distinct native
+   traffic force path. Wall collision, impact damage and mileage are no
+   longer player-only; damage options still distinguish the player
    (`src/resources/part_runtime.cpp:advance_chassis_tick`,
    `src/resources/part_runtime.cpp:configure_drive`).
 5. Impacts feed `damage_chassis` and the XPBD cage
@@ -628,10 +629,43 @@ Physics:
 - The physics delta is clamped to 0.1 s and scaled by the time warp
   (`src/jvm/jvm.cpp:advance_sim_time`), and at most four host ticks run per
   frame, so below 15 FPS the simulation slows down.
+- The intended vehicle solver is maintainer revision `8ac2ba9`, not the
+  earlier #48 curve. `src/physics/tire_model.cpp:tire_forces` scales reference
+  Magic Formula curves by clamped ratios of script friction, stiffness and
+  sliction, with progressive load efficiency, lateral load smoothing and a
+  combined friction ellipse. Stiffness is a B multiplier, not an exact slope.
+  `setCPatch` tolerance and `setInstantCenter` data are copied/stored but have
+  no active solver effect; there is no jacking or shared lateral impulse
+  bound. The approved brake fix consumes one impulse budget before tyre
+  force and holds the reaction with the unused budget; raised launch take-up
+  still requires the service brake below 0.05
+  (`src/physics/vehicle_dynamics.cpp:VehicleDynamics::step_drive`).
+  See ENGINE_CONTRACT §11 and [the migration plan](VEHICLE_DYNAMICS_PLAN.md).
+- Installed body low points are cached from real mesh vertices, not the
+  chassis AABB's empty underside corners
+  (`src/resources/part_runtime.cpp:rebuild_body_support`). Hidden meshes keep
+  their supports; corner gear and hinged panels have separate contact paths.
+  Slot poses, deformation, repair and assembly changes invalidate the cache.
+- Missing-spring fixed-travel support is solved implicitly with body contacts
+  in the current substep, before the tyre law consumes the load
+  (`src/physics/vehicle_dynamics.cpp:solve_fixed_support`). A compression limit
+  missing from scripts uses CFG `base - travel`. Rim-less hub hardware has a
+  metal contact, not the previous tyre's grip. Static friction is projected
+  after forces/gravity and before pose advance
+  (`src/physics/vehicle_dynamics.cpp:solve_rest_contacts`). Rubber sticking
+  also respects the active tyre model's anisotropic zero-slip capacities
+  (`src/physics/tire_model.cpp:tire_friction_limits`), so low grip or zero
+  longitudinal grip cannot borrow a stronger parking coefficient. Controlled
+  longitudinal brake holding is additionally limited by its unspent brake
+  impulse, independently of lateral grip. This adds no new chassis
+  sleep/wake state machine.
 - A CFG `body` line is mass and collision; it is not a crush zone. Do not size
-  a deformation cage from the phys SCX bodies, and do not take inertia from the
-  render bounds: 815 of the 818 stock racer phys hulls with mass are closed
-  solids, and the mass properties integrate them.
+  a deformation cage from the phys SCX bodies. The assembly mass properties
+  integrate the closed phys hulls (815 of 818 stock racer hulls in the earlier
+  audit), with a 30%-of-render-box moment floor for chassis configuration.
+  The generic rigid-body fallback now uses 0.75 times the bounds dimensions
+  (`src/physics/vehicle_dynamics.cpp:RigidBody::configure`); a supplied inertia
+  vector replaces it only when every component is positive and finite.
 - Repairs must restore deformation, damage-associated slot state and wheel
   damage together. The native `repair` command does this locally for each part
   (`src/resources/part_runtime.cpp:repair_part`); stock Java covers the normal
@@ -675,7 +709,7 @@ Process:
 | SFX voices | 32 total, 3 menu, 2 copies per cue, 35 ms coalescing | `src/platform/host_sfx.cpp:host_sfx_play_file` |
 | Ambient start range | 250 m beyond the CFG radius | `src/resources/scene_ambience.cpp:scene_ambience_audible` |
 | Chassis wall probe | four spheres of 0.18 m | `src/resources/part_runtime.cpp:collide_chassis` |
-| Tyre friction units | script friction / 1.68 = peak mu | `include/slrr/tire_model.hpp:kFrictionUnits` |
+| Tyre reference scaling (`8ac2ba9`) | friction / 1.76863, stiffness / 17.6839, sliction / 0.814, each clamped; nominal lateral peak multiplier 1.42 before load/slip factors | `src/physics/tire_model.cpp:tire_forces` |
 | Hinged panel step / latch release / tear-off | 240 Hz / 3.5 m/s local impact speed / 4.5 m/s contact speed or 0.15 m blocked overlap | `src/resources/part_runtime.cpp:kFlapStep`, `include/slrr/flap_hinge.hpp:FlapTuning` |
 | Prop cell | 64 m | `src/resources/scene_instances.cpp:kPropCellSize` |
 | Shadow maps | 2048² | `src/render/bgfx_lib_backend.hpp:kShadowResolution` |
@@ -858,10 +892,12 @@ Each answer names its evidence.
     idempotent request and consumes it at the physics boundary
     (`src/resources/gameref.cpp:gameref_process_collision_requests`).
 13. *Which tyre model drives the car?* `src/physics/tire_model.cpp:tire_forces`,
-    not `sl2_pacejka.cpp`. Its curve comes from the tyre script's `WheelRef`
-    values (friction, stiffness, sliction, load capacity, `frictn_x`, patch
-    angle); `configure_drive` copies them each tick
-    (`src/resources/part_runtime.cpp:configure_drive`).
+    not `sl2_pacejka.cpp`. Revision `8ac2ba9` scales reference curves by script
+    friction, stiffness, sliction, load capacity/smoothing and `frictn_x`;
+    `configure_drive` also copies the patch tolerance, but the solver does
+    not use that field (`src/resources/part_runtime.cpp:configure_drive`).
+    Native traffic has its own load-limited force path within the same
+    `VehicleDynamics` owner, not this mechanical-tyre curve.
 14. *Can SLRR_rev's EXE addresses be used for the MWM binary?* No. They
     belong to Steam build 940. SLRR_rev documents three EXE hashes, and the
     MWM binary is a fourth.
@@ -1615,6 +1651,16 @@ video_safety suite checks cancellation both before opening a decoder and after
 opening a generated silent AVI; no later intro is opened. Immediate LibVLC
 cancellation can log demux errors in this fixture; actual rendered frames are
 not asserted. Release build and the suite pass.
+
+Video without VLC (#216): 64-bit Windows ships no Cinepak codec (only the
+32-bit `SysWOW64\iccvid.dll`), so without LibVLC both the AVIFile and the
+DirectShow paths failed and every intro and `prime.avi` was skipped.
+`video_fmv_open` now tries `src/platform/video_cinepak.cpp` first: it indexes
+the AVI, decodes Cinepak frames in order into BGRA and plays PCM audio through
+its own XAudio2 voice, whose position drives the frame clock. Files it rejects
+(another codec, or a first frame it cannot decode) still go to LibVLC, then
+AVIFile/DirectShow. The video_safety suite checks the decoder and a generated
+Cinepak AVI with PCM audio.
 
 
 ### Options save failure policy (#109)

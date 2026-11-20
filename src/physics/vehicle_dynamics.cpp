@@ -69,6 +69,10 @@ void RigidBody::configure(double kilograms, Vec3 lo, Vec3 hi, Vec3 com,
   }
 }
 
+Vec3 RigidBody::inertia() const {
+  return {1.0 / inverse_inertia_.x, 1.0 / inverse_inertia_.y, 1.0 / inverse_inertia_.z};
+}
+
 void RigidBody::set_frame(const Matrix &m) {
   for (float v : m)
     if (!std::isfinite(v))
@@ -138,13 +142,24 @@ void RigidBody::impulse(Vec3 j, Vec3 p) {
 }
 
 void RigidBody::integrate(double dt) {
+  integrate_forces(dt);
+  integrate_pose(dt);
+}
+
+void RigidBody::integrate_forces(double dt) {
   if (!std::isfinite(dt) || dt <= 0)
     throw std::invalid_argument("invalid physics dt");
   velocity += force_ * (dt / mass);
   velocity.y -= 9.81 * dt;
-  // Amortissement angulaire très léger pour stabiliser numériquement sans
-  // freiner les rotations en dérive ou en l'air.
   momentum = (momentum + torque_ * dt) * std::exp(-0.015 * dt);
+  force_ = torque_ = {};
+  if (!velocity.finite() || !momentum.finite())
+    throw std::runtime_error("non-finite rigid state");
+}
+
+void RigidBody::integrate_pose(double dt) {
+  if (!std::isfinite(dt) || dt <= 0)
+    throw std::invalid_argument("invalid physics dt");
   position += velocity * dt;
   Vec3 w = omega();
   double angle = w.length() * dt;
@@ -154,7 +169,6 @@ void RigidBody::integrate(double dt) {
         (Quaternion{axis.x, axis.y, axis.z, std::cos(angle * .5)} * orientation)
             .normalized();
   }
-  force_ = torque_ = {};
   if (!position.finite() || !velocity.finite() || !momentum.finite())
     throw std::runtime_error("non-finite rigid state");
 }
@@ -226,8 +240,7 @@ double suspension_force(double length, double speed, double rest, double max,
 }
 
 void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
-                  const Terrain &terrain, double ceiling, double dt,
-                  bool parked_friction) {
+                  const Terrain &terrain, double ceiling, double dt) {
   const Vec3 local_down = w.down.normalized();
   const Vec3 down = body.orientation.rotate(local_down);
   const Vec3 hard = body_point(body, w.center - local_down * w.anchor_length());
@@ -308,23 +321,125 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
   s.hub_rotation = pose.hub_rotation;
   s.center = hub_w;
   s.patch = s.center - normal * w.radius;
-  if (!s.contact || !parked_friction)
-    return;
-  Vec3 velocity = body.point_velocity(s.patch);
-  Vec3 tangent = velocity - normal * velocity.dot(normal);
-  const double slip = tangent.length();
-  if (slip <= 1e-9)
-    return;
-  tangent = tangent / slip;
-  const Vec3 arm = s.patch - body.position;
-  const double inverse =
-      1 / body.mass +
-      tangent.dot(body.inverse_world_inertia(arm.cross(tangent)).cross(arm));
-  const double amount = std::min(s.force * .8, slip / (inverse * dt * 4));
-  body.add_force(tangent * (-amount), s.patch);
 }
 
 namespace {
+// Host-designed compliant support, solved implicitly and jointly. Independent
+// explicit dampers can exceed the 120 Hz stability bound when several low
+// points act on the same rotation, even if each individual damper is stable.
+struct FixedSupport {
+  Vec3 point, normal;
+  double inverse = 0, softness = 0, target = 0, limit = 0, impulse = 0;
+  int wheel = -1;
+};
+FixedSupport fixed_support(const RigidBody& body, Vec3 point, Vec3 normal,
+                           double depth, bool metal, double dt, int wheel = -1,
+                           double installed_damping = 0) {
+  const Vec3 arm = point - body.position;
+  const double inverse = 1 / body.mass +
+      normal.dot(body.inverse_world_inertia(arm.cross(normal)).cross(arm));
+  const double stiffness = body.mass * (metal ? 800.0 : 160.0);
+  const double damping = 1.4 * std::sqrt(stiffness / inverse) +
+                         std::max(0.0, installed_damping);
+  const double response = damping + stiffness * dt;
+  return {point, normal, inverse, 1 / (dt * response),
+          stiffness * depth / response, body.mass * 9.81 * 3 * dt, 0, wheel};
+}
+void solve_fixed_support(const RigidBody& body, std::array<FixedSupport, 12>& contacts,
+                         size_t count, double dt) {
+  if (!count) return;
+  auto predicted = body;
+  predicted.integrate_forces(dt); // healthy springs, external forces and gravity
+  for (int iteration = 0; iteration < 16; ++iteration) {
+    for (size_t i = 0; i < count; ++i) {
+      auto& c = contacts[i];
+      const double speed = predicted.point_velocity(c.point).dot(c.normal);
+      const double delta = (c.target - speed - c.softness * c.impulse) /
+                           (c.inverse + c.softness);
+      const double next = std::clamp(c.impulse + delta, 0.0, c.limit);
+      predicted.impulse(c.normal * (next - c.impulse), c.point);
+      c.impulse = next;
+    }
+  }
+}
+
+struct RestContact {
+  Vec3 point, normal, heading;
+  double limit_x = 0, limit_y = 0;
+  Vec3 impulse;
+};
+
+// Project the contact impulses into their friction disks, after gravity but
+// before pose integration. Unlike velocity damping this can actually stick
+// without advancing the chassis downhill by a tiny amount every tick.
+void solve_rest_contacts(RigidBody& body, std::array<RestContact, 12>& contacts,
+                         size_t count) {
+  for (int iteration = 0; iteration < 12; ++iteration) {
+    for (size_t i = 0; i < count; ++i) {
+      auto& c = contacts[i];
+      const Vec3 seed = std::abs(c.normal.y) < .9 ? Vec3{0, 1, 0} : Vec3{1, 0, 0};
+      const Vec3 x = c.heading.length() > .5 ? c.heading.normalized() : seed.cross(c.normal).normalized();
+      const Vec3 y = c.normal.cross(x);
+      const Vec3 r = c.point - body.position;
+      const auto inverse = [&](Vec3 a, Vec3 b) {
+        return a.dot(b) / body.mass +
+            a.dot(body.inverse_world_inertia(r.cross(b)).cross(r));
+      };
+      const double xx = inverse(x, x), yy = inverse(y, y), xy = inverse(x, y);
+      const double determinant = xx * yy - xy * xy;
+      if (!(determinant > 1e-18)) continue;
+      const Vec3 v = body.point_velocity(c.point);
+      const double vx = v.dot(x), vy = v.dot(y);
+      const double old_x = c.impulse.dot(x), old_y = c.impulse.dot(y);
+      const double gx = vx - xx * old_x - xy * old_y;
+      const double gy = vy - xy * old_x - yy * old_y;
+      double ix = 0, iy = 0;
+      if (c.limit_x <= 0) {
+        if (c.limit_y > 0) iy = std::clamp(-gy / yy, -c.limit_y, c.limit_y);
+      } else if (c.limit_y <= 0) {
+        ix = std::clamp(-gx / xx, -c.limit_x, c.limit_x);
+      } else {
+        ix = (xy * gy - yy * gx) / determinant;
+        iy = (xy * gx - xx * gy) / determinant;
+        if (std::hypot(ix / c.limit_x, iy / c.limit_y) > 1) {
+          // Project in the effective-mass metric, not radially. This is the
+          // minimum post-impulse kinetic energy inside the friction ellipse;
+          // arbitrary anisotropic clipping can otherwise add energy.
+          double a = xx * c.limit_x * c.limit_x, b = yy * c.limit_y * c.limit_y;
+          double cross = xy * c.limit_x * c.limit_y;
+          double fx = gx * c.limit_x, fy = gy * c.limit_y;
+          const double scale = std::max({a, b, std::abs(cross), std::abs(fx), std::abs(fy)});
+          a /= scale; b /= scale; cross /= scale; fx /= scale; fy /= scale;
+          const auto at = [&](double multiplier) {
+            const double d = (a + multiplier) * (b + multiplier) - cross * cross;
+            return Vec3{(cross * fy - (b + multiplier) * fx) / d,
+                        (cross * fx - (a + multiplier) * fy) / d, 0};
+          };
+          double lo = 0, hi = std::hypot(fx, fy);
+          for (int pass = 0; pass < 24; ++pass) {
+            const double middle = (lo + hi) * .5;
+            if (at(middle).length() > 1) lo = middle;
+            else hi = middle;
+          }
+          const auto q = at(hi);
+          ix = q.x * c.limit_x;
+          iy = q.y * c.limit_y;
+        }
+      }
+      const auto energy = [&](double a, double b) {
+        return .5 * (xx * a * a + 2 * xy * a * b + yy * b * b) + gx * a + gy * b;
+      };
+      if (!std::isfinite(ix) || !std::isfinite(iy) || energy(ix, iy) > energy(old_x, old_y)) {
+        ix = old_x;
+        iy = old_y;
+      }
+      const Vec3 candidate = x * ix + y * iy;
+      body.impulse(candidate - c.impulse, c.point);
+      c.impulse = candidate;
+    }
+  }
+}
+
 constexpr double rpm_per_rad = 9.54929658551372;
 constexpr double wheel_inertia = 1.6;
 
@@ -562,25 +677,57 @@ void VehicleDynamics::step_drive() {
     auto &s = state[i];
     if (!wheel.enabled)
       continue;
-    double road_speed = 0;
+    const auto brake = [](double speed, double amount) {
+      return std::copysign(std::max(0.0, std::abs(speed) - amount), speed);
+    };
+    const Vec3 heading = wheel_forward(body, cfg.steer, s.hub_rotation);
+    const Vec3 forward =
+        (heading - s.normal * heading.dot(s.normal)).normalized();
+    const Vec3 side = forward.cross(s.normal);
+    const Vec3 speed = body.point_velocity(s.patch);
+    const double road = speed.dot(forward), lateral = speed.dot(side);
+
+    // Consume one brake-impulse budget, before traction sees the driven spin.
+    // Any unused budget can hold a locked wheel against the tyre reaction
+    // below; applying the full brake a second time would double its torque.
+    double remaining_brake = 0;
+    const auto apply_brake = [&](double amount) {
+      amount = std::max(0.0, amount);
+      const double before = s.spin;
+      s.spin = brake(s.spin, amount);
+      remaining_brake += std::max(0.0, amount - std::abs(before - s.spin));
+    };
+    apply_brake(500 * timestep * cfg.bearing * drive.bearing_scale);
+    const double torque_step = timestep / wheel_inertia;
+    double service = torque_step * service_brake_ * cfg.brake * drive.brake_scale;
+    if (drive.abs_strength > 0 && s.contact && std::abs(road) >= 3 &&
+        s.spin * road >= 0) {
+      const double minimum = std::abs(road) / std::max(.01, wheel.radius) * .85;
+      const double allowed = std::max(0.0, std::abs(s.spin) - minimum);
+      service = std::lerp(service, std::min(service, allowed),
+                          std::clamp(drive.abs_strength, 0.0, 1.0));
+    }
+    apply_brake(service);
+    apply_brake(torque_step * drive.handbrake * cfg.handbrake * drive.handbrake_scale);
+
     if (!s.contact || s.force <= 0) {
       s.spin *= 1 - .25 * timestep / wheel_inertia;
     } else {
-      const Vec3 heading = wheel_forward(body, cfg.steer, s.hub_rotation);
-      const Vec3 forward =
-          (heading - s.normal * heading.dot(s.normal)).normalized();
-      const Vec3 side = forward.cross(s.normal);
-      const Vec3 speed = body.point_velocity(s.patch);
-      const double road = speed.dot(forward), lateral = speed.dot(side);
-      road_speed = road;
       s.slip_speed = s.spin * wheel.radius - road;
       s.lateral_speed = lateral;
       const double tilt =
           body.orientation.rotate(s.hub_rotation.rotate({0, -1, 0}))
               .dot(s.normal);
       const double alignment = std::max(.25, tilt * tilt);
-      auto force = tire_forces(s.force, alignment, s.spin * wheel.radius, road,
-                               lateral, cfg.tyre);
+      TireForces force{};
+      if (wheel.metal_contact) {
+        // Hub/disc contact is sliding metal, never the removed tyre's curve.
+        const double slip = std::hypot(s.slip_speed, lateral);
+        const double factor = slip > 1e-9 ? .4 * s.force / slip : 0;
+        force = {s.slip_speed * factor, -lateral * factor};
+      } else {
+        force = tire_forces(s.force, alignment, s.spin * wheel.radius, road, lateral, cfg.tyre);
+      }
 
       const Vec3 arm = s.patch - body.position;
       const double inverse_mass =
@@ -603,25 +750,10 @@ void VehicleDynamics::step_drive() {
           (force.longitudinal * wheel.radius + rolling_torque + s.spin * .15) *
           timestep / wheel_inertia;
     }
-    const double brake_step = 500 * timestep;
-    const auto brake = [](double speed, double amount) {
-      return std::copysign(std::max(0.0, std::abs(speed) - amount), speed);
-    };
-    const double free_spin =
-        brake(s.spin, brake_step * cfg.bearing * drive.bearing_scale);
-    const double torque_step = timestep / wheel_inertia;
-    double braked = brake(free_spin, torque_step * service_brake_ * cfg.brake *
-                                         drive.brake_scale);
-    if (s.contact && std::abs(road_speed) >= 3 && free_spin * road_speed > 0) {
-      const double minimum =
-          std::abs(road_speed) / std::max(.01, wheel.radius) * .85;
-      const double allowed = std::max(0.0, std::abs(free_spin) - minimum);
-      const double released =
-          std::max(0.0, std::abs(free_spin - braked) - allowed);
-      braked += std::copysign(released * drive.abs_strength, road_speed);
-    }
-    s.spin = brake(braked, torque_step * drive.handbrake * cfg.handbrake *
-                               drive.handbrake_scale);
+    const double before_hold = s.spin;
+    s.spin = brake(s.spin, remaining_brake);
+    const double unspent = std::max(0.0, remaining_brake - std::abs(before_hold - s.spin));
+    s.holding_impulse = unspent * wheel_inertia / std::max(.01, wheel.radius);
     s.rotation =
         std::remainder(s.rotation + s.spin * timestep, 6.283185307179586);
   }
@@ -631,13 +763,28 @@ void VehicleDynamics::step(const Terrain &terrain) {
   double ceiling = body.position.y;
   for (Vec3 p : body.corners())
     ceiling = std::max(ceiling, p.y);
+  std::array<RestContact, 12> rest_contacts{};
+  size_t rest_count = 0;
+  std::array<FixedSupport, 12> fixed_contacts{};
+  size_t fixed_count = 0;
+  for (size_t i = 0; i < std::min(body_support_count, body_supports.size()); ++i) {
+    const Vec3 point = body_point(body, body_supports[i]);
+    GroundHit hit;
+    if (!terrain(point.x, point.z, ceiling, hit)) continue;
+    const Vec3 normal = hit.normal.normalized();
+    if (normal.y <= .05) continue;
+    const double depth = (hit.height - point.y) * normal.y;
+    if (depth < 0) continue;
+    const Vec3 surface = point + normal * depth;
+    fixed_contacts[fixed_count++] = fixed_support(body, surface, normal, depth, true, timestep);
+  }
   for (size_t i = 0; i < wheels.size(); ++i) {
     const auto &w = wheels[i];
     auto &s = state[i];
-    const double previous_load = s.force;
     s.contact = false;
     s.force = 0;
     s.slip_speed = s.lateral_speed = 0;
+    s.holding_impulse = 0;
     s.tire_force = {};
     if (!s.seeded)
       s.length = w.maximum;
@@ -652,16 +799,23 @@ void VehicleDynamics::step(const Terrain &terrain) {
       GroundHit hit;
       if (terrain(hub.x, hub.z, ceiling, hit)) {
         s.normal = hit.normal.normalized();
-        s.patch = hub - Vec3{0, w.radius, 0};
-        s.contact = s.patch.y - hit.height <= .004;
-        s.force = s.contact ? previous_load : 0;
+        s.patch = hub - s.normal * w.radius;
+        const double depth = w.radius -
+            (hub - Vec3{hub.x, hit.height, hub.z}).dot(s.normal);
+        s.contact = depth >= 0;
+        if (s.contact) s.patch += s.normal * depth;
+        const double speed = body.point_velocity(s.patch).dot(s.normal);
+        const double damper = speed >= 0 ?
+            (w.rebound_damping > 0 ? w.rebound_damping : .7 * w.bump_damping) : w.bump_damping;
         s.hub_rotation = pose.hub_rotation;
+        if (s.contact)
+          fixed_contacts[fixed_count++] = fixed_support(body, s.patch, s.normal,
+              depth, w.metal_contact, timestep, static_cast<int>(i), damper);
       }
       continue;
     }
     if (w.linked()) {
-      solve_linked(body, w, s, terrain, ceiling, timestep,
-                   !drive.torque && !drive.native_traffic);
+      solve_linked(body, w, s, terrain, ceiling, timestep);
       continue;
     }
     s.length = w.maximum;
@@ -691,20 +845,16 @@ void VehicleDynamics::step(const Terrain &terrain) {
     const Vec3 point =
         body_point(body, wheel_pose(w, s.length).hub_origin) - s.normal * w.radius;
     s.patch = point;
-    if (drive.torque || drive.native_traffic)
-      continue;
-    Vec3 v = body.point_velocity(point),
-         tangent = v - s.normal * v.dot(s.normal);
-    double speed = tangent.length();
-    if (speed > 1e-9) {
-      Vec3 direction = tangent / speed, r = point - body.position;
-      double inverse =
-          1 / body.mass +
-          direction.dot(
-              body.inverse_world_inertia(r.cross(direction)).cross(r));
-      double amount = std::min(s.force * .8, speed / (inverse * timestep * 4));
-      body.add_force(direction * (-amount), point);
-    }
+  }
+
+  solve_fixed_support(body, fixed_contacts, fixed_count, timestep);
+  for (size_t i = 0; i < fixed_count; ++i) {
+    const auto& c = fixed_contacts[i];
+    const double force = c.impulse / timestep;
+    body.add_force(c.normal * force, c.point);
+    if (c.wheel >= 0) state[static_cast<size_t>(c.wheel)].force = force;
+    else if (force > 0)
+      rest_contacts[rest_count++] = {c.point, c.normal, {}, .4 * c.impulse, .4 * c.impulse, {}};
   }
 
   /*
@@ -773,17 +923,55 @@ void VehicleDynamics::step(const Terrain &terrain) {
       s.spin = speed / wheels[i].radius;
     }
   }
-  body.integrate(timestep);
-  std::array<double, 4> rigid_impulses{};
+  const bool parked = !drive.torque && !drive.native_traffic;
+  for (size_t i = 0; i < wheels.size(); ++i) {
+    const auto& s = state[i];
+    const auto& cfg = drive.wheels[i];
+    if (!wheels[i].enabled || !s.contact || !(s.force > 0)) continue;
+    const bool braked = (drive.brake > .05 && cfg.brake > 0) ||
+                        (drive.handbrake > .05 && cfg.handbrake > 0) ||
+                        (drive.native_traffic && drive.brake > .5);
+    const Vec3 v = body.point_velocity(s.patch);
+    const double speed = (v - s.normal * v.dot(s.normal)).length();
+    if (!parked && !(braked && speed < .05 && std::abs(s.spin * wheels[i].radius) < .05))
+      continue;
+    const double mu = wheels[i].metal_contact ? .4 : .8;
+    TireForces caps{mu * s.force, mu * s.force};
+    if (!wheels[i].metal_contact && !drive.native_traffic) {
+      const double tilt = body.orientation.rotate(s.hub_rotation.rotate({0, -1, 0})).dot(s.normal);
+      const auto peaks = tire_friction_limits(s.force, std::max(.25, tilt * tilt), cfg.tyre);
+      caps.longitudinal = std::min(caps.longitudinal, peaks.longitudinal);
+      caps.lateral = std::min(caps.lateral, peaks.lateral);
+    }
+    const double used = std::hypot(
+        caps.longitudinal > 0 ? s.tire_force.longitudinal / caps.longitudinal : 0,
+        caps.lateral > 0 ? s.tire_force.lateral / caps.lateral : 0);
+    const bool no_capacity = (caps.longitudinal <= 0 && s.tire_force.longitudinal != 0) ||
+                             (caps.lateral <= 0 && s.tire_force.lateral != 0);
+    const double remaining = no_capacity ? 0 : std::max(0.0, 1 - used);
+    double limit_x = caps.longitudinal * remaining * timestep;
+    const double limit_y = caps.lateral * remaining * timestep;
+    if (!parked && !drive.native_traffic) limit_x = std::min(limit_x, s.holding_impulse);
+    Vec3 heading = wheel_forward(body, cfg.steer, s.hub_rotation);
+    heading = (heading - s.normal * heading.dot(s.normal)).normalized();
+    Vec3 surface = s.patch;
+    GroundHit hit;
+    if (terrain(surface.x, surface.z, ceiling, hit))
+      surface += s.normal * ((hit.height - surface.y) * s.normal.y);
+    rest_contacts[rest_count++] = {surface, s.normal, heading, limit_x, limit_y, {}};
+  }
+  body.integrate_forces(timestep);
+  solve_rest_contacts(body, rest_contacts, rest_count);
+  body.integrate_pose(timestep);
   for (int iteration = 0; iteration < 4; ++iteration) {
     double depth = 0;
     Vec3 correction;
     auto solve = [&](Vec3 point, double restitution, bool chassis = false,
-                     double *tyre_impulse = nullptr) {
+                     bool tyre = false, double allowance = 0) {
       GroundHit ground;
       if (!terrain(point.x, point.z, ceiling, ground))
         return false;
-      double overlap = ground.height - point.y;
+      double overlap = ground.height - point.y - allowance;
       if (overlap <= 0)
         return false;
       if (chassis && iteration == 0) {
@@ -791,20 +979,21 @@ void VehicleDynamics::step(const Terrain &terrain) {
         if (speed > ground_impact.speed)
           ground_impact = {point, ground.normal, speed};
       }
-      const double friction =
-          tyre_impulse && drive.torque && drive.inertia > 0 ? 0 : .6;
-      const double impulse =
-          body.contact(point, ground.normal, restitution, friction);
-      if (tyre_impulse)
-        *tyre_impulse += impulse;
+      const double friction = tyre && drive.torque && drive.inertia > 0 ? 0 : .6;
+      body.contact(point, ground.normal, restitution, friction);
       if (overlap > depth) {
         depth = overlap;
         correction = ground.normal.normalized();
       }
       return true;
     };
-    for (Vec3 point : body.corners())
-      solve(point, .12, true);
+    // An AABB corner is not necessarily material on the underside of a car.
+    // Prefer installed-mesh low points; keep the old box fallback for callers
+    // without them, and for the roof/side after a rollover.
+    if (!body_support_count || body.orientation.rotate({0, 1, 0}).y < .5)
+      for (Vec3 point : body.corners()) solve(point, .12, true);
+    for (size_t i = 0; i < std::min(body_support_count, body_supports.size()); ++i)
+      solve(body_point(body, body_supports[i]), 0, true, false, .03);
     for (size_t i = 0; i < wheels.size(); ++i) {
       const auto &wheel = wheels[i];
       if (!wheel.enabled)
@@ -819,9 +1008,9 @@ void VehicleDynamics::step(const Terrain &terrain) {
       const auto point = body.position +
                          body.orientation.rotate(local - body.center) -
                          Vec3{0, wheel.radius, 0};
-      if (solve(point, 0, false,
-                wheel.rigid_contact ? &rigid_impulses[i] : nullptr) &&
-          wheel.rigid_contact)
+      // Fixed-travel corners carry a same-step compliant load above. This
+      // is only a deep-penetration safety stop, not the normal support path.
+      if (solve(point, 0, false, true, wheel.rigid_contact ? .03 : 0) && wheel.rigid_contact)
         state[i].contact = true;
     }
     if (depth > .001)
@@ -829,10 +1018,6 @@ void VehicleDynamics::step(const Terrain &terrain) {
     else
       break;
   }
-  for (size_t i = 0; i < wheels.size(); ++i)
-    if (wheels[i].rigid_contact)
-      state[i].force =
-          std::min(rigid_impulses[i] / timestep, body.mass * 9.81 * 3);
   sync_wheels();
 }
 

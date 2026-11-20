@@ -1,6 +1,37 @@
 # Vehicle dynamics validation (issue #42)
 
-Before is `main` at 51e65b2. After is this branch. Both builds are Windows x64
+## Approved support migration: new evidence
+
+The [2026-11-19 support replays](support-2026-11-19/README.md) compare the
+actual intended `8ac2ba9` application with `5570bf3`: rear-right spring
+removal and a 620-second front-left-rim-less garage rest stress test.
+They include matched full application captures, exact scenarios and limits.
+The dynamic tyre law is retained. Stage A's API/test/brake corrections are
+implemented in `8bd1e77`; the two original GPT review findings are resolved.
+The gauge/loss policy, stronger crush, engine fragmentation and complete
+handling matrix are still open, not validated by the new support captures.
+
+## Historical evidence scope
+
+The images and measurements in the historical sections below predate the
+intended `8ac2ba9601300b36efca54dd81031fb6bc9de98b` solver. **They are
+historical Before/After evidence at the revisions listed, not current-branch
+handling or damage guarantees.** Tyre peak/slope, instant-centre response,
+brake ordering, burnout and fallback inertia changed. Re-run the same
+scenarios before asserting those results for the new model.
+
+The initial GPT review tested unchanged `8ac2ba9`: its vehicle suite did not
+link (obsolete tyre helper declarations), and wheel mounts were 6/7 (an
+inertia-dependent old bound). A full-brake/full-throttle kernel probe moved
+4.84 m in 3 s despite zero final wheel speeds. The approved stage-A fix
+migrated the tests and reduced the same probe to 0.0021 m. These are kernel
+results, not an in-game burnout claim. The
+[revised migration plan](../../../docs/VEHICLE_DYNAMICS_PLAN.md) separates
+completed checks from the remaining application/visual gates.
+
+## Historical comparison
+
+Before is `main` at 51e65b2. After is the revision identified below. Both builds are Windows x64
 Release (MSVC) with the same local validation hooks, which are not committed:
 scripted inputs from the bench start, a 60 Hz telemetry log of the controlled
 car, timed window captures, a tyre swap through `Tyre.SetupTyre`, a brake
@@ -13,7 +44,7 @@ CoupeSport 2.5 (`--spawn-car cars/racers/Baiern.rpk:0x6`), fixed 1/60 s step
 | `chart-roll.png`, `cmp-rollover.png` | Drag_Track: full throttle for 8 s, then throttle 0.3 and full left steer at 107 km/h (steering help as in the default options) | 4048185 |
 | `chart-tyre.png` | Drag_Track: the same car with 195/50 street and 275/40 supersport tyres fitted by the tyre script on the same rim; full-throttle launch, then full brake | 4048185 |
 | `chart-burn.png` | Drag_Track: full throttle with the brake pedal at 40 % and the brake balance at 25 % rear | 4048185 |
-| `chart-wall.png` | Valo City bench (`--bench-drive 22`): the car held against a wall by full throttle after its crash, every tick | ddfa1eb (`collide_chassis` is identical at the branch head) |
+| `chart-wall.png` | Valo City bench (`--bench-drive 22`): the car held against a wall by full throttle after its crash, every tick | ddfa1eb (wall-contact implementation at that capture) |
 | `bones-*-before-after.png` | Garage, body hidden, wheels forced 7 cm into bump (left) and droop (right) through `pose_wheels` | eee32bd |
 | `cmp-flap-hit.png` | Valo City bench at about 58 km/h: a scripted 8 m/s impact through `damage_chassis` on the left door's outer face | 6d5f9cf |
 | `cmp-wheel-loss.png` | Valo City bench, full throttle into a tree (74 km/h offset hit, then a 38 km/h hit on the next tree) | a988a74 |

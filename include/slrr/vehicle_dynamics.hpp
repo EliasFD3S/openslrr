@@ -1,6 +1,7 @@
 #pragma once
 #include "slrr/tire_model.hpp"
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 
@@ -35,17 +36,17 @@ struct Quaternion {
 };
 using Matrix = std::array<float, 16>;
 
-// Adapted contracts: SLRR_rev a2ee10de, rigid-body-3d.ts. Without explicit
-// moments the inertia is a solid box of the bounds (the upstream
-// approximation); it is not the original game's compound inertia.
+// Adapted contracts: SLRR_rev a2ee10de, rigid-body-3d.ts. The 8ac2ba9
+// fallback uses a solid box of 0.75 times the bounds dimensions (host tuning,
+// not the collision dimensions or the original game's compound inertia).
 class RigidBody {
 public:
   double mass = 1;
   Vec3 position, velocity, momentum, center, minimum, maximum;
   Quaternion orientation;
   void configure(double kilograms, Vec3 bounds_min, Vec3 bounds_max, Vec3 com);
-  // Principal moments about `com` along the body axes, in kg m². A component
-  // that is not positive and finite keeps the solid-box value for that axis.
+  // Principal moments about `com` along the body axes, in kg m². All three
+  // must be positive and finite; otherwise the entire fallback is retained.
   void configure(double kilograms, Vec3 bounds_min, Vec3 bounds_max, Vec3 com,
                  Vec3 principal_inertia);
   Vec3 inertia() const;
@@ -58,6 +59,10 @@ public:
   void add_force(Vec3 force, Vec3 point);
   void impulse(Vec3 impulse, Vec3 point);
   void integrate(double dt);
+  // Split semi-implicit integration for constraints that must remove slip
+  // after forces/gravity, but before those velocities advance the pose.
+  void integrate_forces(double dt);
+  void integrate_pose(double dt);
   double contact(Vec3 point, Vec3 normal, double restitution = .12,
                  double friction = .6, RigidBody* other = nullptr);
   std::array<Vec3, 8> corners() const;
@@ -75,7 +80,9 @@ using Terrain =
     std::function<bool(double x, double z, double from_y, GroundHit &)>;
 struct WheelConfig {
   bool enabled = false;
+  // Fixed suspension travel with compliant tyre/bump-stop support.
   bool rigid_contact = false;
+  bool metal_contact = false; // no installed rim/tyre, only hub hardware
   Vec3 center, down{0, -1, 0};
   double radius = 0, rest = 0, minimum = 0, maximum = 0;
   // CFG spring base + travel, independent of the tunable spring rest length.
@@ -91,24 +98,24 @@ struct WheelConfig {
   bool has_hub = false;
   std::array<float, 10> hub{};
   Quaternion hub_alignment;
-  // WheelRef.setInstantCenter (Suspension.setRollCenter), relative to
-  // `center` in chassis axes: the front-view centre uses x/y, the side-view
-  // centre z/y. The links carry the tyre force along the line from the
-  // contact patch through the centre, so part of it lifts or pulls the body
-  // (roll centre, anti-dive, anti-squat) instead of going through the spring.
+  // Stored WheelRef.setInstantCenter data, relative to `center` in chassis
+  // axes: front-view x/y, side-view z/y. Retained for native compatibility;
+  // the intended 8ac2ba9 solver does not apply an instant-centre load force.
   bool front_instant_center = false, side_instant_center = false;
   Vec3 front_center_offset, side_center_offset;
   bool linked() const { return unsprung > 0 || arm_length > 0; }
 };
 struct WheelState {
   bool contact = false, seeded = false;
-  // force: spring and damper support. jacking: vertical force the links add
-  // at the patch from the instant centres. The tyre load is their sum.
+  // force: spring and damper support, used as the tyre load. jacking is a
+  // reserved legacy field; the intended solver does not add it to the load.
   double length = 0, speed = 0, force = 0, jacking = 0;
   Vec3 center, normal{0, 1, 0}, hub, patch;
   Quaternion hub_rotation;
   double spin = 0, rotation = 0;
   double slip_speed = 0, lateral_speed = 0;
+  // Unspent brake/bearing budget at the patch (N s), not free tyre grip.
+  double holding_impulse = 0;
   TireForces tire_force{};
 };
 struct DriveWheel {
@@ -163,6 +170,10 @@ public:
   } ground_impact;
   std::array<WheelConfig, 4> wheels;
   std::array<WheelState, 4> state;
+  // Installed-body low points in chassis coordinates; no implicit support
+  // is created when the runtime supplies none. Contact is floor-only.
+  std::array<Vec3, 8> body_supports{};
+  std::size_t body_support_count = 0;
   DriveInput drive;
   double engine_omega = 0;
   bool engine_running = false;

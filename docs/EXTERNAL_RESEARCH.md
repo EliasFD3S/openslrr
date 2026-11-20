@@ -383,6 +383,24 @@ updates in §3 and below supersede the Painter and road/traffic entries): all `P
 0x00484E20, and the three `Painter` natives from its notes on 0x004827D0
 (`paintPart`), 0x00482960 (`doPaint`) and 0x00482C00 (`xPaint`).
 
+### Vehicle dynamics baseline for PR #48
+
+Maintainer revision `8ac2ba9601300b36efca54dd81031fb6bc9de98b` is the
+intended OpenSLRR tyre/suspension model. Its reference Magic Formula curves,
+load-efficiency factors, 0.75-bounds default inertia and drivetrain tuning
+are host choices, not recovered original values or a direct SLRR_rev port.
+The older #48 script-derived curve, instant-centre lift and `setCPatch`
+tolerance calculation no longer run. Stored native fields do not establish
+implemented physics; see ENGINE_CONTRACT §11.
+
+The [revised migration plan](VEHICLE_DYNAMICS_PLAN.md) keeps the earlier
+three-wheel, missing-spring, gauge, crush and engine follow-ups, but requires
+new reproductions on this baseline before tuning. It separates upstream
+ideas from uncalibrated proposals; especially, the proposed engine
+break-up is not something SLRR_rev `77b0fb6` implements. Earlier captures
+in [the validation record](../assets/validation/vehicle-dynamics/README.md)
+remain historical evidence, not validation of `8ac2ba9`.
+
 ### v221 shared race port, 18 November 2026
 
 Source branch supplied by the maintainer: [SLRR_rev v221](https://github.com/nedobylskiy/SLRR_rev/tree/v221),
