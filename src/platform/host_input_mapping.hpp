@@ -12,7 +12,7 @@ inline std::optional<float> pad_fallback(const ControllerInput& input, int axis,
                                          std::span<const float> pad) {
   if (axis != 1 && axis != 28 && axis != 29 && axis != 48) return std::nullopt;
   for (const auto& binding : input.bindings)
-    if (binding.device == kPadDevice && binding.axis == axis) return std::nullopt;
+    if (binding.device >= kPadDevice && binding.axis == axis) return std::nullopt;
   auto available = [&](int physical) {
     return std::none_of(input.bindings.begin(), input.bindings.end(), [&](const InputBinding& b) {
       return b.device == kPadDevice && b.physical == physical;
@@ -30,15 +30,26 @@ inline std::optional<float> pad_fallback(const ControllerInput& input, int axis,
   return std::nullopt;
 }
 
-template<class Physical>
+struct AllAvailable {
+  bool operator()(int, int) const { return true; }
+};
+struct LegacyAnalog {
+  bool operator()(int device, int axis) const { return device == kPadDevice && axis >= 0 && axis < 10; }
+};
+
+inline float binding_value(const InputBinding& binding, float value) {
+  if (binding.from == binding.to) return 0.f;
+  const float t = std::clamp((value - binding.from) / (binding.to - binding.from), 0.f, 1.f);
+  return std::lerp(binding.low, binding.high, t);
+}
+
+template<class Physical, class Available = AllAvailable>
 float mapped_axis(const ControllerInput& input, int axis, Physical physical,
-                  std::span<const float> pad) {
+                  std::span<const float> pad, Available available = {}) {
   float positive = 0.f, negative = 0.f;
   for (const auto& binding : input.bindings) {
-    if (binding.axis != axis || binding.from == binding.to) continue;
-    const float value = physical(binding.device, binding.physical);
-    const float t = std::clamp((value - binding.from) / (binding.to - binding.from), 0.f, 1.f);
-    const float mapped = std::lerp(binding.low, binding.high, t);
+    if (binding.axis != axis || !available(binding.device, binding.physical)) continue;
+    const float mapped = binding_value(binding, physical(binding.device, binding.physical));
     positive = std::max(positive, mapped);
     negative = std::min(negative, mapped);
   }
@@ -50,14 +61,14 @@ float mapped_axis(const ControllerInput& input, int axis, Physical physical,
   return positive + negative;
 }
 
-template<class Physical>
+template<class Physical, class Analog = LegacyAnalog, class Available = AllAvailable>
 bool steering_is_analog(const ControllerInput& input, Physical physical,
-                         std::span<const float> pad) {
+                         std::span<const float> pad, Analog analog_axis = {}, Available available = {}) {
   bool analog = false, digital = false;
   for (const auto& binding : input.bindings) {
-    if (binding.axis != 1) continue;
-    const bool analog_binding = binding.device == kPadDevice && binding.physical >= 0 && binding.physical < 10;
-    const bool active = std::abs(physical(binding.device, binding.physical)) > .01f;
+    if (binding.axis != 1 || !available(binding.device, binding.physical)) continue;
+    const bool analog_binding = analog_axis(binding.device, binding.physical);
+    const bool active = std::abs(binding_value(binding, physical(binding.device, binding.physical))) > .01f;
     analog |= analog_binding && active;
     digital |= !analog_binding && active;
   }

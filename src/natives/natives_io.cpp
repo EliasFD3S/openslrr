@@ -1218,7 +1218,8 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
             !std::isfinite(binding.low) || !std::isfinite(binding.high))
           return Value::make_int(0);
         // Stock remapping assumes a newly detected joystick axis is bipolar.
-        // XInput exposes each direction independently. Retain the configured
+        // The legacy pad alias still exposes split-positive SDL channels.
+        // Raw SDL peripheral axes remain bipolar. Retain the configured
         // dead zone while mapping the active half to the full output range.
         if (device == 2 && binding.from < 0.f && binding.to == 1.f)
           binding.from = (binding.from + 1.f) * .5f;

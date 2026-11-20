@@ -1809,7 +1809,13 @@ replaces that axis's default. A physical channel assigned elsewhere cannot
 also drive its default action; the two steering halves are checked separately.
 Keyboard steering retains priority and its digital classification. Explicit
 analog steering still uses its configured transfer function. Smoothing, forced
-axes, device polling and the Y/reverse fallback are unchanged.
+axes and the Y/reverse fallback are unchanged. SDL3 peripheral polling (#188)
+now lives in `src/platform/host_input_devices.cpp`; device 2 preserves the legacy
+pad schema while slots 3+ expose simultaneous signed joystick axes/buttons/hats.
+Explicit wheel/pedal bindings replace the corresponding pad default, and analog
+classification uses actual peripheral axis metadata. Unavailable signed bindings
+are skipped to avoid a false midpoint value on focus loss or disconnect.
+The `sdl_input` suite exercises these paths with SDL virtual devices.
 
 Release build, pad_fallback and script_safety pass. The new fixture supplies
 synthetic physical values to the same pure production mapping helpers, testing

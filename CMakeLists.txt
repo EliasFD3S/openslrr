@@ -44,6 +44,7 @@ add_executable(slrr_host
   src/platform/game_root.cpp
   src/platform/frame_profiler.cpp
   src/platform/host_input.cpp
+  src/platform/host_input_devices.cpp
   src/platform/host_sfx.cpp
   src/platform/host_music.cpp
   src/platform/host_game_options.cpp
@@ -150,9 +151,36 @@ endif()
 if(WIN32)
   # strmiids = DirectShow GUIDs for FMV (GfxEngine.openVideo).
   # vfw32 = AVIFile fallback for movies the built-in Cinepak decoder rejects.
-  target_link_libraries(slrr_host PRIVATE user32 gdi32 opengl32 winmm ole32 xinput
+  target_link_libraries(slrr_host PRIVATE user32 gdi32 opengl32 winmm ole32
                                           oleaut32 strmiids vfw32 xaudio2 mfplat mfreadwrite mfuuid)
 endif()
+
+# SDL handles peripherals only; keep the existing Win32 window, audio and renderer.
+include(FetchContent)
+if(POLICY CMP0135)
+  cmake_policy(SET CMP0135 NEW)
+endif()
+set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+set(SDL_STATIC ON CACHE BOOL "" FORCE)
+set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
+foreach(_slrr_sdl_subsystem IN ITEMS AUDIO VIDEO GPU RENDER CAMERA HAPTIC POWER SENSOR DIALOG)
+  set(SDL_${_slrr_sdl_subsystem} OFF CACHE BOOL "" FORCE)
+endforeach()
+FetchContent_Declare(SDL3
+  URL https://github.com/libsdl-org/SDL/releases/download/release-3.2.30/SDL3-3.2.30.tar.gz
+  URL_HASH SHA256=4c3b09330d866dc52eb65b66259a6684ad387252ca8c57901b3a2b534eb42e3d)
+# SDL gates this probe on audio/video's SDL_DIRECTX option. Input-only builds
+# still need DirectInput for wheels, pedals and shifters on a fresh CMake cache.
+include(CheckIncludeFileCXX)
+check_include_file_cxx(dinput.h HAVE_DINPUT_H)
+if(NOT HAVE_DINPUT_H)
+  message(FATAL_ERROR "SDL peripheral input requires dinput.h from the Windows SDK.")
+endif()
+FetchContent_MakeAvailable(SDL3)
+target_link_libraries(slrr_host PRIVATE SDL3::SDL3-static)
 
 # bgfx is the game's renderer.
 set(BGFX_BUILD_TOOLS ON CACHE BOOL "" FORCE)
