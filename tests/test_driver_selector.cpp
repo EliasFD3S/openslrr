@@ -37,6 +37,16 @@ int main() {
    for(const auto& entry:instance.texture_replacements)if(entry.second==expected)replaced=true;
  }
  SLRR_REQUIRE(replaced);
+ // A duplicated RenderRef type is its own resource: a render created from
+ // copy.id() (Painter's decal slots) keeps the copy's replacement.
+ Object slot_type,slot_handle,slot_render;slot_type.class_name="java.util.resource.RenderRef";
+ call("java.util.resource.ResourceRef","duplicate","(Ljava.util.resource.ResourceRef;)V",&slot_type,{Value::make_obj(&tmp)});
+ const auto slot_id=call("java.util.resource.ResourceRef","id","()I",&slot_type).v.i;
+ SLRR_REQUIRE(slot_id>=0x70000000);
+ call("java.util.resource.ResourceRef","set","(I)V",&slot_handle,{Value::make_int(slot_id)});
+ call("java.util.resource.RenderRef","create","(Ljava.util.resource.ResourceRef;Ljava.util.resource.RenderRef;Ljava.lang.String;)V",&slot_render,{Value::make_obj(&parent),Value::make_obj(&slot_handle),Value::make_obj(nullptr)});
+ SLRR_REQUIRE(gameref_get(&slot_render)->type_id==gameref_get(&tmp)->type_id);
+ SLRR_REQUIRE(gameref_get(&slot_render)->texture_file_replacements==gameref_get(&tmp)->texture_file_replacements);
  // Later changes must not mutate the already-created instance or the original mesh.
  path.str="skin-b.dds";
  call("java.util.resource.ResourceRef","makeTexture","(Ljava.util.resource.ResourceRef;Ljava.lang.String;)V",&texture,{Value::make_obj(nullptr),Value::make_obj(&path)});

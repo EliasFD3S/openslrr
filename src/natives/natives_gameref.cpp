@@ -44,7 +44,8 @@ Object* placed_body(Object* self) {
 // Osd.createIcon (only Painter's decal picker uses it) places a "native
 // button" type in an Osd group at a converted text position and listens for
 // EC_LCLICK on it; Osd.event_handler matches the clicked object's id. Give it
-// a hit box the size of the button's render mesh. Its picture is not drawn.
+// a hit box the size of the button's render mesh. RenderRef.create draws the
+// picture the script attaches to it.
 static void bind_icon_button(const RpkIndex& rpk, Object* icon, Object* group,
                              uint32_t type, const std::string& params) {
   if (!icon || !group) return;

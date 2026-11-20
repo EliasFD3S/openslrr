@@ -634,6 +634,10 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
               dst->directional_light.flare = {};
             }
           }
+          // A duplicated render type is a new resource: id() names this copy,
+          // so RenderRef(parent, copy.id(), alias) keeps its replacements
+          // (Painter builds its decal-slot pictures that way).
+          if (self->class_name == "java.util.resource.RenderRef") gameref_make_live(self);
         }
         for (const char* k : {"_mw", "_mh", "_tid", "_texpath"}) {
           auto it = src->fields.find(k);

@@ -289,6 +289,35 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
         copy_num(type, self, "_texpath");
         if (st->alias == "Rectangle")
           self->fields["_rect"] = Value::make_int(1);
+        // Painter's decal slot (an Osd.createIcon button) shows this instance
+        // of its duplicated button type, whose texture is now the decal. Draw
+        // that texture over the slot; destroying the instance removes it.
+        if (auto wi = parent ? parent->fields.find("_osd_wi") : self->fields.end();
+            parent && wi != parent->fields.end() && wi->second.tag == ValueTag::Int) {
+          const OsdWidget* slot = osd_widget_mut(wi->second.v.i);
+          std::string icon;
+          if (!st->texture_file_replacements.empty()) {
+            icon = st->texture_file_replacements.front().second;
+          } else if (!st->texture_replacements.empty()) {
+            const uint32_t tex = st->texture_replacements.front().second;
+            icon = paint_texture_exists(tex) || gameref_find_live(static_cast<int32_t>(tex))
+                ? scene_instances_texture(tex) : rpk.texture_path_for_id(tex);
+          }
+          if (slot && slot->event_source == parent && !slot->dead && !icon.empty()) {
+            OsdWidget picture;
+            picture.owner = slot->owner;
+            picture.group = slot->group;
+            picture.layer = slot->layer;
+            picture.x = slot->x;
+            picture.y = slot->y;
+            picture.half_w = slot->half_w;
+            picture.half_h = slot->half_h;
+            picture.no_hit = true;
+            picture.picture_source = self;
+            picture.icon_path = icon;
+            self->fields["_osd_wi"] = Value::make_int(osd_add_widget(std::move(picture)));
+          }
+        }
         return Value::make_void();
       });
   jvm.natives().register_method(

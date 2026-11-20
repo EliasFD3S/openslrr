@@ -2332,8 +2332,12 @@ at layer 15 over the paint-can and decal slots, so after a catalog visit those
 clicks reached the parts bin. `osd_on_field_write("vp")` now keeps an Osd's
 widgets hidden until its viewport is activated (ENGINE_CONTRACT.md).
 
-Remaining UI limitation: the decal-picker thumbnails are still blank. The
-picker's `RenderRef.duplicate` type keeps the base resource id, so the
-"render <id>" instance cannot find its decal texture; the infoline
-("N stickies left") and the hovered preview show the selected decal.
+Decal thumbnails. `setDecalButtons` duplicates the button render type,
+swaps its texture for the decal and creates
+`RenderRef(slot, copy.id(), "decal button")`. A duplicated render type is now
+a live resource (`ResourceRef.duplicate` in `src/natives/natives_resref.cpp`),
+so `copy.id()` aliases the copy and the instance inherits its replacement.
+`RenderRef.create` (`src/natives/natives_renderref.cpp`) then draws that
+texture as a flat picture over the slot's hit box, and destroying the instance
+removes it. The button mesh itself is not drawn.
 Projection/preview behavior remains the host approximation described above.
