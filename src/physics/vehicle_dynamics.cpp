@@ -1,4 +1,5 @@
 #include "slrr/suspension_geometry.hpp"
+#include "slrr/dyno_model.hpp"
 #include "slrr/vehicle_dynamics.hpp"
 #include <algorithm>
 #include <cmath>
@@ -436,12 +437,13 @@ void VehicleDynamics::step_drive() {
   starter_remaining_ = std::max(0.0, starter_remaining_ - timestep);
   service_brake_ = std::lerp(service_brake_, direction_brake ? 1.0 : drive.brake,
                              -std::expm1(-timestep / .08));
-  const double drag = 14 + std::max(0.0, rpm - drive.idle) * .012;
+  const double friction = engine_friction_torque(rpm);
+  const double pumping = 14 + std::max(0.0, rpm - drive.idle) * .012;
   const double idle_torque =
       rpm < drive.idle ? std::min(80.0, 25.0 + (drive.idle - rpm) * .25) : 0;
   const double combustion = std::clamp((rpm - 200) / 450, 0.0, 1.0);
   const double kph = std::abs(forward_speed) * 3.6;
-  double gas = direction_brake ? 0 : drive.throttle;
+  double gas = direction_brake ? 0 : std::clamp(drive.throttle, 0.0, 1.0);
   if (drive.launch_help <= 0 || !engine_running || drive.clutch < .5 ||
       drive.brake > 0 || drive.handbrake > .2 || gas < .2 ||
       (gear != 1 && gear != 7) || kph >= 30) {
@@ -458,12 +460,16 @@ void VehicleDynamics::step_drive() {
   }
   const double combustion_torque =
       engine_running && rpm < drive.limit && !automatic_shift
-          ? (2 * drive.torque(rpm) * gas + idle_torque) * combustion *
+          ? ((drive.torque(rpm) + friction) * gas + idle_torque) * combustion *
                 limiter_factor(rpm, previous_rpm_, drive.limit)
           : 0;
   previous_rpm_ = rpm;
-  const double net =
-      combustion_torque + (starting ? 4 * drive.starter : 0) - drag;
+  // The dyno supplies net WOT torque. Recover its indicated contribution
+  // before scaling combustion, then apply the shared mechanical loss once.
+  // The existing drag curve is incremental closed-throttle pumping, not a
+  // second WOT friction loss. Fuel cut leaves mechanical friction active.
+  const double net = combustion_torque + (starting ? 4 * drive.starter : 0) -
+                     friction - pumping * (1 - gas);
   engine_omega = std::max(0.0, engine_omega + net * timestep / drive.inertia);
 
   double drive_impulse = 0;

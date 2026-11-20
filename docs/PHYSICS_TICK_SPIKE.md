@@ -1,10 +1,14 @@
 # Spike #203: physics clock, throttle and engine math
 
 Investigation for [#203](https://github.com/EliasFD3S/openslrr/issues/203), based
-on `d60b907`, including #205's shared-world collision changes. This is **not a
-production rollout**: the default remains 120 Hz, with no Java/native API
-changes and no default handling change. The compile-time rate override and
+on `d60b907`, including #205's shared-world collision changes. The
+[owner's follow-up](https://github.com/EliasFD3S/openslrr/issues/203#issuecomment-7030114967)
+allows changed stock outputs for physically consistent torque/power. This branch
+corrects those units and the driving loss path; **handling/output changes are
+intentional**. The default clock remains 120 Hz, with no Java/native API change.
+The compile-time rate override and
 [standalone experiment](../tests/test_physics_tick_rate.cpp) support further work.
+This is not completion of the broader thread, throttle, port and fuel redesign.
 
 ## Findings and remaining work
 
@@ -14,7 +18,7 @@ changes and no default handling change. The compile-time rate override and
 | CPU cost | Compare 120 and 960 Hz in the same Valo City drive below. | Interpolation's end-to-end cost is not isolated; no physics-thread prototype. |
 | Adaptive setting | Only selects render interpolation; it never selects a physics clock. References listed below. | Removing Classic is a separate UI/compatibility decision. |
 | Throttle | Existing torque integration, input filtering, starter, idle, boost curve and clutch exchange must be retained. The issue prototype duplicates some of them and can stick at its limiter. | No plate/airflow prototype or new TUFA hooks in this change. |
-| Torque/power | Driving already samples torque. The recovered cycle has non-SI torque/power factors and driving applies a further ×2. | Decide whether to preserve legacy outputs or recalibrate; no formula changes here. |
+| Torque/power | Corrected cycle work to SI net crank torque, derived sampled watts from torque × ω, selected net torque peaks and removed the runtime ×2 gain/duplicate WOT loss. | Stock outputs change with owner authorization. Thermochemistry, friction and stock-car calibration remain empirical. |
 | Port flow | Located the squared valve-area/lift volume law in both Inline and Vee scripts. It is an empirical pressure-relaxation coefficient, not geometric optimal port volume. | A physical replacement and stock-engine calibration are not established. |
 | Fuel heat | Raw 95-octane H is 1.0995 MJ/kg; effective mixture heat is 1.704225 MJ/kg at the script's optimal AFR 12.5. Heat also sets allowed compression bounds. | A constant-only change can reject stock engines. No Java patch or recalibration here. |
 | Stability | Neutral idle/limiter/lift and one synthetic launch are sampled at 120–1000 Hz and five inertias. | These fixtures do not establish stability for every car, collision, terrain, input or rendering cadence. |
@@ -91,6 +95,8 @@ inventory is not timing evidence. Repeated Classic/Adaptive comparisons could
 estimate incremental overhead under controlled identical workloads, but none is
 claimed here.
 
+**Pre-math-fix rate comparison:** baseline `d60b907` versus the experimental
+rate hook at `cdced33`. These are not timings of the later corrected engine.
 Windows x64/MSVC Release, 1280×720 window, no VSync, pristine private game copy
 reset before **each** run; Baiern `0x6`, Valo City, hour 13, two-second settling
 then 40 simulated seconds full throttle (command below). Three runs per rate;
@@ -106,7 +112,7 @@ with the range of the three trial means in parentheses:
 | Base 120 Hz | 2.910 (2.616–3.123) | 2.672 (2.397–2.868) | 9.182 (8.875–9.371) | 3.426 |
 | Experimental 960 Hz | 18.163 (17.681–18.922) | 17.825 (17.342–18.582) | 21.117 (20.637–21.914) | 0.036 |
 
-Raising the rate adds **15.253 ms/frame to Physics**, including **15.152 ms** in
+Raising the rate adds **15.25 ms/frame to Physics**, including **15.15 ms** in
 Vehicles (6.67×). The collision-preparation subzone stays about 0.05 ms; it does
 not include the shared-world pair/wall contact work inside Vehicles. The zones
 are nested: do not sum Physics and Vehicles. This world includes traffic,
@@ -152,10 +158,11 @@ The current chain is:
 2. [`configure_drive`](../src/resources/part_runtime.cpp) supplies pedal, idle,
    limit, inertia `0.28 + 0.01 × max(0, engine_inertia)`, starter and the dyno torque
    sampler (nitro 0) once per host tick.
-3. [`step_drive`](../src/physics/vehicle_dynamics.cpp) applies
-   `(2 × table_torque × gas + idle_torque) × combustion_ramp × limiter`, subtracts
-   independent drag `14 + 0.012 × max(0, rpm − idle)`, adds starter torque,
-   integrates crank speed and exchanges impulses with the driven wheels.
+3. [`step_drive`](../src/physics/vehicle_dynamics.cpp) now recovers indicated
+   torque as `net_table_torque + F`, applies pedal/idle/combustion/limiter gates,
+   then subtracts shared mechanical friction F and incremental closed-throttle
+   pumping `D × (1 − gas)`, where `D = 14 + 0.012 × max(0, rpm − idle)`.
+   Starter torque and the crank/wheel clutch impulse exchange remain unchanged.
 4. [HUD/audio](../src/resources/part_runtime.cpp) consume live rpm and pedal.
    Turbo gauge response is `dyno_boost_fraction × pedal`.
 
@@ -184,29 +191,40 @@ wiring does not require a new Java API.
 
 ### Torque and power
 
-The [current recovered model](../src/physics/dyno_model.cpp) uses a 720-degree
-cycle (`period = 120/rpm`). For work W per cylinder, N cylinders:
+The [cycle model](../src/physics/dyno_model.cpp) uses 720 crank degrees
+(`period = 120/rpm`). For work W per cylinder and N cylinders:
 
-| Quantity | Current formula | SI four-stroke formula |
+| Quantity | Legacy output | Corrected output |
 | --- | --- | --- |
-| Gross torque | N·W/8 | N·W/(4π) |
+| Indicated torque | N·W/8 | N·W/(4π) |
 | Gross power | N·W·rpm/60 | N·W·rpm/120 |
-| Power loss only | rpm³ × 2·10⁻⁸ W | Must agree with the chosen crank loss model |
-| Horsepower conversion | net W × 0.001341 | Correct mechanical-hp conversion |
+| Net crank torque | Table torque had no mechanical loss subtraction | N·W/(4π) − F |
+| Net power | Gross W − rpm³ × 2·10⁻⁸ | Net torque × ω |
+| Horsepower conversion | net W × 0.001341 | Unchanged mechanical-hp conversion |
 
-Current gross power/(table torque × ω) is 4/π ≈ 1.273; net power is lower due to
-its friction subtraction. Driving samples torque, never the power table, then
-applies ×2 before its own independent drag: WOT gross combustion is π times
-cycle-derived SI torque. Table torque, net crank torque and displayed power must
-not be conflated.
+F is the shared recovered mechanical loss `rpm² × 2·10⁻⁸ / (2π/60)` in Nm,
+well-defined at zero rpm. The legacy gross-power/table-torque ratio was 4/π,
+and driving doubled table torque before subtracting another independent drag.
+That gain is removed. In normal running WOT (no idle assist, ramp complete,
+no limiter or shift cut), the crank now receives exactly the sampled **net**
+curve. At part throttle the model reconstructs indicated torque, scales combustion,
+then subtracts F once and the existing incremental closed-throttle pumping loss.
+F remains active during fuel cut. These are still empirical loss/linear-pedal
+curves, not a validated physical manifold model.
 
-The 437 rpm witness (82.0871 N·m, 4781.27 W) preserves the **recovered model**;
-it is not independent proof for every original MWM engine. The
+Watts are derived **after** torque interpolation and nitrous blending, so
+`P = T·ω` holds between nodes too. Net torque peaks are selected by net torque,
+not by mean cylinder pressure. Peak horsepower/rpm stats still refer to table
+nodes, not an analytic search for continuous-curve extrema. Native `getHP`
+continues to return watts; `maxHP` remains horsepower. Java schemas, compression
+gates and saved fuel/AFR semantics are unchanged.
+
+The old 437 rpm witness (82.0871 Nm, 4781.27 W) now anchors recovered **cycle
+work**, not the old output scales. Its SI-converted result is about 52.2220 Nm
+and 2389.81 W. This deliberately changes original-game behavior with the owner's
+permission; neither version proves calibration for every MWM engine. The
 [research provenance and endpoint disagreement](EXTERNAL_RESEARCH.md#4-game-mechanics-and-telemetry)
-remain relevant (Steam build 940 evidence versus target MWM). A display-only
-`P = T·ω` correction is technically separable from driving, but it must identify
-which torque it displays. A physically consistent crank model should derive net
-torque and power from the same loss model rather than changing isolated constants.
+remain relevant (Steam build 940 evidence versus target MWM).
 
 ### Port-volume/flow law
 
@@ -261,12 +279,12 @@ MSVC Release-style (`/O2`) public-API sweep, default geometry/timing, maxRPM 700
 
 | Effective heat | Peak table torque | Peak table power | P/(T·ω) at power peak |
 | --- | --- | --- | --- |
-| 1.000 MJ/kg | 171.47 N·m at 1750 rpm | 69.06 kW at 4250 rpm | 1.2456 |
-| 1.704225 MJ/kg | 297.48 N·m at 2000 rpm | 130.23 kW at 6000 rpm | 1.2324 |
-| 3.214815 MJ/kg | 546.61 N·m at 2000 rpm | 261.28 kW at 6250 rpm | 1.2499 |
+| 1.000 MJ/kg | 108.58 N·m at 1750 rpm | 33.76 kW at 4250 rpm | 1.0000 |
+| 1.704225 MJ/kg | 188.62 N·m at 2000 rpm | 63.18 kW at 5750 rpm | 1.0000 |
+| 3.214815 MJ/kg | 347.22 N·m at 2000 rpm | 128.20 kW at 6250 rpm | 1.0000 |
 
-Changing only heat from the second to third row raises peak table torque by 84%.
-The recovered witness check passes (82.0873 N·m / 4781.29 W at 437 rpm).
+Changing only heat from the second to third row raises peak net torque by 84%.
+The converted cycle-work witness passes (52.2220 N·m / 2389.81 W at 437 rpm).
 This sensitivity experiment does not validate a replacement combustion model,
 thermal efficiency, or any actual stock engine's output.
 
@@ -279,31 +297,32 @@ flywheel inertias (0.10, 0.22, 0.28, 0.38 and 0.60 kg·m²), plus one automatic
 rear-drive launch on flat analytic ground. The host's 0.28 floor means the two
 smallest inertias are intentionally below normal game configurations.
 
-MSVC `/O2`, five checks passing at each of the five compiled rates:
+MSVC `/O2`, corrected net-torque integration, eight checks passing at each
+of the five compiled rates:
 
 | Rate | Inertia kg·m² | Idle ripple ± rpm | Peak / steady limiter band rpm | 6 s launch km/h |
 | --- | --- | --- | --- | --- |
-| 120 Hz | 0.10 | 9.9 | 7301 / 6930–7301 | 121.78 |
-| 120 Hz | 0.28 | 3.5 | 7108 / 6978–7108 | |
-| 120 Hz | 0.60 | 1.5 | 7051 / 6988–7050 | |
-| 240 Hz | 0.10 | 4.6 | 7152 / 6965–7152 | 123.28 |
-| 480 Hz | 0.10 | 2.4 | 7076 / 6983–7076 | 123.24 |
-| 960 Hz | 0.10 | 1.1 | 7038 / 6991–7038 | 123.10 |
-| 960 Hz | 0.28 | 0.4 | 7014 / 6997–7014 | |
-| 1000 Hz | 0.10 | 1.2 | 7036 / 6992–7036 | 123.12 |
-| 1000 Hz | 0.60 | 0.2 | 7006 / 6999–7006 | |
+| 120 Hz | 0.10 | 9.7 | 7187 / 6994–7186 | 86.28 |
+| 120 Hz | 0.28 | 3.2 | 7067 / 6998–7066 | |
+| 120 Hz | 0.60 | 1.6 | 7030 / 6999–7030 | |
+| 240 Hz | 0.10 | 5.0 | 7093 / 6996–7093 | 87.62 |
+| 480 Hz | 0.10 | 2.5 | 7047 / 6998–7047 | 87.60 |
+| 960 Hz | 0.10 | 1.2 | 7023 / 6999–7023 | 87.58 |
+| 960 Hz | 0.28 | 0.4 | 7008 / 7000–7008 | |
+| 1000 Hz | 0.10 | 1.2 | 7022 / 6999–7022 | 87.60 |
+| 1000 Hz | 0.60 | 0.2 | 7004 / 7000–7004 | |
 
 All 25 neutral rate/inertia combinations remain running; mean idle is within
 0.4% of target. Peak limiter overshoot is bounded by one acceleration step in
-these checks. Measured time to 95% of limit is 0.163–0.975 s, and lift back to
-2000 rpm takes 0.99–5.97 s depending on inertia. Higher rate tightens resolution;
+these checks. Measured time to 95% of limit is 0.290–1.742 s, and lift back to
+2000 rpm takes 0.94–5.63 s depending on inertia. Higher rate tightens resolution;
 it does not prove that the existing 120 Hz integration is generally unstable.
 
-The timed 20-s synthetic workload costs 266, 549, 1063, 2266 and 2536 μs per
-simulated second at 120/240/480/960/1000 Hz (2.21–2.54 μs per step). This includes
-the fixture's per-step call/callback overhead, one car and analytic ground,
-not production terrain or shared-world bookkeeping; one trial per rate, not a
-portable performance guarantee.
+Additional checks cover one-step WOT/part-throttle net torque, limiter friction,
+starter/restart and zero-engine states, sampled/nitrous power identity and net
+peak selection. The fixture also prints timing for a 20-s one-car analytic-ground
+workload; it includes per-step call/callback overhead, excludes production terrain
+and shared-world bookkeeping, and is not a portable performance guarantee.
 
 The existing standalone vehicle-dynamics regression could **not** be linked on
 the unmodified base: MSVC LNK2019 reports missing `tire_effective_load`, declared
@@ -316,14 +335,25 @@ original-game compatibility. They exclude mixed dynamic contacts, full terrain,
 render-rate/input variation, stalls/catch-up, time warp and the issue's unintegrated
 throttle prototype. The 1000 Hz kernel result does not validate its game scheduler.
 
-## 6. Implementation decision still needed
+## 6. Remaining contract/design work
 
-Before changing production math, choose whether existing stock-car dyno/driving
-outputs must be preserved or may change to a physically consistent target.
-Port/fuel recalibration, compression eligibility and the drive multiplier must then
-be evaluated against that target. Thread ownership and exact 1000 Hz scheduling
-need a separate coordinated shared-world design. No default-rate, Classic-mode,
-Java or native API change is made by this investigation.
+The output-compatibility question is resolved: the owner explicitly permits
+changed torque/power, and the focused C++ correction is implemented. It is not a
+newly calibrated stock engine, manifold, fuel or port-flow model.
+
+The remaining physical port/fuel work cannot be a local coefficient fix. The
+Java head→block→DynoData chain clips and averages empirical coefficients before
+C++ sees them, losing valve dimensions; a curtain-flow model needs a new input
+contract across head/block scripts and the native cycle. Fuel heat also changes
+saved AFR/fuel behavior and driveability through compression gates, so values
+cannot be rescaled blindly in C++ without fuel identity. No verified replacement
+model/calibration was established in the inspected references.
+
+Independent-thread ownership likewise needs a coordinated shared-world/VM
+mutation and publication contract; moving the current live-GameRef tick locally
+would be unsafe. The throttle-plate/TUFA prototype and isolated interpolation
+measurement remain incomplete. No default-rate, Classic-mode, Java or native API
+change is made here; these remaining goals are not marked completed.
 
 ## Reproduce
 

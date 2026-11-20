@@ -97,10 +97,10 @@ struct Car {
   double rpm() const { return dynamics.engine_omega * kRpmPerRad; }
 };
 
-// The most one step can add to the engine speed: step_drive applies twice
-// the dyno torque at full throttle against at least 14 N m of drag.
+// Normal WOT integrates the sampled net crank torque, with no second gain
+// or friction subtraction. Idle is inactive in the limiter region.
 double max_rpm_per_step(double inertia) {
-  return (2 * kPeakTorque - 14) / inertia * VehicleDynamics::timestep * kRpmPerRad;
+  return kPeakTorque / inertia * VehicleDynamics::timestep * kRpmPerRad;
 }
 }  // namespace
 
@@ -213,7 +213,7 @@ SLRR_TEST(launch_and_solver_cost) {
   const double distance = (car.dynamics.body.position - start).length();
   std::printf("[tick_rate] %u Hz launch: %.2f km/h at 3 s, %.2f km/h and %.2f m at 6 s, gear %d\n",
               VehicleDynamics::frequency, at3 * 3.6, at6 * 3.6, distance, car.dynamics.gear);
-  SLRR_REQUIRE(at6 * 3.6 > 100 && at6 * 3.6 < 140);
+  SLRR_REQUIRE(std::isfinite(at6) && at6 > at3 && at3 > 0 && distance > 0);
 
   Car timed;
   timed.run(1);
@@ -227,6 +227,85 @@ SLRR_TEST(launch_and_solver_cost) {
               "flat analytic ground, one car\n",
               VehicleDynamics::frequency, micros / seconds,
               micros / (seconds * VehicleDynamics::frequency));
+}
+
+SLRR_TEST(wot_uses_net_curve_once_and_fuel_cut_still_decelerates) {
+  for (double pedal : {0.0, .25, .5, 1.0}) {
+    Car car(.28);
+    car.dynamics.drive.engaged = false;
+    car.dynamics.drive.throttle = pedal;
+    car.dynamics.drive.torque = [](double) { return kPeakTorque; };
+    constexpr double rpm = 2500;
+    car.dynamics.engine_omega = rpm * slrr::engine_rpm_to_rad;
+    const double before = car.dynamics.engine_omega;
+    const double friction = slrr::engine_friction_torque(rpm);
+    const double pumping = 14 + (rpm - kIdle) * .012;
+    const double expected_net = pedal * kPeakTorque -
+        (1 - pedal) * (friction + pumping);
+    car.run(VehicleDynamics::timestep);
+    const double actual_net = (car.dynamics.engine_omega - before) *
+        car.dynamics.drive.inertia / VehicleDynamics::timestep;
+    SLRR_REQUIRE(std::abs(actual_net - expected_net) < 1e-7);
+  }
+  Car limited;
+  limited.dynamics.drive.engaged = false;
+  limited.dynamics.drive.throttle = 1;
+  limited.dynamics.engine_omega = (kLimit + 100) * slrr::engine_rpm_to_rad;
+  const double before = limited.dynamics.engine_omega;
+  limited.run(VehicleDynamics::timestep);
+  SLRR_REQUIRE(limited.dynamics.engine_omega < before);
+}
+
+SLRR_TEST(starter_and_engineless_states_survive_the_loss_change) {
+  SLRR_REQUIRE(slrr::engine_friction_torque(0) == 0);
+  Car stopped;
+  stopped.dynamics.drive.engaged = false;
+  stopped.dynamics.drive.throttle = 1;
+  stopped.dynamics.engine_running = false;
+  stopped.dynamics.engine_omega = 0;
+  stopped.run(.5);
+  SLRR_REQUIRE(!stopped.dynamics.engine_running && stopped.rpm() == 0);
+  // configure_drive represents a torn-off engine by a zero curve, no
+  // starter and neutral. It must never acquire idle combustion.
+  stopped.dynamics.drive.torque = [](double) { return 0.0; };
+  stopped.run(.5);
+  SLRR_REQUIRE(!stopped.dynamics.engine_running && stopped.rpm() == 0);
+  Car starting;
+  starting.dynamics.drive.engaged = false;
+  starting.dynamics.drive.throttle = 1;
+  starting.dynamics.drive.starter = 15;
+  starting.dynamics.engine_running = false;
+  starting.dynamics.engine_omega = 0;
+  starting.run(1);
+  SLRR_REQUIRE(starting.dynamics.engine_running && starting.rpm() > kIdle);
+  starting.dynamics.drive.throttle = 0;
+  starting.run(7);
+  SLRR_REQUIRE(starting.dynamics.engine_running && std::abs(starting.rpm() - kIdle) < 30);
+}
+
+SLRR_TEST(sampled_power_follows_torque_between_nodes_and_with_nitrous) {
+  int key = 0;
+  slrr::DynoStats stats;
+  SLRR_REQUIRE(slrr::dyno_calculate(&key,
+      {{"maxRPM", 7000.f}, {"nitro_H", 1.2f}, {"nitro_cooling", .9f}}, 28.f, &stats));
+  double peak = 0;
+  float peak_rpm = 0;
+  for (int node = 1; node < 28; ++node) {
+    const float rpm = node * stats.rpm_step;
+    const double torque = slrr::dyno_sample(&key, rpm, 0, false);
+    if (torque > peak) { peak = torque; peak_rpm = rpm; }
+  }
+  SLRR_REQUIRE(std::abs(peak - stats.max_torque) < 1e-5);
+  SLRR_REQUIRE(peak_rpm == stats.torque_rpm);
+  for (float nitro : {0.f, .35f, 1.f}) {
+    for (float rpm : {0.f, 437.f, 1234.5f, 3375.f, 6750.f, 7000.f}) {
+      const double torque = slrr::dyno_sample(&key, rpm, nitro, false);
+      const double watts = slrr::dyno_sample(&key, rpm, nitro, true);
+      const double expected = torque * rpm * slrr::engine_rpm_to_rad;
+      SLRR_REQUIRE(std::abs(watts - expected) < 1e-6 * std::max(1.0, std::abs(expected)));
+    }
+  }
+  slrr::dyno_forget(&key);
 }
 
 SLRR_TEST(dyno_heat_and_power_audit) {
@@ -259,6 +338,9 @@ int main() {
       idle_and_limiter_stay_bounded_for_every_flywheel,
       launch_and_solver_cost,
       dyno_heat_and_power_audit,
+      wot_uses_net_curve_once_and_fuel_cut_still_decelerates,
+      starter_and_engineless_states_survive_the_loss_change,
+      sampled_power_follows_torque_between_nodes_and_with_nitrous,
   };
   return slrr::standalone::run("physics_tick_rate", tests);
 }

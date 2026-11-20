@@ -802,7 +802,10 @@ These are entry points, not fixes. Each needs its own reproduction.
   discarded. The integer shared-world loop would lose 4% of simulated time
   with a bare 1000 Hz override. Rate experiments, throttle integration boundaries,
   adaptive-setting references and dyno/Java compression couplings are recorded
-  in [PHYSICS_TICK_SPIKE.md](PHYSICS_TICK_SPIKE.md); production decisions remain open.
+  in [PHYSICS_TICK_SPIKE.md](PHYSICS_TICK_SPIKE.md). The owner permits changed
+  engine outputs: cycle torque is now SI net crank Nm, sampled power is T·ω,
+  and driving consumes that curve without the legacy ×2 gain or duplicate WOT
+  loss. The physical port/fuel model and independent-thread ownership remain open.
 
 ## 12. Self-check
 

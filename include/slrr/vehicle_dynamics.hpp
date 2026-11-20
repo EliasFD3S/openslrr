@@ -130,6 +130,8 @@ struct DriveInput {
   double differential_lock = 0;
   double inertia = 0, idle = 0, limit = 0, starter = 0;
   double clutch = 1;
+  // Net open-throttle crank torque (Nm) at the requested rpm, including
+  // the shared mechanical friction loss; the solver applies no extra gain.
   std::function<double(double)> torque;
 };
 double suspension_force(double length, double velocity, double rest,
