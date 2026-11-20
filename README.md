@@ -118,6 +118,30 @@ Open SLRR builds for Windows x64 with an MSVC-compatible compiler and uses bgfx 
 
 The original intros and the menu background are Cinepak AVI files with PCM sound, which Open SLRR decodes itself; 64-bit Windows has no Cinepak codec, and no VLC installation is needed. Other formats, such as H.264/AAC in MP4, need **VLC 3.x for Windows x64**. Open SLRR looks in the standard VideoLAN installation directory. For a custom installation, set `SLRR_VLC_DIR` to the absolute folder containing `libvlc.dll`, `libvlccore.dll`, and `plugins`.
 
+### Quick start: build and run a branch
+
+With the requirements above installed, clone this repository, then run in PowerShell:
+
+```powershell
+git clone https://github.com/EliasFD3S/openslrr.git
+cd openslrr
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-run-branch.ps1 -Branch main -GameRoot 'D:\Games\SLRR'
+```
+
+The execution-policy override applies only to that PowerShell process and must
+be permitted by your organization. Replace `main` with the desired branch and
+the path with your SLRR 2.2.1 MWM installation. The helper fetches the branch
+into a separate checkout under
+`%LOCALAPPDATA%\OpenSLRR-branch-builds`, builds Release, and launches it. Pass
+`-Workspace 'D:\OpenSLRR-builds'` to change the checkout location or
+`-FmodSdkDir 'D:\FMOD Studio API Windows'` for a non-default FMOD SDK location.
+`-ToolsCacheDir` enables the shared shader tool cache. Existing CMake cache
+settings persist between runs. The helper uses the bgfx.cmake pin and build/launch
+commands documented here; branches with different requirements may need a manual
+build. Only build trusted branches and use a trusted workspace: CMake and the
+resulting game execute code. The game can change saves and options in `GameRoot`;
+use separate copies if running branches concurrently or to protect existing saves.
+
 ### Get the project
 
 In PowerShell:
