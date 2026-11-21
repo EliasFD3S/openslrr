@@ -1477,10 +1477,10 @@ change that changes frontend font size. No production Java was modified.
 
 ### Issues #107 / #94: RPK reads and index-scoped cache lifetime
 
-`src/resources/rpk_index.cpp:RpkIndex::read_payload` reuses a lazily opened
-file stream per pack under a mutex. Text/ICFG descriptors are cached by
-canonical full RID; large binary map payloads are not retained as another
-resident copy. `payload_props` parses all text keys once under its own lock
+`src/resources/rpk_index.cpp:RpkIndex::read_payload` reuses at most 64 lazily
+opened pack streams in an LRU under a mutex, reopening evicted packs on demand.
+Text/ICFG descriptors are cached by canonical full RID; large binary map
+payloads are not retained as another resident copy. `payload_props` parses all text keys once under its own lock
 and caches ordered repeated values, including negative key lookups. Empty
 read failures are retried. Unscoped ids retain last-pack-wins resolution.
 TOC lookups hash the low 16-bit local id directly (first matching TOC entry),
@@ -1568,8 +1568,9 @@ from gameplay validation. RPK TOC count validation remains a separate risk.
 
 ### Issues #80 / #95: RPAK ranges and bounded ground-node traversal
 
-`src/resources/rpk_index.cpp:RpkIndex::parse_rpak` checks file sizing,
-64-bit dependency-count sums, dependency/table spans, record count versus
+`src/resources/rpk_index.cpp:RpkIndex::parse_rpak` reads only the header,
+dependencies and TOC, leaving payloads on disk until first use. It checks file
+sizing, 64-bit dependency-count sums, dependency/table spans, record count versus
 minimum TOC record size, alias/bounds spans, and 64-bit offset+size against
 the file snapshot before publishing entries. It parses into a temporary
 pack: a bad record rejects the TOC instead of leaving a usable prefix.

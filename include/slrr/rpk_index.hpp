@@ -5,9 +5,10 @@
 #include <unordered_map>
 #include <vector>
 #include <mutex>
-#include <memory>
+#include <utility>
 #include <fstream>
 #include <atomic>
+#include <list>
 
 namespace slrr {
 
@@ -51,11 +52,16 @@ class RpkIndex {
   // Non-recursive *.rpk basenames in dir (relative to game root or absolute).
   std::vector<std::string> list_rpks(const std::string& dir) const;
 
-  // Every *.rpk under the game root, any folder. No fixed pack list.
-  // Already-open paths keep their pack id. Returns how many files were opened.
+  // Static RIDs must stay below live GameRef handles (0x70000000).
+  static constexpr int32_t kMaxPackId = 0x6fff;
+
+  // Every *.rpk under the game root, any folder. No fixed stock pack list.
+  // Already-open paths keep their pack id. Returns the number of files found;
+  // fresh paths beyond the compatible RID range are logged and not registered.
   int32_t open_all();
 
-  // Register pack path → id; parse RPAK TOC when file exists. Returns pack id (>0).
+  // Register pack path → id; parse RPAK TOC when file exists.
+  // Returns pack id (>0), or zero when the compatible RID range is exhausted.
   int32_t open_lib(const std::string& path);
 
   int32_t pack_count() const { return static_cast<int32_t>(packs_.size()); }
@@ -133,14 +139,17 @@ class RpkIndex {
 
   uint32_t canonical_id(uint32_t full_id) const;
   uint64_t generation_ = 0;
-  mutable std::mutex payload_mutex_, rsd_mutex_;
+  mutable std::mutex payload_mutex_, rsd_mutex_, children_mutex_;
   mutable std::unordered_map<uint32_t, std::vector<uint8_t>> payload_cache_;
-  mutable std::unordered_map<int32_t, std::unique_ptr<std::ifstream>> pack_streams_;
+  // Small, bounded MRU list: no per-installed-pack stream or recency table.
+  mutable std::list<std::pair<int32_t, std::ifstream>> pack_streams_;
+  mutable uint64_t children_generation_ = 0;
+  mutable std::unordered_map<uint32_t, std::vector<uint32_t>> children_;
   using RsdProperties = std::unordered_map<std::string, std::vector<std::string>>;
   mutable std::unordered_map<uint32_t, RsdProperties> rsd_cache_;
   mutable std::atomic<uint64_t> payload_disk_reads_{0}, rsd_parse_count_{0};
   std::string root_;
-  std::unordered_map<std::string, int32_t> by_path_;
+  std::unordered_map<std::string, int32_t> by_path_, by_basename_;
   std::vector<RpkPack> packs_;  // index 0 unused; pack_id == index
   int32_t next_id_ = 1;
 };

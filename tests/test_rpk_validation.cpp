@@ -7,7 +7,7 @@ void put(std::vector<uint8_t>& b,size_t p,uint32_t v){for(int i=0;i<4;++i)b[p+i]
 void save(const fs::path& p,const std::vector<uint8_t>& b){std::ofstream o(p,std::ios::binary);o.write(reinterpret_cast<const char*>(b.data()),b.size());}
 std::vector<uint8_t> pack(const std::vector<uint8_t>& data,uint8_t kind=14){std::vector<uint8_t>b(55+data.size());std::memcpy(b.data(),"RPAK",4);put(b,4,0x200);put(b,16,23);put(b,20,1);put(b,36,1);b[40]=kind;put(b,46,55);put(b,50,uint32_t(data.size()));std::copy(data.begin(),data.end(),b.begin()+55);return b;}
 std::vector<uint8_t> node(const std::string& text,int kids){std::vector<uint8_t>b(8+kids*23+8+text.size());put(b,4,kids);put(b,8+kids*23,0x00445352);put(b,12+kids*23,uint32_t(text.size()));std::memcpy(b.data()+16+kids*23,text.data(),text.size());return b;}
-int main(int argc,char** argv){
+int main(int argc,char** argv) try {
  if(argc>1&&std::string(argv[1])=="--corpus"){
   RpkIndex r;r.set_root(fs::absolute("game").string());r.open_all();size_t files=0,bad=0,entries=0;
   for(auto& e:fs::recursive_directory_iterator("game"))if(e.path().extension()==".rpk"){
@@ -29,6 +29,16 @@ int main(int argc,char** argv){
  {auto b=valid;b[41]=1;reject(b,"truncated bounds");}
  {auto b=valid;put(b,16,UINT32_MAX);reject(b,"table range");}
  auto path=f.root/"truncated.rpk";save(path,valid);{RpkIndex r;r.set_root(f.root.string());auto id=r.open_lib(path.filename().string());SLRR_REQUIRE(r.find_entry(id,1));fs::resize_file(path,55);SLRR_REQUIRE(r.read_payload(RpkIndex::make_full_id(id,1)).empty()&&r.payload_disk_reads()==0);}
+ // A large payload must not be read or allocated while indexing metadata.
+ auto metadata=valid;metadata.resize(55+6+48);put(metadata,16,23+6+48);metadata[41]=1;metadata[54]=6;std::memcpy(metadata.data()+55,"alias",6);
+ path=f.root/"large.rpk";save(path,metadata);constexpr uint32_t payload_at=256*1024*1024;
+ fs::resize_file(path,uint64_t(payload_at)+text.size());
+ {std::fstream out(path,std::ios::binary|std::ios::in|std::ios::out);put(metadata,46,payload_at);out.seekp(46);out.write(reinterpret_cast<const char*>(metadata.data()+46),4);out.seekp(payload_at);out.write(reinterpret_cast<const char*>(text.data()),text.size());SLRR_REQUIRE(out);}
+ {RpkIndex r;r.set_root(f.root.string());IO_COUNTERS before{},after{};SLRR_REQUIRE(GetProcessIoCounters(GetCurrentProcess(),&before));auto id=r.open_lib("large.rpk");SLRR_REQUIRE(GetProcessIoCounters(GetCurrentProcess(),&after));
+  const auto bytes=after.ReadTransferCount-before.ReadTransferCount;std::printf("INDEX 256 MiB pack: read %llu bytes\n",static_cast<unsigned long long>(bytes));
+  SLRR_REQUIRE(r.find_entry(id,1)&&r.find_entry(id,1)->alias=="alias"&&bytes<64*1024);
+  SLRR_REQUIRE(r.read_payload(RpkIndex::make_full_id(id,1))==text);}
+ std::puts("PASS metadata-only indexing and deferred large-offset payload read");
  auto root=node("params 0x2\n",2);
  for(int k=0;k<2;++k){size_t p=8+k*23;root[p+8]=1;put(root,p+14,55);put(root,p+18,uint32_t(root.size()));}
  path=f.root/"cycle.rpk";save(path,pack(root,1));{RpkIndex r;r.set_root(f.root.string());auto id=r.open_lib("cycle.rpk");auto map=scene_instances_ground_map(r,RpkIndex::make_full_id(id,1));SLRR_REQUIRE(map.render_id==RpkIndex::make_full_id(id,2));}
@@ -37,4 +47,6 @@ int main(int argc,char** argv){
  auto shared=pack(root,1);shared.insert(shared.end(),leaf.begin(),leaf.end());path=f.root/"shared.rpk";save(path,shared);
  {RpkIndex r;r.set_root(f.root.string());auto id=r.open_lib("shared.rpk");auto map=scene_instances_ground_map(r,RpkIndex::make_full_id(id,1));SLRR_REQUIRE(map.placements.size()==1&&map.placements[0].position[0]==1);}
  std::puts("PASS truncated disk payload rejected before allocation/read");std::puts("PASS cyclic map terminates and shared node emits one placement");return 0;
+} catch(const std::exception& e) {
+ std::fprintf(stderr,"FAIL rpk_validation: %s\n",e.what());return 1;
 }

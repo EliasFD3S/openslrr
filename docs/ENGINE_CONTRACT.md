@@ -350,6 +350,24 @@ native pointer into a resource-ID field or a script integer.
 Preserve signed/unsigned conversions: the high bit of a RID can be in use
 while a script argument is represented as `int32_t`.
 
+There is no stock 286-pack cap in this host. Pack registration uses dynamic
+containers, but the compatible runtime namespace is finite: pack IDs
+`1..0x6fff` (28,671 packs) precede live handles at `0x70000000`; the
+`0xffff` high word also identifies transient painter textures. Registration
+returns zero at exhaustion rather than aliasing a live handle or wrapping a
+pack number. Existing paths remain reopenable. Removing this ABI boundary
+would require changing script ID arithmetic and save/resource remapping,
+not just widening the host's pack counter.
+
+Indexing reads only the header, dependencies and TOC; payloads are read on
+demand. Payload streams use a 64-entry LRU, independent of installed pack
+count, so visiting many packs does not retain a CRT file stream for each.
+Pack basename lookup and the generation-scoped parent/child index avoid
+repeated global scans during resource traversal. Exact path lookup still
+wins over the first-opened basename match, and children retain pack/TOC
+order. Registration/root changes invalidate derived traversal data and
+must remain quiescent as described in §6.
+
 ### Load chain
 
 ```text

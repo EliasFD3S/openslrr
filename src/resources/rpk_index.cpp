@@ -40,6 +40,11 @@ std::string norm_key(std::string p) {
   return p;
 }
 
+std::string basename_key(const std::string& normalized) {
+  const auto slash = normalized.find_last_of('\\');
+  return slash == std::string::npos ? normalized : normalized.substr(slash + 1);
+}
+
 bool path_ends_cfg(const std::string& path) {
   if (path.size() < 4) return false;
   const char* e = path.c_str() + path.size() - 4;
@@ -80,10 +85,11 @@ RpkIndex::RpkIndex() : generation_(++g_index_generation) {}
 void RpkIndex::set_root(std::string root) {
   if (root_ == root) return;
   // Root/index mutation is quiescent: stop preload readers before rebinding.
-  std::scoped_lock lock(payload_mutex_,rsd_mutex_);
+  std::scoped_lock lock(payload_mutex_,rsd_mutex_,children_mutex_);
   root_ = std::move(root);
-  packs_.clear();by_path_.clear();next_id_=1;
+  packs_.clear();by_path_.clear();by_basename_.clear();next_id_=1;
   payload_cache_.clear();rsd_cache_.clear();pack_streams_.clear();
+  children_.clear();children_generation_=0;
   payload_disk_reads_=0;rsd_parse_count_=0;
   generation_=++g_index_generation;
 }
@@ -131,36 +137,38 @@ bool RpkIndex::parse_rpak(const std::string& disk, RpkPack& output) const {
   std::ifstream in(disk, std::ios::binary | std::ios::ate);
   if (!in) return false;
   const auto length=in.tellg();
-  if (length<16) return false;
-  const auto sz = static_cast<size_t>(length);
+  if (length<32) return false;
+  const auto sz = static_cast<uint64_t>(length);
   pack.file_size=sz;
   in.seekg(0);
-  std::vector<uint8_t> buf(sz);
-  in.read(reinterpret_cast<char*>(buf.data()),
-          static_cast<std::streamsize>(sz));
+  uint8_t header[16];
+  in.read(reinterpret_cast<char*>(header),sizeof(header));
   if (!in) return false;
 
-  if (sz < 16 || std::memcmp(buf.data(), "RPAK", 4) != 0) {
+  if (std::memcmp(header, "RPAK", 4) != 0) {
     jobs_printf("[rpk] not RPAK: %s\n", disk.c_str());
     return false;
   }
-  const uint32_t version = rd_u32(buf.data() + 4);
+  const uint32_t version = rd_u32(header + 4);
   if (version != 0x200) {
     jobs_printf("[rpk] bad version 0x%x %s\n", version, disk.c_str());
     return false;
   }
   pack.version = version;
-  const uint32_t dep_a = rd_u32(buf.data() + 8);
-  const uint32_t dep_b = rd_u32(buf.data() + 12);
+  const uint32_t dep_a = rd_u32(header + 8);
+  const uint32_t dep_b = rd_u32(header + 12);
   const uint64_t dep_n = uint64_t(dep_a) + dep_b;
-  size_t off = 16;
-  if (sz<32 || dep_n>(sz-32)/64) return false;
+  if (dep_n>(sz-32)/64) return false;
   const size_t dep_bytes = static_cast<size_t>(dep_n) * 64;
+  std::vector<uint8_t> deps(dep_bytes+16); // Includes the TOC header.
+  in.read(reinterpret_cast<char*>(deps.data()),static_cast<std::streamsize>(deps.size()));
+  if (!in) return false;
+  size_t off = 0;
 
   pack.deps.clear();
   pack.deps.reserve(dep_n);
   for (uint64_t i = 0; i < dep_n; ++i) {
-    const uint8_t* d = buf.data() + off;
+    const uint8_t* d = deps.data() + off;
     RpkDep dep;
     dep.id = rd_u32(d);
     dep.path.assign(reinterpret_cast<const char*>(d + 4), 56);
@@ -171,11 +179,15 @@ bool RpkIndex::parse_rpak(const std::string& disk, RpkPack& output) const {
     off += 64;
   }
 
-  const uint32_t table_size = rd_u32(buf.data() + off);
-  const uint32_t count = rd_u32(buf.data() + off + 4);
-  off += 16;  // tableSize, count, skip(8)
-  if (table_size > sz-off || count > table_size/23) return false;
-  const size_t table_end = off + table_size;
+  const uint32_t table_size = rd_u32(deps.data() + off);
+  const uint32_t count = rd_u32(deps.data() + off + 4);
+  if (table_size > sz-(32+dep_bytes) || count > table_size/23) return false;
+  // Payloads can dwarf the TOC. Keep them on disk until a resource is used.
+  std::vector<uint8_t> buf(table_size);
+  in.read(reinterpret_cast<char*>(buf.data()),static_cast<std::streamsize>(buf.size()));
+  if (!in) return false;
+  off = 0;
+  const size_t table_end = buf.size();
 
   pack.entries.clear();
   pack.by_type_id.clear();
@@ -248,13 +260,19 @@ int32_t RpkIndex::open_all() {
     paths.push_back(rel_ec ? it->path().string() : rel.string());
     ++n;
   }
-  // Indexing reads each whole pack. Read them on the job pool, then number
-  // them in directory order as open_lib would.
+  // Read pack metadata on the job pool, then number the results in directory
+  // order as open_lib would. Payloads stay on disk until first use.
   std::vector<std::string> fresh;
   std::unordered_set<std::string> keys;
   for (const auto& path : paths) {
     const std::string key = norm_key(path);
     if (!by_path_.contains(key) && keys.insert(key).second) fresh.push_back(path);
+  }
+  const size_t available = static_cast<size_t>(kMaxPackId-next_id_+1);
+  if (fresh.size()>available) {
+    std::fprintf(stderr,"[rpk] RID range exhausted: skipping %zu packs (maximum %d)\n",
+                 fresh.size()-available,kMaxPackId);
+    fresh.resize(available);
   }
   std::vector<RpkPack> parsed(fresh.size());
   std::vector<char> indexed(fresh.size());
@@ -268,7 +286,9 @@ int32_t RpkIndex::open_all() {
   if (!fresh.empty()) generation_ = ++g_index_generation;
   for (size_t i = 0; i < fresh.size(); ++i) {
     const int32_t id = next_id_++;
-    by_path_[norm_key(fresh[i])] = id;
+    const auto key = norm_key(fresh[i]);
+    by_path_[key] = id;
+    by_basename_.try_emplace(basename_key(key),id);
     if (static_cast<size_t>(id) >= packs_.size()) packs_.resize(id + 1);
     packs_[static_cast<size_t>(id)] = std::move(parsed[i]);
     std::printf(indexed[i] ? "[rpk] openLib %s -> %d\n" : "[rpk] openLib %s -> %d (no TOC)\n",
@@ -284,10 +304,16 @@ int32_t RpkIndex::open_lib(const std::string& path) {
   const std::string key = norm_key(path);
   auto it = by_path_.find(key);
   if (it != by_path_.end()) return it->second;
+  if (next_id_>kMaxPackId) {
+    std::fprintf(stderr,"[rpk] RID range exhausted: cannot open %s (maximum %d)\n",
+                 path.c_str(),kMaxPackId);
+    return 0;
+  }
 
   generation_=++g_index_generation;
   const int32_t id = next_id_++;
   by_path_[key] = id;
+  by_basename_.try_emplace(basename_key(key),id);
   if (static_cast<size_t>(id) >= packs_.size()) packs_.resize(id + 1);
 
   RpkPack& pack = packs_[static_cast<size_t>(id)];
@@ -322,17 +348,8 @@ const RpkPack* RpkIndex::pack_by_name(const std::string& pack) const {
     with_ext += ".rpk";
   if (const RpkPack* p = pack_by_path(with_ext)) return p;
   const std::string want = norm_key(with_ext);
-  const auto slash = want.find_last_of('\\');
-  const std::string base =
-      slash == std::string::npos ? want : want.substr(slash + 1);
-  for (size_t i = 1; i < packs_.size(); ++i) {
-    if (packs_[i].path.empty()) continue;
-    std::string key = norm_key(packs_[i].path);
-    const auto s = key.find_last_of('\\');
-    const std::string b = s == std::string::npos ? key : key.substr(s + 1);
-    if (b == base) return &packs_[i];
-  }
-  return nullptr;
+  const auto it = by_basename_.find(basename_key(want));
+  return it == by_basename_.end() ? nullptr : pack_by_id(it->second);
 }
 
 namespace {
@@ -406,19 +423,26 @@ std::vector<uint8_t> RpkIndex::read_payload(uint32_t full_id) const {
   std::lock_guard lock(payload_mutex_);
   if (auto it=payload_cache_.find(full_id);it!=payload_cache_.end()) return it->second;
   const int32_t pid=pack_from_full(full_id);
-  auto& stream=pack_streams_[pid];
-  if (!stream) {
-    auto opened=std::make_unique<std::ifstream>(disk_path_for_pack(pid),std::ios::binary);
-    if (!*opened) return {};
-    stream=std::move(opened);
+  auto found=std::find_if(pack_streams_.begin(),pack_streams_.end(),
+                          [pid](const auto& item){return item.first==pid;});
+  if (found==pack_streams_.end()) {
+    // Evict before opening: resource count must not consume the CRT stream limit.
+    constexpr size_t kStreamLimit=64;
+    if (pack_streams_.size()>=kStreamLimit) pack_streams_.pop_back();
+    std::ifstream opened(disk_path_for_pack(pid),std::ios::binary);
+    if (!opened) return {};
+    pack_streams_.emplace_front(pid,std::move(opened));
+  } else {
+    pack_streams_.splice(pack_streams_.begin(),pack_streams_,found);
   }
-  stream->clear();stream->seekg(0,std::ios::end);
-  const auto current_size=stream->tellg();
+  auto& stream=pack_streams_.front().second;
+  stream.clear();stream.seekg(0,std::ios::end);
+  const auto current_size=stream.tellg();
   if (current_size<0 || uint64_t(e->offset)+e->size>static_cast<uint64_t>(current_size)) return {};
-  stream->seekg(static_cast<std::streamoff>(e->offset));
+  stream.seekg(static_cast<std::streamoff>(e->offset));
   std::vector<uint8_t> out(e->size);
-  stream->read(reinterpret_cast<char*>(out.data()),static_cast<std::streamsize>(out.size()));
-  if (!*stream) return {};
+  stream.read(reinterpret_cast<char*>(out.data()),static_cast<std::streamsize>(out.size()));
+  if (!stream) return {};
   ++payload_disk_reads_;
   // Cache small text descriptors, not another resident copy of map binaries.
   auto text_end=out.end();
@@ -793,19 +817,27 @@ std::vector<uint32_t> RpkIndex::garage_render_ids(int32_t pack_id,
 }
 
 std::vector<uint32_t> RpkIndex::children_of(uint32_t parent) const {
-  std::vector<uint32_t> result;
-  if (!resolve(parent)) return result;
-  for (int32_t pi = 1; pi < pack_count(); ++pi) {
-    const auto* pack = pack_by_id(pi);
-    if (!pack) continue;
-    for (const auto& entry : pack->entries) {
-      if (!entry.super_id) continue;
-      const auto id = make_full_id(pi, entry.type_id);
-      if (id != parent && resolve_embedded_id(pi, entry.super_id) == parent)
-        result.push_back(id);
+  if (!resolve(parent)) return {};
+  std::lock_guard lock(children_mutex_);
+  if (children_generation_!=generation_) {
+    // A newly opened dependency can change parents in already indexed packs.
+    // Rebuild once per generation, preserving pack/TOC order and duplicates.
+    std::unordered_map<uint32_t,std::vector<uint32_t>> children;
+    for (int32_t pi = 1; pi < pack_count(); ++pi) {
+      const auto* pack = pack_by_id(pi);
+      if (!pack) continue;
+      for (const auto& entry : pack->entries) {
+        if (!entry.super_id) continue;
+        const auto id = make_full_id(pi, entry.type_id);
+        const auto owner = resolve_embedded_id(pi,entry.super_id);
+        if (id!=owner) children[owner].push_back(id);
+      }
     }
+    children_=std::move(children);
+    children_generation_=generation_;
   }
-  return result;
+  const auto found=children_.find(parent);
+  return found==children_.end()?std::vector<uint32_t>{}:found->second;
 }
 
 }  // namespace slrr
