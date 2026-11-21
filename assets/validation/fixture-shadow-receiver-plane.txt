@@ -1,0 +1,36 @@
+Issue #201 / PR #202: fixture shadow receiver-plane correction (2026-11-19)
+
+Cause/evidence:
+- User reported horizontal stripes on the car after stronger neon lighting.
+- Isolated game captures with identical camera, active reflections and only
+  fixture shadows toggled reproduce/remove the bands. Before: stripe-before.png;
+  fixture shadows disabled: stripe-no-shadow.png (both under build/).
+- Existing fixture PCF compared neighbouring depths against a single reference.
+  Wide 160-degree perspective/512-square tiles project large, sloping receiver
+  footprints on near-vertical body panels, producing self-shadow bands.
+
+Change:
+- Derive projected receiver-plane depth gradients before varying bounds branches.
+- Four texel-centred comparisons each use that texel's plane depth, then bilinear
+  weights interpolate their results. Hidden hardware PCF neighbours no longer
+  need the same incorrect reference. A small .000005 residual depth bias remains.
+- Existing normal/radial offsets, intensity, range, atlas size and four-tap budget
+  retained. Vehicle casting/reception, real blockers and cubemap capture stay on.
+
+Validation:
+- build/stripe-baseline-gpu.log: new grazing vehicle-panel regression fails on
+  the previous implementation: 9724 affected pixels out of 16384.
+- build/stripe-fix-gpu.log: exit 0; panel stripes=0; actual garage blocked pixels
+  4986. Nine individual sources, cache/lifetime, white emission, sun and flare
+  tests also pass.
+- build/stripe-corrected.png: same isolated game/camera inspected, body bands
+  removed while actual furniture/vehicle shadows remain. Diagnostic processes
+  deliberately stopped; not a clean-exit or matched performance result.
+- Temporary camera/capture/shadow-toggle instrumentation removed.
+- Final production build, tests, ownership, knowledge and smoke run recorded
+  separately in build/stripe-final-*.log.
+
+Limits:
+- This targets fixture shadow acne, not every reflection/material artifact.
+- The car's original mesh normals/materials and cubemap resolution are unchanged.
+- No matched frame-time improvement is claimed; user acceptance remains pending.

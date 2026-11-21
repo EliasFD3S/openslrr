@@ -29,6 +29,13 @@ public class OptionsDialog extends Dialog
 	final static int CMD_RENDERER_FIRST = 500;
 	final static int CMD_ENHANCED_SHADOWS = 505;
 	final static int CMD_FRAMERATE_MODE = 506;
+	final static int CMD_ANISOTROPIC = 507;
+	final static int CMD_AO_METHOD = 508;
+	final static int CMD_AO_QUALITY = 509;
+	final static int CMD_SHADOW_QUALITY = 510;
+	final static int CMD_SHADOW_SMOOTHING = 511;
+	final static int CMD_AO_STRENGTH = 512;
+	final static int CMD_AO_RADIUS = 513;
 	final static int RENDERER_FRAMERATE_MODE = 5;
 	public static native int getRendererOption(int option);
 	public static native void setRendererOption(int option, int value);
@@ -409,19 +416,34 @@ public class OptionsDialog extends Dialog
 		antialiasing[2] = "MSAA 4X";
 		antialiasing[3] = "MSAA 8X";
 
-		m = osd.createMenu( Menu_Left, -0.72, -0.25, 0 );
+		String[] quality = new String[3];
+		quality[0] = "LOW"; quality[1] = "MEDIUM"; quality[2] = "HIGH";
+		String[] occlusion = new String[3];
+		occlusion[0] = "OFF"; occlusion[1] = "HBAO"; occlusion[2] = "GTAO";
+		String[] smoothing = new String[3];
+		smoothing[0] = "SHARP"; smoothing[1] = "SOFT"; smoothing[2] = "VERY SOFT";
+		m = osd.createMenu( Menu_Left_Small, -0.50, -0.30, 0 );
 		m.addItem( "ANTI-ALIASING", CMD_RENDERER_FIRST, getRendererOption(0), antialiasing, null );
 		m.addItem( "REFLECTIONS", CMD_RENDERER_FIRST+1, getRendererOption(1), detailTextOO, null );
 		m.addItem( "VOLUMETRIC CLOUDS", CMD_RENDERER_FIRST+2, getRendererOption(2), detailTextOO, null );
-
+		m.addItem( "ANISOTROPIC FILTERING", CMD_ANISOTROPIC, getRendererOption(6), detailTextOO, null );
+		m.addItem( "AMBIENT OCCLUSION", CMD_AO_METHOD, getRendererOption(7), occlusion, "Screen-space indirect contact shading" );
+		m.addItem( "AO QUALITY", CMD_AO_QUALITY, getRendererOption(8), quality, "Sampling budget and resolution" );
 		int shadowEnabled = 0;
-		if (Config.shadows > 0)
-			shadowEnabled = 1;
-		m = osd.createMenu( Menu_Left, 0.25, -0.25, 0 );
-		m.addItem( "SHADOWS", CMD_ENHANCED_SHADOWS, shadowEnabled, detailTextOO, "Dynamic 2048 x 2048 shadow maps" );
+		if (Config.shadows > 0) shadowEnabled = 1;
+		m = osd.createMenu( Menu_Left_Small, 0.55, -0.30, 0 );
+		m.addItem( "SHADOWS", CMD_ENHANCED_SHADOWS, shadowEnabled, detailTextOO, null );
+		m.addItem( "SHADOW QUALITY", CMD_SHADOW_QUALITY, getRendererOption(9), quality, "Shadow-map resolution" );
+		m.addItem( "SHADOW SMOOTHING", CMD_SHADOW_SMOOTHING, getRendererOption(10), smoothing, "Shadow edge filtering" );
 		m.addItem( "MAP SUNLIGHT", CMD_RENDERER_FIRST+3, getRendererOption(3), detailTextOO, null );
 		m.addItem( "LOCAL LIGHTS", CMD_RENDERER_FIRST+4, getRendererOption(4), detailTextOO, null );
 		m.addItem( "SUN FLARE", CMD_FLARES, Config.flares, detailTextOO, null );
+		m = osd.createMenu( Menu_Left_Small, -0.50, 0.38, 0 );
+		m.setSliderStyle( sld2, sldk );
+		m.addItem( "AO STRENGTH", CMD_AO_STRENGTH, getRendererOption(11), 0, 200, 21, "Ambient occlusion strength (%)" ).printValue("%.0f");
+		m = osd.createMenu( Menu_Left_Small, 0.55, 0.38, 0 );
+		m.setSliderStyle( sld2, sldk );
+		m.addItem( "AO RADIUS", CMD_AO_RADIUS, getRendererOption(12), 25, 300, 12, "Ambient occlusion radius (cm)" ).printValue("%.0f");
 
 		m = osd.createMenu( butt2, 0.98, 0.85, 0 );
 		m.addItem( "BACK", CMD_VIDEO_OPTIONS_DONE );
@@ -984,6 +1006,16 @@ public class OptionsDialog extends Dialog
 		else
 		if (command == CMD_FRAMERATE_MODE)
 			setRendererOption(RENDERER_FRAMERATE_MODE, osd.multiValue);
+		else
+		if (command == CMD_AO_METHOD) setRendererOption(7, osd.multiValue);
+		else if (command == CMD_AO_QUALITY) setRendererOption(8, osd.multiValue);
+		else if (command == CMD_SHADOW_QUALITY) setRendererOption(9, osd.multiValue);
+		else if (command == CMD_SHADOW_SMOOTHING) setRendererOption(10, osd.multiValue);
+		else if (command == CMD_AO_STRENGTH) setRendererOption(11, osd.sliderValue);
+		else if (command == CMD_AO_RADIUS) setRendererOption(12, osd.sliderValue);
+		else
+		if (command == CMD_ANISOTROPIC)
+			setRendererOption(6, osd.multiValue);
 		else
 		if (command == CMD_ENHANCED_SHADOWS)
 		{

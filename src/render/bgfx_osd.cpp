@@ -3,6 +3,7 @@
 #include "slrr/frame_profiler.hpp"
 
 #include "slrr/part_runtime.hpp"
+#include "slrr/vehicle_hud_damage.hpp"
 #include "slrr/dds_image.hpp"
 #include "slrr/paint_texture.hpp"
 #include "slrr/host_cursor.hpp"
@@ -180,10 +181,10 @@ namespace slrr {
     std::memcpy(tib.data, idx, sizeof(idx));
     float mtx[16];
     bx::mtxIdentity(mtx);
-    bgfx::setTransform(mtx);
-    bgfx::setVertexBuffer(0, &tvb);
-    bgfx::setIndexBuffer(&tib);
-    bgfx::setTexture(0, s_tex_, tex_for_osd_icon(w.icon_path));
+    enc()->setTransform(mtx);
+    enc()->setVertexBuffer(0, &tvb);
+    enc()->setIndexBuffer(&tib);
+    enc()->setTexture(0, s_tex_, tex_for_osd_icon(w.icon_path));
     bind_baked_light(nullptr, nullptr);
     // Icons: cutout low-alpha (kills green JPEG plate).
     // OpeningPic.ptx is a JPEG with no alpha. Blending with tex.a hides it
@@ -201,17 +202,17 @@ namespace slrr {
     // PTX RGB is premultiplied. Discarding a<0.5 chewed the icon edges.
     // tex.a keeps the antialiasing. Splash/loading have no usable alpha.
     const float u[4] = {0.f, 1.f, splash_plate ? 0.f : 1.f, 0.f};
-    bgfx::setUniform(u_alpha_test_, u);
+    enc()->setUniform(u_alpha_test_, u);
     const float tint[4] = {cr, cg, cb, ca};
-    bgfx::setUniform(u_color_, tint);
+    enc()->setUniform(u_color_, tint);
     // PTX RGB is already multiplied by alpha. SRC_ALPHA would darken the
     // menu plate a second time (rgb * a * a). Premultiplied blend keeps
     // the gold frame and lets prime.avi through the transparent center.
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+    enc()->setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                    BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE,
                                          BGFX_STATE_BLEND_INV_SRC_ALPHA) |
                    BGFX_STATE_MSAA);
-    bgfx::submit(osd_view_, program_);
+    submit_counted(osd_view_, program_);
   }
 #endif
 #ifdef _WIN32
@@ -263,7 +264,7 @@ namespace slrr {
                     t.custom_effects ? &t.effects : nullptr);
     }
     const float white_c[4] = {1.f, 1.f, 1.f, 1.f};
-    bgfx::setUniform(u_color_, white_c);
+    enc()->setUniform(u_color_, white_c);
   }
 #endif
 #ifdef _WIN32
@@ -353,7 +354,7 @@ namespace slrr {
 
     draw_osd_line(font_key, h->tip, bx, by - text_h * 0.5f, 1, 0xFFFFFFFFu);
     const float white_c[4] = {1.f, 1.f, 1.f, 1.f};
-    bgfx::setUniform(u_color_, white_c);
+    enc()->setUniform(u_color_, white_c);
   }
 #endif
 #ifdef _WIN32
@@ -405,7 +406,7 @@ namespace slrr {
     bgfx::setViewRect(view_id, 0, 0, static_cast<uint16_t>(width_),
                       static_cast<uint16_t>(height_));
     bgfx::setViewTransform(view_id, nullptr, ortho);
-    bgfx::touch(view_id);
+    enc()->touch(view_id);
 
     MeshVertex v[4];
     auto setv = [](MeshVertex& o, float x, float y, float uu, float vv) {
@@ -434,20 +435,20 @@ namespace slrr {
     std::memcpy(tib.data, idx, sizeof(idx));
     float mtx[16];
     bx::mtxIdentity(mtx);
-    bgfx::setTransform(mtx);
-    bgfx::setVertexBuffer(0, &tvb);
-    bgfx::setIndexBuffer(&tib);
-    bgfx::setTexture(0, s_tex_, fmv_tex_);
+    enc()->setTransform(mtx);
+    enc()->setVertexBuffer(0, &tvb);
+    enc()->setIndexBuffer(&tib);
+    enc()->setTexture(0, s_tex_, fmv_tex_);
     bind_baked_light(nullptr, nullptr);
     const float white[4] = {1.f, 1.f, 1.f, 1.f};
-    bgfx::setUniform(u_color_, white);
+    enc()->setUniform(u_color_, white);
     // Unlit. The mesh light (~0.44 on a flat quad) was the black filter
     // on intros and on prime.avi.
     const float u_at[4] = {0.f, 1.f, 0.f, 0.f};
-    bgfx::setUniform(u_alpha_test_, u_at);
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+    enc()->setUniform(u_alpha_test_, u_at);
+    enc()->setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                    BGFX_STATE_MSAA);
-    bgfx::submit(view_id, program_);
+    submit_counted(view_id, program_);
   }
 #endif
 #ifdef _WIN32
@@ -477,7 +478,7 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
                         const uint16_t *indices, size_t index_count,
                         float x, float y, float sx, float sy, float angle,
                         float min_x, float min_y, uint32_t color, bool opaque = false,
-                        bool color_mix = false) {
+                        bool color_mix = false, const float* glyph_uv = nullptr) {
     if (!count || count > 65535 || !index_count || mesh.textures.empty() ||
         mesh.uvs.size() < (begin + count) * 2 ||
         bgfx::getAvailTransientVertexBuffer(static_cast<uint32_t>(count), layout_) < count ||
@@ -498,7 +499,8 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       const float py = mesh.positions[v * 3 + 1] - min_y;
       vertices[i] = {x + sx * (c * px - s * py),
                      y + sy * (s * px + c * py), 0.f, 0.f, 0.f, 1.f,
-                     mesh.uvs[v * 2], mesh.uvs[v * 2 + 1]};
+                     glyph_uv ? glyph_uv[i * 2] : mesh.uvs[v * 2],
+                      glyph_uv ? glyph_uv[i * 2 + 1] : mesh.uvs[v * 2 + 1]};
     }
     std::memcpy(ib.data, indices, index_count * sizeof(uint16_t));
     float identity[16];
@@ -514,18 +516,18 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
                           float(color & 255) * rgb_scale, opacity};
     const float alpha[] = {0.f, 1.f, opaque ? 0.f : 1.f,
                            color_mix && premultiplied ? 2.f : 0.f};
-    bgfx::setTransform(identity);
-    bgfx::setVertexBuffer(0, &vb);
-    bgfx::setIndexBuffer(&ib);
-    bgfx::setTexture(0, s_tex_, texture);
+    enc()->setTransform(identity);
+    enc()->setVertexBuffer(0, &vb);
+    enc()->setIndexBuffer(&ib);
+    enc()->setTexture(0, s_tex_, texture);
     bind_baked_light(nullptr, nullptr);
-    bgfx::setUniform(u_color_, tint);
-    bgfx::setUniform(u_alpha_test_, alpha);
+    enc()->setUniform(u_color_, tint);
+    enc()->setUniform(u_alpha_test_, alpha);
     const uint64_t blend = premultiplied
         ? BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA)
         : BGFX_STATE_BLEND_ALPHA;
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | blend);
-    bgfx::submit(osd_view_, program_);
+    enc()->setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | blend);
+    submit_counted(osd_view_, program_);
   };
   const auto safe_numeric_format = [](const std::string& fmt) {
     if (fmt.size() < 2 || fmt.size() > 6 || fmt.front() != '%' || fmt.back() != 'f')
@@ -609,19 +611,12 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       if (damage) {
         // The stock font stores the car outline ('A') and one blip per car
         // region as separate glyphs in one shared coordinate system, front
-        // up and the car's left on the left. Each blip takes the worst
-        // condition of the installed parts that fall in its quad; a blip
-        // with no part is not drawn. Drivetrain blips (E, L, T) take engine
-        // parts, body blips take body panels, and the four wheel blips take
-        // the wheel of their corner.
+        // up and the car's left on the left. Quarterpanel script instances
+        // exclusively own p/q/u/v at their rest-installed corner. Other
+        // regions keep spatial aggregation, and absent parts have no blip.
+        // Drivetrain blips take engine parts; wheels keep their slot corner.
         using Kind = VehicleHudPart::Kind;
-        struct Blip {
-          unsigned char glyph;
-          Kind kind;
-          float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
-          bool present = false;
-          float condition = 1;
-        };
+        using Blip = HudDamageBlip;
         const auto bounds = [&](unsigned char glyph, Blip &out) {
           const size_t first = size_t(glyph) * 4;
           if ((first + 4) * 3 > mesh->positions.size()) return false;
@@ -649,36 +644,12 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
         add("ELT", Kind::Engine);
         add("Ohlpqrtuv", Kind::Body);
         add("abcd", Kind::Wheel);
-        const float centre_x = .5f * (outline.x0 + outline.x1);
-        const float centre_y = .5f * (outline.y0 + outline.y1);
-        for (size_t k = 0; k < hud.part_count; ++k) {
-          const auto &part = hud.parts[k];
-          const float gx = outline.x0 + (part.x + 1.f) * .5f * (outline.x1 - outline.x0);
-          const float gy = outline.y0 + (part.z + 1.f) * .5f * (outline.y1 - outline.y0);
-          Blip *best = nullptr;
-          float best_area = std::numeric_limits<float>::max();
-          for (size_t b = 0; b < blip_count; ++b) {
-            Blip &blip = blips[b];
-            if (blip.kind != part.kind) continue;
-            if (part.kind == Kind::Wheel) {
-              const bool left = .5f * (blip.x0 + blip.x1) < centre_x;
-              const bool front = .5f * (blip.y0 + blip.y1) < centre_y;
-              if ((front ? 0 : 2) + (left ? 0 : 1) == part.corner) best = &blip;
-              continue;
-            }
-            // Overlapping quads (the hood spans the fenders): the smallest
-            // quad that holds the part's centre is the most specific region.
-            const float area = (blip.x1 - blip.x0) * (blip.y1 - blip.y0);
-            if (gx >= blip.x0 && gx <= blip.x1 && gy >= blip.y0 && gy <= blip.y1 &&
-                area < best_area) {
-              best = &blip;
-              best_area = area;
-            }
-          }
-          if (!best) continue;
-          best->present = true;
-          best->condition = std::min(best->condition, part.condition);
-        }
+        std::array<float, 8> left_fender_uv{};
+        const bool stock_fenders = item.resource == cars_resource(0x57) &&
+            hud_stock_left_fender_uv(*mesh, left_fender_uv);
+        hud_assign_damage(std::span(blips.data(), blip_count),
+                          std::span(hud.parts.data(), std::min(hud.part_count, hud.parts.size())),
+                          outline, stock_fenders);
         const float scale_x = sy * pixel_aspect;
         // The outline stands for the whole car; keep it neutral.
         draw(*mesh, size_t('A') * 4, 4, quad, 6, x, y, scale_x, sy, 0, p[0], p[1],
@@ -690,7 +661,8 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
           const auto red = static_cast<uint32_t>(255.f * std::min(1.f, 2.f * (1.f - condition)));
           const auto green = static_cast<uint32_t>(255.f * std::min(1.f, 2.f * condition));
           draw(*mesh, size_t(blip.glyph) * 4, 4, quad, 6, x, y, scale_x, sy, 0, p[0], p[1],
-               0xff000000u | (red << 16) | (green << 8));
+               0xff000000u | (red << 16) | (green << 8), false, false,
+               stock_fenders && blip.glyph == 'q' ? left_fender_uv.data() : nullptr);
         }
       } else {
         draw(*mesh, start, 4, quad, 6, x, y,
@@ -776,7 +748,7 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
                         static_cast<uint16_t>(height_));
       bgfx::setViewTransform(view, nullptr, ortho);
       bgfx::setViewMode(view, bgfx::ViewMode::Sequential);
-      bgfx::touch(view);
+      enc()->touch(view);
     };
     setup_osd(kOsdUnder);
     setup_osd(kOsdView);
@@ -805,10 +777,10 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       // White tex + darken via color uniform — draw after setting color.
       // draw_osd_quad owns the tint uniform; pass the color into the draw.
       const float u_at[4] = {0.f, 1.f, 1.f, 0.f};
-      bgfx::setUniform(u_alpha_test_, u_at);
+      enc()->setUniform(u_alpha_test_, u_at);
       draw_osd_quad(plate, 0.05f, 0.05f, 0.07f, 0.82f);
       const float white_c[4] = {1.f, 1.f, 1.f, 1.f};
-      bgfx::setUniform(u_color_, white_c);
+      enc()->setUniform(u_color_, white_c);
     }
 
     // Viewport priority: menu, then the darken shield, then the dialog plate.
@@ -1022,19 +994,19 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       std::memcpy(tvb.data, text_vertices_.data(), text_vertices_.size() * sizeof(OsdTextVertex));
       std::memcpy(tib.data, text_indices_.data(), text_indices_.size() * sizeof(uint16_t));
       float mtx[16]; bx::mtxIdentity(mtx);
-      bgfx::setTransform(mtx);
-      bgfx::setVertexBuffer(0, &tvb); bgfx::setIndexBuffer(&tib);
-      bgfx::setTexture(0, s_tex_, tex);
-      bgfx::setUniform(u_color_, col);
-      bgfx::setUniform(u_font_params_, params, 2);
-      bgfx::setUniform(u_font_outline_, outline.data());
-      bgfx::setUniform(u_font_shadow_, shadow.data());
-      bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+      enc()->setTransform(mtx);
+      enc()->setVertexBuffer(0, &tvb); enc()->setIndexBuffer(&tib);
+      enc()->setTexture(0, s_tex_, tex);
+      enc()->setUniform(u_color_, col);
+      enc()->setUniform(u_font_params_, params, 2);
+      enc()->setUniform(u_font_outline_, outline.data());
+      enc()->setUniform(u_font_shadow_, shadow.data());
+      enc()->setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                      BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
-      bgfx::submit(osd_view_, text_program_);
+      submit_counted(osd_view_, text_program_);
     }
     const float white[4] = {1.f, 1.f, 1.f, 1.f};
-    bgfx::setUniform(u_color_, white);
+    enc()->setUniform(u_color_, white);
   }
 #endif
 

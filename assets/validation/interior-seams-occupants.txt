@@ -1,0 +1,46 @@
+Issue #201 / PR #202: interior seams, wall shadows and reflected occupants
+2026-11-19
+
+Evidence / changes:
+- Isolated diagnostic captures (build/edges-physical.png,
+  edges-no-fixture-shadow.png, edges-no-sun.png, edges-ambient.png) isolate
+  the bright roof/wall seam lines to direct sunlight rather than the neon field.
+- Physical world coordinates no longer inherit the 5 cm legacy normal shadow
+  offset. Mesh/instance/vehicle light and reflection calculations use real
+  positions; only the legacy shadow varying retains that offset.
+- Sun depth PCF uses aligned receiver-plane comparisons with .0000005 residual
+  depth bias. Slope correction alone did not eliminate thin-shell seam leakage.
+- Added a projected window depth/transmission field: 1024-square RG32F plus
+  its own D32F attachment (12 MiB). View 66 precedes world; sampler 8 is separate
+  from the existing sun/fixture maps. Window alpha and depth gate direct sun:
+  no aperture coverage or a window behind the receiver means no interior sunlight.
+  This field shares the sun cache stamp. Both extra attachments die with the FB.
+- Sky material mode reset and shader branch order isolate aperture capture.
+- Dynamic cubemap filtering follows Part ownership/GameRef ancestry, excluding
+  seated characters together with vehicles. Free pedestrians remain eligible;
+  the main camera's occupant is unchanged.
+
+Validation:
+- build/edges-final-gpu.log: real garage sunlight through windows remains;
+  replacing all window alpha with opaque yields zero leaked-sun pixels.
+  Existing source/clock/flare/white-emitter/cache tests pass.
+- NEON vehicle-to-vertical-wall test: 3824 blocked pixels, removed by moving the
+  vehicle away; grazing panel acne remains zero. Outdoor wall reception passes.
+- Reflection ancestry test rejects a seated subtree, accepts a free pedestrian
+  and accepts the same actor after reparenting out of the vehicle.
+- build/edges-reviewed.png: isolated actual-game capture inspected; roof and
+  vertical corner highlight lines gone, white neon tubes and lighting retained,
+  sky/window background correct. Earlier intermediate capture files are not
+  the final result. Camera instrumentation removed from production source.
+- Diagnostic processes were deliberately stopped: that is not a clean-exit or
+  performance result. Final production startup/build/check logs recorded separately.
+
+Limits:
+- User acceptance and matched FPS validation remain pending. One extra small
+  window draw pass per changed sun state; no performance improvement is claimed.
+- Window transmission is an interior aperture contract; arbitrary other garage
+  assets still require metadata. An exterior floor in an explicitly interior
+  root is not certified as an outdoor lighting scene.
+- High ceiling sources project a distant car's shadow onto the floor; wall
+  projection requires an actual lamp/car/wall occlusion arrangement. No fake
+  globally projected car shadow is introduced.

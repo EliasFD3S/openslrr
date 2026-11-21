@@ -2,6 +2,7 @@
 
 #include "slrr/scx_mesh.hpp"
 #include "slrr/scene_sun.hpp"
+#include "slrr/script_lights.hpp"
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -28,6 +29,7 @@ struct SceneInstance {
   std::string paint_texture;
   std::vector<std::pair<size_t, std::string>> texture_replacements;
   bool vehicle_material = false;
+  bool ground_prop = false;  // a map placement (debug toggle, #243)
   uint32_t light_flags = 0;
   // Render-object id. Carries `flags` (dynamic shadow caster) and `shd_*`.
   int32_t type_id = 0;
@@ -62,7 +64,12 @@ struct SceneShadowDecal {
 void scene_instances_set_resources(const RpkIndex *resources);
 void scene_instances_set_envmap(uint32_t resource);
 std::string scene_instances_envmap();
-void scene_instances_select(void *world, void *skydome, bool preview_lamps);
+// Scene.java declares interior/exterior independently of the map mesh format.
+// Automatic preserves callers without section metadata (tools and old scripts).
+enum class SceneEnvironment { Automatic, Exterior, Interior };
+void scene_instances_select(void *world, void *skydome, bool preview_lamps,
+                            SceneEnvironment environment = SceneEnvironment::Automatic);
+bool scene_instances_outdoor();
 using SceneFrustum = std::array<std::array<float, 4>, 6>;
 bool scene_instances_has_ground_props();
 void* scene_instances_world();
@@ -70,9 +77,34 @@ void* scene_instances_world();
 // data is read. Null disables filtering for shadow maps and reflection faces.
 using SceneSizeFilter = bool (*)(const float center[3], float radius, void* user);
 void scene_instances_set_size_filter(SceneSizeFilter test, void* user);
+// Map prop LOD (#252). The stock `lods` thresholds are size ratios; the
+// ratio used here is the placement's bounding radius over its distance to
+// `eye` (script space) times `bias`. Only a collection with `update` set (the
+// main view) stores each placement's level, so AO, shadow and reflection
+// passes reuse the main view's choice. `force_highest` restores the old
+// behaviour (highest LOD only). Without a valid view the highest LOD is used.
+struct ScenePropLodView {
+  std::array<float, 3> eye{};
+  float bias = 1.f;
+  bool force_highest = false, update = false, valid = false;
+};
+void scene_instances_set_lod_view(const ScenePropLodView& view);
+// LOD level for size ratio `size` with ascending `thresholds`: the number of
+// thresholds reached. From `current` (>= 0) a level changes only when the
+// ratio passes the threshold by the factor `hysteresis` (no flicker).
+int scene_prop_lod_level(int current, float size, const std::vector<float>& thresholds,
+                         float hysteresis = 1.1f);
+// Placements with a LOD chain in the loaded maps, for tests and statistics.
+size_t scene_instances_lod_placements();
+// With `night_batches`, visible night-only props (authored night facades) go
+// there, one entry per night mesh and shell in a layout kept across frames
+// (entries may be empty), instead of one SceneInstance each (#264). Without
+// it they stay SceneInstances with `emissive_overlay` set.
 std::vector<SceneInstance> scene_instances_collect(
     const SceneFrustum* frustum = nullptr,
-    std::vector<std::shared_ptr<const ScxGeometry>>* resident_props = nullptr);
+    std::vector<std::shared_ptr<const ScxGeometry>>* resident_props = nullptr,
+    bool complete_character_palettes = true,
+    std::vector<SceneBatch>* night_batches = nullptr);
 // Repeated opaque props already grouped per cell. reflection_origin, in
 // render metres, drops placements that cover fewer than about four pixels
 // of a 256² reflection face.
@@ -87,6 +119,15 @@ std::vector<SceneInstance> scene_instances_collect_root(void *root);
 // built only for walkers inside the frustum passed to scene_instances_collect.
 void scene_instances_frame_cache(bool enabled);
 SceneSun scene_instances_light(void* root=nullptr);
+// The world's sun as the renderer lights with it (#271): elevation of the
+// light (radians, negative below the horizon), diffuse luminance, the same
+// light's luminance at noon, `direct` (diffuse / noon), whether it still casts
+// sun shadows, and the street lamp night factor derived from `direct`.
+struct SceneSunState {
+  float elevation = 0.f, diffuse = 0.f, noon = 0.f, direct = 0.f, night = 0.f;
+  bool shadowing = false;
+};
+SceneSunState scene_instances_sun_state();
 // Rejects missing parents, hidden subtrees and cycles. Draws simulated
 // bodies at their pose interpolated between physics ticks.
 bool scene_instance_transform(void *key, void *root, float *matrix);
@@ -120,6 +161,8 @@ std::shared_ptr<const ScxGeometry> scene_instances_geometry(uint32_t resource);
 // Parse render meshes off the calling thread and publish them before return.
 void scene_instances_preload(const std::vector<uint32_t>& resources);
 std::string scene_instances_texture(uint32_t resource);
+// Stock flare artwork resolved through the current resource root, never cwd.
+std::string scene_instances_daylight_flare_texture();
 // Nearest mesh the ray enters, in unreflected script metres. Sky and
 // instances outside the active world are ignored. Null when the ray only
 // starts inside a volume (the garage shell around the camera).
@@ -171,6 +214,10 @@ struct GroundMapData {
 };
 GroundMapData scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id);
 void scene_instances_add_ground_props(const GroundMapData& map);
+// Light `render` children of the map's placements (type-13 resources, #237),
+// in the ground shell's local script space. Null when the map has none or its
+// props were not added. natives_resref attaches it to each new shell.
+SceneryLightList scene_instances_ground_lights(uint32_t render_id);
 // Drawn instead of the render object's .scx (a ground template is materials).
 void scene_instances_override_mesh(uint32_t id,
                                    std::shared_ptr<const ScxGeometry> geo);

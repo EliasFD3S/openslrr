@@ -1,5 +1,9 @@
 #include "slrr/gc_roots.hpp"
+#include "slrr/frame_profiler.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/legacy_neon.hpp"
+#include "slrr/light_resource.hpp"
+
 #include "slrr/paint_texture.hpp"
 #include "slrr/scene_collision.hpp"
 #include <limits>
@@ -11,14 +15,17 @@
 #include "slrr/race_runtime.hpp"
 #include "slrr/rpk_index.hpp"
 #include "slrr/scene_ambience.hpp"
+#include "slrr/script_lights.hpp"
 #include "slrr/skeleton.hpp"
 #include "slrr/vehicle_dynamics.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <charconv>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -35,6 +42,7 @@ SceneSizeFilter g_size_filter = nullptr;
 void* g_size_filter_user = nullptr;
 void *g_sky = nullptr;
 bool g_preview_lamps = false;
+SceneEnvironment g_environment_kind = SceneEnvironment::Automatic;
 uint32_t g_environment = 0;
 struct ShadowInfo {
   uint32_t flags = 0;
@@ -62,6 +70,7 @@ uint64_t floor_cell(int32_t x, int32_t z) {
 struct GroundPropBatch {
   uint32_t render_id = 0;
   std::vector<uint32_t> indices;
+  uint32_t slot = 0;  // index in GroundPropMap::batch_ids (#260)
 };
 struct GroundProp {
   uint32_t render_id;
@@ -73,14 +82,32 @@ struct GroundProp {
   bool hidden = false;   // replaced by a live loose body
   int32_t dormant = -1;  // index into GroundPropMap::dormant, or -1
   bool night_only = false;
+  int32_t night_slot = -1;  // GroundPropMap::night_ids index of a night-only prop (#264)
   bool signal = false;
   RoadPoint signal_position{};
+  int8_t lod_min = -1, lod_max = -1;  // stock `lod first last`; -1 always drawn
+  int32_t lod_index = -1;             // GroundPropMap::lods entry of its placement
+  // World cache (#260): script-space centre and render-space instance matrix
+  // (S*shell*pose*S) for GroundPropMap::cached_shell.
+  std::array<float, 3> world_center{};
+  PartMatrix render_matrix{};
+};
+// One per placement with a LOD chain (#252): shell-local centre and radius
+// covering all its LOD renders, the type's thresholds and the level chosen
+// by the main view (-1 until first chosen).
+struct PlacementLod {
+  std::array<float, 3> center{};
+  float radius = 0.f;
+  std::vector<float> sizes;
+  int level = -1;
+  uint64_t epoch = 0;  // g_lod_epoch of the update that chose `level` (#257)
 };
 struct GroundPropCell {
   std::vector<GroundProp> props;
   std::vector<GroundPropBatch> batches;
   std::array<float, 3> center{};
   float radius = 0.f;
+  std::array<float, 3> world_center{};  // for GroundPropMap::cached_shell (#260)
 };
 // A positive-mass placement stays an instanced render prop until a car comes
 // close. Only then does it become a live loose body, so a map with thousands of
@@ -105,7 +132,26 @@ struct GroundPropMap {
   std::vector<uint32_t> resources;
   std::vector<StaticMesh> collision_meshes;
   collision::StaticIndex collision_shapes;
+  // Type-13 `render` children of the placements, shell-local (#237). Each
+  // new shell of this map attaches the same list to the light registry.
+  SceneryLightList lights;
+  std::vector<PlacementLod> lods;
+  // Static prop world cache (#260): props keep their world centre and
+  // instance matrix for this shell matrix; recomputed only when it changes.
+  PartMatrix cached_shell{};
+  bool world_cache_valid = false;
+  // Persistent batch layout (#260): one slot per batchable mesh of the map.
+  std::vector<uint32_t> batch_ids;
+  std::vector<std::shared_ptr<const ScxGeometry>> batch_geometry;
+  // The same for the night-only meshes, instanced as night overlays (#264).
+  std::vector<uint32_t> night_ids;
+  std::vector<std::shared_ptr<const ScxGeometry>> night_geometry;
 };
+ScenePropLodView g_lod_view;
+// Bumped by every updating LOD view (one per main-view collection), so each
+// placement's level is computed once per frame and reused by both of its
+// chain members and by both collection paths (#257).
+uint64_t g_lod_epoch = 1;
 std::unordered_map<uint32_t, GroundPropMap> g_ground_props;
 // The map is cached per render id and outlives its GroundRef: each visit to a
 // city builds a new GroundRef, so the one to parent a promoted prop to is
@@ -424,6 +470,7 @@ std::shared_ptr<const ScxGeometry> load_geometry(const RpkIndex& resources, uint
         }
         mesh->textures = std::move(model.textures);
         scx_resolve_baked_lightmaps(*mesh);
+        adapt_legacy_neon_fixtures(*mesh);
         result = std::move(mesh);
         jobs_printf("[scene] resource=0x%x source=%s vertices=%d\n", id,
                     path.string().c_str(), result->info.vertices);
@@ -786,6 +833,7 @@ void scene_instances_set_resources(const RpkIndex *resources) {
   g_resources = resources;
   g_world = g_sky = nullptr;
   g_preview_lamps = false;
+  g_environment_kind = SceneEnvironment::Automatic;
   g_meshes.clear();
   g_shadow_info.clear();
   g_overrides.clear();
@@ -811,6 +859,13 @@ void scene_instances_set_envmap(uint32_t resource) { g_environment = resource; }
 std::shared_ptr<const ScxGeometry> scene_instances_geometry(uint32_t resource) {
   return geometry(resource);
 }
+std::string scene_instances_daylight_flare_texture() {
+  if (!g_resources) return {};
+  const auto* pack = g_resources->pack_by_path("maps/skydome.rpk");
+  return pack ? scene_instances_texture(RpkIndex::make_full_id(pack->pack_id, 0x100))
+              : std::string{};
+}
+
 std::string scene_instances_texture(uint32_t resource) {
   if (!resource) return {};
   // Painter textures live in host memory; the renderer uploads them by id.
@@ -835,14 +890,23 @@ std::string scene_instances_envmap() {
   return g_resources ? g_resources->texture_path_for_id(g_environment)
                      : std::string{};
 }
-void scene_instances_select(void *world, void *skydome, bool preview_lamps) {
+void scene_instances_select(void *world, void *skydome, bool preview_lamps,
+                            SceneEnvironment environment) {
   if (g_world != world) ++g_floor_revision;
   g_world = world;
   g_sky = skydome;
   g_preview_lamps = preview_lamps;
+  g_environment_kind = environment;
   g_floor_prepared = false;
   if (auto *sky = gameref_get(skydome))
     sky->sky_render = true;
+}
+
+bool scene_instances_outdoor() {
+  if (!g_world || g_preview_lamps) return false;
+  if (g_environment_kind == SceneEnvironment::Interior) return false;
+  if (g_environment_kind == SceneEnvironment::Exterior) return true;
+  return scene_instances_has_ground_props();
 }
 
 bool chain_matrix(void *key, void *root, float *matrix, bool reflect,
@@ -1814,8 +1878,9 @@ bool scene_instances_supports(void *root,
   return !points.empty();
 }
 
-SceneSun scene_instances_light(void* root) {
-  if(!root)root=g_world;
+namespace {
+// The world's light before the day cycle, and whether the cycle applies.
+SceneSun base_light(void* root, bool* cycle) {
   SceneSun selected=scene_sun();int newest=0;
   for(auto* node:gameref_directional_lights()) {
     if(!node->directional_light.set || node->live_id<=newest)continue;
@@ -1826,22 +1891,58 @@ SceneSun scene_instances_light(void* root) {
     const auto& d=node->directional_light.direction;
     for(int i=0;i<3;++i)selected.direction[i]=frame[i]*d[0]+frame[4+i]*d[1]+frame[8+i]*d[2];
   }
-  if (root == g_world && scene_instances_has_ground_props())
+  *cycle = root == g_world && scene_instances_outdoor();
+  return selected;
+}
+float luminance(const float* rgb) {
+  return rgb[0] * 0.2126f + rgb[1] * 0.7152f + rgb[2] * 0.0722f;
+}
+}  // namespace
+
+SceneSun scene_instances_light(void* root) {
+  if(!root)root=g_world;
+  bool cycle=false;
+  SceneSun selected=base_light(root,&cycle);
+  if (cycle)
     scene_sun_apply_day_cycle(selected);
   return selected;
+}
+
+SceneSunState scene_instances_sun_state() {
+  SceneSunState state;
+  bool cycle=false;
+  const SceneSun base=base_light(g_world,&cycle);
+  SceneSun now=base, noon=base;
+  if (cycle) {
+    scene_sun_apply_day_cycle(now);
+    scene_sun_apply_day_cycle_at(noon, 12.f * 3600.f);
+  }
+  const float length=std::sqrt(now.direction[0]*now.direction[0]+now.direction[1]*now.direction[1]+
+                               now.direction[2]*now.direction[2]);
+  // The direction is where the light travels: a sun above the horizon points down.
+  state.elevation = now.has_direction && length > 1e-6f
+      ? std::asin(std::clamp(-now.direction[1] / length, -1.f, 1.f)) : 0.f;
+  state.diffuse = now.set ? luminance(now.diffuse) : 0.f;
+  state.noon = noon.set ? luminance(noon.diffuse) : 0.f;
+  // update_static_shadow casts no sun shadow from a direction with y >= 0.02.
+  state.shadowing = now.has_direction && now.direction[1] < 0.02f && state.diffuse > 0.f;
+  state.direct = state.noon > 1e-4f ? std::clamp(state.diffuse / state.noon, 0.f, 1.f) : 0.f;
+  state.night = scene_sun_night_factor(state.direct);
+  return state;
 }
 namespace {
 constexpr int kSkinBones = 48;
 
 // False when the clip gives no bones; the instance then keeps the CPU pose.
-bool skin_palette(SceneInstance& instance, void* key, int32_t type_id) {
+// Safe on the job pool for distinct characters (#268): it writes only the
+// instance and the prepared character.
+bool skin_palette_prepared(SceneInstance& instance, void* prepared) {
   instance.skin.assign(static_cast<size_t>(kSkinBones) * 16, 0.f);
   for (int bone = 0; bone < kSkinBones; ++bone) {
     float* m = instance.skin.data() + static_cast<size_t>(bone) * 16;
     m[0] = m[5] = m[10] = m[15] = 1.f;
   }
-  const int count = character_skin_palette(key, type_id, *g_resources,
-                                           instance.skin.data(), kSkinBones);
+  const int count = character_skin_palette_prepared(prepared, instance.skin.data(), kSkinBones);
   if (count <= 0) {
     instance.skin.clear();
     instance.gpu_skin = false;
@@ -1868,6 +1969,53 @@ bool skin_palette(SceneInstance& instance, void* key, int32_t type_id) {
   instance.gpu_skin = true;
   return true;
 }
+bool skin_palette(SceneInstance& instance, void* key, int32_t type_id) {
+  return skin_palette_prepared(instance, character_skin_prepare(key, type_id, *g_resources));
+}
+
+// Lowercase texture path without extension or game/ prefix: the mesh list
+// may prefer a DDS sidecar while the resource names the original image.
+std::string texture_key(std::string path) {
+  std::replace(path.begin(), path.end(), '\\', '/');
+  for (char &c : path)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  const auto slash = path.find_last_of('/');
+  const auto dot = path.find_last_of('.');
+  if (dot != std::string::npos &&
+      (slash == std::string::npos || dot > slash))
+    path.resize(dot);
+  const auto game = path.rfind("game/");
+  if (game != std::string::npos)
+    path = path.substr(game + 5);
+  return path;
+}
+
+// texture_key of every texture of a mesh, kept per mesh and revision (#268):
+// a painted or retextured part matched them string by string every frame.
+// The weak pointer catches a freed mesh whose address was reused. Host
+// thread only.
+const std::vector<std::string>& mesh_texture_keys(const std::shared_ptr<const ScxGeometry>& mesh) {
+  struct Entry {
+    std::weak_ptr<const ScxGeometry> owner;
+    uint32_t revision = 0;
+    std::vector<std::string> keys;
+  };
+  static std::unordered_map<const ScxGeometry*, Entry> cache;
+  static size_t prune_at = 256;
+  if (cache.size() >= prune_at) {
+    std::erase_if(cache, [](const auto& item) { return item.second.owner.expired(); });
+    prune_at = std::max<size_t>(256, cache.size() * 2);
+  }
+  auto& entry = cache[mesh.get()];
+  if (entry.owner.lock() != mesh || entry.revision != mesh->revision ||
+      entry.keys.size() != mesh->textures.size()) {
+    entry.owner = mesh;
+    entry.revision = mesh->revision;
+    entry.keys.clear();
+    for (const auto& texture : mesh->textures) entry.keys.push_back(texture_key(texture));
+  }
+  return entry.keys;
+}
 
 // defer_skin leaves pedestrians with gpu_skin set and an empty palette.
 std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
@@ -1889,6 +2037,7 @@ std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
            widget->second.tag == ValueTag::Int;
   };
   const auto nodes = render_nodes_in_world(root);
+  out.reserve(nodes.size());  // SceneInstance is large; one allocation (#268)
   {
     // A new car or scene brings many meshes at once: read them on the job
     // pool instead of one by one in the loop below. Lamp renders keep their
@@ -1967,43 +2116,30 @@ std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
     instance.vehicle_material = n->vehicle_material;
     instance.light_flags = n->light_flags;
     if (n->paint_source || !n->texture_replacements.empty() || !n->texture_file_replacements.empty()) {
-      // The mesh list may prefer a DDS sidecar while the resource names the
-      // original image. Match the path without the extension.
-      auto key = [](std::string path) {
-        std::replace(path.begin(), path.end(), '\\', '/');
-        for (char &c : path)
-          c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        const auto slash = path.find_last_of('/');
-        const auto dot = path.find_last_of('.');
-        if (dot != std::string::npos &&
-            (slash == std::string::npos || dot > slash))
-          path.resize(dot);
-        const auto game = path.rfind("game/");
-        if (game != std::string::npos)
-          path = path.substr(game + 5);
-        return path;
-      };
-      const auto paint = key(scene_instances_texture(n->paint_source));
+      // Match paths without the extension (texture_key); the mesh side is
+      // cached per mesh (#268).
+      const auto& keys = mesh_texture_keys(instance.geometry);
+      const auto paint = texture_key(scene_instances_texture(n->paint_source));
       if (!paint.empty()) {
-        for (size_t i = 0; i < instance.geometry->textures.size(); ++i) {
-          if (key(instance.geometry->textures[i]) == paint) {
+        for (size_t i = 0; i < keys.size(); ++i) {
+          if (keys[i] == paint) {
             instance.paint_slot = static_cast<int>(i);
             break;
           }
         }
       }
       for (const auto& [from, to] : n->texture_replacements) {
-        const auto source = key(scene_instances_texture(from));
+        const auto source = texture_key(scene_instances_texture(from));
         if (source.empty()) continue;
-        for (size_t i = 0; i < instance.geometry->textures.size(); ++i)
-          if (source == key(instance.geometry->textures[i]))
+        for (size_t i = 0; i < keys.size(); ++i)
+          if (source == keys[i])
             instance.texture_replacements.emplace_back(i, scene_instances_texture(to));
       }
       for (const auto& [from, path] : n->texture_file_replacements) {
-        const auto source = key(scene_instances_texture(from));
+        const auto source = texture_key(scene_instances_texture(from));
         if (source.empty()) continue;
-        for (size_t i = 0; i < instance.geometry->textures.size(); ++i)
-          if (source == key(instance.geometry->textures[i]))
+        for (size_t i = 0; i < keys.size(); ++i)
+          if (source == keys[i])
             instance.texture_replacements.emplace_back(i, path);
       }
       if (n->paint_texture)
@@ -2030,6 +2166,7 @@ struct FrameCharacter {
   std::vector<float> skin;
   std::shared_ptr<const ScxGeometry> geometry;
   bool gpu_skin = false;
+  bool pending = false;  // reserved by a palette batch, not built yet (#268)
 };
 std::unordered_map<void*, FrameCharacter> g_frame_characters;
 
@@ -2040,6 +2177,7 @@ const std::vector<SceneInstance>& world_instances(std::vector<SceneInstance>& lo
     return local;
   }
   if (!g_frame_world_valid || g_frame_world_root != g_world) {
+    perf::Scope scope(perf::Zone::WorldList);
     g_frame_world = collect_root(g_world, true);
     g_frame_world_root = g_world;
     g_frame_world_valid = true;
@@ -2099,6 +2237,33 @@ void scene_instances_frame_cache(bool enabled) {
 void scene_instances_set_size_filter(SceneSizeFilter test, void* user) {
   g_size_filter = test;
   g_size_filter_user = user;
+}
+
+void scene_instances_set_lod_view(const ScenePropLodView& view) {
+  g_lod_view = view;
+  if (view.update) ++g_lod_epoch;
+}
+
+int scene_prop_lod_level(int current, float size, const std::vector<float>& thresholds,
+                         float hysteresis) {
+  const int count = static_cast<int>(thresholds.size());
+  if (!std::isfinite(size)) return count;
+  if (current < 0 || current > count) {
+    int level = 0;
+    while (level < count && size >= thresholds[static_cast<size_t>(level)]) ++level;
+    return level;
+  }
+  const float h = std::max(hysteresis, 1.f);
+  int level = current;
+  while (level < count && size >= thresholds[static_cast<size_t>(level)] * h) ++level;
+  while (level > 0 && size < thresholds[static_cast<size_t>(level - 1)] / h) --level;
+  return level;
+}
+
+size_t scene_instances_lod_placements() {
+  size_t count = 0;
+  for (const auto& [id, map] : g_ground_props) count += map.lods.size();
+  return count;
 }
 
 namespace {
@@ -2206,10 +2371,73 @@ std::shared_ptr<const ScxGeometry> signal_geometry(GroundPropMap &map) {
   map.signal_stamp = stamp;
   return map.signal_geometry = merged;
 }
-bool night_props_visible() {
-  const float seconds = std::fmod(scene_sun_time(), 86400.f);
-  const float hour = (seconds < 0.f ? seconds + 86400.f : seconds) / 3600.f;
-  return hour < 6.f || hour >= 18.5f;
+bool night_props_visible() { return scene_sun_is_night(); }
+
+// Brings the map's world cache to `shell` (#260). Ground shells do not move,
+// so this runs once per shell instead of a matrix product per placement and
+// frame.
+void refresh_world_cache(GroundPropMap& map, const PartMatrix& shell) {
+  if (map.world_cache_valid && map.cached_shell == shell) return;
+  for (auto& [key, cell] : map.cells) {
+    cell.world_center = transform_point(shell, cell.center);
+    for (auto& prop : cell.props) {
+      prop.world_center = transform_point(shell, prop.center);
+      prop.render_matrix = part_matrix_multiply(shell, prop.pose);
+      for (int col = 0; col < 4; ++col)
+        for (int row = 0; row < 4; ++row)
+          if ((col == 2) != (row == 2)) prop.render_matrix[col * 4 + row] *= -1.f;
+    }
+  }
+  map.cached_shell = shell;
+  map.world_cache_valid = true;
+}
+
+// Frustum test of a script-space sphere (planes are render space).
+bool sphere_visible(const SceneFrustum* frustum, const std::array<float, 3>& world, float radius) {
+  if (!frustum) return true;
+  for (const auto& plane : *frustum)
+    if (plane[0] * world[0] + plane[1] * world[1] - plane[2] * world[2] + plane[3] < -radius)
+      return false;
+  return true;
+}
+
+// Whether `prop` draws at its placement's current LOD (#252).
+// The batch loop calls this from several jobs at once (#266). A placement's
+// level and epoch are read and written through atomic_ref: two jobs may meet
+// the same placement (both chain members), and scene_prop_lod_level is
+// idempotent (the level it returns maps to itself for the same size), so a
+// job that reads a level another job has just stored still gets the same
+// answer, and the frame's choices match a serial loop's.
+bool prop_lod_visible(GroundPropMap& map, const GroundProp& prop, const PartMatrix& shell) {
+  if (prop.lod_min < 0 || prop.lod_index < 0 ||
+      static_cast<size_t>(prop.lod_index) >= map.lods.size())
+    return true;
+  auto& entry = map.lods[static_cast<size_t>(prop.lod_index)];
+  int level = static_cast<int>(entry.sizes.size());
+  if (g_lod_view.valid && !g_lod_view.force_highest) {
+    std::atomic_ref<int> stored_level(entry.level);
+    std::atomic_ref<uint64_t> stored_epoch(entry.epoch);
+    const uint64_t epoch = stored_epoch.load(std::memory_order_acquire);
+    const int previous = stored_level.load(std::memory_order_relaxed);
+    if (previous >= 0 && (!g_lod_view.update || epoch == g_lod_epoch)) {
+      // Chosen this frame (the other chain member, the other collection
+      // path) or a non-updating pass reusing the main view's choice.
+      level = previous;
+    } else {
+      const auto world = transform_point(shell, entry.center);
+      const float dx = world[0] - g_lod_view.eye[0], dy = world[1] - g_lod_view.eye[1],
+                  dz = world[2] - g_lod_view.eye[2];
+      const float distance = std::sqrt(dx * dx + dy * dy + dz * dz) *
+                             std::clamp(g_lod_view.bias, .1f, 10.f);
+      level = scene_prop_lod_level(previous, entry.radius / std::max(distance, .01f),
+                                   entry.sizes);
+      if (g_lod_view.update) {
+        stored_level.store(level, std::memory_order_relaxed);
+        stored_epoch.store(g_lod_epoch, std::memory_order_release);
+      }
+    }
+  }
+  return level >= prop.lod_min && level <= prop.lod_max;
 }
 }
 
@@ -2223,17 +2451,82 @@ bool scene_instances_has_ground_props() {
   return false;
 }
 
+// Fewer visible cells than this keep the batch loop on the host thread (#266).
+constexpr size_t kParallelCellMin = 16;
+constexpr size_t kParallelThreadMin = 4;
+// Fewer new walker palettes than this are built on the host thread (#268).
+constexpr size_t kParallelSkinMin = 8;
+
 std::vector<SceneInstance> scene_instances_collect(
     const SceneFrustum* frustum,
-    std::vector<std::shared_ptr<const ScxGeometry>>* resident_props) {
+    std::vector<std::shared_ptr<const ScxGeometry>>* resident_props,
+    bool complete_character_palettes, std::vector<SceneBatch>* night_batches) {
   std::vector<SceneInstance> out;
-  if (const auto& world = world_instances(out); &world != &out) out = world;
+  // Night layout (#264): entries keep their instance vectors' capacity.
+  size_t night_total = 0;
+  if (night_batches)
+    for (auto& batch : *night_batches) batch.instances.clear();
+  // Copying the frame's world list measured at ~0 in the harness (#260):
+  // taking it instead would make later collections (reflections, shadows)
+  // rebuild it, so it is copied.
+  if (const auto& world = world_instances(out); &world != &out) {
+    perf::Scope scope(perf::Zone::WorldCopy);
+    out = world;
+  }
   // Walkers outside this view keep an empty palette; the renderer skips them.
-  for (auto& instance : out)
-    if (instance.gpu_skin && instance.skin.empty() &&
-        (!frustum || character_in_view(instance, *frustum)))
-      complete_skin(instance);
-  if (g_ground_props.empty()) return out;
+  if (complete_character_palettes) {
+    perf::Scope skin_scope(perf::Zone::CollectSkins);
+    // Palettes new this frame are built on the job pool (#268): the host
+    // thread finds or loads each character first, every job then rebuilds a
+    // different character into its own instance, and the host thread
+    // publishes them in order. Other views copy the frame's palette.
+    struct Fresh {
+      SceneInstance* instance;
+      void* prepared;
+      bool skinned = false;
+    };
+    static std::vector<Fresh> fresh;  // host thread only, capacity kept
+    fresh.clear();
+    std::vector<SceneInstance*> repeats;
+    for (auto& instance : out) {
+      if (!instance.gpu_skin || !instance.skin.empty() ||
+          (frustum && !character_in_view(instance, *frustum)))
+        continue;
+      auto [found, added] = g_frame_characters.try_emplace(instance.key);
+      if (!added) {
+        if (found->second.pending) repeats.push_back(&instance);
+        else {
+          instance.skin = found->second.skin;
+          instance.geometry = found->second.geometry;
+          instance.gpu_skin = found->second.gpu_skin;
+        }
+        continue;
+      }
+      found->second.pending = true;
+      fresh.push_back({&instance, character_skin_prepare(instance.key, instance.type_id,
+                                                         *g_resources)});
+    }
+    const auto build = [&](size_t i) {
+      fresh[i].skinned = skin_palette_prepared(*fresh[i].instance, fresh[i].prepared);
+    };
+    if (fresh.size() >= kParallelSkinMin && jobs_concurrency() >= kParallelThreadMin)
+      jobs_parallel_for(fresh.size(), build);
+    else
+      for (size_t i = 0; i < fresh.size(); ++i) build(i);
+    for (auto& item : fresh) {
+      auto& instance = *item.instance;
+      if (!item.skinned)
+        if (auto posed = character_posed(instance.key, instance.type_id,
+                                         instance.geometry.get(), *g_resources))
+          instance.geometry = std::move(posed);
+      g_frame_characters[instance.key] = {instance.skin, instance.geometry, instance.gpu_skin};
+    }
+    for (auto* instance : repeats) complete_skin(*instance);
+  }
+  if (g_ground_props.empty()) {
+    if (night_batches) night_batches->clear();
+    return out;
+  }
   const size_t base_count = out.size();
   for (size_t i = 0; i < base_count; ++i) {
     const auto found = g_ground_props.find(static_cast<uint32_t>(out[i].type_id));
@@ -2243,15 +2536,19 @@ std::vector<SceneInstance> scene_instances_collect(
     if (resident_props)
       for (const auto id : found->second.resources)
         if (auto mesh = geometry(id)) resident_props->push_back(std::move(mesh));
-    const auto visible = [&](const std::array<float, 3>& center, float radius) {
-      if (!frustum) return true;
-      const auto world = transform_point(shell, center);
-      for (const auto& plane : *frustum)
-        if (plane[0] * world[0] + plane[1] * world[1] - plane[2] * world[2] + plane[3] < -radius)
-          return false;
-      return true;
-    };
+    refresh_world_cache(found->second, shell);
     const SceneSun lighting = out[i].lighting;
+    const size_t night_offset = night_total;
+    if (night_batches) {
+      const auto& meshes = found->second.night_geometry;
+      night_total += meshes.size();
+      if (night_batches->size() < night_total) night_batches->resize(night_total);
+      for (size_t slot = 0; slot < meshes.size(); ++slot) {
+        auto& batch = (*night_batches)[night_offset + slot];
+        if (batch.geometry != meshes[slot]) batch.geometry = meshes[slot];
+        batch.lighting = lighting;
+      }
+    }
     auto glow = signal_geometry(found->second);
     if (glow && !glow->indices.empty()) {
       SceneInstance instance;
@@ -2266,116 +2563,176 @@ std::vector<SceneInstance> scene_instances_collect(
       out.push_back(std::move(instance));
     }
     for (const auto& [key, cell] : found->second.cells) {
-        if (!visible(cell.center, cell.radius)) continue;
-        if (g_size_filter) {
-          const auto cell_world = transform_point(shell, cell.center);
-          if (!g_size_filter(cell_world.data(), cell.radius, g_size_filter_user)) continue;
-        }
+        if (!sphere_visible(frustum, cell.world_center, cell.radius)) continue;
+        if (g_size_filter &&
+            !g_size_filter(cell.world_center.data(), cell.radius, g_size_filter_user)) continue;
         for (const auto& prop : cell.props) {
           if (prop.signal || prop.batched || prop.hidden || (prop.night_only && !night_props_visible())) continue;
-          if (!visible(prop.center, prop.radius)) continue;
-          if (g_size_filter) {
-            const auto prop_world = transform_point(shell, prop.center);
-            if (!g_size_filter(prop_world.data(), prop.radius, g_size_filter_user)) continue;
+          if (!prop_lod_visible(found->second, prop, shell)) continue;
+          if (!sphere_visible(frustum, prop.world_center, prop.radius)) continue;
+          if (g_size_filter &&
+              !g_size_filter(prop.world_center.data(), prop.radius, g_size_filter_user)) continue;
+          if (night_batches && prop.night_only && prop.night_slot >= 0) {
+            auto& batch = (*night_batches)[night_offset + static_cast<size_t>(prop.night_slot)];
+            if (batch.geometry) batch.instances.push_back({prop.render_matrix, prop.color});
+            continue;
           }
           auto mesh = geometry(prop.render_id);
           if (!mesh) continue;
           SceneInstance instance;
           instance.cull_backfaces = true;
+          instance.ground_prop = true;
           instance.type_id = static_cast<int32_t>(prop.render_id);
           instance.color = prop.color;
           instance.emissive_overlay = prop.night_only;
           instance.lighting = lighting;
           instance.geometry = std::move(mesh);
-          instance.transform = part_matrix_multiply(shell, prop.pose);
-          for (int col = 0; col < 4; ++col)
-            for (int row = 0; row < 4; ++row)
-              if ((col == 2) != (row == 2)) instance.transform[col * 4 + row] *= -1.f;
+          instance.transform = prop.render_matrix;
           out.push_back(std::move(instance));
         }
       }
   }
+  if (night_batches) night_batches->resize(night_total);
   return out;
 }
+
 
 void scene_instances_collect_batches(const SceneFrustum* frustum,
                                      std::vector<SceneBatch>& out,
                                      const float* reflection_origin) {
-  out.clear();
-  if (g_ground_props.empty()) return;
+  if (g_ground_props.empty()) {
+    out.clear();
+    return;
+  }
   std::vector<SceneInstance> local;
-  // One batch per mesh and shell, whatever cell its placements come from.
-  std::unordered_map<uint64_t, size_t> batch_of;
+  // Persistent layout (#260): one entry per batchable mesh and shell, in
+  // shell order, kept in `out` across frames (its instance vectors keep their
+  // capacity). Entries may be empty; consumers skip empty batches.
+  struct Shell {
+    GroundPropMap* map;
+    PartMatrix shell;
+    const SceneInstance* base;
+    size_t offset;
+  };
+  std::vector<Shell> shells;
+  size_t total = 0;
   for (const auto& base : world_instances(local)) {
     const auto found = g_ground_props.find(static_cast<uint32_t>(base.type_id));
     if (found == g_ground_props.end()) continue;
     PartMatrix shell;
     if (!scene_instances_script_matrix(base.key, shell.data())) continue;
-    const auto visible = [&](const std::array<float, 3>& center, float radius) {
-      if (!frustum) return true;
-      const auto world = transform_point(shell, center);
-      for (const auto& plane : *frustum)
-        if (plane[0] * world[0] + plane[1] * world[1] - plane[2] * world[2] + plane[3] < -radius)
-          return false;
-      return true;
-    };
-    for (const auto& [key, cell] : found->second.cells) {
-      (void)key;
-      if (cell.batches.empty() || !visible(cell.center, cell.radius)) continue;
-      if (g_size_filter) {
-        const auto cell_world = transform_point(shell, cell.center);
-        if (!g_size_filter(cell_world.data(), cell.radius, g_size_filter_user)) continue;
+    refresh_world_cache(found->second, shell);
+    shells.push_back({&found->second, shell, &base, total});
+    total += found->second.batch_ids.size();
+  }
+  bool same_layout = out.size() == total;
+  for (size_t s = 0; same_layout && s < shells.size(); ++s)
+    for (size_t slot = 0; slot < shells[s].map->batch_geometry.size(); ++slot)
+      if (out[shells[s].offset + slot].geometry != shells[s].map->batch_geometry[slot]) {
+        same_layout = false;
+        break;
       }
-      for (const auto& batch : cell.batches) {
-        const uint64_t batch_key = (static_cast<uint64_t>(static_cast<uint32_t>(base.type_id)) << 32) |
-                                   batch.render_id;
-        const auto existing = batch_of.find(batch_key);
-        auto mesh = existing != batch_of.end() ? out[existing->second].geometry
-                                               : geometry(batch.render_id);
-        if (!mesh) continue;
-        float extent = 0.f;
-        if (reflection_origin) {
-          const float scale = mesh->position_scale;
-          for (int axis = 0; axis < 3; ++axis)
-            extent = std::max(extent,
-                (mesh->info.bbox_max[axis] - mesh->info.bbox_min[axis]) * scale);
-        }
-        SceneBatch fresh;
-        SceneBatch& draw = existing != batch_of.end() ? out[existing->second] : fresh;
-        if (existing == batch_of.end()) {
-          draw.geometry = std::move(mesh);
-          draw.lighting = base.lighting;
-          draw.instances.reserve(batch.indices.size());
-        }
-        for (const auto index : batch.indices) {
-          if (index >= cell.props.size()) continue;
-          const auto& prop = cell.props[index];
-          if (prop.hidden || (prop.night_only && !night_props_visible()) ||
-              !visible(prop.center, prop.radius)) continue;
-          if (g_size_filter) {
-            const auto prop_world = transform_point(shell, prop.center);
-            if (!g_size_filter(prop_world.data(), prop.radius, g_size_filter_user)) continue;
-          }
-          auto matrix = part_matrix_multiply(shell, prop.pose);
-          for (int col = 0; col < 4; ++col)
-            for (int row = 0; row < 4; ++row)
-              if ((col == 2) != (row == 2)) matrix[col * 4 + row] *= -1.f;
-          if (reflection_origin && extent > 0.f) {
-            const float dx = matrix[12] - reflection_origin[0];
-            const float dy = matrix[13] - reflection_origin[1];
-            const float dz = matrix[14] - reflection_origin[2];
-            const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-            if (dist > 12.f && extent / dist * 128.f < 4.f) continue;
-          }
-          draw.instances.push_back({matrix, prop.color});
-        }
-        if (existing == batch_of.end() && !draw.instances.empty()) {
-          batch_of.emplace(batch_key, out.size());
-          out.push_back(std::move(fresh));
-        }
+  if (!same_layout) {
+    out.resize(total);
+    for (const auto& entry : shells)
+      for (size_t slot = 0; slot < entry.map->batch_geometry.size(); ++slot)
+        out[entry.offset + slot].geometry = entry.map->batch_geometry[slot];
+  }
+  for (const auto& entry : shells)
+    for (size_t slot = 0; slot < entry.map->batch_geometry.size(); ++slot) {
+      auto& draw = out[entry.offset + slot];
+      draw.instances.clear();
+      draw.lighting = entry.base->lighting;
+    }
+  // Visible cells in serial order (#266). The placement loop runs on the
+  // job pool over contiguous runs of this list, and the runs are appended in
+  // order, so every batch lists its placements as the serial loop did.
+  struct VisibleCell {
+    const Shell* shell;
+    const GroundPropCell* cell;
+  };
+  static std::vector<VisibleCell> cells;  // host thread only, capacity kept
+  cells.clear();
+  for (const auto& entry : shells)
+    for (const auto& [key, cell] : entry.map->cells) {
+      (void)key;
+      if (cell.batches.empty() || !sphere_visible(frustum, cell.world_center, cell.radius)) continue;
+      if (g_size_filter &&
+          !g_size_filter(cell.world_center.data(), cell.radius, g_size_filter_user)) continue;
+      cells.push_back({&entry, &cell});
+    }
+  if (cells.empty()) return;
+  const bool night = night_props_visible();
+  // A few runs per thread balance uneven cells. Tiny lists, and machines with
+  // fewer than kParallelThreadMin threads (the bgfx render thread and the
+  // walker stepper need theirs; on two cores the pool was slower), stay on
+  // this thread.
+  const size_t threads = jobs_concurrency();
+  const size_t runs = cells.size() < kParallelCellMin || threads < kParallelThreadMin
+      ? 1 : std::min(cells.size(), threads * 4);
+  const auto run_cells = [&](size_t run) {
+    return std::pair<size_t, size_t>{cells.size() * run / runs, cells.size() * (run + 1) / runs};
+  };
+  // Placements past the per-placement flags, as the serial loop tested them.
+  const auto each_candidate = [&](const VisibleCell& visible, auto&& visit) {
+    const auto& map = *visible.shell->map;
+    for (const auto& batch : visible.cell->batches) {
+      if (batch.slot >= map.batch_geometry.size()) continue;
+      const auto& draw = out[visible.shell->offset + batch.slot];
+      if (!draw.geometry) continue;
+      for (const auto index : batch.indices) {
+        if (index >= visible.cell->props.size()) continue;
+        const auto& prop = visible.cell->props[index];
+        if (prop.hidden || (prop.night_only && !night)) continue;
+        visit(batch, draw, prop);
       }
     }
-  }
+  };
+  struct Hit {
+    uint32_t slot;
+    const GroundProp* prop;
+  };
+  static std::vector<std::vector<Hit>> hit_runs;
+  if (hit_runs.size() < runs) hit_runs.resize(runs);
+  jobs_parallel_for(runs, [&](size_t run) {
+    auto& list = hit_runs[run];
+    list.clear();
+    const auto [first, last] = run_cells(run);
+    for (size_t i = first; i < last; ++i) {
+      const auto& visible = cells[i];
+      const SceneBatch* extent_of = nullptr;
+      float extent = 0.f;
+      each_candidate(visible, [&](const GroundPropBatch& batch, const SceneBatch& draw,
+                                  const GroundProp& prop) {
+        if (reflection_origin && extent_of != &draw) {
+          extent_of = &draw;
+          extent = 0.f;
+          const auto& mesh = *draw.geometry;
+          for (int axis = 0; axis < 3; ++axis)
+            extent = std::max(extent, (mesh.info.bbox_max[axis] - mesh.info.bbox_min[axis]) *
+                                          mesh.position_scale);
+        }
+        // LOD first (#257): the non-selected chain member costs one cached
+        // lookup instead of a frustum test.
+        if (!prop_lod_visible(*visible.shell->map, prop, visible.shell->shell) ||
+            !sphere_visible(frustum, prop.world_center, prop.radius)) return;
+        if (g_size_filter &&
+            !g_size_filter(prop.world_center.data(), prop.radius, g_size_filter_user)) return;
+        const auto& matrix = prop.render_matrix;
+        if (reflection_origin && extent > 0.f) {
+          const float dx = matrix[12] - reflection_origin[0];
+          const float dy = matrix[13] - reflection_origin[1];
+          const float dz = matrix[14] - reflection_origin[2];
+          const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+          if (dist > 12.f && extent / dist * 128.f < 4.f) return;
+        }
+        list.push_back({static_cast<uint32_t>(visible.shell->offset + batch.slot), &prop});
+      });
+    }
+  });
+  for (size_t run = 0; run < runs; ++run)
+    for (const auto& hit : hit_runs[run])
+      out[hit.slot].instances.push_back({hit.prop->render_matrix, hit.prop->color});
 }
 
 void scene_instances_override_mesh(uint32_t id,
@@ -2522,6 +2879,16 @@ GroundMapData scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id
   geo->info.groups = static_cast<int32_t>(geo->groups.size());
   if (geo->indices.empty())
     return map;
+  // POLY positions are already in script metres. The SCY is only a material
+  // table, so no SCX decoder supplies bounds for this assembled map mesh.
+  // Shadow cascades must cull the geometry, not a zero-size box at its origin.
+  for (int axis = 0; axis < 3; ++axis) {
+    geo->info.bbox_min[axis] = geo->info.bbox_max[axis] = geo->positions[axis];
+    for (size_t i = 3 + axis; i < geo->positions.size(); i += 3) {
+      geo->info.bbox_min[axis] = std::min(geo->info.bbox_min[axis], geo->positions[i]);
+      geo->info.bbox_max[axis] = std::max(geo->info.bbox_max[axis], geo->positions[i]);
+    }
+  }
   jobs_printf("[scene] ground poly 0x%x tris=%d materials=%zu\n", map.render_id,
               geo->info.triangles, mats.size());
   map.poly = std::move(geo);
@@ -2694,6 +3061,11 @@ void build_prop_batches(GroundPropCell& cell, const std::unordered_set<uint32_t>
 }
 }
 
+SceneryLightList scene_instances_ground_lights(uint32_t render_id) {
+  const auto found = g_ground_props.find(render_id);
+  return found == g_ground_props.end() ? nullptr : found->second.lights;
+}
+
 void scene_instances_add_ground_props(const GroundMapData& map) {
   if (!g_resources || map.placements.empty() || g_ground_props.contains(map.render_id))
     return;
@@ -2710,6 +3082,10 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
   };
   size_t props = 0;
   std::unordered_set<uint32_t> used_resources;
+  // Light children per object type, in the object's frame (#237). The RPK
+  // entry's typeof (13) marks a light; the mesh filter below would drop them.
+  std::unordered_map<uint32_t, std::vector<SceneryLight>> type_lights;
+  std::unordered_map<uint32_t, std::optional<LightResource>> light_resources;
   {
     // A type's CFG and collision meshes only read packs and files. Prepare
     // the map's types on the job pool, then place them in map order.
@@ -2728,10 +3104,37 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
     for (size_t i = 0; i < types.size(); ++i) {
       if (build[i]) g_native_collision.emplace(types[i], std::move(collisions[i]));
       auto& renders = (object_types[types[i]] = std::move(configs[i])).renders;
+      for (const auto& render : renders) {
+        if (!render.variants.empty() || !is_light_resource(*g_resources, render.resource))
+          continue;
+        auto [cached, unseen] = light_resources.try_emplace(render.resource);
+        if (unseen) cached->second = load_light_resource(*g_resources, render.resource);
+        if (!cached->second) continue;
+        const auto& resource = *cached->second;
+        const auto frame = part_pose_matrix(render.pose);
+        SceneryLight light;
+        light.position = transform_point(frame, resource.position);
+        const auto& d = resource.direction;
+        light.direction = {frame[0] * d[0] + frame[4] * d[1] + frame[8] * d[2],
+                           frame[1] * d[0] + frame[5] * d[1] + frame[9] * d[2],
+                           frame[2] * d[0] + frame[6] * d[1] + frame[10] * d[2]};
+        light.color = resource.diffuse;
+        light.range = resource.range;
+        light.attenuation = resource.attenuation;
+        light.group = render.flags;
+        light.resource = render.resource;
+        light.lights_scene = light_resource_lights_scene(resource.type);
+        light.spot = resource.type == LightResourceType::Spot ||
+                     resource.type == LightResourceType::FakeSpot;
+        type_lights[types[i]].push_back(light);
+      }
       std::erase_if(renders, [&](const PartRender& render) {
         return render.variants.empty() ? !is_visible(render.resource)
             : std::none_of(render.variants.begin(), render.variants.end(), is_visible);
       });
+      // A type with stock `lods` thresholds keeps its whole LOD chain (#252);
+      // one with `lod` lines but no thresholds keeps only its highest LOD.
+      if (!object_types[types[i]].lod_sizes.empty()) continue;
       const auto score = [](const PartRender& render) {
         return std::pair{render.lod_level + render.lod_last, render.lod_last};
       };
@@ -2751,9 +3154,21 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
     PartMatrix pose;
   };
   std::vector<CollisionBake> bakes;
+  std::vector<SceneryLight> lights;
   for (const auto& placement : map.placements) {
     const auto type = object_types.find(placement.type);
     const auto pose = part_pose_matrix({placement.position, placement.rotation});
+    // A dynamic placement's light stays at the authored pose when it is
+    // knocked over; lights do not follow promoted bodies.
+    if (const auto found = type_lights.find(placement.type); found != type_lights.end())
+      for (auto light : found->second) {
+        const auto& d = light.direction;
+        light.direction = {pose[0] * d[0] + pose[4] * d[1] + pose[8] * d[2],
+                           pose[1] * d[0] + pose[5] * d[1] + pose[9] * d[2],
+                           pose[2] * d[0] + pose[6] * d[1] + pose[10] * d[2]};
+        light.position = transform_point(pose, light.position);
+        lights.push_back(light);
+      }
     const auto& collision = native_collision_data(*g_resources, placement.type,
                                                   &type->second);
     const auto& p = placement.position;
@@ -2798,16 +3213,31 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
           props_map.collision_shapes.add_sphere(frame, body.sphere_radius);
       }
     if (type->second.renders.empty()) continue;
+    int32_t lod_index = -1;
     for (const auto& render : type->second.renders) {
       const auto resource = render.variants.empty() ? render.resource
           : render.variants[seed % render.variants.size()];
       if (!is_visible(resource)) continue;
+      const bool lod_render = render.lod_level >= 0 && !type->second.lod_sizes.empty();
+      if (lod_render && lod_index < 0) {
+        lod_index = static_cast<int32_t>(props_map.lods.size());
+        PlacementLod entry;
+        entry.center = {pose[12], pose[13], pose[14]};
+        entry.sizes = type->second.lod_sizes;
+        props_map.lods.push_back(std::move(entry));
+      }
       const auto color = render.colors.empty() ? 0xffffffu : render.colors[seed % render.colors.size()];
       const auto transform = part_matrix_multiply(pose, part_pose_matrix(render.pose));
       auto& render_cell = cells[floor_cell(prop_cell(transform[12]), prop_cell(transform[14]))];
       render_cell.props.push_back({resource, transform, color});
       render_cell.props.back().dormant = dormant_index;
       render_cell.props.back().night_only = ground_prop_is_night(*g_resources, resource);
+      if (lod_render) {
+        render_cell.props.back().lod_min = static_cast<int8_t>(std::clamp(render.lod_level, 0, 127));
+        render_cell.props.back().lod_max =
+            static_cast<int8_t>(std::clamp(std::max(render.lod_last, render.lod_level), 0, 127));
+        render_cell.props.back().lod_index = lod_index;
+      }
       if(type->second.native_kind=="trlight"){
         render_cell.props.push_back({resource,pose,0xffffff});auto&glow=render_cell.props.back();glow.signal=true;glow.signal_position=placement.position;
       }
@@ -2823,6 +3253,11 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
     });
   }
   props_map.resources.assign(used_resources.begin(), used_resources.end());
+  if (!lights.empty()) {
+    props_map.lights = std::make_shared<const std::vector<SceneryLight>>(std::move(lights));
+    jobs_printf("[scene] ground 0x%x scenery lights=%zu\n", map.render_id,
+                props_map.lights->size());
+  }
   preload_meshes(props_map.resources);
   for (auto& [key, cell] : cells) {
     std::array<float, 3> lower, upper;
@@ -2847,6 +3282,15 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
         upper[axis] = std::max(upper[axis], prop.center[axis] + prop.radius);
       }
     }
+    // LOD radius of each placement: the sphere around its origin that holds
+    // every one of its LOD renders, so all its levels switch together.
+    for (const auto& prop : cell.props) {
+      if (prop.lod_index < 0) continue;
+      auto& entry = props_map.lods[static_cast<size_t>(prop.lod_index)];
+      const float dx = prop.center[0] - entry.center[0], dy = prop.center[1] - entry.center[1],
+                  dz = prop.center[2] - entry.center[2];
+      entry.radius = std::max(entry.radius, std::sqrt(dx * dx + dy * dy + dz * dz) + prop.radius);
+    }
     if (cell.props.empty()) continue;
     for (int axis = 0; axis < 3; ++axis) cell.center[axis] = (lower[axis] + upper[axis]) * .5f;
     cell.radius = .5f * std::hypot(upper[0] - lower[0], upper[1] - lower[1], upper[2] - lower[2]);
@@ -2862,6 +3306,33 @@ void scene_instances_add_ground_props(const GroundMapData& map) {
   for (auto& [key, cell] : cells)
     if (!cell.props.empty()) jobs.push_back(&cell);
   jobs_parallel_for(jobs.size(), [&](size_t job) { build_prop_batches(*jobs[job], batchable); });
+  // Persistent batch layout (#260): a slot per batchable mesh of this map.
+  {
+    std::unordered_map<uint32_t, uint32_t> slot_of;
+    for (auto& [key, cell] : cells)
+      for (auto& batch : cell.batches) {
+        const auto [found, added] =
+            slot_of.try_emplace(batch.render_id, static_cast<uint32_t>(props_map.batch_ids.size()));
+        if (added) {
+          props_map.batch_ids.push_back(batch.render_id);
+          props_map.batch_geometry.push_back(geometry(batch.render_id));
+        }
+        batch.slot = found->second;
+      }
+    std::unordered_map<uint32_t, uint32_t> night_slot_of;
+    for (auto& [key, cell] : cells)
+      for (auto& prop : cell.props) {
+        if (!prop.night_only || prop.signal) continue;
+        const auto [found, added] = night_slot_of.try_emplace(
+            prop.render_id, static_cast<uint32_t>(props_map.night_ids.size()));
+        if (added) {
+          props_map.night_ids.push_back(prop.render_id);
+          props_map.night_geometry.push_back(geometry(prop.render_id));
+        }
+        prop.night_slot = static_cast<int32_t>(found->second);
+      }
+    props_map.world_cache_valid = false;
+  }
   std::erase_if(cells, [](const auto& entry) { return entry.second.props.empty(); });
   merge_static_meshes(props_map.collision_meshes);
   if (!props_map.collision_meshes.empty() || props_map.collision_shapes.size()) {

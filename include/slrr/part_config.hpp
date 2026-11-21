@@ -123,6 +123,10 @@ struct PartConfig {
   std::vector<PartSlot> slots;
   std::vector<uint32_t> stock;
   std::vector<PartRender> renders;
+  // `lods N s0 s1 ...` (map objects): the size ratios at which the object
+  // switches to LOD level 1, 2, ... (ascending). Renders choose their levels
+  // with `lod first last`. Empty when the cfg has no `lods` line.
+  std::vector<float> lod_sizes;
   VehicleHudLayout hud{};
   std::vector<std::string> unknown;
   std::vector<std::string> errors;

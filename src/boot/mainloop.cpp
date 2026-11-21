@@ -223,7 +223,20 @@ void mainloop_sync_section_render(IRenderBackend& render,
   if (!world) world = object_field("Scene");
   if (!world && !inset_preview)
     if (GameRefState* cam = fullscreen_script_camera()) world = cam->parent;
-  scene_instances_select(world, object_field("skydome"), world && world == car_preview);
+  auto environment = SceneEnvironment::Automatic;
+  if (actual) {
+    const auto internal = actual->fields.find("internalScene");
+    if (internal != actual->fields.end() && internal->second.tag == ValueTag::Int)
+      environment = internal->second.v.i ? SceneEnvironment::Interior
+                                         : SceneEnvironment::Exterior;
+    else if (const auto* sun = gameref_get(object_field("sun"));
+             sun && !sun->empty && sun->parent == world)
+      // Unassigned Java int fields may be absent from the sparse host object.
+      // Scene.addSceneElements has already materialized its exterior intent.
+      environment = SceneEnvironment::Exterior;
+  }
+  scene_instances_select(world, object_field("skydome"), world && world == car_preview,
+                         environment);
   const bool in_garage =
       actual && actual->class_name.find("Garage") != std::string::npos;
   scene_instances_enable_static_floor(in_garage);

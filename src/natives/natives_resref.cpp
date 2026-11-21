@@ -105,6 +105,9 @@ void spawn_ground_shell(Jvm& jvm, const RpkIndex& rpk, Object* ground) {
     gameref_set_type(*shell, static_cast<int32_t>(full));
     node->fields["id"] = Value::make_int(static_cast<int32_t>(full));
     gameref_set_parent(node, ground);
+    // Street lamps and other scenery lights belong to this shell and leave
+    // the registry with it (gameref_remove -> script_lights_forget_parent).
+    scenery_lights_attach(node, scene_instances_ground_lights(full));
     scene_ambience_attach(node, rpk, map);
     if (id == primary) ground->fields["_ground_shell"] = Value::make_obj(node);
     pending.insert(pending.end(), map.exterior_maps.begin(), map.exterior_maps.end());

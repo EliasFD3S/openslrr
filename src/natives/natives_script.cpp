@@ -67,6 +67,13 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           case 3: return Value::make_int(graphics.dynamic_lighting);
           case 4: return Value::make_int(graphics.local_lights);
           case 5: return Value::make_int(static_cast<int>(host_framerate_mode()));
+          case 6: return Value::make_int(graphics.anisotropic_filtering);
+          case 7: return Value::make_int(graphics.ao_method);
+          case 8: return Value::make_int(graphics.ao_quality);
+          case 9: return Value::make_int(graphics.shadow_quality);
+          case 10: return Value::make_int(graphics.shadow_smoothing);
+          case 11: return Value::make_int(graphics.ao_strength);
+          case 12: return Value::make_int(graphics.ao_radius);
           default: return Value::make_int(0);
         }
       });
@@ -87,6 +94,13 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           case 5:
             host_set_framerate_mode(value ? FramerateMode::Adaptive : FramerateMode::Classic);
             return Value::make_void();
+          case 6: graphics.anisotropic_filtering = value != 0; break;
+          case 7: graphics.ao_method=std::clamp(value,0,2);break;
+          case 8: graphics.ao_quality=std::clamp(value,0,2);break;
+          case 9: graphics.shadow_quality=std::clamp(value,0,2);break;
+          case 10: graphics.shadow_smoothing=std::clamp(value,0,2);break;
+          case 11: graphics.ao_strength=std::clamp(value,0,200);break;
+          case 12: graphics.ao_radius=std::clamp(value,25,300);break;
           default: return Value::make_void();
         }
         host_save_graphics_options();

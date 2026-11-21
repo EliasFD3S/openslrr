@@ -22,6 +22,35 @@ struct SceneMeshData {
         index_count(source.indices.size()) {}
   SceneMeshData() = default;
 };
+// Shadow depth ignores opaque colour/texture changes. Merge only adjacent
+// index ranges; retain alpha-cutout texture/channel/reference boundaries.
+inline std::vector<ScxGroup> shadow_draw_groups(const SceneMeshData& mesh) {
+  std::vector<ScxGroup> out;
+  if(mesh.groups.empty() && mesh.index_count) {
+    ScxGroup group;group.index_count=uint32_t(mesh.index_count);out.push_back(group);
+  }
+  for (auto group : mesh.groups) {
+    const auto surface=scx_surface(mesh.info.version,group);
+    if(surface.blend || !group.index_count) continue;
+    if(!surface.cutout) {
+      group.material_flags=0;group.texture_index=0xffff;
+      group.base_map={};group.alpha_reference=0;
+    }
+    if(!out.empty()) {
+      auto& previous=out.back();
+      const auto before=scx_surface(mesh.info.version,previous);
+      const bool same=surface.cutout==before.cutout &&
+          (!surface.cutout || (previous.texture_index==group.texture_index &&
+          previous.base_map.channel==group.base_map.channel &&
+          previous.alpha_reference==group.alpha_reference));
+      if(same && uint64_t(previous.index_start)+previous.index_count==group.index_start) {
+        previous.index_count+=group.index_count;continue;
+      }
+    }
+    out.push_back(group);
+  }
+  return out;
+}
 // Reordered indices are upload scratch, never retained in the GPU cache.
 struct SceneMeshUpload {
   SceneMeshData metadata;
@@ -61,7 +90,8 @@ inline bool same_material(const ScxGroup &a, const ScxGroup &b) {
                     std::begin(b.diffuse)) &&
          std::equal(std::begin(a.specular), std::end(a.specular),
                     std::begin(b.specular)) &&
-         a.shininess == b.shininess;
+         a.shininess == b.shininess &&
+         a.self_illuminated == b.self_illuminated;
 }
 inline void merge_scene_materials(SceneMeshUpload &upload,
                                   const ScxGeometry &source) {

@@ -558,8 +558,11 @@ void character_forget_all() {
 std::shared_ptr<const ScxGeometry> character_posed(void* key, int32_t type_id,
                                                    const ScxGeometry* bind,
                                                    const RpkIndex& packs) {
+  // A mesh without skin weights never poses (#268): check it before the
+  // character lookup, which inserted an entry for every render node.
+  if (!bind || bind->skin_weights.empty()) return nullptr;
   Character* character = ensure_character(key, type_id, &packs);
-  if (!character || !bind || bind->skin_weights.empty()) return nullptr;
+  if (!character) return nullptr;
   rebuild(*character, g_character_sim_time);
   if (!character->want_skin || !character->bind ||
       character->worlds.size() < character->bind->bones.size() * 16)
@@ -577,14 +580,24 @@ std::shared_ptr<const ScxGeometry> character_posed(void* key, int32_t type_id,
   return character->posed;
 }
 
+void* character_skin_prepare(void* key, int32_t type_id, const RpkIndex& packs) {
+  Character* character = ensure_character(key, type_id, &packs);
+  return character && character->bind ? character : nullptr;
+}
+
+int character_skin_palette_prepared(void* prepared, float* out, int capacity) {
+  if (!prepared || !out || capacity <= 0) return 0;
+  Character& character = *static_cast<Character*>(prepared);
+  rebuild(character, g_character_sim_time);
+  if (character.worlds.size() < character.bind->bones.size() * 16) return 0;
+  return skeleton_skin_palette(*character.bind, character.worlds.data(), out, capacity);
+}
+
 int character_skin_palette(void* key, int32_t type_id, const RpkIndex& packs,
                            float* out, int capacity) {
   if (!out || capacity <= 0) return 0;
-  Character* character = ensure_character(key, type_id, &packs);
-  if (!character || !character->bind) return 0;
-  rebuild(*character, g_character_sim_time);
-  if (character->worlds.size() < character->bind->bones.size() * 16) return 0;
-  return skeleton_skin_palette(*character->bind, character->worlds.data(), out, capacity);
+  return character_skin_palette_prepared(character_skin_prepare(key, type_id, packs), out,
+                                         capacity);
 }
 
 int character_find_bone(void* key, int32_t type_id, const RpkIndex& packs,

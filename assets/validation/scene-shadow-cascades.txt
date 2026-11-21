@@ -1,0 +1,35 @@
+#201 second increment: camera-centred radial shadow cascades
+Windows x64 Release / D3D11. Builds based on PR #202 first increment f35983c.
+
+4 distance levels: 32/100/320/1000 m, 2048-square tiles in one 4096-square D32F
+atlas (64 MiB versus previous 16 MiB). Four passes per frame replace the cached
+single map. The light-space translation snaps to tile texels; every update
+uses the current sun direction. Off-camera scenery casters are uploaded and
+retained through a one-frame retirement overlap. Main camera far clip unchanged.
+
+Production GPU pixel checks PASS (scene_shadow_gpu):
+- Each distinct atlas tile is selected at 10/70/220/700 m; lit RGB sum 534,
+  shadow 75, captured scenery 75. Per-view atlas clear isolation verified.
+- Inner transition 75 -> 309 -> 534; outer fade at 950 m 306; beyond 1 km 534.
+- Sub-texel camera motion leaves X/Y sample translation stable; a small sun
+  change updates the projection without the old angular threshold.
+- Previous single/local-light, preview/emissive and scenery/vehicle checks pass.
+Shader ownership/reopen regression PASS. Release DXBC/GLSL builds PASS.
+
+Both isolated Valocity/Baiern fixed-step 12 s smoke runs: exit 0 / 841 frames.
+Same root, map and requested time; inspected 10 s captures show longer scenery
+shadows. Pedestrians/other scheduling can vary. Not an exact deterministic FPS
+comparison, a manually driven route or proof of motion smoothness everywhere.
+Mean recorded windows 2-11 (ms except draw count):
+First increment: {'frame_avg_ms': 6.957, 'shadows_ms': 0.015, 'gpu_ms': 6.838, 'draws': 1657.1}
+Cascades: {'frame_avg_ms': 12.608, 'shadows_ms': 6.28, 'gpu_ms': 5.225, 'draws': 5757.5}
+The cost is mainly CPU shadow collection/submission; no performance gain is
+claimed. Sampling is limited to the selected and adjacent tile. Further CPU
+batching/culling work remains; do not reintroduce visible sun cache jumps.
+
+Limitations: radial coverage rather than camera-frustum-fitted splits; distant
+vehicle/skinned casters unchanged; addon/dealer detection and real local lights
+are separate work. Low-angle, moving-camera and all-scene visual validation is
+not complete. No PBR, post-processing or Scene.java workaround is introduced.
+Logs: build/issue201-cascades-{build,gpu,programs}.log;
+smoke: build/issue201-cascades-city-final/{stdout.log,stderr.log,perf.csv,t10.tga}.

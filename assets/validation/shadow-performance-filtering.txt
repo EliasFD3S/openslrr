@@ -1,0 +1,40 @@
+#201 cascade CPU optimization, thin-shadow filtering and anisotropy
+Windows x64 Release / D3D11, baseline PR #202 035f929.
+
+- Collect outer shadow candidates once; do not complete excluded character
+  palettes; cull reflected-Z transformed bounds into each nested level.
+- Cache depth draw ranges, merging adjacent opaque materials without crossing
+  blend holes or differing alpha-cutout texture/channel/reference boundaries.
+- All four cascade radii/resolutions and per-frame sun updates remain intact.
+- Replace cross-shaped four-tap comparison with symmetric nine-tap tent PCF.
+- Add off/hardware-maximum anisotropic world colour/detail sampling, default on,
+  OptionsDialog renderer key 6 and debug checkbox; save/reload in openslrr_options.
+  No individual 2x/4x/8x/16x API is advertised. Comparison maps/UI remain separate.
+
+Actual GPU receiver/cascade tests pass, including thin one-texel stripe response
+432/432/396/432/525 as it crosses the footprint (full lit/shadow 534/75).
+This checks spatial filtering, not complete temporal stability of the user's
+reported pole shadow. Manual motion validation remains necessary.
+Mesh-cache tests pass: opaque merging, blend holes, distinct cutout references/
+channels, implicit groups, revision rebuilds and resource ownership.
+Options retry/persistence test passes both native key-6 states, reload/getter,
+legacy/malformed options and coexistence with existing settings.
+Shader program ownership/reopen test passes.
+Patched OptionsDialog.java compiled: 1 attempted/1 succeeded/0 failed, 3 TUFA
+classes in its container; source and container shipped in patch and installed
+in the local game. Full interactive menu validation remains separate.
+
+Isolated Valocity/Baiern fixed-step 12 s smoke: final exit 0 / 841 frames.
+Mean recorded windows 2-11 (ms except draws), same root/map/requested time:
+Before optimization: {'frame_avg_ms': 12.608, 'shadows_ms': 6.28, 'gpu_ms': 5.225, 'draws': 5757.5}
+Optimized + anisotropy + tent PCF: {'frame_avg_ms': 9.265, 'shadows_ms': 3.309, 'gpu_ms': 4.526, 'draws': 2870.3}
+Final run includes anisotropic sampling and wider tent PCF; it is not a pure
+single-variable GPU comparison. Scheduling and pedestrians can vary. These
+local runs show lower shadow CPU/draw overhead, not a guaranteed FPS recovery
+in every scene or on the user's camera. Further optimization remains possible.
+Historical diagnostic scopes found ~4.5-6 ms outer collection with unnecessary
+character completion, versus ~1.6 ms after opting out; temporary logging removed.
+
+Logs: build/issue201-{shadow-ranges,shadow-filter,aniso-options,opt-programs}.log;
+Java: build/issue201-java-compile.log;
+smoke: build/issue201-shadow-ready/{stdout.log,stderr.log,perf.csv,t10.tga}.

@@ -250,9 +250,11 @@ SLRR_TEST(new_saves_are_readable_typed_json_with_bit_exact_streams) {
   f.close();
   const auto text = disk_text(f.root / "save/json");
   SLRR_REQUIRE(text.starts_with("{\n  \"format\": \"OpenSLRR-save\""));
-  SLRR_REQUIRE(text.find("[\"int\", -2147483648]") != std::string::npos);
-  SLRR_REQUIRE(text.find("[\"float\", -0]") != std::string::npos);
-  SLRR_REQUIRE(text.find("[\"floatBits\", 2143294004]") != std::string::npos);
+  SLRR_REQUIRE(text.find("\"version\": 2") != std::string::npos);
+  SLRR_REQUIRE(text.find("\"kind\": \"raw\"") != std::string::npos);
+  SLRR_REQUIRE(text.find("-2147483648") != std::string::npos);
+  SLRR_REQUIRE(text.find("-0.0") != std::string::npos);
+  SLRR_REQUIRE(text.find("{\"floatBits\": 2143294004}") != std::string::npos);
   SLRR_REQUIRE(f.open("save/json", 0) == 1);
   SLRR_REQUIRE(slrr::g_host_files.at(&f.file).bytes == binary);
   SLRR_REQUIRE(f.read_int() == INT32_MIN); SLRR_REQUIRE(f.read_int() == INT32_MAX);
@@ -275,7 +277,8 @@ SLRR_TEST(json_strings_preserve_byte_encoding_escapes_and_null_distinction) {
   SLRR_REQUIRE(f.write_int(42) == 4); f.close();
   const auto text_on_disk = disk_text(f.root / "save/strings");
   SLRR_REQUIRE(text_on_disk.find("\\u0080\\u00e9") != std::string::npos);
-  SLRR_REQUIRE(text_on_disk.find("[\"string\", null]") != std::string::npos);
+  SLRR_REQUIRE(text_on_disk.find("\"before\"") != std::string::npos);
+  SLRR_REQUIRE(text_on_disk.find("null") != std::string::npos);
   SLRR_REQUIRE(f.open("save/strings", 0) == 1);
   auto read = [&]() { return f.invoke("readString", "()Ljava.lang.String;", {}, &f.file).v.o; };
   auto* a = read(); SLRR_REQUIRE(a && a->str.empty());
@@ -304,8 +307,8 @@ SLRR_TEST(json_resource_paths_remount_in_a_different_session_order) {
   SLRR_REQUIRE(writer.write_resource(int32_t(0xffff0056u), 7) == 4);
   SLRR_REQUIRE(writer.write_int(99) == 4); writer.close();
   const auto text = disk_text(writer.root / "save/car");
-  SLRR_REQUIRE(text.find("[\"resource\", 65622]") != std::string::npos);
-  SLRR_REQUIRE(text.find("fixture.rpk") != std::string::npos);
+  SLRR_REQUIRE(text.find("{\"rpk\": \"fixture.rpk\", \"id\": 86}") != std::string::npos);
+  SLRR_REQUIRE(text.find("{\"blob\": 1}") != std::string::npos);
   Fixture reader;
   reader.packs.open_lib("other.rpk");
   const int mounted = reader.packs.open_lib("fixture.rpk");
@@ -390,6 +393,144 @@ SLRR_TEST(corrupt_json_and_sdat_are_rejected_instead_of_becoming_raw_payloads) {
     SLRR_REQUIRE(!slrr::g_host_files.contains(&f.file));
   }
 }
+namespace {
+// Stock Vehicle.save layout, version 5, with a chassis holding no parts.
+void write_stock_car(Fixture& f, int32_t pack_id) {
+  f.write_int(int32_t(0x88664422u)); f.write_int(5);
+  f.write_resource(int32_t(slrr::RpkIndex::make_full_id(pack_id, 3)));  // part type
+  f.write_int(1);
+  f.write_resource(0); f.write_resource(0);
+  for (float v : {0.25f, 0.5f}) f.invoke("write", "(F)I", {slrr::Value::make_float(v)}, &f.file);
+  f.write_int(-1);  // no slots; no frames, so no subclass data
+  for (int k = 0; k < 8; ++k)
+    f.invoke("write", "(F)I", {slrr::Value::make_float(float(k))}, &f.file);
+  f.write_int(3); f.write_int(1);
+  f.invoke("write", "(F)I", {slrr::Value::make_float(13.5f)}, &f.file);
+}
+void read_stock_car(Fixture& f, int32_t mounted) {
+  SLRR_REQUIRE(f.read_int() == int32_t(0x88664422u)); SLRR_REQUIRE(f.read_int() == 5);
+  SLRR_REQUIRE(f.read_resource() == int32_t(slrr::RpkIndex::make_full_id(mounted, 3)));
+  SLRR_REQUIRE(f.read_int() == 1);
+  SLRR_REQUIRE(f.read_resource() == 0); SLRR_REQUIRE(f.read_resource() == 0);
+  SLRR_REQUIRE(f.invoke("readFloat", "()F", {}, &f.file).v.f == 0.25f);
+  SLRR_REQUIRE(f.invoke("readFloat", "()F", {}, &f.file).v.f == 0.5f);
+  SLRR_REQUIRE(f.read_int() == -1);
+  for (int k = 0; k < 8; ++k) SLRR_REQUIRE(f.invoke("readFloat", "()F", {}, &f.file).v.f == float(k));
+  SLRR_REQUIRE(f.read_int() == 3); SLRR_REQUIRE(f.read_int() == 1);
+  SLRR_REQUIRE(f.invoke("readFloat", "()F", {}, &f.file).v.f == 13.5f);
+}
+}  // namespace
+
+SLRR_TEST(car_saves_are_named_json_and_read_back) {
+  Fixture f;
+  const int pack = f.packs.open_lib("fixture.rpk");
+  SLRR_REQUIRE(f.open("save/carrer/P-1/PlayerCar0", 1) == 1);
+  write_stock_car(f, pack);
+  f.close();
+  const auto text = disk_text(f.root / "save/carrer/P-1/PlayerCar0");
+  for (const char* needle : {"\"kind\": \"vehicle\"", "\"chassis\": {", "\"slots\": []",
+                             "\"type\": {\"rpk\": \"fixture.rpk\", \"id\": 3}",
+                             "\"bestNightQM\": 13.5", "\"racesWon\": 3"})
+    SLRR_REQUIRE(text.find(needle) != std::string::npos);
+  SLRR_REQUIRE(f.open("save/carrer/P-1/PlayerCar0", 0) == 1);
+  read_stock_car(f, pack);
+  f.close();
+}
+
+SLRR_TEST(script_frames_attribute_part_data_to_its_script) {
+  Fixture f;
+  const int pack = f.packs.open_lib("fixture.rpk");
+  slrr::Object chassis; chassis.class_name = "java.game.parts.bodypart.Chassis";
+  auto write_float = [&](float v) { f.invoke("write", "(F)I", {slrr::Value::make_float(v)}, &f.file); };
+  SLRR_REQUIRE(f.open("save/carrer/P-1/PlayerCar1", 1) == 1);
+  f.write_int(int32_t(0x88664422u)); f.write_int(5);
+  // What Jvm::invoke reports for chassis.save(file) and its super.save(file).
+  const std::vector<slrr::Value> args = {slrr::Value::make_obj(&f.file)};
+  SLRR_REQUIRE(slrr::script_frame_enter("java.game.parts.bodypart.Chassis", "save", &chassis, args));
+  SLRR_REQUIRE(slrr::script_frame_enter("java.game.parts.Part", "save", &chassis, args));
+  f.write_resource(int32_t(slrr::RpkIndex::make_full_id(pack, 3))); f.write_int(1);
+  f.write_resource(0); f.write_resource(0); write_float(0.25f); write_float(0.5f);
+  f.write_int(-1);
+  slrr::script_frame_leave();
+  f.write_int(3); f.write_int(1); f.write_resource(0);  // wheel damage read as a string below
+  slrr::script_frame_leave();
+  for (int k = 0; k < 8; ++k) write_float(float(k));
+  f.write_int(3); f.write_int(1); write_float(13.5f);
+  f.close();
+  auto text = disk_text(f.root / "save/carrer/P-1/PlayerCar1");
+  // The int written where Chassis writes a wheel damage string keeps the
+  // block generic: its values stay in order under the script's name.
+  for (const char* needle : {"\"kind\": \"vehicle\"", "\"class\": \"Chassis\"",
+                             "\"script\": \"Chassis\"", "\"values\": [", "{\"rpk\": null}"})
+    SLRR_REQUIRE(text.find(needle) != std::string::npos);
+
+  SLRR_REQUIRE(f.open("save/carrer/P-1/PlayerCar2", 1) == 1);
+  f.write_int(int32_t(0x88664422u)); f.write_int(5);
+  SLRR_REQUIRE(slrr::script_frame_enter("java.game.parts.bodypart.Chassis", "save", &chassis, args));
+  SLRR_REQUIRE(slrr::script_frame_enter("java.game.parts.Part", "save", &chassis, args));
+  f.write_resource(int32_t(slrr::RpkIndex::make_full_id(pack, 3))); f.write_int(1);
+  f.write_resource(0); f.write_resource(0); write_float(0.25f); write_float(0.5f);
+  f.write_int(-1);
+  slrr::script_frame_leave();
+  f.write_int(3); f.write_int(0); write_float(0.6f); write_float(12.f);
+  slrr::script_frame_leave();
+  for (int k = 0; k < 8; ++k) write_float(float(k));
+  f.write_int(3); f.write_int(1); write_float(13.5f);
+  f.close();
+  text = disk_text(f.root / "save/carrer/P-1/PlayerCar2");
+  for (const char* needle : {"\"saveVersion\": 3", "\"wheels\": 0", "\"wheelDamage\": []",
+                             "\"brakeBalance\": 0.6", "\"mileage\": 12.0"})
+    SLRR_REQUIRE(text.find(needle) != std::string::npos);
+  SLRR_REQUIRE(f.open("save/carrer/P-1/PlayerCar2", 0) == 1);
+  SLRR_REQUIRE(f.read_int() == int32_t(0x88664422u));
+  f.close();
+}
+
+SLRR_TEST(fully_read_legacy_saves_under_save_are_converted_to_json) {
+  Fixture f;
+  f.packs.open_lib("other.rpk");
+  const int mounted = f.packs.open_lib("fixture.rpk");
+  for (int type : {1, 2}) {
+    const auto legacy = legacy_save(type);
+    const fs::path path = f.root / "save/carrer/P-1/PlayerCar0";
+    fs::create_directories(path.parent_path());
+    { std::ofstream out(path, std::ios::binary); out.write(legacy.data(), std::streamsize(legacy.size())); }
+    // Vehicle.fileCheck reads only the header: the file is kept.
+    SLRR_REQUIRE(f.open("save/carrer/P-1/PlayerCar0", 0) == 1);
+    f.read_resource();
+    f.close();
+    SLRR_REQUIRE(disk_text(path) == legacy);
+    SLRR_REQUIRE(f.open("save/carrer/P-1/PlayerCar0", 0) == 1);
+    SLRR_REQUIRE(f.read_resource() == int32_t(slrr::RpkIndex::make_full_id(mounted, 0x56)));
+    SLRR_REQUIRE(f.read_resource() == 0);
+    SLRR_REQUIRE(std::bit_cast<uint32_t>(f.invoke("readFloat", "()F", {}, &f.file).v.f) == 0x80000000);
+    auto* s = f.invoke("readString", "()Ljava.lang.String;", {}, &f.file).v.o;
+    SLRR_REQUIRE(s && s->str == "x");
+    f.close();
+    const auto text = disk_text(path);
+    SLRR_REQUIRE(text.starts_with("{\n  \"format\": \"OpenSLRR-save\",\n  \"version\": 2"));
+    SLRR_REQUIRE(text.find("{\"rpk\": \"fixture.rpk\", \"id\": 86}") != std::string::npos);
+    SLRR_REQUIRE(f.open("save/carrer/P-1/PlayerCar0", 0) == 1);
+    SLRR_REQUIRE(f.read_resource() == int32_t(slrr::RpkIndex::make_full_id(mounted, 0x56)));
+    SLRR_REQUIRE(f.read_resource() == 0);
+    SLRR_REQUIRE(std::bit_cast<uint32_t>(f.invoke("readFloat", "()F", {}, &f.file).v.f) == 0x80000000);
+    s = f.invoke("readString", "()Ljava.lang.String;", {}, &f.file).v.o;
+    SLRR_REQUIRE(s && s->str == "x");
+    f.close();
+  }
+  // Version 1 JSON converts the same way.
+  const fs::path v1 = f.root / "save/game/options";
+  fs::create_directories(v1.parent_path());
+  { std::ofstream out(v1, std::ios::binary);
+    out << json_save("[[\"int\",7],[\"float\",1.5],[\"string\",null]]"); }
+  SLRR_REQUIRE(f.open("save/game/options", 0) == 1);
+  SLRR_REQUIRE(f.read_int() == 7);
+  SLRR_REQUIRE(f.invoke("readFloat", "()F", {}, &f.file).v.f == 1.5f);
+  SLRR_REQUIRE(f.invoke("readString", "()Ljava.lang.String;", {}, &f.file).v.o == nullptr);
+  f.close();
+  SLRR_REQUIRE(disk_text(v1).find("\"values\": [7, 1.5, null]") != std::string::npos);
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
     game_root_cannot_be_deleted_or_opened_as_a_file,
@@ -414,6 +555,9 @@ int main() {
     json_reader_accepts_reordered_fields_utf8_bom_and_edited_numbers,
     json_embedded_resource_metadata_and_bytes_are_retained,
     corrupt_json_and_sdat_are_rejected_instead_of_becoming_raw_payloads,
+    car_saves_are_named_json_and_read_back,
+    script_frames_attribute_part_data_to_its_script,
+    fully_read_legacy_saves_under_save_are_converted_to_json,
   };
   return slrr::standalone::run("save_io", tests);
 }

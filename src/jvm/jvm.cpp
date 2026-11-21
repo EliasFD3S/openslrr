@@ -18,6 +18,37 @@
 
 namespace slrr {
 namespace {
+ScriptFrameEnter g_frame_enter = nullptr;
+ScriptFrameLeave g_frame_leave = nullptr;
+
+struct ScriptFrameScope {
+  bool entered;
+  ScriptFrameScope(const std::string& owner, const std::string& method, Object* self,
+                   const std::vector<Value>& args)
+      : entered(script_frame_enter(owner, method, self, args)) {}
+  ~ScriptFrameScope() {
+    if (entered) script_frame_leave();
+  }
+  ScriptFrameScope(const ScriptFrameScope&) = delete;
+  ScriptFrameScope& operator=(const ScriptFrameScope&) = delete;
+};
+}  // namespace
+
+void set_script_frame_hooks(ScriptFrameEnter enter, ScriptFrameLeave leave) {
+  g_frame_enter = enter;
+  g_frame_leave = leave;
+}
+
+bool script_frame_enter(const std::string& owner, const std::string& method, Object* self,
+                        const std::vector<Value>& args) {
+  return g_frame_enter && g_frame_enter(owner, method, self, args);
+}
+
+void script_frame_leave() {
+  if (g_frame_leave) g_frame_leave();
+}
+
+namespace {
 Value declared_return(Value value, const std::string& descriptor) {
   // TREE expressions retain their numeric type. The method boundary applies
   // the declared conversion (e.g. Catalog InventoryItem_Part.getPrice(): int).
@@ -936,6 +967,7 @@ Value Jvm::invoke_by_name(const std::string& class_fqn,
   }
   SceneTransitionScope transition(jni == "(Ljava.game.GameState;)V" &&
       (method == "exit" || (method == "changeActiveSection" && owner == "java.game.GameLogic")));
+  ScriptFrameScope frame_scope(owner, method, self, call_args);
   ++invoke_depth_;
   TreeEvalResult tr;
   try {
@@ -1039,6 +1071,7 @@ Value Jvm::invoke(const std::string& class_fqn, const std::string& method,
   }
   SceneTransitionScope transition(jni_sig == "(Ljava.game.GameState;)V" &&
       (method == "exit" || (method == "changeActiveSection" && owner == "java.game.GameLogic")));
+  ScriptFrameScope frame_scope(owner, method, self, call_args);
   ++invoke_depth_;
   TreeEvalResult tr;
   try {

@@ -30,6 +30,8 @@ Object* part_add_dynamic_native(const PartConfig& config,
 bool part_install(Object *child, Object *root, int own_slot = 0,
                   int parent_slot = 0, const float *hint = nullptr);
 bool part_destroy(Object *part);
+// GameRef id of the chassis the player controls (0 when none).
+int32_t part_controlled_vehicle();
 bool part_command(Object *part, const std::string &command);
 // Car setMatrix: loaded springs, contacts on the given point, body asleep.
 // shift is false for reset, which tucks the springs and does not move the body.
@@ -41,8 +43,44 @@ void part_apply_state(Object *car, const float* velocity, const float* angular_v
 // placed again does not climb by the ride height.
 bool part_car_script_pos(void *key, float *x, float *y, float *z);
 // City lamps require a running engine at night. The showroom preview can
-// demonstrate the lights with its own time-of-day toggle.
+// demonstrate the lights with its own time-of-day toggle. Brake lamps (flag
+// 1, #279) are lit while the car they are installed on brakes with its
+// engine running; never in the preview. Outside the preview a lamp whose
+// part condition (wear x tear) is at most kLampBrokenCondition is broken and
+// never lit.
+inline constexpr float kLampBrokenCondition = .25f, kLampFullCondition = .5f;
 bool part_lamp_lit(void *part, uint32_t flags, bool preview);
+// Light output of a lamp part by its condition c = wear x tear: 0 at or
+// below kLampBrokenCondition, then 40 % rising linearly to full power at
+// kLampFullCondition.
+float part_lamp_power(float condition);
+// Tears an installed part off its car as a loose body, as a collision that
+// exceeds its tear limit does. False when it is not installed on a car.
+bool part_tear_off(Object *part);
+
+// Car lights (#279). Each light belongs to the part whose cfg places it, as a
+// `render <type-13 light>` child: a headlight is the part's first city-group
+// (`flags 4`) light of type `spot`; a brake light is its first brake-group
+// (`flags 1`) light of any type (stock brake lights are glow-only
+// `fakespot`). A part keeps at most one of each. A light is reported only
+// while its part is installed on a car (a detached, removed or destroyed
+// part reports nothing) and lit by part_lamp_lit with that group.
+// Positions and directions are render space (script Z flipped), the space
+// of the scenery lamps; the light resource values are as authored.
+enum class CarLightKind : int32_t { Headlight = 0, Brake = 1 };
+struct CarLight {
+  Object *part = nullptr;  // owning part, the light's stable identity
+  Object *car = nullptr;   // chassis it is installed on
+  CarLightKind kind = CarLightKind::Headlight;
+  uint32_t resource = 0;   // type-13 full id
+  std::array<float, 3> position{}, direction{0, 0, 1};
+  std::array<float, 3> diffuse{1, 1, 1}, attenuation{1, 0, 0};
+  float range = 0.f, theta = 0.f, phi = 0.f;  // authored; cone full angles
+  float power = 1.f;  // part_lamp_power of the owning part's condition
+};
+// Lights of every part with a light child, whether lit or not, when `lit_only`
+// is false (diagnostics and tests); else the lit ones only.
+std::vector<CarLight> part_car_lights(bool lit_only = true);
 // Render node or one of its parents, when that node is an installed part.
 Object *part_render_owner(void *key);
 // Part.getTexture and the cfg `texture` (the paint slot; 0 = unpaintable).
@@ -109,11 +147,13 @@ std::vector<PartVehiclePosition> part_vehicle_positions();
 Object* part_chassis(Object* object);
 Object* part_debug_chassis(Object* object);
 // One installed part as the damage gauge (osd_damage) sees it. `x` and `z`
-// are the centre of its drawn meshes seen from above, normalised to the
-// car's top-down extent: -1 is the left / front edge, +1 the right / rear.
+// are the centre of its meshes in the closed/rest installed pose, normalised
+// to chassis bounds: -1 is the left / front edge, +1 the right / rear.
 struct VehicleHudPart {
   enum class Kind : uint8_t { Engine, Body, Wheel };
   Kind kind = Kind::Body;
+  // Script type, not a CFG filename: only Quarterpanel instances own fender blips.
+  bool quarterpanel = false;
   int8_t corner = -1;   // Wheel: the corner of its chassis slot (101 + corner)
   float x = 0, z = 0;
   float condition = 1;  // Stock Part.getConditionNoAttach: wear * tear

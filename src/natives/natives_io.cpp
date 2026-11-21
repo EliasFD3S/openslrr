@@ -258,34 +258,182 @@ std::string json_string(std::string_view bytes) {
   return out + '"';
 }
 
-void json_record(Object* self, const char* type, const std::string& value) {
-  auto& file = g_host_files.at(self);
-  if (!file.sdat) return;
-  if (!file.json_values.empty()) file.json_values += ",\n";
-  file.json_values += "    [" + json_string(type) + ", " + value + "]";
+// File-local resource word (as written by sdat_wire_resource) to the
+// session-independent form stored in version 2 JSON.
+save_json::Leaf resource_leaf(const HostFile& file, uint32_t wired) {
+  save_json::Leaf leaf;
+  leaf.type = save_json::LeafType::Resource;
+  if (wired == 0) return leaf;
+  const uint32_t hi = wired & 0xFFFF0000u;
+  if (hi != 0 && hi != 0xFFFF0000u) {
+    const int32_t ordinal = static_cast<int32_t>(hi >> 16);
+    for (const SdatPackRef& row : file.sdat_packs)
+      if (row.ordinal == ordinal) {
+        leaf.res = save_json::ResKind::Pack;
+        leaf.pack = row.path;
+        leaf.local = wired & 0xFFFFu;
+        return leaf;
+      }
+    return leaf;  // an unknown pack row reads as null
+  }
+  const int32_t ordinal = static_cast<int32_t>(wired & 0xFFFFu);
+  for (const SdatBlobRef& blob : file.sdat_blobs)
+    if (blob.ordinal == ordinal) {
+      leaf.res = save_json::ResKind::Blob;
+      leaf.blob = ordinal;
+      return leaf;
+    }
+  return leaf;
 }
 
-std::vector<uint8_t> json_frame(const HostFile& file) {
-  std::string out = "{\n  \"format\": \"OpenSLRR-save\",\n  \"version\": 1,\n  \"values\": [\n" +
-      file.json_values + "\n  ],\n  \"packs\": [";
-  bool first = true;
-  for (const auto& pack : file.sdat_packs) {
-    if (!first) out += ',';
-    first = false;
-    out += "\n    [" + std::to_string(pack.ordinal) + ", " + json_string(pack.path) + "]";
+bool records_values(const HostFile& file) {
+  return file.sdat && (file.writing || (file.convert && !file.convert_broken));
+}
+
+void record_leaf(HostFile& file, save_json::Leaf leaf) {
+  if (!records_values(file)) return;
+  leaf.frame = file.frame_stack.empty() ? -1 : file.frame_stack.back();
+  file.doc.leaves.push_back(std::move(leaf));
+}
+
+void record_word(Object* self, save_json::LeafType type, uint32_t word) {
+  auto it = g_host_files.find(self);
+  if (it == g_host_files.end()) return;
+  save_json::Leaf leaf;
+  leaf.type = type;
+  leaf.word = word;
+  record_leaf(it->second, std::move(leaf));
+}
+
+void record_read(HostFile& file, save_json::LeafType type, uint32_t word) {
+  if (!file.convert || file.convert_broken) return;
+  save_json::Leaf leaf;
+  leaf.type = type;
+  leaf.word = word;
+  record_leaf(file, std::move(leaf));
+}
+
+save_json::Document file_document(const HostFile& file) {
+  save_json::Document doc = file.doc;
+  for (const SdatBlobRef& blob : file.sdat_blobs)
+    doc.blobs.push_back({blob.ordinal, blob.kind, blob.bytes});
+  return doc;
+}
+
+std::vector<uint8_t> json_frame(const HostFile& file, std::string* kind) {
+  const std::string text = save_json::encode(file_document(file), kind);
+  return {text.begin(), text.end()};
+}
+
+// Script frames (Part.save, Inventory.load, ...) that receive an open save
+// File. They let the encoder attribute part data to its script class.
+std::vector<Object*> g_frame_files;
+
+bool save_frame_enter(const std::string& owner, const std::string& method, Object* self,
+                      const std::vector<Value>& args) {
+  if (g_host_files.empty()) return false;
+  for (const Value& arg : args) {
+    if (arg.tag != ValueTag::Obj || !arg.v.o) continue;
+    auto it = g_host_files.find(arg.v.o);
+    if (it == g_host_files.end()) continue;
+    HostFile& file = it->second;
+    if (!records_values(file) || file.doc.frames.size() >= 1000000) return false;
+    save_json::Frame frame;
+    frame.owner = owner;
+    frame.method = method;
+    frame.self = self;
+    if (self) frame.self_class = self->class_name;
+    frame.parent = file.frame_stack.empty() ? -1 : file.frame_stack.back();
+    file.doc.frames.push_back(std::move(frame));
+    file.frame_stack.push_back(static_cast<int>(file.doc.frames.size() - 1));
+    g_frame_files.push_back(arg.v.o);
+    return true;
   }
-  out += "\n  ],\n  \"blobs\": [";
-  first = true;
-  constexpr char hex[] = "0123456789abcdef";
-  for (const auto& blob : file.sdat_blobs) {
-    if (!first) out += ',';
-    first = false;
-    out += "\n    [" + std::to_string(blob.ordinal) + ", " + std::to_string(blob.kind) + ", \"";
-    for (uint8_t c : blob.bytes) { out += hex[c >> 4]; out += hex[c & 15]; }
-    out += "\"]";
+  return false;
+}
+
+void save_frame_leave() {
+  if (g_frame_files.empty()) return;
+  Object* file = g_frame_files.back();
+  g_frame_files.pop_back();
+  auto it = g_host_files.find(file);
+  if (it != g_host_files.end() && !it->second.frame_stack.empty())
+    it->second.frame_stack.pop_back();
+}
+
+// Version 2 JSON to the script stream and its remount tables.
+// Returns 0 when the bytes are not a version 2 save, 1 when decoded,
+// -1 when a version 2 save is damaged.
+int json2_take_payload(RpkIndex& rpk, HostFile& file) {
+  save_json::Document doc;
+  std::string error;
+  const int result = save_json::decode(
+      std::string_view(reinterpret_cast<const char*>(file.bytes.data()), file.bytes.size()),
+      doc, &error);
+  if (result <= 0) {
+    if (result < 0)
+      std::printf("[native] File.open %s: damaged save (%s)\n", file.path.string().c_str(),
+                  error.c_str());
+    return result;
   }
-  out += "\n  ]\n}\n";
-  return {out.begin(), out.end()};
+  HostFile decoded;
+  for (const save_json::Blob& blob : doc.blobs) {
+    SdatBlobRef ref;
+    ref.ordinal = blob.ordinal;
+    ref.kind = blob.kind;
+    ref.bytes = blob.bytes;
+    decoded.sdat_blobs.push_back(std::move(ref));
+  }
+  for (const save_json::Leaf& leaf : doc.leaves) {
+    switch (leaf.type) {
+      case save_json::LeafType::Int:
+      case save_json::LeafType::Float:
+        push_u32(decoded.bytes, leaf.word);
+        break;
+      case save_json::LeafType::String:
+        if (leaf.null_string) { push_u32(decoded.bytes, 0); break; }
+        push_u32(decoded.bytes, static_cast<uint32_t>(leaf.text.size() + 1));
+        decoded.bytes.insert(decoded.bytes.end(), leaf.text.begin(), leaf.text.end());
+        decoded.bytes.push_back(0);
+        break;
+      case save_json::LeafType::Resource: {
+        uint32_t wired = 0;
+        if (leaf.res == save_json::ResKind::Blob) {
+          wired = static_cast<uint32_t>(leaf.blob);
+        } else if (leaf.res == save_json::ResKind::Pack) {
+          const SdatPackRef* row = nullptr;
+          for (const SdatPackRef& existing : decoded.sdat_packs)
+            if (_stricmp(existing.path.c_str(), leaf.pack.c_str()) == 0) row = &existing;
+          if (!row) {
+            if (decoded.sdat_packs.size() >= 0xFFFE ||
+                under_game(rpk.game_root(), leaf.pack).empty())
+              return -1;
+            SdatPackRef added;
+            added.ordinal = static_cast<int32_t>(decoded.sdat_packs.size() + 1);
+            added.path = leaf.pack;
+            decoded.sdat_packs.push_back(std::move(added));
+            row = &decoded.sdat_packs.back();
+          }
+          wired = (static_cast<uint32_t>(row->ordinal) << 16) | (leaf.local & 0xFFFFu);
+        }
+        push_u32(decoded.bytes, wired);
+        break;
+      }
+    }
+  }
+  for (auto& pack : decoded.sdat_packs) pack.pack_id = sdat_resolve_pack(rpk, pack.path);
+  file.bytes = std::move(decoded.bytes);
+  file.sdat_packs = std::move(decoded.sdat_packs);
+  file.sdat_blobs = std::move(decoded.sdat_blobs);
+  return 1;
+}
+
+bool under_save_dir(const std::string& root, const std::filesystem::path& path) {
+  std::error_code ec;
+  const auto relative = std::filesystem::relative(path, std::filesystem::path(root), ec);
+  if (ec || relative.empty()) return false;
+  const std::string first = relative.begin()->string();
+  return _stricmp(first.c_str(), "save") == 0;
 }
 
 // A schema-specific, nonrecursive JSON reader. No generic object tree or new
@@ -616,6 +764,7 @@ void resource_loading_pump() {
   if (auto history = loading_history.lock()) history->pump();
 }
 void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
+  set_script_frame_hooks(save_frame_enter, save_frame_leave);
   struct PackLoading {
     unsigned scans = 0;
     bool high_priority = false;
@@ -940,18 +1089,27 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
           // MSVC does not open the file.
           std::ifstream in(p, std::ios::in | std::ios::binary);
           const auto kept = g_unflushed_saves.find(save_key(p));
-          if (kept != g_unflushed_saves.end())
+          const bool pending = kept != g_unflushed_saves.end();
+          if (pending)
             hf.bytes = kept->second;
           else if (in)
             hf.bytes.assign(std::istreambuf_iterator<char>(in),
                             std::istreambuf_iterator<char>());
           else
             return Value::make_int(0);
-          int shaped = json_take_payload(rpk, hf);
-          if (shaped == 0)
-            shaped = sdat_take_payload(rpk, hf.bytes, hf.sdat_packs, hf.sdat_blobs);
+          // Version 2 JSON, then version 1 JSON, then SDAT type 1/2, then a
+          // raw stream. Version 1 and SDAT saves become version 2 once read.
+          int shaped = json2_take_payload(rpk, hf);
+          bool legacy = false;
+          if (shaped == 0) {
+            shaped = json_take_payload(rpk, hf);
+            if (shaped == 0)
+              shaped = sdat_take_payload(rpk, hf.bytes, hf.sdat_packs, hf.sdat_blobs);
+            legacy = shaped > 0;
+          }
           if (shaped < 0) return Value::make_int(0);
           hf.sdat = shaped > 0;
+          hf.convert = legacy && !pending && under_save_dir(jvm.game_root(), p);
         }
         g_host_files[self] = std::move(hf);
         return Value::make_int(1);
@@ -963,8 +1121,9 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         auto it = g_host_files.find(self);
         if (it != g_host_files.end() && it->second.writing &&
             !it->second.path.empty()) {
+          std::string kind = "binary";
           const std::vector<uint8_t> framed =
-              it->second.sdat ? json_frame(it->second) : it->second.bytes;
+              it->second.sdat ? json_frame(it->second, &kind) : it->second.bytes;
           DWORD publish_error = ERROR_SUCCESS;
           const bool wrote = publish_save(it->second.path, framed, publish_error);
           const std::string key = save_key(it->second.path);
@@ -973,11 +1132,23 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
           else
             g_unflushed_saves[key] = framed;
           std::printf(
-              "[native] File.close %s %zu bytes ok=%d kept=%d json=%d packs=%zu degraded_resources=%u error=%lu\n",
+              "[native] File.close %s %zu bytes ok=%d kept=%d json=%s packs=%zu degraded_resources=%u error=%lu\n",
               it->second.path.string().c_str(), framed.size(),
               wrote ? 1 : 0,
-              g_unflushed_saves.count(key) ? 1 : 0, it->second.sdat ? 1 : 0,
+              g_unflushed_saves.count(key) ? 1 : 0, kind.c_str(),
               it->second.sdat_packs.size(), it->second.degraded_resources, publish_error);
+        } else if (it != g_host_files.end() && it->second.convert) {
+          // A legacy save the script read completely: rewrite it as version
+          // 2 JSON. A partial read (fileCheck) or misaligned read keeps it.
+          HostFile& file = it->second;
+          if (!file.convert_broken && file.pos == file.bytes.size() && !file.doc.leaves.empty()) {
+            std::string kind;
+            const std::vector<uint8_t> framed = json_frame(file, &kind);
+            DWORD publish_error = ERROR_SUCCESS;
+            const bool wrote = publish_save(file.path, framed, publish_error);
+            std::printf("[native] File.close %s converted legacy save to json=%s ok=%d error=%lu\n",
+                        file.path.string().c_str(), kind.c_str(), wrote ? 1 : 0, publish_error);
+          }
         }
         g_host_files.erase(self);
         return Value::make_void();
@@ -992,7 +1163,7 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
             v = static_cast<int32_t>(args[0].v.f);
         }
         if (!file_push(self, &v, 4)) return Value::make_int(0);
-        json_record(self, "int", std::to_string(v));
+        record_word(self, save_json::LeafType::Int, static_cast<uint32_t>(v));
         return Value::make_int(4);
       });
   jvm.natives().register_method(
@@ -1005,15 +1176,8 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
             v = static_cast<float>(args[0].v.i);
         }
         if (!file_push(self, &v, 4)) return Value::make_int(0);
-        if (std::isfinite(v)) {
-          char text[64];
-          const auto result = std::to_chars(text, text + sizeof(text), v,
-              std::chars_format::general, std::numeric_limits<float>::max_digits10);
-          json_record(self, "float", std::string(text, result.ptr));
-        } else {
-          uint32_t bits; std::memcpy(&bits, &v, 4);
-          json_record(self, "floatBits", std::to_string(bits));
-        }
+        uint32_t bits; std::memcpy(&bits, &v, 4);
+        record_word(self, save_json::LeafType::Float, bits);
         return Value::make_int(4);
       });
   jvm.natives().register_method(
@@ -1044,7 +1208,7 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
                       static_cast<uint32_t>(id));
         }
         if (!file_push(self, &wired, 4)) return Value::make_int(0);
-        json_record(self, "resource", std::to_string(wired));
+        record_leaf(it->second, resource_leaf(it->second, static_cast<uint32_t>(wired)));
         return Value::make_int(degraded ? 0 : 4);
       });
   jvm.natives().register_method(
@@ -1057,10 +1221,17 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         const char* c = s ? s->str.c_str() : nullptr;
         const int32_t len = c ? static_cast<int32_t>(std::strlen(c) + 1) : 0;
         if (!file_push(self, &len, 4)) return Value::make_int(0);
-        if (len <= 0) { json_record(self, "string", "null"); return Value::make_int(0); }
+        save_json::Leaf leaf;
+        leaf.type = save_json::LeafType::String;
+        if (len <= 0) {
+          leaf.null_string = true;
+          record_leaf(g_host_files.at(self), std::move(leaf));
+          return Value::make_int(0);
+        }
         if (!file_push(self, c, static_cast<size_t>(len)))
           return Value::make_int(-1);
-        json_record(self, "string", json_string(std::string_view(c, len - 1)));
+        leaf.text.assign(c, static_cast<size_t>(len - 1));
+        record_leaf(g_host_files.at(self), std::move(leaf));
         return Value::make_int(len);
       });
   jvm.natives().register_method(
@@ -1068,7 +1239,12 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
       [](Object* self, const std::vector<Value>&) {
         uint32_t v = 0;
         auto it = g_host_files.find(self);
-        if (it != g_host_files.end()) rd_u32(it->second.bytes, it->second.pos, &v);
+        if (it != g_host_files.end()) {
+          if (rd_u32(it->second.bytes, it->second.pos, &v))
+            record_read(it->second, save_json::LeafType::Int, v);
+          else
+            it->second.convert_broken = true;
+        }
         return Value::make_int(static_cast<int32_t>(v));
       });
   jvm.natives().register_method(
@@ -1076,7 +1252,14 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
       [](Object* self, const std::vector<Value>&) {
         float v = 0.f;
         auto it = g_host_files.find(self);
-        if (it != g_host_files.end()) rd_f32(it->second.bytes, it->second.pos, &v);
+        if (it != g_host_files.end()) {
+          if (rd_f32(it->second.bytes, it->second.pos, &v)) {
+            uint32_t bits; std::memcpy(&bits, &v, 4);
+            record_read(it->second, save_json::LeafType::Float, bits);
+          } else {
+            it->second.convert_broken = true;
+          }
+        }
         return Value::make_float(v);
       });
   jvm.natives().register_method(
@@ -1084,9 +1267,13 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
       [&jvm](Object* self, const std::vector<Value>&) {
         uint32_t v = 0;
         auto it = g_host_files.find(self);
-        if (it == g_host_files.end() ||
-            !rd_u32(it->second.bytes, it->second.pos, &v))
+        if (it == g_host_files.end()) return Value::make_int(0);
+        if (!rd_u32(it->second.bytes, it->second.pos, &v)) {
+          it->second.convert_broken = true;
           return Value::make_int(0);
+        }
+        if (it->second.convert && !it->second.convert_broken)
+          record_leaf(it->second, resource_leaf(it->second, v));
         return Value::make_int(sdat_remap_resource(it->second, v, jvm.game_root()));
       });
   jvm.natives().register_method(
@@ -1095,16 +1282,24 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         auto it = g_host_files.find(self);
         if (it == g_host_files.end()) return Value::make_obj(nullptr);
         uint32_t len = 0;
-        if (!rd_u32(it->second.bytes, it->second.pos, &len) || len == 0 ||
-            len > (1u << 20))
+        HostFile& file = it->second;
+        save_json::Leaf leaf;
+        leaf.type = save_json::LeafType::String;
+        if (!rd_u32(file.bytes, file.pos, &len) || len > (1u << 20) ||
+            file.pos + len > file.bytes.size()) {
+          file.convert_broken = true;
           return Value::make_obj(nullptr);
-        if (it->second.pos + len > it->second.bytes.size())
+        }
+        if (len == 0) {
+          leaf.null_string = true;
+          if (file.convert) record_leaf(file, std::move(leaf));
           return Value::make_obj(nullptr);
-        std::string s(
-            reinterpret_cast<const char*>(it->second.bytes.data() +
-                                          it->second.pos),
-            len);
-        it->second.pos += len;
+        }
+        std::string s(reinterpret_cast<const char*>(file.bytes.data() + file.pos), len);
+        file.pos += len;
+        // The version 2 form stores strlen strings; other bytes stay legacy.
+        if (s.back() != '\0' || s.find('\0') != len - 1) file.convert_broken = true;
+        else if (file.convert) { leaf.text.assign(s, 0, len - 1); record_leaf(file, std::move(leaf)); }
         while (!s.empty() && s.back() == '\0') s.pop_back();
         return Value::make_obj(jvm.new_string(s));
       });
@@ -1168,9 +1363,6 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         return Value::make_void();
       });
 
-  // Player.<init> during start_init is a long TREE. A miss there aborts boot.
-  // Career creation fills the existing player from the menu script.
-  jvm.natives().register_method("java.game.Player", "<init>", "()V", native_noop);
   for (const bool visible : {true, false}) {
     jvm.natives().register_method("java.game.Player", visible ? "showOsd" : "hideOsd", "()V",
       [&jvm, visible](Object* player, const std::vector<Value>&) {

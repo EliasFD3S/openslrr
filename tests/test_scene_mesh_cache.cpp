@@ -53,6 +53,26 @@ static void metadata_and_materials() {
   g.groups[1].index_count = 100;
   SLRR_REQUIRE(prepare_scene_mesh(g, true).merged_indices.empty());
 }
+static void shadow_material_ranges() {
+  SceneMeshData implicit;implicit.index_count=3;
+  const auto implicit_ranges=shadow_draw_groups(implicit);
+  SLRR_REQUIRE(implicit_ranges.size()==1 && implicit_ranges[0].index_count==3);
+  ScxGeometry g;g.info.version=4;
+  for(unsigned i=0;i<8;++i) {
+    ScxGroup group;group.index_start=i*3;group.index_count=3;group.texture_index=uint16_t(i);
+    if(i==2) group.material_flags=0x40000000u;
+    if(i>=4){group.material_flags=0x20000000u;group.texture_index=2;group.alpha_reference=i<6?128:64;}
+    if(i==7) group.base_map.channel=1;
+    g.groups.push_back(group);
+  }
+  const auto ranges=shadow_draw_groups(SceneMeshData(g));
+  SLRR_REQUIRE(ranges.size()==5);
+  SLRR_REQUIRE(ranges[0].index_start==0 && ranges[0].index_count==6);
+  SLRR_REQUIRE(ranges[1].index_start==9 && ranges[1].index_count==3);
+  SLRR_REQUIRE(ranges[2].index_start==12 && ranges[2].index_count==6 && ranges[2].alpha_reference==128);
+  SLRR_REQUIRE(ranges[3].alpha_reference==64 && ranges[4].base_map.channel==1);
+  SLRR_REQUIRE(g.groups.size()==8 && g.groups[0].index_count==3);
+}
 static size_t payload_bytes(const ScxGeometry &g) {
   return (g.positions.size() + g.normals.size() + g.uvs.size() + g.uv2.size() +
           g.uv3.size() + g.skin_weights.size()) *
@@ -161,6 +181,7 @@ int main() {
   LibBgfxBackend backend;
   try {
     metadata_and_materials();
+    shadow_material_ranges();
     real_asset_metadata();
     SLRR_REQUIRE(backend.open(640, 480, "Shared mesh cache regression"));
     ShowWindow(static_cast<HWND>(backend.native_hwnd()), SW_HIDE);

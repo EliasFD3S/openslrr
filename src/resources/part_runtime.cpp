@@ -15,6 +15,7 @@
 #include "slrr/osd_registry.hpp"
 #include "slrr/paint_texture.hpp"
 #include "slrr/jvm.hpp"
+#include "slrr/light_resource.hpp"
 #include "slrr/rpk_index.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/scene_collision.hpp"
@@ -38,6 +39,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <tuple>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -128,6 +130,15 @@ struct Record {
   };
   std::vector<LinkVisual> links;
   float max_wear = 1.f;
+  // Car lights placed by this part's cfg (#279): at most one headlight and
+  // one brake light, in the part's local script space.
+  struct Lamp {
+    CarLightKind kind = CarLightKind::Headlight;
+    uint32_t resource = 0, flags = 0;
+    LightResource light;
+    std::array<float, 3> position{}, direction{};
+  };
+  std::vector<Lamp> lamps;
   // Hinge of this part on its parent's CFG `flap` slot (flap_hinge.hpp).
   // The state belongs to one mount; a part moved or taken off starts latched.
   physics::FlapState flap;
@@ -209,6 +220,8 @@ struct Record {
 };
 std::unordered_map<Object *, std::vector<SfxItem>> sfx_items;
 std::unordered_map<Object *, Record> records;
+// Pedal travel above which brake lamps light (#279).
+constexpr float kBrakeLampMin = .05f;
 // Weak, one-shot repair work consumed by the next part update. Stock Java may
 // repair descendants before their parents, so links must not be relinked early.
 std::unordered_set<Object *> repair_relink_pending;
@@ -510,8 +523,162 @@ Object *car(Object *self) {
   }
   return nullptr;
 }
+// The part's own car lights (#279), from its cfg `render` light children.
+void collect_lamps(Record &rec) {
+  rec.lamps.clear();
+  if (!index)
+    return;
+  bool head = false, brake = false;
+  for (const auto &r : rec.config->renders) {
+    if (r.wheel >= 0 || (r.flags & 0x40u) || !(r.flags & 5u) ||
+        !is_light_resource(*index, r.resource))
+      continue;
+    const auto light = load_light_resource(*index, r.resource);
+    if (!light)
+      continue;
+    Record::Lamp lamp;
+    if (!head && (r.flags & 4u) && light->type == LightResourceType::Spot) {
+      lamp.kind = CarLightKind::Headlight;
+      head = true;
+    } else if (!brake && (r.flags & 1u)) {
+      lamp.kind = CarLightKind::Brake;
+      brake = true;
+    } else {
+      continue;
+    }
+    const auto frame = part_pose_matrix(r.pose);
+    const auto &p = light->position, &d = light->direction;
+    for (int i = 0; i < 3; ++i) {
+      lamp.position[i] = frame[i] * p[0] + frame[4 + i] * p[1] +
+                         frame[8 + i] * p[2] + frame[12 + i];
+      lamp.direction[i] = frame[i] * d[0] + frame[4 + i] * d[1] + frame[8 + i] * d[2];
+    }
+    lamp.resource = r.resource;
+    lamp.flags = r.flags;
+    lamp.light = *light;
+    rec.lamps.push_back(lamp);
+  }
+}
+// Lamp glass (#284): the stock `_CITY`/`_BRAKE` meshes are authored about
+// 1 cm in front of the lamp body, so the lit glass floated off the lens.
+// Each glass vertex moves onto the nearest body triangle within
+// kGlassSnapReach (measured along that triangle's plane, oriented by the
+// glass normal) and kGlassSnapGap in front of it; vertices with no body
+// triangle in reach take the mean move of the others, so the glass keeps its
+// shape. The copy is the node's own geometry (deformed_geometry, which the
+// deformation pass leaves alone on lamp nodes); the game files and the shared
+// mesh cache are unchanged.
+constexpr double kGlassSnapReach = .03, kGlassSnapGap = .0005;
+// Lens triangles face within 60 degrees of the glass normal.
+constexpr double kGlassLensAlignment = .5;
+void snap_lamp_glass(Record &rec) {
+  using physics::Vec3;
+  struct Tri { Vec3 a, n, e0, e1; double d00, d01, d11, inv; };
+  std::vector<Tri> body;
+  for (auto *render : rec.renders) {
+    const auto *node = gameref_get(render);
+    if (!node || node->light_flags || node->empty) continue;
+    const auto mesh = scene_instances_geometry(static_cast<uint32_t>(node->type_id));
+    if (!mesh || !(mesh->position_scale > 0)) continue;
+    const auto m = node_local(render);
+    const double k = mesh->position_scale;
+    const auto at = [&](uint32_t i) {
+      const double x = mesh->positions[i * 3] * k, y = mesh->positions[i * 3 + 1] * k,
+                   z = mesh->positions[i * 3 + 2] * k;
+      return Vec3{m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * x + m[5] * y + m[9] * z + m[13],
+                  m[2] * x + m[6] * y + m[10] * z + m[14]};
+    };
+    for (size_t t = 0; t + 2 < mesh->indices.size(); t += 3) {
+      Tri tri;
+      tri.a = at(mesh->indices[t]);
+      tri.e0 = at(mesh->indices[t + 1]) - tri.a;
+      tri.e1 = at(mesh->indices[t + 2]) - tri.a;
+      const Vec3 n = tri.e0.cross(tri.e1);
+      const double length = std::sqrt(n.dot(n));
+      if (!(length > 1e-10)) continue;
+      tri.n = n / length;
+      tri.d00 = tri.e0.dot(tri.e0); tri.d01 = tri.e0.dot(tri.e1); tri.d11 = tri.e1.dot(tri.e1);
+      const double det = tri.d00 * tri.d11 - tri.d01 * tri.d01;
+      if (!(std::abs(det) > 1e-20)) continue;
+      tri.inv = 1 / det;
+      body.push_back(tri);
+    }
+  }
+  if (body.empty()) return;
+  for (auto *render : rec.renders) {
+    auto *node = gameref_get(render);
+    if (!node || !node->light_flags) continue;
+    const auto mesh = scene_instances_geometry(static_cast<uint32_t>(node->type_id));
+    if (!mesh || !(mesh->position_scale > 0) || mesh->normals.size() != mesh->positions.size())
+      continue;
+    const auto m = node_local(render);
+    const Vec3 x{m[0], m[1], m[2]}, y{m[4], m[5], m[6]}, z{m[8], m[9], m[10]};
+    const Vec3 origin{m[12], m[13], m[14]};
+    const double k = mesh->position_scale;
+    const size_t count = mesh->positions.size() / 3;
+    std::vector<Vec3> points(count), normals(count);
+    for (size_t v = 0; v < count; ++v) {
+      points[v] = origin + (x * mesh->positions[v * 3] + y * mesh->positions[v * 3 + 1] +
+                            z * mesh->positions[v * 3 + 2]) * k;
+      normals[v] = (x * mesh->normals[v * 3] + y * mesh->normals[v * 3 + 1] +
+                    z * mesh->normals[v * 3 + 2]).normalized();
+    }
+    const std::vector<Vec3> stock = points;
+    // The move that puts p kGlassSnapGap in front of the nearest lens
+    // triangle: one roughly parallel to the glass (housing walls are not
+    // lenses), within reach, whose plane projection holds p.
+    const auto snap = [&](const Vec3 &p, const Vec3 &normal, Vec3 &move) {
+      double best = kGlassSnapReach;
+      bool hit = false;
+      for (const auto &tri : body) {
+        // Front of the lens is the side the glass faces.
+        const Vec3 n = tri.n.dot(normal) < 0 ? tri.n * -1. : tri.n;
+        if (n.dot(normal) < kGlassLensAlignment) continue;
+        const double d = (p - tri.a).dot(n);
+        if (std::abs(d) >= best) continue;
+        const Vec3 q = p - n * d - tri.a;
+        const double d20 = q.dot(tri.e0), d21 = q.dot(tri.e1);
+        const double b1 = (tri.d11 * d20 - tri.d01 * d21) * tri.inv;
+        const double b2 = (tri.d00 * d21 - tri.d01 * d20) * tri.inv;
+        if (b1 < -.02 || b2 < -.02 || b1 + b2 > 1.04) continue;
+        best = std::abs(d);
+        move = n * (kGlassSnapGap - d);
+        hit = true;
+      }
+      return hit;
+    };
+    // Pass 1 moves the vertices over a lens and the others by their mean;
+    // later passes settle vertices that the mean brought over a lens.
+    bool any = false;
+    for (int pass = 0; pass < 3; ++pass) {
+      Vec3 mean;
+      size_t snapped = 0;
+      std::vector<Vec3> moves(count);
+      std::vector<char> found(count, 0);
+      for (size_t v = 0; v < count; ++v)
+        if ((found[v] = snap(points[v], normals[v], moves[v]))) { mean = mean + moves[v]; ++snapped; }
+      if (!snapped) break;
+      any = true;
+      mean = mean / double(snapped);
+      for (size_t v = 0; v < count; ++v)
+        if (found[v]) points[v] = points[v] + moves[v];
+        else if (pass == 0) points[v] = points[v] + mean;
+    }
+    if (!any) continue;
+    auto copy = std::make_shared<ScxGeometry>(*mesh);
+    for (size_t v = 0; v < count; ++v) {
+      const Vec3 delta = (points[v] - stock[v]) / k;
+      copy->positions[v * 3] += float(delta.dot(x));
+      copy->positions[v * 3 + 1] += float(delta.dot(y));
+      copy->positions[v * 3 + 2] += float(delta.dot(z));
+    }
+    node->deformed_geometry = std::move(copy);
+    node->deformed_type = node->type_id;
+  }
+}
 void render_part(Jvm &jvm, Object *self, Record &rec) {
   rec.inline_wheels.clear();
+  collect_lamps(rec);
   auto paint_of = [&](const std::vector<uint32_t> &colors) {
     uint32_t paint = 0xffffff;
     if (!rec.colour_set || colors.empty())
@@ -611,6 +778,7 @@ void render_part(Jvm &jvm, Object *self, Record &rec) {
       }
     }
   }
+  snap_lamp_glass(rec);
 }
 void stock_parts(Jvm &jvm, Object *part, Object *descriptor, int depth = 0) {
   if (depth > 48 || records.size() > 2000)
@@ -1384,13 +1552,99 @@ void install_cfg_stock(Jvm &jvm, Object *part, int depth = 0) {
 
 } // namespace
 
-bool part_lamp_lit(void *part, uint32_t flags, bool preview) {
-  if (!(flags & 4u) || (flags & 0x40u) || !runtime)
+int32_t part_controlled_vehicle() { return controlled_vehicle; }
+
+namespace {
+void detach_panel(Object* part, Record& rec, Object* chassis, Record& vehicle);
+} // namespace
+
+float part_lamp_power(float condition) {
+  if (!(condition > kLampBrokenCondition))
+    return 0.f;
+  const float t = std::min(1.f, (condition - kLampBrokenCondition) /
+                                    (kLampFullCondition - kLampBrokenCondition));
+  return .4f + .6f * t;
+}
+
+bool part_tear_off(Object *part) {
+  part = canonical(part);
+  auto *rec = record(part);
+  Object *chassis = rec ? car(part) : nullptr;
+  auto *vehicle = chassis && chassis != part ? record(chassis) : nullptr;
+  if (!vehicle)
     return false;
-  if (!preview) {
-    const auto *chassis = record(car(static_cast<Object *>(part)));
-    if (!chassis || !chassis->engine_running) return false;
+  detach_panel(part, *rec, chassis, *vehicle);
+  return !rec->state.parent;
+}
+
+std::vector<CarLight> part_car_lights(bool lit_only) {
+  std::vector<CarLight> out;
+  for (auto &[part, rec] : records) {
+    if (rec.lamps.empty())
+      continue;
+    Object *chassis = car(part);
+    if (!chassis || chassis == part)
+      continue;
+    float m[16];
+    if (!scene_instances_render_matrix(part, m))
+      continue;
+    const float power = part_lamp_power(rec.state.wear * rec.state.tear);
+    if (lit_only && power <= 0.f)
+      continue;
+    for (const auto &lamp : rec.lamps) {
+      if (lit_only && !part_lamp_lit(part, lamp.kind == CarLightKind::Brake ? 1u : 4u, false))
+        continue;
+      CarLight light;
+      light.part = part;
+      light.car = chassis;
+      light.kind = lamp.kind;
+      light.resource = lamp.resource;
+      const auto &p = lamp.position, &d = lamp.direction;
+      for (int i = 0; i < 3; ++i) {
+        light.position[i] = m[i] * p[0] + m[4 + i] * p[1] + m[8 + i] * p[2] + m[12 + i];
+        light.direction[i] = m[i] * d[0] + m[4 + i] * d[1] + m[8 + i] * d[2];
+      }
+      light.position[2] = -light.position[2];
+      light.direction[2] = -light.direction[2];
+      const float length = std::sqrt(light.direction[0] * light.direction[0] +
+                                     light.direction[1] * light.direction[1] +
+                                     light.direction[2] * light.direction[2]);
+      if (length > 1e-6f)
+        for (auto &v : light.direction) v /= length;
+      light.diffuse = lamp.light.diffuse;
+      light.attenuation = lamp.light.attenuation;
+      light.range = lamp.light.range;
+      light.theta = lamp.light.theta;
+      light.phi = lamp.light.phi;
+      light.power = power;
+      out.push_back(light);
+    }
   }
+  // Records are a hash map: a stable order keeps the renderer's light budget
+  // from shuffling between frames.
+  std::sort(out.begin(), out.end(), [](const CarLight &a, const CarLight &b) {
+    return std::tie(a.car, a.part, a.kind) < std::tie(b.car, b.part, b.kind);
+  });
+  return out;
+}
+
+bool part_lamp_lit(void *part, uint32_t flags, bool preview) {
+  if (!(flags & 5u) || (flags & 0x40u) || !runtime)
+    return false;
+  const Record *chassis = nullptr;
+  if (!preview) {
+    chassis = record(car(static_cast<Object *>(part)));
+    if (!chassis || !chassis->engine_running) return false;
+    // A broken lamp (#279): its part worn or torn past the threshold.
+    if (const auto *own = record(static_cast<Object *>(part));
+        own && part_lamp_power(own->state.wear * own->state.tear) <= 0.f)
+      return false;
+  }
+  // Brake lamps (#279): the pedal of the car the part is installed on.
+  if ((flags & 1u) && chassis && chassis->dynamics.drive.brake > kBrakeLampMin)
+    return true;
+  if (!(flags & 4u))
+    return false;
   Value time = runtime->get_static("java.game.GameLogic", "time");
   float sec = 0.f;
   if (time.tag == ValueTag::Float)
@@ -3096,8 +3350,9 @@ void restore_deformation(Object* part, Record& rec) {
   rec.deformation.reset();
   rec.deformed_collision.reset();
   rec.deformation_upload_ticks = 0;
+  // Lamp glass keeps its lens snap (#284): deformation never moves it.
   for (auto* render : rec.renders)
-    if (auto* node = gameref_get(render)) node->deformed_geometry.reset();
+    if (auto* node = gameref_get(render); node && !node->light_flags) node->deformed_geometry.reset();
   for (const auto& [slot, child] : rec.children)
     if (const auto* installed = record(child); installed && installed->config->category == 2)
       place_child(part, slot, false);
@@ -5660,10 +5915,35 @@ void add_render_box(const PartMatrix &part_frame, Object *render, TopBox &box) {
     box.z1 = std::max(box.z1, z);
   }
 }
-// Engine, body and wheel parts for the damage gauge, placed from above in
-// the chassis frame and normalised to the extent of the chassis renders and
-// body panels: the car the gauge outline stands for. Wheels keep their corner
-// from the chassis slot (type 101 + corner) they hang from.
+// The gauge describes installed locations, not a panel's bent/open pose. Use
+// closed CFG mounts plus intentional setSlotPos, excluding damage slot offsets.
+PartMatrix hud_installed_frame(const Record& parent, int slot_id, Object* part) {
+  const auto* child = record(part);
+  if (!child) return node_local(part);
+  const auto mount = std::find_if(parent.config->slots.begin(), parent.config->slots.end(),
+      [&](const PartSlot& s) { return s.id == slot_id; });
+  const auto mate = std::find_if(child->config->slots.begin(), child->config->slots.end(),
+      [&](const PartSlot& s) { return s.id == child->state.own_slot; });
+  if (mount == parent.config->slots.end() || mate == child->config->slots.end())
+    return node_local(part);
+  const auto scripted = [](const Record& rec, const PartSlot& source) {
+    PartSlot slot = source;
+    if (const auto it = rec.slot_script_pose.find(slot.id); it != rec.slot_script_pose.end()) {
+      if (it->second.pos)
+        std::copy(it->second.p, it->second.p + 3, slot.pose.position.begin());
+      if (it->second.ypr)
+        std::copy(it->second.y, it->second.y + 3, slot.pose.rotation.begin());
+    }
+    return slot;
+  };
+  PartMatrix a, b;
+  if (!part_slot_matrix(*parent.config, scripted(parent, *mount), a) ||
+      !part_slot_matrix(*child->config, scripted(*child, *mate), b)) return node_local(part);
+  return part_matrix_multiply(a, part_matrix_inverse_rigid(b));
+}
+// Engine, body and wheel parts in the rest chassis frame. Prefer chassis-only
+// bounds so removing a panel cannot rescale/reassign the surviving indicators.
+// Wheels keep their corner from the chassis slot (type 101 + corner).
 void hud_damage_parts(const Record &rec, VehicleHudState &state) {
   state.part_count = 0;
   struct Placed {
@@ -5674,6 +5954,7 @@ void hud_damage_parts(const Record &rec, VehicleHudState &state) {
   size_t count = 0;
   TopBox car;
   for (Object *render : rec.renders) add_render_box(eye_matrix(), render, car);
+  const bool chassis_bounds = car.valid();
   const auto visit = [&](auto &&visit, Object *part, const PartMatrix &frame,
                          int corner, int depth) -> void {
     const auto *child = record(part);
@@ -5685,7 +5966,7 @@ void hud_damage_parts(const Record &rec, VehicleHudState &state) {
         : category == 1 ? VehicleHudPart::Kind::Engine : VehicleHudPart::Kind::Body;
     TopBox box;
     for (Object *render : child->renders) add_render_box(frame, render, box);
-    if (category == 2 && corner < 0 && box.any()) {
+    if (!chassis_bounds && category == 2 && corner < 0 && box.any()) {
       car.x0 = std::min(car.x0, box.x0);
       car.x1 = std::max(car.x1, box.x1);
       car.z0 = std::min(car.z0, box.z0);
@@ -5694,20 +5975,23 @@ void hud_damage_parts(const Record &rec, VehicleHudState &state) {
     if (shown && box.any() && count < placed.size()) {
       auto &entry = placed[count++];
       entry.part.kind = kind;
+      entry.part.quarterpanel = kind == VehicleHudPart::Kind::Body &&
+          runtime->tree_instance_of(part, "java.game.parts.bodypart.Quarterpanel");
       entry.part.corner = static_cast<int8_t>(corner);
       entry.part.condition = std::clamp(child->state.wear * child->state.tear, 0.f, 1.f);
       entry.x = .5f * (box.x0 + box.x1);
       entry.z = .5f * (box.z0 + box.z1);
     }
     for (const auto &[slot, grandchild] : child->children)
-      visit(visit, grandchild, part_matrix_multiply(frame, node_local(grandchild)), corner,
-            depth + 1);
+      visit(visit, grandchild,
+            part_matrix_multiply(frame, hud_installed_frame(*child, slot, grandchild)),
+            corner, depth + 1);
   };
   for (const auto &[slot_id, child] : rec.children) {
     int corner = -1;
     for (const auto &slot : rec.config->slots)
       if (slot.id == slot_id && slot.type >= 101 && slot.type <= 104) corner = slot.type - 101;
-    visit(visit, child, node_local(child), corner, 0);
+    visit(visit, child, hud_installed_frame(rec, slot_id, child), corner, 0);
   }
   if (!car.valid()) {
     // No chassis mesh or panel: fall back to the extent of the parts.

@@ -1,10 +1,16 @@
-$input v_normal, v_texcoord0, v_texcoord1, v_texcoord2, v_viewPos
+$input v_normal, v_texcoord0, v_texcoord1, v_texcoord2, v_viewPos, v_worldPos, v_staticShadow
 #include <bgfx_shader.sh>
 SAMPLER2D(s_texColor, 0);
 SAMPLER2D(s_vehicleMix, 1);
 SAMPLER2D(s_vehicleEnv, 2);
 SAMPLER2D(s_vehicleBake, 3);
 SAMPLERCUBE(s_sceneReflection, 4);
+SAMPLER2DSHADOW(s_staticShadow, 5);
+SAMPLER2DSHADOW(s_interiorSun, 6);
+SAMPLER2DSHADOW(s_fixtureShadow, 7);
+SAMPLER2D(s_sunAperture, 8);
+#include "scene_shadow.sh"
+#include "ambient_occlusion.sh"
 uniform vec4 u_dynamicReflection; // x: reflection mode, y: two-sided material
 uniform vec4 u_reflectionProbe;
 uniform vec4 u_reflectionBoxMin;
@@ -22,7 +28,7 @@ uniform vec4 u_sunDiff; // rgb, set
 uniform vec4 u_sunAmb;
 uniform vec4 u_sunSpec;
 uniform vec4 u_localLight; // world position, radius
-uniform vec4 u_sunDir; // render-space toward the light, w = present
+uniform vec4 u_sunDir; // toward directional light; w>0 present, w=-1 positional interior
 vec2 channelUv(float channel, vec2 uv0, vec2 uv1, vec2 uv2)
 {
     if (channel > 1.5) return uv2;
@@ -40,10 +46,13 @@ void main()
     // flipped it. Without a light resource, the stand-in is (3, 5, 4).
     vec3 lightDir = normalize(mul(u_view, vec4(normalize(
         u_sunDir.w > 0.5 ? u_sunDir.xyz : vec3(3.0, 5.0, -4.0)), 0.0)).xyz);
-    float ndl = max(dot(n, lightDir), 0.0);
+    float ndl = u_sunDir.w < -0.5 ? 0.0 : max(dot(n, lightDir), 0.0);
     float shade = 0.45+0.55*ndl;
-    vec3 illum = u_sunDiff.a > 0.5
-        ? (u_sunAmb.rgb + u_sunDiff.rgb*ndl)
+    float visibility = sceneShadowVisibility(v_staticShadow, v_worldPos);
+    float sunVisibility = u_staticShadowParams.w > 0.5 ? 1.0 : visibility;
+    float localVisibility = u_staticShadowParams.w > 0.5 ? visibility : 1.0;
+    vec3 illum = u_sunDir.w < -0.5 ? u_sunAmb.rgb*ambientVisibility(gl_FragCoord.xy) : u_sunDiff.a > 0.5
+        ? (u_sunAmb.rgb*ambientVisibility(gl_FragCoord.xy) + u_sunDiff.rgb*ndl*sunVisibility)
         : vec3(shade, shade, shade);
     vec2 raw = channelUv(u_lightmap.z, v_texcoord0, v_texcoord1, v_texcoord2);
     vec2 luv = vec2(((raw.x - 0.5) - u_lightmapUv.z) * u_lightmapUv.x + 0.5,
@@ -52,20 +61,40 @@ void main()
     float use = step(0.5, u_lightmap.x);
     illum = mix(illum, vec3(1.0, 1.0, 1.0), use);
     bake = mix(vec3(1.0, 1.0, 1.0), bake, use);
-	if (u_localLight.w > 0.0) {
-		vec3 delta = mul(u_view, vec4(u_localLight.xyz, 1.0)).xyz - v_viewPos;
-		float d2 = dot(delta, delta);
-		float fade = saturate(1.0 - d2 / (u_localLight.w * u_localLight.w));
-		float facing = max(dot(n, delta * inversesqrt(max(d2, 0.001))), 0.0);
-		illum += vec3(1.0, 0.94, 0.80) * (fade * fade * facing * 3.0 / (1.0 + d2));
-	}
+    vec3 localRadiance=vec3(0.0,0.0,0.0),localDir=vec3(0.0,1.0,0.0);
+    if (u_localLight.w > 0.0) {
+        vec3 delta=mul(u_view,vec4(u_localLight.xyz,1.0)).xyz-v_viewPos;
+        localDir=delta*inversesqrt(max(dot(delta,delta),0.001));
+        localRadiance=localLightRadiance(delta,u_localLight.w,u_sunDir.w < -0.5);
+        illum+=localRadiance*max(dot(n,localDir),0.0)*localVisibility;
+    }
+    vec3 solarDir=normalize(mul(u_view,vec4(u_interiorSunDir.xyz,0.0)).xyz);
+    float solarVisibility=interiorSunVisibility(v_worldPos);
+    vec3 solarRadiance=u_interiorSunColor.rgb*solarVisibility;
+    illum+=solarRadiance*max(dot(n,solarDir),0.0);
+    vec3 fixtureDiffuse,fixtureHighlight;
+    vec3 fixtureNormal=normalize(mul(u_invView,vec4(n,0.0)).xyz);
+    vec3 fixtureView=normalize(mul(u_invView,vec4(-v_viewPos,0.0)).xyz);
+    fixtureLighting(fixtureNormal,fixtureView,v_worldPos,max(u_vehicleSpec.a,1.0),true,fixtureDiffuse,fixtureHighlight);
+    illum+=fixtureDiffuse;
+    illum+=lampLighting(fixtureNormal,v_worldPos);
     vec3 color = albedo*illum*bake;
     vec3 viewDir = normalize(-v_viewPos);
     vec3 halfDir = normalize(lightDir + viewDir);
     float ndh = max(dot(n, halfDir), 0.0);
     float spec = pow(ndh, max(u_vehicleSpec.a, 1.0))*ndl;
     float sheen = pow(ndh, 8.0);
-    color += u_vehicleSpec.rgb*(spec+sheen*0.35)*(1.0-use);
+    vec3 localHalf=localDir+viewDir;
+    localHalf*=inversesqrt(max(dot(localHalf,localHalf),0.000001));
+    vec3 localSpecular=u_vehicleSpec.rgb*pow(max(dot(n,localHalf),0.0),max(u_vehicleSpec.a,1.0))
+                      *max(dot(n,localDir),0.0)*localRadiance*localVisibility;
+    vec3 solarHalf=solarDir+viewDir;
+    solarHalf*=inversesqrt(max(dot(solarHalf,solarHalf),0.000001));
+    localSpecular+=u_vehicleSpec.rgb*pow(max(dot(n,solarHalf),0.0),max(u_vehicleSpec.a,1.0))
+                   *max(dot(n,solarDir),0.0)*solarRadiance;
+    localSpecular+=u_vehicleSpec.rgb*fixtureHighlight;
+    color += (u_sunDir.w < -0.5 ? vec3(0.0,0.0,0.0)
+              : u_vehicleSpec.rgb*(spec+sheen*0.35)*(1.0-use)*sunVisibility)+localSpecular;
     vec2 envUv = channelUv(u_vehicleChannels.z, v_texcoord0, v_texcoord1, v_texcoord2);
     if (u_vehicleChannels.w > 0.5) {
         vec3 ray = reflect(normalize(v_viewPos), n);
@@ -90,7 +119,8 @@ void main()
                 worldRay = position + worldRay * distance - u_reflectionProbe.xyz;
             }
         }
-        vec3 capture = u_sunAmb.rgb + u_sunDiff.rgb * (0.06 + 0.28 * saturate(worldRay.y));
+        vec3 capture = u_sunAmb.rgb + (u_sunDir.w < -0.5 ? vec3(0.0,0.0,0.0)
+            : u_sunDiff.rgb * (0.06 + 0.28 * saturate(worldRay.y)));
         if (u_dynamicReflection.x < 1.5)
             capture = textureCube(s_sceneReflection, worldRay).rgb;
         // Keep dark parts of the scene visible in the reflection without
@@ -107,7 +137,7 @@ void main()
         float alpha = base.a*u_vehicleDiffuse.a;
         if (u_lightmap.w > 0.5 && alpha < 4.0/255.0) discard;
         vec3 pane = mixed*illum*bake;
-        pane += u_vehicleSpec.rgb*spec;
+        pane += (u_vehicleSpec.rgb*spec*sunVisibility+localSpecular);
         if (u_vehicleLayers.w > 4.5) pane += environment*weight;
         gl_FragColor = vec4(pane, alpha);
         return;
@@ -125,18 +155,18 @@ void main()
         // A headlight cover names an empty spheremap and borrows the sky.
         // Cabin glass keeps its strength, plus a graze, so it is not a hole.
         float envK = u_vehicleChannels.w > 1.5 ? 0.4 : (1.0+fres*0.5);
-        vec3 shine = (environment*weight*envK + u_vehicleSpec.rgb*spec)*faceWeight;
+        vec3 shine = (environment*weight*envK + (u_vehicleSpec.rgb*spec*sunVisibility+localSpecular))*faceWeight;
         gl_FragColor = vec4(lit*alpha + shine, alpha);
         return;
     } else if (u_vehicleLayers.w > 1.5) {
         // Stock chrome: lit colour + env*strength + specular. The 0.5 is the
         // garage light's specular when no scene light has been read yet.
-        vec3 lit = u_vehicleDiffuse.rgb*(u_sunDiff.a > 0.5
+        vec3 lit = u_vehicleDiffuse.rgb*((u_sunDiff.a > 0.5 || u_sunDir.w < -0.5)
             ? illum
             : (vec3(0.347, 0.347, 0.347)+vec3(0.919, 0.958, 1.0)*ndl));
-        color = lit + environment*weight;
+        color = lit + environment*weight + localSpecular;
         vec3 sp = u_sunSpec.a > 0.5 ? u_sunSpec.rgb : vec3(0.5, 0.5, 0.5);
-        color += u_vehicleSpec.rgb*pow(ndh, max(u_vehicleSpec.a, 1.0))*sp*step(0.001, ndl);
+        color += u_vehicleSpec.rgb*pow(ndh, max(u_vehicleSpec.a, 1.0))*sp*step(0.001, ndl)*sunVisibility;
     } else if (u_vehicleLayers.w > 0.5) {
         // Painted panels keep their color and gain the room on top.
         if (u_dynamicReflection.x > 0.5) {

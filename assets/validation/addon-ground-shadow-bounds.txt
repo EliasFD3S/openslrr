@@ -1,0 +1,27 @@
+Addon shadow coverage (#201, PR #202)
+
+Reported map: Drag Track (user confirmed).
+A read-only production asset probe decoded maps/Addon_Maps/Drag_Track.rpk.
+Before correction: one ground mesh, 71,008 vertices, scale 1, identity translation,
+bbox (0,0,0)..(0,0,0). At eye (27,2,-36), noon+1h sun, the 32m cascade rejected
+this mesh while larger levels accepted it. The entire map was culled as a point.
+Evidence: build/issue201-drag-probe.log (pre-fix diagnostic; instrumentation removed).
+
+Fix: compute assembled POLY render bounds from decoded positions once in
+scene_instances_ground_map. SCY supplies materials, not SCX vertex bounds.
+No per-frame vertex scan, no range increase, no addon/class-name exception.
+
+Validation:
+- build/issue201-drag-bounds-build.log: Release host build succeeds.
+- build/issue201-drag-bounds-gpu.log: production D3D11 suite exit 0, including
+  real Drag Track bounds compared with all positions and inclusion in each of
+  the 32/100/320/1000m shadow volumes, plus production atlas/caster collection.
+  Existing receiver, garage/dealer, projection and real-world cache checks pass.
+- Optional asset regression skips when Drag Track is not installed.
+- Knowledge references: 325 checked / 119 external / 0 errors; diff check passed.
+
+The attempted automated driving smoke entered Drag_Track but did not start its
+benchmark drive; it was stopped. It is not reported as an in-game success or a
+visual/performance comparison. User retest at the supplied views remains needed.
+The outer shadow radius remains 1000m. Correctly retained monolithic map meshes
+may increase caster submission versus the previously incorrect rejection.

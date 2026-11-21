@@ -1,6 +1,7 @@
 #include "slrr/host_game_options.hpp"
 #include "slrr/jvm.hpp"
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -17,6 +18,15 @@ GameOptions current;
 uint64_t driving_revision = 0;
 FramerateMode framerate_mode = FramerateMode::Adaptive;
 std::string host_options_path;
+
+bool integer_option(const std::string& line,const char* key,int& target,int low,int high) {
+  const std::string prefix=std::string(key)+"=";
+  if(line.rfind(prefix,0)!=0) return false;
+  int value=target;const auto* begin=line.data()+prefix.size();
+  auto [end,error]=std::from_chars(begin,line.data()+line.size(),value);
+  if(error==std::errc{} && end==line.data()+line.size()) target=std::clamp(value,low,high);
+  return true;
+}
 
 // Host-only settings live beside the stock options. Config has a fixed
 // binary layout, so a new field there would need a patched Config class.
@@ -37,7 +47,14 @@ void load_host_options(const std::string& root) {
     else if (line == "msaa=1") graphics.msaa = 1;
     else if (line == "msaa=2") graphics.msaa = 2;
     else if (line == "msaa=3") graphics.msaa = 3;
-    else for (const auto& entry : {std::pair{"dynamic_reflections", &graphics.dynamic_reflections},
+    else if(integer_option(line,"ao_method",graphics.ao_method,0,2) ||
+            integer_option(line,"ao_quality",graphics.ao_quality,0,2) ||
+            integer_option(line,"ao_strength",graphics.ao_strength,0,200) ||
+            integer_option(line,"ao_radius",graphics.ao_radius,25,300) ||
+            integer_option(line,"shadow_quality",graphics.shadow_quality,0,2) ||
+            integer_option(line,"shadow_smoothing",graphics.shadow_smoothing,0,2)) {}
+    else for (const auto& entry : {std::pair{"anisotropic_filtering", &graphics.anisotropic_filtering},
+                                  std::pair{"dynamic_reflections", &graphics.dynamic_reflections},
                                   std::pair{"volumetric_clouds", &graphics.volumetric_clouds},
                                   std::pair{"dynamic_lighting", &graphics.dynamic_lighting},
                                   std::pair{"local_lights", &graphics.local_lights}}) {
@@ -55,10 +72,17 @@ bool save_host_options() {
   out << "framerate_mode="
       << (framerate_mode == FramerateMode::Classic ? "classic" : "adaptive") << '\n'
       << "msaa=" << std::clamp(graphics.msaa, 0, 3) << '\n'
+      << "anisotropic_filtering=" << graphics.anisotropic_filtering << '\n'
       << "dynamic_reflections=" << graphics.dynamic_reflections << '\n'
       << "volumetric_clouds=" << graphics.volumetric_clouds << '\n'
       << "dynamic_lighting=" << graphics.dynamic_lighting << '\n'
-      << "local_lights=" << graphics.local_lights << '\n';
+      << "local_lights=" << graphics.local_lights << '\n'
+      << "ao_method=" << std::clamp(graphics.ao_method,0,2) << '\n'
+      << "ao_quality=" << std::clamp(graphics.ao_quality,0,2) << '\n'
+      << "ao_strength=" << std::clamp(graphics.ao_strength,0,200) << '\n'
+      << "ao_radius=" << std::clamp(graphics.ao_radius,25,300) << '\n'
+      << "shadow_quality=" << std::clamp(graphics.shadow_quality,0,2) << '\n'
+      << "shadow_smoothing=" << std::clamp(graphics.shadow_smoothing,0,2) << '\n';
   out.close();
   if (!out) std::fprintf(stderr, "[options] could not save %s\n", host_options_path.c_str());
   return bool(out);

@@ -1,0 +1,37 @@
+#201 stationary-camera moving-sun edge shimmer follow-up
+Windows x64 Release / D3D11; previous PR #202 head 5a67025.
+User confirms: camera/car stationary, shimmer mainly at edges; stopping clock
+stops the shimmer and improves performance. Earlier wider PCF alone was insufficient.
+
+A numerical stationary receiver at (5000,20,-7000), 400 tiny sun-direction
+changes, reproduces a maximum lattice jump of 0.89844 tile texels with the
+old global origin. The same sequence around the local origin: 0.00372 texels.
+A long-drive aligned rebase preserves all four cascade phases within 0.00073
+texels in the fixture. These are projection tests, not a full visual camera test.
+
+Changes: shared nearby floating origin for sun-caster and receiver coordinates;
+depth vertex shader separates model/world and view-projection multiplication;
+absolute-space culling retained. Rebase travel on the common tile-grid step.
+Use car depth comparison before bilinear filtering instead of interpolated raw
+depth followed by step(). GPU sub-texel car edge: 7 distinct coverage values.
+
+Atlas reuse requires exact matrices, origin and ordered caster snapshots
+(source/revision, buffer handles and transforms). No time/angular threshold.
+A stable redraw establishes the snapshot after a moving-light interval.
+Real Test Track integration confirms unchanged reuse and invalidation by a small
+sun change, a moved shell and a geometry revision. No frozen moving geometry.
+GPU tests also cover nonzero-origin reception, cascades, blending/fade, previews,
+emission/local light and thin stripes. Existing shader ownership/reopen passes
+with 28 baseline shaders (one additional depth vertex shader).
+
+Isolated Valocity/Baiern 12 s fixed-step smoke: exit 0 / 841 frames.
+Inspected a reduced 10 s capture: scene/shadows render without an obvious alignment
+break. Static screenshots do not establish temporal quality.
+Final moving-sun warm-window means (2-11; ms except draws):
+{'frame_avg_ms': 9.393, 'shadows_ms': 3.626, 'gpu_ms': 4.518, 'draws': 2870.6}
+No FPS improvement is claimed for this follow-up. Clock-frozen cache reuse is
+covered by the real-map integration test; the user's exact camera still needs
+manual retesting for remaining aliasing and motion.
+Logs: build/issue201-origin-gpu.log, build/issue201-origin-programs.log,
+build/issue201-shadow-origin-build.log;
+smoke: build/issue201-origin-final/{stdout.log,stderr.log,perf.csv}.

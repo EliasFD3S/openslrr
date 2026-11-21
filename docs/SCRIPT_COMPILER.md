@@ -88,6 +88,32 @@ three classes in one 83,244-byte TUFA: `java.game.OptionsDialog`,
 reader and SLRR-JVM-decompiler's strict parser accepted it. This is structural
 validation, not an in-game test of every generated method.
 
+### Shipped patch classes (#235)
+
+The light API and the patched Garage were compiled with the CLI on a copy of
+the game root, never on the installed game. From the repository root, in Git
+Bash (`R` is gitignored scratch space):
+
+```bash
+R=build/issue235-compile-root
+mkdir -p $R && for e in game/*; do case "${e##*/}" in save|screenshots|music) ;; *) cp -r "$e" $R/;; esac; done
+mv $R/sl/Scripts/game/src/OptionsDialog.java $R/OptionsDialog.java.aside
+mkdir -p $R/system/Scripts/render/src
+cp patch/system/Scripts/render/src/*.java $R/system/Scripts/render/src/
+./build/Release/compile_game_sources.exe "$(cygpath -w $R)" system/Scripts/render
+cp patch/sl/Scripts/game/src/Garage.java $R/sl/Scripts/game/src/
+./build/Release/compile_game_sources.exe "$(cygpath -w $R)" sl/Scripts/game
+cp $R/system/Scripts/render/{LightSource,PointLight,SpotLight,RectLight}.class patch/system/Scripts/render/
+cp $R/sl/Scripts/game/Garage.class patch/sl/Scripts/game/
+```
+
+The render package compiles first so Garage resolves `java.render.SpotLight`.
+Moving `OptionsDialog.java` aside keeps the second run to Garage alone; the
+directory argument compiles every `src/*.java` below it. Results: 4/4 render
+units, and 1/1 Garage unit producing three classes (94,397 bytes with the three garage tables), with two
+`W_UNVERIFIED` warnings for constructs already in the MWM source (a final
+static method, an empty `else ;`).
+
 Reference projects consulted: SLRR-JVM, SLRR-JVM-compiler,
 SLRR-JVM-decompiler and slrr-reverse. The bundled compiler's exact provenance
 and license are recorded in `third_party/slrrc/README.openslrr.md` and `LICENSE`.

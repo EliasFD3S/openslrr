@@ -1,0 +1,28 @@
+Scene environment / exterior eligibility (#201, PR #202)
+
+Problem: exterior lighting required registered stock ground props, and the
+shadow light was taken from a visible ground_polygons instance. SCX-only addon
+scenes and dealer scenes could therefore miss the exterior path.
+
+Change: mainloop forwards Scene.java internalScene when present; preview scenes
+opt out. Without metadata, retain automatic stock-ground detection. The shadow
+pass uses the active root-scoped scene light directly. No Java patch.
+Garage local-light approximation and real emitter work are unchanged.
+
+Validation (Windows D3D11 Release):
+- build/issue201-scene-build.log: slrr_host Release build succeeded.
+- build/issue201-scene-gpu.log: scene_shadow_gpu exit 0. Production shadow pass
+  activates on a mesh-only exterior (no ground props/POLY, empty main-view list)
+  and includes its triangle caster. Production mainloop reads internalScene;
+  interior+sky retains its authored light at noon/midnight; an unrelated newer
+  light cannot override it; previews/automatic fallback do not gain a sun.
+  Existing real-map cache invalidation and receiver/projection tests pass.
+- check_knowledge_refs: 325 checked / 119 external / 0 errors; diff check passed.
+- build/issue201-scene-city/stdout.log: isolated Valocity/Baiern smoke exits 0,
+  841 frames. t10.tga inspected; scenery and vehicle shadows present.
+  Recorded warm CSV means: frame 12.208 ms, shadows 4.361 ms, GPU 6.054 ms,
+  2863 draws. These are one local run, not a matched performance comparison.
+
+The user confirmed the preceding moving-sun shimmer fix on their reported view.
+Actual dealer/addon scenes still require visual acceptance; no full interior
+light replacement, PBR, headlight or reflection eligibility overhaul is claimed.

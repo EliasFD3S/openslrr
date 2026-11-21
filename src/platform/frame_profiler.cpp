@@ -12,7 +12,11 @@ namespace {
 constexpr const char *kZoneNames[] = {
     "scripts",  "physics",     "flush",     "collect", "shadows",
     "refl",     "world",       "osd",       "present", "traffic",
-    "vehicles", "pedestrians", "collision", "gc"};
+    "vehicles", "pedestrians", "collision", "gc",
+    "collect_batches", "sun_shadows", "car_depth", "fixture_shadows",
+    "lamp_select", "lamp_shadows", "ao", "world_list", "world_copy",
+    "collect_instances", "collect_skins", "collect_previews", "residency",
+    "worker_submit", "submit_wait"};
 static_assert(std::size(kZoneNames) == static_cast<size_t>(Zone::Count));
 
 struct State {
@@ -39,6 +43,11 @@ State &state() {
 double to_ms(int64_t ticks) { return static_cast<double>(ticks) * 1e-6; }
 
 } // namespace
+
+bool &worker_thread() {
+  static thread_local bool worker = false;
+  return worker;
+}
 
 int64_t now_ticks() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(

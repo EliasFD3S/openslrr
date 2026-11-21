@@ -1,0 +1,36 @@
+Garage real-geometry shadow coverage (#201 / PR #202)
+
+User: Drag Track fix accepted; garage still appears baked-only, with a forced
+illumination effect. Earlier tests certified sampling but not the complete bay.
+
+Diagnosed defects:
+- All ground_polygons instances were excluded from the garage depth pass, also
+  excluding integrated interior geometry, rather than only the ceiling.
+- Fixed +/-10m footprint vs first stock room x=-17.93..19.06m, z=-11.19..14.06m.
+- Legacy single-field distance/UV fades deliberately relit covered room edges.
+
+Fix: fit footprint from transformed room bounds (one eight-corner scan per shell),
+include room POLY casters and furniture, keep ceiling-above-emitter near clipping.
+Use zero single-field fade distance to preserve coverage throughout the fitted
+footprint; tap bounds still reject outside samples. No source-texture darkening,
+per-frame vertex scan, shader sampling budget or outdoor range increase.
+
+Validation:
+- Real D3D11 garage regression loads misc/garage.rpk room 0x7A and furniture
+  0x42. Actual floor triangles/materials/normals/UVs are used as receivers.
+- Every room corner lies inside production shadow UV bounds.
+- 256-square floor capture: enabling shadows changes 2860 pixels by >10 red
+  levels; moving actual furniture 1m changes 1378 pixels while baked textures
+  stay identical. The ceiling does not blanket the floor (coverage <50%).
+- Previous real-map, addon, dealer, receiver/capture, local-light, preview and
+  projection/cache regressions pass in the same scene_shadow_gpu suite.
+- Actual game on/off views with fixed wider camera: build/issue201-garage-wide-on.tga
+  and -off.tga. Inspected world and difference images: furniture and vehicle floor
+  shadows change. Interior ambient and baked source texture details remain.
+- Diagnostic instrumentation and camera override removed before production build.
+- User's running executable was left alone; a separate diagnostic build was used
+  while it locked the main executable. Final delivery build is reported separately.
+
+Logs: build/issue201-garage-fit-motion-gpu.log; build/issue201-garage-wide-build.log.
+Remaining: user acceptance at original view; physical multi-fixture lighting,
+complete room/light metadata and source baked-light adaptation are still #201 work.

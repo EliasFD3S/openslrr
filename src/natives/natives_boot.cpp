@@ -12,6 +12,7 @@
 #include "slrr/osd_registry.hpp"
 #include "slrr/render_backend.hpp"
 #include "slrr/gameref.hpp"
+#include "slrr/script_lights.hpp"
 #include "slrr/script_cfg.hpp"
 #include "slrr/slrr_font.hpp"
 #include "slrr/video_fmv.hpp"
@@ -593,6 +594,7 @@ void register_boot_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
     mainloop_visit_gc_roots(visit);
     dyno_visit_gc_roots(visit);
     scene_visit_gc_roots(visit);
+    script_lights_visit_gc_roots(visit);
   });
   scene_instances_set_resources(&rpk);
   register_io_natives(jvm, rpk, sections);
@@ -606,6 +608,7 @@ void register_boot_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   register_part_natives(jvm,rpk);
   register_race_natives(jvm,rpk,sections);
   register_painter_natives(jvm);
+  register_light_natives(jvm);
   install_osd_script_hover(jvm);
 
   // Statics

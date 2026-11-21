@@ -1,0 +1,58 @@
+Interior point light foundation (#201 / PR #202)
+
+Contract:
+- PointLight: owner, render-space position in metres, RGB, engine intensity,
+  range, explicit ambient and shadow flag; finite-value validation.
+- First compatibility adapter: stock garage neon owner/colour, owner-transformed
+  local anchor (0,3.3,0), intensity 18, radius 32 m, authored ambient * .15.
+  This is an explicit policy, not recovered ceiling-fixture metadata or lumens.
+- One source with inverse-square attenuation and smooth radial window. Old
+  fixed/directional illumination is suppressed on the migrated interior path.
+  Vehicle direct highlights and scenery receive the same source visibility;
+  captured scenery receives the same light. Baked diffuse detail remains.
+- Six 512x512 D32F faces in a 1536x1024 atlas: 6 MiB depth payload, versus the
+  old interior map's 16 MiB. Near .05m, overlapping 92-degree perspectives,
+  dominant-face sampling with four comparison taps, .015m radial receiver bias.
+- Reserved view 64 is ordered before world 5/6. Other faces use 0/1/2/3/4;
+  garage vehicle depth is disabled. Previews 8..63/OSD 70/reflections 72+ retain
+  their roles. Inset ordering includes the reserved face as well.
+- Reuse exact unchanged geometry/projection state. Position/range/caster changes
+  invalidate; RGB/intensity updates do not redraw depth. Close/world transitions
+  and local/dynamic-light options remove the active adapter/source.
+
+Validation (Release D3D11):
+- build/issue201-point-final-build.log: production executable and DXBC/GLSL build.
+- build/issue201-point-final-gpu.log: scene_shadow_gpu exit 0. Controlled
+  vehicle-tagged blocker shadows vertical receivers in every cube direction in
+  the SAME frame as atlas submission (including face/view 64). Coverage per face:
+  16384,16384,15616,15616,16384,16384 pixels. Lateral blocker removal leaves 0
+  blocked pixels on each receiver. Reflection view 72 matches the main view.
+- Position change invalidates; RGB/intensity changes only shade; radial range
+  cutoff restores ambient-only pixels. Finite data validation, owner translation,
+  local-light toggle and other-world isolation pass.
+- Actual garage shell/furniture/floor-material regression: 607 covered pixels;
+  moving furniture changes 919 shadow pixels with source textures unchanged.
+- Directional vehicle-depth regression: 4456 vertical-wall shadow pixels. This
+  rejects a general floor-only receiver restriction, but does not reproduce the
+  user's exact outdoor parking/sun configuration.
+- build/issue201-point-programs.log: shader baseline 28; rejection 30; after 32
+  cycles 28; backend reopen passes. build/issue201-point-preview.log: catalog,
+  cursor and tooltip/inset regressions pass. Knowledge check 325 refs / 0 errors.
+- build/issue201-point-city.log: isolated Valocity smoke exit 0 / 241 frames.
+- Real-script garage captures in build/issue201-point-garage/: view-centre.tga,
+  view-moved.tga (diagnostic source translated 3m). Inspected: pools of light,
+  shadow direction and car highlights/reflections respond to source movement.
+  Point atlas revision changes from 1 to 2 for that move; stationary frames
+  reuse depth. Local run is capped near 144 Hz; no matched FPS comparison is
+  claimed. The captured GPU timing is not treated as a performance gain.
+- All temporary capture/source-motion/camera instrumentation removed.
+  The capture process was deliberately stopped; final production startup smoke
+  and compilation are recorded separately, not inferred from that termination.
+
+Limits:
+- One interior point adapter only. Multiple fixture placement, source authoring,
+  outdoor point registry, sun+point shadow allocation and spot/projector headlights
+  are not connected. Skinned casters remain excluded.
+- Engine intensity is not calibrated photometry; PBR/linear-light material
+  adaptation and HDR/tonemapping are later work. A single source leaves distant
+  parts of the garage dark. No area-light softness or volumetric beam is claimed.

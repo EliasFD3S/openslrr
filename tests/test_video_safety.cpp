@@ -1,5 +1,6 @@
 #include "save_io_fixture.hpp"
 #include "slrr/video_cinepak.hpp"
+#include "slrr/host_audio.hpp"
 #include "slrr/video_frame.hpp"
 #include <fstream>
 #include "slrr/video_fmv.hpp"
@@ -8,6 +9,7 @@
 #include <vfw.h>
 using namespace slrr;
 int main() {
+ try {
   const std::vector<uint8_t> sample={1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
   std::vector<uint8_t> output;
   SLRR_REQUIRE(video_copy_rgb32(sample,2,-2,output) && output==sample);
@@ -67,23 +69,29 @@ int main() {
   AVIStreamRelease(stream);AVIFileRelease(avi);
   // A Cinepak AVI with PCM audio plays through the built-in decoder.
   const auto cinepak_path=movies/"Cinepak.avi";
-  SLRR_REQUIRE(AVIFileOpenW(&avi,cinepak_path.c_str(),OF_CREATE|OF_WRITE,nullptr)==0);
-  info={};info.fccType=streamtypeVIDEO;info.fccHandler=mmioFOURCC('c','v','i','d');info.dwScale=1;info.dwRate=20;
-  SetRect(&info.rcFrame,0,0,8,4);
-  SLRR_REQUIRE(AVIFileCreateStreamW(avi,&stream,&info)==0);
-  bitmap.biWidth=8;bitmap.biHeight=4;bitmap.biBitCount=24;bitmap.biCompression=mmioFOURCC('c','v','i','d');bitmap.biSizeImage=0;
-  SLRR_REQUIRE(AVIStreamSetFormat(stream,0,&bitmap,sizeof(bitmap))==0);
-  SLRR_REQUIRE(AVIStreamWrite(stream,0,1,(void*)key.data(),LONG(key.size()),AVIIF_KEYFRAME,nullptr,nullptr)==0);
-  SLRR_REQUIRE(AVIStreamWrite(stream,1,1,(void*)inter.data(),LONG(inter.size()),0,nullptr,nullptr)==0);
-  PAVISTREAM sound=nullptr;AVISTREAMINFOW sound_info{};sound_info.fccType=streamtypeAUDIO;sound_info.dwScale=4;
-  sound_info.dwRate=4*8000;sound_info.dwSampleSize=4;
-  SLRR_REQUIRE(AVIFileCreateStreamW(avi,&sound,&sound_info)==0);
-  WAVEFORMATEX wave{};wave.wFormatTag=WAVE_FORMAT_PCM;wave.nChannels=2;wave.nSamplesPerSec=8000;wave.wBitsPerSample=16;
-  wave.nBlockAlign=4;wave.nAvgBytesPerSec=32000;
-  SLRR_REQUIRE(AVIStreamSetFormat(sound,0,&wave,sizeof(wave))==0);
-  std::vector<uint8_t> silence(4*800);
-  SLRR_REQUIRE(AVIStreamWrite(sound,0,800,silence.data(),LONG(silence.size()),AVIIF_KEYFRAME,nullptr,nullptr)==0);
-  AVIStreamRelease(sound);AVIStreamRelease(stream);AVIFileRelease(avi);AVIFileExit();
+  auto make_cinepak=[&](const fs::path& path,int channels,int bits,int samples){
+    SLRR_REQUIRE(AVIFileOpenW(&avi,path.c_str(),OF_CREATE|OF_WRITE,nullptr)==0);
+    info={};info.fccType=streamtypeVIDEO;info.fccHandler=mmioFOURCC('c','v','i','d');info.dwScale=1;info.dwRate=20;
+    SetRect(&info.rcFrame,0,0,8,4);
+    SLRR_REQUIRE(AVIFileCreateStreamW(avi,&stream,&info)==0);
+    bitmap.biWidth=8;bitmap.biHeight=4;bitmap.biBitCount=24;bitmap.biCompression=mmioFOURCC('c','v','i','d');bitmap.biSizeImage=0;
+    SLRR_REQUIRE(AVIStreamSetFormat(stream,0,&bitmap,sizeof(bitmap))==0);
+    SLRR_REQUIRE(AVIStreamWrite(stream,0,1,(void*)key.data(),LONG(key.size()),AVIIF_KEYFRAME,nullptr,nullptr)==0);
+    SLRR_REQUIRE(AVIStreamWrite(stream,1,1,(void*)inter.data(),LONG(inter.size()),0,nullptr,nullptr)==0);
+    const int block=channels*bits/8;
+    PAVISTREAM sound=nullptr;AVISTREAMINFOW sound_info{};sound_info.fccType=streamtypeAUDIO;sound_info.dwScale=block;
+    sound_info.dwRate=block*8000;sound_info.dwSampleSize=block;
+    SLRR_REQUIRE(AVIFileCreateStreamW(avi,&sound,&sound_info)==0);
+    WAVEFORMATEX wave{};wave.wFormatTag=WAVE_FORMAT_PCM;wave.nChannels=channels;wave.nSamplesPerSec=8000;wave.wBitsPerSample=bits;
+    wave.nBlockAlign=block;wave.nAvgBytesPerSec=8000*block;
+    SLRR_REQUIRE(AVIStreamSetFormat(sound,0,&wave,sizeof(wave))==0);
+    std::vector<uint8_t> silence(block*samples,bits==8?128:0);
+    SLRR_REQUIRE(AVIStreamWrite(sound,0,samples,silence.data(),LONG(silence.size()),AVIIF_KEYFRAME,nullptr,nullptr)==0);
+    AVIStreamRelease(sound);AVIStreamRelease(stream);AVIFileRelease(avi);
+  };
+  make_cinepak(cinepak_path,2,16,800);
+  make_cinepak(movies/"Mono8.avi",1,8,8001);
+  AVIFileExit();
   {
     std::ifstream file(cinepak_path,std::ios::binary);AviCinepakInfo index;
     SLRR_REQUIRE(avi_read_cinepak(file,index) && index.width==8 && index.height==4 && index.frames.size()==2 &&
@@ -92,15 +100,48 @@ int main() {
     std::ifstream plain(movies/"Activision.avi",std::ios::binary);
     SLRR_REQUIRE(!avi_read_cinepak(plain,index));
   }
+  auto mixer=host_audio_acquire();SLRR_REQUIRE(mixer);
+  SLRR_REQUIRE(mixer->fmv->setVolume(0)==FMOD_OK);
   video_fmv_set_game_root(f.root.string());
   SLRR_REQUIRE(video_fmv_open("Data\\FMV\\Cinepak.avi",1,0)==0 && video_fmv_is_playing());
+  SLRR_REQUIRE(video_fmv_audio_running()&&video_fmv_audio_stream_count()==1);
+  int channels=0;SLRR_REQUIRE(mixer->fmv->getNumChannels(&channels)==FMOD_OK&&channels==1);
   video_fmv_pump();
   SLRR_REQUIRE(video_fmv_frame_ready() && video_fmv_width()==8 && video_fmv_height()==4 && video_fmv_frame_serial()==1);
   SLRR_REQUIRE(std::vector<uint8_t>(video_fmv_bgra(),video_fmv_bgra()+16)==cat(cat(colour,colour),cat(colour,colour)));
   for(int i=0;i<400 && video_fmv_is_playing();++i){video_fmv_pump();Sleep(5);}
   SLRR_REQUIRE(!video_fmv_is_playing());
   video_fmv_close();
-  std::puts("PASS Cinepak AVI index, built-in playback and end of stream");
+  SLRR_REQUIRE(mixer->fmv->getNumChannels(&channels)==FMOD_OK&&channels==0);
+  SLRR_REQUIRE(video_fmv_open("Data\\FMV\\Cinepak.avi",1,1)==0);
+  const auto loop_serial=video_fmv_frame_serial();
+  for(int i=0;i<400;++i){
+    video_fmv_pump();
+    if(video_fmv_frame_serial()>loop_serial+4&&video_fmv_audio_running())break;
+    Sleep(5);
+  }
+  SLRR_REQUIRE(video_fmv_is_playing()&&video_fmv_audio_running()&&video_fmv_frame_serial()>loop_serial+4);
+  SLRR_REQUIRE(mixer->fmv->getNumChannels(&channels)==FMOD_OK&&channels==1);
+  video_fmv_close();
+  SLRR_REQUIRE(!video_fmv_audio_running()&&mixer->fmv->getNumChannels(&channels)==FMOD_OK&&channels==0);
+  SLRR_REQUIRE(video_fmv_open("Data\\FMV\\Cinepak.avi",1,0)==0);
+  Sleep(250);video_fmv_pump(); // Audio can end between widely spaced pumps.
+  SLRR_REQUIRE(!video_fmv_is_playing());
+  SLRR_REQUIRE(video_fmv_open("Data\\FMV\\Mono8.avi",1,0)==0);
+  FMOD::Channel* pcm_channel=nullptr;FMOD::Sound* pcm_sound=nullptr;unsigned samples=0;
+  SLRR_REQUIRE(mixer->fmv->getChannel(0,&pcm_channel)==FMOD_OK&&pcm_channel->getCurrentSound(&pcm_sound)==FMOD_OK);
+  SLRR_REQUIRE(pcm_sound->getLength(&samples,FMOD_TIMEUNIT_PCM)==FMOD_OK&&samples==8001);
+  video_fmv_pump();Sleep(150);video_fmv_pump();
+  SLRR_REQUIRE(video_fmv_is_playing()&&video_fmv_audio_running()); // Audio outlasts the two video frames.
+  for(int i=0;i<400&&video_fmv_is_playing();++i){video_fmv_pump();Sleep(5);}
+  SLRR_REQUIRE(!video_fmv_is_playing());
+  SLRR_REQUIRE(video_fmv_open("Data\\FMV\\Mono8.avi",1,0)==0);
+  const auto stopped_serial=video_fmv_frame_serial();
+  SLRR_REQUIRE(mixer->fmv->stop()==FMOD_OK); // Inject early channel invalidation.
+  video_fmv_pump();SLRR_REQUIRE(video_fmv_is_playing()&&video_fmv_frame_serial()==stopped_serial+1);
+  for(int i=0;i<400&&video_fmv_is_playing();++i){video_fmv_pump();Sleep(5);}
+  SLRR_REQUIRE(!video_fmv_is_playing());video_fmv_close();
+  std::puts("PASS Cinepak FMOD stereo16/odd mono8 PCM, loop restart, EOF/cancel and continuous clock after channel failure");
   int playback_ticks=0;
   const auto active_played=video_fmv_play_boot_intros(0,[&](){return ++playback_ticks<2;});
   SLRR_REQUIRE(active_played==1 && playback_ticks==2 && !video_fmv_is_playing() && !video_fmv_block_osd());
@@ -121,4 +162,8 @@ int main() {
   SLRR_REQUIRE(!IsWindow(hwnd) && !backend->ready());
   backend->close();
   std::puts("PASS WM_CLOSE retains HWND until backend close; quit frame returns; close is repeatable");
+ } catch(const std::exception& error) {
+  video_fmv_close();
+  std::fprintf(stderr,"video_safety: %s\n",error.what());return 1;
+ }
 }

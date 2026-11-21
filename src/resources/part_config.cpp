@@ -331,7 +331,11 @@ PartConfig parse_part_config(const std::string &source,
           deformable_pose = pose(t, 2);
       } else if (command == "flags" && !out.renders.empty())
         out.renders.back().flags |= static_cast<uint32_t>(integer(t, 1));
-      else if (command == "lod" && !out.renders.empty()) {
+      else if (command == "lods") {
+        out.lod_sizes.clear();
+        for (size_t i = 2; i < t.size(); ++i) out.lod_sizes.push_back(number(t, i));
+        if (!std::is_sorted(out.lod_sizes.begin(), out.lod_sizes.end())) out.lod_sizes.clear();
+      } else if (command == "lod" && !out.renders.empty()) {
         out.renders.back().lod_level = integer(t, 1);
         out.renders.back().lod_last = t.size() > 2 ? integer(t, 2) : out.renders.back().lod_level;
       } else if (command == "linked" && !out.renders.empty()) {

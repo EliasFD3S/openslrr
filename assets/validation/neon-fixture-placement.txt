@@ -1,0 +1,52 @@
+Issue #201 / PR #202: stock g1 ceiling fixtures (2026-11-19)
+
+Asset evidence:
+- garazs_01_targyak.scx, texturak group, garazs1.dds white swatch
+  UV (.188369,.139628). 432 tube triangles form 18 connected tubes,
+  paired spatially into 9 fittings. Tube lower Y ~6.511m; emitter Y ~6.431m.
+- Loader preserves positions, normals and UVs. It splits only accepted tube
+  triangles into an explicitly self-illuminated runtime material group.
+  Source anchors are local script-space metres, not hardcoded world positions.
+
+Renderer:
+- Maximum 12 rooted-owner SpotLight records, one per paired fitting, neutral white,
+  intensity 12 engine units, range 20m, 65/80 degree inner/outer half-angle.
+- 12 MiB D32F atlas, 2048x1536, twelve 512-square tiles. Views 128..139 are
+  ordered before world, without disturbing 64/65 point/sun, preview or captures.
+  Actual g1 uses 9 tiles; original cube point atlas is inactive on this path.
+- Exact projection/caster reuse, per-tile frustum culling, cached opaque groups.
+  Colour/intensity edits do not invalidate depth. Source/caster movement does.
+- Mesh/vehicle sampler 7. Direct diffuse/specular and reflection capture share
+  local falloff/cone and shadow reception. Sun/ambient remain separate.
+- White tube display works when lighting is off. No texture replacement or
+  whole-material/full-room illumination is used to keep the tubes bright.
+
+Validation:
+- build/neon-production-build.log: Release build successful.
+- build/neon-production-gpu.log: exit 0, 9 sources, 24334 illuminated real-floor pixels,
+  each source adds 6790..12080 pixels alone, occlusion changes 4493 pixels.
+  Unchanged/colour-only state reuses depth; moved source refreshes and moves light.
+  Reflection view matches; 136 white tube pixels stay identical with lights off.
+  Instance translation moves anchors; missing world/local option clears sources.
+- build/neon-garage-view.png: inspected isolated-game diagnostic capture with
+  camera raised to show the ceiling: paired white tubes align with fittings,
+  wall/floor illumination is visible, ceiling stays dark above downward hoods.
+  Only the owned diagnostic process was stopped. That termination is not a
+  clean-exit or performance result. No user save data was used or modified.
+- Temporary capture/camera code removed from production source.
+- build/neon-programs.log: exit 0, shader baseline 28, rejection exercise 30,
+  after 32 cycles 28, reopen passes. build/neon-preview.log: exit 0.
+- build/neon-garage-smoke.log: production startup in isolated root, exit 0,
+  3 frames, Garage section. No manual acceptance inferred from this smoke.
+- build/neon-knowledge.log: 325 refs checked / 119 external / 0 errors.
+
+Limits:
+- Explicit g1 legacy adapter only. Other garage layouts retain the old single
+  point fallback; generic authoring and other adapters are still open.
+- Broad punctual sources under hoods, not physically integrated tube/area emitters.
+  Intensity is not lumens; no GI, bounce light, HDR, PBR or calibrated exposure.
+- 512-square wide-cone shadows and existing exclusions (skinned casters) remain.
+- No matched FPS claim; user visual/performance acceptance is still required.
+
+Brightness tuning: fixture intensity increased from 12 to 24 engine units
+following user feedback. Positions/range/cones and white tube texture unchanged.

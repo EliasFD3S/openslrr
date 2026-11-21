@@ -81,7 +81,7 @@ The chart, the counts above and [native-coverage.json](assets/progress/native-co
 | Cars | ✅ Assembly from scripts and CFG files; reference Baiern with 76 parts. Showroom camera orbit, vehicle information, powertrain layout, gear ratios and dyno calculations |
 | Workshop | ✅ Point at a part to read its name, hide the body or the engine, open panels with interpolated motion and adjust tunable parts. Remove or fit attached assemblies, and drag inventory parts onto Repair/Sell. Detached suspension parts regain their rest pose in the inventory |
 | Physics | ⏳ Fixed-step chassis, suspension and tyre contacts, differential lock, impact deformation and panel detachment. Handling and damage still need comparison with the original |
-| Audio and video | ✅ Effects, loops, FMV audio and four music playlists streamed with Media Foundation/XAudio2. Repeated effects and menu sounds have separate overlap limits |
+| Audio and video | ✅ Effects, loops, stock Cinepak FMV audio and four streamed music playlists mixed with FMOD Core. Repeated effects and menu sounds have separate overlap limits |
 | Options | ✅ Game, Advanced Game and audio settings use `save/game/options`, writing JSON while still reading legacy SDAT saves. The patched OptionsDialog removes the pedestrian density slider and fixes the crowd at the original maximum (1.5). Traffic density is saved while its simulation is pending |
 | Driving | ⏳ Test Track driving with engine SFX tables, keyboard and SDL3 peripherals, stock and CFG-defined instruments, and GPS. Acceleration has been compared with stock Nonus and Einvagen telemetry, with differences remaining |
 | World and career | ⏳ City, traffic and complete career flow; vehicle purchase/save/load still need end-to-end validation |
@@ -98,7 +98,7 @@ Engine loops use the scripts' SFX tables. Music playlists currently play in sequ
 - Added GameType notification replacement/removal, event aliases/custom handlers/one-shot delivery, and control/drive/animate registrations.
 
 - Added an engine-owned Config instance, audio sliders, and debounced option saving, with a final save on normal shutdown.
-- Replaced the failing MCI music player with bounded PCM streaming through Media Foundation and XAudio2. Music volume is independent of effects and FMV.
+- Effects, streamed music and stock Cinepak FMV now share an FMOD Core mixer, preserving separate volumes, bounded effects and playlist recovery. Optional VLC/Windows video-codec fallbacks keep their library-owned audio.
 - Fixed `Input.createHotkey` being misrouted to Osd, slider track hit-testing, and tuning events carrying the actual slider to the part. Modal dialogs block clicks into the car behind them.
 - Fixed reference casts used by tuning scripts, so mixture-ratio and similar assignments update the part instance.
 
@@ -111,12 +111,36 @@ Headless diagnostics cover all four music sets (muted), audio-volume save/reload
 - **Windows x64** and **Visual Studio 2022**, with the **Desktop development with C++** workload and the Windows SDK.
 - **CMake 3.21 or later** and **Git**, available in your terminal.
 - An installation of **SLRR 2.2.1 MWM**, containing `system/Scripts/lang/System.class`.
-- Windows Media Foundation for music decoding (included in standard Windows installations; Windows N editions need the Media Feature Pack).
+- **FMOD Studio API for Windows 2.04**, from the [FMOD downloads page](https://www.fmod.com/download). Only the Core API's x64 headers, import library and runtime are used.
 - An Internet connection while preparing and initially configuring dependencies.
 
 Open SLRR builds for Windows x64 with an MSVC-compatible compiler and uses bgfx for rendering. CMake rejects non-MSVC toolchains (including MinGW), x86 and ARM64 before adding targets. It loads the original game scripts and assets.
 
 The original intros and the menu background are Cinepak AVI files with PCM sound, which Open SLRR decodes itself; 64-bit Windows has no Cinepak codec, and no VLC installation is needed. Other formats, such as H.264/AAC in MP4, need **VLC 3.x for Windows x64**. Open SLRR looks in the standard VideoLAN installation directory. For a custom installation, set `SLRR_VLC_DIR` to the absolute folder containing `libvlc.dll`, `libvlccore.dll`, and `plugins`.
+
+### Quick start: build and run a branch
+
+With the requirements above installed, clone this repository, then run in PowerShell:
+
+```powershell
+git clone https://github.com/EliasFD3S/openslrr.git
+cd openslrr
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-run-branch.ps1 -Branch main -GameRoot 'D:\Games\SLRR'
+```
+
+The execution-policy override applies only to that PowerShell process and must
+be permitted by your organization. Replace `main` with the desired branch and
+the path with your SLRR 2.2.1 MWM installation. The helper fetches the branch
+into a separate checkout under
+`%LOCALAPPDATA%\OpenSLRR-branch-builds`, builds Release, and launches it. Pass
+`-Workspace 'D:\OpenSLRR-builds'` to change the checkout location or
+`-FmodSdkDir 'D:\FMOD Studio API Windows'` for a non-default FMOD SDK location.
+`-ToolsCacheDir` enables the shared shader tool cache. Existing CMake cache
+settings persist between runs. The helper uses the bgfx.cmake pin and build/launch
+commands documented here; branches with different requirements may need a manual
+build. Only build trusted branches and use a trusted workspace: CMake and the
+resulting game execute code. The game can change saves and options in `GameRoot`;
+use separate copies if running branches concurrently or to protect existing saves.
 
 ### Get the project
 
@@ -143,6 +167,27 @@ cmake --build build --config Release --target slrr_host --parallel
 CMake downloads the hash-pinned SDL 3.2.30 source and builds its peripheral support statically; no SDL DLL is needed. Offline builds can supply `-DFETCHCONTENT_SOURCE_DIR_SDL3=<SDL source directory>`.
 
 The executable is generated at `build/Release/slrr_host.exe`. The first build includes bgfx and its shader tools, so it may take a while.
+
+CMake finds FMOD in `C:/Program Files (x86)/FMOD SoundSystem/FMOD Studio API Windows`.
+For another location, pass `-DSLRR_FMOD_SDK_DIR="C:/path/to/FMOD Studio API Windows"`
+at configure time, or set the `SLRR_FMOD_SDK_DIR` environment variable before
+first configuring. The folder must contain `api/core/inc` and `api/core/lib/x64`.
+Build and install copy `fmod.dll` beside the executable. FMOD is proprietary,
+is not vendored or downloaded by this project, and is not covered by our MIT
+license; obtain the SDK and comply with [FMOD's licensing terms](https://www.fmod.com/licensing)
+before distributing builds.
+
+Audio regressions (muted, using the real FMOD runtime):
+
+```powershell
+cmake -S . -B build -DBUILD_TESTING=ON
+cmake --build build --config Release --target audio_recovery --parallel
+ctest --test-dir build -C Release --output-on-failure
+# Optional: also start all four playlists from a private game copy.
+.\build\Release\audio_recovery.exe --root data\game
+# Cinepak PCM, clock fallback, looping and video cancellation regressions.
+powershell -File scripts/run_save_io_tests.ps1 -Suite video_safety
+```
 
 #### Faster builds
 
@@ -195,6 +240,26 @@ and flush totals include their subtimes; do not sum every displayed row. Values
 are from the last completed measurement window, alongside bgfx's delayed render
 and GPU counters. A large GPU reading alone does not identify the whole frame's
 bottleneck.
+
+The Renderer tab is organised in sections. **Timings** lists the GPU time of
+every bgfx view (sun cascades, lamp and car lamp shadow tiles, AO passes,
+reflection faces, world, OSD), sorted by cost, with a 120-frame average,
+minimum and maximum, the CPU time of renderer phases (collection, prop
+batches, lamp selection, sun/vehicle/lamp shadows, fixture shadows, AO,
+reflections, submission), draws, primitives, instances, batches, texture and
+render-target memory; **Freeze**, **Copy to clipboard** and **Log** take a
+snapshot. **Log** also appends it to `perf/renderer_debug_YYYYMMDD_HHMMSS.txt`
+next to `slrr_host.exe` (for example `build/Release/perf/`); the menu shows
+the path. **Passes** and **Budgets and quality** are debug overrides that are
+not saved: AO, each sun cascade, shadow caching, vehicle and character
+casters, garage fixture shadows, street lamp lighting and shadows, car lamp
+tiles, reflections, sky, clouds, fog, MSAA, anisotropic filtering, map props,
+vehicles, characters and the OSD; lamp count and distance, shadowed lamps, car
+lamp tiles, shadow tile sizes, cascade radius scale, AO resolution,
+reflection faces per frame, map prop LOD bias, forcing the highest prop LOD,
+and the far size cull (4 px by default). **Buffers** shows the lamp/fixture shadow atlas,
+the sun cascade atlas and the AO buffer. **Options (saved)** holds the saved
+Enhanced graphics options as before.
 
 `--perf-log` prints one `[perf]` line per simulated second and writes the same fields to the CSV file. Add `--bench-shots DIR` to capture the window every 10 seconds. The run writes `save/game/options` on exit like a normal session.
 Select a visible vehicle or a preview in **Vehicle**, or use **Freeze

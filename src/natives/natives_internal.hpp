@@ -7,6 +7,7 @@
 #include "slrr/rpk_index.hpp"
 #include "slrr/section_machine.hpp"
 #include "slrr/slrr_font.hpp"
+#include "save_json.hpp"
 
 #include <cstdint>
 #include <cmath>
@@ -105,9 +106,15 @@ struct HostFile {
   // True for JSON saves and legacy SDAT containers: resource IDs use the
   // file-local remount tables. Older raw files keep their stored IDs.
   bool sdat = false;
-  // Ordered typed JSON records collected by File.write; bytes retains the
-  // script's binary stream contract (including cross-type reads).
-  std::string json_values;
+  // Typed values (and the script frames that wrote or read them) for the
+  // version 2 JSON; bytes retains the script's binary stream contract
+  // (including cross-type reads).
+  save_json::Document doc;
+  std::vector<int> frame_stack;
+  // A legacy SDAT / version 1 JSON save opened for reading under save/: when
+  // the script reads it completely, close() rewrites it as version 2 JSON.
+  bool convert = false;
+  bool convert_broken = false;
   // Unrepresentable resources are written as null, keeping the stream aligned.
   uint32_t degraded_resources = 0;
   std::filesystem::path path;
@@ -169,5 +176,7 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk,
                                 SectionMachine& sections);
 void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections);
 void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections);
+// java.render.LightSource family (#235); also clears the light registry.
+void register_light_natives(Jvm& jvm);
 
 }  // namespace slrr

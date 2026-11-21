@@ -15,6 +15,20 @@
 
 namespace slrr {
 
+// Host observer of script (TREE) method frames. enter() returns true when it
+// recorded the frame; leave() is then called once that frame returns or
+// throws. args excludes the receiver. Save serialization uses it to learn
+// which script method and object wrote each value of an open File.
+using ScriptFrameEnter = bool (*)(const std::string& owner, const std::string& method,
+                                  Object* self, const std::vector<Value>& args);
+using ScriptFrameLeave = void (*)();
+void set_script_frame_hooks(ScriptFrameEnter enter, ScriptFrameLeave leave);
+// Reports a frame to the installed hooks (Jvm::invoke does this for TREE
+// methods). Call script_frame_leave() once for each enter that returned true.
+bool script_frame_enter(const std::string& owner, const std::string& method, Object* self,
+                        const std::vector<Value>& args);
+void script_frame_leave();
+
 class Jvm : public TreeHost {
  public:
   explicit Jvm(NativeRegistry* natives);

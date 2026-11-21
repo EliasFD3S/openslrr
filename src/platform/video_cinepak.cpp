@@ -1,4 +1,5 @@
 #include "slrr/video_cinepak.hpp"
+#include "slrr/host_audio.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -7,12 +8,6 @@
 #include <cstring>
 #include <fstream>
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#include <xaudio2.h>
-#endif
 
 namespace slrr {
 namespace {
@@ -356,11 +351,12 @@ namespace {
 using Clock = std::chrono::steady_clock;
 
 struct Movie {
-  IXAudio2* engine = nullptr;
-  IXAudio2MasteringVoice* master = nullptr;
-  bool com = false;
-  IXAudio2SourceVoice* voice = nullptr;
-  uint64_t audio_base = 0;
+  std::shared_ptr<HostAudio> audio;
+  FMOD::Sound* sound = nullptr;
+  FMOD::Channel* voice = nullptr;
+  double audio_length = 0;
+  double audio_position = 0;
+  double audio_wall = 0;
   bool audio_done = true;
 
   std::ifstream file;
@@ -377,19 +373,16 @@ struct Movie {
   Clock::time_point started;
   double wall_offset = 0;
 
-  ~Movie() {
-    close();
-    if (master) master->DestroyVoice();
-    if (engine) engine->Release();
-    if (com) CoUninitialize();
-  }
+  ~Movie() { close(); }
 
   void close() {
     if (voice) {
-      voice->DestroyVoice();
+      voice->stop();
       voice = nullptr;
     }
+    if (sound) { sound->release(); sound = nullptr; }
     audio_done = true;
+    audio_length = 0;
     file.close();
     file.clear();
     info = {};
@@ -416,38 +409,20 @@ struct Movie {
     return true;
   }
 
-  bool audio_init() {
-    if (master) return true;
-    if (!com) {
-      const HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-      if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) return false;
-      com = SUCCEEDED(hr);
-    }
-    if (!engine && FAILED(XAudio2Create(&engine))) {
-      engine = nullptr;
-      return false;
-    }
-    if (FAILED(engine->CreateMasteringVoice(&master))) {
-      master = nullptr;
-      return false;
-    }
-    return true;
-  }
-
   bool submit_audio() {
-    XAUDIO2_BUFFER buffer{};
-    buffer.AudioBytes = static_cast<UINT32>(pcm.size());
-    buffer.pAudioData = pcm.data();
-    buffer.Flags = XAUDIO2_END_OF_STREAM;
-    XAUDIO2_VOICE_STATE state{};
-    voice->GetState(&state);
-    audio_base = state.SamplesPlayed;
-    audio_done = FAILED(voice->SubmitSourceBuffer(&buffer));
+    if (voice) { voice->stop(); voice = nullptr; }
+    audio_position = audio_wall = 0;
+    audio_done = !sound || !host_audio_check(audio->system->playSound(
+        sound, audio->fmv, false, &voice), "play Cinepak PCM");
     return !audio_done;
   }
 
   void start_audio() {
     if (!info.audio_channels) return;
+    // Wrap the indexed PCM in a WAV header so FMOD preserves WAV's unsigned
+    // 8-bit convention as well as signed 16-bit samples.
+    constexpr size_t header = 44;
+    pcm.resize(header);
     for (const AviChunkRef& ref : info.audio) {
       const size_t at = pcm.size();
       pcm.resize(at + ref.size);
@@ -457,24 +432,32 @@ struct Movie {
       pcm.resize(at + static_cast<size_t>(file.gcount()));
     }
     const int block = info.audio_channels * info.audio_bits / 8;
-    pcm.resize(pcm.size() - pcm.size() % block);
-    if (pcm.empty() || !audio_init()) return;
-    WAVEFORMATEX format{};
-    format.wFormatTag = WAVE_FORMAT_PCM;
-    format.nChannels = static_cast<WORD>(info.audio_channels);
-    format.nSamplesPerSec = static_cast<DWORD>(info.audio_rate);
-    format.wBitsPerSample = static_cast<WORD>(info.audio_bits);
-    format.nBlockAlign = static_cast<WORD>(block);
-    format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
-    if (FAILED(engine->CreateSourceVoice(&voice, &format))) {
-      voice = nullptr;
-      return;
-    }
-    if (!submit_audio() || FAILED(voice->Start(0))) {
-      voice->DestroyVoice();
-      voice = nullptr;
-      audio_done = true;
-    }
+    const auto bytes = static_cast<uint32_t>((pcm.size() - header) / block * block);
+    const uint32_t padding = bytes & 1u;
+    pcm.resize(header + bytes + padding);
+    if (padding) pcm.back() = 0;
+    if (!bytes) return;
+    if (!audio) audio = host_audio_acquire();
+    if (!audio) return;
+    auto put = [&](size_t at, uint32_t value, int count = 4) {
+      for (int i = 0; i < count; ++i) pcm[at + i] = static_cast<uint8_t>(value >> (8 * i));
+    };
+    std::memcpy(pcm.data(), "RIFF", 4);put(4, 36 + bytes + padding);
+    std::memcpy(pcm.data() + 8, "WAVEfmt ", 8);put(16, 16);
+    put(20, 1, 2);put(22, info.audio_channels, 2);put(24, info.audio_rate);
+    put(28, info.audio_rate * block);put(32, block, 2);put(34, info.audio_bits, 2);
+    std::memcpy(pcm.data() + 36, "data", 4);put(40, bytes);
+    FMOD_CREATESOUNDEXINFO extra{};extra.cbsize = sizeof(extra);
+    extra.length = static_cast<unsigned>(pcm.size());
+    const bool loaded = host_audio_check(audio->system->createSound(
+        reinterpret_cast<const char*>(pcm.data()),
+        FMOD_OPENMEMORY | FMOD_CREATESAMPLE | FMOD_2D | FMOD_LOOP_OFF,
+        &extra, &sound), "load Cinepak PCM");
+    // OPENMEMORY copies the sample. Free the staging buffer before playback.
+    std::vector<uint8_t>().swap(pcm);
+    if (!loaded) return;
+    audio_length = static_cast<double>(bytes) / (info.audio_rate * block);
+    submit_audio();
   }
 
   void restart() {
@@ -522,15 +505,25 @@ struct Movie {
 
   CinepakFrame pump(std::vector<uint8_t>& bgra, int& width, int& height) {
     if (!open) return CinepakFrame::Stopped;
+    // Boot intros run before the ordinary frame/music pump is installed.
+    host_audio_update();
     const double wall = std::chrono::duration<double>(Clock::now() - started).count();
     double t = wall + wall_offset;
     if (voice && !audio_done) {
       // Audio drives the clock while it plays. A stalled device must not
       // freeze the picture, so fall back to wall time when it lags.
-      XAUDIO2_VOICE_STATE state{};
-      voice->GetState(&state);
-      t = static_cast<double>(state.SamplesPlayed - audio_base) / info.audio_rate;
-      if (state.BuffersQueued == 0 || wall - t > 2.0) {
+      unsigned samples = 0;bool playing = false;
+      const bool running = voice->isPlaying(&playing) == FMOD_OK && playing &&
+                           voice->getPosition(&samples, FMOD_TIMEUNIT_PCM) == FMOD_OK;
+      if (running) {
+        audio_position = std::min(audio_length, static_cast<double>(samples) / info.audio_rate);
+        audio_wall = wall;
+      }
+      // FMOD invalidates an ended/stopped channel. On EOF or an early device
+      // failure, continue from the last known position instead of jumping the
+      // picture to the end of the sample.
+      t = running ? audio_position : std::min(audio_length, audio_position + wall - audio_wall);
+      if (!running || wall - t > 2.0) {
         audio_done = true;
         wall_offset = t - wall;
       }
@@ -569,9 +562,8 @@ CinepakFrame cinepak_fmv_pump(std::vector<uint8_t>& bgra, int& width, int& heigh
 int cinepak_fmv_audio_tracks() { return movie.voice ? 1 : 0; }
 bool cinepak_fmv_audio_running() {
   if (!movie.voice || movie.audio_done) return false;
-  XAUDIO2_VOICE_STATE state{};
-  movie.voice->GetState(&state, XAUDIO2_VOICE_NOSAMPLESPLAYED);
-  return state.BuffersQueued > 0;
+  bool playing = false;
+  return movie.voice->isPlaying(&playing) == FMOD_OK && playing;
 }
 #else
 bool cinepak_fmv_open(const std::filesystem::path&, bool) { return false; }

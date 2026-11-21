@@ -141,7 +141,9 @@ All little-endian. Each item notes OpenSLRR's status.
   (`src/natives/natives_io.cpp:sdat_take_payload`); new saves use JSON
   (`src/natives/natives_io.cpp:json_frame`).
 - `Part.save` writes subclass tails of varying length, so only each class's
-  own `load` can read a part; a flat parser fails. **source**
+  own `load` can read a part; a flat parser fails. **source** OpenSLRR's
+  version 2 JSON therefore names part data from the script frames that wrote
+  it (`src/natives/natives_io.cpp:save_frame_enter`, #291).
 
 ### Road network `city.trc` (`SLRR_rev:docs/road-graph-debug.md`, `SLRR_rev:docs/traffic-upstream-audit-2026-11-08.md`) **corpus**
 

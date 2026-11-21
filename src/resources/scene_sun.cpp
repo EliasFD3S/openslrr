@@ -53,9 +53,26 @@ void scene_sun_set_time(float seconds) {
 
 float scene_sun_time() { return g_sun_time; }
 
+bool scene_sun_is_night() {
+  const float seconds = std::fmod(g_sun_time, 86400.f);
+  const float hour = (seconds < 0.f ? seconds + 86400.f : seconds) / 3600.f;
+  return hour < 6.f || hour >= 18.5f;
+}
+
+float scene_sun_night_factor(float direct) {
+  // Lamps stay out while the sun still gives at least a fifth of its noon
+  // light: a lamp beside a strong sun shadow reads as a second shadow.
+  const float t = std::clamp(1.f - direct / 0.2f, 0.f, 1.f);
+  return t * t * (3.f - 2.f * t);
+}
+
 void scene_sun_apply_day_cycle(SceneSun& light) {
+  scene_sun_apply_day_cycle_at(light, g_sun_time);
+}
+
+void scene_sun_apply_day_cycle_at(SceneSun& light, float seconds) {
   constexpr float tau = 6.28318530718f;
-  const float phase = std::fmod(g_sun_time, 86400.f) * (tau / 86400.f) - tau * .25f;
+  const float phase = std::fmod(seconds, 86400.f) * (tau / 86400.f) - tau * .25f;
   const float elevation = std::sin(phase);
   light.direction[0] = -std::cos(phase);
   light.direction[1] = -.85f * elevation;

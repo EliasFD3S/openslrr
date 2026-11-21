@@ -1,0 +1,50 @@
+Dealer/garage retest (#201 / PR #202)
+
+Script evidence:
+- Garage.java sets internalScene=1 and instances misc.garage:0x001D neon.
+  Its resource is directional, travelling downwards; no sun is created.
+- CarMarket.java (the dealer script) calls Scene.addSceneElements, which creates
+  maps.skydome:0x0124 as Scene.sun for an exterior scene.
+
+Runtime diagnoses:
+- Real CarMarket's unassigned internalScene is absent from the sparse object.
+  Explicit-zero test fixtures had hidden this case. Its sun existed, but outdoor
+  detection and the atlas were off. Mainloop now recognizes the live sun parented
+  to the active world when explicit internalScene metadata is absent.
+- Garage neon and its map were active. Visibility attenuated a weak added point
+  contribution while the floor fallback stayed unshadowed. Bind the actual
+  directional source to garage world shading and its visibility; do not duplicate
+  it as a point light on scenery/vehicles. Ordinary non-terrain furniture casts
+  alongside cars; the terrain shell remains a receiver.
+
+Validation:
+- Release build: build/issue201-dealer-garage-final-build.log succeeds.
+- Production D3D11 suite: build/issue201-dealer-garage-final-gpu.log exits 0.
+  Interior directional pixel sums: lit 534 / shadow 75 / reflection capture 75.
+  Sparse missing-internalScene + live sun exercises production mainloop selection;
+  explicit interior still wins. Garage pass uses directional visibility. Existing
+  cascade, receiver, preview/local-light isolation and real-map cache checks pass.
+- Knowledge references: 325 checked, 119 external, 0 errors. Diff check passed.
+- Isolated real-script garage and used dealer create their lights and active maps.
+  Garage trace: garage=1/outdoor=0/directional=1/active=1/localmap=0.
+  Dealer trace: garage=0/outdoor=1/directional=1/active=1/localmap=0.
+- Dealer world capture inspected: building/wall shadows present on ground and car.
+  build/issue201-dealer-world-after.tga. UI was suppressed in this diagnostic-only
+  capture to uncover the loading plate left by the automated section entry.
+  All temporary tracing/capture/UI suppression code was removed before final build.
+- Garage capture inspected: build/issue201-garage-late-after.tga. The car/pit view
+  is insufficient for full visual acceptance of all interior shadows; user retest
+  remains necessary. One orthographic bay map does not model multiple fixtures.
+- Final production Valocity smoke exits 0 / 241 frames:
+  build/issue201-dealer-garage-city.log. No matched performance claim.
+
+Validation-root correction:
+The older build/perf-city-grid-root used junction subdirectories. open_all did
+not descend into those, so nested garage/dealer packs were absent (13 indexed
+packs at startup). Earlier city smokes do not establish garage/dealer behavior.
+The new build/issue201-scene-root has physical directories, copied mutable files
+and read-only-use hard links for immutable assets; all packs are indexed. Tests
+write only to the isolated root. User saves and original game data were untouched.
+
+Remaining: general real local emitters, full interior geometry occlusion/budgets,
+all dealer/garage/addon visuals, low-sun and camera-motion quality acceptance.

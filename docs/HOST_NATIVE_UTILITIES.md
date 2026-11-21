@@ -14,15 +14,18 @@ contracts documented in `repos/slrr-reverse/engine/Runtime/Render/RenderNatives.
 | `Sound.changeMusicSet` | Selects Garage_Shop, Roam_ride, Race_chase or Main_menu under the game's music directory. Invalid set/NONE stops music. Re-selecting the current set does not restart it. |
 | `Sound.nextTrack`, `prevTrack` | Wrap around the active playlist and actually switch the streamed track. |
 | `Sound.getMode`, `setMode` | Per-playlist mode state (initially 3). Accept 0..3, preserve the old mode for invalid values. No active set: get returns -1, set returns its input, matching the reference native. Specific shuffle/repeat policies for these mode values have not been established; the host currently advances sequentially at EOF. |
-| `Sound.has3DHardware`, `hasMixHardware` | Zero: the XAudio2 backend does not provide the legacy DirectSound hardware-buffer capabilities. This does not mean sound is unavailable. |
+| `Sound.has3DHardware`, `hasMixHardware` | Zero: the software mixer does not provide the legacy DirectSound hardware-buffer capabilities. This does not mean sound is unavailable. |
 
-Music uses Media Foundation to decode MP3/WAV/WMA and a separate XAudio2
-streaming voice. MCI and DirectShow failed to open the stock menu MP3 on the
-host machine; the replacement successfully decodes and starts playback.
-At most 24 decoded chunks are queued, rather than loading complete songs.
-The music voice is independent of FMV and effects volume, and is refilled
-in modal script pumps as well as the main loop. Startup logs list scan counts
-and track starts; decoding failures include their HRESULT.
+Effects and music share one FMOD Core system with separate channel groups.
+Music uses FMOD streams rather than loading complete songs, retaining the
+MP3/WAV/WMA playlist scan, sequential order and bounded bad-track recovery.
+The shared mixer is updated in modal script pumps as well as the main loop,
+even with music stopped. Startup logs list scan counts and track starts;
+FMOD failures include the operation and error text. Stock Cinepak FMV PCM
+uses a separate FMOD group and updates the mixer during boot intros too;
+its audio position drives video timing, falling back continuously to wall
+time on EOF or channel failure. Other VLC/Windows codec fallbacks retain
+their own audio outputs. No Studio banks or authored events are required.
 
 ## Audio options
 
@@ -43,9 +46,10 @@ the track; release, cancellation and hidden controls are handled.
 The engine-owned Config instance is loaded before Init and retained as a VM
 static. Audio edits queue a save after 500 ms of inactivity and flush on normal
 shutdown. Persistence uses the original Java `Config.saveConfig/loadConfig`
-and `save/game/options` SDAT format, including all three channel volumes and
+and `save/game/options` (written as JSON, legacy SDAT still read), including all three channel volumes and
 the other Config fields. No original Java files are patched. The engine volume
-value is saved/restored; engine-loop audio itself is not yet implemented.
+value is saved/restored; engine-loop audio is driven by
+`update_engine_audio` (`src/resources/part_runtime.cpp`).
 
 A temporary headless diagnostic exercised the actual OptionsDialog sliders,
 verified 20/40/60% through save/reload in an isolated directory, and started all
@@ -57,7 +61,7 @@ device or screenshot implementation was taken from it.
 
 ## Repeated effects and UI bursts
 
-Transient XAudio2 effects are grouped by normalized WAV path. Requests closer
+Transient FMOD effects are grouped by normalized WAV path. Requests closer
 than 35 ms are coalesced before reading/allocating another voice. At most two
 copies of one transient cue may overlap; their gains are divided by the copy
 count so correlated waveforms cannot multiply that cue's peak amplitude.
@@ -120,3 +124,33 @@ sound properties are not interpreted. Many trees request the same bird cue,
 so the transient coalescing keeps at most two copies of it playing.
 `SLRR_AMBIENCE_LOG=1` logs each random request. Loop starts and stops are
 always logged as `[ambience]`.
+
+
+## Renderer options: anisotropic filtering
+
+Existing natives `java.game.OptionsDialog.getRendererOption(I)I` and
+`setRendererOption(II)V` use option index **6** for anisotropic filtering.
+Getter returns 0/1. Setter treats zero as off and nonzero as on and saves via
+the existing host graphics persistence path. Default is on; malformed/missing
+keys retain that default. `save/game/openslrr_options` stores
+`anisotropic_filtering=0|1`; stock Config's binary layout is unchanged.
+
+The patched OptionsDialog video menu and debug Renderer checkbox share this
+value. The setting takes effect on subsequent rendered frames, enables bgfx's
+maximum anisotropy reset flag and opts world colour/detail texture samplers into
+anisotropic min/mag filtering. The actual maximum is backend/hardware-defined;
+this is not an API for selecting individual sample counts. Shadow comparison,
+cubemap and UI samplers retain their own filtering contracts. Existing texture
+mip availability still limits the result. Source and compiled TUFA container
+are both shipped in patch/sl/Scripts/game; no new native signature was added.
+
+
+## AO and shadow controls
+
+The same OptionsDialog getters/setters add integer IDs 7–12: AO method
+(0 off, 1 HBAO, 2 GTAO), AO quality, shadow quality, shadow smoothing (each 0–2),
+AO strength (0–200 percent), and AO radius (25–300 cm). Setters clamp values and
+save immediately through host graphics persistence. Missing/malformed keys retain
+defaults; stock Config binary layout is unchanged. Menu source and compiled TUFA
+container ship together. Defaults are AO off, medium qualities, soft shadows,
+100 percent strength and 100 cm radius. Debug Renderer controls share these values.

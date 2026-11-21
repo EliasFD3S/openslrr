@@ -6,6 +6,11 @@ class Jvm;
 struct Object;
 struct EnhancedGraphics {
   int msaa = 1;
+  int ao_method = 0; // 0 off, 1 HBAO, 2 GTAO
+  int ao_quality = 1; // low / medium / high
+  int ao_strength = 100, ao_radius = 100; // percent / centimetres
+  int shadow_quality = 1, shadow_smoothing = 1;
+  bool anisotropic_filtering = true;
   bool dynamic_reflections = true;
   bool volumetric_clouds = true;
   bool dynamic_lighting = true;

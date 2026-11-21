@@ -13,6 +13,25 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake/CMakeLists.txt
   message(FATAL_ERROR "Missing third_party/bgfx.cmake. See README.md for setup.")
 endif()
 
+# FMOD Core is an external Windows x64 SDK; never download or vendor it.
+set(_slrr_fmod_default "C:/Program Files (x86)/FMOD SoundSystem/FMOD Studio API Windows")
+if(DEFINED ENV{SLRR_FMOD_SDK_DIR} AND NOT "$ENV{SLRR_FMOD_SDK_DIR}" STREQUAL "")
+  set(_slrr_fmod_default "$ENV{SLRR_FMOD_SDK_DIR}")
+endif()
+set(SLRR_FMOD_SDK_DIR "${_slrr_fmod_default}" CACHE PATH "FMOD Studio API Windows SDK root (Core 2.04)")
+file(TO_CMAKE_PATH "${SLRR_FMOD_SDK_DIR}" _slrr_fmod_dir)
+foreach(_slrr_fmod_file IN ITEMS api/core/inc/fmod.hpp api/core/inc/fmod.h
+    api/core/lib/x64/fmod_vc.lib api/core/lib/x64/fmod.dll)
+  if(NOT EXISTS "${_slrr_fmod_dir}/${_slrr_fmod_file}")
+    message(FATAL_ERROR "Missing FMOD Core SDK file: ${_slrr_fmod_dir}/${_slrr_fmod_file}. Install the Windows x64 FMOD Studio API SDK and set SLRR_FMOD_SDK_DIR (CMake cache or environment) to its root.")
+  endif()
+endforeach()
+add_library(FMOD::Core SHARED IMPORTED)
+set_target_properties(FMOD::Core PROPERTIES
+  IMPORTED_IMPLIB "${_slrr_fmod_dir}/api/core/lib/x64/fmod_vc.lib"
+  IMPORTED_LOCATION "${_slrr_fmod_dir}/api/core/lib/x64/fmod.dll"
+  INTERFACE_INCLUDE_DIRECTORIES "${_slrr_fmod_dir}/api/core/inc")
+
 # Visual Studio compiles the files of one project one after the other unless
 # /MP is set, which left most cores idle. It covers bgfx.cmake's targets too.
 # SLRR_COMPILE_JOBS caps the cl.exe processes per project; empty uses every core.
@@ -45,6 +64,8 @@ add_executable(slrr_host
   src/platform/frame_profiler.cpp
   src/platform/host_input.cpp
   src/platform/host_input_devices.cpp
+  src/platform/host_clipboard.cpp
+  src/platform/host_audio.cpp
   src/platform/host_sfx.cpp
   src/platform/host_music.cpp
   src/platform/host_game_options.cpp
@@ -56,6 +77,7 @@ add_executable(slrr_host
   src/natives/native_registry.cpp
   src/natives/natives_boot.cpp
   src/natives/natives_io.cpp
+  src/natives/save_json.cpp
   src/natives/natives_lang.cpp
   src/natives/natives_osd.cpp
   src/natives/natives_physicsref.cpp
@@ -64,6 +86,7 @@ add_executable(slrr_host
   src/natives/natives_resref.cpp
   src/natives/natives_script.cpp
   src/natives/natives_painter.cpp
+  src/natives/natives_lights.cpp
   src/ui/osd_registry.cpp
   src/ui/osd_script.cpp
   src/ui/ui_time.cpp
@@ -81,6 +104,8 @@ add_executable(slrr_host
   src/formats/skeleton_text.cpp
   src/formats/matrixdata.cpp
   src/resources/gameref.cpp
+  src/resources/script_lights.cpp
+  src/resources/light_resource.cpp
   src/resources/scene_instances.cpp
   src/resources/scene_ambience.cpp
   src/resources/scene_triggers.cpp
@@ -150,9 +175,9 @@ endif()
 
 if(WIN32)
   # strmiids = DirectShow GUIDs for FMV (GfxEngine.openVideo).
-  # vfw32 = AVIFile fallback for movies the built-in Cinepak decoder rejects.
+  # vfw32 = AVIFile fallback; stock Cinepak PCM is mixed through FMOD.
   target_link_libraries(slrr_host PRIVATE user32 gdi32 opengl32 winmm ole32
-                                          oleaut32 strmiids vfw32 xaudio2 mfplat mfreadwrite mfuuid)
+                                          oleaut32 strmiids vfw32 FMOD::Core)
 endif()
 
 # SDL handles peripherals only; keep the existing Win32 window, audio and renderer.
@@ -297,7 +322,7 @@ target_include_directories(slrr_host PRIVATE
 
 bgfx_compile_shaders(
   TYPE VERTEX
-  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_osd_text.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh_inst.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_skin.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_vehicle.sc"
+  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_osd_text.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh_inst.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_skin.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_ao.sc"
   VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
   OUTPUT_DIR "${SLRR_SHADER_OUT}"
   INCLUDE_DIRS "${_bgfx_shader_inc}"
@@ -307,7 +332,7 @@ bgfx_compile_shaders(
 )
 bgfx_compile_shaders(
   TYPE FRAGMENT
-  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_osd_text.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_static_shadow.sc"
+  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_osd_text.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_static_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_ao.sc"
   VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
   OUTPUT_DIR "${SLRR_SHADER_OUT}"
   INCLUDE_DIRS "${_bgfx_shader_inc}"
@@ -316,10 +341,20 @@ bgfx_compile_shaders(
   OUT_FILES_VAR SLRR_FS_SHADER_HEADERS
 )
 
+# bgfx's helper tracks the input and varying definition, not local includes.
+# Append to the first output of each receiver's multi-profile compile rule.
+foreach(_shadow_receiver IN ITEMS mesh vehicle)
+  add_custom_command(
+    OUTPUT "${SLRR_SHADER_OUT}/dxbc/fs_${_shadow_receiver}.sc.bin.h"
+    APPEND DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene_shadow.sh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/ambient_occlusion.sh"
+  )
+endforeach()
+
 target_sources(slrr_host PRIVATE
   src/render/bgfx_lib_backend.cpp
   src/render/bgfx_lighting.cpp
   src/render/bgfx_shadows.cpp
+  src/render/bgfx_ao.cpp
   src/render/bgfx_osd.cpp
   ${SLRR_VS_SHADER_HEADERS}
   ${SLRR_FS_SHADER_HEADERS}
@@ -336,4 +371,37 @@ target_link_libraries(slrr_host PRIVATE bgfx bx bimg slrr_script_compiler)
 target_compile_features(slrr_host PRIVATE cxx_std_20)
 message(STATUS "slrr_host: libbgfx + mesh shaders enabled")
 
+option(BUILD_TESTING "Build regression tests" OFF)
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(vehicle_hud_damage tests/test_vehicle_hud_damage.cpp
+    src/resources/scx_mesh.cpp src/platform/job_system.cpp)
+  target_include_directories(vehicle_hud_damage PRIVATE include)
+  target_compile_features(vehicle_hud_damage PRIVATE cxx_std_20)
+  target_compile_options(vehicle_hud_damage PRIVATE /W3 /utf-8)
+  add_test(NAME vehicle_hud_damage COMMAND vehicle_hud_damage)
+  add_executable(audio_recovery tests/test_audio_recovery.cpp
+    src/platform/host_audio.cpp src/platform/host_sfx.cpp src/platform/host_music.cpp)
+  target_include_directories(audio_recovery PRIVATE include)
+  target_compile_options(audio_recovery PRIVATE /W3 /utf-8)
+  target_compile_definitions(audio_recovery PRIVATE _CRT_SECURE_NO_WARNINGS)
+  target_link_libraries(audio_recovery PRIVATE FMOD::Core)
+  add_test(NAME audio_recovery COMMAND audio_recovery)
+  add_executable(save_json tests/test_save_json.cpp src/natives/save_json.cpp)
+  target_include_directories(save_json PRIVATE src/natives)
+  target_compile_features(save_json PRIVATE cxx_std_20)
+  target_compile_options(save_json PRIVATE /W3 /utf-8)
+  add_test(NAME save_json COMMAND save_json)
+endif()
+
+foreach(_slrr_audio_target IN ITEMS slrr_host audio_recovery)
+  if(TARGET ${_slrr_audio_target})
+    add_custom_command(TARGET ${_slrr_audio_target} POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "$<TARGET_FILE:FMOD::Core>" "$<TARGET_FILE_DIR:${_slrr_audio_target}>"
+      VERBATIM)
+  endif()
+endforeach()
+
 install(TARGETS slrr_host RUNTIME DESTINATION bin)
+install(FILES "$<TARGET_FILE:FMOD::Core>" DESTINATION bin)

@@ -5,6 +5,7 @@
 #include "slrr/host_input.hpp"
 #include "slrr/part_runtime.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/script_lights.hpp"
 #include "slrr/skeleton.hpp"
 #include "slrr/vehicle_dynamics.hpp"
 
@@ -29,6 +30,10 @@ uint64_t g_scene_revision = 1, g_next_incarnation = 1;
 // per-frame and per-tick passes do not scan every GameRef.
 std::unordered_set<void*> g_trigger_refs, g_simulated_refs;
 std::unordered_set<void*> g_lights;
+// Keys that were given kind Camera (#268). gameref_active_cameras ran over
+// every node several times per frame; it now reads these and drops the
+// ones that are gone or no longer cameras.
+std::unordered_set<void*> g_camera_refs;
 uint32_t g_next_live = 0x70000000;
 int32_t g_fog_color = 0;
 float g_fog_near = 0.f;
@@ -69,6 +74,8 @@ void gameref_clear() {
   g_trigger_refs.clear();
   g_simulated_refs.clear();
   g_lights.clear();
+  g_camera_refs.clear();
+  script_lights_clear();
   g_next_live = 0x70000000;
   g_fog = false;
 }
@@ -77,6 +84,7 @@ GameRefState* gameref_upsert(void* key, GameRefKind kind) {
   if (!key) return nullptr;
   ++g_scene_revision;
   auto it = g_refs.find(key);
+  if (kind == GameRefKind::Camera) g_camera_refs.insert(key);
   if (it != g_refs.end()) {
     if (kind != GameRefKind::Generic) it->second.kind = kind;
     it->second.empty = false;
@@ -151,6 +159,9 @@ void gameref_remove(void* key) {
     }
   }
   g_lights.erase(key);
+  g_camera_refs.erase(key);
+  // Script lights die with the GameRef they are attached to (#235).
+  script_lights_forget_parent(key);
   if (n) g_live_refs.erase(n->live_id);
   g_refs.erase(key);
 }
@@ -300,6 +311,7 @@ void gameref_bind_scene_camera(void* key, const std::string& params) {
   if (!st || (st->type_id & 0xFFFF) != 0x33) return;
   if (st->kind != GameRefKind::Camera) ++g_scene_revision;
   st->kind = GameRefKind::Camera;
+  g_camera_refs.insert(st->key);
   st->cam_active = false;
   st->half_aov = 60.f;
   st->dmin = 0.05f;
@@ -1042,19 +1054,30 @@ void gameref_orbit_world_camera(float yaw_delta, float pitch_delta,
 
 std::vector<GameRefState*> gameref_active_cameras() {
   std::vector<GameRefState*> out;
-  for (auto& kv : g_refs) {
-    if (kv.second.kind != GameRefKind::Camera || !kv.second.cam_active || kv.second.binding) continue;
+  std::vector<void*> stale;
+  for (void* key : g_camera_refs) {
+    const auto found = g_refs.find(key);
+    if (found == g_refs.end() || found->second.kind != GameRefKind::Camera) {
+      stale.push_back(key);
+      continue;
+    }
+    auto& camera = found->second;
+    if (!camera.cam_active || camera.binding) continue;
     // A camera cannot render through a hidden or destroyed viewport. Scene
     // ownership alone does not end its lifetime when a dialog/section exits.
-    if (kv.second.viewport) {
-      const auto* viewport = gameref_get(kv.second.viewport);
+    if (camera.viewport) {
+      const auto* viewport = gameref_get(camera.viewport);
       if (!viewport || !viewport->vp_active) continue;
     }
-    out.push_back(&kv.second);
+    out.push_back(&camera);
   }
+  for (void* key : stale) g_camera_refs.erase(key);
+  // Equal priorities used to keep the node table's hash order; activation
+  // order (cam_seq) is the same for every run (#268).
   std::sort(out.begin(), out.end(),
             [](const GameRefState* a, const GameRefState* b) {
-              return a->cam_pri < b->cam_pri;
+              return a->cam_pri != b->cam_pri ? a->cam_pri < b->cam_pri
+                                              : a->cam_seq < b->cam_seq;
             });
   return out;
 }

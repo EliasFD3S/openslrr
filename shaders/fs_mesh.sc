@@ -6,12 +6,14 @@ SAMPLER2D(s_texColor, 0);
 SAMPLER2D(s_lightmap, 1);
 SAMPLER2D(s_meshMix, 2);
 SAMPLER2DSHADOW(s_staticShadow, 3);
-SAMPLER2D(s_carDepth, 4);
+SAMPLER2DSHADOW(s_carDepth, 4);
 uniform mat4 u_carDepthMtx;
 uniform vec4 u_carDepthParams;
-// x: strength, y: texel size, z: depth bias.
-uniform vec4 u_staticShadowParams;
-uniform vec4 u_staticShadowEye;
+SAMPLER2DSHADOW(s_interiorSun, 5);
+SAMPLER2DSHADOW(s_fixtureShadow, 7);
+SAMPLER2D(s_sunAperture, 8);
+#include "scene_shadow.sh"
+#include "ambient_occlusion.sh"
 uniform vec4 u_sunAmb;
 uniform vec4 u_sunDiff;
 uniform vec4 u_localLight; // world position, radius
@@ -173,6 +175,11 @@ void main()
 		gl_FragColor = vec4(renderSky(normalize(v_worldPos - u_cloudSky.xyz), gl_FragCoord.xy), 1.0);
 		return;
 	}
+    if(u_alphaTest.y>3.5) {
+        vec2 uv=mapUv(uvSet(u_lightmap.y,v_texcoord0,v_texcoord1,v_texcoord2),u_meshBaseUv);
+        gl_FragColor=vec4(gl_FragCoord.z,1.0-texture2D(s_texColor,uv).a,0.0,1.0);
+        return;
+    }
 	vec3 n = normalize(v_normal);
 	float ndl = max(abs(dot(n, normalize(vec3(0.35, 0.85, 0.45)))), 0.22);
 	vec4 tex = texture2D(s_texColor, mapUv(uvSet(u_lightmap.y, v_texcoord0, v_texcoord1, v_texcoord2), u_meshBaseUv));
@@ -228,39 +235,7 @@ void main()
 	float use = step(0.5, u_lightmap.x);
 	light = mix(light, 1.0, use);
 	bake = mix(vec3(1.0, 1.0, 1.0), bake, use);
-	float visibility = 1.0;
-	if (u_staticShadowParams.x > 0.0 && use < 0.5) {
-		vec3 p = v_staticShadow;
-		float edge = min(min(p.x, 1.0 - p.x), min(p.y, 1.0 - p.y));
-		float range = u_staticShadowEye.w;
-		float distanceToEye = length(v_worldPos - u_staticShadowEye.xyz);
-		if (distanceToEye < range && edge > u_staticShadowParams.y && p.z > 0.0 && p.z < 1.0) {
-			float texel = u_staticShadowParams.y;
-			// Measure slope in shadow UV space, not screen pixels. A receiver
-			// also present in the depth pass needs bias across the PCF footprint.
-			vec3 dx = dFdx(v_staticShadow);
-			vec3 dy = dFdy(v_staticShadow);
-			float det = dx.x * dy.y - dx.y * dy.x;
-			vec2 gradient = vec2(0.0, 0.0);
-			if (abs(det) > 1e-10)
-				gradient = vec2(dy.y * dx.z - dx.y * dy.z,
-				                dx.x * dy.z - dy.x * dx.z) / det;
-			float slope = dot(abs(gradient), vec2(texel * 2.0, texel * 2.0));
-			float depth = p.z - min(u_staticShadowParams.z + slope, 0.004);
-			// Hardware 2x2 compare. A point-sampled disk drew the shadow
-			// map's own texels as stripes on the garage apron.
-			vec2 o = vec2(texel * 1.5, texel * 0.5);
-			float visible = (
-				shadow2D(s_staticShadow, vec3(p.xy + vec2(-o.x, -o.y), depth)) +
-				shadow2D(s_staticShadow, vec3(p.xy + vec2( o.y, -o.x), depth)) +
-				shadow2D(s_staticShadow, vec3(p.xy + vec2( o.x,  o.y), depth)) +
-				shadow2D(s_staticShadow, vec3(p.xy + vec2(-o.y,  o.x), depth))
-			) * 0.25;
-			visibility -= (1.0 - visible) * u_staticShadowParams.x *
-			              (1.0 - smoothstep(range * 0.2, range, distanceToEye)) *
-			              smoothstep(0.0, 0.22, edge);
-		}
-	}
+	float visibility = use < 0.5 ? sceneShadowVisibility(v_staticShadow, v_worldPos) : 1.0;
 	float carVisibility = 1.0;
 	if (u_carDepthParams.x > 0.5) {
 		vec3 p = mul(u_carDepthMtx, vec4(v_worldPos, 1.0)).xyz;
@@ -268,26 +243,32 @@ void main()
 		if (edge > u_carDepthParams.y && p.z > 0.0 && p.z < 1.0) {
 			vec2 offset = vec2(u_carDepthParams.y, 0.0);
 			float depth = p.z - u_carDepthParams.z;
-			float samples = step(depth, texture2D(s_carDepth, p.xy + offset.xy).r)
-			              + step(depth, texture2D(s_carDepth, p.xy - offset.xy).r)
-			              + step(depth, texture2D(s_carDepth, p.xy + offset.yx).r)
-			              + step(depth, texture2D(s_carDepth, p.xy - offset.yx).r);
+			float samples = shadow2D(s_carDepth, vec3(p.xy + offset.xy, depth))
+			              + shadow2D(s_carDepth, vec3(p.xy - offset.xy, depth))
+			              + shadow2D(s_carDepth, vec3(p.xy + offset.yx, depth))
+			              + shadow2D(s_carDepth, vec3(p.xy - offset.yx, depth));
 			carVisibility -= (1.0 - samples * 0.25) * smoothstep(0.005, 0.06, edge);
 		}
 	}
-	vec3 illumination = vec3(light, light, light) * visibility * mix(0.55, 1.0, carVisibility);
-	if (u_sunDir.w > 0.5 && use < 0.5) {
+	float sunVisibility = u_staticShadowParams.w > 0.5 ? 1.0 : visibility;
+	float localVisibility = u_staticShadowParams.w > 0.5 ? visibility : 1.0;
+	vec3 illumination = vec3(light, light, light) * sunVisibility * mix(0.55, 1.0, carVisibility);
+	if (u_sunDir.w < -0.5) illumination = u_sunAmb.rgb*ambientVisibility(gl_FragCoord.xy);
+	else if (u_sunDir.w > 0.5 && use < 0.5) {
 		float direct = max(dot(n, normalize(u_sunDir.xyz)), 0.0);
-		illumination = u_sunAmb.rgb + u_sunDiff.rgb * direct * min(visibility, carVisibility);
+		illumination = u_sunAmb.rgb*ambientVisibility(gl_FragCoord.xy) + u_sunDiff.rgb * direct * min(sunVisibility, carVisibility);
 	}
 	if (u_localLight.w > 0.0) {
 		vec3 delta = u_localLight.xyz - v_worldPos;
 		float d2 = dot(delta, delta);
-		float fade = saturate(1.0 - d2 / (u_localLight.w * u_localLight.w));
 		float facing = max(dot(n, delta * inversesqrt(max(d2, 0.001))), 0.0);
-		illumination += vec3(1.0, 0.94, 0.80) * (fade * fade * facing * 3.0 / (1.0 + d2))
-		              * mix(0.35, 1.0, visibility);
+		illumination += localLightRadiance(delta,u_localLight.w,u_sunDir.w < -0.5)*facing*localVisibility;
 	}
+    vec3 fixtureDiffuse,fixtureHighlight;
+    fixtureLighting(n,vec3(0.0,1.0,0.0),v_worldPos,1.0,false,fixtureDiffuse,fixtureHighlight);
+    illumination+=fixtureDiffuse;
+    illumination+=lampLighting(n,v_worldPos);
+	illumination += interiorSunDiffuse(n,v_worldPos);
 	vec3 shaded = tex.rgb * bake * tint * placement * illumination;
 	if (u_alphaTest.y > 1.5) {
 		// EmissionMaskMap (SCX 0x06000005) selects lit windows/sign detail.
@@ -295,6 +276,7 @@ void main()
 		vec3 emission = texture2D(s_lightmap, emissionUv).rgb;
 		shaded = tex.rgb * tint * placement * emission;
 	}
+    if(u_alphaTest.w < -3.5) shaded *= interiorSunVisibility(u_cloudSky.xyz);
 	// Sky and OSD set u_alphaTest.y. Their fragments stay sharp.
 	if (u_fogColor.a > 0.5 && u_alphaTest.y < 0.5) {
 		float span = max(u_fogRange.y - u_fogRange.x, 1.0);

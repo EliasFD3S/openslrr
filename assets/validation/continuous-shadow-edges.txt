@@ -1,0 +1,32 @@
+Continuous fixture/sun shadow edges — 2026-11-20
+
+Reproduced the reported serrated fixture shadows in a separate g1/Baiern game
+copy with AO off, high shadow quality, and Sharp. Comparing AO off/HBAO/GTAO
+and fixture shadows enabled/disabled isolates the serrated edges to fixture depth
+comparison, not the ambient occlusion pass.
+
+Two defects corrected:
+- Sharp sampled one nearest depth texel: raw square boundaries and binary jumps.
+  Keep a narrow smooth four-tap comparison, using receiver-plane depths.
+- Very Soft snapped a nine-tap kernel to the nearest texel. Use fractional tent
+  weights over 4x4 aligned comparisons; clamp samples inside the emitter tile.
+Soft retains its former bilinear four comparisons and cost. Sharp now has four
+comparisons rather than one; Very Soft has sixteen rather than nine. There is
+no additional shadow draw, atlas, or cache invalidation.
+
+Regression uses production mesh/fixture shader bindings and a controlled depth
+edge translated in 1/32-texel increments. The previous shader fails with two
+coverage levels and a maximum RGB-sum step of 78. Corrected Sharp/Soft/Very Soft:
+11/14/7 distinct values, maximum steps 6/3/3. Wider filters reduce the contrast
+range over the tested one-texel interval. The test guards smooth progression,
+not merely a different output between modes.
+
+Release DXBC/GLSL build and complete scene_shadow_gpu regressions pass,
+including real garage geometry, vertical-wall vehicle occlusion, fixture acne,
+window transmission/seams, all quality tiers, AO and source lifetime.
+Isolated final Sharp and Very Soft garage captures inspected. Temporary capture
+hooks removed before the production build. No career data or user options changed.
+
+Limits: Sharp remains crisper than Soft/Very Soft; hard shadows from actual
+occluders remain. These filters are not tube area-light penumbrae or volumetrics.
+No claim is made that every dark band in the supplied camera views is artificial.

@@ -1,0 +1,25 @@
+#201 first increment: shared shadow reception (Windows x64 Release / D3D11)
+Baseline source: main d1c719d; existing local optional-build edits preserved.
+Production changes: shared PCF visibility for scenery/vehicles; vehicle sampler
+stage 5; direct diffuse/specular occlusion; capture-view world receivers;
+local-lamp field source tag; preview/emission isolation. Existing ranges,
+cache thresholds, probe geometry and sky implementation remain unchanged.
+
+scene_shadow_gpu: PASS, real render-target pixels, RGB sums:
+Vehicle lit 534, shadow 75, disabled 534, preview 534, emissive 765.
+Scenery lit 534, shadow 75, capture-view shadow 75.
+Local field without local lamp: sun remains 534.
+Local lamp enabled: vehicle lit 757, shadow 534; scenery lit 760,
+capture shadow 534. Ambient/unrelated sun are not extinguished.
+These controlled depth-field cases verify production receiver shaders/bindings,
+not real-world caster selection or complete cubemap output. They do not yet
+cover full specular/clearcoat material behavior, cascades or addon detection.
+
+render_programs_gpu: PASS, shader ownership 27 -> legacy leak 29 -> 27,
+32 cycles and backend reopen.
+City smoke on isolated build/perf-city-grid-root: Valocity, stock Baiern,
+bench time 13h, 12-second fixed-step drive, exit 0 / 841 frames.
+Inspected t10 capture: scene renders, HUD intact, foliage/vehicle visible.
+This is not a matched before/after comparison or a gameplay FPS claim.
+Logs/captures: build/issue201-shadow-gpu.log, build/issue201-programs-gpu.log,
+build/issue201-city/{stdout.log,stderr.log,perf.csv,t00.tga,t10.tga}.

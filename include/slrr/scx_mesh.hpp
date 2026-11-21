@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -47,6 +48,7 @@ struct ScxGroup {
   float specular[3] = {0.f, 0.f, 0.f};
   float shininess = 1.f;
   std::string name;
+  bool self_illuminated = false; // Explicit enhanced material, no ambient override.
 };
 
 // Function words select colour operations; the SCX4 render flags independently
@@ -88,6 +90,8 @@ inline void scx_modulate_blend(int version, const ScxGroup& group, float (&tint)
 struct ScxGeometry {
   ScxMeshInfo info;
   bool ground_polygons = false;
+  // Fixture anchors in local script-space metres, below their emitting tubes.
+  std::vector<std::array<float,3>> ceiling_light_anchors;
   std::vector<float> positions;  // xyz * N
   std::vector<float> normals;    // xyz * N
   std::vector<float> uvs;        // uv * N (UV1)

@@ -81,6 +81,13 @@ std::shared_ptr<const ScxGeometry> character_posed(void* key, int32_t type_id,
 // Returns 0 when the render has no skeleton. `out` is column-major.
 int character_skin_palette(void* key, int32_t type_id, const RpkIndex& packs,
                            float* out, int capacity);
+// The same in two steps, for the job pool (#268). character_skin_prepare runs
+// on the host thread (it may load the skeleton) and returns null when the
+// render has no skeleton. character_skin_palette_prepared touches only that
+// character and reads its immutable skeleton and clip, so jobs may run it for
+// different characters at once.
+void* character_skin_prepare(void* key, int32_t type_id, const RpkIndex& packs);
+int character_skin_palette_prepared(void* prepared, float* out, int capacity);
 
 // Skeleton index, or 0 when the render has no matching bone. Never negative.
 int character_bone_id(void* key, int32_t type_id, const RpkIndex& packs,

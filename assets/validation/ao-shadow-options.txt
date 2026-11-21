@@ -1,0 +1,39 @@
+AO / shadow options validation — 2026-11-19
+
+Release build: succeeds (DXBC and GLSL shader generation).
+OptionsDialog: source compiled by embedded TUFA compiler (1 unit, 3 classes),
+then distributed with its compiled class and installed in the local game.
+Isolated game copy used for captures; no career save was changed.
+
+D3D11 production shader regression:
+- HBAO/GTAO: all three quality tiers preserve a standalone flat plane
+  (0–4 pixels differ by >3/255 out of 4,174 visible pixels).
+- Cube contact: HBAO 332/353/279 darkened pixels, GTAO 92/109/84,
+  low/medium/high respectively; results differ between methods.
+- Direct-only lighting unchanged pixel-for-pixel; reflection view excluded.
+- AO targets resize and are released when disabled.
+- All fixture shadow qualities resize tiles to 256/512/1024; all filters retain
+  object shadows, produce different contours and reuse unchanged caster depths.
+- Interior sunlight targets resize to 512/1024/2048.
+- Existing vertical receiver, alpha-window admission, seam, fixture acne,
+  emission, owner lifetime and cubemap shading regressions pass.
+- Native range clamping and disk roundtrip pass for all added controls.
+- Program ownership/reopen, catalog/inset, script argument safety tests pass
+  (script safety retried alone after a concurrent-run abnormal termination).
+
+Isolated real g1/Baiern captures: off, HBAO, GTAO and two-column Video Options
+layout inspected. AO adds contact/corner shading without a global flat-plane veil.
+Temporary capture hooks removed before the final Release build.
+AO defaults off; medium/soft shadows preserve the previous settings.
+
+Limits: simplified horizon-based implementations, not full HBAO+ or XeGTAO ports.
+No temporal history, depth mips, HDR, bent normals or screen-space reflection AO.
+GTAO finite-slice visibility is normalised against the open hemisphere.
+Transparent objects are excluded from AO. AO duplicates opaque depth submissions;
+measure each quality on representative hardware before choosing a new default.
+The reported artifacts on deformed body panels are not certified fully resolved;
+a slightly increased sun residual bias is independent of AO.
+
+Algorithm references:
+https://github.com/GameTechDev/XeGTAO
+https://github.com/NVIDIAGameWorks/HBAOPlus

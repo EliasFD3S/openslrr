@@ -114,6 +114,12 @@ struct GarageProbe : InventoryProbe {
  Object camera,painter,cans,controller,cursor;
  std::vector<std::unique_ptr<Object>> allocated;
  int saved=-1,exit_calls=0,enter_calls=0;
+ // Command probe (#235 review): record transitions, saves and warnings
+ // instead of running them, with a controllable clock and car state.
+ bool record_only=false;
+ std::vector<std::string> events;
+ float hour=12;
+ Value problem=Value::make_obj(nullptr);
  GarageProbe(const std::string& garage_path="game/sl/Scripts/game/Garage.class"){
   std::string error;
   for(const char* name:{"Garage","GameLogic","Mechanic"}){
@@ -145,12 +151,23 @@ struct GarageProbe : InventoryProbe {
     for(const auto& node:cls.trees[member.tree])if(node.op==0x0b && node.wide)return Value::make_int(int32_t(node.imm));
   return Value::make_int(0);
  }
+ void tree_set_static(const std::string& owner,const std::string& field,Value value)override{
+  if(record_only&&field!="actualState")return; // dealer timestamps, car lists
+  DispatchProbe::tree_set_static(owner,field,value);
+ }
  int tree_field_kind(const std::string& owner,const std::string& field)override{
   for(const auto& cls:definitions)if(cls.name()==owner)
    for(const auto& member:cls.static_fields)if(cls.utf8(member.name)==field)return 1;
   return field=="actualState" || field=="cursor"?1:2;
  }
  Value inv_effect(const std::string& owner,const std::string& name,Object* self,const std::vector<Value>& args){
+  if(record_only){
+   if(name=="changeActiveSection"){events.push_back("change");return Value::make_void();}
+   if(name=="autoSaveQuiet"||name=="autoSave"){events.push_back("save");return Value::make_void();}
+   if(name=="giveWarning"){events.push_back("warn");return Value::make_void();}
+   if(name=="getTime")return Value::make_float(hour*3600);
+   if(name=="isDriveable")return problem;
+  }
   if(name=="changeActiveSection")return run("java.game.GameLogic",name,nullptr,args);
   if(name=="exit"){++exit_calls;return run("java.game.Garage",name,&old,args);}
   if(name=="enter"){++enter_calls;return Value::make_void();}
@@ -183,4 +200,59 @@ void shipped_garage_save_order() {
  SLRR_REQUIRE(host.saved==3 && host.moves==3 && host.exit_calls==1 && host.enter_calls==1);
  std::puts("PASS actual Garage.osdCommand -> GameLogic change -> Garage.exit -> Mechanic flush -> autosave ordering");
 }
-int main(){const standalone::Test tests[]={transition,shipped_transition,shipped_inventory_flush,shipped_garage_save_order};return standalone::run("inventory_transition",tests);}
+// Garage commands that are refused (dealer closed, no car, undriveable car)
+// stay in the garage, so the mechanic strip is not flushed: they must not
+// autosave. Accepted commands change section first, then save.
+std::string garage_command(const std::string& path,const char* command,bool car,bool driveable,float hour){
+ GarageProbe probe(path);
+ probe.record_only=true;probe.hour=hour;
+ Object vehicle,problem;vehicle.class_name="java.game.Vehicle";problem.class_name="java.lang.String";problem.str="broken";
+ probe.player.fields["car"]=Value::make_obj(car?&vehicle:nullptr);
+ probe.problem=Value::make_obj(driveable?nullptr:&problem);
+ probe.run("java.game.Garage","osdCommand",&probe.old,{probe.tree_get_static("java.game.Garage",command)});
+ std::string out;for(const auto& event:probe.events)out+=(out.empty()?"":",")+event;
+ return out;
+}
+void garage_rejected_commands_do_not_save() {
+ struct Case{const char* command;bool car,driveable;float hour;const char* expected;};
+ const Case cases[]={
+  {"CMD_TRACKSELECT",false,true,12,"warn"},{"CMD_TRACKSELECT",true,false,12,"warn"},
+  {"CMD_TRACKSELECT",true,true,12,"change,save"},
+  {"CMD_BUYCARS",true,true,20,"warn"},{"CMD_BUYCARSUSED",true,true,3,"warn"},
+  {"CMD_BUYCARS",true,true,12,"change,save"},{"CMD_BUYCARSUSED",true,true,12,"change,save"},
+  {"CMD_CARLOT",true,true,12,"change,save"},
+  {"CMD_TESTTRACK",false,true,12,"warn"},{"CMD_TESTTRACK",true,false,12,"warn"}};
+ // The #59 class is the behavioural reference when a local copy exists.
+ const bool baseline=fs::exists("build/garage-59.class");
+ int failures=0;
+ for(const auto& c:cases){
+  const auto got=garage_command("patch/sl/Scripts/game/Garage.class",c.command,c.car,c.driveable,c.hour);
+  std::printf("%s car=%d driveable=%d hour=%.0f patch=%s",c.command,c.car,c.driveable,c.hour,got.c_str());
+  if(baseline)std::printf(" #59=%s",garage_command("build/garage-59.class",c.command,c.car,c.driveable,c.hour).c_str());
+  std::puts("");
+  failures+=got!=c.expected;
+ }
+ SLRR_REQUIRE(failures==0);
+ std::puts("PASS refused Garage commands do not autosave; accepted ones save after the transition");
+ // Every other command must save exactly when the #59 class does (where a
+ // local copy exists), apart from the order fixed above.
+ if(baseline){
+  GarageProbe names("patch/sl/Scripts/game/Garage.class");
+  int compared=0,differ=0;
+  for(const auto& cls:names.definitions)if(cls.name()=="java.game.Garage")
+   for(const auto& member:cls.static_fields){
+    const auto name=cls.utf8(member.name);
+    if(name.rfind("CMD_",0)!=0)continue;
+    std::string now,old;
+    try{now=garage_command("patch/sl/Scripts/game/Garage.class",name.c_str(),true,true,12);
+        old=garage_command("build/garage-59.class",name.c_str(),true,true,12);}
+    catch(const std::exception&){continue;}
+    ++compared;
+    const bool a=now.find("save")!=std::string::npos,b=old.find("save")!=std::string::npos;
+    if(a!=b){++differ;std::printf("save differs %s patch=%s #59=%s\n",name.c_str(),now.c_str(),old.c_str());}
+   }
+  std::printf("compared %d commands with the #59 class, %d differ in saving\n",compared,differ);
+  SLRR_REQUIRE(compared>10 && differ==0);
+ }
+}
+int main(){const standalone::Test tests[]={transition,shipped_transition,shipped_inventory_flush,shipped_garage_save_order,garage_rejected_commands_do_not_save};return standalone::run("inventory_transition",tests);}

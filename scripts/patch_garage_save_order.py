@@ -1,5 +1,9 @@
 """Build the narrow MWM Garage patch for issue #59 without recompiling its TUFA container.
 
+Superseded for distribution by #235: patch/sl/Scripts/game/Garage.class is now
+compiled from patch/sl/Scripts/game/src/Garage.java. This builder still
+reproduces the #59-only class and is kept for that reference.
+
 Usage: python scripts/patch_garage_save_order.py INPUT_CLASS OUTPUT_CLASS
 Only the verified MWM input is accepted. Other mods must fix their Java source
 (changeActiveSection before autoSaveQuiet) and compile with their own toolchain.

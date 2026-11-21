@@ -1,0 +1,42 @@
+Issue #201 / PR #202: interior directional daylight (2026-11-19)
+
+Implementation:
+- Separate 1024x1024 D32F sun field, 4 MiB; view 65 ordered before world.
+  Existing 6 MiB point atlas retained. Sun direct light uses continuous time,
+  independent of point-light attenuation and sky/ambient.
+- Real stock garage window adapter: blended ablak section, transformed triangle
+  planes/base UVs, one alpha texture, maximum 32 triangles. Threshold .5.
+  Coplanar shell cut limited to .08m; window frames/roof/objects still block.
+- Mesh sampler 5, vehicle sampler 6; shared diffuse/specular/capture visibility.
+- Cached depth reused only with unchanged projection, mask handle and casters.
+- Flare uses root-resolved stock artwork and common camera-to-sun visibility,
+  including alpha frames. Night/preview/option/lifetime gating.
+
+Validation:
+- Build: build/interior-sun-final-build.log, success / 0 errors.
+- Pixel suite: build/interior-sun-final-gpu.log, exit 0:
+  real furniture motion: 919 pixels; sunlight: 801 pixels;
+  opaque window mask blocks 666 sunlight pixels;
+  clock-only sun motion: 1578 pixels; flare at glass: RGB sum 2735,
+  roof occlusion: 0; opaque frame occlusion: 0.
+  Pixels use actual floor textures/geometry, not a synthetic floor quad.
+- Ownership: build/interior-sun-programs.log, exit 0, baseline 28, rejection
+  exercise 30, after 32 cycles 28, reopen passes.
+- Preview/catalog: build/interior-sun-preview.log, exit 0.
+- Startup: build/interior-sun-garage-smoke.log, isolated game root, Garage
+  exit 0 / 3 frames. This is a startup smoke, not manual visual acceptance.
+- Knowledge: build/interior-sun-knowledge.log, 325 checked / 119 external / 0 errors.
+
+Limits:
+- Manual acceptance and matched frame-time comparison are still required.
+- Authored neon placement/white emitter emission and multiple punctual sources
+  are not part of this increment; the previous single-point adapter remains.
+- Binary alpha coverage, not coloured glass/transmission/refraction/PBR.
+- One mask/32 triangles; other garage/addon conventions need metadata/adapters.
+- No volumetric sunlight beam, bounce lighting or skinned shadow caster support.
+- Existing baked markings in diffuse textures remain.
+
+Recovery:
+- A BSOD interrupted the initial shader build. Two source shader files contained
+  only null bytes; reconstructed from HEAD and reapplied the current patch.
+  Corrupted generated headers regenerated. No cause of the BSOD is claimed.

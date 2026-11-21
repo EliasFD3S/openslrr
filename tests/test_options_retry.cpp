@@ -48,6 +48,23 @@ int main() {
    host_game_options_load(f.vm);
    SLRR_REQUIRE(host_enhanced_graphics().msaa==mode);
  }
+ for(int value=0;value<=1;++value){
+   set_graphics(6,value);host_enhanced_graphics()={};host_game_options_load(f.vm);
+   SLRR_REQUIRE(host_enhanced_graphics().anisotropic_filtering==bool(value));
+   SLRR_REQUIRE(f.registry.invoke("java.game.OptionsDialog","getRendererOption","(I)I",nullptr,{Value::make_int(6)}).v.i==value);
+ }
+ for(int key=7;key<=12;++key) {
+   const int low=key==12?25:0,high=key==11?200:key==12?300:2;
+   for(int value:{low,(low+high)/2,high}) {
+     set_graphics(key,value);host_enhanced_graphics()={};host_game_options_load(f.vm);
+     SLRR_REQUIRE(f.registry.invoke("java.game.OptionsDialog","getRendererOption","(I)I",nullptr,{Value::make_int(key)}).v.i==value);
+   }
+   set_graphics(key,9999);
+   SLRR_REQUIRE(f.registry.invoke("java.game.OptionsDialog","getRendererOption","(I)I",nullptr,{Value::make_int(key)}).v.i==high);
+   set_graphics(key,-99);
+   SLRR_REQUIRE(f.registry.invoke("java.game.OptionsDialog","getRendererOption","(I)I",nullptr,{Value::make_int(key)}).v.i==low);
+ }
+ std::puts("PASS AO method/quality/strength/radius and shadow quality/filter clamps + disk roundtrip");
  for(int key=1;key<=4;++key)set_graphics(key,0);
  set_graphics(0,3);
  host_set_framerate_mode(FramerateMode::Classic);
@@ -61,9 +78,14 @@ int main() {
  g={};host_game_options_load(f.vm);SLRR_REQUIRE(g.msaa==2 && g.dynamic_reflections);
  std::ofstream(host_file)<<"framerate_mode=classic\n";
  host_game_options_load(f.vm);SLRR_REQUIRE(g==EnhancedGraphics{});
- std::ofstream(host_file)<<"msaa=999\nlocal_lights=invalid\nvolumetric_clouds=0\n";
+ std::ofstream(host_file)<<"msaa=999\nlocal_lights=invalid\nvolumetric_clouds=0\nanisotropic_filtering=invalid\n";
  host_game_options_load(f.vm);
- SLRR_REQUIRE(g.msaa==1 && g.local_lights && !g.volumetric_clouds);
+ SLRR_REQUIRE(g.msaa==1 && g.local_lights && !g.volumetric_clouds && g.anisotropic_filtering);
  std::puts("PASS graphics disk round-trip: all MSAA modes, booleans, framerate coexistence, debug path, legacy and malformed files");
+ if(const char* root=std::getenv("SLRR_COMPILE_OPTIONS_ROOT")) {
+   const auto report=script_compile_all(root,"options-build");
+   SLRR_REQUIRE(report.attempted==1 && report.succeeded==1 && report.failed==0);
+   std::puts("PASS patched OptionsDialog source compilation");
+ }
  std::puts("PASS debounce; failed saves suspend automatic retries; real changes rearm; forced retry and success clear dirty");
 }

@@ -94,7 +94,8 @@ current gaps to SLRR_rev code are in
   The host matches this (`src/platform/host_music.cpp:host_music_change_set`).
   The extra `Misc_Menu` and `Anim_Scene` sets in SLRR_rev belong to build 940.
 - Java changes are allowed only for specific authorized features. Shipped
-  changes live in `patch/` with their source (`patch/sl/Scripts/game/src/OptionsDialog.java`).
+  changes live in `patch/` with their source (`patch/sl/Scripts/game/src/OptionsDialog.java`,
+  `patch/sl/Scripts/game/src/Garage.java`, `patch/system/Scripts/render/src/*.java`).
   A file that exists only in the local game tree is not a patch.
 
 ## 3. Build, run and diagnostics
@@ -137,13 +138,19 @@ current gaps to SLRR_rev code are in
   by frame and each CSV row is one simulated second. `--bench-shots DIR`
   writes window captures every 10 simulated seconds
   (`src/boot/boot.cpp:boot_game`).
-- Environment variables: `SLRR_GAME_ROOT` and `SLRR_VLC_DIR`
-  (`src/platform/video_fmv_vlc.cpp`). There are no others.
-- There is no test target on `main`. `main` had a CTest suite (added in
-  `8637eae` with PR #3's `System.arraycopy`, PTX and dyno regressions) until
-  `b907b6b` deleted it. A Windows CI workflow only ever existed on the PR #3
-  branch. The probes are the only automated checks: `--probe` and
-  `--probe-gc` need a game root, `--probe-dyno` and `--probe-pacejka` do not.
+- Runtime environment variables: `SLRR_GAME_ROOT` (`src/main.cpp`),
+  `SLRR_VLC_DIR` (`src/platform/video_fmv_vlc.cpp`) and `SLRR_AMBIENCE_LOG`
+  (`src/resources/scene_ambience.cpp`, debug logging of random ambience
+  requests). `SLRR_FMOD_SDK_DIR` and `SLRR_TOOLS_CACHE_DIR` are build-time
+  only (see README.md).
+- Automated checks on `main`: the only CTest target is `audio_recovery`
+  (`-DBUILD_TESTING=ON`, `CMakeLists.txt`). Every other regression is a
+  standalone `tests/test_<name>.cpp` built and run by
+  `scripts/run_save_io_tests.ps1 -Suite <name>` (suite list in its
+  `ValidateSet`); `tests/*.py` run with Python. The older CTest suite from
+  PR #3 (`8637eae`) was deleted by `b907b6b`, and no CI workflow exists in
+  the repository. The probes `--probe` and `--probe-gc` need a game root;
+  `--probe-dyno` and `--probe-pacejka` do not.
 - Ctrl+F12 opens the ImGui debug panel (`src/render/debug_overlay.cpp:handle_message`).
   Its FPS readout is `1000 / cpuTimeFrame`, and VSync defaults to on
   (`src/render/debug_overlay.hpp:RenderOptions`).
@@ -174,7 +181,7 @@ current gaps to SLRR_rev code are in
 | Renderer | `src/render/bgfx_lib_backend.cpp:flush`, `src/render/bgfx_lighting.cpp:draw_instance`, `src/render/bgfx_shadows.cpp`, `src/render/bgfx_osd.cpp:draw_osd` | Frame, materials, shadows, OSD and HUD |
 | UI | `src/ui/osd_registry.cpp:osd_add_widget`, `src/ui/osd_registry.cpp:osd_on_field_write` | OSD widgets, hit-testing, modal state |
 | Map ambience | `src/resources/scene_ambience.cpp:scene_ambience_attach`, `src/resources/scene_ambience.cpp:scene_ambience_tick` | `sfx_loop`/`sfx_random` lines of map placements |
-| Platform | `src/platform/host_input.cpp`, `src/platform/host_sfx.cpp`, `src/platform/host_music.cpp`, `src/platform/video_fmv.cpp`, `src/platform/video_cinepak.cpp`, `src/platform/host_game_options.cpp` | Input, audio, FMV (built-in Cinepak AVI decoder), options |
+| Platform | `src/platform/host_input.cpp`, `src/platform/host_audio.cpp`, `src/platform/host_sfx.cpp`, `src/platform/host_music.cpp`, `src/platform/video_fmv.cpp`, `src/platform/video_cinepak.cpp`, `src/platform/host_game_options.cpp` | Input, audio, FMV (built-in Cinepak AVI decoder), options |
 | Worker pool | `src/platform/job_system.cpp:jobs_parallel_for` | One worker per logical processor for loading work off the host thread (§6) |
 
 Code that exists but is not used:
@@ -408,9 +415,11 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   run (kind 23, a Hermite spline); any other id is a gate into that row.
 - Walkers follow the original model (tick 0x00589cb0,
   `src/resources/pedestrian_lines.cpp:PedestrianLines::step`): free agents
-  with a heading, 1 m radius and 1 m/s. Walls and both runs repel them and
-  push them back to 1 m; the four strongest influences steer; they leave a
-  row only through a gate. Stock gate links form closed block rings, so no
+  with a heading, 1 m radius and 1 m/s. Walls and both runs repel them (soft
+  steering within 3 m) and push them back to 0.5 m, an OpenSLRR choice: many
+  stock corridors and gates are only 2.2 m wide, and a 1 m clearance left
+  walkers pinned on gates (#272); the four strongest influences steer; they
+  leave a row only through a gate. Stock gate links form closed block rings, so no
   route crosses a carriageway.
 - Spawns use the original formula per row (corridor: 10-90 % across the
   runs; other rows: a fan triangle). The headcount is `density × row area`
@@ -432,12 +441,25 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   `A` is the car outline, `E`/`L`/`T` the drivetrain, `O h l r p q t u v` the
   body and `a b c d` the wheels, in one coordinate system with the front up.
   `src/resources/part_runtime.cpp:hud_damage_parts` lists the installed
-  engine, body and wheel parts with their top-down centre, normalised to the
-  chassis renders, and their condition `wear × tear`
-  (`GAME:parts/scripts/src/Part.java:getConditionNoAttach`). The renderer
-  gives each part to the smallest blip quad of its kind holding that centre
-  (wheels by corner) and draws a blip in its worst part's colour, or not at
-  all when it holds no part (`src/render/bgfx_osd.cpp:draw_vehicle_hud`).
+  engine, body and wheel parts with their rest-installed top-down centre,
+  normalised to chassis renders, and their condition `wear × tear`
+  (`GAME:parts/scripts/src/Part.java:getConditionNoAttach`). Closed CFG mount
+  frames retain deliberate `setSlotPos`, not flap/damage offsets; removing a
+  panel does not change valid chassis-only normalisation bounds.
+  `src/render/bgfx_osd.cpp:draw_vehicle_hud` delegates region ownership to
+  `include/slrr/vehicle_hud_damage.hpp:hud_assign_damage`: for the stock font,
+  only script `Quarterpanel` instances (including subclasses) own `q/p/u/v`, selected by
+  left/right and front/rear. Accessories cannot colour or resurrect a missing
+  fender. Other regions retain smallest-containing-quad aggregation (wheels
+  by corner). This is host mapping, not recovered original native behaviour.
+  The stock `q` UVs reverse the longitudinal axis of the asymmetric front
+  fender tile, placing its bright edge beside the engine. For the stock
+  cars damage font and exact stock UV layout only,
+  `include/slrr/vehicle_hud_damage.hpp:hud_stock_left_fender_uv` uses a
+  horizontal mirror of `p`; shared SCX/PNG assets and custom UVs stay untouched.
+  Custom fonts keep the previous spatial region mapping.
+  Regression target: `vehicle_hud_damage` (`BUILD_TESTING=ON`); optionally pass
+  the original `cars/meshes/osdfont.scx` path for a real-asset integration check.
 
 ### 5.9 Options and saves
 
@@ -447,12 +469,31 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
 - Enhanced options (MSAA, reflections, clouds, sunlight, local lights) are
   session-only and exposed through `OptionsDialog.get/setRendererOption`
   (`src/natives/natives_script.cpp:register_script_natives`).
-- File saves now write versioned typed JSON at the existing paths, with SDAT
-  type 1/type 2 and raw-stream read fallback. Resource paths remount independently
-  of session pack order; scripts keep binary cross-type read semantics. See
-  ENGINE_CONTRACT §15 (`src/natives/natives_io.cpp:json_frame`,
+- File saves write version 2 JSON at the existing paths (#291): named career,
+  car (part tree, per-class tuning data) and skin layouts, and a typed
+  `values` list for other files. Schema: [SAVE_JSON_SCHEMA.md](SAVE_JSON_SCHEMA.md).
+  Version 1 JSON, SDAT type 1/type 2 and raw streams are still read; a version
+  1 or SDAT file under `save/` read to its last byte is rewritten as version 2
+  on close. Resource paths remount independently of session pack order;
+  scripts keep binary cross-type read semantics. See ENGINE_CONTRACT §15
+  (`src/natives/save_json.cpp:encode`, `src/natives/save_json.cpp:decode`,
+  `src/natives/natives_io.cpp:json_frame`,
+  `src/natives/natives_io.cpp:json2_take_payload`,
   `src/natives/natives_io.cpp:json_take_payload`,
   `src/natives/natives_io.cpp:sdat_take_payload`).
+- Lessons from #291. Before it, cars looked stuck in SDAT: a `PlayerCarN` is
+  rewritten only when that car is saved (`CarLot.saveCar` on the current car),
+  so untouched cars never left the legacy format. Conversion therefore happens
+  on a complete read, which the car lot does through `save/temp/` when a car is
+  shown; the career folder gets the JSON copy on the next save
+  (`GAME:sl/Scripts/game/src/GameLogic.java:save` copies `PlayerCar*`).
+  The flat stream cannot name part data on its own: subclasses (`Tyre`,
+  `Block`, mod parts) append versioned fields after `super.save`, so the host
+  records which script frame wrote each value
+  (`src/jvm/jvm.cpp:set_script_frame_hooks`,
+  `src/natives/natives_io.cpp:save_frame_enter`). `GameLogic.save` writes the
+  racer list without a count; the encoder recognises a racer by its
+  int, int, float prefix followed by a `VehicleDescriptor` frame.
 
 ### 5.10 Threads and the worker pool
 
@@ -469,7 +510,7 @@ this section is the working guide.
 | Worker pool, one per logical CPU minus one | `src/platform/job_system.cpp:jobs_parallel_for` | Data-parallel batches started by the host thread |
 | Exterior map parser | `src/natives/natives_resref.cpp:spawn_ground_shell` (`std::async`) | `scene_instances_ground_map` for the next chained map file |
 | Pedestrian stepper | `src/resources/part_runtime.cpp:PedSim` | Walker steering on copies of the walker records |
-| Audio and video | XAudio2, Media Foundation, VLC | Their own decode and output threads |
+| Audio and video | FMOD Core (effects/music/Cinepak PCM), optional VLC/Windows codecs | Their own decode and output threads |
 
 **API** (`include/slrr/job_system.hpp`).
 
@@ -554,6 +595,75 @@ limits the speed-up.
   matching start-of-drive window captures (`--bench-shots`) when the same
   sky dome is chosen.
 
+**Per-frame work on the pool (#266).**
+`src/resources/scene_instances.cpp:scene_instances_collect_batches` lists the
+visible cells on the host thread, then runs the placement tests (flags, LOD,
+frustum, far-size filter, reflection size) over contiguous runs of cells, a
+few runs per thread. Each run fills its own list of (batch slot, placement),
+and the host thread appends the runs in order, so every batch lists its
+placements as the serial loop did. The far-size filter
+(`src/render/bgfx_lib_backend.cpp:screen_size_visible`) only reads backend
+state that the batch does not change. The LOD level and epoch of a placement
+are the only values written during the batch, from any job, through
+`std::atomic_ref` in `src/resources/scene_instances.cpp:prop_lod_visible`;
+`scene_prop_lod_level` is idempotent, so a job that reads a level another
+job has just stored gets the same answer. Fewer than 16 visible cells, or
+fewer than 4 pool threads, keep the loop on the host thread (on two cores the
+pool was slower than the serial loop). A new per-frame user must follow the
+same rules: lazy caches and bgfx stay on the host thread, results are
+appended in serial order. Walker palettes (#268) follow it too:
+`src/resources/scene_instances.cpp:scene_instances_collect` finds or loads
+each character on the host thread (`character_skin_prepare`), the jobs run
+`character_skin_palette_prepared` for different characters
+(`src/resources/character.cpp:rebuild` touches only its own character and
+reads its immutable skeleton and clip), and the host thread publishes the
+palettes into the frame cache in order.
+
+**Worker bgfx encoders (#270).** On by default (renderer debug option
+"Worker encoders", `render_debug().worker_encoders`). When on,
+`src/render/bgfx_lib_backend.cpp:parallel_submission_ready` is true with 3 or
+more pool threads; `queue_or_run` then queues the AO prepass
+(`src/render/bgfx_ao.cpp`), each car lamp tile (`src/render/bgfx_shadows.cpp`)
+and each reflection face draw instead of submitting it, and
+`src/render/bgfx_lib_backend.cpp:run_worker_submits` runs the queue on the
+pool while the host thread draws the sky and the world on encoder 0. Rules:
+
+- One job per Sequential view, so the order inside a view is the serial one.
+  Each job calls `bgfx::begin(true)` and sets the thread-local `t_encoder_`
+  and `t_bind_`; every draw helper goes through `enc()` and `bind()`. The host
+  caches encoder 0 in `host_encoder_` (reset at `bgfx::shutdown`): one
+  `bgfx::begin()` or TLS lookup per draw call doubled world submission.
+- Binding caches (#246 light arrays, #262 uniforms and textures) live in a
+  `BindState`; each worker owns one (`worker_binds_`), the host uses
+  `main_bind_`. The harness reads `main_bind_` counters.
+- No shared writes from jobs: `draw_prop_batches` takes the shadow-local
+  choice as a parameter instead of toggling `static_shadow_local_`;
+  `snapshot_textures` resolves every texture of the queued objects into
+  `resolved_textures_` first (lookups that would insert run on the host);
+  `upload_light_data` runs in frame setup and is skipped inside the window;
+  profiler zones are off on worker threads (`perf::worker_thread`), whose time
+  is summed in `worker_submit`, with the host's wait in `submit_wait`.
+- `draw_prop_batches` allocates one instance buffer per list: bgfx takes its
+  resource lock per transient allocation, and a granted count can be smaller
+  than asked when another encoder allocates in between.
+- Fewer than 3 threads, or the option off: the queued draws run on the host
+  thread in submission order.
+
+Harness (`tests/test_scene_shadow_gpu.cpp`, crowd city 1280x720 with lamp
+tiles, GTAO and a reflection probe; lamp fades use a fixed step so the runs
+compare): threaded and one-thread images are identical at 24, 2 and 1 cores.
+At 24 threads host submission was 1.54 ms threaded against 1.61 ms on one
+thread, worker submission 0.50 ms, host wait 0.002 ms; bgfx's shared submit
+state (sort keys, atomics, transient buffers) took back most of what the host
+saved, so the option first shipped off. In game (user, 21 November 2026,
+Valo City at night, 2560x1440, MSAA 4x, HBAO high, 40 lamps, 6 shadowed,
+12 car tiles; `build/Release/perf/renderer_debug_20261121_031919.txt` off,
+`_031932.txt` on) the host gained: renderer zones 5.80 → 5.13 ms, frame
+8.15 → 7.35 ms, world submission 1.96 → 1.88 ms, worker submission 0.85 ms
+summed, host wait 0.002 ms, render thread unchanged (4.15 / 4.19 ms). The
+user then made it the default; the two views were close but not identical
+(1032 / 1014 instances).
+
 **Where to build next.** [MILESTONES.md M7](MILESTONES.md#m7--multicore-frame)
 lists the planned steps for the frame loop: measure where the CPU limits,
 cull scene collection in parallel, record draws with bgfx encoders, run
@@ -578,7 +688,8 @@ VM and lifetime:
   (`src/render/bgfx_lib_backend.cpp:prefetch_part_textures`). A job writes
   only its own slot of a result the caller prepared and never touches the
   VM, GameRef state, other cache entries or bgfx; the host thread publishes
-  the results. Steady per-frame work stays on the host thread. §5.10 is the
+  the results. Steady per-frame work stays on the host thread, except the
+  placement loop of `scene_instances_collect_batches` (#266). §5.10 is the
   guide for adding parallel work.
 - An `Object*` held in C++ is not a root. Use `Jvm::RootScope`
   (`include/slrr/jvm.hpp:RootScope`) across yields, or register a root
@@ -715,6 +826,7 @@ Process:
 | Shadow maps | 2048² | `src/render/bgfx_lib_backend.hpp:kShadowResolution` |
 | Pedestrian radius / density scale | 400 m / ×4 | `src/resources/part_runtime.cpp:tick_pedestrians` |
 | Walker body radius / speed | 1 m / 1 m/s (original) | `src/resources/pedestrian_lines.cpp:kRadius` |
+| Walker hard wall clearance | 0.5 m (OpenSLRR) | `src/resources/pedestrian_lines.cpp:kWallClearance` |
 | Live GameRef IDs | from `0x70000000` | `src/resources/gameref.cpp:g_next_live` |
 
 ## 8. Native coverage at a glance
@@ -735,8 +847,10 @@ The three `Painter` natives that this table listed are bound since #64;
 see "Garage paint booth (#64)" below.
 
 Explicit no-ops: `System.analyze` ×3 (faithful).
-`GameRef.setActiveCollision` has a body since PR #22 (§12). Two host-only
-no-ops outside the stock table: `Player.<init>` and `LoadingScreen.<init>`.
+`GameRef.setActiveCollision` has a body since PR #22 (§12). One host-only
+no-op outside the stock table: `LoadingScreen.<init>`. `Player.<init>` runs
+its Java body (#226): without it the boot player had no `parts`, `carlot` or
+`osd`, so `--spawn-car` sessions left the game from Car Lot.
 
 Partial bodies that matter for upcoming work: `GameRef.setState` applies to
 cars only, `GroundRef.getNearestCross` returns null,
@@ -747,7 +861,6 @@ reads, and `Part.setSfxLoopParams` stores values without applying them.
 
 | Statement | Code reality |
 | --- | --- |
-| HOST_NATIVE_UTILITIES: engine-loop audio not yet implemented | `update_engine_audio` runs every physics frame |
 | Stale comments: "no green-thread budget yet" in `src/boot/mainloop.cpp`, "240 Hz tick" in `src/resources/scene_instances.cpp` | Fibers have budgets, physics is 120/60 Hz |
 
 ## 10. Open risk register
@@ -772,11 +885,11 @@ lifetime and sampling, and the `Vehicle.getHorn` / `hasCrime` registrations.
 
 These are entry points, not fixes. Each needs its own reproduction.
 
-- **#15 HUD too small** (PR #20 open). Every stock HUD element comes from the
+- **#15 HUD too small** (closed; PR #20 merged). Every stock HUD element comes from the
   table in `src/render/bgfx_osd.cpp:draw_vehicle_hud`. Speed, gear and
   mileage are drawn left-aligned at their anchor, so centring needs the
   string width. CFG `osd_*` overrides take separate branches.
-- **#16 car drives through trees (PR #22).** `ground_prop_config` now keeps
+- **#16 car drives through trees** (closed; PR #22 merged). `ground_prop_config` now keeps
   native CFG bodies. Placements use cached triangle and exact box/sphere
   collision paths, including a full chassis volume test for thin trunks.
   `PhysicsRef` has its seven missing signatures, and `setActiveCollision`
@@ -1144,9 +1257,9 @@ Parse and retain emission texture slot plus UV mapping; include both in material
 merge equality. In a night overlay, skip sections without a mask and sample the
 mask RGB to modulate the additive emissive contribution. Missing masks do not
 fall back to white/full-bright. Preserve normal lighting on base facades. The
-night detail vertex path uses a 0.002 m normal offset to reduce coplanar depth
-fighting, without depth writes or distance-dependent clip bias. Onset remains
-18:30. Signs only emit through their authored masks as well.
+night detail vertex path used a 0.002 m normal offset to reduce coplanar depth
+fighting, without depth writes; since #281 it is a relative depth bias instead
+(see "Emissive overlays sit flush" below). Onset remains 18:30. Signs only emit through their authored masks as well.
 
 Release x64 and DXBC/GLSL shaders compile. Stock integration test verifies one
 masked and four unmasked sections, valid mask slot and hour transitions. This
@@ -1165,7 +1278,7 @@ either an authored mask (windows) or a nonzero emission colour (signs).
 Colour-only signs use the white mask binding and multiply the base texture
 by the emission colour; non-emissive facade groups remain excluded. Missing
 authored mask textures still do not fall back to a full-bright facade.
-The 2 mm overlay offset and 18:30 onset remain unchanged.
+The overlay depth handling (now #281's depth bias) and 18:30 onset remain unchanged.
 
 Validation: Release host build succeeded; `night_props` passed against game
 assets, checking night/day sign emission and window mask presence. Actual
@@ -1507,21 +1620,27 @@ coalescing is retained. Rejected loop requests increment diagnostics without
 reading their WAV. This is a common loop budget, not new engine-vs-ambient
 priority; a 25th loop can still be denied until another loop stops.
 
-Decoded immutable WAV format/PCM is shared between voices and held in a
-16 MiB / 64-entry LRU cache. Playing voices retain their buffer even after
-cache eviction; root reset stops voices and clears cached data/counters.
-Oversized valid WAVs can play but are not added to that cache. Loop pitch
+FMOD decoded sample sounds are shared between voices and held in a
+16 MiB decoded-PCM / 64-entry LRU cache. Samples are prepared for looping at
+load time; each channel selects loop or one-shot playback independently.
+Playing voices retain their sound even after cache eviction; root reset
+stops voices and clears cached data/counters. `host_audio` owns the shared
+FMOD mixer with independent effects/music groups; music streams are updated
+through the existing frame pump even when only effects are playing.
+Sounds above the cache limit can play up to the 64 MiB per-effect bound,
+checked with an open-only metadata probe before full decode. `wave_reads`
+counts uncached load attempts (probe plus decode), not OS file reads. Loop pitch
 and gain updates now reject non-finite inputs via the same finite defaults
 as play_file. HostSfxStats exposes rejection/read/hit/cache diagnostics.
 
 `src/platform/host_music.cpp` tries at most one playlist pass when opening
-a track fails, preserving next/previous direction. A fill() failure advances
+a track fails, preserving next/previous direction. A stream failure advances
 through the same bounded recovery path. A wholly unreadable set remains
 stopped; update does not continuously retry it. Explicit change/next can
 retry later. HostMusicStats exposes attempts/failures/current track for
 diagnostics. No Java native or music-set/mode contract is added.
 
-Validation: Release host compiles. audio_recovery creates only digital-silence
+Pre-FMOD validation: Release host compiles. audio_recovery creates only digital-silence
 PCM WAVs in an isolated fixture and mutes playback. Actual XAudio2/Media
 Foundation checks pass: 24 loops share one disk read; the next loop is
 rejected before I/O; nine distinct one-shots are admitted with 32 total
@@ -1641,7 +1760,12 @@ Video without VLC (#216): 64-bit Windows ships no Cinepak codec (only the
 DirectShow paths failed and every intro and `prime.avi` was skipped.
 `video_fmv_open` now tries `src/platform/video_cinepak.cpp` first: it indexes
 the AVI, decodes Cinepak frames in order into BGRA and plays PCM audio through
-its own XAudio2 voice, whose position drives the frame clock. Files it rejects
+a dedicated FMOD channel/group, whose position drives the frame clock.
+The FMV pump updates the shared mixer during boot intros, and EOF/channel
+failure falls back to wall time from the last valid position without jumping
+the picture. PCM is staged in a WAV memory sample (unsigned 8-bit or signed
+16-bit, mono/stereo) and released before its shared mixer owner. Looping
+replays the same sound with a fresh channel. Files it rejects
 (another codec, or a first frame it cannot decode) still go to LibVLC, then
 AVIFile/DirectShow. The video_safety suite checks the decoder and a generated
 Cinepak AVI with PCM audio.
@@ -1909,6 +2033,8 @@ Mechanic.flushInventory before autoSaveQuiet snapshots player.parts. The VM,
 natives and save format are unchanged. scripts/patch_garage_save_order.py
 reproduces the binary patch from one SHA-256 verified MWM input and rejects
 other mods; do not apply binary offsets to an unknown Garage container.
+Since #235 the shipped class is compiled from `patch/sl/Scripts/game/src/Garage.java`
+instead, which keeps this order; the binary builder is kept as the #59 reference.
 
 Validation: inventory_transition executes the actual shipped GameLogic transition,
 Mechanic.flushInventory and Garage.osdCommand/exit with isolated presentation
@@ -2295,6 +2421,77 @@ fixture takes about 11ms to collect versus 168-171ms before; allocation costs
 26-29ms versus 23ms before. The baseline/current logs and limits are recorded in
 assets/validation/gc-lookup-epochs.txt. This is not a gameplay FPS measurement.
 
+
+### Shared shadow receivers (#201, first increment)
+
+- `src/render/bgfx_lighting.cpp:LibBgfxBackend::bind_scene_shadow` binds the
+  same field for scenery, vehicles and world reflection captures. Vehicle stage
+  5 avoids the cubemap at stage 4. The source tag distinguishes the sunlight
+  field from the existing garage-lamp field.
+- `shaders/scene_shadow.sh` shares filtering/bias/fade across the mesh and
+  vehicle shaders; only the associated direct light is attenuated. Ambient,
+  environment reflection, emissive lamps and previews retain their own policy.
+- `tests/test_scene_shadow_gpu.cpp` measures real D3D11 pixels: shadowed/lit
+  receivers, disabled field, preview/emission isolation, capture-view parity and
+  local-shadow isolation from sunlight. It does not validate full cubemap
+  composition, cascades, addon light discovery or complete garage behavior.
+- See RENDERING_ROADMAP.md and assets/validation/scene-shadow-foundation.txt
+  for the current scope, evidence and remaining #201 work.
+
+
+### Distance cascades (#201, second increment)
+
+- `src/render/shadow_cascades.hpp:shadow_projection` builds camera-centred
+  radial projections with fixed light-space basis and texel-snapped X/Y.
+- `src/render/bgfx_shadows.cpp:LibBgfxBackend::update_static_shadow` renders
+  four outdoor atlas tiles each frame, keeping garage local shadows separate.
+  Radial splits are 32/100/320/1,000 m; off-camera scenery participates.
+- `shaders/scene_shadow.sh` selects adjacent levels and crossfades their
+  visibility. See RENDERING_ROADMAP.md for memory/CPU cost, cache retirement,
+  the separate short-range vehicle-caster path and scene-detection limits.
+- `tests/test_scene_shadow_gpu.cpp` checks distinct atlas clears/selection,
+  blends and the 1 km fade through actual shaders, plus projection stability.
+
+
+### Cascade CPU cost, filtering and anisotropy (#201)
+
+- The outer shadow candidates are collected once per frame; the four levels
+  cull their render-space bounds without rebuilding all scene records. Shadow
+  collection opts out of character palette completion: these passes exclude
+  skinned casters. Main/reflection character collection keeps the default.
+- `src/render/scene_mesh_data.hpp:shadow_draw_groups` caches contiguous depth
+  ranges across opaque material changes while preserving blend holes and
+  cutout texture/channel/reference boundaries. Revision uploads rebuild them.
+- Tent-weighted nine-tap bilinear comparison replaces the four-tap footprint.
+  A thin-stripe GPU regression checks fractional response, but reported moving
+  pole-shadow scintillation still needs manual validation; do not mark it fixed.
+- `OptionsDialog.get/setRendererOption` index 6 controls anisotropic filtering
+  (off/hardware maximum, default on), saved in openslrr_options and shared with
+  the debug checkbox. World colour/detail samplers opt in, comparison maps and
+  UI do not. Patched OptionsDialog source/container are shipped and installed.
+- See assets/validation/shadow-performance-filtering.txt for measured changes;
+  the previous cascade cost in scene-shadow-cascades.txt is historical.
+
+
+### Stationary moving-sun shimmer follow-up (#201)
+
+- User reports edge shimmer stopping when clock speed is zero. The numeric
+  regression reproduces global-origin light-lattice jumps with a stationary
+  receiver: see `tests/test_scene_shadow_gpu.cpp`. World-space UV thresholds
+  and a wider PCF kernel alone did not address that projection defect.
+- Cascades now rotate around a nearby shared origin, with caster model
+  translations and receiver coordinates rebased consistently. The depth vertex
+  shader separates model and view-projection transforms to avoid large-coordinate
+  cancellation after rotation. Long-drive origin shifts align to all tile grids.
+- An atlas is reused only when the sample matrices, origin and ordered caster
+  stamps (geometry identity/revision, buffer handles, transforms) match exactly.
+  Small sun changes and changed/moved casters invalidate it; no angular gate.
+- Car shadows use comparison sampling before interpolation, not interpolation
+  of raw depths followed by a binary step. GPU tests cover fractional edges,
+  nonzero origin reception, origin rebase phase and real-map reuse/invalidation.
+  See assets/validation/shadow-origin-stability.txt; manual user validation of
+  the reported camera remains outstanding.
+
 ## Garage paint booth (#64)
 
 Body paint, spray and decals were inert: the three `Painter` natives were
@@ -2404,3 +2601,1212 @@ so `copy.id()` aliases the copy and the instance inherits its replacement.
 texture as a flat picture over the slot's hit box, and destroying the instance
 removes it. The button mesh itself is not drawn.
 Projection/preview behavior remains the host approximation described above.
+
+### AO silhouette streaks around cars and pedestrians (#201)
+
+Reported at `905dee4`: with HBAO or GTAO on, dark lines spread on the
+ground beside cars (rear wheel, bumper) and pedestrians' legs; AO Off removes
+them. Both methods in `shaders/fs_ao.sc` sampled every receiver at the same
+radial distances (`(k+0.75)/steps`), and only varied the direction rotation
+with interleaved gradient noise. That hash is built for temporal accumulation,
+which this AO does not have; on its own it varies slowly along diagonals. The
+5-tap Gaussian filter could not remove either pattern, so the occluder's
+outline appeared as shifted copies on the ground.
+
+The main pass now takes rotation and step offset from a 4x4 tile
+(`shaders/fs_ao.sc:hbao`, `shaders/fs_ao.sc:gtao`), and the separable filter
+uses [1,2,2,2,1]/8, one full tile period. This follows the HBAO+ approach
+(per-texel rotation and jitter from a small tile, then a matched blur).
+Assetto Corsa's Custom Shaders Patch, which the user named as a reference,
+documents SSAO or NVIDIA HBAO+ over a pre-pass with real scene normals and
+uses baked vertex AO for cars and tracks; it publishes no further algorithm
+details. This host still reconstructs normals from depth and has no baked AO.
+
+Validated at `b92f6c0`: Release build and `scene_shadow_gpu` (flat planes
+0 darkened pixels, contact AO kept), `render_programs_gpu` and
+`scene_mesh_cache` pass. The user retested the reported car and pedestrian
+views in game and confirmed the streaks are gone. A numerical model of a box
+on a plane with ideal normals had not reproduced them, so in-game checks are
+the reliable test for this kind of pattern artifact. Pedestrians cast no sun shadow at all (#230); the
+contact darkening under them comes only from AO.
+
+### Pedestrian sun shadows (#230)
+
+Every shadow pass skipped `gpu_skin` instances: the scenery depth program has
+no bone palette, and the outer cascade collection calls
+`scene_instances_collect` with palette completion off to save CPU. Pedestrians
+therefore cast nothing; only AO darkened the ground under them.
+
+`src/render/bgfx_shadows.cpp:update_static_shadow` now takes skinned casters
+from the main-view `instances_`, which are already palette-complete, within
+`kSkinnedShadowRange` (100 m). It draws them in each cascade whose radius
+covers them, with the skinned depth program the AO prepass already uses
+(`vs_skin` + `fs_static_shadow`), and XORs a palette hash into their caster
+stamp so animation invalidates the cached atlas
+(`src/render/bgfx_shadows.cpp:skin_palette_hash`).
+
+Pitfalls: rest-pose bounds of skinned meshes do not cover animated limbs, so
+cull by distance, not `shadow_bounds_visible`. `u_skinBones` reads 48 matrices;
+only pass a palette of at least 48x16 floats, as the main draw does.
+Off-screen characters, point lights, interior daylight and the car-depth map
+still ignore skinned casters.
+
+Validated in game by the user together with the AO tile fix: pedestrians cast
+sun shadows in ValoCity and no AO streaks appear around them or the car. A
+build without the AO fix showed the streaks again, which is a quick way to tell
+the two problems apart. No skinned-caster GPU regression or `--perf-log`
+measurement exists yet.
+
+### Rendering foundation review findings (#233)
+
+Fixes from the `antomys` review of PR #202:
+
+- Batched props (trees, fences, street furniture) occlude in the AO prepass, so
+  they must also receive it. The prop path in
+  `src/render/bgfx_lighting.cpp:bind_ambient_occlusion` callers now binds AO
+  with `view_id == ao_world_view_`; before, `fs_mesh` read whatever
+  `u_aoSampling` the previous draw left.
+- `src/render/bgfx_lib_backend.cpp:update_local_light` is gated on
+  `local_lights` only. Gating it on `dynamic_lighting` (Map sunlight) removed the
+  garage fixtures and their point shadow with sunlight off, unlike `main`.
+- `shaders/scene_shadow.sh:clampReceiverGradient` caps the outdoor cascade
+  receiver-plane gradient. The old `receiverBias` capped it at 0.004; without a
+  cap, quads straddling two surfaces can produce thin leaks or dark fringes.
+  The limit is a 20-unit world slope times `extent/(extent+768)`, matching the
+  ortho depth range in `src/render/shadow_cascades.hpp:shadow_projection`.
+- `src/render/scene_mesh_data.hpp:same_material` compares `self_illuminated`,
+  so emissive and non-emissive parts are not merged.
+- Some docs held raw 0x96 bytes (Windows-1252 en dash), which is invalid UTF-8.
+  Check with `grep -P '\x96'` before committing.
+
+Validated in game by the user at `bbcb39c` (20 November 2026), after checking
+the garage with Map sunlight off, prop AO and shadow edges near poles and kerbs.
+No `--perf-log` measurement exists for these changes.
+
+### Stock light resources and placement (#235)
+
+Survey of the stock game plus the `DestructionTools` and `MW_Mod` RPKs
+(20 November 2026, read-only scan of the game root). The game already has a
+complete authored light model; an explicit light API should consume it before
+inventing new Java classes.
+
+- Light resources are RPK type 13 (`RESTYPE_RENDER_LIGHT` in the game's
+  `ResourceRef.java`), text payloads. 89 entries: 35 `spot`, 27 `fakespot`,
+  15 `directional`, 5 `fakepoint`, 2 `point`, 1 `fake point` (with a space),
+  4 base classes without a `type` line.
+- Common keywords: `type`, `diffuse a r g b`, `specular`, `ambient`,
+  `position x y z`, `direction x y z`, `range f`, usually `attenuation c l q`
+  (`1 .03 0` or `0 0 0`). Spot and fake lights add `theta`/`phi` cone angles
+  (radians, e.g. 1.896/2.02), `lit_dynamic 1`, `attH_texture`/`attV_texture`
+  (0x80000000 = none), and a flare set `lf_*` (note the `lenght` spelling).
+- Parser pitfalls: inline `//` comments (`type spot // thatis`), commented-out
+  lines, non-zero `position` on directional lights (garage `0 3 0`).
+- `src/natives/natives_renderref.cpp:apply_directional_light` only reads
+  directional lights (diffuse/ambient/specular/direction). Range, attenuation,
+  cone, `lit_dynamic`, `fake*` and `lf_*` are not parsed anywhere yet.
+- Placement: lights are render children in part/car/scenery cfgs,
+  `render <light id> <pos xyz> <ypr>`, then `flags <group>` and optionally
+  `colors 1 0xAARRGGBB`. 99 car/part cfgs do this. Group bits from cfg comments:
+  1 brake, 2 reversing, 4 city (headlights/streetlights), 8 police/siren,
+  16/32 indicators, 256 nitro; combinations exist.
+- Scenery: `objects.rpk` lamps (`0x18C` kislampa, `0x18E` lamp_base) place the
+  `0x1C7` street point light (range 500); `0x18F`/`0x191` use `0x16`
+  `fake point`. `0x1D7` trafficlamp is an ICFG with a separate
+  `light <id> ...` + `color` syntax.
+- Java: only directional lights are created from scripts (Garage.java duplicates
+  `misc.garage:0x001D` as "neon", CarLot uses `0x0025`, Scene.java the skydome
+  sun with `setLight`/`setFlare`). No Java creates headlights; lamp state is
+  engine-driven (time of day, car state).
+- The `fake*` types look like flare/glow-only lights that do not light the
+  scene. Not confirmed against the original engine.
+
+### Script light sources and the g1 garage (#235, phase 1)
+
+- API: `patch/system/Scripts/render/src/LightSource.java` with `PointLight`,
+  `SpotLight` (`setCone`) and `RectLight` (`setSize`). Package `java.render`,
+  new classes, no stock equivalent. Contract in ENGINE_CONTRACT §12
+  "Script light sources".
+- Natives: `src/natives/natives_lights.cpp:register_light_natives`, called from
+  `src/natives/natives_boot.cpp:register_boot_natives`. Natives are registered
+  on the declaring class only: `Jvm::invoke` resolves the declaring owner first
+  (`src/jvm/jvm.cpp:find_method_inherited`), so `SpotLight.setPosition` reaches
+  `java.render.LightSource.setPosition`. Registrations use literal class names
+  because `scripts/render_native_coverage.py` reads them statically.
+- Registry: `src/resources/script_lights.cpp:script_lights_create`, keyed by the
+  Java object, parent stored as the canonical GameRef key (`gameref_get`).
+  `src/resources/gameref.cpp:gameref_remove` calls
+  `script_lights_forget_parent`; `gameref_clear` and `register_light_natives`
+  clear it. `script_lights_visit_gc_roots` roots lights and parents.
+- Parent type: `ResourceRef`, not `GameRef`. `RenderRef` extends `ResourceRef`
+  directly (`GAME:system/Scripts/util/resource/src/RenderRef.java`), and the
+  garage parents its lights to `stuff`, a `RenderRef`.
+- Space: parent-local script metres, the coordinates of `RenderRef.setMatrix`.
+  `src/resources/scene_instances.cpp:chain_matrix` documents the S·M·S instance
+  transform; `src/render/bgfx_lib_backend.cpp:update_local_light` uses
+  `scene_instances_render_matrix` (the drawn pose, as the instance transform)
+  and flips Z. Mesh-local SCX coordinates equal script-local coordinates, so
+  the adapter's anchors can be pasted into Java unchanged.
+- g1 anchors: `include/slrr/legacy_neon.hpp:adapt_legacy_neon_fixtures` finds
+  nine fittings, all in `misc/garage/g1/garazs_01_targyak.scx` (the 0x42 stuff
+  mesh), none in the room mesh; y = 6.43138, x/z in `Garage.java:createFixtures`.
+- All garages use the same fitting: two 3.00 × 0.11 × 0.09–0.12 m tubes about
+  0.185 m apart. Anchors follow the adapter's rule (a tube is a connected
+  component 2–4 m long and under 0.25 m wide and tall; tubes pair within 0.4 m
+  horizontally and 0.1 m vertically; anchor = pair midpoint, 8 cm below the
+  lower tube's bottom). Run on the g1 group it reproduces the adapter exactly.
+  - g2 (`misc/garage/g2/garazs2_targyak.scx`, stuff 0x18): group `neon`
+    (texture `g2cucc.dds`, SCX4 emissive colour 0.53), 20 tubes → 10 fittings
+    along X, all at y = 5.42426, x = −13.633/−7.046/0.027/7.122/14.095,
+    z = −3.267/4.322. Ceiling 7.79 m.
+  - g3 (`misc/garage/g3/garazs3targyak.scx`, stuff 0x3c): group
+    `Material #11345` (texture `g3cucc.dds`, emissive colour 0.82), 24 tubes →
+    12 fittings, three along Z and nine along X, at y 5.52–6.43 (stepped
+    ceiling up to 8.80 m). Exactly the 12-fixture budget.
+  - ROC (`misc/garage/g4`, ground 0x2f, stuff 0x51): an open-air scene
+    (sand ground, tents, containers, stands); no ceiling fittings and no
+    emissive lamp group. No lights are created there.
+  - Dark tubes in g2/g3 (user test at `bc2f8aa`): only
+    `include/slrr/legacy_neon.hpp:adapt_legacy_neon_fixtures` turns tube faces
+    into `self_illuminated` groups, and it matched only g1's `garazs1.dds`
+    swatch. Script lights never touched it (g1 kept its white tubes). Now
+    `legacy_neon_candidate_group` also accepts groups with an SCX4 emissive
+    colour and no emission mask, and the same tube-shape and pairing rules pick
+    the faces. Its anchors equal the Garage.java tables in all three garages, so
+    without the patch g2 and g3 get the same fallback lights as g1.
+  - Brightness: Garage.java sets intensity 30 and range 26 m per garage
+    (`createFixtures`). History, all user feedback in game: 24 / 20 m too dim,
+    48 / 26 m (`c07d99c`) too bright, 36 / 26 m (`1e0c3cd`), then 30 at the
+    user's request. In the GPU test the floor that was dim at 24 / 20 m (gain
+    under 60 in an 8-bit capture) brightens about 1.5× (g1 47→72, g2 54→77,
+    g3 55→81; 36 / 26 m gave 87, 93, 91 and 48 / 26 m 112, 123, 105).
+    Brighter areas clip in the capture. The tube glow does not depend on
+    these values.
+- Renderer: registry lights replace the adapter whenever one has a drawn parent,
+  even when disabled. Limits: one point light, 12 fixtures, inner cone fixed at
+  65° by `shaders/scene_shadow.sh`, fixture shadows all-or-nothing, rect drawn as
+  spot, garage only (`garage_`).
+- Garage source: `sources/sl/Scripts/game/src/Garage.java` is the only copy on
+  disk and is the MWM version (jack, `Mirans_Mod_protection`). Every
+  non-comment string literal appears in the original MWM class; the known code
+  difference was the #59 save order. The patch copy adds `createFixtures`
+  (one table per garage index 0–2), `createFixture` and `destroyFixtures`
+  (called in `exit` before `stuff.destroy`).
+- Validation: `tests/test_script_lights.cpp` (constructors and inherited natives
+  through the shipped classes, input validation, destroy/parent/GC/reset
+  lifetime); `tests/test_scene_shadow_gpu.cpp` checks that nine script spots at
+  the Garage.java anchors give the adapter's positions, directions and cones,
+  that disabled lights darken the garage and that destroying them restores the
+  adapter. Its `garage_fixtures` case loads g2 and g3, checks each Garage.java
+  anchor sits 8 cm under its lamp group's tubes, that the registry places all
+  10/12 spots there, and that they light the real floor (15,207 and 20,437 of
+  65,536 pixels), that only lamp-group faces emit and stay white without any
+  light (g1 120, g2 193, g3 168 pixels), and the brightness above; and that the
+  neon point record stays ambient-only when every script light is disabled.
+  `tests/test_inventory_transition.cpp` runs the recompiled
+  `patch/sl/Scripts/game/Garage.class` main-menu path (save after exit), and
+  `garage_rejected_commands_do_not_save` runs `osdCommand` with a recording
+  probe.
+- Refused commands (review of PR #236): the MWM source saved after Choose
+  Track and the dealers even when they were refused (no car, undriveable car,
+  dealer closed). The shipped #59 class does not save there; it saves before the
+  transition when they are accepted (`save,change`). The patch saves inside the
+  success branch after `changeActiveSection` (`change,save`), so a refused
+  command never saves a garage whose mechanic strip was not flushed. With a local
+  `build/garage-59.class` (`git cat-file blob 6171aa2:patch/sl/Scripts/game/Garage.class`) the test also compares all 43 `CMD_*` commands: none
+  differs from the #59 class in whether it saves.
+  Validated in game by the user in the g1 garage at `df7117f` (20 November
+  2026): the nine script fittings light the garage as before. g1, g2 and g3
+  validated in game by the user at `2f904ac` (20 November 2026): glowing tubes
+  and intensity 30 / range 26 m accepted (24 was too dim, 48 and 36 too bright).
+- Phase 2: street lamps and scenery lights, see "Scenery lights and street
+  lamps (#237)" below. Still open: per-light spot shadows and inner cone.
+
+### Scenery lights and street lamps (#237)
+
+Phase 2 of #235: type-13 light resources placed by map objects now light the
+city at night.
+
+- Parser: `src/resources/light_resource.cpp:parse_light_resource` reads
+  `type` (`point`, `spot`, `directional`, `fakepoint`/`fake point`,
+  `fakespot`; none for base classes), `diffuse/specular/ambient a r g b`
+  (alpha dropped), `position`, `direction`, `range`, `attenuation c l q`,
+  `theta`, `phi`, `lit_dynamic`, and notes any `lf_*` flare keyword. Inline
+  `//` and `;` comments are stripped; malformed or negative values keep the
+  previous value. `src/resources/light_resource.cpp:load_light_resource`
+  parses only RPK entries whose `typeof` is 13
+  (`src/resources/light_resource.cpp:is_light_resource`); the light is never
+  guessed from keywords or aliases. All 89 stock payloads parse (2 point,
+  35 spot, 6 fake point, 27 fake spot, 15 directional, 4 untyped).
+- Placement: `src/resources/scene_instances.cpp:scene_instances_add_ground_props`
+  keeps every non-variant `render` child whose resource is typeof 13 before
+  the mesh filter drops it, composes `render` pose, resource `position` and
+  placement pose, and stores the shell-local list in `GroundPropMap::lights`
+  (`src/resources/scene_instances.cpp:scene_instances_ground_lights`). The cfg
+  `flags` after the render line is the light group. A dynamic placement's light
+  stays at its authored pose when the body is knocked over.
+- Ownership: `src/natives/natives_resref.cpp:spawn_ground_shell` attaches the
+  list to each new ground shell with
+  `src/resources/script_lights.cpp:scenery_lights_attach`. The registry keys it
+  by the shell's canonical GameRef; `script_lights_forget_parent` (called by
+  `gameref_remove`) and `script_lights_clear` drop it. Scenery lights hold no
+  Java object and are not GC roots; the list is shared with the cached map, so
+  revisiting a city attaches the same data again.
+- Valo City (`maps/city.rpk` id 1, two shells, 25,821 placements): 3,736
+  light children, 2,841 real (`objects.rpk` 0x1C7 street, group 4) and 895
+  glow-only (0x16 `fake point`). Drag Track has 318.
+- Rendering: `src/render/bgfx_lib_backend.cpp:update_scenery_lights`, called
+  by `update_local_light` outside garages when Local lights (option 4) is on.
+  The city group follows the night factor of
+  `src/resources/scene_instances.cpp:scene_instances_sun_state` since #271
+  (lamp power scaled by it, off below 0.01); night facades keep
+  the `scene_sun_is_night` window (before 06:00 or from 18:30). Other groups (car
+  brake/indicator bits) stay off for scenery; car lights are their own path
+  (#279, below); `fake*` lights never light the scene.
+  `src/resources/script_lights.cpp:scenery_lights_select` keeps lamps whose
+  45 m light sphere meets the view frustum (a lamp outside it lights no visible
+  pixel), then the nearest 64 within 500 m. Each fades to 0 over
+  min(150 m, 40 % of the cut distance, at least 20 m) before the first excluded
+  lamp or the 500 m limit, so lamps enter and leave the set with no power and
+  near lamps stay at full power. On a straight street (lamps every 30 m on
+  both sides) the whole visible street fits: 36 lamps ahead out to 480 m, the
+  last at 0.04 of full power.
+- History: the first version (`1df1452`) reused the 12 garage fixture slots,
+  nearest 12 within 250 m, with no frustum test. In game (user, 20 November
+  2026) lamps visibly appeared only a few lamps ahead while driving.
+- Shader budget: a separate lamp array, `kSceneryLamps` = 64
+  (`src/render/bgfx_lib_backend.hpp`), `u_lampParams` plus three vec4[64]
+  arrays (position + range, colour × intensity, attenuation), 193 vec4 of the
+  fragment constants, bound with the fixtures in
+  `src/render/bgfx_lighting.cpp:bind_fixture_lights` (same enable: previews
+  and lamp glass get none). `shaders/scene_shadow.sh:lampLighting` runs in
+  `fs_mesh` (instanced props included) and `fs_vehicle`: unshadowed, no cone,
+  stock falloff 1/(c + l·d + q·d²) inside the window saturate(1 − (d²/r²)²)²,
+  and an early `continue` when the pixel is outside a lamp's range. Garage
+  fixtures (12, shadowed) are unchanged and never hold scenery lamps.
+- Brightness: accepted in game by the user at `7c9d05f` (20 November 2026,
+  "l'intensité top"); keep these values. Intensity 0.8 ×
+  authored diffuse, range capped at 45 m (authored street range is 500 m)
+  (`kSceneryLightIntensity`, `kSceneryLightMaxRange` in
+  `include/slrr/script_lights.hpp`). In the GPU test a lamp at 7.8 m over a
+  road with 0.08 ambient adds 161/255 red at its foot and 39 at a corner 30 m
+  away.
+- Cost: selection over all 3,736 Valo City lights takes about 8.5 µs per frame
+  (`tests/test_scenery_lights.cpp`, Release). GPU, `scene_shadow_gpu` case
+  `lamp_cost` on this machine: 1920×1080, a street-level road over the lower
+  half drawn as 8 layers (about 8 M shaded pixels), GPU timer per frame: no
+  lamps 0.21 ms, 12 street lamps 0.35 ms, 64 street lamps 0.83 ms; 12 and 64
+  lamps all in range of every pixel 0.46 and 1.50 ms. Per million shaded
+  pixels that is about 0.08 ms for 64 street lamps and 0.16 ms worst case. Not
+  measured in game because the bench writes to the installed game root.
+- Shadows (after the user noted at `7c9d05f` that lamps cast none):
+  `src/render/bgfx_shadows.cpp:update_lamp_shadows`. Budget
+  `kLampShadows` = 6 wanted lamps in `kLampShadowSlots` = 8 slots (two spare
+  so a new lamp fades in while the one it replaces fades out), each one tile
+  of the fixture atlas (4 × 3 tiles of `local_shadow_resolution`, 256/512/1024
+  by Shadow quality; outside garages it is otherwise unused) with view ids
+  128–135.
+  - Selection (after the user saw the car's shadow "turn around the car" at
+    `cb90023`): the first version took the 6 nearest lamps of the
+    frustum-selected set by camera distance, so orbiting the chase camera
+    around a parked car changed the shadowed set (4 changes in two orbits in
+    `lamp_shadow_stability`) and its shadows cross-faded between directions.
+    Now `src/resources/script_lights.cpp:scenery_lights_near` lists lamps
+    within 55 m of the focus, the followed car (`set_lamp_shadow_focus`, from
+    the same car matrix as `update_car_depth`), else the camera position,
+    with no frustum. Held lamps keep their slot while within reach; the
+    farthest held lamp is replaced only by a candidate at most 75 % as far and
+    4 m nearer, after 1 s of hold, one swap per frame; free slots take the
+    nearest candidates. A shadowed lamp outside the frustum-selected lit set
+    is added to it at full power (the lit selection keeps 8 of its 64 entries
+    free for this). Projection: one downward perspective, 150° field, near 0.3 m, far
+  = the 45 m range. A lamp lights mostly downward; at the tile rim (3.7 × the
+  lamp height, 29 m for the 7.8 m `lamp_base`) its ground light is about a
+  tenth of the peak, and the shader fades the shadow to none over the outer
+  part of the tile, so one depth pass per lamp replaces a five- or six-face
+  cube. A paraboloid would need tessellated casters (large ground and prop
+  triangles warp), so it was not used.
+  - Casters: static scenery (props, instanced batches, trees, poles, world
+    meshes) is collected once when a lamp gets a slot, with the lamp's frustum
+    (`scene_instances_collect`, `scene_instances_collect_batches`). Excluded:
+    the ground POLY (city-wide; it also holds buildings, which therefore cast
+    no lamp shadow; its streets only receive), and meshes whose box holds the
+    lamp (its own housing and pole, which would black it out). Dynamic casters
+    come from the main-view instances each frame: vehicles including the
+    player car (when vehicle shadows are on) and skinned characters
+    (`ao_skin_depth_program_`, culled by distance like the cascades). A tile
+    is redrawn only when its lamp is newly assigned or a dynamic caster stamp
+    (geometry, revision, buffers, transform, skin palette hash) changes; static
+    and dynamic casters are redrawn together because D3D11 cannot copy part
+    of a depth texture.
+  - Car shadows (after the user still saw the car's shadow move around it at
+    `d17976f` and asked to always show it): every lamp whose light reaches a
+    6 m sphere around the player car gets a car-only tile, up to
+    `kCarShadowTiles` = 16, the half-size quarters of atlas tiles 8–11 (128,
+    256 or 512 px by Shadow quality), drawn in one view (136) with a per-draw
+    clip remap and scissor. Projection: a narrow perspective from the lamp onto
+    the sphere, near = distance − 6 m, far = the lamp range, so every receiver
+    whose ray from the lamp crosses the car falls in the tile. Casters: the
+    vehicles in the sphere (the player car, nearby traffic); the scenery tiles
+    then skip vehicles in the sphere, so they stay cached while the car moves.
+    Strength fades over 10 m before the lamp's reach (or the 17th lamp), so a
+    car shadow appears where that lamp's light on the car is near zero. Focus:
+    the car followed by the script camera, else
+    `src/resources/part_runtime.cpp:part_controlled_vehicle`; no car tiles
+    without a car. The shader multiplies the scenery and car visibilities per
+    lamp (`shaders/scene_shadow.sh:lampTileVisibility`); special lamps
+    (scenery or car tile) are the first 24 lamp entries and the frustum
+    selection keeps 40 of 64.
+  - Diagnosis of the moving car shadow (no in-game capture available here):
+    the shadow projections are fixed in world space (lamp position, straight
+    down; no camera term, re-centring or texel snapping), the lamp views
+    128–143 are ordered before the world view in `draw_previews` (no frame
+    lag), each receiver uses the matrix and tile of its own slot, the sun car
+    depth map is off at night (the night sun points upward and
+    `update_car_depth` returns), and the stock `shd_*` decal is not drawn. In
+    the harness a parked car seen from a fixed top-down camera keeps exactly
+    the same shadow pixels while the game camera orbits it. What changed with
+    the camera or the car was the 6-lamp budget: on the test street 7 lamps
+    reach the car and on crossings more, so at least one lit it unshadowed,
+    and while driving the 6 slots were reassigned every lamp spacing (19
+    assignments over 300 m), each one fading a car shadow out on one side and
+    in on another over 0.8 s, which reads as the shadow moving around the car.
+    With car tiles every lamp that lights the car shadows it; a lamp's shadow
+    still swings around the car as it is passed (correct for a point light).
+  - No pop: a slot's weight fades 0 → 1 in 0.8 s (real time) when assigned
+    and back to 0 when it is released (out of reach or replaced); the shader
+    mixes visibility by that weight.
+  - Sampling: `shaders/scene_shadow.sh:lampTileVisibility`, the fixture
+    filtering (receiver-plane depth gradient, aligned 2×2 taps, 4×4 tent for
+    the very-soft Shadow smoothing), 3 cm normal offset toward the lamp.
+    Shadowed lamps are the first `u_lampShadowParams.x` lamp entries; their
+    loop has no per-pixel early-out before the lookup because the gradient
+    needs uniform control flow.
+  - Gates: Local lights, the global shadow toggle (`VideoOptions::shadows`),
+    Map shadows in the debug panel, night, outside garages.
+  - Cost (`scene_shadow_gpu` case `lamp_shadows`, this machine, 1024 tiles,
+    1920×1080 with 8 road layers ≈ 8 M shaded pixels, 10 lamps): unshadowed
+    0.37 ms, 6 shadowed lamps with cached tiles 0.68 ms, with all 6 tiles
+    redrawn every frame (moving car) 0.79 ms. The test scene has few casters;
+    redraw cost grows with the casters in each lamp's cone.
+- Validation: `tests/test_scenery_lights.cpp` (parser, every stock payload,
+  Valo City registration count against an independent ICFG scan, kislampa
+  pose, shell removal and revisit, selection budget/groups/day/fade);
+  `tests/test_scene_shadow_gpu.cpp` case `scenery_lamps` (night lights the road
+  through `fs_mesh`, noon equals the unlit image, option 4 off, glow-only,
+  non-city and behind-camera lights select nothing, a zero-power or
+  out-of-range lamp leaves the image unchanged) and `lamp_cost` (timing).
+  `selection_frustum_and_distance` checks frustum culling, the 500 m street
+  and that a lamp entering far ahead has no power. `lamp_shadows` checks that
+  a static block and a car under a lamp darken the road at night (304
+  darkened pixels of 19,200), that the ground POLY does not cast, that
+  shadows off and daytime give no lamp shadows, the 6-lamp budget goes to the
+  nearest lamps, a newly assigned lamp starts at zero strength (image equal
+  to unshadowed) and fades in, and that unchanged casters cause no redraw
+  while a moved car causes one. `lamp_shadow_stability`: a parked car with
+  the camera orbiting it twice keeps the same 6 lamps (0 changes, 0
+  assignments); driving 300 m along a street with lamps every 15 m assigns
+  19 lamps, each exactly once. `car_lamp_shadows`: a parked car on that
+  street gets 7 car tiles (all 7 lamps reaching it); seen from a fixed
+  top-down observer its shadow (2,112 pixels) is identical over two orbits of
+  the game camera, with no car tile redraw; driving 30 m at 3 m/s changes
+  car-tile strength by at most 0.0073 per frame, tiles enter and leave at
+  strength 0, and scenery tiles are redrawn only on new assignments. Cost
+  (1920×1080, 8 road layers, 50 lamps, car moving every frame, noisy between
+  runs): no lamp shadows 0.60–1.00 ms, 6 scenery tiles 1.06–1.12 ms, plus
+  7 car tiles 1.57–1.77 ms. In-game: `1df1452` worked but lamps popped
+  in; `7c9d05f` accepted (intensity, no pop) without shadows; `cb90023` cast
+  shadows that moved around the car when the camera turned; `d17976f`
+  (car-focused selection) still showed it; `cd1e963` (car tiles from every
+  lamp reaching the car) accepted by the user in game (20 November 2026).
+- Not done: lens flares/glow for scenery lights (`lf_*`), spot cones for
+  scenery spots (drawn as omni), lights following knocked-over lamps,
+  `0x1D7` trafficlamp `light` syntax. Car head- and brake lights: #279 below.
+
+### Car lights: headlight beams and brake lights (#279)
+
+- What the stock data says (read-only scan of every car cfg and RPK under
+  `game/cars` and `game/parts`). Lights are not marked by a part class,
+  name or typeof of the part: a light part is any part whose cfg has a
+  `render <id>` line resolving to a typeof-13 light resource, followed by
+  `flags <group>` (1 brake, 2 reverse, 4 city, 16 indicator; see the
+  scenery-light notes above). Example, Baiern `L_headlights.cfg`:
+  `render 0x000000E4 ... ; CITY / flags 4` (typeof 14 lamp-glass mesh
+  `L_headlights_CITY`, texture `Baiern_light_glow.dds`) and
+  `render 0x00030008 0 0 0 0.087 0 0 ; CITY / flags 4` (racers.rpk 0x08,
+  `type spot`, diffuse 0.2 grey, range 400, attenuation 1 .03 0, theta
+  1.896, phi 2.02, `attH_texture`/`attV_texture` = `light_beams/attH.dds`,
+  `attVV.png`, flare `lf_*`). `L_taillights.cfg` has `render 0x0003000F ...
+  ; BRAKE / flags 1`: `fakespot`, diffuse 1 0 0, range 5. Over the stock
+  cfgs, 34 headlight parts carry a real `spot` in group 4 (range 250–400),
+  some other parts too (pop-up or bumper lamps); taillight city lamps are
+  `fakespot` (range 0.001 or 5); every brake child is a `fakespot`.
+- The "fake beam": the original lit the road with the headlight spot itself,
+  shaped by the horizontal/vertical attenuation textures `attH`/`attV`
+  (D3D projected light). No beam quad or ground mesh exists in the data, and
+  this engine never drew those textures, so nothing doubled up and nothing
+  had to be hidden. The `_CITY`/`_BRAKE` meshes are the lamp glass, shown by
+  `src/resources/scene_instances.cpp` through `part_lamp_lit`; they stay.
+- Scripts: no Java class drives headlights or brake lights (no lights
+  on/off or braking method in the car scripts); the engine decides.
+- Ownership: `src/resources/part_runtime.cpp:collect_lamps` keeps, per part
+  record, the first group-4 `spot` light (headlight beam) and the first
+  group-1 light (brake light), with the render pose composed with the
+  resource position and direction. `part_car_lights` reports them in render
+  space for installed parts only: `car(part)` must reach a chassis (a
+  removed part has no record; a torn-off loose part, `detach_panel`, has no
+  parent), and lit ones only when `part_lamp_lit` is true for their group.
+- Gates (`part_lamp_lit`, shared with the lamp glass): engine running;
+  headlights in the stock night window (before 06:00, from 21:00, on the
+  `GameLogic.time` clock); brake lights while `dynamics.drive.brake` >
+  0.05 (`kBrakeLampMin`), day or night, never in the showroom preview.
+  Wear: condition c = wear × tear (the `getConditionNoAttach` product of
+  `Part.java`; 1 = new). `part_lamp_power`: 0 at c ≤ 0.25
+  (`kLampBrokenCondition`: no beam, no lit glass), 40 % rising linearly to
+  full at c = 0.5 (`kLampFullCondition`). No flicker: it would make frames
+  depend on time and break the capture tests. `part_tear_off` tears a part
+  off as a collision does (used by the test).
+- Rendering: `src/render/bgfx_lib_backend.cpp:update_car_lights`, before
+  `update_scenery_lights` outside garages when Local lights (option 4) and
+  the debug option "Car lights" are on. At most `kCarLights` = 16 within
+  150 m, nearest to the followed car first; the street-lamp budget shrinks
+  by that count so the array still holds 64. Car lights are unshadowed and
+  come right after the shadowed lamps. Hue from the resource diffuse
+  normalised to its peak; power and cone are constants because the authored
+  0.2 diffuse and 108–116° cone were shaped by the textures above: headlight
+  intensity 3 × part power, range min(authored, 60 m), authored attenuation,
+  half-angles 14°/30°; brake light intensity 1.5, range 6 m, attenuation
+  1 0 0.3, half-angles 55°/85° around its authored backward direction.
+  Shader: `shaders/scene_shadow.sh:lampCone`, direction and outer cosine at
+  light-data column 192+i of row 0, inner cosine in the attenuation `.w`;
+  street lamps store −2 (omnidirectional), so their images are unchanged.
+  Stock headlight poses yaw each beam 5° outward (`0.087` is yaw) and do not
+  pitch it down.
+- Tests: `tests/test_car_lights.cpp` (new suite `car_lights`, stock Baiern
+  on Valo City): 2 headlights and 2 brake lights from 4 different parts;
+  beams 2.07 m ahead of the car centre, forward, level; nothing lit parked
+  at noon; driving at night 2 headlights, no brake; braking 2 brake lights;
+  removing the left headlight leaves only the right beam; wear 0.2 gives no
+  beam and no lit glass, 0.4 gives 0.76, 1.0 full; a taillight torn to 0.1
+  loses its brake light; the remaining headlight torn off and lying loose
+  gives no light. `scene_shadow_gpu` case `car_lights` (night road, 25-pixel
+  patches, sum of r+g+b): 10 m ahead 1500 unlit, 9510 with two headlights,
+  5520 with one; 24 m ahead 1500 → 3600; 9 m behind unchanged; brake red 3.5 m
+  behind 500 → 2271 with green unchanged; toggle off or option 4 off equals
+  the unlit image.
+- Not done: headlight shadows came in #283 (below); the `attH`/`attV` beam pattern (a round
+  cone instead), lens flares, reverse and indicator lights, native traffic
+  cars without part records, not validated in game yet.
+
+### Headlight shadows (#283)
+
+- `src/render/bgfx_shadows.cpp:update_headlight_shadows`, after
+  `update_lamp_shadows` in the frame (so it sees the final lamp order). Its
+  own D32F atlas, 3 × 2 tiles of half the local shadow resolution (128, 256
+  or 512 px by Shadow quality), views 145–150, ordered before the world with
+  the other shadow views (`draw_previews`).
+- Candidates are the lit headlight beams in the lamp array, so the #279 rules
+  (installed part, running engine, condition above 0.25) already apply. The
+  followed car's (`set_headlight_focus`, the same car as the lamp shadow
+  focus) go first, then the others in the array's nearest-first order, up to
+  `kHeadlightShadows` = 6 (debug budget "Headlight shadow tiles").
+- One perspective frustum per headlight part: from the lamp along its beam,
+  2 × the outer half-angle + 4° wide, near 0.15 m, far = the beam range
+  (60 m). Casters are the main view's instances (world meshes except the
+  ground polygon, vehicles except the light's own car through
+  `part_render_owner`/`part_chassis`, characters within reach) and the
+  instanced props whose bounds meet the frustum. A caster outside the camera
+  view casts nothing, a known gap; the beams point ahead of the followed car,
+  mostly inside the view. Tiles are redrawn every frame (the beams move).
+- Each tile view is one `queue_or_run` job (#270), so it is submitted on a
+  worker encoder when worker encoders are on.
+- Shader: a lamp entry's colour `.w` holds its tile + 1;
+  `shaders/scene_shadow.sh:headlightVisibility` samples `s_headlightShadow`
+  (stage 12) with four compare taps, 3 cm normal offset toward the lamp,
+  matrices and tile rects in row 2 of the light data (columns 96+4t and
+  120+t). The unshadowed lamp loop now also skips pixels outside a spot cone
+  before shading.
+- Gates: Local lights, Car lights, the shadow option (`VideoOptions::shadows`),
+  the debug option "Headlight shadows", outside garages.
+- Tests (`scene_shadow_gpu` case `headlight_shadows`): a 1.5 m box 8 m ahead
+  of two headlights darkens the road behind it (3798 → 1866, r+g+b over a
+  patch) and leaves the road beside and in front unchanged; with ten
+  headlights the followed car's two (the farthest) get tiles and six in all;
+  shadow option off gives none. Cost (`city_submission` workers case, crowd
+  city 1280x720, the followed car's 2 headlights + 4 of traffic, 256 px
+  tiles), two runs: GPU +0.15 / +0.26 ms (the headlight views 0.234 / 0.247
+  ms), render thread +0.17 / +0.36 ms, host submission +0.05 / +0.19 ms, 386
+  more draws.
+- Not done: casters outside the camera view, brake light shadows, a
+  per-headlight shadow fade on budget changes (a tile switches on or off at
+  once), not validated in game.
+
+### Lamp glass snapped onto the lens (#284)
+
+- The stock lamp-glass meshes (`light_flags` renders such as `_CITY`,
+  `_BRAKE`) are authored in front of their lamp body: Baiern 3.85–10.6 mm over
+  the lens (`L_taillights_CITY` 10 mm on every vertex). Lit, the glass floated
+  off the car.
+- `src/resources/part_runtime.cpp:snap_lamp_glass`, at the end of
+  `render_part`: each glass vertex moves onto the nearest lens triangle of
+  the same part's other renders, 0.5 mm (`kGlassSnapGap`) in front of it. A
+  lens triangle faces within 60° of the glass normal (`kGlassLensAlignment`;
+  housing walls are not lenses), lies within 3 cm (`kGlassSnapReach`) and
+  holds the vertex in its plane projection. Vertices with no lens under them
+  take the mean move, then two more passes settle those the mean brought over
+  a lens. The copy is the render node's `deformed_geometry`; game files and
+  the shared mesh cache are untouched.
+- `restore_deformation` no longer clears lamp nodes: Java `setTear(1)` during
+  assembly ran it and dropped the snap. The deformation pass already skipped
+  lamp nodes, so lamp glass still does not follow body dents.
+- The vehicle path draws lamp glass with `BGFX_STATE_DEPTH_TEST_GEQUAL`, so
+  the 0.5 mm gap never loses a depth tie with the lens.
+- Test (`tests/test_car_lights.cpp`, stock Baiern): 14 glass meshes, 78
+  vertices over a lens, all exactly 0.50 mm in front after loading, none
+  behind, at most 10.1 mm moved; before the change 3.85–10.6 mm.
+
+### Renderer debug menu (#243)
+
+- Overrides and statistics: `src/render/render_debug.hpp:render_debug`
+  (`RenderDebugOverrides`, defaults = normal renderer, never saved) and
+  `src/render/render_debug.hpp:render_debug_stats`, filled each frame by
+  `src/render/bgfx_lib_backend.cpp:publish_debug_stats` just before the overlay
+  draws. That function also turns the bgfx profiler (`BGFX_DEBUG_PROFILER`) on
+  only while the overlay is open; per-view GPU times need it.
+- Menu: `src/render/debug_overlay.cpp:draw_render` with sections Timings
+  (`draw_render_timings`, rolling 120 frames per view, views missing in a
+  frame count as 0, sorted by GPU time; dump via `render_timing_dump`),
+  Passes (`draw_render_passes`), Budgets (`draw_render_budgets`), Buffers
+  (`draw_render_views`, `ImGui::Image` of the D32F atlases and the R8 AO
+  buffer), Session and host, Options (saved). View names come from
+  `src/render/render_debug.hpp:render_debug_view_name`; views 128–135 are the
+  fixture or lamp tiles, 136 the car lamp tiles, 140–144 AO (prepass,
+  geometry since #256, pass 1, two filters).
+- Clipboard and log: bgfx's Dear ImGui build defines
+  `IMGUI_DISABLE_WIN32_DEFAULT_CLIPBOARD_FUNCTIONS` (bgfx `imconfig.h`), so
+  `ImGui::SetClipboardText` only filled an in-process buffer and Copy never
+  reached Windows (user report on PR #244). `src/platform/host_clipboard.cpp:host_clipboard_set_text`
+  writes CF_UNICODETEXT; `DebugOverlay::draw` installs it, with
+  `host_clipboard_get_text`, as the ImGui platform clipboard after
+  `imguiCreate`, and the Copy button calls it directly
+  (`tests/test_host_clipboard.cpp` round-trips UTF-8 and restores the previous
+  text). Log prints to stdout and appends to
+  `perf/renderer_debug_YYYYMMDD_HHMMSS.txt` beside the executable
+  (`src/render/debug_overlay.cpp:write_render_dump`); the menu shows the path.
+- Snapshot header: resolution, VSync (there is no frame cap besides VSync),
+  then `overrides:` with one line per debug override that differs from its
+  default (`src/render/render_debug.hpp:render_debug_overrides_text`, plus the
+  overlay's map/vehicle shadows, OSD, flare and reflection faces), or `none`.
+  Saved Enhanced options are not listed.
+- CPU zones added to `include/slrr/frame_profiler.hpp` (also new `--perf-log`
+  CSV columns): `CollectBatches` (inside Collect), `SunShadows`, `CarDepth`,
+  `LampShadows` (inside Shadows), `FixtureShadows`, `LampSelect`,
+  `AmbientOcclusion`.
+- Where each override acts: AO in `update_ambient_occlusion` (targets
+  destroyed); cascades in the `update_static_shadow` cascade loop (an off
+  cascade is cleared, i.e. lit); shadow caching in the sun, point, fixture,
+  lamp and car-tile cache checks; character casters in the cascade and lamp
+  tile caster loops; fixture shadows in `update_fixture_shadows`; lamp lighting
+  in `update_scenery_lights`; lamp shadows and car tiles in
+  `update_lamp_shadows`; reflections in `update_reflections`; clouds and fog at
+  their uniforms; MSAA and anisotropy in the reset flags and `world_sampler`;
+  map props, vehicles, characters and sky by removing their records right
+  after collection in `sync_instances` (so draw, shadows and AO all lose them;
+  `SceneInstance::ground_prop` marks single props). Budgets: lit lamps and
+  distance (`scenery_lights_select` got a distance parameter), shadowed lamps
+  (a lower budget now also releases the farthest held slots), car tiles,
+  `local_shadow_resolution` / `scenery_shadow_resolution` and
+  `src/render/shadow_cascades.hpp:cascade_radii` (radius scale), AO buffer
+  scale, reflection faces (0 freezes the cube).
+- Validation: `tests/test_scene_shadow_gpu.cpp` case `render_debug_overrides`
+  checks the defaults, that cached lamp tiles are not resubmitted, that lamp
+  shadows, car tiles, AO and lamp lighting toggles remove their views (0 ms)
+  and restore them, and the budgets. First harness look (1280×720, 50 lamps,
+  caching off, HBAO, one road and one car): world 0.13 ms, AO 0.10 ms
+  (pass 1 0.07), six lamp tiles 0.014 ms, car tiles 0.005 ms. The harness
+  scene is tiny; real costs need the menu in game.
+
+### Per-view light uniforms (#246)
+
+- bgfx uniform semantics (checked in the vendored source,
+  `build/_deps/bgfx-src/src/bgfx.cpp` `Encoder::submit` and
+  `rendererUpdateUniforms`): `setUniform` calls between two submits form a
+  range attached to the next draw only. The renderer replays each draw's range
+  into a value cache that persists across draws, views and frames, in render
+  order. Render order equals submit order only in a `ViewMode::Sequential`
+  view; sorted views reorder draws, so a value set on one draw can be missing
+  on a draw rendered before it.
+- Hence `src/render/bgfx_lighting.cpp:bind_scene_shadow` uploads the
+  view-invariant arrays (fixtures, lamps, lamp and car-tile shadow matrices and
+  tiles, sun cascades, point faces) only when
+  `LibBgfxBackend::light_arrays_current` is false: the draw's view (set by
+  `draw_instance` and `draw_prop_batches`) is marked Sequential through
+  `set_view_sequential`, and the view, frame (`frames_`) and light revision
+  (bumped by the `update_*` light/shadow functions) match the last upload.
+  Per-draw counts and flags (`u_lampParams`, `u_lampShadowParams`,
+  `u_fixtureParams`, shadow params) and textures are still set per draw, so
+  unlit draws (previews, lamp glass) read no lamp. Draws from other paths (sky,
+  terrain parts, OSD) and views not marked Sequential upload every time.
+- #262 extends the rule to the single-value light uniforms and to texture
+  stages; see "Per-view uniform values, kept texture stages and residency
+  skip (#262)" below.
+- Measured (`scene_shadow_gpu` case `per_view_light_uniforms`, 2,000 lit draws
+  in one view): main-thread submission 1.45 → 1.08 ms, bgfx render thread
+  unchanged (≈3.7 ms). The D3D11 renderer re-uploads the program's whole
+  fragment constant buffer whenever any uniform of a draw changed, and every
+  draw still sets per-draw material uniforms; the fragment cbuffer of
+  `fs_mesh` is about 600 vec4 (64-lamp arrays, 24 lamp-shadow and 24
+  car-tile matrices, fixtures, cascades). Cutting render-thread and GPU upload
+  cost needs a smaller cbuffer, e.g. lamp and shadow arrays in a texture.
+
+### High AO at half resolution (#248)
+
+- `src/render/bgfx_ao.cpp:update_ambient_occlusion` now sizes the AO buffers
+  at half resolution for every quality; the debug "AO resolution scale"
+  multiplies that half size (0.25–2, 2 = full resolution, the old High).
+- Samples per pixel (`shaders/fs_ao.sc`, quality Low / Medium / High):
+  HBAO directions × steps 4×3 / 6×4 / 10×6 (High was 8×6 at full res);
+  GTAO slices × steps (× 2 sides) 2×4 / 3×6 / 5×8 (High was 4×8 at full res).
+  High therefore keeps about 1.25× the old per-pixel samples on a quarter of
+  the pixels, and 2.2× Medium's GTAO samples.
+- Upsample unchanged: `shaders/ambient_occlusion.sh:ambientVisibility`, 2×2
+  bilinear taps weighted by view-depth similarity. In the AO test (160×120,
+  blocker on a floor) half-res High differs from full-res High by more than 12
+  levels on 0.6 % (HBAO) and 0.15 % (GTAO) of pixels; the contact shading
+  widens by about one half-res texel (HBAO 376 vs 246 contact pixels, GTAO
+  135 vs 94) and does not cross the blocker silhouette.
+- Harness timing at 2560×1440 (small scene, noisy between runs): GTAO High
+  pass 1 0.26–0.29 ms vs 0.61–0.80 ms full-res (−55 to −65 %), HBAO High
+  0.25–0.38 vs 0.55–0.79 ms. Applied to the in-game 2.6 ms that is roughly
+  −1.5 to −1.7 ms; confirm in game with the debug menu.
+
+### Street lamp shadow early-out and capped kernel (#250)
+
+- `shaders/scene_shadow.sh:lampLighting` takes `dFdx/dFdy(world)` once per
+  pixel, in uniform control flow, then skips each shadowed lamp whose range
+  does not reach the pixel or that faces away (`dot(n, delta) <= 0`); both
+  give zero radiance, so the skip is exact. The surviving lamps call
+  `shaders/scene_shadow.sh:lampTileVisibilityFast`, which rejects pixels
+  outside the tile before any tap and derives the receiver depth gradient
+  from the world derivatives through the tile matrix (quotient rule on
+  clip.xyz / clip.w, `receiverGradientFrom`) instead of `dFdx(p)`, so it can
+  run after a per-pixel branch.
+- Kernel: Sharp and Soft keep their 2x2 taps; Very soft uses the same 2x2
+  taps on a two-texel grid (4 taps) instead of the 4x4 tent (16). Sun
+  cascades and garage fixtures are unchanged.
+- The #237 loop stays as a reference path behind
+  `render_debug().lamp_shadow_reference` (u_lampShadowParams.w = 1; menu
+  Passes, "Lamp shadow reference path").
+- `scene_shadow_gpu` case `per_view_light_uniforms` compares both paths on the
+  lamp, car-tile and block scene: Sharp and Soft are byte-identical (max
+  channel difference 0); Very soft differs on shadow edges (max 35 levels,
+  1.5 % of channels). Harness timing, 1920×1080, 8 road layers, 50 lamps,
+  6 scenery + 7 car tiles redrawn every frame (noisy): lamp shadow cost over
+  "no lamp shadows" Very soft 1.10 → 0.61 ms, Soft 0.69 → 0.65 ms, Sharp
+  about 1.1 → 0.86 ms. The harness lamps all reach the visible road, so the
+  range early-out saves more in the city, where most pixels are out of range
+  of most shadowed lamps.
+
+### Map prop LOD and far size cull (#252)
+
+- Stock data (read-only scan of the game root, `tests/test_prop_lod.cpp`):
+  `lod first last` follows a `render` line and marks the levels it draws at,
+  `lods N s0 s1` is one object-wide line with ascending size ratios
+  (thresholds for levels 1..N). In practice N = 2 and every chain is a pair:
+  the high mesh `lod 2 2` and a `_lod` mesh `lod 0 1` (e.g. `lamp_base`
+  0x118 / 0x13, tree `fa03a` 0xd8 / 0x5d5 `lod_fa3.scx`). Two threshold sets
+  exist: `0.01 0.025` (trees, lamp posts, some buildings) and
+  `0.001 0.0025` (most building fronts). 32 object types in the stock packs
+  have chains. The ratio's definition is not documented; it is implemented as
+  placement bounding radius / distance (not confirmed against the original
+  engine): a fa03a tree switches to its low mesh at about 150 m going out and
+  back at 122 m.
+- Code: `src/resources/part_config.cpp:parse_part_config` reads `lods` into
+  `PartConfig::lod_sizes`. `scene_instances_add_ground_props` keeps the whole
+  chain for types with `lods` (others keep only the highest LOD, as before),
+  tags each prop with its level range and one `PlacementLod` per placement
+  (shell-local centre, radius covering all its LOD renders, thresholds, level).
+  `src/resources/scene_instances.cpp:prop_lod_visible` picks the level with
+  `src/resources/scene_instances.cpp:scene_prop_lod_level` (10 % hysteresis)
+  in both collection paths. The renderer sets `ScenePropLodView` in
+  `sync_instances`: only the main view's collection stores levels; AO, sun
+  cascades, reflections and lamp tiles reuse them. Low meshes are resident
+  with the map (`resources`), a small memory cost.
+- Far size cull: `screen_size_visible` drops props beyond 40 m whose
+  projected box is under `render_debug().far_cull_px` (default 4, was 2).
+- Debug overrides: `lod_bias` (distance multiplier), `force_highest_lod`
+  (pre-#252 behaviour) and `far_cull_px`, all in the snapshot header.
+- Valo City (whole city, no frustum): 16,602 placements with a chain; prop
+  triangles 3.37 M with the highest LOD → 1.94 M with LOD (−42 %) from the
+  first shell origin. With a 2560×1440 projection model the far cull gives
+  1.69 M triangles / 26,728 records at 2 px and 1.47 M / 23,152 at 4 px (of
+  31,075). Draw calls are not reduced by LOD itself (a low mesh replaces the
+  high one); the size cull removes records.
+
+### Light data texture (#254)
+
+- The fixture, street lamp, lamp-tile and car-tile arrays moved out of the
+  fragment constants into a 256 × 3 RGBA32F texture (`s_lightData`, stage 11)
+  read with `texelFetch` (`shaders/scene_shadow.sh:lightData`,
+  `shaders/scene_shadow.sh:lightMatrix`; layout documented there). Matrices
+  are stored by column and rebuilt with `mtxFromCols`, which reproduces the
+  uniform `mat4` exactly.
+- `src/render/bgfx_lighting.cpp:upload_light_data` builds the contents where
+  the #246 per-view arrays were uploaded (first lit draw of a Sequential view
+  and frame, every draw in other views) and calls `updateTexture2D` only when
+  they changed. A bgfx texture update applies to the whole frame, which is
+  valid because light data changes only in the `update_*` functions, before
+  any draw. Per-draw counts and flags stay uniforms.
+- Fragment uniforms (from the embedded D3D11 shaders' uniform tables):
+  `fs_mesh` 595 → 79 vec4, `fs_vehicle` 593 → 77 vec4. Harness, 2,000 lit
+  draws in one view: bgfx render thread 6.5–7.1 ms → 4.7–5.0 ms (about −30 %),
+  main-thread submission unchanged at about 1.1 ms with the per-view path.
+  Images are byte-identical to the uniform version (cross-build capture of the
+  lamp/car-tile scene, and every scene_shadow_gpu pixel count unchanged).
+- Investigations noted while measuring (not fixed):
+  - Half-res GTAO pass 1 still reads the full-resolution D32F prepass:
+    `surfaceNormal` takes 9 depth taps, and each slice sample calls
+    `sampleDelta`, which reads the depth twice (`depthAt`, then `positionAt`).
+    High is 5 slices × 8 steps × 2 sides, so about 170 full-res depth fetches
+    per AO pixel, spread over a screen radius that grows with the world radius
+    (Elias uses 3 m, the harness 1 m, which is why the harness predicted more
+    savings). Filter passes 2 and 3 each rebuild the position and the 9-tap
+    normal again. Likely wins: one fetch per sample, a half-resolution linear
+    depth (R16F/R32F) for all three passes, and a depth mip chain chosen by
+    sample distance (as in XeGTAO); storing the normal once would remove the
+    9-tap reconstruction from passes 2 and 3.
+  - Prop LOD (#252) keeps both meshes of a chain as props, so the collection
+    loops visit about twice as many props for the 16,602 chained placements.
+    Each runs the frustum test before the LOD test, and `prop_lod_visible`
+    recomputes the transformed centre and distance for both of a placement's
+    props. That matches the +0.3 ms of collection seen in game. Testing the
+    LOD before the frustum test, caching the level per placement and frame, or
+    keeping per-LOD lists would remove it.
+
+### LOD selection cost in collection (#257)
+
+- `src/resources/scene_instances.cpp:prop_lod_visible` now computes a
+  placement's level once per updating LOD view: `scene_instances_set_lod_view`
+  bumps `g_lod_epoch` when `update` is set, `PlacementLod::epoch` records the
+  epoch of the stored level, and the second chain member and the other
+  collection path reuse it. The batch path tests the LOD before the frustum
+  sphere, so the non-selected chain member costs one lookup. Levels are now
+  also refreshed for placements in visible cells outside the view frustum,
+  which keeps off-screen casters consistent.
+- Harness (`tests/test_prop_lod.cpp`, Valo City, street-level 60° frustum,
+  no size filter, 60 frames): collection 0.56–0.58 ms with the highest LOD
+  only; with LOD 0.60–0.63 ms before this change and 0.59–0.61 ms after
+  (noisy, ±0.2 ms on a loaded machine). LOD selection itself costs about
+  0.03–0.05 ms here, so the +0.3 ms of collection seen in game at #252 is
+  mostly not LOD selection; it is within frame-to-frame noise of that zone.
+
+### AO geometry pass and depth fetches (#256)
+
+- New view 141 (`src/render/bgfx_ao.cpp:update_ambient_occlusion`, shader
+  pass 3 of `shaders/fs_ao.sc`) writes, at AO resolution, the linear view
+  depth (R32F, 0 = no surface) and the 9-tap reconstructed normal (RGBA32F,
+  w = valid) of the full-resolution depth texel under each AO texel centre.
+  AO pass 1 and both filters read the centre position and normal from it
+  (2 fetches instead of 10), and the filter taps read the linear depth once
+  per tap; positions are rebuilt at the same full-resolution texel centres,
+  so the filters and the centre terms are exact. AO passes moved to views
+  142–144; the views ordered before the world now run 128–144
+  (`draw_previews`).
+- Pass 1 samples the AO-resolution linear depth (one fetch per sample, a
+  quarter of the texels over the same radius) instead of reading the
+  full-resolution D32F twice per sample. `render_debug().ao_reference`
+  ("AO reference sampling") keeps the full-resolution depth, now with one
+  fetch per sample, for comparison. Depth mips chosen by sample distance were
+  not added (the half-resolution depth already removed most of the cost).
+- AO test, reference vs new on the blocker scene: GTAO max 2–7 levels and no
+  pixel off by more than 8 at every quality; HBAO max 48–55 levels on
+  0.7–0.8 % of pixels (its few radial samples move to the coarser grid),
+  contact area within ±10 %.
+- Harness timing, GTAO High, 2560×1440, 3 m radius, a street scene filling
+  the screen (400 m ground, 400 boxes): pass 1 1.61–1.93 ms → 0.57–0.74 ms;
+  the new geometry pass costs 0.02–0.03 ms and the filters 0.09–0.15 ms.
+  The old numbers match the 1.8 ms Elias measured in game.
+
+### Measured in game after the renderer performance stack (#246–#257)
+
+Elias, 2560×1440, night city, his settings (MSAA 8x, GTAO High, 3 m AO
+radius, shadow quality High, Very soft smoothing), debug snapshot:
+
+| | Before the stack | After the stack |
+| --- | --- | --- |
+| GPU | 13.34 ms | 7.63 ms |
+| bgfx render thread | 12.11 ms | 5.62 ms |
+| World view | 9.31 ms | 5.40 ms |
+| AO pass 1 | 2.60 ms | 0.62 ms |
+
+The frame is still about 11.2 ms with present wait 0.03 ms: the main thread
+is now the bottleneck (scene collection + residency 3.87 ms, of which
+instanced prop batches 1.56 ms; world submission 2.91 ms; OSD + debug 0.62;
+reflections 0.5; AO 0.25; shadows 0.2). The renderer snapshot does not list
+the script, traffic, physics and GC zones, which make up most of the
+remaining ~2.8 ms (they are in the menu's "Session and host" section).
+
+### Static prop world cache and persistent batches (#260)
+
+- `src/resources/scene_instances.cpp:refresh_world_cache` stores, per map
+  prop, its script-space world centre and its render-space instance matrix
+  (S·shell·pose·S), plus each cell's world centre, for
+  `GroundPropMap::cached_shell`. Both collection paths call it with the
+  shell's current matrix and it recomputes only when that matrix changes
+  (ground shells are static), instead of a matrix product, two
+  `transform_point` and a sign-flip loop per placement and frame.
+- `scene_instances_collect_batches` keeps a persistent layout: at load each
+  map gets one slot per batchable mesh (`GroundPropMap::batch_ids`,
+  `batch_geometry`, `GroundPropBatch::slot`); the output vector holds one
+  entry per slot and shell, keeps its instance vectors' capacity from frame
+  to frame and is only rebuilt when the shells or slots change. The
+  per-frame `batch_of` hash map is gone. Entries can be empty; every consumer
+  already skips empty batches (the debug stats now count non-empty ones).
+- The world list copy in `scene_instances_collect` was kept: in the harness
+  taking the frame list instead of copying it saved nothing measurable, and
+  it would force reflection and shadow collections to rebuild the list later
+  in the frame.
+- The renderer snapshot (`src/render/debug_overlay.cpp:render_timing_dump`)
+  now lists Scripts, Traffic, Physics (vehicles, pedestrians, collision), GC
+  and the render flush, plus "other main thread" (frame minus scripts,
+  traffic, physics, flush and GC), so the main-thread budget adds up.
+- Harness (`tests/test_prop_lod.cpp`, Valo City, street frustum, 60 frames,
+  frame cache on, batch vector kept across frames as in the renderer):
+  main-view collection 0.60–0.70 ms → 0.17–0.24 ms; identical output
+  (same records and transform checksums with and without LOD).
+
+### Per-view uniform values, kept texture stages and residency skip (#262)
+
+- Same bgfx rule as #246, extended to every single-value light uniform:
+  `LibBgfxBackend::set_uniform` (`src/render/bgfx_lighting.cpp`) skips a
+  value equal to the one already set in the same Sequential view and frame
+  (sun, fog, sky and cloud wind, shadow filter/params/origin/ranges/eye and
+  matrix, interior sun, point and local light, car depth, AO, fixture/lamp
+  counts, lightmap and mesh UV transforms). The view comes from
+  `LibBgfxBackend::BindingScope`, opened by `draw_instance` and
+  `draw_prop_batches`; a new view or frame (`frames_`) starts a new
+  generation. Every set of these handles in the renderer goes through
+  `set_uniform`: outside a Sequential scope it forgets that handle, so sky,
+  terrain parts, sun flare, AO passes and shadow passes that set the same
+  uniforms stay correct. Matrices pass 16 floats; a new handle routed through
+  `set_uniform` must pass its real size.
+- Two bgfx cases where a set value never reaches the draw the cache expects
+  (`build/_deps/bgfx-src/src/bgfx.cpp` `EncoderImpl::submit`, `bgfx_p.h`
+  `discard`): a dropped submit (no indices, or more than
+  `BGFX_CONFIG_MAX_DRAW_CALLS`) discards its pending uniforms, and values set
+  after the last submit of a scope attach to whatever submit comes next.
+  `submit_bound` forgets everything after a submit without indices, and the
+  scope destructor forgets everything when values are still pending (this
+  also covers the #246 arrays). The draw-call limit is not detected: past it
+  the frame is already missing draws.
+- Texture stages (`set_texture`, `submit_bound`): in this bgfx (fe9bbdec6)
+  `setTexture` compares the binding (`setBind`) and writes a sampler uniform,
+  and the encoder hashes the binding set at a submit when it changed;
+  `BGFX_DISCARD_BINDINGS` resets the bindings after every submit. Inside a
+  Sequential scope, submits now use `BGFX_DISCARD_ALL & ~BGFX_DISCARD_BINDINGS`
+  and only stages whose sampler, texture or flags changed are set again. A
+  draw that leaves a kept stage unset (vehicle stage 4 without a live
+  reflection cube, mesh and vehicle samplers on the same stage) is submitted
+  with the full discard, so no draw samples a texture it did not ask for. The
+  scope ends with `bgfx::discard(BGFX_DISCARD_BINDINGS)`, so sky, terrain,
+  blended, OSD and shadow draws outside it start with no bindings, as before.
+  Every `setTexture` and `submit` inside the two scoped functions must use
+  the wrappers, or the kept state no longer matches the encoder.
+- Instanced map props: `kPropInstanceChunk` (`src/render/bgfx_lib_backend.hpp`)
+  raised from 128 to 1024 placements per submit. Instance data comes from the
+  per-frame transient vertex buffer (6 MB default, 80 bytes per placement)
+  whatever the chunk; `getAvailInstanceDataBuffer` still clamps a chunk when
+  the buffer runs low. Draw order inside a batch changes (each group now
+  covers all placements at once); the city capture is byte-identical.
+- `sync_instances` (`src/render/bgfx_lib_backend.cpp`) lists the meshes it
+  keeps (shadow meshes, lamp casters, resident props, instances, previews)
+  with revision, owner and deformed flag. When that list and
+  `instance_meshes_.size()` match the previous frame, `cache_scene_mesh` and
+  the sweep would change nothing, so the used map, prefetch, cache loop and
+  sweep are skipped (`residency_skips_`); skin uploads still run.
+  `clear_scene` resets the stored list.
+- Harness (`tests/test_scene_shadow_gpu.cpp` `city_submission`, Valo City at
+  22 h, street view, 640×360, world view 5 Sequential, two runs): caches off
+  then on in the same process, captures byte-identical to each other and to
+  the pre-#262 build. sync_instances 0.38–0.39 → 0.32 ms, world submission
+  0.84–0.87 → 0.68–0.69 ms, bgfx render thread 1.28–1.34 → 0.92–0.94 ms.
+  Per frame: uniform sets 39,590 → 186, texture sets 15,063 → 1,995, draws
+  1,368 → 1,367. The pre-#262 build measured 0.39–0.46 / 0.79–0.99 /
+  1.34–1.62 ms in the same harness.
+- In game after #260 and #262 (Elias, 2560×1440, night city, about the same
+  spot and time as the #246–#257 snapshot, 6,090 draws, 625 batches / 8,946
+  placements): frame 11.2 → 10.2 ms, GPU 7.63 → 7.36 ms, bgfx render thread
+  5.62 → 4.70 ms, world view GPU 5.40 → 5.25 ms, scene collection +
+  residency 3.87 → 3.24 ms, world submission 2.91 → 2.68 ms. The main thread
+  is still the limit (render flush 7.9 ms of a 10.1 ms frame; scripts 0.37,
+  physics 0.98, other 0.88). Open question: the "instanced prop batches"
+  zone (main-view `scene_instances_collect_batches` only) stayed at 1.55 ms
+  although the #260 harness measured 0.6–0.7 → 0.17–0.24 ms for it, so the
+  in-game cost lies in something the harness does not reproduce (scene,
+  LOD/size filter, frame cache state).
+
+### Emissive overlays sit flush (#281)
+
+- Symptom (user, 21 November 2026): lamp glass floated about 2 mm off its
+  body: car head- and taillights, traffic lights.
+- Cause in code: `shaders/vs_mesh.sc` and `shaders/vs_mesh_inst.sc` pushed
+  every emissive overlay 2 mm along its normal (`1f886b5` for night facade
+  masks, `8f2775d` for the instanced copy). The flag is
+  `SceneInstance::emissive_overlay` (`u_alphaTest.y` = 2, or the instance
+  colour's w = 2): night-only props, night facade meshes and the traffic
+  signal glass (`src/resources/scene_instances.cpp:signal_geometry`). The
+  push moved the glass visibly and showed glass authored just behind its
+  bezel.
+- Fix: no geometry offset; clip z is scaled by 1 + 1e-4, which with
+  reverse Z brings the overlay 1e-4 × its distance nearer in depth only
+  (0.5 mm at 5 m, 5 mm at 50 m); x and y are unchanged, so nothing moves on
+  screen. 1e-5 lost depth ties on 250 of 4,200 pixels of a slanted wall in the
+  harness. Overlays keep `BGFX_STATE_DEPTH_TEST_GEQUAL` and additive blend
+  without depth writes.
+- Car lamp glass is not an emissive overlay: the `_CITY`/`_BRAKE` meshes
+  (`light_flags`) are drawn by the vehicle program, which has no offset. In
+  the stock data they are authored in front of the lamp body: Baiern
+  `L_taillights_CITY` exactly 1.000 cm along the lens normal for all 12
+  vertices, `L_taillights_BRAKE` 0.94–1.0 cm, `L_headlights_CITY` 0.4–1.0 cm
+  (measured with `load_scx_geometry`, distance to the body triangles). That
+  gap is the asset's, not the renderer's; #284 snaps that glass onto the lens
+  at load (see "Lamp glass snapped onto the lens (#284)").
+- Test: `scene_shadow_gpu` case `emissive_overlay_flush`: a 4 × 4 m wall seen
+  at a slant, glass as an 8 × 8 grid with the other diagonal; level glass
+  shows on all 4,200 interior pixels, 1.5 mm in front too, 1.5 mm behind on
+  none. With the old 2 mm push the glass 1.5 mm behind showed on every pixel.
+
+### Instanced night overlays and blended props, world list zones (#264)
+
+- Profiler: `perf::Zone::WorldList` wraps the frame's world list build in
+  `src/resources/scene_instances.cpp:world_instances` (the first collection of
+  the frame builds it, which is the main view's
+  `scene_instances_collect_batches`, so it is nested in "instanced prop
+  batches"), and `perf::Zone::WorldCopy` wraps the copy of that list in
+  `scene_instances_collect`, summed over every collection of the frame. The
+  snapshot and the menu's view table now show draws per view:
+  `LibBgfxBackend::submit_counted` (`src/render/bgfx_lib_backend.hpp`) counts
+  every renderer submit into `view_draws_`, reset at the start of the frame
+  and published with the debug stats.
+- Night overlays: night-only props (`GroundProp::night_only`, the authored
+  night facades) get a persistent slot per mesh (`GroundPropMap::night_ids`,
+  `night_geometry`, `GroundProp::night_slot`). When `scene_instances_collect`
+  receives a `night_batches` vector (only `sync_instances` passes
+  `night_batches_`), visible night props go there instead of one
+  `SceneInstance` each; other callers still get SceneInstances with
+  `emissive_overlay`, which every shadow, AO and reflection pass already
+  skips. `draw_dynamic_world` draws them in pass 1 through
+  `LibBgfxBackend::draw_props_instanced` (`src/render/bgfx_lighting.cpp`).
+- Props with a blended section (`LibBgfxBackend::blended_prop_instance`: a map
+  placement whose SCX3/4 mesh has a blended group, no ground polygons) keep
+  their SceneInstance, because shadows, AO and reflections use it. Only the
+  world view draws them instanced: `draw_dynamic_world` groups them per mesh
+  and lighting in first-appearance order and draws each group in both passes
+  through `draw_props_instanced` instead of `draw_instance`.
+- `draw_props_instanced` is draw_instance's group lambda for a map placement
+  (cull_backfaces, no preview, sky, skin or texture replacement, opacity 1)
+  with `inst_program_`. Each group gets its own instance data, because the
+  tint draw_instance computes from the placement colour (diffuse, ColorMixTex,
+  blend modulation, emission colour) is computed per placement in the same
+  order and sent in the instance colour, with `u_color.rgb` = 1 and the alpha
+  (which never depends on the placement) in `u_color.a`. fs_mesh multiplies
+  `tint * placement`, so the product is the same float.
+- `shaders/vs_mesh_inst.sc` applies vs_mesh's overlay depth bias (a 2 mm
+  normal offset before #281) when the instance colour's w is 2 (1 otherwise, including the shadow programs).
+  Pitfall: the first version read `u_alphaTest.y` in this vertex shader, like
+  vs_mesh does; the bgfx render thread then took ~45 ms per frame in the
+  harness, and the main thread got slower too (bisected: same code without
+  that shader change ran at normal speed). Keep that uniform out of
+  vs_mesh_inst.
+- Order: pass 1 is now the instance loop (world list, signal glow), then the
+  night overlays, then the blended props; groups are drawn group-major over
+  their placements. Overlays add light (SRC_ALPHA, ONE), which an 8-bit
+  target accumulates in any order; the captures below show no change.
+- Harness (`tests/test_scene_shadow_gpu.cpp` `city_submission`, now run at
+  640×360 and at 2560×1440; the size also drives the far-size filter, so
+  2560 keeps the props the game keeps; Valo City 22 h, world view only,
+  caches on). Both captures are byte-identical to the pre-#264 build
+  (`build/city_frame_reference_<w>x<h>.bin`, written by the earlier build).
+  At 2560×1440: world-view draws 2,555 → 1,843, scene instances 789 → 116
+  (673 overlay placements in 65 meshes, 114 blended placements),
+  sync_instances 0.50–0.67 → 0.36–0.41 ms, world submission
+  1.55–1.64 → 0.97–1.06 ms, bgfx render thread 1.87–2.12 → 1.29 ms (two
+  runs each).
+
+### Parallel prop batch collection and collection sub-zones (#266)
+
+- `scene_instances_collect_batches` runs its placement loop on the job pool
+  (§5.10 "Per-frame work on the pool"). A first version chose the LOD in a
+  separate pass (jobs list the LOD placements, the host thread chooses) and
+  was slower than serial in the harness (0.36 ms warm against 0.28 ms): two
+  pool dispatches and a serial pass over every LOD placement. The shipped
+  version is one dispatch with the LOD chosen in place through
+  `std::atomic_ref`.
+- Equivalence: `city_submission` compares the pooled loop with the same
+  loop run inside a job (where a batch runs serially) on the same frame
+  state: identical batches and placement order. The 640x360 and 2560x1440
+  captures match the pre-#266 build on 24 threads and with the test process
+  pinned to one and to two cores. Windows has no ThreadSanitizer here (MSVC
+  only, no g++/clang); the review covers what the jobs read and write.
+- New profiler zones in sync_instances: `CollectInstances` (the main view's
+  `scene_instances_collect`), `CollectSkins` (walker palettes, every
+  collection), `CollectPreviews` (script viewport previews) and `Residency`
+  (`src/render/bgfx_lib_backend.cpp:sync_instances`), shown under "Scene
+  collection + residency" in the snapshot.
+- Harness (`city_submission`, 2560x1440, world view, 24 pool threads; "cold"
+  overwrites 96 MB before every frame): batches zone 0.28-0.32 ms warm,
+  0.50 ms cold before; 0.17-0.23 ms warm, 0.26-0.31 ms cold after.
+  sync_instances cold 0.72-0.73 -> 0.46-0.54 ms. Main-view
+  `scene_instances_collect` (still serial) takes 0.11-0.15 ms warm and
+  0.16-0.21 ms cold.
+- Known harness flake, present before #266 (seen on the #264 build with
+  no source change): about one run in three, the 2560x1440 capture differs
+  from another run's in 17 scattered pixels of the lamp-lit road by 1 in one
+  channel, between two runs in the same process too (warm against cold).
+  The cause is not found; it is not thread related (it happens with the
+  serial #264 code). `city_submission` prints the warm/cold comparison and
+  requires only caches on/off and pooled/serial equality.
+
+### Walker palettes, camera list and world list costs (#268)
+
+- Walker palettes were already built once per frame and shared by every
+  collection (`g_frame_characters`); the cost is the pose rebuild. New ones
+  now run on the job pool (8 or more, with 4 or more pool threads), see §5.10.
+  Walkers outside a view's frustum still get no palette; walkers that are
+  merely far keep theirs, because the renderer skips a walker without one and
+  dropping them would change the image.
+- `src/resources/gameref.cpp:gameref_active_cameras` read every GameRef of
+  the scene, and `fullscreen_script_camera`, `sync_instances` and
+  `draw_previews` call it each frame. It now reads `g_camera_refs`, the keys
+  given kind Camera (`gameref_upsert`, `gameref_bind_scene_camera`), dropping
+  the ones that are gone. Ties in `cam_pri` are now broken by `cam_seq`
+  (activation order) instead of the node table's hash order. Harness: a full
+  scan of 6,000 extra nodes takes 34.5 us warm; the registry ~0.
+- `src/resources/character.cpp:character_posed` checks for skin weights
+  before the character lookup, which used to insert a `Character` entry for
+  every render node of the world list.
+- The world list (`collect_root`) costs about 1 us per node, spread over the
+  transform chain, paint and texture matching, and moving the large
+  `SceneInstance` into the list. The mesh side of the texture matching is now
+  cached per mesh and revision (`mesh_texture_keys`), and the list is
+  reserved once. No per-node revision exists (`g_scene_revision` is global
+  and texture and paint fields change without it), so caching whole nodes or
+  whole previews across frames would need change tracking first. Memoising
+  parent matrices would change the float association of `chain_matrix`, so
+  the captures would no longer match.
+- Harness: `city_submission` has a third case, `crowd` (2560x1440): 80
+  walkers of the Valo City types (humans 0x57-0x5B, 60 ahead of the camera),
+  a car-like subtree of 30 cars.rpk renders whose nodes carry a paint id
+  (approximation: the paint id matches no texture, so the matching loops run
+  but nothing is repainted), and the same subtree in an inset preview drawn
+  by `draw_previews`. The walker clock ends at the same value in every run,
+  because a step computed at a different absolute time rounds differently.
+  Before -> after: walker palettes 0.30-0.32 -> 0.15-0.17 ms, previews
+  0.05-0.06 -> 0.04 ms, world list 0.12-0.13 ms (unchanged within noise),
+  sync_instances 0.95-1.0 -> 0.92-0.97 ms. The crowd frame's bgfx render
+  thread is 9-11 ms before and after (not investigated: 80 skinned walkers
+  and 30 overlapping car meshes at 2560x1440).
+- The 2560x1440 flake noted for #266 also hit the caches on/off comparison;
+  `city_submission` now accepts up to 64 differing bytes at most 1 apart and
+  fails on anything larger.
+
+### AO darkens large walls seen at a grazing angle (#274)
+
+- Symptom (Elias, Valo City suburb, daytime): a house facade very dark with
+  black blotches at wall bases and corners; normal with AO off or with "AO
+  reference sampling" on, so the #259 AO-resolution path.
+- Cause: every AO texel stands for one full-resolution depth texel, but at
+  half resolution the AO texel centre lies exactly on the boundary between
+  two full texels. The geometry pass picked the texel from its interpolated
+  uv, the AO pass and its filters from integer AO texels
+  (`fullTexelCentre(aoTexelCentre(t))`), and they did not always agree. The
+  stored linear depth then belonged to one texel while the position was
+  rebuilt at its neighbour. On a frontal wall the two depths are equal; at a
+  grazing angle they differ a lot, so samples left the wall plane, became
+  occluders and darkened open walls in bands.
+- Fix: `shaders/fs_ao.sc` `aoFullCentre` picks the full texel with a
+  quarter-texel bias (texel 2t at half resolution, t at full resolution) and
+  every pass uses it: the geometry pass (depth, position, normal), the
+  receiver and samples of the AO pass and the filter weights.
+  `shaders/ambient_occlusion.sh` fetches the depth of the same texel for the
+  depth-aware upsample weights.
+- Test: `tests/test_scene_shadow_gpu.cpp` `ambient_occlusion`, a 30 m x 8 m
+  wall alone and on a floor, frontal and grazing, near and far, AO High,
+  geometry path against reference sampling. Before: open wall grazing near
+  GTAO 2,817 of 8,257 pixels darkened (reference 0), HBAO 7,439. After: 0
+  for both; every case within 2 % of the reference. The house itself was not
+  located in the harness; the synthetic wall reproduces the fault.
+### Street lamps lit while the sun is up (#271)
+
+- Symptom (Elias, Valo City, evening): a walker had its sun shadow plus a
+  softer second shadow pointing away from a street lamp, and the lamp post
+  had two diagonal shadows. Turning "street lamp lighting" off removed the
+  second shadow. Cause: street lamps switched on at full power on a clock
+  window (`scene_sun_is_night`, 18:30-06:00) independent of the light that
+  lit the scene, so a lamp's shadow tile (#237) added a second shadow beside
+  the sun's. Not a regression of the #244-#269 stack: the clock gate and
+  the lamp tiles come from #237/#238, and on the 2a4abf1 merge the harness
+  at 13:30 shows 0 lamps lit and single shadows (no bisect was needed).
+- Fix, second version (the first used the day-cycle clock and ramped from
+  17:37, 68 % at 18:00 while the low sun still cast long shadows; Elias saw
+  the doubled shadows again at dusk):
+  `src/resources/scene_instances.cpp:scene_instances_sun_state` measures the
+  sun the renderer lights with: the world's light after the day cycle
+  (`scene_instances_light`), its diffuse luminance against the same light at
+  noon (`scene_sun_apply_day_cycle_at`), its elevation, and whether it still
+  casts sun shadows (direction y < 0.02, as in `update_static_shadow`).
+  `src/resources/scene_sun.cpp:scene_sun_night_factor` maps the direct
+  fraction: 0 down to 20 % of noon, smoothstep to 1 at 0.
+  `src/render/bgfx_lib_backend.cpp:update_scenery_lights` scales lamp power
+  by it (none below 0.01); `src/render/bgfx_shadows.cpp:update_lamp_shadows`
+  draws no tile below 0.3 or while the sun casts shadows, and scales the
+  lamps it adds itself. A lamp's shadow is the absence of its light, so its
+  darkening fades with it. The renderer snapshot header prints the sun
+  elevation, diffuse, noon diffuse, direct fraction, sun shadows and factor.
+- By hour on the stock day cycle (elevation, direct, sun shadows, factor):
+  05:54 -1.3 deg 0.09 off 0.60; 06:00 0.0 deg 0.15 on 0.14; 06:15 3.2 deg
+  0.35 on 0; 12:00 0; 17:45 3.2 deg 0.35 on 0; 17:54 1.3 deg 0.22 on 0;
+  18:00 0.0 deg 0.15 on 0.14 (lamps faint, no tiles); 18:06 -1.3 deg 0.09
+  off 0.60; 18:15 -3.2 deg 0 off 1; night 1. The old clock gate was off
+  until 18:30 and on before 06:00.
+- Lamp geometry: the light sits at the type-13 light child (the lamp head);
+  `update_lamp_shadows` keeps out of a lamp's own tile any caster whose
+  bounds contain the light position (the pole and housing, `holds_lamp`).
+- Test: `tests/test_scene_shadow_gpu.cpp` `city_submission(..., day=true)`
+  (1280x720, crowd, sun passes and GTAO High 3 m, plus `update_lamp_shadows`)
+  renders noon, 18:00 and 22:00 with street lamp lighting on and off. Noon:
+  no lamp lit, no shadow slot, identical frames. 18:00 (sun shadows on):
+  40 lamps at most 0.11 (factor 0.14), no shadow tile, lamp contribution
+  11.7 M (sum of channel differences) over 496 k pixels. 22:00: unchanged,
+  lamps 0.80, 6 shadowed, 80.7 M over 500 k pixels. The
+  night captures at 640x360, 2560x1440 and crowd match the pre-#271 build.
+
+### Baked vertex light on ground POLY under the dynamic sun (#275)
+
+- Symptom (Elias): the Nevada Desert mountains very dark, blotchy and high
+  in contrast by day. Nevada Desert is MW_Mod's `Nevada_Track` script, which
+  starts `maps\ROC_track.rpk`; the terrain is `maps/roc_track/meshes/roc.scY`,
+  one SCX3 ground POLY (61,038 vertices, normals present).
+- Cause: POLY vertices carry a colour (byte 24 of each 56-byte vertex,
+  `src/resources/scene_instances.cpp` POLY parser). On this terrain it is
+  grey with alpha equal to the grey, mostly 0 or 1 (rock `sziklafal2`: 43 %
+  of vertices near 0; sand `sivatag`: 49 %), brighter on slopes facing the
+  original's sun: baked light. The sections do not overlap (no coinciding
+  triangles), so it is not a layer blend weight. Since 5ca91e7 (2026-11-10)
+  outdoor ground POLY drew with `u_alphaTest.w = -3`, where `fs_mesh`
+  multiplies the texture by it, then our sun, ambient, shadows and AO lit it
+  again: baked-dark vertices stayed black whatever the sun did. Not AO and
+  not the cascades: the same look with AO off and map shadows off.
+- Fix: `src/render/bgfx_lib_backend.hpp:baked_vertex_light` keeps the
+  vertex colour only for outdoor ground POLY without dynamic lighting (where
+  it is the scene's light); under the dynamic sun it is ignored, as the
+  stock lightmap path already does for lightmapped surfaces.
+- Test: `tests/test_scene_shadow_gpu.cpp` `desert_capture`, the desert at
+  noon (sun passes, GTAO High 3 m), the mountain band behind the start
+  gantry: 72.4 % of pixels under luminance 40 (mean 54) before, 0.1 % (mean
+  136) after; it also checks that the data still bakes dark rock vertices.
+- Side effect: Valo City's ground POLY loses its baked vertex light too. The
+  night city captures differ by 3.5 on average per changed pixel (max 69):
+  slightly lighter ground, same picture. `build/city_frame_reference_*.bin`
+  from earlier builds therefore no longer match byte for byte.
+- Not checked: SLRR_rev does not establish the original's use of this
+  colour (its docs call vertex-colour blending unconfirmed and drop alpha).
