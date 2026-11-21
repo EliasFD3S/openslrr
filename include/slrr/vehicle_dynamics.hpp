@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 namespace slrr::physics {
 // Script-space metres, kilograms and seconds. Renderer handedness stays
@@ -78,6 +79,28 @@ struct GroundHit {
 // from_y is a ray origin/ceiling, not a default ground height. False = air.
 using Terrain =
     std::function<bool(double x, double z, double from_y, GroundHit &)>;
+// Real-life aerodynamics (ENGINE_CONTRACT §11): ½ρv² forces from the air
+// velocity relative to the car, with typical road-car coefficients.
+struct AeroWing {
+  // One face of a wing in chassis-frame metres: unit normal, planform m².
+  Vec3 position, normal;
+  double area = 0;
+};
+struct Aerodynamics {
+  // Chassis.C_drag (kg/m): the extra drag of missing body panels, against
+  // the velocity of drag_center (chassis frame) above 1 m/s.
+  double drag = 0;
+  Vec3 drag_center;
+  // Drag and lift of the body, sized by the rigid body's bounds.
+  bool body = false;
+  std::vector<AeroWing> wings;
+};
+// Resultant aerodynamic force (world) and its torque about the centre of
+// mass for one step of `dt`, as VehicleDynamics applies it.
+struct AeroLoad {
+  Vec3 force, torque;
+};
+AeroLoad aero_load(const Aerodynamics &aero, const RigidBody &body, double dt);
 struct WheelConfig {
   bool enabled = false;
   // Fixed suspension travel with compliant tyre/bump-stop support.
@@ -166,6 +189,7 @@ public:
   std::array<Vec3, 8> body_supports{};
   std::size_t body_support_count = 0;
   DriveInput drive;
+  Aerodynamics aero;
   double engine_omega = 0;
   bool engine_running = false;
   int gear = 0;
@@ -186,6 +210,7 @@ private:
   bool accelerator_down_ = false, forced_reverse_ = false;
   bool launch_active_ = false;
   void step(const Terrain &terrain);
+  void apply_aero();
   void step_drive();
   void update_gear(double rpm, double shaft, double road_shaft);
 };

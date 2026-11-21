@@ -260,6 +260,7 @@ the sun cascade atlas and the AO buffer. **Options (saved)** holds the saved
 Enhanced graphics options as before.
 
 `--perf-log` prints one `[perf]` line per simulated second and writes the same fields to the CSV file. Add `--bench-shots DIR` to capture the window every 10 seconds. The run writes `save/game/options` on exit like a normal session.
+During the drive, a `[bench] t=… speed=… rpm=… gear=…` line every 0.1 s of simulated time gives a speed trace at the interval of the original-game telemetry. On a map without ground props, such as the drag strip (`--bench-map Drag_Track`, about 12 s of straight road), the drive starts once the car has rested on all its wheels for 5 s.
 Select a visible vehicle or a preview in **Vehicle**, or use **Freeze
 telemetry** to hold a sample. **Tuning** changes tyre parameters and
 simulation speed live. **Renderer** has visual toggles. **Section** shows

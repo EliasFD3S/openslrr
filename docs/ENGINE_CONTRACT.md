@@ -659,6 +659,59 @@ The active tire code is in `tire_model.cpp`, integrated in
 `vehicle_dynamics.cpp`. The presence of `sl2_pacejka.cpp` in the repository
 does not mean the whole driving model uses that older model.
 
+Aerodynamics are real-life calculations, as the owner decided on PR #223:
+every force is `½ ρ C A v²` from the air velocity relative to the car
+(`-v`, no wind yet), with ρ = 1.225 kg/m³ and typical road-car coefficients,
+not values recovered from the original game.
+`VehicleDynamics::apply_aero` adds, each substep:
+
+- **Body drag and lift.** The rigid body's bounds (W × H × L) give a frontal
+  area `0.85 W H`. Drag uses Cd 0.32 on it, and Cd 1.0 on `0.85 L H` (side)
+  and `0.85 W L` (plan) in proportion to the flow's direction cosines, so a
+  sliding car meets its side area. Lift uses CL 0.25 on the frontal area with
+  the flow along the car. Both act at the centre of the bounds; native
+  traffic templates keep their own force policy and get neither.
+- **Chassis drag.** `Chassis.updatevariables` sets `C_drag` to
+  `fully_stripped_drag` minus the `drag_reduction` of each body part on the
+  chassis slots, floored at 0, and the EXE reads it with `drag_center`
+  (0x448CD2). It is already in real units (kg/m, `½ρCdA`): above 1 m/s it
+  adds `-C_drag |v| v` at `drag_center` (0x456A83), the extra drag of missing
+  panels. A complete stock car has 0.
+- **Wings.** A CFG `wing` line authored as a wing (type 5, or type 4 with
+  exponent 0.667) is one face of an airfoil in its part's frame; body surface
+  lines only describe the shape the body model covers. The face meeting the
+  air, with incidence `sin α = v̂ · n`, carries the element's normal force
+  `½ρ A v² min(4.2 sin α, 1.5)` along `-n` (lift slope `2πA/(A+2)` for aspect
+  ratio 4, stalled single-element limit) plus profile drag Cd 0.05; the face
+  turned away carries nothing. Its tilt splits the force into downforce and
+  induced drag.
+
+The centre of pressure follows from where these forces act: a rear wing
+moves load to the rear axle and lifts the front. Every drag force is
+clamped to the impulse that stops its point in one step, as the EXE does for
+`C_drag`.
+
+`part_runtime` reads `C_drag`/`drag_center` with the drive inputs and
+collects the wing faces in chassis coordinates when the body support is
+rebuilt (assembly change, deformation, repair), at the parts' poses at that
+moment (`rebuild_aerodynamics`). A swinging hinged panel keeps the pose it
+had then; loose detached parts get no aerodynamics.
+
+`wing` lines (handler 0x4443C0, 16 per part) are authored by the original
+Invictus Aero v1.2 3ds Max calculator (posted on PR #223): position and
+unnormalised normal are the area-weighted centre and normal of the selected
+faces. Its SLRR method writes type 4 with `area` = 30 × the flattened area in
+m² for surfaces and 90 × for wings, suction −0.25/0.25 and exponent
+0.666/0.667; its CRC and Experimental methods store about 1.27 × the area and
+write wings as type 5. `part_wing_is_airfoil`/`part_wing_area` invert this.
+For reference only, the original EXE's own formulas, no longer applied:
+type 4 pushes along the normal with `-area · d' · (d' > 0 ? 1 : suction)`,
+`d' = sign(d) · 100 (|d|/100)^exponent` for the normal velocity `d`
+(0x48EB3C); type 5 with `-area · d + suction · |v_t|²` (0x48ED73). With the
+stock exponent 0.666 that grows with speed^0.666, far stronger than real air
+at town speeds. slrr-reverse decodes the same `C_drag` drag and clamp
+(`Chassis_part2.inc`).
+
 ### Intended driving model: revision `8ac2ba9`
 
 The maintainer's `8ac2ba9601300b36efca54dd81031fb6bc9de98b` revision is the
@@ -697,7 +750,10 @@ not read by the solver. Likewise, `setInstantCenter` values and the
 `WheelState::jacking` field are retained but have no active load effect:
 there is no instant-centre anti-dive/anti-squat force or jacking feedback.
 Wheel YPR and the existing arm/hub kinematics still affect contact geometry.
-The proposed anti-roll-bar loop is commented out, not implemented.
+The proposed anti-roll-bar loop is commented out, not implemented. The
+original has no effect from stock anti-roll-bar parts either: MWM
+`Swaybar.updatevariables` has its `addrollbar` commands commented out. Only
+the native CFG `rollbar` lines of fake-racer and traffic templates carry one.
 
 The approved migration keeps that tyre law but corrects brake coupling.
 After the drivetrain impulse, one bearing/service/handbrake impulse budget

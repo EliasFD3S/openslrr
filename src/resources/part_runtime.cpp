@@ -2322,6 +2322,39 @@ void rebuild_body_support(Object* chassis, Record& rec) {
   rec.body_support_dirty = false;
 }
 
+// The car body gets real-life drag and lift; installed parts' CFG `wing`
+// lines authored as wings act as airfoils in their current mount pose, as the
+// EXE's per-part wing nodes follow their parts (0x44B48C, 0x48E880). Body
+// surface lines only describe the shape the body model already covers.
+void rebuild_aerodynamics(Object* chassis, Record& rec) {
+  auto& aero = rec.dynamics.aero;
+  aero.wings.clear();
+  aero.body = !rec.native_vehicle;
+  if (rec.native_vehicle) return;
+  const auto to_chassis = part_matrix_inverse_rigid(world_matrix(chassis));
+  for (const auto& item : part_installed_tree(chassis)) {
+    const auto* part = record(item.object);
+    if (!part || !part->config || part->config->wings.empty()) continue;
+    const auto m = part_matrix_multiply(to_chassis, world_matrix(item.object));
+    for (const auto& line : part->config->wings) {
+      if (!part_wing_is_airfoil(line)) continue;
+      const auto& p = line.position;
+      const auto& n = line.normal;
+      physics::AeroWing wing;
+      wing.position = {m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12],
+                       m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13],
+                       m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]};
+      wing.normal = physics::Vec3{m[0] * n[0] + m[4] * n[1] + m[8] * n[2],
+                                  m[1] * n[0] + m[5] * n[1] + m[9] * n[2],
+                                  m[2] * n[0] + m[6] * n[1] + m[10] * n[2]}.normalized();
+      wing.area = part_wing_area(line);
+      if (wing.position.finite() && wing.normal.length() > .5 &&
+          std::isfinite(wing.area) && wing.area > 0)
+        aero.wings.push_back(wing);
+    }
+  }
+}
+
 bool dynamics_configure(Object *chassis, Record &rec, const PartMatrix &frame,
                         bool preserve_parked_wheels = false) {
   auto unavailable = [&](const char *reason) {
@@ -2912,6 +2945,21 @@ void update_steering(Record &rec, bool controls) {
 }
 
 void configure_drive(Object *chassis, Record &rec, bool controlled) {
+  // Chassis.updatevariables leaves C_drag (fully_stripped_drag less the
+  // drag_reduction of each body part on its slots) and drag_center for the
+  // EXE's quadratic drag (read at 0x448CD2, applied at 0x456A83). It acts
+  // on every scripted car, driven or not.
+  auto &aero = rec.dynamics.aero;
+  aero.drag = 0;
+  aero.drag_center = {};
+  if (!rec.native_vehicle) {
+    const float drag = comp(chassis, "C_drag");
+    aero.drag = std::isfinite(drag) ? std::max(0.f, drag) : 0.f;
+    if (auto *center = part_field(chassis, "drag_center")) {
+      const physics::Vec3 point{comp(center, "x"), comp(center, "y"), comp(center, "z")};
+      if (point.finite()) aero.drag_center = point;
+    }
+  }
   auto &drive = rec.dynamics.drive;
   drive.torque = {};
   drive.native_traffic = false;
@@ -4561,7 +4609,10 @@ void advance_chassis_tick() {
       dynamics_wheels(rec);
       configure_drive(chassis, rec, chassis == controlled);
     }
-    if (rec.body_support_dirty) rebuild_body_support(chassis, rec);
+    if (rec.body_support_dirty) {
+      rebuild_aerodynamics(chassis, rec);
+      rebuild_body_support(chassis, rec);
+    }
     // An unreleased chassis (catalog, before start) may drop onto a floor.
     // With no floor the step only applies gravity, and the car leaves the shot.
     if (!rec.physics_released && rec.physics_pending_placement) {
