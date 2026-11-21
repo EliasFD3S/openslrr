@@ -21,6 +21,12 @@ namespace {
 // Original: ped+0x30 (radius) and ped+0x34 (speed), both set to 1.0 at spawn.
 constexpr float kRadius = 1.f;
 constexpr float kSpeed = 1.f;
+// OpenSLRR choice, not the original 1 m: many stock sidewalk corridors and the
+// gates between them are only 2.2 m wide, so a 1 m hard clearance left a 0.2 m
+// band, and walkers stalled on gates (the next row's walls pushed them straight
+// back) and could never pass each other. The soft steering above still uses
+// the 1 m radius, so walkers keep to the middle where there is room.
+constexpr float kWallClearance = 0.5f;
 // Original 0x00586e40: the current heading counts three times in the sum.
 constexpr float kHeadingWeight = 3.f;
 // Original car obstacle (0x00463ac0 -> 0x00589860): radius 3 m. A walker
@@ -304,8 +310,8 @@ bool inside_block(float x, float y, float z, const PedestrianBlock& block) {
 }
 
 // Push a walker out of the row's walls and runs (original hard pass in
-// 0x00589cb0, run variant 0x005860a0): an edge closer than the body radius
-// pushes it back to the radius, and the distance lost to the push is given
+// 0x00589cb0, run variant 0x005860a0): an edge closer than kWallClearance
+// pushes it back to that distance, and the distance lost to the push is given
 // back as a slide along the edge. OpenSLRR addition: inside an edge's span
 // a walker found behind the edge is put back on the row side, so one long
 // step cannot carry it out of the sidewalk.
@@ -313,20 +319,20 @@ V constrain(const Row& row, V p, V previous, float step) {
   for (int pass = 0; pass < 2; ++pass)
     for (const Edge& edge : row.edges) {
       if (edge.type == EdgeType::Gate) continue;
-      const Nearest n = nearest(edge, p, kRadius + 2.f);
+      const Nearest n = nearest(edge, p, kWallClearance + 2.f);
       if (n.distance >= 1e29f) continue;
       const float side = (p.x - n.point.x) * n.normal.x + (p.z - n.point.z) * n.normal.z;
       float ox = 0.f, oz = 0.f;
       if (n.interior && side <= 0.f) {
-        p.x = n.point.x + n.normal.x * kRadius;
-        p.z = n.point.z + n.normal.z * kRadius;
+        p.x = n.point.x + n.normal.x * kWallClearance;
+        p.z = n.point.z + n.normal.z * kWallClearance;
         ox = -n.normal.x;
         oz = -n.normal.z;
-      } else if (n.distance < kRadius) {
+      } else if (n.distance < kWallClearance) {
         ox = n.distance > 1e-5f ? (n.point.x - p.x) / n.distance : -n.normal.x;
         oz = n.distance > 1e-5f ? (n.point.z - p.z) / n.distance : -n.normal.z;
-        p.x += ox * (n.distance - kRadius);
-        p.z += oz * (n.distance - kRadius);
+        p.x += ox * (n.distance - kWallClearance);
+        p.z += oz * (n.distance - kWallClearance);
       } else {
         continue;
       }

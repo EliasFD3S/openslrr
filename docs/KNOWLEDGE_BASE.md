@@ -415,9 +415,11 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   run (kind 23, a Hermite spline); any other id is a gate into that row.
 - Walkers follow the original model (tick 0x00589cb0,
   `src/resources/pedestrian_lines.cpp:PedestrianLines::step`): free agents
-  with a heading, 1 m radius and 1 m/s. Walls and both runs repel them and
-  push them back to 1 m; the four strongest influences steer; they leave a
-  row only through a gate. Stock gate links form closed block rings, so no
+  with a heading, 1 m radius and 1 m/s. Walls and both runs repel them (soft
+  steering within 3 m) and push them back to 0.5 m, an OpenSLRR choice: many
+  stock corridors and gates are only 2.2 m wide, and a 1 m clearance left
+  walkers pinned on gates (#272); the four strongest influences steer; they
+  leave a row only through a gate. Stock gate links form closed block rings, so no
   route crosses a carriageway.
 - Spawns use the original formula per row (corridor: 10-90 % across the
   runs; other rows: a fan triangle). The headcount is `density × row area`
@@ -824,6 +826,7 @@ Process:
 | Shadow maps | 2048² | `src/render/bgfx_lib_backend.hpp:kShadowResolution` |
 | Pedestrian radius / density scale | 400 m / ×4 | `src/resources/part_runtime.cpp:tick_pedestrians` |
 | Walker body radius / speed | 1 m / 1 m/s (original) | `src/resources/pedestrian_lines.cpp:kRadius` |
+| Walker hard wall clearance | 0.5 m (OpenSLRR) | `src/resources/pedestrian_lines.cpp:kWallClearance` |
 | Live GameRef IDs | from `0x70000000` | `src/resources/gameref.cpp:g_next_live` |
 
 ## 8. Native coverage at a glance
