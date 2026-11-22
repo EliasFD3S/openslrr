@@ -114,7 +114,16 @@ silently replacing it with a collision-filter toggle.
   every car record, not only the controlled car. The real SfxTables and RPM/load
   path must be checked in a script-loaded reproduction before attributing all
   missing sounds to ownership.
-- **Native traffic sound has a concrete missing input path.** Native-only
+- **Native traffic engine loop (host model).**
+  `src/resources/part_runtime.cpp:update_traffic_engine_audio` gives every
+  released native car (traffic, fake racers) a loop from the three
+  `cars/traffic/sounds/engines/diesel_5.0L` samples, cross-faded by an RPM
+  modelled from speed through a stepped gearbox and attenuated by distance to
+  the world camera (not FMOD 3D). Only the four nearest cars within 80 m hold
+  voices. It is a host fallback, not vehicle-specific SfxTable parity; the
+  CFG `sfx_loop` of Erbilac/Wagon is a music loop and is still not retained.
+  The next entry describes the state before this model.
+- **Native traffic sound had a concrete missing input path.** Native-only
   templates have no Java engine/SfxTables. `PartConfig` does not retain CFG
   `sfx_loop` declarations (present in installed traffic CFGs); map ambience
   parsing does not supply a native vehicle voice. Upstream

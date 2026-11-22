@@ -1501,7 +1501,10 @@ Engine loops use the scripts' SfxTables.
 `scene_ambience` plays the `sfx_loop`/`sfx_random` lines of map placements
 through `host_sfx`; it owns those voices and stops them when their ground
 shell leaves the active world.
-Do not substitute a fixed engine sound for an RPM/load curve.
+Do not substitute a fixed engine sound for an RPM/load curve. Native
+script-less cars (traffic, fake racers) have no SfxTables; they use the
+speed-modelled host loop of `update_traffic_engine_audio`, bounded to the
+nearest four cars, and its voices stop with the car like the SfxTable loops.
 
 Simultaneous voices are deliberately bounded, and menu repeats are handled
 separately. Installing a kit can produce many install events: avoid adding

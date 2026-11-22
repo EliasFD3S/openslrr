@@ -17,6 +17,7 @@
 #include "slrr/jvm.hpp"
 #include "slrr/light_resource.hpp"
 #include "slrr/rpk_index.hpp"
+#include "slrr/scene_ambience.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/scene_collision.hpp"
 #include "slrr/scx_mesh.hpp"
@@ -231,6 +232,11 @@ struct Record {
   physics::Quaternion render_from_orientation;
   PartMatrix render_parent{};
   std::array<Object *, 3> sfx{};
+  // Host engine loop of a native (script-less) car: one voice per diesel
+  // sample, cross-faded by a speed-modelled RPM. See update_traffic_engine_audio.
+  std::array<int32_t, 3> traffic_voice{};
+  float traffic_rpm = 0;
+  uint32_t traffic_audio_epoch = 0;
 };
 std::unordered_map<Object *, std::vector<SfxItem>> sfx_items;
 std::unordered_map<Object *, Record> records;
@@ -901,6 +907,10 @@ Object *add_part(Jvm &jvm, Object *parent, uint32_t resource,
 void release_side(Record &rec) {
   host_sfx_stop(rec.nitro_voice);
   rec.nitro_voice = 0;
+  for (auto &voice : rec.traffic_voice) {
+    host_sfx_stop(voice);
+    voice = 0;
+  }
   for (Object *tab : rec.sfx) {
     auto table = sfx_items.find(tab);
     if (table == sfx_items.end()) continue;
@@ -3213,6 +3223,107 @@ void update_engine_audio(Record &rec, bool active) {
         item.voice = 0;
       }
     }
+  }
+}
+
+// Native stock cars (traffic, fake racers) have no Java engine or SfxTables, so
+// their loop is a host model: the three diesel samples shipped with the traffic
+// pack, cross-faded by an RPM derived from speed through a stepped gearbox,
+// attenuated by the distance to the world camera. Only the nearest few cars
+// hold voices because the host mixer has a small loop budget.
+void update_traffic_engine_audio() {
+  constexpr size_t kNearest = 4;
+  constexpr float kRange = 80.f, kRefDistance = 5.f, kVolume = .5f;
+  constexpr std::array<float, 3> kSampleRpm = {1000.f, 2200.f, 3300.f};
+  constexpr std::array<const char *, 3> kSampleFile = {"1000rpm.wav", "2200rpm.wav", "3300rpm.wav"};
+  constexpr std::array<float, 4> kGearTop = {8.f, 14.f, 22.f, 34.f}; // m/s
+  static std::array<std::string, 3> paths;
+  static bool resolved = false;
+  static uint32_t epoch = 0;
+  if (!resolved && index) {
+    resolved = true;
+    const auto dir = std::filesystem::path(index->game_root()) / "cars" / "traffic" / "sounds" /
+                     "engines" / "diesel_5.0L";
+    std::error_code ec;
+    bool all = true;
+    for (size_t i = 0; i < paths.size(); ++i) {
+      const auto file = dir / kSampleFile[i];
+      all = all && std::filesystem::is_regular_file(file, ec);
+      paths[i] = file.string();
+    }
+    if (!all) paths = {};
+  }
+  float eye[3]{}, at[3]{};
+  const bool listener = paths[0].size() && gameref_world_camera(eye, at, nullptr, nullptr, nullptr);
+  struct Candidate {
+    float distance_squared;
+    Record *rec;
+  };
+  std::array<Candidate, kNearest> chosen;
+  size_t count = 0;
+  if (listener)
+    for (auto &[key, rec] : records) {
+      if (!rec.native_vehicle || !rec.engine_running || rec.state.parent) continue;
+      const auto &p = rec.dynamics.body.position;
+      const float dx = float(p.x) - eye[0], dy = float(p.y) - eye[1], dz = float(p.z) - eye[2];
+      const float d2 = dx * dx + dy * dy + dz * dz;
+      if (!std::isfinite(d2) || d2 > kRange * kRange) continue;
+      if (count < kNearest) {
+        chosen[count++] = {d2, &rec};
+      } else {
+        auto farthest = std::max_element(chosen.begin(), chosen.end(), [](const auto &a, const auto &b) {
+          return a.distance_squared < b.distance_squared;
+        });
+        if (d2 < farthest->distance_squared) *farthest = {d2, &rec};
+      }
+    }
+  ++epoch;
+  for (size_t n = 0; n < count; ++n) {
+    Record &rec = *chosen[n].rec;
+    rec.traffic_audio_epoch = epoch;
+    const auto &body = rec.dynamics.body;
+    const auto forward = body.orientation.rotate({0, 0, -1});
+    const float speed = std::abs(static_cast<float>(body.velocity.dot(forward)));
+    size_t gear = 0;
+    while (gear + 1 < kGearTop.size() && speed >= kGearTop[gear]) ++gear;
+    const float low = gear ? kGearTop[gear - 1] : 0.f;
+    const float fraction = std::clamp((speed - low) / (kGearTop[gear] - low), 0.f, 1.f);
+    const float throttle = std::clamp(std::abs(static_cast<float>(rec.dynamics.drive.throttle)), 0.f, 1.f);
+    const float target = std::clamp(
+        std::lerp(gear ? 1900.f : 1000.f, 3100.f, fraction) + throttle * 200.f, 1000.f, 3300.f);
+    rec.traffic_rpm = rec.traffic_rpm > 0 ? std::lerp(rec.traffic_rpm, target, .2f) : target;
+    const float rpm = rec.traffic_rpm;
+    const float level = scene_ambience_gain(kVolume * (.7f + .3f * throttle), kRefDistance, kRange,
+                                            std::sqrt(chosen[n].distance_squared));
+    for (size_t i = 0; i < paths.size(); ++i) {
+      float weight = 0;
+      if (i == 0 && rpm <= kSampleRpm[0]) weight = 1;
+      else if (i + 1 == paths.size() && rpm >= kSampleRpm[i]) weight = 1;
+      else if (rpm >= kSampleRpm[i] && i + 1 < paths.size() && rpm < kSampleRpm[i + 1])
+        weight = (kSampleRpm[i + 1] - rpm) / (kSampleRpm[i + 1] - kSampleRpm[i]);
+      else if (i > 0 && rpm >= kSampleRpm[i - 1] && rpm < kSampleRpm[i])
+        weight = (rpm - kSampleRpm[i - 1]) / (kSampleRpm[i] - kSampleRpm[i - 1]);
+      const float gain = level * weight;
+      auto &voice = rec.traffic_voice[i];
+      if (gain > .002f) {
+        const float pitch = rpm / kSampleRpm[i];
+        if (voice && host_sfx_is_playing(voice)) host_sfx_update_loop(voice, pitch, gain);
+        else voice = host_sfx_play_file(paths[i], pitch, gain, true);
+      } else if (voice) {
+        host_sfx_stop(voice);
+        voice = 0;
+      }
+    }
+  }
+  // Cars that left the nearest set, went out of range or stopped.
+  for (auto &[key, rec] : records) {
+    if (rec.traffic_audio_epoch == epoch) continue;
+    for (auto &voice : rec.traffic_voice)
+      if (voice) {
+        host_sfx_stop(voice);
+        voice = 0;
+      }
+    rec.traffic_rpm = 0;
   }
 }
 
@@ -6107,6 +6218,9 @@ void part_pause_engine_audio(bool paused) {
   for (const auto& [table, items] : sfx_items)
     for (const auto& item : items)
       if (item.voice) host_sfx_pause_loop(item.voice, paused);
+  for (const auto &[part, rec] : records)
+    for (const int32_t voice : rec.traffic_voice)
+      if (voice) host_sfx_pause_loop(voice, paused);
 }
 
 void part_physics_advance(double seconds) {
@@ -6132,6 +6246,7 @@ void part_physics_advance(double seconds) {
       if (rec.config->native_kind == "car")
         update_engine_audio(rec, rec.engine_running);
     }
+    update_traffic_engine_audio();
   }
   // After the chassis ticks, so the hinges see this frame's carrier motion.
   advance_flaps(seconds);
