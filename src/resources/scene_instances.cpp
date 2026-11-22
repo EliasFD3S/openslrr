@@ -1167,11 +1167,11 @@ std::vector<GameRefState*> render_nodes_in_world(void* root, bool physics = fals
   return nodes;
 }
 
-void floor_triangles(const float *m, const std::vector<float> &pos,
+void floor_triangles(const std::vector<float> &pos,
                      const std::vector<uint32_t> &idx, float scale, float x,
                      float z, float below, float &best, bool &hit,
                      float *normal) {
-  if (!m || idx.size() < 3 || pos.size() < 9)
+  if (idx.size() < 3 || pos.size() < 9)
     return;
   for (size_t t = 0; t + 2 < idx.size(); t += 3) {
     float v[3][3];
@@ -1186,9 +1186,19 @@ void floor_triangles(const float *m, const std::vector<float> &pos,
       const float vx = pos[vi * 3] * scale;
       const float vy = pos[vi * 3 + 1] * scale;
       const float vz = pos[vi * 3 + 2] * scale;
-      v[k][0] = m[0] * vx + m[4] * vy + m[8] * vz + m[12];
-      v[k][1] = m[1] * vx + m[5] * vy + m[9] * vz + m[13];
-      v[k][2] = m[2] * vx + m[6] * vy + m[10] * vz + m[14];
+      // Every caller samples script-space baked geometry (or an identity
+      // garage mesh). Do not multiply every triangle by identity per wheel.
+      if (std::isfinite(vx) && std::isfinite(vy) && std::isfinite(vz)) {
+        v[k][0] = vx + 0.f;
+        v[k][1] = vy + 0.f;
+        v[k][2] = vz + 0.f;
+      } else {
+        // Preserve the original identity arithmetic for malformed coordinates:
+        // zero times Inf/NaN deliberately still contaminates the other axes.
+        v[k][0] = 1.f * vx + 0.f * vy + 0.f * vz + 0.f;
+        v[k][1] = 0.f * vx + 1.f * vy + 0.f * vz + 0.f;
+        v[k][2] = 0.f * vx + 0.f * vy + 1.f * vz + 0.f;
+      }
       if (k == 0) {
         min_x = max_x = v[0][0];
         min_z = max_z = v[0][2];
@@ -1788,16 +1798,14 @@ bool scene_instances_sample_floor(float x, float z, float below, void *ignore,
   float best = 0.f;
   bool hit = false;
   // Preloaded garage shells are drawn at identity with unflipped script XZ.
-  float eye[16];
-  identity(eye);
   if (g_static_enabled)
     for (const auto &mesh : g_static) {
       const auto cell =
           mesh.cells.find(floor_cell(cell_coordinate(x, mesh), cell_coordinate(z, mesh)));
       if (cell != mesh.cells.end())
-        floor_triangles(eye, mesh.positions, cell->second, mesh.scale, x, z,
+        floor_triangles(mesh.positions, cell->second, mesh.scale, x, z,
                         below, best, hit, sample.normal);
-      floor_triangles(eye, mesh.positions, mesh.large_triangles, mesh.scale, x,
+      floor_triangles(mesh.positions, mesh.large_triangles, mesh.scale, x,
                       z, below, best, hit, sample.normal);
     }
   for (const auto& [key, ground] : g_ground_collision) {
@@ -1805,9 +1813,9 @@ bool scene_instances_sample_floor(float x, float z, float below, void *ignore,
       const auto cell = mesh.cells.find(floor_cell(cell_coordinate(x, mesh),
                                                    cell_coordinate(z, mesh)));
       if (cell != mesh.cells.end())
-        floor_triangles(eye, mesh.positions, cell->second, mesh.scale, x, z,
+        floor_triangles(mesh.positions, cell->second, mesh.scale, x, z,
                         below, best, hit, sample.normal);
-      floor_triangles(eye, mesh.positions, mesh.large_triangles, mesh.scale, x,
+      floor_triangles(mesh.positions, mesh.large_triangles, mesh.scale, x,
                       z, below, best, hit, sample.normal);
     }
   }
@@ -1820,9 +1828,9 @@ bool scene_instances_sample_floor(float x, float z, float below, void *ignore,
     auto cell =
         mesh.cells.find(floor_cell(cell_coordinate(x, mesh), cell_coordinate(z, mesh)));
     if (cell != mesh.cells.end())
-      floor_triangles(eye, mesh.positions, cell->second, mesh.scale, x, z,
+      floor_triangles(mesh.positions, cell->second, mesh.scale, x, z,
                       below, best, hit, sample.normal);
-    floor_triangles(eye, mesh.positions, mesh.large_triangles, mesh.scale, x, z,
+    floor_triangles(mesh.positions, mesh.large_triangles, mesh.scale, x, z,
                     below, best, hit, sample.normal);
   }
   if (!hit)

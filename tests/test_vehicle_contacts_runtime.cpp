@@ -296,6 +296,185 @@ ImpactPair first_x_impact(ContactFixture &f, Object *a, Object *b,
   throw std::runtime_error("both real chassis did not exchange contact impulses");
 }
 
+void separated_native_fleet_preserves_every_car_and_reference_motion() {
+  constexpr unsigned updates = 60;
+  std::vector<Sample> reference;
+  double reference_ms = 0, fleet_ms = 0;
+  for (unsigned count : {1u, 100u}) {
+    ContactFixture f(true);
+    std::vector<Object *> fleet;
+    std::vector<int32_t> ids;
+    for (unsigned i = 0; i < count; ++i) {
+      auto *car = f.car(kWagon);
+      fleet.push_back(car);
+      ids.push_back(gameref_make_live(car));
+      if (i) SLRR_REQUIRE(ids[i] > ids[i - 1]);
+      // Both runs put the primary at exactly the same point. All 100 cars
+      // fit on the existing pad, with ample clearance even while moving.
+      f.place(car, -225.f + 50.f * (i % 10), -225.f + 50.f * (i / 10));
+    }
+    f.advance(48);
+    for (unsigned i = 0; i < count; ++i)
+      f.velocity(fleet[i], i == 0 ? 12.f : 2.f);
+    SLRR_REQUIRE(sample(fleet.front()).velocity[0] > 10.f);
+    std::vector<uint64_t> ticks;
+    for (auto *car : fleet) ticks.push_back(sample(car).physics.ticks);
+    double elapsed_ms = 0;
+    for (unsigned tick = 0; tick < updates; ++tick) {
+      // Informational solver timing only: exclude setup and all comparisons.
+      const auto begin = std::chrono::steady_clock::now();
+      f.advance();
+      elapsed_ms += std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - begin).count();
+      for (unsigned i = 0; i < count; ++i) {
+        const auto actual = sample(fleet[i]); // Requires active, finite motion.
+        SLRR_REQUIRE(gameref_get(fleet[i])->live_id == ids[i]);
+        SLRR_REQUIRE(actual.physics.ticks == ticks[i] + 2);
+        ticks[i] = actual.physics.ticks;
+        for (unsigned corner = 0; corner < 4; ++corner) {
+          SLRR_REQUIRE(std::isfinite(actual.physics.length[corner]) &&
+                       std::isfinite(actual.physics.force[corner]));
+          for (double value : actual.physics.wheel_center[corner])
+            SLRR_REQUIRE(std::isfinite(value));
+        }
+        if (i) continue;
+        if (count == 1) {
+          reference.push_back(actual);
+        } else {
+          const auto &expected = reference[tick];
+          // No contacts exist between fleet members. Changing the number or
+          // allocation/order of unrelated cars must not change this solver.
+          SLRR_REQUIRE(actual.matrix == expected.matrix);
+          SLRR_REQUIRE(actual.velocity == expected.velocity);
+          SLRR_REQUIRE(actual.angular == expected.angular);
+          SLRR_REQUIRE(actual.physics.ticks == expected.physics.ticks &&
+                       actual.physics.backlog == expected.physics.backlog);
+          SLRR_REQUIRE(actual.physics.mass == expected.physics.mass &&
+                       actual.physics.speed_kph == expected.physics.speed_kph);
+          SLRR_REQUIRE(actual.physics.length == expected.physics.length &&
+                       actual.physics.force == expected.physics.force &&
+                       actual.physics.contact == expected.physics.contact &&
+                       actual.physics.wheel_center == expected.physics.wheel_center);
+        }
+      }
+    }
+    if (count == 1) reference_ms = elapsed_ms;
+    else fleet_ms = elapsed_ms;
+    std::printf("FLEET cars=%u host-updates=%u total-ms=%.3f ms/update=%.6f\n",
+                count, updates, elapsed_ms, elapsed_ms / updates);
+  }
+  SLRR_REQUIRE(reference.size() == updates);
+  std::printf("FLEET informational one-car-ms=%.3f hundred-car-ms=%.3f\n",
+              reference_ms, fleet_ms);
+  std::puts("PASS all 100 separated native cars remain active and finite at "
+            "120 Hz; primary motion exactly matches its one-car reference");
+}
+
+void ordered_zero_impulse_chain_preserves_swept_corrections() {
+  ContactFixture f(true);
+  auto *a = f.car(kWagon), *b = f.car(kWagon), *c = f.car(kWagon);
+  const std::array<Object *, 3> cars{a, b, c};
+  std::array<int32_t, 3> ids;
+  for (unsigned i = 0; i < cars.size(); ++i)
+    ids[i] = gameref_make_live(cars[i]);
+  SLRR_REQUIRE(ids[0] < ids[1] && ids[1] < ids[2]);
+  const auto cfg = load_part_config(f.packs, f.car_type(kWagon));
+  const auto mesh = scene_instances_geometry(cfg.render);
+  SLRR_REQUIRE(mesh && mesh->info.ok);
+  const double width = (double(mesh->info.bbox_max[0]) -
+                        double(mesh->info.bbox_min[0])) * mesh->position_scale;
+  SLRR_REQUIRE(width > 1 && width < 4);
+  const double spacing = .25 * mesh->position_scale * std::min({
+      double(mesh->info.bbox_max[0]) - double(mesh->info.bbox_min[0]),
+      double(mesh->info.bbox_max[1]) - double(mesh->info.bbox_min[1]),
+      double(mesh->info.bbox_max[2]) - double(mesh->info.bbox_min[2])});
+  SLRR_REQUIRE(spacing > 0);
+  // Current orientation is identity. All three bodies fall together in air,
+  // so there is no road force or relative approach velocity. Only positional
+  // correction can transfer this initial a/b overlap into the clear b/c gap.
+  f.place(a, 0, 0, 0, 20);
+  f.place(b, static_cast<float>(width - .4), 0, 0, 20);
+  f.place(c, static_cast<float>(2 * width - .4 + .02), 0, 0, 20);
+  std::array<Sample, 3> before;
+  std::array<double, 3> expected;
+  for (unsigned i = 0; i < cars.size(); ++i) {
+    before[i] = sample(cars[i]);
+    expected[i] = before[i].position[0];
+    SLRR_REQUIRE(before[i].velocity[0] == 0.f);
+  }
+  const double gap = expected[2] - expected[1] - width;
+  SLRR_REQUIRE(gap > .01 && gap < .03);
+  // Independent scalar oracle for identical, axis-aligned, equal-mass cars:
+  // live-id order is (a,b), (a,c), (b,c), once on each 120 Hz substep. The
+  // .2 m cap moves b by .1 m in the FIRST pair, across the initial b/c gap.
+  // This pins the correction-only ordered response, including its sweep. A
+  // loose broadphase may already admit b/c, so this is not a cull-count test.
+  for (unsigned substep = 0; substep < 2; ++substep) {
+    const auto previous = expected;
+    for (unsigned i = 0; i < cars.size(); ++i)
+      for (unsigned j = i + 1; j < cars.size(); ++j) {
+        if (previous[j] - previous[i] > width) {
+          // Earlier pair correction counts as relative travel against the
+          // unchanged substep snapshots. A newly reached b/c pair therefore
+          // uses the bounded sweep, not the starts-overlapping discrete path.
+          const double travel_i = expected[i] - previous[i];
+          const double travel_j = expected[j] - previous[j];
+          const double relative = travel_i - travel_j;
+          const auto overlap_at = [&](double fraction) {
+            return (expected[j] - travel_j * (1 - fraction)) -
+                       (expected[i] - travel_i * (1 - fraction)) <= width;
+          };
+          const unsigned samples = static_cast<unsigned>(std::clamp(
+              std::ceil(std::fabs(relative) / spacing), 1., 64.));
+          bool reached = false;
+          double clear = 0;
+          for (unsigned step = 1; step <= samples; ++step) {
+            double contact = double(step) / samples;
+            if (!overlap_at(contact)) {
+              clear = contact;
+              continue;
+            }
+            for (unsigned bisect = 0; bisect < 12; ++bisect) {
+              const double middle = (clear + contact) * .5;
+              if (overlap_at(middle)) contact = middle;
+              else clear = middle;
+            }
+            expected[i] -= relative * ((1 - contact) * .5);
+            expected[j] += relative * ((1 - contact) * .5);
+            reached = true;
+            break;
+          }
+          if (!reached) continue;
+        }
+        const double penetration = width - (expected[j] - expected[i]);
+        const double correction =
+            std::min(.2, std::max(0., penetration - .002) * .6);
+        expected[i] -= correction * .5;
+        expected[j] += correction * .5;
+      }
+  }
+  SLRR_REQUIRE(expected[2] - before[2].position[0] > .04);
+  f.advance();
+  for (unsigned i = 0; i < cars.size(); ++i) {
+    const auto after = sample(cars[i]);
+    SLRR_REQUIRE(gameref_get(cars[i])->live_id == ids[i]);
+    SLRR_REQUIRE(after.physics.ticks == before[i].physics.ticks + 2);
+    // Published floats at 20 km have an approximately 2 mm ULP. Delaying
+    // b/c until the next substep changes the ordered result by about 2 cm.
+    SLRR_REQUIRE(std::fabs(after.position[0] - expected[i]) < .0025);
+    SLRR_REQUIRE(std::fabs(after.velocity[0]) < 1e-6f &&
+                 std::fabs(after.velocity[2]) < 1e-6f);
+    SLRR_REQUIRE(std::fabs(after.angular[0]) < 1e-6f &&
+                 std::fabs(after.angular[1]) < 1e-6f &&
+                 std::fabs(after.angular[2]) < 1e-6f);
+    std::printf("CHAIN car=%u dx=%.6f expected-dx=%.6f vx=%.9f\n", i,
+                after.position[0] - before[i].position[0],
+                expected[i] - before[i].position[0], after.velocity[0]);
+  }
+  std::puts("PASS zero-impulse a/b correction reaches initially separated b/c "
+            "in the same substep, preserving ordered three-car response");
+}
+
 void native_baiern_wagon_head_on_in_generic_map() {
   ContactFixture f(true);
   auto *a = f.car(kBaiern), *b = f.car(kWagon);
@@ -967,6 +1146,8 @@ void controller_handoff_deletion_and_zero_time_pause_keep_shared_ownership() {
 
 int main() {
   const standalone::Test tests[] = {
+      separated_native_fleet_preserves_every_car_and_reference_motion,
+      ordered_zero_impulse_chain_preserves_swept_corrections,
       native_baiern_wagon_head_on_in_generic_map,
       native_mechanical_high_speed_head_on_does_not_tunnel,
       mechanical_baiern_rear_end_and_offset_side_wake_parked_cars,

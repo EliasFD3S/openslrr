@@ -4246,6 +4246,58 @@ bool contact_live(const ContactVehicle& vehicle) {
          record(vehicle.chassis) == vehicle.rec && vehicle.rec->physics_ready &&
          !vehicle.rec->physics_fault_reported && contact_visible(vehicle.chassis);
 }
+// A deliberately loose bound for the kernel's fixed-current-orientation sweep.
+// Build it once per participant, not four validated OBBs for every distant pair.
+struct ContactSweepBounds {
+  std::array<double, 3> lower{}, upper{};
+  bool valid = false;
+};
+ContactSweepBounds contact_sweep_bounds(const ContactVehicle& vehicle) {
+  ContactSweepBounds bounds;
+  const auto& body = vehicle.rec->dynamics.body;
+  try {
+    physics::validate_vehicle_contact_body(body);
+    physics::validate_vehicle_contact_body(vehicle.previous);
+  } catch (const std::exception&) {
+    // Keep malformed input on the original pair/fault-isolation path, in order.
+    return bounds;
+  }
+  const auto half = body.maximum * .5 - body.minimum * .5;
+  const double radius = 2 * std::hypot(half.x, half.y, half.z);
+  const auto offset = body.orientation.rotate(
+      body.minimum * .5 + body.maximum * .5 - body.center);
+  const auto travel = body.position - vehicle.previous.position;
+  const auto end = body.position + offset;
+  const auto start = end - travel;  // same arithmetic as the kernel's first sample
+  if (!start.finite() || !end.finite() || !offset.finite() || !travel.finite() ||
+      !(radius > 0) || !std::isfinite(radius)) return bounds;
+  const auto magnitude = [](physics::Vec3 v) {
+    return std::max({std::abs(v.x), std::abs(v.y), std::abs(v.z)});
+  };
+  const double scale = std::max({1., radius, magnitude(body.position),
+      magnitude(vehicle.previous.position), magnitude(offset), magnitude(travel),
+      magnitude(start), magnitude(end)});
+  // Avoid bypassing the kernel's pair-arithmetic failures for extreme inputs.
+  if (scale > std::sqrt(std::numeric_limits<double>::max()) / 64) return bounds;
+  // The full diagonal is twice the enclosing half-diagonal: ample slack for
+  // accepted near-unit quaternions and SAT tolerance, including thin boxes.
+  // Include untranslated terms too, covering cancellation in COM-offset sweeps.
+  const double padding = scale * 1e-8;
+  const double from[] = {start.x, start.y, start.z};
+  const double to[] = {end.x, end.y, end.z};
+  for (size_t axis = 0; axis < 3; ++axis) {
+    bounds.lower[axis] = std::min(from[axis], to[axis]) - radius - padding;
+    bounds.upper[axis] = std::max(from[axis], to[axis]) + radius + padding;
+  }
+  bounds.valid = true;
+  return bounds;
+}
+bool contact_sweeps_overlap(const ContactSweepBounds& a, const ContactSweepBounds& b) {
+  if (!a.valid || !b.valid) return true;
+  for (size_t axis = 0; axis < 3; ++axis)
+    if (a.upper[axis] < b.lower[axis] || b.upper[axis] < a.lower[axis]) return false;
+  return true;
+}
 void suspend_contact_vehicle(const ContactVehicle& vehicle, const char* reason) {
   auto& rec = *vehicle.rec;
   if (!rec.physics_fault_reported)
@@ -4903,13 +4955,28 @@ void advance_chassis_tick() {
   std::sort(vehicles.begin(), vehicles.end(), [](const auto& a, const auto& b) {
     return gameref_get(a.chassis)->live_id < gameref_get(b.chassis)->live_id;
   });
+  std::vector<ContactSweepBounds> sweeps;
+  std::vector<uint8_t> eligible;
+  sweeps.reserve(vehicles.size());
+  eligible.reserve(vehicles.size());
+  for (const auto& vehicle : vehicles) {
+    eligible.push_back(contact_live(vehicle));
+    sweeps.push_back(eligible.back() ? contact_sweep_bounds(vehicle) : ContactSweepBounds{});
+  }
+  // No VM callbacks or registry/parent changes occur in this pair pass. Cache
+  // identity/visibility only here; a failed response can still suspend a body.
+  const auto pair_live = [&](size_t i) {
+    return eligible[i] && vehicles[i].rec->physics_ready &&
+           !vehicles[i].rec->physics_fault_reported;
+  };
   for (size_t i = 0; i < vehicles.size(); ++i) {
     auto& a = vehicles[i];
-    if (!contact_live(a)) continue;
+    if (!pair_live(i)) continue;
     for (size_t j = i + 1; j < vehicles.size(); ++j) {
-      if (!contact_live(a)) break;
+      if (!pair_live(i)) break;
       auto& b = vehicles[j];
-      if (!contact_live(b) || (!a.rec->physics_released && !b.rec->physics_released)) continue;
+      if (!pair_live(j) || (!a.rec->physics_released && !b.rec->physics_released)) continue;
+      if (!contact_sweeps_overlap(sweeps[i], sweeps[j])) continue;
       auto& body_a = a.rec->dynamics.body;
       auto& body_b = b.rec->dynamics.body;
       const auto before_a = body_a, before_b = body_b;
@@ -4953,6 +5020,10 @@ void advance_chassis_tick() {
             body_pair_impact(before_b, body_b, hit->point, -hit->normal,
                              hit->normal_impulse, hit->speed), b.chassis == controlled, released);
       }
+      // Even a zero-impulse overlap can correct either position into a later
+      // car. Refresh both bounds without reordering or preselecting the pairs.
+      sweeps[i] = contact_sweep_bounds(a);
+      sweeps[j] = contact_sweep_bounds(b);
     }
   }
   advance_loose_panels(vehicles, released);

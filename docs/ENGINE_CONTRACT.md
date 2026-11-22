@@ -1717,7 +1717,11 @@ contact without a driver. Movable map props and free bodies query all active
 physical cars rather than only the controlled one. Pair impacts carry actual
 normal impulse and pre-hit motion for mount damage/detachment; legacy wall
 callers retain their default reconstruction. Bounded translational sweeping is
-not exact rotational CCD. See [the #197 audit](TRAFFIC_RACE_AUDIT.md).
+not exact rotational CCD. Conservative current-orientation swept bounds reject
+separated chassis pairs before the OBB kernel without changing live-id order.
+Both bounds refresh after every contact correction, including zero-impulse hits;
+invalid or extreme bounds retain the original resolver and fault-isolation path.
+See [the #197 audit](TRAFFIC_RACE_AUDIT.md).
 Java model weights, including weight-one registered rivals, determine
 the traffic/adversary share under the configured host population cap. Streaming visibility must exclude an entire
 car subtree from rendering, physics and triggers without destroying its Java
