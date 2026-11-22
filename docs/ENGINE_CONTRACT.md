@@ -942,6 +942,14 @@ Main responsibilities:
 | `scene_sun.cpp` | Light/time state used by the scene |
 | `shaders/` | The actual material, sky, and sampling calculations |
 
+### Repeated vehicles
+
+The main world view instances opaque sections of repeated vehicle meshes with
+matching material overrides and lighting. Transforms and create-string colours
+remain per instance. Blended sections keep their original per-object order;
+previews, shadows and reflection capture retain their existing paths. An unavailable
+instanced program or transient buffer space falls back to individual draws.
+
 ### Reflections
 
 The branch has double-buffered dynamic cubemaps, a capture framebuffer, and

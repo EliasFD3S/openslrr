@@ -1870,6 +1870,271 @@ struct SceneShadowRegression {
     gameref_remove(&shell);gameref_remove(&world);scene_instances_set_resources(nullptr);
     std::puts("PASS per-view light uniforms: one upload per Sequential view and frame, same image");
   }
+  // #324: repeated traffic meshes keep vehicle material semantics, per-car
+  // colour/pose and transparent ordering while reducing opaque submissions.
+  static void vehicle_instancing(LibBgfxBackend& b) {
+    Fixture f;scene_instances_set_resources(&f.packs);
+    Object world;gameref_upsert(&world)->flags=kWorldTreeRoot;
+    scene_instances_select(&world,nullptr,false,SceneEnvironment::Exterior);
+    const auto saved=host_enhanced_graphics();
+    auto saved_parts=std::move(b.parts_);auto saved_batches=std::move(b.prop_batches_);
+    b.parts_.clear();b.prop_batches_.clear();b.night_batches_.clear();b.instances_.clear();
+    host_enhanced_graphics().dynamic_lighting=true;
+    host_enhanced_graphics().dynamic_reflections=false;
+    b.garage_=false;b.outdoor_lighting_=true;b.fog_enabled_=false;
+    b.interior_sun_active_=b.static_shadow_active_=b.car_depth_active_=false;
+    b.fixture_shadow_active_=b.ao_active_=false;b.reflection_scene_=false;
+    b.point_light_.reset();b.local_light_={};b.fixture_lights_.clear();b.scenery_lamps_.clear();
+    b.lamp_shadow_count_=b.car_lamp_count_=0;b.upload_light_data();
+    SLRR_REQUIRE(bgfx::isValid(b.vehicle_inst_program_));
+
+    // Five opaque strips: textured Tex, ColorMixTex, untextured chrome,
+    // textured ColorMixTex+spheremap and untextured bare material. Glass
+    // extends above the body so overlapping cars test alpha order without
+    // opaque depth hiding the overlap. Two-sided cards avoid winding hiding
+    // an instancing failure behind an empty reference image.
+    auto mesh=std::make_shared<ScxGeometry>();
+    mesh->info.ok=true;mesh->info.version=4;mesh->position_scale=1;
+    mesh->textures={"",""};
+    const auto quad=[&](float x0,float y0,float x1,float y1,float z,ScxGroup group) {
+      const auto first=uint32_t(mesh->positions.size()/3);
+      const float p[]={x0,y0,z,x1,y0,z,x0,y1,z,x1,y1,z};
+      mesh->positions.insert(mesh->positions.end(),p,p+12);
+      for(int i=0;i<4;++i) mesh->normals.insert(mesh->normals.end(),{0.f,0.f,1.f});
+      mesh->uvs.insert(mesh->uvs.end(),{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f});
+      group.index_start=uint32_t(mesh->indices.size());group.index_count=6;
+      mesh->indices.insert(mesh->indices.end(),{first,first+2,first+1,first+1,first+2,first+3});
+      group.material_flags|=0x02000000u;mesh->groups.push_back(group);
+    };
+    const uint32_t kinds[]={0x00,0x03,0x33,0x0b,0x00};
+    for(int i=0;i<5;++i) {
+      ScxGroup g;g.material_type=kinds[i];
+      g.texture_index=i==2||i==4?0xffff:0;
+      if(i==3) {g.mix_index=1;g.reflection_index=1;}
+      g.diffuse[0]=.55f;g.diffuse[1]=.8f;g.diffuse[2]=.65f;
+      g.specular[0]=.4f;g.specular[1]=.3f;g.specular[2]=.2f;g.shininess=12.f;
+      quad(-1.f+.4f*i,0.f,-.6f+.4f*i,1.f,0.f,g);
+    }
+    ScxGroup glass;glass.material_type=0x33;glass.material_flags=0x40000000u;
+    glass.diffuse[3]=.75f;glass.reflection_strength=.15f;
+    quad(-.8f,.6f,.8f,1.5f,.05f,glass);
+    b.cache_scene_mesh(mesh,nullptr,false);
+    auto& resident=b.instance_meshes_.at(mesh.get());
+    const uint8_t texels[][16]={
+        {220,180,120,255,100,210,240,255,100,210,240,255,220,180,120,255},
+        {180,90,210,128,90,210,120,192,90,210,120,192,180,90,210,128}};
+    for(int i=0;i<2;++i) {
+      resident.tex[i]=bgfx::createTexture2D(2,2,false,1,bgfx::TextureFormat::RGBA8,0,
+                                          bgfx::copy(texels[i],sizeof(texels[i])));
+      SLRR_REQUIRE(bgfx::isValid(resident.tex[i]));
+    }
+    PaintImage paint;paint.width=paint.height=2;paint.rgba.assign(16,255);
+    for(size_t i=0;i<paint.rgba.size();i+=4) {paint.rgba[i]=80;paint.rgba[i+1]=160;paint.rgba[i+2]=230;}
+    const uint32_t paint_a=paint_texture_create(paint);
+    for(size_t i=0;i<paint.rgba.size();i+=4) {paint.rgba[i]=230;paint.rgba[i+1]=100;paint.rgba[i+2]=60;}
+    const uint32_t paint_b=paint_texture_create(paint);
+    SLRR_REQUIRE(paint_a && paint_b);
+    const auto path_a=paint_texture_path(paint_a),path_b=paint_texture_path(paint_b);
+    const uint32_t colors[]={0xf08040,0x50c0f0,0x90e060,0xc060e0,0xffffff};
+    for(int i=0;i<100;++i) {
+      SceneInstance car;car.geometry=mesh;car.vehicle_material=true;car.color=colors[i%5];
+      bx::mtxIdentity(car.transform.data());
+      const float angle=.04f*float(i%5-2),yaw=.1f*float(i%7-3),scale=.85f+.04f*float(i%4);
+      car.transform[0]=scale*std::cos(yaw)*std::cos(angle);
+      car.transform[1]=scale*std::cos(yaw)*std::sin(angle);car.transform[2]=-scale*std::sin(yaw);
+      car.transform[4]=-std::sin(angle);car.transform[5]=std::cos(angle);
+      car.transform[8]=std::sin(yaw)*std::cos(angle);car.transform[9]=std::sin(yaw)*std::sin(angle);
+      car.transform[10]=std::cos(yaw);
+      car.transform[12]=2.35f*float(i%10)-10.575f;
+      car.transform[13]=1.85f*float(i/10)-9.2f;car.transform[14]=.12f*float(i%3);
+      car.lighting.set=car.lighting.has_direction=true;car.lighting.direction[2]=1;
+      for(int c=0;c<3;++c) {car.lighting.ambient[c]=.3f;car.lighting.diffuse[c]=.5f;car.lighting.specular[c]=.3f;}
+      switch(i%6) {
+      case 1:car.paint_slot=0;car.paint_texture=path_a;break;
+      case 2:car.paint_slot=0;car.paint_texture=path_b;break;
+      case 3:car.texture_replacements={{0,path_a}};break;
+      case 4:
+        // Change one lighting field at a time: grouping on ambient alone
+        // must not accidentally cover a missing specular/direction key.
+        switch((i/6)%5) {
+        case 0:car.lighting.ambient[0]=.05f;break;
+        case 1:car.lighting.diffuse[1]=.1f;break;
+        case 2:car.lighting.specular[2]=.8f;break;
+        case 3:car.lighting.direction[0]=.6f;break;
+        default:car.lighting.has_direction=false;break;
+        }
+        break;
+      case 5:car.light_flags=4;break;
+      default:break;
+      }
+      b.instances_.push_back(car);
+    }
+    // Nonadjacent material cohorts overlap here. Reversing these last two
+    // cars must visibly alter their glass-only silhouettes; an all-opaque or
+    // invisible fixture would otherwise pass an alpha-order comparison.
+    for(int i=0;i<2;++i) {
+      auto car=b.instances_[size_t(i)];bx::mtxIdentity(car.transform.data());
+      car.transform[13]=-1.f;car.transform[14]=float(i)*.2f;
+      car.color=i?0x3080f0:0xf05030;b.instances_.push_back(car);
+    }
+    constexpr uint16_t width=640,height=480,view_id=5;
+    const auto color=bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_RT);
+    const auto depth=bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::D32F,BGFX_TEXTURE_RT);
+    const bgfx::TextureHandle attachments[]={color,depth};
+    const auto fb=bgfx::createFrameBuffer(2,attachments,true);
+    const auto readback=bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::RGBA8,
+                                            BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK);
+    float view[16],projection[16],render[16];
+    bx::mtxLookAt(view,{0,0,-26},{0,0,0});
+    bx::mtxProj(projection,55.f,float(width)/height,.05f,100.f,bgfx::getCaps()->homogeneousDepth);
+    std::copy(projection,projection+16,render);
+    for(int i:{2,6,10,14}) render[i]=bgfx::getCaps()->homogeneousDepth?-render[i]:render[i+1]-render[i];
+    b.set_view_sequential(view_id);
+    struct Capture {std::vector<uint8_t> pixels;uint32_t draws=0;};
+    const auto capture=[&](bool world_draw,int leave_instances=-1) {
+      ++b.frames_;b.view_draws_.fill(0);
+      bgfx::setViewFrameBuffer(view_id,fb);bgfx::setViewRect(view_id,0,0,width,height);
+      bgfx::setViewClear(view_id,BGFX_CLEAR_COLOR|BGFX_CLEAR_DEPTH,uint32_t(0xff),0.f);
+      bgfx::setViewTransform(view_id,view,render);
+      if(leave_instances>=0) {
+        constexpr uint16_t stride=80; // four transform rows plus raw colour
+        const uint32_t available=bgfx::getAvailInstanceDataBuffer(1u<<20,stride);
+        SLRR_REQUIRE(available>=uint32_t(leave_instances));
+        if(available>uint32_t(leave_instances)) {
+          bgfx::InstanceDataBuffer reserved;
+          bgfx::allocInstanceDataBuffer(&reserved,available-uint32_t(leave_instances),stride);
+        }
+        SLRR_REQUIRE(bgfx::getAvailInstanceDataBuffer(1u<<20,stride)==uint32_t(leave_instances));
+      }
+      if(world_draw) b.draw_dynamic_world(view_id);
+      else for(int pass=0;pass<2;++pass) for(const auto& car:b.instances_)
+        b.draw_instance(view_id,car,car.transform.data(),false,pass);
+      Capture out;out.draws=b.view_draws_[view_id];out.pixels.resize(width*height*4);
+      bgfx::TextureRegion dst,src;dst.init(readback);src.init(color);bgfx::blit(100,dst,src);bgfx::frame();
+      const auto ready=bgfx::read(dst,out.pixels.data());
+      for(int i=0;i<16;++i) if(bgfx::frame()>=ready) return out;
+      throw std::runtime_error("vehicle instancing readback timeout");
+    };
+    const auto compare=[&](const Capture& reference,const Capture& actual,unsigned min_visible=10000) {
+      unsigned visible=0,differ=0;int worst=0;
+      for(size_t i=0;i<reference.pixels.size();i+=4) {
+        visible+=std::max({reference.pixels[i],reference.pixels[i+1],reference.pixels[i+2]})>30;
+        int delta=0;for(int c=0;c<3;++c)
+          delta=std::max(delta,std::abs(int(reference.pixels[i+c])-int(actual.pixels[i+c])));
+        worst=std::max(worst,delta);differ+=delta>4;
+      }
+      std::printf("VEHICLE INSTANCING %zu cars: draws %u -> %u, visible %u, differ>4 %u, max %d\n",
+                  b.instances_.size(),reference.draws,actual.draws,visible,differ,worst);
+      SLRR_REQUIRE(visible>min_visible && differ<=unsigned(width)*height/500);
+    };
+    const auto reference=capture(false),instanced=capture(true);
+    SLRR_REQUIRE(reference.draws==6*b.instances_.size());
+    SLRR_REQUIRE(instanced.draws<reference.draws/2);
+    compare(reference,instanced);
+    // Exercise both allocation fallback branches on a fresh frame. Reserving
+    // every 80-byte record must preserve all individual draws; leaving three
+    // combines exactly three cars' five opaque groups (15 -> 5 submissions),
+    // then draws the unallocated remainder individually without duplicates.
+    const auto exhausted=capture(true,0);
+    SLRR_REQUIRE(exhausted.draws==reference.draws && exhausted.pixels==reference.pixels);
+    const auto partial=capture(true,3);
+    SLRR_REQUIRE(partial.draws==reference.draws-10);compare(reference,partial);
+    // Submission is not the whole cost: a shader/uniform change can improve
+    // host time while regressing bgfx's D3D11 render thread. No readbacks or
+    // image comparisons in these frames; discard 30 frames for delayed stats.
+    struct Timing {double submit=0,render=0,gpu=0,draws=0;};
+    bgfx::setDebug(BGFX_DEBUG_PROFILER);
+    const auto measure=[&](bool world_draw) {
+      Timing out;constexpr int warmup=30,samples=120;
+      for(int frame=0;frame<warmup+samples;++frame) {
+        ++b.frames_;b.view_draws_.fill(0);
+        bgfx::setViewFrameBuffer(view_id,fb);bgfx::setViewRect(view_id,0,0,width,height);
+        bgfx::setViewClear(view_id,BGFX_CLEAR_COLOR|BGFX_CLEAR_DEPTH,uint32_t(0xff),0.f);
+        bgfx::setViewTransform(view_id,view,render);
+        const auto start=std::chrono::steady_clock::now();
+        if(world_draw) b.draw_dynamic_world(view_id);
+        else for(int pass=0;pass<2;++pass) for(const auto& car:b.instances_)
+          b.draw_instance(view_id,car,car.transform.data(),false,pass);
+        const double submit=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
+        bgfx::frame();const auto* stats=bgfx::getStats();
+        if(frame<warmup) continue;
+        out.submit+=submit;out.draws+=b.view_draws_[view_id];
+        if(stats->cpuTimerFreq>0)
+          out.render+=double(stats->cpuTimeEnd-stats->cpuTimeBegin)*1000.0/double(stats->cpuTimerFreq);
+        if(stats->gpuTimerFreq>0)
+          out.gpu+=double(stats->gpuTimeEnd-stats->gpuTimeBegin)*1000.0/double(stats->gpuTimerFreq);
+      }
+      out.submit/=samples;out.render/=samples;out.gpu/=samples;out.draws/=samples;
+      return out;
+    };
+    const auto direct_time=measure(false),instanced_time=measure(true);
+    std::printf("VEHICLE INSTANCING 102 cars, 30 warmup + 120 samples: draws %.0f -> %.0f, "
+                "host submission %.3f -> %.3f ms, render thread %.3f -> %.3f ms, GPU %.3f -> %.3f ms\n",
+                direct_time.draws,instanced_time.draws,direct_time.submit,instanced_time.submit,
+                direct_time.render,instanced_time.render,direct_time.gpu,instanced_time.gpu);
+    bgfx::setDebug(BGFX_DEBUG_NONE);
+    const auto program=b.vehicle_inst_program_;b.vehicle_inst_program_=BGFX_INVALID_HANDLE;
+    const auto fallback=capture(true);b.vehicle_inst_program_=program;
+    SLRR_REQUIRE(fallback.draws==reference.draws && fallback.pixels==reference.pixels);
+    std::swap(b.instances_[100],b.instances_[101]);
+    const auto reversed=capture(false);
+    unsigned alpha_changed=0;
+    for(size_t i=0;i<reversed.pixels.size();i+=4) {
+      int delta=0;for(int c=0;c<3;++c)
+        delta=std::max(delta,std::abs(int(reference.pixels[i+c])-int(reversed.pixels[i+c])));
+      alpha_changed+=delta>4;
+    }
+    std::printf("VEHICLE INSTANCING reversed overlapping glass changes %u pixels\n",alpha_changed);
+    SLRR_REQUIRE(alpha_changed>10);compare(reversed,capture(true));
+    // Reflection fallback uses world positions/normals too, not only tint.
+    host_enhanced_graphics().dynamic_reflections=true;b.reflection_scene_=true;
+    const bool saved_reflection_ready=b.reflection_ready_;b.reflection_ready_=false;
+    compare(capture(false),capture(true));
+    b.reflection_ready_=saved_reflection_ready;b.reflection_scene_=false;
+    host_enhanced_graphics().dynamic_reflections=false;
+    // A pass-0 fractional-alpha car is also an ordering barrier between
+    // eligible cars of the SAME mesh. A/C may not be gathered across B:
+    // A writes far depth, B blends without writing depth, then C overwrites
+    // that blend. Gathering A/C before B would incorrectly leave B on top.
+    auto barrier_mesh=std::make_shared<ScxGeometry>(*mesh);
+    barrier_mesh->groups.resize(1);barrier_mesh->groups[0].texture_index=0xffff;
+    barrier_mesh->groups[0].diffuse[3]=.5f;b.cache_scene_mesh(barrier_mesh,nullptr,false);
+    auto traffic=std::move(b.instances_);b.instances_.clear();
+    SceneInstance a=traffic[0];bx::mtxIdentity(a.transform.data());
+    a.transform[14]=.2f;a.color=0xf04040;
+    SceneInstance barrier=a;barrier.geometry=barrier_mesh;barrier.transform[14]=0.f;barrier.color=0x40f040;
+    SceneInstance c=a;c.transform[14]=.1f;c.color=0x4040f0;
+    b.instances_={a,barrier,c};
+    const auto ordered=capture(false),batched_ordered=capture(true);
+    SLRR_REQUIRE(ordered.draws==13 && batched_ordered.draws==ordered.draws);
+    compare(ordered,batched_ordered,100);
+    SLRR_REQUIRE(ordered.pixels==batched_ordered.pixels);
+    b.instances_={a,c,barrier};const auto incorrectly_reordered=capture(false);
+    unsigned barrier_changed=0;
+    for(size_t i=0;i<ordered.pixels.size();i+=4) {
+      int delta=0;for(int channel=0;channel<3;++channel)
+        delta=std::max(delta,std::abs(int(ordered.pixels[i+channel])-int(incorrectly_reordered.pixels[i+channel])));
+      barrier_changed+=delta>4;
+    }
+    std::printf("VEHICLE INSTANCING crossing blend barrier changes %u pixels\n",barrier_changed);
+    SLRR_REQUIRE(barrier_changed>10);
+    b.instances_=std::move(traffic);
+    b.destroy_part(b.instance_meshes_.at(barrier_mesh.get()));b.instance_meshes_.erase(barrier_mesh.get());
+    // A nominally opaque group with fractional material alpha blends in
+    // pass 0. Keep that entire mesh on the ordered individual fallback.
+    mesh->groups[0].diffuse[3]=.5f;++mesh->revision;b.cache_scene_mesh(mesh,nullptr,false);
+    const auto blended_reference=capture(false),blended_world=capture(true);
+    SLRR_REQUIRE(blended_world.draws==blended_reference.draws &&
+                 blended_world.pixels==blended_reference.pixels);
+    bgfx::setViewMode(view_id,bgfx::ViewMode::Default);b.sequential_views_.reset(view_id);
+    bgfx::frame();bgfx::destroy(fb);bgfx::destroy(readback);
+    b.instances_.clear();b.destroy_part(resident);b.instance_meshes_.erase(mesh.get());
+    paint_texture_release(paint_a);paint_texture_release(paint_b);
+    host_enhanced_graphics()=saved;b.outdoor_lighting_=false;
+    b.parts_=std::move(saved_parts);b.prop_batches_=std::move(saved_batches);
+    gameref_remove(&world);scene_instances_set_resources(nullptr);
+    std::puts("PASS vehicle instancing: material/lighting cohorts, per-car pose/colour, glass order and fallback");
+  }
   // #262: main-thread cost of a real city frame. Valo City at night, street
   // view: sync_instances (collection + residency) and world submission
   // (draw_dynamic_world into a Sequential view), plus the render thread, and
@@ -4093,6 +4358,7 @@ int main() {
     SceneShadowRegression::car_lamp_shadows(backend);
     SceneShadowRegression::render_debug_overrides(backend);
     SceneShadowRegression::per_view_light_uniforms(backend);
+    SceneShadowRegression::vehicle_instancing(backend);
     SceneShadowRegression::city_submission(backend,640,360);
     SceneShadowRegression::city_submission(backend,2560,1440);
     SceneShadowRegression::desert_capture(backend);

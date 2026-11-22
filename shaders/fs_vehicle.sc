@@ -1,4 +1,4 @@
-$input v_normal, v_texcoord0, v_texcoord1, v_texcoord2, v_viewPos, v_worldPos, v_staticShadow
+$input v_normal, v_texcoord0, v_texcoord1, v_texcoord2, v_viewPos, v_worldPos, v_staticShadow, v_tint
 #include <bgfx_shader.sh>
 SAMPLER2D(s_texColor, 0);
 SAMPLER2D(s_vehicleMix, 1);
@@ -41,7 +41,7 @@ void main()
     vec2 baseUv = channelUv(u_vehicleChannels.x, v_texcoord0, v_texcoord1, v_texcoord2)*u_vehicleBaseUv.xy+u_vehicleBaseUv.zw;
     vec4 base = texture2D(s_texColor, baseUv);
     vec4 detail = texture2D(s_vehicleMix, channelUv(u_vehicleChannels.y, v_texcoord0, v_texcoord1, v_texcoord2)*u_vehicleMixUv.xy+u_vehicleMixUv.zw);
-    vec3 albedo = mix(base.rgb, detail.rgb, detail.a*u_vehicleLayers.x)*u_vehicleDiffuse.rgb;
+    vec3 albedo = mix(base.rgb, detail.rgb, detail.a*u_vehicleLayers.x)*v_tint.rgb;
     // Toward the scene light. Rendered vertices flip Z, so the CPU already
     // flipped it. Without a light resource, the stand-in is (3, 5, 4).
     vec3 lightDir = normalize(mul(u_view, vec4(normalize(
@@ -133,7 +133,7 @@ void main()
     // ColorMixTex. Texture alpha reveals colour 0. A transparent group
     // drops texels at or under alpha ref 4, so a grille's holes stay open.
     if (u_vehicleLayers.w > 3.5) {
-        vec3 mixed = mix(u_vehicleDiffuse.rgb, base.rgb, base.a);
+        vec3 mixed = mix(v_tint.rgb, base.rgb, base.a);
         float alpha = base.a*u_vehicleDiffuse.a;
         if (u_lightmap.w > 0.5 && alpha < 4.0/255.0) discard;
         vec3 pane = mixed*illum*bake;
@@ -151,7 +151,7 @@ void main()
         float faceWeight = u_dynamicReflection.y > 0.5 ? 0.5 : 1.0;
         float alpha = u_dynamicReflection.y > 0.5
             ? 1.0-sqrt(max(1.0-u_vehicleDiffuse.a, 0.0)) : u_vehicleDiffuse.a;
-        vec3 lit = u_vehicleDiffuse.rgb*illum;
+        vec3 lit = v_tint.rgb*illum;
         // A headlight cover names an empty spheremap and borrows the sky.
         // Cabin glass keeps its strength, plus a graze, so it is not a hole.
         float envK = u_vehicleChannels.w > 1.5 ? 0.4 : (1.0+fres*0.5);
@@ -161,7 +161,7 @@ void main()
     } else if (u_vehicleLayers.w > 1.5) {
         // Stock chrome: lit colour + env*strength + specular. The 0.5 is the
         // garage light's specular when no scene light has been read yet.
-        vec3 lit = u_vehicleDiffuse.rgb*((u_sunDiff.a > 0.5 || u_sunDir.w < -0.5)
+        vec3 lit = v_tint.rgb*((u_sunDiff.a > 0.5 || u_sunDir.w < -0.5)
             ? illum
             : (vec3(0.347, 0.347, 0.347)+vec3(0.919, 0.958, 1.0)*ndl));
         color = lit + environment*weight + localSpecular;

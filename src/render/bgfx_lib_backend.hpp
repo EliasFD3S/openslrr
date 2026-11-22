@@ -346,7 +346,16 @@ class LibBgfxBackend final : public IRenderBackend {
                         bool receive_static_shadow = false, const SceneSun* sun = nullptr, const float* sky = nullptr);
 
 
-  void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass);
+  void draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass,
+                     const bgfx::InstanceDataBuffer* instance_data = nullptr);
+  size_t draw_vehicle_instances(uint16_t view_id, const std::vector<const SceneInstance*>& instances);
+  struct VehicleGroup {
+    size_t span = 0;  // never reorder opaque cars across a pass-0 blend
+    size_t next = 0, instanced = 0;
+    std::vector<const SceneInstance*> instances;
+  };
+  std::vector<VehicleGroup> vehicle_groups_;
+  std::vector<size_t> vehicle_group_indices_;
   // `shadow_local` < 0 reads static_shadow_local_; 0 / 1 override it, so a
   // worker pass never toggles a member the host thread reads (#270).
   void draw_prop_batches(uint16_t view_id, const std::vector<SceneBatch>& batches,
@@ -537,6 +546,7 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::UniformHandle u_alpha_test_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_color_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle vehicle_program_ = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle vehicle_inst_program_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle s_mix_=BGFX_INVALID_HANDLE,s_env_=BGFX_INVALID_HANDLE,s_bake_=BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_layers_=BGFX_INVALID_HANDLE,u_channels_=BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_base_uv_=BGFX_INVALID_HANDLE,u_mix_uv_=BGFX_INVALID_HANDLE,u_env_uv_=BGFX_INVALID_HANDLE,u_diffuse_=BGFX_INVALID_HANDLE,u_spec_=BGFX_INVALID_HANDLE,u_sun_diff_=BGFX_INVALID_HANDLE,u_sun_amb_=BGFX_INVALID_HANDLE,u_sun_spec_=BGFX_INVALID_HANDLE,u_sun_dir_=BGFX_INVALID_HANDLE;

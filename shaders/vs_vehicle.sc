@@ -1,7 +1,8 @@
 $input a_position, a_normal, a_texcoord0, a_texcoord1, a_texcoord2
-$output v_normal, v_texcoord0, v_texcoord1, v_texcoord2, v_viewPos, v_worldPos, v_staticShadow
+$output v_normal, v_texcoord0, v_texcoord1, v_texcoord2, v_viewPos, v_worldPos, v_staticShadow, v_tint
 #include <bgfx_shader.sh>
 uniform mat4 u_staticShadowMtx;
+uniform vec4 u_vehicleDiffuse;
 void main()
 {
     gl_Position = mul(u_modelViewProj, vec4(a_position, 1.0));
@@ -17,4 +18,5 @@ void main()
     v_texcoord0 = a_texcoord0;
     v_texcoord1 = a_texcoord1;
     v_texcoord2 = a_texcoord2;
+    v_tint = u_vehicleDiffuse;
 }

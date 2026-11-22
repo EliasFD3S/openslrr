@@ -71,8 +71,10 @@
 #include "glsl/vs_skin.sc.bin.h"
 #include "glsl/fs_mesh.sc.bin.h"
 #include "dxbc/vs_vehicle.sc.bin.h"
+#include "dxbc/vs_vehicle_inst.sc.bin.h"
 #include "dxbc/fs_vehicle.sc.bin.h"
 #include "glsl/vs_vehicle.sc.bin.h"
+#include "glsl/vs_vehicle_inst.sc.bin.h"
 #include "glsl/fs_vehicle.sc.bin.h"
 #include "dxbc/vs_shadow.sc.bin.h"
 #include "glsl/vs_shadow.sc.bin.h"
@@ -108,7 +110,8 @@ static const bgfx::EmbeddedShader k_fs[] = {
 static const bgfx::EmbeddedShader k_ao[] = {
     BGFX_EMBEDDED_SHADER(vs_ao), BGFX_EMBEDDED_SHADER(fs_ao), BGFX_EMBEDDED_SHADER_END()};
 static const bgfx::EmbeddedShader k_vehicle[] = {
-    BGFX_EMBEDDED_SHADER(vs_vehicle), BGFX_EMBEDDED_SHADER(fs_vehicle),
+    BGFX_EMBEDDED_SHADER(vs_vehicle), BGFX_EMBEDDED_SHADER(vs_vehicle_inst),
+    BGFX_EMBEDDED_SHADER(fs_vehicle),
     BGFX_EMBEDDED_SHADER_END()};
 }  // namespace
 
@@ -226,6 +229,9 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
     vehicle_program_ = create_owned_program(
         bgfx::createEmbeddedShader(k_vehicle, rt, "vs_vehicle"),
         bgfx::createEmbeddedShader(k_vehicle, rt, "fs_vehicle"));
+    vehicle_inst_program_ = create_owned_program(
+        bgfx::createEmbeddedShader(k_vehicle, rt, "vs_vehicle_inst"),
+        bgfx::createEmbeddedShader(k_vehicle, rt, "fs_vehicle"));
     s_mix_ = bgfx::createUniform("s_vehicleMix", bgfx::UniformType::Sampler);
     s_env_ = bgfx::createUniform("s_vehicleEnv", bgfx::UniformType::Sampler);
     s_bake_ = bgfx::createUniform("s_vehicleBake", bgfx::UniformType::Sampler);
@@ -289,7 +295,8 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
         {"mesh", program_}, {"osd_text", text_program_}, {"skin", skin_program_},
         {"ao",ao_program_},{"ao_skin_depth",ao_skin_depth_program_},
         {"static_shadow", static_shadow_program_}, {"inst", inst_program_},
-        {"inst_shadow", inst_shadow_program_}, {"vehicle", vehicle_program_}};
+        {"inst_shadow", inst_shadow_program_}, {"vehicle", vehicle_program_},
+        {"vehicle_inst", vehicle_inst_program_}};
     for (const auto& [name, handle] : programs)
       if (!bgfx::isValid(handle))
         std::fprintf(stderr, "[bgfx] program %s failed to link\n", name);
@@ -431,6 +438,8 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
     }
     if (bgfx::isValid(vehicle_program_)) bgfx::destroy(vehicle_program_);
     vehicle_program_ = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(vehicle_inst_program_)) bgfx::destroy(vehicle_inst_program_);
+    vehicle_inst_program_ = BGFX_INVALID_HANDLE;
     destroy_reflections();
     if (bgfx::isValid(car_depth_fb_)) bgfx::destroy(car_depth_fb_);
     car_depth_fb_ = BGFX_INVALID_HANDLE;
@@ -1877,6 +1886,56 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
       }
       blended_groups_[g].placements.push_back({instance.transform.data(), instance.color});
     }
+    // Repeated vehicle meshes share material state, but not pose or paint colour.
+    // Only opaque sections are gathered; glass keeps the instance list's order.
+    constexpr size_t individual = size_t(-1);
+    vehicle_group_indices_.assign(instances_.size(), individual);
+    size_t vehicle_groups = 0, span = 0;
+    if (bgfx::isValid(vehicle_program_) && bgfx::isValid(vehicle_inst_program_)) {
+      for (size_t i = 0; i < instances_.size(); ++i) {
+        const auto& instance = instances_[i];
+        if (!instance.vehicle_material || !instance.geometry) continue;
+        const auto& mesh = *instance.geometry;
+        const bool blends_in_pass0 = std::any_of(mesh.groups.begin(), mesh.groups.end(),
+            [&](const ScxGroup& group) {
+              const bool scx3_blend = scx_surface(mesh.info.version, group).blend;
+              const bool transparent = (group.material_flags & 0x40000000u) ||
+                  ((instance.light_flags & 256u) && scx3_blend) ||
+                  (mesh.info.version == 3 && scx3_blend && !instance.light_flags);
+              return !transparent && group.diffuse[3] < .99f;
+            });
+        // These draws blend without writing depth even in pass 0. Moving an
+        // opaque car across one would change the image, including lamp records
+        // that are not themselves eligible for instancing.
+        if (blends_in_pass0) { ++span; continue; }
+        if (instance.sky || instance.gpu_skin || instance.emissive_overlay ||
+            instance.light_flags || instance.opacity != 1.f) continue;
+        const auto same_material = [&](const SceneInstance& first) {
+          const auto& a = first.lighting;
+          const auto& b = instance.lighting;
+          return first.geometry == instance.geometry && first.paint_slot == instance.paint_slot &&
+              first.paint_texture == instance.paint_texture &&
+              first.texture_replacements == instance.texture_replacements &&
+              a.set == b.set && a.has_direction == b.has_direction &&
+              std::memcmp(a.diffuse, b.diffuse, sizeof(a.diffuse)) == 0 &&
+              std::memcmp(a.ambient, b.ambient, sizeof(a.ambient)) == 0 &&
+              std::memcmp(a.specular, b.specular, sizeof(a.specular)) == 0 &&
+              std::memcmp(a.direction, b.direction, sizeof(a.direction)) == 0;
+        };
+        size_t g = 0;
+        while (g < vehicle_groups && !(vehicle_groups_[g].span == span &&
+               same_material(*vehicle_groups_[g].instances.front()))) ++g;
+        if (g == vehicle_groups) {
+          if (vehicle_groups_.size() <= g) vehicle_groups_.emplace_back();
+          auto& group = vehicle_groups_[vehicle_groups++];
+          group.span = span;
+          group.next = group.instanced = 0;
+          group.instances.clear();
+        }
+        vehicle_groups_[g].instances.push_back(&instance);
+        vehicle_group_indices_[i] = g;
+      }
+    }
     const auto draw_blended = [&](int pass) {
       for (size_t g = 0; g < groups; ++g) {
         const auto& group = blended_groups_[g];
@@ -1887,8 +1946,15 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
       }
     };
     for (int pass = 0; pass < 2; ++pass) {
-      for (const auto& instance : instances_) {
+      for (size_t i = 0; i < instances_.size(); ++i) {
+        const auto& instance = instances_[i];
         if (instance.sky || blended_prop_instance(instance)) continue;
+        if (pass == 0 && vehicle_group_indices_[i] != individual) {
+          auto& group = vehicle_groups_[vehicle_group_indices_[i]];
+          if (group.next == 0)
+            group.instanced = draw_vehicle_instances(view_id, group.instances);
+          if (group.next++ < group.instanced) continue;
+        }
         // The mesh stays resident, so a pedestrian walking into view does not
         // upload on that frame. The triangles behind the camera are not sent.
         // A walker outside the view frustum has no palette this frame.

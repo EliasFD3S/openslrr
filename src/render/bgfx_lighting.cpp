@@ -577,7 +577,8 @@ bool LibBgfxBackend::bind_point_light(bool enabled) {
     if (bgfx::isValid(u_fog_range_)) set_uniform(u_fog_range_, fog_range);
     if (bgfx::isValid(u_fog_eye_)) set_uniform(u_fog_eye_, fog_eye);
   }
-  void LibBgfxBackend::draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass)
+  void LibBgfxBackend::draw_instance(uint16_t view_id,const SceneInstance& instance,const float* matrix,bool preview,int pass,
+                                      const bgfx::InstanceDataBuffer* instance_data)
 {
     // The view of this draw: per-view light arrays (#246), uniform values
     // and kept texture stages (#262).
@@ -662,7 +663,7 @@ bool LibBgfxBackend::bind_point_light(bool enabled) {
         if(!has_tex || (!tex_family && !painted))
           std::copy(group.diffuse,group.diffuse+3,diffuse);
         // The create string's colour index. White is "no paint".
-        if (instance.color != 0xffffffu) {
+        if (!instance_data && instance.color != 0xffffffu) {
           const float paint[3] = {((instance.color >> 16) & 255) / 255.f,
                                   ((instance.color >> 8) & 255) / 255.f,
                                   (instance.color & 255) / 255.f};
@@ -721,7 +722,8 @@ bool LibBgfxBackend::bind_point_light(bool enabled) {
         const bool two_sided = part.geo.info.version != 4 ||
             (group.material_flags & 0x02000000u) != 0;
         const float reflection[4] = {live_env ? 1.f : enhanced_env ? 2.f : 0.f,
-                                     two_sided ? 1.f : 0.f, 0.f, 0.f};
+                                     two_sided ? 1.f : 0.f,
+                                     instance_data && !painted ? (has_tex ? 1.f : 2.f) : 0.f, 0.f};
         enc()->setUniform(u_dynamic_reflection_, reflection);
         if (live_env) {
           set_texture(4, s_reflection_cube_, reflection_cubes_[reflection_write_ ^ 1]);
@@ -754,7 +756,9 @@ bool LibBgfxBackend::bind_point_light(bool enabled) {
           state |= BGFX_STATE_BLEND_ALPHA;
         else
           state |= BGFX_STATE_WRITE_Z;
-        enc()->setState(state);submit_bound(view_id,vehicle_program_,group.index_count);
+        enc()->setState(state);
+        if (instance_data) enc()->setInstanceDataBuffer(instance_data);
+        submit_bound(view_id, instance_data ? vehicle_inst_program_ : vehicle_program_, group.index_count);
       }
       return;
     }
@@ -880,6 +884,40 @@ bool LibBgfxBackend::bind_point_light(bool enabled) {
     if(part.geo.groups.empty())draw(0,static_cast<uint32_t>(part.geo.index_count),0,0,nullptr);
     else for(const auto&g:part.geo.groups)draw(g.index_start,g.index_count,g.texture_index,g.material_flags,&g);
   }
+
+size_t LibBgfxBackend::draw_vehicle_instances(uint16_t view_id,
+                                           const std::vector<const SceneInstance*>& instances) {
+  struct VehicleInstance {
+    float matrix[16];
+    float color[4];
+  };
+  static_assert(sizeof(VehicleInstance) == 80);
+  constexpr auto stride = uint16_t(sizeof(VehicleInstance));
+  size_t base = 0;
+  while (instances.size() - base > 1) {
+    const auto want = uint32_t(std::min<size_t>(kPropInstanceChunk, instances.size() - base));
+    const auto available = bgfx::getAvailInstanceDataBuffer(want, stride);
+    if (available < 2) break;
+    bgfx::InstanceDataBuffer data;
+    bgfx::allocInstanceDataBuffer(&data, available, stride);
+    if (!data.num) break;  // a worker encoder may have allocated in between
+    auto* output = reinterpret_cast<VehicleInstance*>(data.data);
+    for (uint32_t i = 0; i < data.num; ++i) {
+      const auto& instance = *instances[base + i];
+      std::memcpy(output[i].matrix, instance.transform.data(), sizeof(output[i].matrix));
+      const auto color = instance.color;
+      output[i].color[0] = ((color >> 16) & 255) / 255.f;
+      output[i].color[1] = ((color >> 8) & 255) / 255.f;
+      output[i].color[2] = (color & 255) / 255.f;
+      output[i].color[3] = color != 0xffffffu ? 1.f : 0.f;
+    }
+    const auto& first = *instances[base];
+    draw_instance(view_id, first, first.transform.data(), false, 0, &data);
+    base += data.num;
+  }
+  // Unallocated records stay in the caller's original instance order.
+  return base;
+}
 
 bool LibBgfxBackend::blended_prop_instance(const SceneInstance& instance) {
   if (!instance.ground_prop || instance.emissive_overlay || instance.sky || instance.gpu_skin ||
