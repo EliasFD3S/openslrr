@@ -18,6 +18,8 @@ int32_t host_sfx_play_file(const std::string& path, float pitch=1.f, float volum
 void host_sfx_stop(int32_t instance);
 void host_sfx_pause_loop(int32_t instance, bool paused);
 void host_sfx_update_loop(int32_t instance, float pitch, float volume);
+// Stereo placement of a loop: -1 left, 0 centre, 1 right. A non-finite value is centre.
+void host_sfx_set_loop_pan(int32_t instance, float pan);
 bool host_sfx_is_playing(int32_t instance);
 void host_sfx_set_volume(float volume);
 struct HostSfxStats {

@@ -118,21 +118,15 @@ silently replacing it with a collision-filter toggle.
   `src/resources/part_runtime.cpp:update_traffic_engine_audio` gives every
   released native car (traffic, fake racers) a loop from the three
   `cars/traffic/sounds/engines/diesel_5.0L` samples, cross-faded by an RPM
-  modelled from speed through a stepped gearbox and attenuated by distance to
-  the world camera (not FMOD 3D). Only the four nearest cars within 80 m hold
-  voices. It is a host fallback, not vehicle-specific SfxTable parity; the
-  CFG `sfx_loop` of Erbilac/Wagon is a music loop and is still not retained.
-  The next entry describes the state before this model.
-- **Native traffic sound had a concrete missing input path.** Native-only
-  templates have no Java engine/SfxTables. `PartConfig` does not retain CFG
-  `sfx_loop` declarations (present in installed traffic CFGs); map ambience
-  parsing does not supply a native vehicle voice. Upstream
-  `src/audio/traffic-audio.ts` instead owns a simplified positional idle loop
-  with modeled RPM/throttle. That is a host fallback, not vehicle-specific
-  SfxTable parity. OpenSLRR's host SFX loop API has pitch/volume but no spatial
-  position/listener input. Do not disguise a fixed non-positional sample as a
-  completed engine-audio port or replace mechanical SfxTables with it. Not every
-  native car authors such a loop: the inspected Police main CFG has none.
+  modelled from speed through a stepped gearbox. The gain falls with the
+  distance to the world camera and the loop is panned left/right by the car's
+  side (`host_sfx_set_loop_pan`; plain stereo pan, not FMOD 3D). Pitch follows
+  the CFG mass plus a stable per-car offset, so heavy and light cars differ.
+  The CFG `sfx_loop` (`PartConfig::sfx_loop`; Erbilac and Wagon, a radio
+  music loop) plays as that car's own loop within 40 m. Only the four nearest
+  cars within 80 m hold voices. This is a host fallback modelled on upstream
+  `src/audio/traffic-audio.ts`, not vehicle-specific SfxTable parity; the
+  Police main CFG has no loop of its own.
 - **Racer seating is explicitly omitted.**
   `src/resources/race_brain.cpp:race_brain_command` accepts `renderinstance`
   without retaining its render ID. `src/resources/part_runtime.cpp:pose_driver`

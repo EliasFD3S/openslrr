@@ -235,6 +235,7 @@ struct Record {
   // Host engine loop of a native (script-less) car: one voice per diesel
   // sample, cross-faded by a speed-modelled RPM. See update_traffic_engine_audio.
   std::array<int32_t, 3> traffic_voice{};
+  int32_t radio_voice = 0; // CFG `sfx_loop` of a native car (its radio)
   float traffic_rpm = 0;
   uint32_t traffic_audio_epoch = 0;
 };
@@ -911,6 +912,8 @@ void release_side(Record &rec) {
     host_sfx_stop(voice);
     voice = 0;
   }
+  host_sfx_stop(rec.radio_voice);
+  rec.radio_voice = 0;
   for (Object *tab : rec.sfx) {
     auto table = sfx_items.find(tab);
     if (table == sfx_items.end()) continue;
@@ -3229,11 +3232,14 @@ void update_engine_audio(Record &rec, bool active) {
 // Native stock cars (traffic, fake racers) have no Java engine or SfxTables, so
 // their loop is a host model: the three diesel samples shipped with the traffic
 // pack, cross-faded by an RPM derived from speed through a stepped gearbox,
-// attenuated by the distance to the world camera. Only the nearest few cars
-// hold voices because the host mixer has a small loop budget.
+// attenuated by the distance to the world camera and panned by its side. Pitch
+// follows the car's mass plus a fixed per-car offset, so a bus and a hatchback,
+// or two identical cars, do not sound the same. A CFG `sfx_loop` is the car's
+// radio. Only the nearest few cars hold voices because the host mixer has a
+// small loop budget.
 void update_traffic_engine_audio() {
   constexpr size_t kNearest = 4;
-  constexpr float kRange = 80.f, kRefDistance = 5.f, kVolume = .5f;
+  constexpr float kRange = 80.f, kRefDistance = 5.f, kVolume = .5f, kRadioRange = 40.f;
   constexpr std::array<float, 3> kSampleRpm = {1000.f, 2200.f, 3300.f};
   constexpr std::array<const char *, 3> kSampleFile = {"1000rpm.wav", "2200rpm.wav", "3300rpm.wav"};
   constexpr std::array<float, 4> kGearTop = {8.f, 14.f, 22.f, 34.f}; // m/s
@@ -3253,8 +3259,21 @@ void update_traffic_engine_audio() {
     }
     if (!all) paths = {};
   }
-  float eye[3]{}, at[3]{};
-  const bool listener = paths[0].size() && gameref_world_camera(eye, at, nullptr, nullptr, nullptr);
+  float eye[3]{}, at[3]{}, up[3] = {0.f, 1.f, 0.f}, right[3]{};
+  bool listener = !paths[0].empty() && gameref_world_camera(eye, at, nullptr, nullptr, nullptr, up);
+  if (listener) {
+    // The renderer flips Z and uses a left-handed look-at, so script-space
+    // right is forward x up (ped_view's up x forward only uses |side|).
+    float f[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
+    const float fl = std::sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+    right[0] = f[1] * up[2] - f[2] * up[1];
+    right[1] = f[2] * up[0] - f[0] * up[2];
+    right[2] = f[0] * up[1] - f[1] * up[0];
+    const float rl = std::sqrt(right[0] * right[0] + right[1] * right[1] + right[2] * right[2]);
+    listener = fl > 1e-4f && rl > 1e-4f;
+    if (listener)
+      for (float &c : right) c /= rl;
+  }
   struct Candidate {
     float distance_squared;
     Record *rec;
@@ -3293,8 +3312,19 @@ void update_traffic_engine_audio() {
         std::lerp(gear ? 1900.f : 1000.f, 3100.f, fraction) + throttle * 200.f, 1000.f, 3300.f);
     rec.traffic_rpm = rec.traffic_rpm > 0 ? std::lerp(rec.traffic_rpm, target, .2f) : target;
     const float rpm = rec.traffic_rpm;
+    const float distance = std::sqrt(chosen[n].distance_squared);
     const float level = scene_ambience_gain(kVolume * (.7f + .3f * throttle), kRefDistance, kRange,
-                                            std::sqrt(chosen[n].distance_squared));
+                                            distance);
+    const auto &position = body.position;
+    const float side = (float(position.x) - eye[0]) * right[0] + (float(position.y) - eye[1]) * right[1] +
+                       (float(position.z) - eye[2]) * right[2];
+    const float pan = std::clamp(side / std::max(distance, kRefDistance), -1.f, 1.f);
+    // Heavier cars run lower; the offset is stable per car, within about +-6 %.
+    const float mass = rec.config->mass > 100.f ? rec.config->mass : 1300.f;
+    const uint32_t hash = static_cast<uint32_t>(
+        (reinterpret_cast<uintptr_t>(&rec) >> 4) * 2654435761u + rec.state.resource * 40503u);
+    const float character = std::clamp(std::pow(1300.f / mass, .2f), .75f, 1.25f) *
+                            (.94f + .12f * float((hash >> 8) & 255u) / 255.f);
     for (size_t i = 0; i < paths.size(); ++i) {
       float weight = 0;
       if (i == 0 && rpm <= kSampleRpm[0]) weight = 1;
@@ -3306,13 +3336,32 @@ void update_traffic_engine_audio() {
       const float gain = level * weight;
       auto &voice = rec.traffic_voice[i];
       if (gain > .002f) {
-        const float pitch = rpm / kSampleRpm[i];
+        const float pitch = rpm / kSampleRpm[i] * character;
         if (voice && host_sfx_is_playing(voice)) host_sfx_update_loop(voice, pitch, gain);
         else voice = host_sfx_play_file(paths[i], pitch, gain, true);
+        host_sfx_set_loop_pan(voice, pan);
       } else if (voice) {
         host_sfx_stop(voice);
         voice = 0;
       }
+    }
+    // The car's own radio, only close by.
+    const uint32_t radio = rec.config->sfx_loop;
+    const float radio_gain = radio && index
+        ? scene_ambience_gain(.35f, 3.f, kRadioRange, distance) : 0.f;
+    if (radio_gain > .005f && distance < kRadioRange) {
+      if (!rec.radio_voice || !host_sfx_is_playing(rec.radio_voice)) {
+        auto file = index->payload_prop(radio, "sourcefile");
+        std::replace(file.begin(), file.end(), '\\', '/');
+        rec.radio_voice = file.empty() ? 0 : host_sfx_play_file(
+            (std::filesystem::path(index->game_root()) / file).string(), 1.f, radio_gain, true);
+      } else {
+        host_sfx_update_loop(rec.radio_voice, 1.f, radio_gain);
+      }
+      host_sfx_set_loop_pan(rec.radio_voice, pan);
+    } else if (rec.radio_voice) {
+      host_sfx_stop(rec.radio_voice);
+      rec.radio_voice = 0;
     }
   }
   // Cars that left the nearest set, went out of range or stopped.
@@ -3323,6 +3372,10 @@ void update_traffic_engine_audio() {
         host_sfx_stop(voice);
         voice = 0;
       }
+    if (rec.radio_voice) {
+      host_sfx_stop(rec.radio_voice);
+      rec.radio_voice = 0;
+    }
     rec.traffic_rpm = 0;
   }
 }
@@ -6219,7 +6272,8 @@ void part_pause_engine_audio(bool paused) {
     for (const auto& item : items)
       if (item.voice) host_sfx_pause_loop(item.voice, paused);
   for (const auto &[part, rec] : records)
-    for (const int32_t voice : rec.traffic_voice)
+    for (const int32_t voice : {rec.traffic_voice[0], rec.traffic_voice[1], rec.traffic_voice[2],
+                                rec.radio_voice})
       if (voice) host_sfx_pause_loop(voice, paused);
 }
 

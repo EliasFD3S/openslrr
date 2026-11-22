@@ -246,6 +246,15 @@ void host_sfx_update_loop(int32_t id, float pitch, float volume) {
   }
 #endif
 }
+void host_sfx_set_loop_pan(int32_t id, float pan) {
+#ifdef _WIN32
+  for (const auto &voice : audio.voices) {
+    if (voice->id != id || !voice->loop) continue;
+    voice->source->setPan(std::isfinite(pan) ? std::clamp(pan, -1.f, 1.f) : 0.f);
+    break;
+  }
+#endif
+}
 bool host_sfx_is_playing(int32_t id) {
 #ifdef _WIN32
   for (const auto &v : audio.voices)

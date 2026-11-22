@@ -1503,7 +1503,8 @@ through `host_sfx`; it owns those voices and stops them when their ground
 shell leaves the active world.
 Do not substitute a fixed engine sound for an RPM/load curve. Native
 script-less cars (traffic, fake racers) have no SfxTables; they use the
-speed-modelled host loop of `update_traffic_engine_audio`, bounded to the
+speed-modelled host loop of `update_traffic_engine_audio` (distance gain, stereo
+pan, mass-dependent pitch, plus the CFG `sfx_loop` radio), bounded to the
 nearest four cars, and its voices stop with the car like the SfxTable loops.
 
 Simultaneous voices are deliberately bounded, and menu repeats are handled

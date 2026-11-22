@@ -145,6 +145,8 @@ struct PartConfig {
   std::vector<float> wheel_steering;
   std::vector<PartSlot> slots;
   std::vector<uint32_t> stock;
+  // `sfx_loop <sound>` of a native car: the sound resource of its radio loop.
+  uint32_t sfx_loop = 0;
   std::vector<PartRender> renders;
   // `lods N s0 s1 ...` (map objects): the size ratios at which the object
   // switches to LOD level 1, 2, ... (ascending). Renders choose their levels
