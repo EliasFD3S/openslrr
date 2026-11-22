@@ -116,6 +116,9 @@ void part_physics_advance(double seconds);
 void part_physics_join();
 // False runs each batch on the calling thread (--physics-inline).
 void part_physics_set_threaded(bool threaded);
+// The wind on released cars: m/s at 10 m height, blowing towards
+// heading_degrees from +Z towards +X (physics::wind_velocity). 0 is calm.
+void part_set_wind(double speed, double heading_degrees);
 // External traffic motion owns pose/velocity; physics resumes from that pose on release.
 void part_set_external_motion(Object*,bool);
 // Metres travelled and road-wheel steering angle for externally driven traffic.

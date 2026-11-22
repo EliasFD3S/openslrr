@@ -81,6 +81,14 @@ using Terrain =
     std::function<bool(double x, double z, double from_y, GroundHit &)>;
 // Real-life aerodynamics (ENGINE_CONTRACT §11): ½ρv² forces from the air
 // velocity relative to the car, with typical road-car coefficients.
+// The mean wind of a weather report: m/s at 10 m height, blowing towards
+// `heading` (degrees from +Z towards +X).
+struct Wind {
+  double speed = 0, heading = 0;
+};
+// Air velocity (world m/s) at car height at a world position and time: the
+// mean wind reduced by the log wind profile, plus gusts that travel with it.
+Vec3 wind_velocity(const Wind &wind, Vec3 position, double seconds);
 struct AeroWing {
   // One face of a wing in chassis-frame metres: unit normal, planform m².
   Vec3 position, normal;
@@ -94,6 +102,9 @@ struct Aerodynamics {
   // Drag and lift of the body, sized by the rigid body's bounds.
   bool body = false;
   std::vector<AeroWing> wings;
+  // Air velocity around the car (world m/s); every force uses the car's
+  // velocity relative to it.
+  Vec3 wind;
 };
 // Resultant aerodynamic force (world) and its torque about the centre of
 // mass for one step of `dt`, as VehicleDynamics applies it.

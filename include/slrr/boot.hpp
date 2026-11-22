@@ -36,6 +36,10 @@ struct BootOptions {
   // --bench-shots: directory for window captures (TGA) at the start of the
   // benchmark drive and every 10 seconds after it.
   std::string bench_shots;
+  // --wind SPEED[,HEADING]: mean wind in m/s at 10 m height (a gentle breeze
+  // by default, 0 for calm air), blowing towards HEADING degrees from +Z
+  // towards +X.
+  float wind_speed = 4.f, wind_heading = 60.f;
   bool vsync = true;          // --no-vsync clears it
   bool debug_overlay = false; // --debug-overlay opens the Ctrl+F12 panel
   RenderBackendKind render = RenderBackendKind::Bgfx;

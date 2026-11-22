@@ -239,6 +239,9 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
 
   const int32_t opened = rpk.open_all();
   if (!opt.vehicle_osd.empty()) part_set_hud_preview(opt.vehicle_osd);
+  part_set_wind(opt.wind_speed, opt.wind_heading);
+  std::printf("[phys] wind %.1f m/s at 10 m towards %.0f deg\n", opt.wind_speed,
+              opt.wind_heading);
   const RpkPack* fe_found = rpk.pack_by_path("frontend.rpk");
   const RpkPack* garage_found = rpk.pack_by_path("misc\\garage.rpk");
   const RpkPack* mwm_found = rpk.pack_by_path("MW_Mod.rpk");

@@ -394,6 +394,26 @@ SLRR_TEST(sliding_sideways_meets_the_side_area_without_lift) {
   SLRR_REQUIRE(std::abs(side.force.y) < 1e-9);
 }
 
+SLRR_TEST(a_yawed_car_gets_a_side_force_ahead_without_extra_axial_drag) {
+  // 30 m/s along the car with 5 m/s across: 9.5 degrees of yaw.
+  const auto car = aero_body({-5, 0, -30});
+  const auto load = aero_load(car.aero, car.body, VehicleDynamics::timestep);
+  const double frontal = .85 * 1.7 * 1.25, side = .85 * 4.4 * 1.25;
+  const double slope = 3.14159265358979 * 1.25 / 4.4;  // πH/L
+  // Frontal drag from the flow along the car only.
+  SLRR_REQUIRE(std::abs(load.force.z - half_rho * .32 * frontal * 900) < 1e-6);
+  // Slender-body side force plus crossflow drag on the side area.
+  SLRR_REQUIRE(std::abs(load.force.x - half_rho * side * (slope * 150 + 25)) < 1e-6);
+  // About 0.04 per degree of yaw on the frontal area, as road cars measure.
+  const double per_degree = (load.force.x / (half_rho * 925) - side * 25 / 925) / frontal /
+                            (std::atan(5. / 30) * 180 / 3.14159265358979);
+  std::printf("AERO side force slope %.4f per degree\n", per_degree);
+  SLRR_REQUIRE(per_degree > .03 && per_degree < .05);
+  // The quarter-chord side force acts ahead of the centre of mass and turns
+  // the nose downwind (towards +X here), as a road car's does.
+  SLRR_REQUIRE(load.torque.y < 0);
+}
+
 SLRR_TEST(a_wing_face_meeting_the_air_makes_downforce_until_it_stalls) {
   const Vec3 tilted = Vec3{0, .94, -.34}.normalized();  // up, towards the front
   const auto wing_force = [&](Vec3 normal, double speed) {
@@ -484,6 +504,76 @@ SLRR_TEST(chassis_drag_never_reverses_the_motion) {
   SLRR_REQUIRE(light.body.velocity.x > -1e-9 && light.body.velocity.x < 1e-6);
 }
 
+SLRR_TEST(wind_follows_the_log_profile_with_gusts_it_carries) {
+  SLRR_REQUIRE(wind_velocity({}, {12, 0, -40}, 30).length() == 0);  // calm
+  const Wind breeze{10, 90};  // towards +X
+  // The 10 m report at car height: ln(1/0.03) / ln(10/0.03) of it.
+  const double mean = 10 * std::log(1 / .03) / std::log(10 / .03);
+  const Vec3 here{3, 1, 7};
+  const int samples = 400000;
+  double along = 0, across = 0, along2 = 0, across2 = 0, vertical = 0;
+  for (int i = 0; i < samples; ++i) {
+    const Vec3 air = wind_velocity(breeze, here, i * .25);
+    along += air.x;
+    across += air.z;
+    along2 += air.x * air.x;
+    across2 += air.z * air.z;
+    vertical = std::max(vertical, std::abs(air.y));
+  }
+  along /= samples;
+  across /= samples;
+  const double sigma_along = std::sqrt(along2 / samples - along * along);
+  const double sigma_across = std::sqrt(across2 / samples - across * across);
+  std::printf("WIND mean %.3f (expected %.3f) across %.4f sigma %.3f/%.3f m/s\n", along,
+              mean, across, sigma_along, sigma_across);
+  SLRR_REQUIRE(std::abs(along - mean) < .01 * mean);
+  SLRR_REQUIRE(std::abs(across) < .01 * mean);
+  // Turbulence intensity 1/ln(z/z0) along the wind, three quarters across.
+  SLRR_REQUIRE(std::abs(sigma_along - mean / std::log(1 / .03)) < .03 * sigma_along);
+  SLRR_REQUIRE(std::abs(sigma_across - .75 * sigma_along) < .03 * sigma_across);
+  SLRR_REQUIRE(vertical == 0);
+  // Frozen gusts: the air here now is the air 2 s downwind of here later.
+  const Vec3 now = wind_velocity(breeze, here, 100);
+  const Vec3 later = wind_velocity(breeze, here + Vec3{mean * 2, 0, 0}, 102);
+  SLRR_REQUIRE((now - later).length() < 1e-9);
+  SLRR_REQUIRE((now - wind_velocity(breeze, here, 101)).length() > 1e-3);
+}
+
+SLRR_TEST(wind_changes_the_air_speed_the_car_meets) {
+  const double frontal = .85 * 1.7 * 1.25;
+  // Forward (-Z) at 30 m/s into a 5 m/s headwind meets 35 m/s of air; with
+  // the same wind behind, 25 m/s.
+  for (double wind : {5.0, -5.0}) {
+    auto car = aero_body({0, 0, -30});
+    car.aero.wind = {0, 0, wind};
+    const double air = 30 + wind;
+    const auto load = aero_load(car.aero, car.body, VehicleDynamics::timestep);
+    SLRR_REQUIRE(std::abs(load.force.z - half_rho * .32 * frontal * air * air) < 1e-6);
+    SLRR_REQUIRE(std::abs(load.force.y - half_rho * .25 * frontal * air * air) < 1e-6);
+  }
+  // A crosswind on a standing car meets its side area, without lift. It acts
+  // at the centre of the bounds, ahead of the centre of mass, so it turns
+  // the nose downwind.
+  auto standing = aero_body({});
+  standing.aero.wind = {10, 0, 0};
+  const auto side = aero_load(standing.aero, standing.body, VehicleDynamics::timestep);
+  SLRR_REQUIRE(std::abs(side.force.x - half_rho * 1.0 * .85 * 4.4 * 1.25 * 100) < 1e-6);
+  SLRR_REQUIRE(std::abs(side.force.y) < 1e-9);
+  SLRR_REQUIRE(side.torque.y < 0);
+}
+
+SLRR_TEST(a_braked_car_holds_against_a_strong_crosswind) {
+  Car car;
+  car.dynamics.aero.body = true;
+  car.run(1, 0, 1, 0);
+  const Vec3 start = car.dynamics.body.position;
+  car.dynamics.aero.wind = {15, 0, 0};  // a gale at car height
+  car.run(3, 0, 1, 0);
+  const double moved = (car.dynamics.body.position - start).length();
+  std::printf("WIND braked car moved %.4f m in a 15 m/s crosswind\n", moved);
+  SLRR_REQUIRE(moved < .02);
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
       tyre_grip_follows_the_tyre_script,
@@ -503,10 +593,14 @@ int main() {
       nitrous_blends_the_wet_bank_without_changing_dry_drive,
       body_drag_and_lift_follow_half_rho_v_squared,
       sliding_sideways_meets_the_side_area_without_lift,
+      a_yawed_car_gets_a_side_force_ahead_without_extra_axial_drag,
       a_wing_face_meeting_the_air_makes_downforce_until_it_stalls,
       a_rear_wing_moves_load_to_the_rear_axle,
       chassis_drag_slows_a_coasting_car,
       chassis_drag_never_reverses_the_motion,
+      wind_follows_the_log_profile_with_gusts_it_carries,
+      wind_changes_the_air_speed_the_car_meets,
+      a_braked_car_holds_against_a_strong_crosswind,
   };
   return slrr::standalone::run("vehicle_dynamics", tests);
 }

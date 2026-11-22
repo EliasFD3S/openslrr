@@ -121,8 +121,9 @@ current gaps to SLRR_rev code are in
 - Command-line flags are parsed in `src/main.cpp:main`: `--help`/`-h`,
   `--game`, `--window`, `--root DIR`, `--spawn-car pack.rpk:0xID` (implies
   `--auto-new`), `--auto-new`, `--no-wait` (`--auto-new` plus a three-frame
-  limit), `--auto-cmd mainmenu|street|escape|N`, `--vehicle-osd PATH`, a
-  positional player name, and the headless probes `--probe`, `--probe-gc`,
+  limit), `--auto-cmd mainmenu|street|escape|N`, `--vehicle-osd PATH`,
+  `--wind M/S[,HEADING]` (ENGINE_CONTRACT §11), a positional player name,
+  and the headless probes `--probe`, `--probe-gc`,
   `--probe-dyno`, `--probe-pacejka`. `escape` is accepted but missing from
   the usage text.
 - Performance flags: `--perf-log CSV|-` prints one `[perf]` line per second
@@ -340,14 +341,19 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
    The renderer, chase and cockpit cameras and car shadows draw that pose;
    scripts and physics still read the ticked one
    (`src/resources/scene_instances.cpp:chain_matrix`).
-11. Aerodynamics are real-life `½ρCAv²` forces: body drag and lift over the
-   chassis bounds, `Chassis.C_drag` at `drag_center` (read by
+11. Aerodynamics are real-life `½ρCAv²` forces: body drag, side force and
+   lift over the chassis bounds, `Chassis.C_drag` at `drag_center` (read by
    `src/resources/part_runtime.cpp:configure_drive`), and wing faces from the
    installed parts' CFG `wing` lines
    (`src/resources/part_config.cpp:parse_part_config`,
    `src/resources/part_config.cpp:part_wing_area`), collected in chassis
    coordinates by `src/resources/part_runtime.cpp:rebuild_aerodynamics`. All
-   act in `src/physics/vehicle_dynamics.cpp:VehicleDynamics::apply_aero`.
+   act in `src/physics/vehicle_dynamics.cpp:VehicleDynamics::apply_aero`, on
+   the car's velocity relative to the wind that
+   `src/resources/part_runtime.cpp:sim_step_car` sets on released cars from
+   `src/physics/vehicle_dynamics.cpp:wind_velocity`, with the wind and clock
+   `src/resources/part_runtime.cpp:prepare_batch` copies into the batch
+   (`--wind`, `src/resources/part_runtime.cpp:part_set_wind`).
    ENGINE_CONTRACT §11 has the coefficients and the original formulas.
 
 ### 5.6 Maps and world

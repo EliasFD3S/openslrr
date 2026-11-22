@@ -3,6 +3,7 @@
 #include "slrr/vehicle_dynamics.hpp"
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <stdexcept>
 
 namespace slrr::physics {
@@ -244,11 +245,25 @@ namespace {
 constexpr double air_density = 1.225;      // kg/m³, ISA sea level at 15 °C
 constexpr double frontal_fill = .85;       // frontal area / (width × height)
 constexpr double body_drag = .32;          // road-car Cd on the frontal area
-constexpr double body_cross_drag = 1.0;    // Cd of the side and plan views
+constexpr double body_cross_drag = 1.0;    // crossflow Cd of the side and plan
 constexpr double body_lift = .25;          // road-car CL on the frontal area
 constexpr double wing_lift_slope = 4.2;    // per radian, 2π·A/(A+2) at A = 4
 constexpr double wing_normal_limit = 1.5;  // stalled single-element wing
 constexpr double wing_profile_drag = .05;
+// Wind at car height: the log wind profile over open terrain (roughness
+// length 0.03 m) at 1 m, about the height of a car's aerodynamic centre.
+constexpr double wind_roughness = .03, wind_height = 1, wind_report_height = 10;
+// Gusts: plane waves frozen in the moving air (Taylor's hypothesis), three
+// along the wind and three across it, with fixed phases so a run repeats.
+// Their 28–240 m wavelengths span the turbulence length scales near the
+// ground.
+struct Gust {
+  double wavelength, angle, phase;  // m; wave direction from the wind, rad
+  bool across;
+};
+constexpr Gust gusts[] = {{240, 0, 0, false},   {90, .6, 2.1, false},
+                          {35, -.9, 4.4, false}, {160, 1.2, 1.3, true},
+                          {60, -.4, 3.7, true},  {28, .3, 5.6, true}};
 
 // Calls apply(force, point) with world vectors for each aerodynamic force.
 template <class Apply>
@@ -264,7 +279,7 @@ void each_aero_force(const Aerodynamics &aero, const RigidBody &body, double dt,
   // EXE 0x456A83: Chassis.C_drag as -C |v| v above 1 m/s.
   if (aero.drag > 0) {
     const Vec3 point = body_point(body, aero.drag_center);
-    const Vec3 velocity = body.point_velocity(point);
+    const Vec3 velocity = body.point_velocity(point) - aero.wind;
     const double square = velocity.dot(velocity);
     if (square > 1) {
       const double speed = std::sqrt(square);
@@ -274,36 +289,57 @@ void each_aero_force(const Aerodynamics &aero, const RigidBody &body, double dt,
             point);
     }
   }
-  // The body: drag over the projected bounds, lift from the flow along the
-  // car, both at the centre of the bounds.
+  // The body, from the air's velocity in the car's axes: drag along each
+  // axis on the projected bounds, a side force at a quarter of the length
+  // from the leading end, and lift from the flow along the car.
   if (aero.body) {
     const Vec3 size = body.maximum - body.minimum;
-    const Vec3 point = body_point(body, (body.minimum + body.maximum) * .5);
-    const Vec3 velocity = body.point_velocity(point);
-    const Vec3 local = body.orientation.inverse_rotate(velocity);
-    const double square = local.dot(local);
-    if (square > 1e-6) {
-      const double speed = std::sqrt(square);
-      const Vec3 c = local / speed;
-      const double frontal = frontal_fill * size.x * size.y;
-      const double area = body_drag * frontal * std::abs(c.z) +
-                          body_cross_drag * frontal_fill *
-                              (size.z * size.y * std::abs(c.x) + size.x * size.z * std::abs(c.y));
-      const Vec3 direction = velocity / speed;
-      apply(direction * -std::min(.5 * air_density * area * square,
-                                  stopping_force(point, direction, speed)),
+    const Vec3 centre = (body.minimum + body.maximum) * .5;
+    const Vec3 point = body_point(body, centre);
+    const Vec3 local = body.orientation.inverse_rotate(body.point_velocity(point) - aero.wind);
+    const double frontal = frontal_fill * size.x * size.y;
+    const double side = frontal_fill * size.z * size.y;
+    const double plan = frontal_fill * size.x * size.z;
+    // Frontal Cd on the flow along the car, crossflow Cd on the flow across
+    // its side and plan views, each at the centre of the bounds.
+    const auto axis_drag = [&](Vec3 axis, double speed, double cd_area) {
+      if (!(std::abs(speed) > 1e-3)) return;
+      const Vec3 direction = body.orientation.rotate(axis);
+      apply(direction * -std::copysign(std::min(.5 * air_density * cd_area * speed * speed,
+                                                stopping_force(point, direction, speed)),
+                                       speed),
             point);
-      apply(body.orientation.rotate({0, 1, 0}) *
-                (.5 * air_density * body_lift * frontal * local.z * local.z),
-            point);
+    };
+    axis_drag({0, 0, 1}, local.z, body_drag * frontal);
+    axis_drag({1, 0, 0}, local.x, body_cross_drag * side);
+    axis_drag({0, 1, 0}, local.y, body_cross_drag * plan);
+    // Slender-body side force: the side view as a wing of chord L and span
+    // 2H, the ground mirroring it, so πAR/2 = πH/L per radian of yaw on the
+    // side area, at the quarter chord.
+    if (std::abs(local.x) > 1e-3 && std::abs(local.z) > 1e-3) {
+      const Vec3 quarter{centre.x, centre.y,
+                         local.z < 0 ? body.minimum.z + .25 * size.z
+                                     : body.maximum.z - .25 * size.z};
+      const Vec3 at = body_point(body, quarter);
+      const Vec3 direction = body.orientation.rotate({1, 0, 0});
+      const double slope = std::numbers::pi * size.y / size.z;
+      apply(direction * -std::copysign(
+                            std::min(.5 * air_density * slope * side *
+                                         std::abs(local.x * local.z),
+                                     stopping_force(at, direction, local.x)),
+                            local.x),
+            at);
     }
+    apply(body.orientation.rotate({0, 1, 0}) *
+              (.5 * air_density * body_lift * frontal * local.z * local.z),
+          point);
   }
   // Wings: the face meeting the air carries the normal force of the whole
   // element, rising with incidence until it stalls, plus its profile drag.
   for (const auto &wing : aero.wings) {
     const Vec3 point = body_point(body, wing.position);
     const Vec3 normal = body.orientation.rotate(wing.normal);
-    const Vec3 velocity = body.point_velocity(point);
+    const Vec3 velocity = body.point_velocity(point) - aero.wind;
     const double square = velocity.dot(velocity);
     if (!(square > 1e-6)) continue;
     const double speed = std::sqrt(square);
@@ -316,6 +352,31 @@ void each_aero_force(const Aerodynamics &aero, const RigidBody &body, double dt,
   }
 }
 } // namespace
+
+Vec3 wind_velocity(const Wind &wind, Vec3 position, double seconds) {
+  if (!(wind.speed > 0) || !std::isfinite(wind.speed) || !std::isfinite(wind.heading) ||
+      !position.finite() || !std::isfinite(seconds))
+    return {};
+  const double profile = std::log(wind_height / wind_roughness);
+  const double mean = wind.speed * profile / std::log(wind_report_height / wind_roughness);
+  // Turbulence intensity 1/ln(z/z0) along the wind (EN 1991-1-4 §4.4), 0.75
+  // of it across; each set of three waves shares its variance.
+  const double along_gust = mean / profile * std::sqrt(2. / 3);
+  const double across_gust = .75 * along_gust;
+  const double heading = wind.heading * std::numbers::pi / 180;
+  const Vec3 along{std::sin(heading), 0, std::cos(heading)};
+  const Vec3 across{along.z, 0, -along.x};
+  // The point's coordinates in the air that the mean wind carries.
+  const double x = position.dot(along) - mean * seconds, y = position.dot(across);
+  Vec3 air = along * mean;
+  for (const auto &gust : gusts) {
+    const double phase = 2 * std::numbers::pi / gust.wavelength *
+                             (x * std::cos(gust.angle) + y * std::sin(gust.angle)) +
+                         gust.phase;
+    air += (gust.across ? across * across_gust : along * along_gust) * std::sin(phase);
+  }
+  return air;
+}
 
 AeroLoad aero_load(const Aerodynamics &aero, const RigidBody &body, double dt) {
   AeroLoad load;

@@ -284,6 +284,8 @@ In the garage, **right-click and drag**, the **arrow keys**, and the **scroll wh
 
 You can also set the game path with `$env:SLRR_GAME_ROOT`. The `--root` option takes priority. Without either, the host looks for `data/game`, then `game` and `../game`. Run `slrr_host.exe --help` for all options.
 
+Cars out in the world drive through a gusty wind: by default a 4 m/s breeze, as a weather report measures it at 10 m height, blowing towards 60° from +Z towards +X. `--wind M/S[,HEADING]` changes it, and `--wind 0` gives calm air, for example to compare bench runs.
+
 ### Outline fonts
 
 The text renderer prefers `frontend/fonts/<stem>.ttf`, then `.otf`, in the game

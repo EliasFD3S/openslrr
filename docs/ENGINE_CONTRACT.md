@@ -702,16 +702,22 @@ does not mean the whole driving model uses that older model.
 
 Aerodynamics are real-life calculations, as the owner decided on PR #223:
 every force is `½ ρ C A v²` from the air velocity relative to the car
-(`-v`, no wind yet), with ρ = 1.225 kg/m³ and typical road-car coefficients,
-not values recovered from the original game.
+(`w - v`, with the wind `w` below), with ρ = 1.225 kg/m³ and typical road-car
+coefficients, not values recovered from the original game.
 `VehicleDynamics::apply_aero` adds, each substep:
 
-- **Body drag and lift.** The rigid body's bounds (W × H × L) give a frontal
-  area `0.85 W H`. Drag uses Cd 0.32 on it, and Cd 1.0 on `0.85 L H` (side)
-  and `0.85 W L` (plan) in proportion to the flow's direction cosines, so a
-  sliding car meets its side area. Lift uses CL 0.25 on the frontal area with
-  the flow along the car. Both act at the centre of the bounds; native
-  traffic templates keep their own force policy and get neither.
+- **Body drag, side force and lift.** The rigid body's bounds (W × H × L)
+  give a frontal area `0.85 W H`, a side area `0.85 L H` and a plan area
+  `0.85 W L`. Each component of the air velocity in the car's axes drags on
+  its own area: Cd 0.32 on the frontal area for the flow along the car, and a
+  crossflow Cd 1.0 on the side and plan areas, so a sliding car meets its
+  side area. In yawed flow the side view also acts as a slender wing of
+  chord L and span 2H (the ground mirrors it): a side force of
+  `½ρ A_side (πH/L) |v_x v_z|`, about 0.04 per degree of yaw on the frontal
+  area as road cars measure, at a quarter of the length from the leading
+  end. Lift uses CL 0.25 on the frontal area with the flow along the car.
+  The drags and lift act at the centre of the bounds; native traffic
+  templates keep their own force policy and get none of them.
 - **Chassis drag.** `Chassis.updatevariables` sets `C_drag` to
   `fully_stripped_drag` minus the `drag_reduction` of each body part on the
   chassis slots, floored at 0, and the EXE reads it with `drag_center`
@@ -728,9 +734,38 @@ not values recovered from the original game.
   induced drag.
 
 The centre of pressure follows from where these forces act: a rear wing
-moves load to the rear axle and lifts the front. Every drag force is
+moves load to the rear axle and lifts the front, and the side force ahead of
+the centre of mass turns a car in a crosswind downwind, as a road car is
+aerodynamically unstable in yaw. Every drag force is
 clamped to the impulse that stops its point in one step, as the EXE does for
 `C_drag`.
+
+**Wind.** `--wind M/S[,HEADING]` gives the mean wind of a weather report: m/s
+at 10 m height, blowing towards HEADING degrees from +Z towards +X. The
+default is 4 m/s (a gentle breeze) towards 60°; `--wind 0` is calm air. The
+original game has no wind. `wind_velocity` turns it into the air velocity at
+car height:
+
+- **Mean.** The log wind profile over open terrain, roughness length
+  z0 = 0.03 m, at z = 1 m: `ln(z/z0) / ln(10/z0)` = 0.60 of the report.
+- **Gusts.** Turbulence intensity `1/ln(z/z0)` = 0.29 along the wind
+  (EN 1991-1-4 §4.4) and three quarters of it across, each from three
+  sinusoidal plane waves of 28–240 m wavelength with fixed phases. The waves
+  are frozen in the air and carried by the mean wind (Taylor's hypothesis):
+  in the default wind a standing car feels gusts every 12 s to 3 minutes,
+  and a car at 100 km/h crosses the shortest in about a second. There is no
+  vertical wind.
+
+The wind changes the dynamic pressure `½ρ|w - v|²` on every surface: a
+headwind adds drag, lift and wing downforce, a tailwind removes them, and a
+crosswind yaws the flow: it pushes the car downwind and turns its nose
+downwind through the body's side force.
+On the physics thread, `sim_step_car` samples it at each released car's
+centre of mass every substep, from the wind and driving-world clock that
+`prepare_batch` copies into the batch on the host; cars in the garage or a
+preview, and native traffic templates, feel none. Hinged panels feel the
+same wind. Air density stays at ISA sea level: there is no weather, altitude
+or temperature change of pressure.
 
 `part_runtime` reads `C_drag`/`drag_center` with the drive inputs and
 collects the wing faces in chassis coordinates when the body support is

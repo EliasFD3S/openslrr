@@ -32,6 +32,7 @@ void usage() {
       "           [--perf-log CSV|-] [--bench-map TRACK] [--bench-drive SECONDS]\n"
       "           [--bench-career SAVE_DIRECTORY] [--bench-realtime]\n"
       "           [--bench-time HOUR] [--bench-shots DIR]\n"
+      "           [--wind M/S[,HEADING]]\n"
       "           [--no-vsync] [--debug-overlay] [--physics-inline]\n"
       "           [PlayerName]\n"
       "\n"
@@ -151,6 +152,13 @@ int main(int argc, char** argv) {
     }
     if (std::strcmp(a, "--bench-drive") == 0 && i + 1 < argc) {
       opt.bench_drive_seconds = static_cast<float>(std::atof(argv[++i]));
+      continue;
+    }
+    if (std::strcmp(a, "--wind") == 0 && i + 1 < argc) {
+      char* rest = nullptr;
+      opt.wind_speed = std::strtof(argv[++i], &rest);
+      if (!(opt.wind_speed >= 0)) opt.wind_speed = 0;
+      if (rest && *rest == ',') opt.wind_heading = std::strtof(rest + 1, nullptr);
       continue;
     }
     if (std::strcmp(a, "--root") == 0 && i + 1 < argc) {

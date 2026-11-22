@@ -2400,6 +2400,12 @@ void rebuild_body_support(Object* chassis, Record& rec) {
   rec.body_support_dirty = false;
 }
 
+// The world's wind (part_set_wind) and the driving-world time that carries
+// its gusts. The host advances it as it prepares each physics batch, which
+// takes a copy of both.
+physics::Wind world_wind;
+double wind_clock = 0;
+
 // The car body gets real-life drag and lift; installed parts' CFG `wing`
 // lines authored as wings act as airfoils in their current mount pose, as the
 // EXE's per-part wing nodes follow their parts (0x44B48C, 0x48E880). Body
@@ -4332,6 +4338,8 @@ struct SimBatch {
   std::vector<WakeBox> wake;
   std::vector<size_t> loose_ended;  // loose bodies that left the batch, in order
   int64_t thread_ticks = 0;         // physics-thread time for the frame profiler
+  physics::Wind wind;               // world_wind, and wind_clock at the first tick
+  double wind_time = 0;
 };
 
 bool sim_live(const SimCar& car) { return car.ready && !car.fault_reported; }
@@ -4812,6 +4820,14 @@ void sim_step_car(SimBatch& batch, size_t index, unsigned tick, unsigned substep
       ground.normal = {hit.normal[0], hit.normal[1], hit.normal[2]};
       return true;
     };
+    // Wind blows on cars out in the world, not in the garage or a preview.
+    constexpr unsigned substeps =
+        physics::VehicleDynamics::frequency / physics::VehicleDynamics::update_frequency;
+    const double wind_time =
+        batch.wind_time + (tick * substeps + substep) * physics::VehicleDynamics::timestep;
+    car.dynamics.aero.wind =
+        car.released ? physics::wind_velocity(batch.wind, car.dynamics.body.position, wind_time)
+                     : physics::Vec3{};
     // One shared solver substep; controls remain on their 60 Hz host tick.
     const auto before_body = car.dynamics.body;
     const auto before = before_body.position;
@@ -5094,6 +5110,9 @@ void suspend_chassis(Object* chassis, Record& rec, GameRefState& node,
 SimBatch prepare_batch(unsigned ticks) {
   SimBatch batch;
   batch.ticks = ticks;
+  batch.wind = world_wind;
+  batch.wind_time = wind_clock;
+  wind_clock += double(ticks) / physics::VehicleDynamics::update_frequency;
   const auto* target = gameref_find_live(controlled_vehicle);
   Object* controlled = target ? as_part(static_cast<Object*>(target->key)) : nullptr;
   const auto& options = host_game_options();
@@ -6455,7 +6474,7 @@ void advance_flaps(double seconds) {
                                 geometry.pivot[1] + geometry.com[1],
                                 geometry.pivot[2] + geometry.com[2]};
       const Vec3 velocity = body.point_velocity(pivot), omega = body.omega();
-      const Vec3 air = inward(-body.point_velocity(outward(centre)));
+      const Vec3 air = inward(vehicle->dynamics.aero.wind - body.point_velocity(outward(centre)));
       loads.air[0] = air.x;
       loads.air[1] = air.y;
       loads.air[2] = air.z;
@@ -6513,6 +6532,11 @@ void advance_flaps(double seconds) {
 }
 
 } // namespace
+
+void part_set_wind(double speed, double heading_degrees) {
+  world_wind.speed = std::isfinite(speed) ? std::max(0.0, speed) : 0.0;
+  world_wind.heading = std::isfinite(heading_degrees) ? heading_degrees : 0.0;
+}
 
 void part_pause_engine_audio(bool paused) {
   // Trigger sounds are short one-shots, not resumable engine loops. Retire
