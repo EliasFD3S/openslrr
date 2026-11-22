@@ -98,6 +98,11 @@ std::string format_script_number(double v) {
 
 bool values_equal(const Value& a, const Value& b) {
   if (a.tag != b.tag) {
+    // An unassigned reference field or static reads as Void; Java sees null.
+    // RacerTalkDialog fills its static texts only `if (Text_honkin == null)`.
+    if ((a.tag == ValueTag::Void && b.tag == ValueTag::Obj && !b.v.o) ||
+        (b.tag == ValueTag::Void && a.tag == ValueTag::Obj && !a.v.o))
+      return true;
     if ((a.tag == ValueTag::Int || a.tag == ValueTag::Float) &&
         (b.tag == ValueTag::Int || b.tag == ValueTag::Float)) {
       const float af =

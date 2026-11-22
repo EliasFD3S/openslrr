@@ -65,6 +65,25 @@ void compiled_increments() {
  SLRR_REQUIRE(call("down").v.i==INT32_MAX);
  std::puts("PASS static pre/post ++/--, statement, float, foreign owner, local/instance regression and int wrap");
 }
+void unassigned_static_is_null() {
+ Fixture f;fs::create_directories(f.root/"probe/src");
+ // RacerTalkDialog.init fills its static texts only `if (Text_honkin == null)`.
+ std::ofstream(f.root/"probe/src/Texts.java")<<R"JAVA(package probe;
+ public class Texts {
+  static String[] lines;
+  public static int fill(){if(lines == null){lines=new String[2];lines[0]="a";lines[1]="b";}return lines.length;}
+  public static int unset(){return lines != null;}
+ }
+ )JAVA";
+ auto report=script_compile_all(f.root.string(),"probe");SLRR_REQUIRE(report.failed==0 && report.succeeded==1);
+ SLRR_REQUIRE(f.vm.load_class_file((f.root/"probe/Texts.class").string()));
+ SLRR_REQUIRE(f.vm.invoke_by_name("probe.Texts","unset",{},true).v.i==0);
+ SLRR_REQUIRE(f.vm.invoke_by_name("probe.Texts","fill",{},true).v.i==2);
+ const Value lines=f.vm.get_static("probe.Texts","lines");
+ SLRR_REQUIRE(lines.tag==ValueTag::Obj && lines.v.o && lines.v.o->slots.size()==2);
+ SLRR_REQUIRE(f.vm.invoke_by_name("probe.Texts","unset",{},true).v.i==1);
+ std::puts("PASS an unassigned static reference compares equal to null");
+}
 struct ClockHost : TreeHost {
  Object refresher;
  std::unordered_map<std::string,Value> fields;
@@ -100,4 +119,4 @@ void shipped_spend_time() {
   }
  throw std::runtime_error("GameLogic.spendTime not found");
 }
-int main(){const standalone::Test tests[]={compiled_increments,shipped_spend_time};return standalone::run("static_increment",tests);}
+int main(){const standalone::Test tests[]={compiled_increments,unassigned_static_is_null,shipped_spend_time};return standalone::run("static_increment",tests);}

@@ -56,6 +56,11 @@ are removed before invoking script code, including on a mask miss. Named
 methods take the stock GameRef/event/int or GameRef/event/String signatures;
 the default selects `handleEventAsync` when the listener enables async mode.
 
+Timers belong to their GameType: a section change does not remove them, and a
+due timer reaches `handleEvent` whenever its owner's mask includes EVENT_TIME,
+whether or not the owner is the active section. Stock exit() methods clear their
+own timers or mask; City keeps its one-second tick through RaceSetup.
+
 The event emitter is connected to existing timer and mechanic part-pointer
 events, and to trigger volumes: `scene_triggers_tick` emits
 `EVENT_TRIGGER_ON` (0x20) and `EVENT_TRIGGER_OFF` (0x40) from a
@@ -454,7 +459,10 @@ original junction producer remain outside this port.
 brake and steering to configure_drive in the existing Part solver. Player
 Controller commands keep their owner. BeginRace/stop/suspend hold; race/GoToTarget
 plan a route; GoToTraffic follows roads and restrictions; follow periodically
-replans toward its target. The latest v221 NightRace finish policy preserves
+replans toward its target. Outside traffic, a brain's ground is the first
+ancestor of its car with a road graph, because script GroundRefs are not tagged
+with the GroundRef kind; race, night-race and pursuit cars reach it through
+setParent(map). The latest v221 NightRace finish policy preserves
 the destination and coasts across the finish plane when the radius-based Java
 stop event arrives early, then applies brakes.
 

@@ -41,12 +41,16 @@ bool read_point(std::istream &in, RoadPoint &p) {
          std::all_of(p.begin(), p.end(),
                      [](float x) { return std::isfinite(x); });
 }
-void *car_ground(Object *car) {
+void *car_ground(const RpkIndex &rpk, Object *car) {
   if (auto *ground = race_traffic_ground(car))
     return ground;
+  // Race, night-race and police cars outside traffic reach their map through
+  // setParent(map). Nothing tags a script GroundRef or a native map GameType
+  // as GameRefKind::GroundRef at run time, so the first ancestor with a road
+  // graph is the car's ground.
   auto *n = gameref_get(car);
   for (int i = 0; n && i < 32; ++i) {
-    if (n->kind == GameRefKind::GroundRef)
+    if (n->kind == GameRefKind::GroundRef || race_ground_roads(rpk, n->key))
       return n->key;
     n = gameref_get(n->parent);
   }
@@ -154,7 +158,8 @@ RoadRoute spline(const RpkIndex &rpk, const std::string &file,
   return r;
 }
 void traffic_route(Brain &b, const RoadPoint &position) {
-  auto graph = race_ground_roads(*b.resources, car_ground(b.car));
+  auto graph =
+      race_ground_roads(*b.resources, car_ground(*b.resources, b.car));
   PartMatrix frame;
   RoadPoint heading{};
   if (scene_instances_script_matrix(b.car, frame.data()))
@@ -258,8 +263,8 @@ bool race_brain_command(const RpkIndex &rpk, void *key,
   if (verb == "AI_race" || verb == "AI_GoToTarget") {
     RoadPoint finish;
     if (read_point(input, finish)) {
-      auto route =
-          race_query_route(rpk, car_ground(b.car), car_position(b.car), finish);
+      auto route = race_query_route(rpk, car_ground(rpk, b.car),
+                                    car_position(b.car), finish);
       if (route)
         b.route = *route;
     }
@@ -313,7 +318,7 @@ bool race_drive_input(Object *car, const RoadPoint &position, float yaw,
     b->runout = false;
   }
   if (b->mode == "AI_GoToTraffic") {
-    if (race_traffic_halted(car_ground(car), position, car)) {
+    if (race_traffic_halted(car_ground(*b->resources, car), position, car)) {
       b->blocked_for = 0;
       return true; // A red light is not a failed driver.
     }
@@ -362,8 +367,9 @@ bool race_drive_input(Object *car, const RoadPoint &position, float yaw,
         auto finish = car_position(target);
         for (int k = 0; k < 3; ++k)
           finish[k] += b->offset[k];
-        auto r =
-            race_query_route(*b->resources, car_ground(car), position, finish);
+        auto r = race_query_route(*b->resources,
+                                  car_ground(*b->resources, car), position,
+                                  finish);
         b->route = r ? *r : RoadRoute{};
         b->progress = 0;
       }

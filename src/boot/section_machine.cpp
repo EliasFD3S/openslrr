@@ -130,11 +130,10 @@ void SectionMachine::change_active_section(Object* next) {
   Object* old = actual_;
   if (old) {
     std::printf("[section] exit %s\n", old->class_name.c_str());
+    // A section owns its timers. exit() clears them or masks EVENT_TIME, and
+    // Track keeps City's one-second tick through RaceSetup (the tick checks
+    // actualState), so a section change must not drop them.
     call_lifecycle(jvm_, old, "exit", next);
-    // Drop pending timers (tree-smoke Splash.addTimer must not fire later).
-    if (jvm_)
-      jvm_->invoke(old->class_name, "removeAllTimers", "()V",
-                   {Value::make_obj(old)}, false);
   }
   actual_ = next;
   actual_name_ = next ? next->class_name : "(null)";

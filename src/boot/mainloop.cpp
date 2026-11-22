@@ -37,19 +37,15 @@ constexpr float kDtClamp = 0.1f;  // PE Engine_dtClamp @ 0x60C8CC
 
 void dispatch_due_timers(Jvm& jvm, float now, int32_t* fired) {
   // Soft PE TickTimers → queueEvent EVENT_TIME (0x80) → handleEvent(ref,I,I).
-  // Gate on GameType.event_mask like stock mask test. Only the live
-  // section may consume timers (stale Splash from tree smoke).
-  // GameLogic is not a section: its 10 s timer is the 4x clock
-  // (spendTime(timeRefreshRate * timeFactor), then it re-arms).
-  Object* actual = nullptr;
-  Value av = jvm.get_static("java.game.GameLogic", "actualState");
-  if (av.tag == ValueTag::Obj) actual = av.v.o;
+  // Gate on GameType.event_mask like stock mask test, not on the active
+  // section: City keeps its one-second tick through RaceSetup and checks
+  // actualState itself, GameLogic's 10 s timer is the 4x clock and a Bot
+  // rejoins traffic from its own timer. A section that leaves (the tree-smoke
+  // Splash included) clears EVENT_TIME or its timers in exit().
   for (const DueTimer& t : gameref_poll_timers(now)) {
     auto* o = static_cast<Object*>(t.key);
     if (!o) continue;
     script_event_emit(jvm,o,nullptr,kEventTime,Value::make_int(t.timer_id));
-    const bool game_clock = o->class_name == "java.game.GameLogic";
-    if (actual && o != actual && !game_clock) continue;
     GameRefState* st = gameref_get(o);
     if (st && (st->event_mask & kEventTime) == 0) continue;
     jvm.invoke(o->class_name, "handleEvent",

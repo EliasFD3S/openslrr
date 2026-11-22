@@ -710,6 +710,18 @@ VM and lifetime:
   pass: boot to the main menu and the garage was checked in game.
 - `System.arraycopy` grows the destination on purpose
   (`src/natives/natives_internal.hpp:native_arraycopy`).
+- An unassigned reference field or static reads as Void and compares equal to
+  null (`src/jvm/tree_eval.cpp:values_equal`). RacerTalkDialog builds its
+  static reply texts only `if (Text_honkin == null)`; before #226 every racer
+  reply except the literal lines was blank.
+- Timers belong to their GameType. A section change neither removes nor drops
+  them; EVENT_TIME is gated only by the event mask
+  (`src/boot/section_machine.cpp:change_active_section`,
+  `src/boot/mainloop.cpp:dispatch_due_timers`). Stock sections clear their own
+  timers or mask in exit(). City's one-second tick (police, racer challenges,
+  night races, the garage trigger) keeps running through RaceSetup and checks
+  actualState itself; before #226 it stopped for the rest of the visit after a
+  day race was set up.
 
 Resources and data:
 
@@ -2349,6 +2361,10 @@ Sources and host limits: EXTERNAL_RESEARCH v221 section and SCRIPT_RUNTIME share
 race section. Tests: road_routes, race_brain, traffic_runtime and race_vehicle.
 A real assembled Baiern moves under original Bot.startRace commands in an
 isolated fixture; this is not proof of finished career day/night/ROC sessions.
+A brain outside traffic finds its ground through the car's parents
+(`src/resources/race_brain.cpp:car_ground`): nothing tags a script GroundRef or
+native map with the GroundRef kind at run time, so before #226 day, quick and
+night race opponents and pursuing police got no route and never moved.
 The original issues and #179 were closed for consolidation, not gameplay acceptance;
 #197 retains the remaining work. The [current audit](TRAFFIC_RACE_AUDIT.md)
 records the baseline's missing chassis pairs/player-only movable contacts, the

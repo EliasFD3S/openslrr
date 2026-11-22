@@ -45,7 +45,9 @@ struct RaceFixture : Fixture {
     auto city = packs.open_lib("maps/city.rpk");
     auto *w = gameref_upsert(&world, GameRefKind::Dummy);
     w->flags = kWorldTreeRoot;
-    auto *g = gameref_upsert(&ground, GameRefKind::GroundRef);
+    // Like a script `new GroundRef(...)` at run time: no GroundRef kind, so a
+    // brain finds the roads through the car's parent.
+    auto *g = gameref_upsert(&ground);
     g->type_id = RpkIndex::make_full_id(city, 1);
     gameref_set_parent(&ground, &world);
     // The synthetic car's resource payload is cached before changing root.
