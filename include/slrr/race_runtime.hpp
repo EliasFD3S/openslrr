@@ -19,6 +19,14 @@ struct RaceDriveInput {
 bool race_brain_command(const RpkIndex &, void *brain, const std::string &);
 bool race_drive_input(Object *car, const RoadPoint &position, float yaw,
                       float speed, float dt, RaceDriveInput &);
+// Visible top-level cars at the start of a physics tick, in script metres.
+// Brains keep their distance from these (lead-car following).
+struct RacePeer {
+  Object *car = nullptr;
+  RoadPoint position{}, velocity{}, forward{};
+  float half_length = 2.3f, half_width = .95f;
+};
+void race_set_peers(std::vector<RacePeer> peers);
 void race_brain_forget(void *);
 void race_brains_reset();
 void race_set_traffic_mode(const RpkIndex &, Object *);
@@ -33,8 +41,10 @@ void race_traffic_reset();
 int32_t race_traffic_pointer(Object *);
 // Canonical, incarnation-checked map retained by the traffic registration.
 void *race_traffic_ground(Object *);
+// True when the car must stop for a signal, STOP line or halt. stop_distance
+// receives the distance left to the stopping point (0: stop now).
 bool race_traffic_halted(void *ground, const RoadPoint &position,
-                         Object *car = nullptr);
+                         Object *car = nullptr, float *stop_distance = nullptr);
 void race_halt_path(const RpkIndex &, void *, const RoadPoint &,
                     const RoadPoint &);
 void race_halt_cross(const RpkIndex &, void *, const RoadPoint &, float);

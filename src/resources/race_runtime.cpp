@@ -199,7 +199,17 @@ void register_race_natives(Jvm &vm, RpkIndex &rpk, SectionMachine &sections) {
       "(Ljava.lang.Vector3;Ljava.lang.Vector3;)F",
       [query](Object *self, const std::vector<Value> &args) {
         auto r = query(self, args);
-        return Value::make_float(r ? r->length : -1.f);
+        float length = r ? r->length : -1.f;
+        // City compares police-to-player road distance with 10 m to pull a
+        // driver over. For two cars a few metres apart on one level, the
+        // graph's lane offsets and junction anchors only inflate it.
+        auto a = point(object(args, 0)), b = point(object(args, 1));
+        if (a && b && std::fabs((*a)[1] - (*b)[1]) < 2.5f &&
+            std::hypot((*a)[0] - (*b)[0], (*a)[2] - (*b)[2]) < 20) {
+          const float direct = road_distance(*a, *b);
+          length = length < 0 ? direct : std::min(length, direct);
+        }
+        return Value::make_float(length);
       });
   vm.natives().register_method("java.util.resource.GroundRef", "getRouteLength",
                                "()F",

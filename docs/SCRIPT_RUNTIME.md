@@ -370,6 +370,12 @@ The full 0..1 range is effective: the old cap at .5 is removed. Spawn candidates
 are kept 45..160 m from the player, with candidates in front rejected below 80 m;
 ordinary cars recycle outside 220 m. This concentrates the population locally
 instead of spreading a small cap over the old 260/380 m spawn/retention ranges.
+Three seconds after a population starts (its first fill happens behind the
+loading screen), no car appears where the world camera looks: candidates and
+hidden rivals inside the view distance and a cone wide enough for a 2:1 window
+(plus a car-length margin) wait, and a car past its recycle distance stays while
+it remains in that cone. Buildings are not tested, so a hidden street in front
+also counts as seen. A frame stops searching after eight unseen-road misses.
 
 Four-wheel native cars and native-only racer doubles now use the existing rigid
 body, floor collision and suspension solver while visible. The inline CFG wheels
@@ -403,14 +409,22 @@ receive multiple connected curves ahead and steer, accelerate and brake through
 the same Part solver as opponents. The external fallback carries arc-length
 progress through lane -> crossing -> outgoing lane. The external/coarse path chooses a destination branch before one of its lanes;
 the physical brain currently rebuilds lookahead using the first connected exit.
-Native traffic uses an urban cruise target; rural speed groups, physical forward
-peer following and the complete upstream traffic controller are not ported.
+Native traffic uses an urban cruise target. Physical traffic and pursuers keep a
+time gap to the car ahead with v221 bot.ts followingSpeed over a straight
+corridor as wide as both cars, using a snapshot of visible cars taken once per
+physics tick (`race_set_peers`). A car held behind another for 20 s (a
+pursuer 5 s) ignores peers for 3 s, so two cars nosed into each other in a
+junction clear; a car turning round at walking pace ignores them. Rural
+speed groups, lane changes, reaction delays and the rest of the upstream
+traffic controller are not ported.
 
 GameRef.create_native on a native car builds its CFG-backed native assembly
 and aliases the Java handle to it, without running a chassis-specific constructor.
 This covers Valocity's fake_racers doubles created at (0,-10000,0), followed by
-addTrafficCar(dummycar,null). Registration owns insertion/visibility; removing it
-preserves the Java-owned car. Explicit insertion positions are projected onto
+addTrafficCar(dummycar,null). Registration owns insertion/visibility;
+remTrafficCar preserves the car, including a streamed one: Bot.followCar
+detaches a police car from traffic before driving it, and a Bot's `controllable`
+replaces the host traffic driver of that car. Explicit insertion positions are projected onto
 actual lanes and published on the road before becoming visible. There are no
 Valocity-specific VM exceptions.
 
@@ -437,15 +451,20 @@ its -BaselineRef f42f1b6 option; traffic_runtime also supports that baseline.
 Notifications emit balanced car_add <live-id> <registration-id> / car_rem
 <live-id> strings to original Java after placement. Java owns opponent lists,
 markers, challenges, countdowns, results and transitions. Removing a traffic
-registration preserves a Java-owned rival; native-owned cars are destroyed.
+registration through remTrafficCar preserves the car; host recycling and
+delTraffic destroy native-owned cars.
 
 Signal fixtures come from actual ICFG trlight placements, including exterior
 maps. The shared crossing/approach binding follows SLRR_rev traffic branch
 bea8ce06 and its traffic-control.ts: nearest crossing, then nearest flagged
 incoming endpoint, grouped by its owning street. Heads and traffic consume the
 same 10 s green / 3 s yellow branch cycle. Red/yellow prevent new entry; green
-passage latches clearance until the next road. These timings and the 2 m offset before the incoming lane end are host policy,
-not recovered original timing/stop lines.
+passage latches clearance until the next road. A physical driver eases down
+(about 2.5 m/s2) to a point 3 m short of the lane end for red, yellow, timed
+STOP and crossing halts, holding the brake once stopped, instead of braking fully
+22 m out; a yellow it cannot stop for at 3 m/s2 is crossed. These timings, the
+3 m physical and 2 m external-motion offsets before the incoming lane end are
+host policy, not recovered original timing/stop lines.
 Signal lens emission is grouped into one cached mesh per ground shell (at most
 three colour groups), rebuilt on phase/registration changes. No separate draw
 per signal head is added. A regulated approach without a matching lamp is a distinct timed STOP state,
@@ -459,7 +478,13 @@ original junction producer remain outside this port.
 brake and steering to configure_drive in the existing Part solver. Player
 Controller commands keep their owner. BeginRace/stop/suspend hold; race/GoToTarget
 plan a route; GoToTraffic follows roads and restrictions; follow periodically
-replans toward its target. Outside traffic, a brain's ground is the first
+replans toward its target every half second. Its offset is in the target's
+frame (+Z behind), so City's `AI_follow 0,0,10` chases 10 m behind the player and
+closes to 5 m once the player is nearly stopped, then waits there. A pursuer is
+not limited to the race ceiling: it drives up to 28 + 12 x AI level m/s and
+arrives at its target's speed. GroundRef.getRouteLength returns the direct
+distance for two points under 20 m apart on one level, because lane offsets and
+junction anchors inflated it past City's 10 m pull-over check. Outside traffic, a brain's ground is the first
 ancestor of its car with a road graph, because script GroundRefs are not tagged
 with the GroundRef kind; race, night-race and pursuit cars reach it through
 setParent(map). The latest v221 NightRace finish policy preserves
@@ -469,7 +494,8 @@ stop event arrives early, then applies brakes.
 Traffic refreshes its route every two seconds, including projections onto
 crossing curves. Adapted from SLRR_rev traffic bot.ts, a driver requesting throttle
 without progress for two seconds attempts up to 3.5 seconds of reverse recovery,
-only while the rear corridor is clear, then replans. A red light/timed STOP resets
+only while the rear corridor is clear, then replans. Race, spline, GoToTarget and
+follow drivers recover the same way after three seconds, reversing 2.5 seconds. A red light/timed STOP resets
 the blocked timer and never triggers that manoeuvre. AI_stop cancels recovery.
 Reverse requests are supported by both the native force driver and the scripted
 mechanical gearbox. These recovery thresholds remain host policies from upstream.
@@ -493,7 +519,9 @@ deviation, rather than the previous 122/126 seconds.
 
 Limitations: behaviour flags are stored without tuning; trailing model
 parameters, spline width/speed metadata, AI_params and opponent IDs do not tune
-the controller. Follow offsets are world-space. Complete pursuit, traffic lane changes,
+the controller. A police scout sent back with AI_GoToTraffic is never told
+`ai_info_entertraffic`, so City keeps it as returning until it is 600 m away and
+replaces it. Traffic lane changes,
 the full traffic impact/recovery policy and opponent driver seating
 remain incomplete. Native/mechanical chassis now share 120 Hz contact substeps
 under the unchanged 60 Hz host/control tick. Each active-world OBB pair receives

@@ -2520,6 +2520,13 @@ A brain outside traffic finds its ground through the car's parents
 (`src/resources/race_brain.cpp:car_ground`): nothing tags a script GroundRef or
 native map with the GroundRef kind at run time, so before #226 day, quick and
 night race opponents and pursuing police got no route and never moved.
+Before #324 the police chase still failed: Bot.followCar calls remTrafficCar,
+which destroyed the streamed police car the scout had just adopted. It now keeps
+the car, and the scout's `controllable` replaces the host traffic driver. Lead-car
+following (`src/resources/race_brain.cpp:following_speed`, fed once per physics
+tick by `race_set_peers`), eased stops (`src/resources/traffic_runtime.cpp:race_traffic_halted`
+returns the distance to the stop point) and camera-aware spawning
+(`src/resources/traffic_runtime.cpp:in_view`) are described in SCRIPT_RUNTIME.
 The original issues and #179 were closed for consolidation, not gameplay acceptance;
 #197 retains the remaining work. The [current audit](TRAFFIC_RACE_AUDIT.md)
 records the baseline's missing chassis pairs/player-only movable contacts, the

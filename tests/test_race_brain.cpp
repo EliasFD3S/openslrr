@@ -173,9 +173,66 @@ void traffic_blocked_recovery() {
   std::puts("PASS blocked traffic physically requests reverse recovery; stop "
             "cancels it");
 }
+void traffic_follows_peer_and_bot_takes_over() {
+  RaceFixture f;
+  f.packs.open_all();
+  auto graph = race_ground_roads(f.packs, &f.ground);
+  SLRR_REQUIRE(graph);
+  size_t edge = 0;
+  for (; edge < graph->traffic_edges().size(); ++edge)
+    if (!graph->traffic_edges()[edge].crossing &&
+        graph->traffic_signal(edge, 0) == -1 &&
+        !graph->traffic_edges()[edge].next.empty() &&
+        graph->traffic_edges()[edge].length > 40)
+      break;
+  SLRR_REQUIRE(edge < graph->traffic_edges().size());
+  const auto &e = graph->traffic_edges()[edge];
+  RoadRoute line;
+  line.points = e.points;
+  auto start = road_at(line, e.length * .25f),
+       next = road_at(line, e.length * .25f + 1);
+  float yaw = std::atan2(-(next[0] - start[0]), -(next[2] - start[2]));
+  RoadPoint forward{-std::sin(yaw), 0, -std::cos(yaw)};
+  auto *car = f.car();
+  gameref_set_matrix(car, start[0], start[1], start[2], yaw, 0, 0);
+  race_set_traffic_mode(f.packs, car);
+  RaceDriveInput input;
+  SLRR_REQUIRE(race_drive_input(car, start, yaw, 5, .02f, input) &&
+               input.throttle > 0);
+  // A stopped car 7 m ahead holds the driver; it does not ram it.
+  Object lead;
+  RacePeer peer;
+  peer.car = &lead;
+  peer.forward = forward;
+  for (int k = 0; k < 3; ++k)
+    peer.position[k] = start[k] + 7 * forward[k];
+  race_set_peers({peer});
+  SLRR_REQUIRE(race_drive_input(car, start, yaw, 5, .02f, input) &&
+               input.throttle == 0 && input.brake > .9f);
+  SLRR_REQUIRE(race_drive_input(car, start, yaw, 0, .02f, input) &&
+               input.throttle == 0 && input.brake == 1 && !input.reverse);
+  race_set_peers({});
+  SLRR_REQUIRE(race_drive_input(car, start, yaw, 0, .02f, input) &&
+               input.throttle > 0);
+  // A Bot adopting the streamed car (City's woken police scout) replaces
+  // the host traffic driver.
+  Object brain;
+  gameref_upsert(&brain);
+  race_brain_command(f.packs, &brain,
+                     "controllable " + std::to_string(gameref_make_live(car)));
+  race_brain_command(f.packs, &brain, "AI_suspend");
+  SLRR_REQUIRE(race_drive_input(car, start, yaw, 0, .02f, input) &&
+               input.throttle == 0 && input.brake == 1);
+  gameref_remove(&brain);
+  SLRR_REQUIRE(!race_drive_input(car, start, yaw, 0, .02f, input));
+  part_destroy(car);
+  std::puts("PASS traffic waits behind a stopped car; a Bot's controllable "
+            "replaces the traffic driver");
+}
 int main() {
   const standalone::Test tests[] = {
       traffic_blocked_recovery, spline_wait_and_arbitration,
-      city_route_drives_and_halts, preview_bend_brakes, night_finish_runout};
+      city_route_drives_and_halts, preview_bend_brakes, night_finish_runout,
+      traffic_follows_peer_and_bot_takes_over};
   return standalone::run("race_brain", tests);
 }

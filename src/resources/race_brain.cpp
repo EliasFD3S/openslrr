@@ -23,12 +23,54 @@ struct Brain {
   RoadRoute route;
   float progress = 0, steering = 0, level = 1, replan = 0;
   float blocked_for = 0, reverse_for = 0, reverse_steer = 0;
+  float queued_for = 0, ignore_peers_for = 0;
   int32_t target = 0;
   RoadPoint offset{};
   bool night = false, runout = false;
   RoadPoint finish{}, finish_direction{};
 };
 std::unordered_map<void *, Brain> brains;
+std::vector<RacePeer> peers;
+// Port of SLRR_rev v221 engine/bot.ts followingSpeed: keep a time gap to the
+// nearest car ahead in a straight corridor as wide as both cars, and never
+// close within 3 m of it.
+float following_speed(Object *car, Object *ignore, const RoadPoint &position,
+                      const RoadPoint &forward, float speed, float desired) {
+  float own_length = 4.6f, own_width = 1.9f;
+  for (const auto &peer : peers)
+    if (peer.car == car) {
+      own_length = 2 * peer.half_length;
+      own_width = 2 * peer.half_width;
+      break;
+    }
+  for (const auto &peer : peers) {
+    if (peer.car == car || peer.car == ignore)
+      continue;
+    const float dx = peer.position[0] - position[0],
+                dz = peer.position[2] - position[2];
+    const float along = dx * forward[0] + dz * forward[2];
+    if (along <= 0 || along > 60 ||
+        std::fabs(peer.position[1] - position[1]) > 2.5f)
+      continue;
+    const float alignment = std::min(
+        1.f, std::fabs(peer.forward[0] * forward[0] + peer.forward[2] * forward[2]));
+    const float across = std::sqrt(std::max(0.f, 1 - alignment * alignment));
+    const float length =
+        2 * (peer.half_length * alignment + peer.half_width * across);
+    const float width =
+        2 * (peer.half_width * alignment + peer.half_length * across);
+    if (std::fabs(dx * forward[2] - dz * forward[0]) >
+        (own_width + width) * .5f + .3f)
+      continue;
+    const float gap = along - (own_length + length) * .5f;
+    const float lead = std::max(0.f, peer.velocity[0] * forward[0] +
+                                         peer.velocity[2] * forward[2]);
+    desired = std::min(
+        {desired, std::max(0.f, lead + (gap - 3 - std::max(0.f, speed) * 1.2f) * .7f),
+         std::sqrt(6 * std::max(0.f, gap - 3))});
+  }
+  return desired;
+}
 Object *live_car(int32_t id) {
   auto *n = gameref_find_live(id);
   if (!n)
@@ -194,7 +236,11 @@ void race_brain_forget(void *key) {
   std::erase_if(brains,
                 [&](const auto &entry) { return entry.second.car == key; });
 }
-void race_brains_reset() { brains.clear(); }
+void race_brains_reset() {
+  brains.clear();
+  peers.clear();
+}
+void race_set_peers(std::vector<RacePeer> list) { peers = std::move(list); }
 bool race_brain_command(const RpkIndex &rpk, void *key,
                         const std::string &command) {
   std::istringstream input(command);
@@ -222,6 +268,12 @@ bool race_brain_command(const RpkIndex &rpk, void *key,
       b.car = live_car(id);
       auto *car = gameref_get(b.car);
       b.car_incarnation = car ? car->incarnation : 0;
+      // A Bot that adopts a streamed traffic car (a woken police scout)
+      // replaces the host's traffic driver of that car.
+      if (b.car)
+        std::erase_if(brains, [&](const auto &entry) {
+          return entry.first != n->key && entry.second.car == b.car;
+        });
     }
     return true;
   }
@@ -317,56 +369,78 @@ bool race_drive_input(Object *car, const RoadPoint &position, float yaw,
     }
     b->runout = false;
   }
-  if (b->mode == "AI_GoToTraffic") {
-    if (race_traffic_halted(car_ground(*b->resources, car), position, car)) {
-      b->blocked_for = 0;
-      return true; // A red light is not a failed driver.
-    }
-    if (b->reverse_for > 0) {
-      b->reverse_for = std::max(0.f, b->reverse_for - dt);
-      PartMatrix frame;
-      RoadPoint forward{};
-      if (scene_instances_script_matrix(car, frame.data()))
-        forward = {-frame[8], 0, -frame[10]};
-      bool clear = true;
-      for (const auto &peer : part_vehicle_positions())
-        if (peer.chassis != car) {
-          float dx = peer.position[0] - position[0],
-                dz = peer.position[2] - position[2];
-          float along = dx * forward[0] + dz * forward[2],
-                side = std::fabs(dx * forward[2] - dz * forward[0]);
-          if (along < 0 && along > -10 && side < 2.5 &&
-              std::fabs(peer.position[1] - position[1]) < 3)
-            clear = false;
-        }
-      if (clear) {
-        out.reverse = true;
-        out.throttle = .65f;
-        out.brake = speed < -3.3f ? .3f : 0;
-        out.steer = b->reverse_steer;
-        out.start = true;
+  const bool traffic = b->mode == "AI_GoToTraffic",
+             follow = b->mode == "AI_follow";
+  const bool driving = traffic || follow || b->mode == "AI_race" ||
+                       b->mode == "AI_GoToTarget" || b->mode == "AI_spline";
+  // A red light, STOP line or race halt slows the car to its stopping point;
+  // it is not a failed driver.
+  float stop = 0;
+  const bool halted =
+      traffic &&
+      race_traffic_halted(car_ground(*b->resources, car), position, car, &stop);
+  if (halted)
+    b->blocked_for = 0;
+  if (driving && !halted && b->reverse_for > 0) {
+    b->reverse_for = std::max(0.f, b->reverse_for - dt);
+    PartMatrix frame;
+    RoadPoint forward{};
+    if (scene_instances_script_matrix(car, frame.data()))
+      forward = {-frame[8], 0, -frame[10]};
+    bool clear = true;
+    for (const auto &peer : part_vehicle_positions())
+      if (peer.chassis != car) {
+        float dx = peer.position[0] - position[0],
+              dz = peer.position[2] - position[2];
+        float along = dx * forward[0] + dz * forward[2],
+              side = std::fabs(dx * forward[2] - dz * forward[0]);
+        if (along < 0 && along > -10 && side < 2.5 &&
+            std::fabs(peer.position[1] - position[1]) < 3)
+          clear = false;
       }
-      if (b->reverse_for == 0) {
+    if (clear) {
+      out.reverse = true;
+      out.throttle = .65f;
+      out.brake = speed < -3.3f ? .3f : 0;
+      out.steer = b->reverse_steer;
+      out.start = true;
+    }
+    if (b->reverse_for == 0) {
+      if (traffic)
         traffic_route(*b, position);
-        b->replan = 2;
-      }
-      return true;
+      b->replan = traffic ? 2.f : 0.f;
     }
+    return true;
+  }
+  if (traffic) {
     b->replan -= dt;
     if (b->replan <= 0) {
       traffic_route(*b, position);
       b->replan = 2;
     }
   }
-  if (b->mode == "AI_follow") {
+  Object *followed = nullptr;
+  float target_speed = 0;
+  if (follow) {
+    followed = live_car(b->target);
+    if (auto *t = gameref_get(followed))
+      target_speed = std::hypot(t->vel[0], t->vel[2]);
     b->replan -= dt;
     if (b->replan <= 0) {
-      b->replan = 1;
-      auto *target = live_car(b->target);
-      if (target) {
-        auto finish = car_position(target);
+      b->replan = .5f;
+      PartMatrix frame;
+      if (followed && scene_instances_script_matrix(followed, frame.data())) {
+        // The offset is in the followed car's frame: +Z is behind it. A
+        // stopped car is approached to within 5 m to pull it over.
+        auto offset = b->offset;
+        const float length = road_distance(offset, {});
+        if (target_speed < 3 && length > 5)
+          for (auto &v : offset)
+            v *= 5 / length;
+        RoadPoint finish;
         for (int k = 0; k < 3; ++k)
-          finish[k] += b->offset[k];
+          finish[k] = frame[12 + k] + offset[0] * frame[k] +
+                      offset[1] * frame[4 + k] + offset[2] * frame[8 + k];
         auto r = race_query_route(*b->resources,
                                   car_ground(*b->resources, car), position,
                                   finish);
@@ -375,9 +449,8 @@ bool race_drive_input(Object *car, const RoadPoint &position, float yaw,
       }
     }
   }
-  if (b->mode == "AI_GoToTraffic" &&
-      (b->route.points.size() < 2 ||
-       road_distance(position, b->route.points.back()) < 8))
+  if (traffic && (b->route.points.size() < 2 ||
+                  road_distance(position, b->route.points.back()) < 8))
     traffic_route(*b, position);
   if (b->route.points.size() < 2)
     return true;
@@ -411,7 +484,9 @@ bool race_drive_input(Object *car, const RoadPoint &position, float yaw,
   }
   b->progress = std::max(b->progress, projected);
   auto finish = points.back();
-  if (!b->night && b->progress >= std::max(0.f, b->route.length - 12.f) &&
+  // A follower keeps chasing a moving target past the end of its last route.
+  if (!b->night && !follow &&
+      b->progress >= std::max(0.f, b->route.length - 12.f) &&
       std::hypot(position[0] - finish[0], position[2] - finish[2]) < 3) {
     b->route = {};
     return true;
@@ -440,19 +515,29 @@ bool race_drive_input(Object *car, const RoadPoint &position, float yaw,
   float request = std::clamp(std::atan(2.7f * curvature) / .6f, -1.f, 1.f);
   // sin(pi) is zero: pure pursuit alone accelerates straight away from a
   // target behind the car. Recover at walking speed with a real steering lock.
-  const bool behind = std::fabs(angle) > 1.5707963f;
+  // A follower at its target point waits there instead of circling it.
+  const bool arrived =
+      follow && std::hypot(position[0] - finish[0], position[2] - finish[2]) < 2.5f;
+  const bool behind = !arrived && std::fabs(angle) > 1.5707963f;
   if (behind)
     request = std::copysign(1.f, angle);
+  if (arrived)
+    request = 0;
   b->steering += std::clamp(request - b->steering, -dt * 3, dt * 3);
   const bool spline_race = b->mode == "AI_spline";
   const float curvature_floor = (b->night || spline_race) ? 1.e-9f : .005f;
+  const float remaining = b->route.length - b->progress;
+  // A pursuer (AI_level 0..0.75 for police) outruns the speed limit and
+  // arrives at its target's speed.
   float desired = std::min(
       {b->night ? INFINITY
+       : follow ? 28 + 12 * std::clamp(b->level, 0.f, 1.f)
                 : (spline_race ? 55.f : 32.f) * std::clamp(b->level, .5f, 1.5f),
        std::sqrt(4.5f / std::max(curvature_floor, std::fabs(curvature))),
        b->night ? INFINITY
+       : follow ? target_speed + std::sqrt(8 * std::max(0.f, remaining))
                 : std::sqrt(8 * std::max(road_distance(position, finish),
-                                         b->route.length - b->progress))});
+                                         remaining))});
   // Brake before a bend, rather than waiting for it to enter the short
   // steering lookahead. Distances and acceleration are host tuning in SI units.
   for (float ahead : {8.f, 16.f, 32.f, 48.f, 80.f, 128.f, 192.f}) {
@@ -472,19 +557,51 @@ bool race_drive_input(Object *car, const RoadPoint &position, float yaw,
   }
   if (behind)
     desired = std::min(desired, 3.f);
-  if (b->mode == "AI_GoToTraffic")
+  if (arrived)
+    desired = std::min(desired, target_speed);
+  if (traffic)
     desired = std::min(desired, 8.f);
+  // Ease down to the stop line at about 2.5 m/s2 (v221 bot.ts).
+  if (halted)
+    desired = std::min(desired, stop < .25f ? 0.f : std::sqrt(5 * stop));
+  // A car turning round at walking pace is not heading into the corridor
+  // ahead of its nose.
+  if ((traffic || follow) && !behind) {
+    b->ignore_peers_for = std::max(0.f, b->ignore_peers_for - dt);
+    const RoadPoint forward{-std::sin(yaw), 0, -std::cos(yaw)};
+    const float limited =
+        b->ignore_peers_for > 0
+            ? desired
+            : following_speed(car, followed, position, forward, speed, desired);
+    // Two cars nosed into each other in a junction would wait forever:
+    // after a standstill behind another car, edge forwards anyway. A pursuer
+    // waits less.
+    b->queued_for = limited < desired - .5f && std::fabs(speed) < .3f && !halted
+                        ? b->queued_for + dt
+                        : 0;
+    if (b->queued_for > (follow ? 5.f : 20.f)) {
+      b->queued_for = 0;
+      b->ignore_peers_for = 3;
+    }
+    desired = limited;
+  }
   out.brake = std::clamp((speed - desired) * .35f, 0.f, 1.f);
   out.throttle =
       out.brake > .05f ? 0 : std::clamp((desired - speed) * .5f, 0.f, 1.f);
+  // Hold a stopped car rather than creeping between tiny commands.
+  if (desired < .3f && std::fabs(speed) < .5f) {
+    out.brake = 1;
+    out.throttle = 0;
+  }
   out.steer = b->steering;
   out.start = true;
-  if (b->mode == "AI_GoToTraffic") {
+  if (driving) {
+    // Stuck against a car or wall with the throttle open: back off and retry.
     b->blocked_for =
         out.throttle > .45f && std::fabs(speed) < .5f ? b->blocked_for + dt : 0;
-    if (b->blocked_for > 2) {
+    if (b->blocked_for > (traffic ? 2.f : 3.f)) {
       b->blocked_for = 0;
-      b->reverse_for = 3.5f;
+      b->reverse_for = traffic ? 3.5f : 2.5f;
       b->reverse_steer =
           std::fabs(angle) > .1f ? -std::copysign(1.f, angle) : 1.f;
     }

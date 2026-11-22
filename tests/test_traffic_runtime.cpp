@@ -162,6 +162,14 @@ void lifecycle_and_stream() {
   SLRR_REQUIRE(road_distance(before, {traffic->pos[0], traffic->pos[1],
                                       traffic->pos[2]}) > 1);
   SLRR_REQUIRE(!scene_instances_collect_root(&f.world).empty());
+  // Bot.followCar detaches a streamed police car with remTrafficCar before
+  // driving it: the registration ends, the car stays.
+  f.call("remTrafficCar", "(I)V", {Value::make_int(registration)});
+  traffic_step(f.vm, .1f);
+  SLRR_REQUIRE(gameref_find_live(car_id) == traffic &&
+               race_traffic_pointer(static_cast<Object *>(traffic->key)) == 0 &&
+               !traffic->streamed_hidden);
+  part_destroy(static_cast<Object *>(traffic->key));
   f.call("delTraffic", "()V");
   traffic_step(f.vm, .1f);
   SLRR_REQUIRE(!gameref_find_live(car_id));

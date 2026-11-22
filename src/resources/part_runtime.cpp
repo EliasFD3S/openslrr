@@ -4812,6 +4812,37 @@ void advance_chassis_tick() {
   std::vector<Object*> released;
   const auto* target = gameref_find_live(controlled_vehicle);
   Object* controlled = target ? as_part(static_cast<Object*>(target->key)) : nullptr;
+  // AI drivers keep their distance from the cars around them as the tick began.
+  {
+    std::vector<RacePeer> peers;
+    for (auto& [chassis, rec] : records) {
+      if (rec.config->native_kind != "car" || rec.state.parent || !contact_visible(chassis))
+        continue;
+      RacePeer peer;
+      peer.car = chassis;
+      const auto& body = rec.dynamics.body;
+      if (rec.physics_ready && !rec.external_motion) {
+        const auto forward = body.orientation.rotate({0, 0, -1});
+        const auto half = (body.maximum - body.minimum) * .5;
+        peer.position = {float(body.position.x), float(body.position.y), float(body.position.z)};
+        peer.velocity = {float(body.velocity.x), float(body.velocity.y), float(body.velocity.z)};
+        peer.forward = road_normalize({float(forward.x), 0, float(forward.z)});
+        if (half.finite() && half.x > .1 && half.z > .1) {
+          peer.half_length = float(half.z);
+          peer.half_width = float(half.x);
+        }
+      } else {
+        PartMatrix frame;
+        if (!scene_instances_script_matrix(chassis, frame.data())) continue;
+        const auto* node = gameref_get(chassis);
+        peer.position = {frame[12], frame[13], frame[14]};
+        peer.velocity = {node->vel[0], node->vel[1], node->vel[2]};
+        peer.forward = road_normalize({-frame[8], 0, -frame[10]});
+      }
+      peers.push_back(peer);
+    }
+    race_set_peers(std::move(peers));
+  }
   // SLRR_rev v221 7441a697 vehicle-physics-world.ts: all bodies share
   // substeps, each unordered pair is resolved once, then every changed body is
   // published before scripts/rendering can observe the tick.
