@@ -103,6 +103,38 @@ void multi_peripheral_input() {
                  {I(logical), I(device), I(physical), F(from), F(to), F(low), F(high)}).v.i == 1);
   };
   add(1, w, 0, -1, 1, 1, -1); // Positive logical steering is left.
+  // Stock AXIS_NITRO (31) uses N (scan 0x31), with no implicit pad binding.
+  host_input_clear_keys();
+  add(31, 0, 0x31, 0, 1, 0, 1);
+  host_input_update_controller(&controller, 1.f / 60);
+  SLRR_REQUIRE(!host_input().drive_nitro); // Pad North is held but not mapped.
+  host_input_key(0x31, true);
+  host_input_update_controller(&controller, 1.f / 60);
+  SLRR_REQUIRE(host_input().drive_nitro);
+  host_input_update_controller(&controller, 1.f / 60);
+  SLRR_REQUIRE(host_input().drive_nitro); // Held, not a press edge.
+  host_input_key(0x31, false);
+  host_input_update_controller(&controller, 1.f / 60);
+  SLRR_REQUIRE(!host_input().drive_nitro);
+  add(31, 2, 23, 0, 1, 0, 1); // Explicit pad North mapping.
+  host_input_update_controller(&controller, 1.f / 60);
+  SLRR_REQUIRE(host_input().drive_nitro);
+  first_pad.button(SDL_GAMEPAD_BUTTON_NORTH, false);
+  devices.poll(true);
+  host_input_update_controller(&controller, 1.f / 60);
+  SLRR_REQUIRE(!host_input().drive_nitro);
+  first_pad.button(SDL_GAMEPAD_BUTTON_NORTH, true);
+  devices.poll(true);
+  host_input_update_controller(&controller, 1.f / 60);
+  SLRR_REQUIRE(host_input().drive_nitro);
+
+  Object analog_nitro;
+  analog_nitro.input = std::make_unique<ControllerInput>();
+  analog_nitro.input->bindings.push_back({31, p, 0, 0, 1, 0, .5f});
+  host_input_update_controller(&analog_nitro, 1.f / 60);
+  SLRR_REQUIRE(close_to(host_input().drive_nitro, .25f)); // Preserve the axis, not a bool threshold.
+  host_input_update_controller(&controller, 1.f / 60);
+
   add(28, p, 0, -1, 1, 0, 1);
   add(50, s, 4, 0, 1, 0, 1);
   SLRR_REQUIRE(controller.input->bindings[0].from == -1);
@@ -131,7 +163,11 @@ void multi_peripheral_input() {
   SLRR_REQUIRE(devices.active_axis(p) == -1 && !devices.available(p, 0));
   SLRR_REQUIRE(devices.axis(p, 0) == 0 && devices.pad()[9] == 0);
   SLRR_REQUIRE(host_input_controller_axis(&controller, 28) == 0);
+  host_input_update_controller(&controller, 1.f / 60);
+  SLRR_REQUIRE(!host_input().drive_nitro);
   devices.poll(true);
+  host_input_update_controller(&controller, 1.f / 60);
+  SLRR_REQUIRE(host_input().drive_nitro);
   SLRR_REQUIRE(close_to(host_input_controller_axis(&controller, 28), .75f));
   const std::string pedal_name = host_input_device_name(p);
   pedals.detach();
@@ -165,6 +201,8 @@ void multi_peripheral_input() {
   second_pad.detach();
   devices.poll(true);
   SLRR_REQUIRE(!devices.available(2, 0) && devices.active_axis(2) == -1);
+  host_input_update_controller(&controller, 1.f / 60);
+  SLRR_REQUIRE(!host_input().drive_nitro);
 }
 }  // namespace
 int main() {

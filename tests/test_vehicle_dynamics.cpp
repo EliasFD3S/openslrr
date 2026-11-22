@@ -321,6 +321,35 @@ SLRR_TEST(abs_releases_a_locked_wheel_while_the_road_moves) {
   SLRR_REQUIRE(cars[1].speed() < 20);
 }
 
+SLRR_TEST(nitrous_blends_the_wet_bank_without_changing_dry_drive) {
+  Car dry, wet, unavailable;
+  for (Car* car : {&dry, &wet, &unavailable}) {
+    car->run(1, 0, 0, 0);
+    car->dynamics.drive.nitro_torque = [](double) { return 350.; };
+  }
+  wet.dynamics.drive.nitro = 1;
+  unavailable.dynamics.drive.nitro = 1;
+  unavailable.dynamics.drive.nitro_torque = {};
+  dry.run(4, 1, 0, 0);
+  wet.run(4, 1, 0, 0);
+  unavailable.run(4, 1, 0, 0);
+  std::printf("NITRO matched 4s drive dry=%.3f wet=%.3f unavailable=%.3f m/s\n",
+              dry.speed(), wet.speed(), unavailable.speed());
+  SLRR_REQUIRE(wet.speed() > dry.speed());
+  SLRR_REQUIRE(unavailable.speed() == dry.speed());
+  // Original injection is not subject to the accelerator's visual threshold.
+  Car released, injected;
+  for (Car* car : {&released, &injected}) {
+    car->dynamics.engine_omega = 2500 / 9.54929658551372;
+    car->dynamics.drive.clutch = 0;
+    car->dynamics.drive.nitro_torque = [](double) { return 350.; };
+  }
+  injected.dynamics.drive.nitro = 1;
+  released.run(.1, 0, 0, 0);
+  injected.run(.1, 0, 0, 0);
+  SLRR_REQUIRE(injected.dynamics.engine_omega > released.dynamics.engine_omega);
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
       tyre_grip_follows_the_tyre_script,
@@ -337,6 +366,7 @@ int main() {
       a_car_without_an_engine_coasts_and_still_brakes,
       preapplied_brakes_hold_against_drive_in_both_directions,
       abs_releases_a_locked_wheel_while_the_road_moves,
+      nitrous_blends_the_wet_bank_without_changing_dry_drive,
   };
   return slrr::standalone::run("vehicle_dynamics", tests);
 }

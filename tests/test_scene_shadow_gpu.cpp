@@ -444,6 +444,155 @@ struct SceneShadowRegression {
     std::puts("PASS car lights: headlight beams, brake light, one beam per headlight part");
   }
 
+  // #304: actual stock FakeSpot artwork, viewed from its authored cone.
+  // This exercises the primitive; the video.flares switch is owned by flush.
+  static void nitro_flares(LibBgfxBackend& b) {
+    Fixture f;f.packs.set_root(fs::absolute("game").string());
+    const int particles=f.packs.open_lib("particles.rpk");SLRR_REQUIRE(particles>0);
+    const auto light=load_light_resource(f.packs,RpkIndex::make_full_id(particles,0x1f));
+    SLRR_REQUIRE(light && light->type==LightResourceType::FakeSpot && light->flare.texture);
+    SLRR_REQUIRE(light->flare_texture_mode==2 && light->flare.max_size==10);
+    scene_instances_set_resources(&f.packs);
+    auto glow_path=scene_instances_texture(light->flare.texture);
+    if(glow_path.empty())glow_path=light->flare_texture_path;
+    SLRR_REQUIRE(!glow_path.empty());
+    const auto glow_texture=b.tex_for_osd_icon(glow_path);
+    std::printf("NITRO resource: texture=0x%x path=%s gpu=%u white=%u range=%g phi=%g\n",
+                light->flare.texture,glow_path.c_str(),unsigned(glow_texture.idx),unsigned(b.white_tex_.idx),light->range,light->phi);
+    SLRR_REQUIRE(glow_texture.idx!=b.white_tex_.idx);
+    Object world;gameref_upsert(&world)->flags=kWorldTreeRoot;
+    scene_instances_select(&world,nullptr,false,SceneEnvironment::Exterior);
+    const auto saved=host_enhanced_graphics();const bool debug_lights=render_debug().car_lights;
+    auto saved_parts=std::move(b.parts_);auto saved_batches=std::move(b.prop_batches_);
+    b.parts_.clear();b.prop_batches_.clear();b.instances_.clear();
+    b.garage_=false;b.outdoor_lighting_=true;b.fog_enabled_=false;
+    b.interior_sun_active_=false;b.static_shadow_active_=false;b.car_depth_active_=false;
+    b.fixture_shadow_active_=false;b.point_light_.reset();b.local_light_={};
+    render_debug().car_lights=true;host_enhanced_graphics().local_lights=true;
+    CarLight nitro;nitro.kind=CarLightKind::Nitro;nitro.light=*light;
+    // Identity script frame into render space, exactly as part_car_lights:
+    // reflect Z on position and direction, with no additional rotation.
+    nitro.position={light->position[0],light->position[1],-light->position[2]};
+    nitro.direction={light->direction[0],light->direction[1],-light->direction[2]};
+    b.car_lights_override_=std::vector<CarLight>{nitro};b.update_local_light();
+    SLRR_REQUIRE(b.car_lamp_count_==0 && b.scenery_lamps_.empty());
+    auto mesh=std::make_shared<ScxGeometry>();mesh->info.ok=true;mesh->info.version=4;mesh->position_scale=1;
+    mesh->positions={-2,-2,-1.5f,2,-2,-1.5f,-2,2,-1.5f,2,2,-1.5f};
+    mesh->normals={0,0,1,0,0,1,0,0,1,0,0,1};mesh->uvs.resize(8);mesh->indices={0,1,2,1,3,2};
+    ScxGroup group;group.index_count=6;group.material_flags=0x02000000u;mesh->groups={group};
+    SceneInstance wall;wall.geometry=mesh;wall.cull_backfaces=true;wall.color=0;
+    bx::mtxIdentity(wall.transform.data());b.cache_scene_mesh(mesh,nullptr,false);
+    constexpr uint16_t width=160,height=120;
+    const auto color=bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_RT);
+    const auto depth=bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::D32F,BGFX_TEXTURE_RT);
+    const bgfx::TextureHandle attachments[]={color,depth};const auto fb=bgfx::createFrameBuffer(2,attachments,true);
+    const auto readback=bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK);
+    auto capture=[&](float camera_z,bool occluded,bool glow) {
+      float view[16],projection[16],render[16];
+      bx::mtxLookAt(view,{0,0,camera_z},{0,0,0});
+      bx::mtxProj(projection,60.f,float(width)/height,.05f,100.f,bgfx::getCaps()->homogeneousDepth);
+      std::copy(projection,projection+16,render);
+      for(int i:{2,6,10,14}) render[i]=bgfx::getCaps()->homogeneousDepth?-render[i]:render[i+1]-render[i];
+      bgfx::setViewFrameBuffer(5,fb);bgfx::setViewRect(5,0,0,width,height);
+      bgfx::setViewClear(5,BGFX_CLEAR_COLOR|BGFX_CLEAR_DEPTH,uint32_t(0xff),0.f);
+      bgfx::setViewTransform(5,view,render);b.set_view_sequential(5);bgfx::touch(5);
+      if(occluded)b.draw_instance(5,wall,wall.transform.data(),false,0);
+      if(glow)b.draw_nitro_flares(view,render,5);
+      bgfx::TextureRegion dst,src;dst.init(readback);src.init(color);bgfx::blit(100,dst,src);bgfx::frame();
+      std::vector<uint8_t> bytes(width*height*4);const auto ready=bgfx::read(dst,bytes.data());
+      for(int i=0;i<16;++i)if(bgfx::frame()>=ready)return bytes;
+      throw std::runtime_error("nitro flare readback timeout");
+    };
+    const auto dark=capture(3,false,false),visible=capture(3,false,true);
+    unsigned glow_pixels=0;uint64_t energy=0;
+    for(size_t i=0;i<visible.size();i+=4) {
+      const unsigned rgb=unsigned(visible[i])+visible[i+1]+visible[i+2];
+      energy+=rgb;glow_pixels+=rgb>3;
+    }
+    std::printf("NITRO visible readback: pixels=%u energy=%llu direction=(%g,%g,%g)\n",
+                glow_pixels,static_cast<unsigned long long>(energy),nitro.direction[0],nitro.direction[1],nitro.direction[2]);
+    SLRR_REQUIRE(glow_pixels>10 && energy>100);
+    SLRR_REQUIRE(capture(3,true,true)==capture(3,true,false));
+    SLRR_REQUIRE(capture(-3,false,true)==dark);  // opposite authored cone
+    host_enhanced_graphics().local_lights=false;b.update_local_light();
+    SLRR_REQUIRE(b.car_lamp_count_==0 && b.scenery_lamps_.empty());
+    SLRR_REQUIRE(capture(3,false,true)==visible);  // optical, not option-4 illumination
+    b.car_lights_override_=std::vector<CarLight>{};
+    SLRR_REQUIRE(capture(3,false,true)==dark);  // runtime deactivation removes glow
+    std::printf("NITRO authored glow: pixels=%u energy=%llu; depth/cone/deactivation occluded, no road light, local-light option independent\n",
+                glow_pixels,static_cast<unsigned long long>(energy));
+    // Independently exercise the real particles:1E SCX3/PNG vehicle material;
+    // no timing, FakeSpot cone or halo is involved in this mesh pixel test.
+    SLRR_REQUIRE(f.packs.open_lib("MW_Mod.rpk")>0);
+    const auto flame=scene_instances_geometry(RpkIndex::make_full_id(particles,0x1e));
+    SLRR_REQUIRE(flame && flame->info.version==3 && !flame->groups.empty() && !flame->textures.empty());
+    SLRR_REQUIRE(flame->groups[0].material_flags==0x101u && flame->groups[0].material_type==0);
+    SLRR_REQUIRE(scx_surface(flame->info.version,flame->groups[0]).blend);
+    SceneInstance exhaust;exhaust.geometry=flame;exhaust.vehicle_material=true;exhaust.light_flags=256;
+    bx::mtxIdentity(exhaust.transform.data());b.cache_scene_mesh(flame,nullptr,false);
+    const auto& uploaded=b.instance_meshes_.at(flame.get());
+    SLRR_REQUIRE(!uploaded.tex.empty() && bgfx::isValid(uploaded.tex[0]) && uploaded.tex[0].idx!=b.white_tex_.idx);
+    auto card=std::make_shared<ScxGeometry>(*flame);card->textures.clear();
+    for(auto& g:card->groups) {
+      g.texture_index=g.mix_index=g.reflection_index=0xffff;
+      std::fill(g.diffuse,g.diffuse+4,1.f);
+    }
+    SceneInstance silhouette=exhaust;silhouette.geometry=card;b.cache_scene_mesh(card,nullptr,false);
+    const float k=flame->position_scale;
+    const bx::Vec3 centre{(flame->info.bbox_min[0]+flame->info.bbox_max[0])*.5f*k,
+                           (flame->info.bbox_min[1]+flame->info.bbox_max[1])*.5f*k,
+                          -(flame->info.bbox_min[2]+flame->info.bbox_max[2])*.5f*k};
+    const float radius=.5f*k*std::max({flame->info.bbox_max[0]-flame->info.bbox_min[0],
+        flame->info.bbox_max[1]-flame->info.bbox_min[1],flame->info.bbox_max[2]-flame->info.bbox_min[2]});
+    SLRR_REQUIRE(radius>0);
+    float flame_view[16],flame_projection[16],flame_render[16],camera[16];
+    bx::mtxLookAt(flame_view,bx::add(centre,{2.f*radius,.7f*radius,2.f*radius}),centre);
+    bx::mtxProj(flame_projection,60.f,float(width)/height,.01f,100.f,bgfx::getCaps()->homogeneousDepth);
+    std::copy(flame_projection,flame_projection+16,flame_render);
+    for(int i:{2,6,10,14})flame_render[i]=bgfx::getCaps()->homogeneousDepth?-flame_render[i]:flame_render[i+1]-flame_render[i];
+    bx::mtxInverse(camera,flame_view);
+    auto back_mesh=std::make_shared<ScxGeometry>(*mesh);
+    back_mesh->positions={-2,-2,0,2,-2,0,-2,2,0,2,2,0};
+    SceneInstance backdrop=wall;backdrop.geometry=back_mesh;backdrop.color=0x203040;
+    std::copy(camera,camera+16,backdrop.transform.begin());
+    const float centre_xyz[3]={centre.x,centre.y,centre.z};
+    for(int i=0;i<3;++i) {
+      backdrop.transform[i]*=4.f*radius;backdrop.transform[4+i]*=4.f*radius;
+      backdrop.transform[12+i]=centre_xyz[i]+camera[8+i]*4.f*radius;
+    }
+    b.cache_scene_mesh(back_mesh,nullptr,false);
+    auto mesh_capture=[&](int mode) {
+      bgfx::setViewFrameBuffer(5,fb);bgfx::setViewRect(5,0,0,width,height);
+      bgfx::setViewClear(5,BGFX_CLEAR_COLOR|BGFX_CLEAR_DEPTH,0x203040ff,0.f);
+      bgfx::setViewTransform(5,flame_view,flame_render);b.set_view_sequential(5);bgfx::touch(5);
+      if(mode==1 || mode==4)b.draw_instance(5,exhaust,exhaust.transform.data(),false,1);
+      if(mode==2)b.draw_instance(5,exhaust,exhaust.transform.data(),false,0);
+      if(mode==3)b.draw_instance(5,silhouette,silhouette.transform.data(),false,1);
+      if(mode==4 || mode==5)b.draw_instance(5,backdrop,backdrop.transform.data(),false,0);
+      bgfx::TextureRegion dst,src;dst.init(readback);src.init(color);bgfx::blit(100,dst,src);bgfx::frame();
+      std::vector<uint8_t> bytes(width*height*4);const auto ready=bgfx::read(dst,bytes.data());
+      for(int i=0;i<16;++i)if(bgfx::frame()>=ready)return bytes;
+      throw std::runtime_error("nitro flame mesh readback timeout");
+    };
+    const auto background=mesh_capture(0),textured=mesh_capture(1),footprint=mesh_capture(3);
+    unsigned flame_pixels=0,card_pixels=0,transparent_pixels=0;
+    for(size_t i=0;i<background.size();i+=4) {
+      const bool actual=std::abs(int(textured[i])-int(background[i]))>2 ||
+          std::abs(int(textured[i+1])-int(background[i+1]))>2 || std::abs(int(textured[i+2])-int(background[i+2]))>2;
+      const bool covered=footprint[i]!=background[i] || footprint[i+1]!=background[i+1] || footprint[i+2]!=background[i+2];
+      flame_pixels+=actual;card_pixels+=covered;transparent_pixels+=covered && !actual;
+    }
+    std::printf("NITRO actual SCX3/PNG: radius=%g textured=%u card=%u transparent-background=%u\n",
+                radius,flame_pixels,card_pixels,transparent_pixels);
+    SLRR_REQUIRE(flame_pixels>10 && transparent_pixels>10 && flame_pixels<card_pixels);
+    SLRR_REQUIRE(mesh_capture(2)==background);  // blend group never enters opaque pass
+    SLRR_REQUIRE(mesh_capture(4)==mesh_capture(5));  // no flame depth writes, even at bright texels
+    b.car_lights_override_.reset();bgfx::frame();bgfx::destroy(fb);bgfx::destroy(readback);
+    host_enhanced_graphics()=saved;render_debug().car_lights=debug_lights;
+    b.instances_.clear();b.scenery_lamps_.clear();b.car_lamp_count_=0;b.outdoor_lighting_=false;
+    b.parts_=std::move(saved_parts);b.prop_batches_=std::move(saved_batches);gameref_remove(&world);
+  }
+
   // #281: emissive overlays (night facade masks, traffic-light glass) sit
   // flush with the surface they light. They used to be pushed 2 mm along
   // their normal, so glass authored behind or level with a body floated in
@@ -3936,6 +4085,7 @@ int main() {
     SceneShadowRegression::emissive_overlay_flush(backend);
     SceneShadowRegression::scenery_lamps(backend);
     SceneShadowRegression::car_lights(backend);
+    SceneShadowRegression::nitro_flares(backend);
     SceneShadowRegression::headlight_shadows(backend);
     SceneShadowRegression::lamp_cost(backend);
     SceneShadowRegression::lamp_shadows(backend);

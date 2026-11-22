@@ -3810,3 +3810,45 @@ remaining ~2.8 ms (they are in the menu's "Session and host" section).
   from earlier builds therefore no longer match byte for byte.
 - Not checked: SLRR_rev does not establish the original's use of this
   colour (its docs call vertex-colour blending unconfirmed and drop alpha).
+
+### Nitrous driving and exhaust (#303, #304)
+
+- Ownership: `src/resources/part_runtime.cpp:configure_drive` takes mapped axis
+  31 from the controlled mechanical car. Native remaining starts at zero;
+  `reload` fills the script capacity, while refresh only clamps. `Canister.actual`
+  remains unchanged script save data. Stock Track reloads on entering driving;
+  arbitrary save/load does not preserve the native aggregate. HUD fill is the
+  remaining/capacity ratio, only for positive injector consumption.
+- Physics: `src/physics/vehicle_dynamics.cpp:VehicleDynamics::step_drive` keeps
+  dry torque and accepts an optional wet dyno callback/input, blending after the
+  predictive limiter. No #215 dyno or torque-gain correction is copied. The Part
+  owner consumes `RPM * .0002 * input * limiter * dt * consumption_nitro` once per
+  fixed solver step. The stock injector's nominal RPM/throttle fields are not
+  exported. Audio uses the configured one-shot or default `sound:25` once per
+  press; release, pause, reset and teardown do not create extra triggers.
+- Evidence: direct read-only MWM executable disassembly, SHA-256
+  `b284a7a53909d0b9ce59d59ddc11e14df40a7eb74d86fa76efb06305aadc2b03`,
+  plus MWM Chassis, Canister, NOSInjectorSystem, Track and ControlSet sources.
+  Addresses, version distinctions and upstream checks are in EXTERNAL_RESEARCH §7.
+- Actual authored asset: mufflers resolve `particles:1E` through `MW_Mod:28`
+  (`NOS_Flames.SCX`, SCX3 flags 0x101, 48 vertices/16 triangles) and `MW_Mod:27`
+  (`NOS_Flames.png`, RGBA8 425x554). Independent SCX parsing and full PNG
+  CRC/zlib/filter decode establish alpha 0..209, not an opaque card. PNG uploads
+  are premultiplied; only flag-256 transparent vehicle sections use the matching
+  blend and no depth write. Flame geometry is excluded from lamp-glass snapping.
+- Flag-256 mesh/fake-light visibility uses eligible injection, >1000 RPM,
+  throttle >.01 and a shared deterministic 30% simulation-clock pulse. This is
+  explicitly not the original per-render-child RNG cadence. Collection and
+  cameras do not spend fuel or resample it; paused physics freezes it.
+- Baiern's pipe carries two separate `particles:1F` FakeSpot children. All
+  placements survive collection. `src/render/bgfx_lighting.cpp:LibBgfxBackend::draw_nitro_flares`
+  draws their authored central atlas glow with source depth; they never enter
+  physical road-light arrays. The Flares option gates this view-only draw.
+  Sizing follows the existing sun approximation, with mode-2 atlas/cm-offset
+  evidence from SLRR_rev `2663d686`. Original size units, directional convention
+  and ray/ghost fidelity remain unverified; no arbitrary backward rotation,
+  floodlight, replacement texture or particle emitter is introduced.
+- Regression entry points: `tests/test_nitrous.cpp`, `tests/test_sdl_input.cpp`,
+  `tests/test_vehicle_dynamics.cpp`, `tests/test_script_lights.cpp` and the
+  `scene_shadow_gpu` nitrous case. Compilation and actual gameplay captures
+  must still be reported separately; these sources alone are not pixel acceptance.

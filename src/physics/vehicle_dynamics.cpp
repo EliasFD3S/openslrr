@@ -506,6 +506,10 @@ void VehicleDynamics::update_gear(double rpm, double shaft,
   }
 }
 
+double VehicleDynamics::engine_limit_fraction() const {
+  return std::clamp(limiter_factor(engine_omega * rpm_per_rad, previous_rpm_, drive.limit), 0.0, 1.0);
+}
+
 void VehicleDynamics::step_drive() {
   const double rpm = engine_omega * rpm_per_rad;
   double weights = 0, shaft = 0, road_shaft = 0, square_weights = 0,
@@ -571,11 +575,17 @@ void VehicleDynamics::step_drive() {
         -std::expm1(-timestep / (target < launch_factor_ ? .04 : .15)));
     gas *= std::lerp(1.0, launch_factor_, drive.launch_help);
   }
-  const double combustion_torque =
-      engine_running && rpm < drive.limit && !automatic_shift
-          ? (2 * drive.torque(rpm) * gas + idle_torque) * combustion *
-                limiter_factor(rpm, previous_rpm_, drive.limit)
-          : 0;
+  double combustion_torque = 0;
+  if (engine_running && rpm < drive.limit && !automatic_shift) {
+    const double limiter = engine_limit_fraction();
+    double torque = drive.torque(rpm) * gas * limiter;
+    // MWM 454A15: blend the limited dry output toward the wet bank; the
+    // nitrous input is independent of the accelerator (unlike visual flames).
+    if (drive.nitro > 0 && drive.nitro_torque)
+      torque = std::lerp(torque, drive.nitro_torque(rpm),
+                         std::clamp(drive.nitro, 0.0, 1.0) * limiter);
+    combustion_torque = (2 * torque + idle_torque * limiter) * combustion;
+  }
   previous_rpm_ = rpm;
   const double net =
       combustion_torque + (starting ? 4 * drive.starter : 0) - drag;

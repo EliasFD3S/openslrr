@@ -891,6 +891,9 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       });
 
       if (debug_render.sun_flare && video.flares) draw_sun_flare(view, render_proj, world_view);
+      // Runtime reports only active-world nitrous children. Never submit this
+      // optical glow to previews/reflection/shadow passes or the light arrays.
+      if (video.flares) draw_nitro_flares(view, render_proj, world_view);
     }
     // Previews start at view 8. OSD plates under the cars are view 7; the
     // rest of the interface is view 70.
@@ -1464,6 +1467,9 @@ void LibBgfxBackend::update_car_lights() {
       return std::array<float, 3>{diffuse[0] / peak, diffuse[1] / peak, diffuse[2] / peak};
     };
     for (const auto& light : lights) {
+      // Stock nitrous is a FakeSpot: only draw its authored glow, not the
+      // tuned headlight/brake illumination (nor any road/shadow light).
+      if (light.kind == CarLightKind::Nitro) continue;
       if (car_lamp_count_ >= kCarLights) break;
       if (distance2(light, eye) > kCarLightMaxDistance * kCarLightMaxDistance) continue;
       LampLight lamp;

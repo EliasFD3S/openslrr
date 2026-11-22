@@ -1,5 +1,6 @@
 #pragma once
 #include "slrr/part_config.hpp"
+#include "slrr/light_resource.hpp"
 #include <array>
 #include <cstdint>
 #include <string>
@@ -62,12 +63,14 @@ bool part_tear_off(Object *part);
 // `render <type-13 light>` child: a headlight is the part's first city-group
 // (`flags 4`) light of type `spot`; a brake light is its first brake-group
 // (`flags 1`) light of any type (stock brake lights are glow-only
-// `fakespot`). A part keeps at most one of each. A light is reported only
+// `fakespot`). A part keeps at most one of each, plus every flag-256 NOS glow
+// placement. NOS follows the chassis injection/flicker sample, never preview.
+// A light is reported only
 // while its part is installed on a car (a detached, removed or destroyed
 // part reports nothing) and lit by part_lamp_lit with that group.
 // Positions and directions are render space (script Z flipped), the space
 // of the scenery lamps; the light resource values are as authored.
-enum class CarLightKind : int32_t { Headlight = 0, Brake = 1 };
+enum class CarLightKind : int32_t { Headlight = 0, Brake = 1, Nitro = 2 };
 struct CarLight {
   Object *part = nullptr;  // owning part, the light's stable identity
   Object *car = nullptr;   // chassis it is installed on
@@ -77,6 +80,7 @@ struct CarLight {
   std::array<float, 3> diffuse{1, 1, 1}, attenuation{1, 0, 0};
   float range = 0.f, theta = 0.f, phi = 0.f;  // authored; cone full angles
   float power = 1.f;  // part_lamp_power of the owning part's condition
+  LightResource light;  // authored fake-light flare (Nitro); never a road light
 };
 // Lights of every part with a light child, whether lit or not, when `lit_only`
 // is false (diagnostics and tests); else the lit ones only.
@@ -129,6 +133,8 @@ struct PartPhysicsState {
   };
   std::array<TireSample, 4> tires{};
   double speed_kph = 0, rpm = 0, yaw_rate = 0;
+  double nitro_remaining = 0, nitro_capacity = 0;
+  bool nitro_active = false, nitro_flame = false;
   double steering_help = 0, steering_request = 0, steering_angle = 0;
   double steering_correction = 0;
   int gear = 0;

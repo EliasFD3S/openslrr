@@ -244,6 +244,7 @@ void host_input_update_controller(Object* controller, float dt) {
   }
   in.drive_throttle = axis(28);
   in.drive_brake = axis(29);
+  in.drive_nitro = std::clamp(axis(31), 0.f, 1.f);
   in.drive_handbrake = axis(48) > .5f;
   in.drive_clutch = axis(49);
   in.free_camera_x = -axis(4);

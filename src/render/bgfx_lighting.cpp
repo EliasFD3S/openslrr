@@ -118,6 +118,28 @@ void LibBgfxBackend::submit_bound(uint16_t view, bgfx::ProgramHandle program, ui
   if (!index_count) forget_uniforms();
 }
 
+namespace {
+// Shared sun/local flare billboard primitive. z is the source's NDC depth,
+// rather than a screen overlay: local glows test against ordinary scene depth.
+void flare_sprite(MeshVertex* vertices, uint16_t* indices, unsigned next,
+                  const float* inverse, float aspect, float z,
+                  float cx, float cy, float half_x, float half_y, float angle,
+                  float u, float v, float w, float h) {
+  const float cos_angle = std::cos(angle), sin_angle = std::sin(angle);
+  const uint16_t base = static_cast<uint16_t>(next * 4);
+  for (unsigned i = 0; i < 4; ++i) {
+    const float sx = i & 1 ? half_x : -half_x;
+    const float sy = i & 2 ? -half_y : half_y;
+    const auto p = bx::mulH({cx + (sx * cos_angle - sy * sin_angle) * aspect,
+                             cy + sx * sin_angle + sy * cos_angle, z}, inverse);
+    vertices[base + i] = {p.x, p.y, p.z, 0.f, 0.f, 1.f,
+                          u + (i & 1 ? w : 0.f), v + (i & 2 ? h : 0.f)};
+  }
+  constexpr uint16_t quad[] = {0, 1, 2, 1, 3, 2};
+  for (unsigned i = 0; i < 6; ++i) indices[next * 6 + i] = base + quad[i];
+}
+} // namespace
+
 void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, uint16_t view_id) {
   if (!interior_sun_active_ && std::none_of(instances_.begin(), instances_.end(),
                    [](const SceneInstance& instance) { return instance.sky; }))
@@ -163,20 +185,9 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
   unsigned next = 0;
   auto sprite = [&](float cx, float cy, float half_x, float half_y, float angle,
                     float u, float v, float w, float h) {
-    const float cos_angle = std::cos(angle), sin_angle = std::sin(angle);
-    const uint16_t base = static_cast<uint16_t>(next * 4);
-    for (unsigned i = 0; i < 4; ++i) {
-      const float sx = i & 1 ? half_x : -half_x;
-      const float sy = i & 2 ? -half_y : half_y;
-      // Reversed-Z puts the far plane at 0. The flare sits just in front of it.
-      const auto p = bx::mulH({cx + (sx * cos_angle - sy * sin_angle) * aspect,
-                               cy + sx * sin_angle + sy * cos_angle, 0.001f}, inverse);
-      vertices[base + i] = {p.x, p.y, p.z, 0.f, 0.f, 1.f,
-                            u + (i & 1 ? w : 0.f), v + (i & 2 ? h : 0.f)};
-    }
-    constexpr uint16_t quad[] = {0, 1, 2, 1, 3, 2};
-    for (unsigned i = 0; i < 6; ++i) indices[next * 6 + i] = base + quad[i];
-    ++next;
+    // Reversed-Z puts the far plane at 0. The sun sits just in front of it.
+    flare_sprite(vertices, indices, next++, inverse, aspect, .001f,
+                 cx, cy, half_x, half_y, angle, u, v, w, h);
   };
   const float size = .02f * std::lerp(std::min(flare.min_size, flare.max_size),
                                      flare.max_size, visibility);
@@ -214,6 +225,105 @@ void LibBgfxBackend::draw_sun_flare(const float* view, const float* projection, 
                  (interior_sun_active_ ? uint64_t(0) : BGFX_STATE_DEPTH_TEST_GREATER) |
                  BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_ONE));
   submit_counted(view_id, program_);
+}
+
+// Stock flag-256 FakeSpot: central authored halo only, never a road light.
+// Like the sun, this uses the existing atlas primitive, .02 size and .32 tint
+// convention. Local size additionally follows camera perspective. Native
+// screen-size units and ray/ghost distribution are not recovered; do not add
+// guessed streaks, colours or brightness gains. SLRR_rev 2663d686,
+// src/render/vehicle-flare.ts documents mode-2's glow tile and cm camera offset.
+void LibBgfxBackend::draw_nitro_flares(const float* view, const float* projection,
+                                      uint16_t view_id) {
+  if (!render_debug().car_lights || !(projection[5] > 0.f)) return;
+  const auto lights = car_lights_override_ ? *car_lights_override_ : part_car_lights();
+  float camera[16], combined[16], inverse[16], identity[16];
+  bx::mtxInverse(camera, view);
+  bx::mtxMul(combined, view, projection);
+  bx::mtxInverse(inverse, combined);
+  bx::mtxIdentity(identity);
+  BindingScope binding(*this, view_id);
+  unsigned drawn = 0;
+  for (const auto& source : lights) {
+    if (source.kind != CarLightKind::Nitro || drawn >= kCarLights) continue;
+    const auto& light = source.light;
+    const auto& flare = light.flare;
+    if (!light.has_flare || !flare.texture || !(flare.max_size > 0.f) ||
+        !(light.range > 0.f) || !(source.power > 0.f) ||
+        (light.type != LightResourceType::FakeSpot && light.type != LightResourceType::FakePoint))
+      continue;
+    float to_camera[3];
+    float distance2 = 0.f, direction2 = 0.f, facing = 0.f;
+    for (int i = 0; i < 3; ++i) {
+      to_camera[i] = camera[12 + i] - source.position[i];
+      distance2 += to_camera[i] * to_camera[i];
+      direction2 += source.direction[i] * source.direction[i];
+      facing += source.direction[i] * to_camera[i];
+    }
+    const float distance = std::sqrt(distance2);
+    if (!(distance > .001f) || distance >= light.range) continue;
+    float visibility = std::clamp(source.power, 0.f, 1.f);
+    if (light.type == LightResourceType::FakeSpot) {
+      if (!(direction2 > 1e-6f) || !(light.phi > 0.f)) continue;
+      const float outer = std::cos(std::min(light.phi, 6.2831853f) * .5f);
+      const float inner = std::cos(std::clamp(light.theta, 0.f, light.phi) * .5f);
+      facing /= distance * std::sqrt(direction2);
+      visibility *= inner > outer
+          ? std::clamp((facing - outer) / (inner - outer), 0.f, 1.f)
+          : facing >= outer ? 1.f : 0.f;
+    }
+    const auto& a = light.attenuation;
+    const float attenuation = a[0] + a[1] * distance + a[2] * distance2;
+    if (!(attenuation > 0.f)) continue;
+    // The stock range is a bound, not permission for a constant-screen glow.
+    visibility *= std::clamp(1.f / attenuation, 0.f, 1.f) * (1.f - distance / light.range);
+    if (!(visibility > 0.f)) continue;
+    const float offset = std::min(light.glow_offset * .01f, distance * .5f);
+    const bx::Vec3 position{source.position[0] + to_camera[0] * offset / distance,
+                            source.position[1] + to_camera[1] * offset / distance,
+                            source.position[2] + to_camera[2] * offset / distance};
+    const float depth = position.x * view[2] + position.y * view[6] +
+                        position.z * view[10] + view[14];
+    if (!(depth > .001f)) continue;
+    const auto screen = bx::mulH(position, combined);
+    const float size = .02f * std::lerp(std::min(flare.min_size, flare.max_size),
+                                       flare.max_size, visibility) * projection[5] / depth;
+    if (!std::isfinite(size) || !(size > 0.f) ||
+        std::abs(screen.x) > 1.f + size || std::abs(screen.y) > 1.f + size) continue;
+    auto texture_path = scene_instances_texture(flare.texture);
+    // Stock particles:1F's lf_texture id is an empty type-14 entry, but the
+    // same line explicitly names the actual flare artwork. Do not invent a
+    // replacement when both authored sources are absent.
+    if (texture_path.empty()) texture_path = light.flare_texture_path;
+    const auto texture = tex_for_osd_icon(texture_path);
+    if (texture.idx == white_tex_.idx) continue;
+    if (bgfx::getAvailTransientVertexBuffer(4, layout_) < 4 ||
+        bgfx::getAvailTransientIndexBuffer(6) < 6) break;
+    bgfx::TransientVertexBuffer vb;
+    bgfx::TransientIndexBuffer ib;
+    bgfx::allocTransientVertexBuffer(&vb, 4, layout_);
+    bgfx::allocTransientIndexBuffer(&ib, 6);
+    const float tile = light.flare_texture_mode == 2 ? .5f : 1.f;
+    flare_sprite(reinterpret_cast<MeshVertex*>(vb.data), reinterpret_cast<uint16_t*>(ib.data),
+                 0, inverse, projection[0] / projection[5], screen.z,
+                 screen.x, screen.y, size, size, 0.f, 0.f, 0.f, tile, tile);
+    const float alpha = .32f * visibility * float(flare.color & 255) / 255.f;
+    const float tint[4] = {alpha * float(flare.color >> 24) / 255.f,
+                           alpha * float((flare.color >> 16) & 255) / 255.f,
+                           alpha * float((flare.color >> 8) & 255) / 255.f, 1.f};
+    const float settings[4] = {0.f, 1.f, 0.f, 0.f};
+    bind_baked_light(nullptr, nullptr, BGFX_INVALID_HANDLE, false, nullptr, nullptr);
+    enc()->setUniform(u_color_, tint);
+    enc()->setUniform(u_alpha_test_, settings);
+    enc()->setTransform(identity);
+    enc()->setVertexBuffer(0, &vb);
+    enc()->setIndexBuffer(&ib);
+    set_texture(0, s_tex_, texture, BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+    enc()->setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_GREATER |
+                   BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_ONE));
+    submit_bound(view_id, program_, 6);
+    ++drawn;
+  }
 }
 
 // Fills the per-frame light data texture (#254, layout in scene_shadow.sh).
@@ -498,7 +608,11 @@ bool LibBgfxBackend::bind_point_light(bool enabled) {
         // 5 = ColorMixTex with a spheremap (headlight lens).
         // 4 = ColorMixTex. 3 = glass. 2 = chrome (0x33, no color map, or a
         // 0x0c cap whose color slot never loaded). A bare pipe is flags 0.
-        const bool transparent = (group.material_flags & 0x40000000u) != 0;
+        // Flag-256 exhaust overlays can be SCX3 (Flame: flags 0x101),
+        // whose blend bit is not SCX4's transparent-group bit.
+        const bool flame_blend = (instance.light_flags & 256u) &&
+            scx_surface(part.geo.info.version, group).blend;
+        const bool transparent = (group.material_flags & 0x40000000u) != 0 || flame_blend;
         if (transparent != (pass == 1)) continue;
         const uint32_t kind_id = group.material_type;
         const bool glass = transparent && kind_id == 0x33u;
@@ -624,7 +738,14 @@ bool LibBgfxBackend::bind_point_light(bool enabled) {
         // Like map SCX4, vehicle materials cull unless explicitly two-sided.
         // Interior backs can protrude through thin outer panels when drawn.
         if (!two_sided) state |= BGFX_STATE_CULL_CW;
-        if (glass)
+        std::string extension = flame_blend && has_tex
+            ? std::filesystem::path(part.geo.textures[group.texture_index]).extension().string() : "";
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        // Decoded PNG/PTX pixels are already premultiplied. Do not multiply
+        // their soft flame edges by alpha a second time; DDS stays straight.
+        const bool premultiplied_flame = flame_blend && has_tex && extension != ".dds";
+        if (glass || premultiplied_flame)
           state |= BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
         else if (transparent || group.diffuse[3] < .99f)
           state |= BGFX_STATE_BLEND_ALPHA;

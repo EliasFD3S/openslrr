@@ -130,8 +130,8 @@ struct Record {
   };
   std::vector<LinkVisual> links;
   float max_wear = 1.f;
-  // Car lights placed by this part's cfg (#279): at most one headlight and
-  // one brake light, in the part's local script space.
+  // Car lights placed by this part's cfg: one headlight/brake group (#279)
+  // and every authored NOS glow placement (#304), in part-local script space.
   struct Lamp {
     CarLightKind kind = CarLightKind::Headlight;
     uint32_t resource = 0, flags = 0;
@@ -165,8 +165,15 @@ struct Record {
   float torque = 0, torque_scale = 0, ackermann = 0, mileage = 0;
   float cooling[3] = {10.f, 50.f, 0.01f};
   float exhaust_min = 0, steer_radius = 0, steer_r = 0, steer_z = 0;
-  int nitro_sfx = 0;
+  int nitro_sfx = 0, nitro_voice = 0;
   float nitro_pitch = 1;
+  // MWM keeps a native aggregate, initially empty; `reload` fills it.
+  // Canister.actual is script save data, not the engine's consumption owner.
+  double nitro_remaining = 0;
+  float nitro_input = 0;
+  bool nitro_requested = false, nitro_active = false, nitro_flame = false;
+  bool nitro_sound_down = false;
+  uint32_t nitro_random = 1;
   struct Horn {
     int sfx = 0;
     float pitch = 1;
@@ -338,6 +345,7 @@ void repair_part(Object *part, Record &rec);
 bool flap_geometry_for(Object *part, Record &rec,
                        physics::FlapGeometry *out = nullptr);
 void pose_wheels(Object *chassis, Record &rec);
+bool contact_visible(Object *chassis);
 Object *object(const std::vector<Value> &args, size_t i) {
   return i < args.size() && args[i].tag == ValueTag::Obj ? args[i].v.o
                                                          : nullptr;
@@ -530,14 +538,16 @@ void collect_lamps(Record &rec) {
     return;
   bool head = false, brake = false;
   for (const auto &r : rec.config->renders) {
-    if (r.wheel >= 0 || (r.flags & 0x40u) || !(r.flags & 5u) ||
+    if (r.wheel >= 0 || (r.flags & 0x40u) || !(r.flags & 0x105u) ||
         !is_light_resource(*index, r.resource))
       continue;
     const auto light = load_light_resource(*index, r.resource);
     if (!light)
       continue;
     Record::Lamp lamp;
-    if (!head && (r.flags & 4u) && light->type == LightResourceType::Spot) {
+    if (r.flags & 256u) {
+      lamp.kind = CarLightKind::Nitro;
+    } else if (!head && (r.flags & 4u) && light->type == LightResourceType::Spot) {
       lamp.kind = CarLightKind::Headlight;
       head = true;
     } else if (!brake && (r.flags & 1u)) {
@@ -607,7 +617,7 @@ void snap_lamp_glass(Record &rec) {
   if (body.empty()) return;
   for (auto *render : rec.renders) {
     auto *node = gameref_get(render);
-    if (!node || !node->light_flags) continue;
+    if (!node || !node->light_flags || (node->light_flags & 256u)) continue;
     const auto mesh = scene_instances_geometry(static_cast<uint32_t>(node->type_id));
     if (!mesh || !(mesh->position_scale > 0) || mesh->normals.size() != mesh->positions.size())
       continue;
@@ -850,6 +860,8 @@ Object *add_part(Jvm &jvm, Object *parent, uint32_t resource,
   return child;
 }
 void release_side(Record &rec) {
+  host_sfx_stop(rec.nitro_voice);
+  rec.nitro_voice = 0;
   for (Object *tab : rec.sfx) {
     auto table = sfx_items.find(tab);
     if (table == sfx_items.end()) continue;
@@ -868,6 +880,24 @@ float comp(Object *o, const char *name) {
   if (it->second.tag == ValueTag::Int)
     return static_cast<float>(it->second.v.i);
   return 0;
+}
+double nitro_capacity(Object *chassis) {
+  const float capacity = comp(chassis, "tank_nitro");
+  return std::isfinite(capacity) ? std::max(0.f, capacity) : 0.;
+}
+void clamp_nitro(Object *chassis, Record &rec) {
+  rec.nitro_remaining = std::clamp(rec.nitro_remaining, 0., nitro_capacity(chassis));
+  const float rate = comp(chassis, "consumption_nitro");
+  if (!(rec.nitro_remaining > 0 && std::isfinite(rate) && rate > 0))
+    rec.nitro_active = rec.nitro_flame = false;
+}
+void stop_nitro(Record &rec) {
+  rec.nitro_requested = rec.nitro_active = rec.nitro_flame = false;
+  rec.nitro_input = 0;
+  rec.dynamics.drive.nitro = 0;
+  rec.nitro_sound_down = false;
+  host_sfx_stop(rec.nitro_voice);
+  rec.nitro_voice = 0;
 }
 int field_int(Object *o, const char *name, int fallback = 0) {
   if (!o)
@@ -1521,6 +1551,7 @@ void refresh_chassis(Object *chassis) {
   runtime->invoke_by_name(chassis->class_name, "updatevariables",
                           {Value::make_obj(chassis)}, false);
   record(chassis)->physics_dirty = true;
+  clamp_nitro(chassis, *record(chassis));
   --refresh_depth;
 }
 // A native car with no script (traffic, fake racers) is finished by its cfg:
@@ -1592,7 +1623,7 @@ std::vector<CarLight> part_car_lights(bool lit_only) {
     if (lit_only && power <= 0.f)
       continue;
     for (const auto &lamp : rec.lamps) {
-      if (lit_only && !part_lamp_lit(part, lamp.kind == CarLightKind::Brake ? 1u : 4u, false))
+      if (lit_only && !part_lamp_lit(part, lamp.flags, false))
         continue;
       CarLight light;
       light.part = part;
@@ -1617,6 +1648,7 @@ std::vector<CarLight> part_car_lights(bool lit_only) {
       light.theta = lamp.light.theta;
       light.phi = lamp.light.phi;
       light.power = power;
+      light.light = lamp.light;
       out.push_back(light);
     }
   }
@@ -1629,7 +1661,7 @@ std::vector<CarLight> part_car_lights(bool lit_only) {
 }
 
 bool part_lamp_lit(void *part, uint32_t flags, bool preview) {
-  if (!(flags & 5u) || (flags & 0x40u) || !runtime)
+  if (!(flags & 0x105u) || (flags & 0x40u) || !runtime)
     return false;
   const Record *chassis = nullptr;
   if (!preview) {
@@ -1640,6 +1672,12 @@ bool part_lamp_lit(void *part, uint32_t flags, bool preview) {
         own && part_lamp_power(own->state.wear * own->state.tear) <= 0.f)
       return false;
   }
+  // Both authored NOS mesh and fake-light children use the same simulation
+  // sample. Never demonstrate nitrous in the showroom or on a loose exhaust.
+  if ((flags & 256u) && chassis && chassis->physics_released &&
+      !chassis->physics_suspended && chassis->nitro_flame &&
+      contact_visible(chassis->state.object))
+    return true;
   // Brake lamps (#279): the pedal of the car the part is installed on.
   if ((flags & 1u) && chassis && chassis->dynamics.drive.brake > kBrakeLampMin)
     return true;
@@ -1702,6 +1740,8 @@ Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
   rec.state.resource = resource;
   rec.config = cfg;
   rec.native_vehicle = script.empty() && cfg->native_kind == "car";
+  if (cfg->native_kind == "car")
+    rec.nitro_sfx = RpkIndex::make_full_id(resources.open_lib("sound.rpk"), 0x25);
   // PE copies the cfg `texture` line onto the part at create. Catalog
   // shows that id on the color chip: cars:0x0025 is default_white.
   rec.state.texture = cfg->texture;
@@ -1910,8 +1950,11 @@ bool part_command(Object *part, const std::string &command) {
         car->physics_suspended = false;
         car->physics_released = true;
       }
-    } else if (controlled_vehicle == id)
+    } else if (controlled_vehicle == id) {
+      if (auto *target = gameref_find_live(id))
+        if (auto *rec = record(as_part(static_cast<Object *>(target->key)))) stop_nitro(*rec);
       controlled_vehicle = 0;
+    }
     return true;
   }
   if (part && part->class_name == "java.io.Controller" && verb == "camera") {
@@ -2014,6 +2057,12 @@ bool part_command(Object *part, const std::string &command) {
   auto *rec = record(part);
   if (!rec)
     return false;
+  if (verb == "reload" && rec->config->native_kind == "car") {
+    // MWM 45A244; Track.lockCar calls this explicitly. forceUpdate, reset,
+    // repair and installing a bottle must not silently refill the aggregate.
+    rec->nitro_remaining = nitro_capacity(part);
+    return true;
+  }
   if (verb == "repair") {
     repair_part(part, *rec);
     return true;
@@ -2094,6 +2143,7 @@ bool part_command(Object *part, const std::string &command) {
     rec->dynamics.body.momentum = {};
     rec->dynamics.reset_drive();
     rec->engine_running = false;
+    stop_nitro(*rec);
     part_park_chassis(part, false);
     for (const auto &slot : rec->config->slots)
       if (slot.type >= 101 && slot.type <= 304)
@@ -2108,11 +2158,13 @@ bool part_command(Object *part, const std::string &command) {
   }
   if (verb == "stop" && rec->config->native_kind == "car") {
     rec->physics_released = false;
+    stop_nitro(*rec);
     return true;
   }
   if (verb == "suspend" && rec->config->native_kind == "car") {
     rec->physics_suspended = true;
     rec->physics_released = false;
+    stop_nitro(*rec);
     return true;
   }
   if (verb == "wakeup" && rec->config->native_kind == "car") {
@@ -2914,6 +2966,10 @@ void update_steering(Record &rec, bool controls) {
 void configure_drive(Object *chassis, Record &rec, bool controlled) {
   auto &drive = rec.dynamics.drive;
   drive.torque = {};
+  drive.nitro_torque = {};
+  drive.nitro = 0;
+  rec.nitro_requested = false;
+  clamp_nitro(chassis, rec);
   drive.native_traffic = false;
   RaceDriveInput ai;
   const auto forward = rec.dynamics.body.orientation.rotate({0,0,-1});
@@ -2973,9 +3029,12 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
   drive.idle = std::max(400.f, comp(chassis, "engine_rpm_idle"));
   drive.limit = std::max(drive.idle + 100.0, double(comp(chassis, "RPM_limit")));
   drive.inertia = .28 + .01 * std::max(0.f, comp(chassis, "engine_inertia"));
-  if (engine)
+  if (engine) {
     drive.torque = [dyno](double rpm) { return dyno_sample(dyno, float(rpm), 0, false); };
-  else {
+    drive.nitro_torque = [dyno](double rpm) { return dyno_sample(dyno, float(rpm), 1, false); };
+    rec.nitro_input = std::isfinite(in.drive_nitro) ? std::clamp(in.drive_nitro, 0.f, 1.f) : 0.f;
+    rec.nitro_requested = controlled && controls && rec.nitro_input > .1f && rec.physics_released;
+  } else {
     drive.torque = [](double) { return 0.0; };
     rec.dynamics.engine_running = false;
     rec.dynamics.engine_omega = 0;
@@ -3039,6 +3098,20 @@ void configure_drive(Object *chassis, Record &rec, bool controlled) {
 }
 
 void update_engine_audio(Record &rec, bool active) {
+  // MWM 452103: one trigger per press, not an injection loop. Holding an
+  // empty kit through a refill is not a new press.
+  const bool nitro_down = active && rec.nitro_requested &&
+      comp(rec.state.object, "consumption_nitro") > 0;
+  if (nitro_down && !rec.nitro_sound_down && rec.nitro_remaining > 0 && index) {
+    auto path = index->payload_prop(rec.nitro_sfx, "sourcefile");
+    if (!path.empty()) {
+      std::replace(path.begin(), path.end(), '\\', '/');
+      host_sfx_stop(rec.nitro_voice);
+      rec.nitro_voice = host_sfx_play_file(
+          (std::filesystem::path(index->game_root()) / path).string(), rec.nitro_pitch);
+    }
+  }
+  rec.nitro_sound_down = nitro_down;
   const float rpm = static_cast<float>(rec.dynamics.engine_omega * 9.54929658551372);
   for (size_t i : {0u, 2u}) {
     const auto table = sfx_items.find(rec.sfx[i]);
@@ -4527,6 +4600,8 @@ void advance_chassis_tick() {
     }
     if (substep == 0) {
       rec.engine_running = false;
+      rec.nitro_active = rec.nitro_flame = false;
+      rec.dynamics.drive.nitro = 0;
       rec.render_blend = false;
     }
     if (rec.external_motion || rec.config->native_kind != "car" || rec.state.parent ||
@@ -4586,7 +4661,32 @@ void advance_chassis_tick() {
     const auto before = before_body.position;
     const auto orientation_before = rec.dynamics.body.orientation;
     const auto velocity_before = rec.dynamics.body.velocity;
+    clamp_nitro(chassis, rec);
+    const double nitro_rate = comp(chassis, "consumption_nitro");
+    const double nitro_rpm = rec.dynamics.engine_omega * 9.54929658551372;
+    const double nitro_limiter = rec.dynamics.engine_limit_fraction();
+    rec.nitro_active = rec.nitro_requested && rec.dynamics.engine_running &&
+        rec.nitro_remaining > 0 && std::isfinite(nitro_rate) && nitro_rate > 0;
+    rec.dynamics.drive.nitro = rec.nitro_active ? rec.nitro_input : 0.;
     const auto steps = rec.dynamics.advance(physics::VehicleDynamics::timestep, terrain);
+    // MWM 454A42: RPM * .0002 * input * limiter * dt * script rate.
+    // Consume once per solver step, never from sampling a curve or collecting
+    // a camera/reflection. Empty tanks return to the dry bank next step.
+    if (rec.nitro_active && steps)
+      rec.nitro_remaining = std::max(0., rec.nitro_remaining -
+          nitro_rpm * .0002 * rec.nitro_input * nitro_limiter * nitro_rate *
+          steps * physics::VehicleDynamics::timestep);
+    if (substep == 0) {
+      // Original flag-256 children flicker with a 30% MSVC-rand gate per
+      // render update. Sample once per 60-Hz simulation tick instead: all
+      // nozzles/cameras agree, and pause freezes both fuel and presentation.
+      rec.nitro_random = rec.nitro_random * 214013u + 2531011u;
+      rec.nitro_flame = rec.nitro_active && nitro_rpm > 1000 &&
+          rec.dynamics.drive.throttle > .01 &&
+          ((rec.nitro_random >> 16) & 32767u) < 9830u;
+    }
+    if (!rec.nitro_active || rec.nitro_remaining <= 0)
+      rec.nitro_flame = false;
     // Collision belongs to the released body, not its engine/controller. A
     // coasting car still hits the world after its driver leaves or is removed.
     if (rec.physics_released) {
@@ -4679,6 +4779,7 @@ void advance_chassis_tick() {
       rec.physics_suspended = true;
       rec.physics_pending_placement = false;
       rec.engine_running = rec.render_blend = false;
+      stop_nitro(rec);
       const auto& safe = finite_frame(saved_local) ? saved_local : rec.published_frame;
       if (finite_frame(saved_local) || (was_ready && finite_frame(safe))) {
         std::copy(safe.begin(),safe.end(),node->local_matrix);
@@ -5775,6 +5876,13 @@ void advance_flaps(double seconds) {
 } // namespace
 
 void part_pause_engine_audio(bool paused) {
+  // Trigger sounds are short one-shots, not resumable engine loops. Retire
+  // them on pause; resuming a held button is not another press.
+  if (paused)
+    for (auto &[part, rec] : records) {
+      host_sfx_stop(rec.nitro_voice);
+      rec.nitro_voice = 0;
+    }
   // These voice IDs belong to the engine/exhaust loops, including any
   // currently stopped chassis whose audio was last updated by the solver.
   for (const auto& [table, items] : sfx_items)
@@ -6030,7 +6138,10 @@ bool part_vehicle_hud(VehicleHudState &state) {
   state.speed = rec->dynamics.body.velocity.length() * 3.6;
   state.mileage = rec->mileage * .01;
   state.unit_scale = 1000.f / host_game_options().unit_meters;
-  state.nitro = comp(as_part(static_cast<Object *>(target->key)), "tank_nitro") > 0 ? 1.f : 0.f;
+  const double capacity = nitro_capacity(rec->state.object);
+  const float nitro_rate = comp(rec->state.object, "consumption_nitro");
+  state.nitro = capacity > 0 && std::isfinite(nitro_rate) && nitro_rate > 0
+      ? static_cast<float>(std::clamp(rec->nitro_remaining / capacity, 0., 1.)) : 0.f;
   hud_damage_parts(*rec, state);
   for (const auto &[slot, child] : rec->children) {
     if (rec->engine_running)
@@ -6076,6 +6187,10 @@ bool part_physics_state(Object *key, PartPhysicsState &state) {
     return false;
   PartMatrix world;
   state = {};
+  state.nitro_remaining = rec->nitro_remaining;
+  state.nitro_capacity = nitro_capacity(rec->state.object);
+  state.nitro_active = rec->nitro_active;
+  state.nitro_flame = rec->nitro_flame;
   state.active = rec->physics_ready && !rec->physics_suspended &&
                  scene_instances_script_matrix(as_part(key), world.data());
   if (!rec->physics_ready)

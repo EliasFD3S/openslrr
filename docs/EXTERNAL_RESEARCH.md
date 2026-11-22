@@ -552,6 +552,34 @@ explicitly omits native-only fake-racer seating. traffic-java-bridge.md still
 leaves full pursuit incomplete; no AI_spline/AI_params implementation was found
 in the refreshed source. These findings are not claims of new in-game acceptance.
 
+### Nitrous runtime and exhaust (#303, #304)
+
+Checked `77b0fb6`, `7441a697f3b7b2d0ff7ddbe3f20f2e29a03165aa` and v221
+`2663d6864e5219e55b7a5744bb3238dae42f130f` through GitHub. The combustion/dyno
+port has wet curve banks, but its chassis capacity query and unregistered
+`getNitroing`/`setNitroSFX` do not implement activation, depletion or refill.
+Do not migrate its historical stale-bank retention or duplicate #215's engine
+math. MWM has no `getNitro`/`getNitroing` native declaration.
+
+The implementation instead follows the MWM executable (SHA-256
+`b284a7a53909d0b9ce59d59ddc11e14df40a7eb74d86fa76efb06305aadc2b03`):
+constructor `44A688` initializes the aggregate to zero; refresh `448B06` clamps it;
+`reload` at `45A244` fills it; `4549D8`–`454A69` gates/blends/depletes it using the
+predictive limiter; `452103` edge-triggers sound; `453465`–`4534FA` gates flag-256
+presentation separately. These are build-specific addresses, not transferable
+upstream ABI. MWM `Chassis.java`, `NOSInjectorSystem.java`, `Canister.java` and
+`Track.java` confirm the script fields, saved bottle value and explicit reload.
+The injector's commented-out RPM/throttle exports are not native eligibility
+limits; the tuning label's pounds/hour is not the recovered consumption formula.
+
+Upstream `SLRR_rev:src/render/vehicle-flare.ts` at `2663d686` supplies supporting evidence
+for mode-2's upper-left glow atlas tile and centimetre camera offset. The host
+reuses its own sun-flare primitive, not upstream's invented size/brightness gains.
+Native glow size, direction convention and ray/ghost distribution remain
+unverified; authored direction is preserved rather than reversed to taste.
+Simulation-clock shared flicker is explicitly a host adaptation of original
+per-render-child randomness. No generic particle code is migrated.
+
 ## 8. Draft PR #3: what it contains and what applies to main
 
 PR #3 documents were written against the merge base `77d19e7`. PRs #6

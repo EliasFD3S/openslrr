@@ -2,6 +2,7 @@
 // shipped patch classes so constructor chains and inherited natives are real.
 #include "natives_internal.hpp"
 #include "slrr/gameref.hpp"
+#include "slrr/light_resource.hpp"
 #include "slrr/script_lights.hpp"
 #include "standalone_test.hpp"
 
@@ -148,10 +149,53 @@ SLRR_TEST(lifetime) {
   std::puts(
       "PASS light lifetime: destroy, parent removal, GC roots, world reset");
 }
+// Exact central-glow fields from stock particles:0x1F (nitrous FakeSpot).
+// Keep this optical resource distinct from physical headlight/brake lighting.
+SLRR_TEST(stock_nitro_flare_fields) {
+  const auto light = parse_light_resource(
+      "type fakespot\r\n"
+      "range 400\nattenuation 1 .030 0\n"
+      "direction 0 0 -1\ntheta 1.896\nphi 2.220\n"
+      "lf_texture 0x00000100 maps\\skydome\\lensflare\\Flares.ptx\n"
+      "lf_glow_color 1.000 .898 .898 .898\n"
+      "lf_glow_offset 4\nlf_glow_minsize 1\nlf_glow_maxsize 10\n"
+      "lf_ray_count 1.000\nlf_flare_count 1.000\nlf_texturemode 2.000\n");
+  SLRR_REQUIRE(light && light->type == LightResourceType::FakeSpot);
+  SLRR_REQUIRE(!light_resource_lights_scene(light->type));
+  SLRR_REQUIRE(light->has_flare && light->flare.texture == 0x100);
+  SLRR_REQUIRE(light->flare_texture_path == "maps\\skydome\\lensflare\\Flares.ptx");
+  SLRR_REQUIRE(light->flare.color == 0xe5e5e5ff);
+  SLRR_REQUIRE(light->flare.min_size == 1 && light->flare.max_size == 10);
+  SLRR_REQUIRE(light->glow_offset == 4 && light->flare_texture_mode == 2);
+  SLRR_REQUIRE(light->flare.rays == 1 && light->flare.flares == 1);
+  SLRR_REQUIRE(light->range == 400 && std::abs(light->phi - 2.220f) < 1e-6f);
+}
+
+SLRR_TEST(flare_parser_rejects_malformed_values) {
+  const auto light = parse_light_resource(
+      "type fakespot\nlf_texture 0x123\nlf_texture 0x123junk\nlf_texture 0x\n"
+      "lf_glow_color .5 1 0 .25\nlf_glow_color 1 0 nan 0\n"
+      "lf_glow_minsize 2\nlf_glow_minsize -1\n"
+      "lf_glow_maxsize 3\nlf_glow_maxsize inf\n"
+      "lf_glow_offset 4\nlf_glow_offset -5\n"
+      "lf_ray_count 2\nlf_ray_count 1.5\nlf_ray_count 1e20\n"
+      "lf_flare_count 3\nlf_flare_count -1\n"
+      "lf_texturemode 2\nlf_texturemode nan\n");
+  SLRR_REQUIRE(light && light->flare.texture == 0x123);
+  SLRR_REQUIRE(light->flare.color == 0xff004080);
+  SLRR_REQUIRE(light->flare.min_size == 2 && light->flare.max_size == 3);
+  SLRR_REQUIRE(light->glow_offset == 4 && light->flare_texture_mode == 2);
+  SLRR_REQUIRE(light->flare.rays == 2 && light->flare.flares == 3);
+  const auto no_flare = parse_light_resource("type point\nrange 2\n");
+  SLRR_REQUIRE(no_flare && !no_flare->has_flare && !no_flare->flare.texture);
+  SLRR_REQUIRE(no_flare->flare.max_size == 0);
+}
 } // namespace
 
 int main() {
   const standalone::Test tests[] = {constructors_and_inherited_natives,
-                                    input_validation, lifetime};
+                                    input_validation, lifetime,
+                                    stock_nitro_flare_fields,
+                                    flare_parser_rejects_malformed_values};
   return standalone::run("script_lights", tests);
 }

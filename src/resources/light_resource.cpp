@@ -1,9 +1,11 @@
 #include "slrr/light_resource.hpp"
 #include "slrr/rpk_index.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <charconv>
 #include <cmath>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -133,6 +135,46 @@ std::optional<LightResource> parse_light_resource(std::string_view text) {
         out.lit_dynamic = value != 0.f;
     } else if (key.starts_with("lf_")) {
       out.has_flare = true;
+      if (key == "lf_texture" && t.size() > 1) {
+        auto id = t[1];
+        if (id.starts_with("0x") || id.starts_with("0X")) id.remove_prefix(2);
+        uint32_t value = 0;
+        const auto parsed = std::from_chars(id.data(), id.data() + id.size(), value, 16);
+        if (parsed.ec == std::errc{} && parsed.ptr == id.data() + id.size()) {
+          out.flare.texture = value;
+          out.flare_texture_path = t.size() > 2
+              ? std::string(trim(line.substr(size_t(t[2].data() - line.data())))) : std::string{};
+          any = true;
+        }
+      } else if (key == "lf_glow_color") {
+        std::array<float, 4> argb{};
+        if (numbers(t, 1, argb)) {
+          const auto byte = [](float value) {
+            return uint32_t(std::lround(std::clamp(value, 0.f, 1.f) * 255.f));
+          };
+          out.flare.color = (byte(argb[1]) << 24) | (byte(argb[2]) << 16) |
+                            (byte(argb[3]) << 8) | byte(argb[0]);
+          any = true;
+        }
+      } else if (key == "lf_glow_minsize" || key == "lf_glow_maxsize" ||
+                 key == "lf_glow_offset") {
+        float value = 0.f;
+        if (t.size() > 1 && number(t[1], value) && value >= 0.f) {
+          (key == "lf_glow_minsize" ? out.flare.min_size :
+           key == "lf_glow_maxsize" ? out.flare.max_size : out.glow_offset) = value;
+          any = true;
+        }
+      } else if (key == "lf_ray_count" || key == "lf_flare_count" ||
+                 key == "lf_texturemode") {
+        float value = 0.f;
+        if (t.size() > 1 && number(t[1], value) && value >= 0.f &&
+            value <= 64.f && std::floor(value) == value) {
+          if (key == "lf_ray_count") out.flare.rays = int(value);
+          else if (key == "lf_flare_count") out.flare.flares = int(value);
+          else out.flare_texture_mode = uint32_t(value);
+          any = true;
+        }
+      }
     }
   }
   if (!any)
@@ -150,7 +192,23 @@ std::optional<LightResource> load_light_resource(const RpkIndex &rpk,
   if (!is_light_resource(rpk, full_id))
     return std::nullopt;
   const auto bytes = rpk.read_payload(full_id);
-  return parse_light_resource(
+  auto light = parse_light_resource(
       {reinterpret_cast<const char *>(bytes.data()), bytes.size()});
+  if (light && light->flare.texture)
+    light->flare.texture = rpk.resolve_embedded_id(
+        RpkIndex::pack_from_full(full_id), light->flare.texture);
+  if (light && !light->flare_texture_path.empty()) {
+    auto path = light->flare_texture_path;
+    std::replace(path.begin(), path.end(), '\\', '/');
+    const auto relative = std::filesystem::path(path).lexically_normal();
+    const bool escapes = relative.is_absolute() || relative.has_root_name() ||
+        relative.has_root_directory() || path.find(':') != std::string::npos ||
+        std::any_of(relative.begin(), relative.end(), [](const auto& component) {
+          return component == "..";
+        });
+    light->flare_texture_path = escapes ? std::string{} :
+        (std::filesystem::path(rpk.game_root()) / relative).string();
+  }
+  return light;
 }
 } // namespace slrr

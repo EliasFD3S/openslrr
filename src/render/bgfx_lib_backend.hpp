@@ -377,6 +377,7 @@ class LibBgfxBackend final : public IRenderBackend {
   void draw_sky(uint16_t view_id, const float* view, const float* projection);
   void draw_dynamic_world(uint16_t view_id);
   void draw_sun_flare(const float* view, const float* projection, uint16_t view_id);
+  void draw_nitro_flares(const float* view, const float* projection, uint16_t view_id);
 
   void draw_previews();
 

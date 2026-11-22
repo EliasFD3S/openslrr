@@ -755,6 +755,42 @@ including nitro. Do not mix an old nitro bank with a new RPM step or a new
 geometry. Bound indices before the integer conversion. The last exact sample
 must remain reachable.
 
+### Nitrous driving and exhaust (#303, #304)
+
+The Part chassis owns a native nitrous aggregate, separate from the script's
+`Canister.actual`. Capacity and injection rate come from the installed scripts'
+`tank_nitro` and `consumption_nitro`. The aggregate starts empty; `forceUpdate`
+only clamps it to capacity, and the explicit `reload` command fills it. Reset,
+repair, a new bottle and serialization do not silently refill it. Stock Track
+calls `reload` when locking the car for driving; a newly loaded chassis is
+otherwise empty, matching MWM's native/script split.
+
+Mapped axis 31 (stock N) supplies a clamped analogue input. A controlled,
+released, running mechanical engine with input > 0.1, positive rate and remaining
+nitrous can select the existing wet dyno bank. The solver blends its limited dry
+output toward the wet bank independently of the accelerator; no new dyno math or
+engine torque gain is introduced. Each fixed solver step consumes
+`RPM * 0.0002 * input * rev_limiter_fraction * dt * consumption_nitro`.
+The HUD reports remaining/capacity only with an injection kit, and the configured
+nitrous sound (default `sound:25`) is a press-triggered one-shot, not a loop.
+
+Flag-256 exhaust meshes and fake-light children share the chassis's presentation
+sample: eligible nitrous, >1000 RPM and throttle >0.01, with a 30% flicker gate.
+The original samples random state per rendered child; the host deliberately uses
+one deterministic MSVC-LCG sample per 60-Hz simulation tick, shared by all outlets
+and cameras. Pausing cannot consume nitrous or resample the flame. Detached,
+broken, preview and stopped parts do not show an exhaust effect.
+
+The stock flame is the authored SCX3 mesh and premultiplied PNG, not a particle
+emitter. It must not be snapped onto lamp glass, write depth, or multiply alpha
+twice. Associated FakeSpot lights draw only the authored central flare glow,
+with depth/camera/range/cone checks and the flares option; they never become
+400-metre floodlights. Glow sizing follows the existing sun-flare approximation,
+not recovered native units; ray/ghost distribution and original view-angle
+fidelity are not established. Generic ParticleSystem and purge remain separate.
+See EXTERNAL_RESEARCH §7 and KNOWLEDGE_BASE "Nitrous driving and exhaust" for
+binary/source provenance and verification entry points.
+
 Mass distribution and crush zones are separate models. The car's mass,
 centre of mass and inertia come from the installed parts' CFG `body` lines
 (`assembly_mass_properties`): each line's mass is spread over its own shape (a

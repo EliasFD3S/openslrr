@@ -1,8 +1,11 @@
 #pragma once
 
+#include "slrr/scene_sun.hpp"
+
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace slrr {
@@ -32,6 +35,15 @@ struct LightResource {
   float theta = 0.f, phi = 0.f;  // spot cone angles, radians (full angles)
   bool lit_dynamic = false;
   bool has_flare = false;  // any lf_* keyword
+  // Shared stock flare atlas/color/glow sizes; parse keeps an embedded texture
+  // id, load_light_resource resolves it in the light's owning RPK.
+  SceneFlare flare;
+  // Optional filename on lf_texture. Stock particles:1F names an empty
+  // type-14 id, so retain its explicit authored artwork as fallback. load
+  // resolves this game-relative path against the resource root.
+  std::string flare_texture_path;
+  float glow_offset = 0.f;  // authored centimetres toward the camera
+  uint32_t flare_texture_mode = 0;  // 2 = atlas, upper-left quadrant is glow
 };
 
 // Point and spot light the scene. fake* types are glow/flare only and never

@@ -59,6 +59,9 @@ GlassGaps glass_gaps(Object *car) {
     for (void *child : part->children) {
       const auto *node = gameref_get(child);
       if (!node || node->empty || node->kind != GameRefKind::RenderRef) continue;
+      // Flag-256 exhaust flames are deliberately unsnapped authored geometry,
+      // neither a lens body nor a lamp-glass overlay (#304).
+      if (node->light_flags & 256u) continue;
       if (node->light_flags) { glass.push_back(node); continue; }
       const auto mesh = scene_instances_geometry(uint32_t(node->type_id));
       if (!mesh) continue;
@@ -187,11 +190,16 @@ void stock_baiern_lights() {
   SLRR_REQUIRE(find(all, CarLightKind::Brake, 0)->part != find(all, CarLightKind::Brake, 1)->part);
   for (const auto &light : all)
     SLRR_REQUIRE(light.part != car);
-  // The headlights are the `type spot` resource (diffuse 0.2, range 400),
-  // the brake lights the red glow-only `fakespot` (range 5).
-  SLRR_REQUIRE(left.range == 400.f && left.theta > 1.8f && left.diffuse[0] < .5f);
+  // MWM cars/racers.rpk:0x08 explicitly authors range 250, not the 400
+  // used by particles:0x1F. Headlights are `type spot` with diffuse 0.2;
+  // cars/racers.rpk:0x0F is red glow-only `fakespot` (red 0.5, range 5).
+  std::printf("CAR LIGHTS authored headlight: resource=0x%x range=%g theta=%g diffuse=(%g,%g,%g) type=%d\n",
+              left.resource,left.range,left.theta,left.diffuse[0],left.diffuse[1],left.diffuse[2],int(left.light.type));
+  SLRR_REQUIRE(left.range == 250.f && left.theta > 1.8f && left.diffuse[0] < .5f);
   const CarLight rear = *find(all, CarLightKind::Brake);
-  SLRR_REQUIRE(rear.diffuse[0] > .9f && rear.diffuse[1] < .1f && rear.range == 5.f);
+  std::printf("CAR LIGHTS authored brake: resource=0x%x range=%g diffuse=(%g,%g,%g)\n",
+              rear.resource,rear.range,rear.diffuse[0],rear.diffuse[1],rear.diffuse[2]);
+  SLRR_REQUIRE(rear.diffuse[0] == .5f && rear.diffuse[1] == 0.f && rear.diffuse[2] == 0.f && rear.range == 5.f);
   // Placement: beams leave the front of the car, forward and level within
   // about 15 degrees; brake lights sit behind the headlights.
   PartMatrix m;

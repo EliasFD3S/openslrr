@@ -69,7 +69,8 @@ that category. It is not a compatibility score or a complete runtime trace.
 | Brain AI commands (not separate native signatures) | Shared physical driver for AI_race, GoToTarget, GoToTraffic, follow and MWM ROC splines. BeginRace/stop/suspend hold; NightRace retains the race destination. Host tuning, basic world-space follow offsets; renderinstance seating and spline metadata remain incomplete. Original Bot bytecode, real City/ROC terrain, ordered ROC gates and the finish gate pass physics integration tests; full career UI/result flows remain pending gameplay validation. |
 | `RenderRef.lineCreate`, `lineAdd` | Build renderable ribbons from positions, normals and widths. Color is applied per segment. |
 | `LightSource` family (OpenSLRR, #235) | New `java.render` classes, not stock natives. Point, spot and rect lights attached to a GameRef; consumed by the garage renderer only. Rect lights render as spots, inner cone and per-spot shadows are not honoured. See ENGINE_CONTRACT §12 "Script light sources". |
-| `Chassis.setCooling`, `setSteerWheelRadius`, `setSteerWheel`, `setBuck`, `setNitroSFX` | Store configuration. No temperature simulation, bucking effect or nitro audio consumes these values yet. The installed wheel on slot type 11 turns about the cfg `steering` locator. |
+| `Chassis.setCooling`, `setSteerWheelRadius`, `setSteerWheel`, `setBuck` | Store configuration. No temperature simulation or bucking effect consumes these values yet. The installed wheel on slot type 11 turns about the cfg `steering` locator. |
+| `Chassis.setNitroSFX` | Configures the press-triggered nitrous one-shot. Mapped driving input selects the wet dyno bank and depletes a native aggregate; explicit `reload` fills it. The HUD uses remaining/capacity. Stock flag-256 exhaust meshes and central fake-light glow share simulation-clock flicker; original flare sizing/rays/ghosts remain approximate or absent. See ENGINE_CONTRACT "Nitrous driving and exhaust". |
 | `GroundRef.setPedestrianDensityN`, `addPedestrianType`, `remPedestrianType`, `removePedestrianType`, `pedestrianDistance` | Density, after the script's Config factor, sets people per square metre of `city.walk` row area around the driven car. Each type's `native ped` cfg supplies the render and the walk clip. Walkers follow the original engine model: free agents inside a row, pushed back by its walls and both sidewalk runs, leaving only through gates (see `src/resources/pedestrian_lines.cpp`). `removePedestrianType` is the original native table's name for `remPedestrianType`. `pedestrianDistance(pos, type)` returns the distance to the nearest live walker of that type id, or of any type for 0, and -1 when there is none. |
 | `PhysicsRef.getPos` | Returns a new Vector3 copying the one stored by `setMatrix`. Without one, it returns a new Vector3 from the object's pose. The copy matters: `Osd` keyboard navigation calls `gad.getHotSpot().sub(cur)`, and returning the stored vector let the arrow keys move the button's own Rectangle (`Rectangle.pos` is the same vector the button passed to `setMatrix`). |
 | `Part.setSfxLoopParams` | Stores the two parameters without applying them to a voice. Native car CFG sfx_loop declarations are not retained by PartConfig; mechanical AI already updates its SfxTables. Vehicle engine loops currently have no listener-distance input. |
@@ -116,7 +117,8 @@ No PhysicsRef signature remains absent from the stock table.
 
 1. **Finish a playable drive on a test track.** Validate steering, brake,
    clutch, shifts and the input profile through a relaunch. Connect the remaining
-   driver actions to gameplay, especially nitro activation and consumption.
+   driver actions to gameplay; compare the implemented nitrous chain against
+   original gameplay beyond its targeted regressions.
    Compare acceleration, stopping and suspension against stock telemetry at
    different render rates.
 2. **Unify world collision and damage.** Native CFG placements and
