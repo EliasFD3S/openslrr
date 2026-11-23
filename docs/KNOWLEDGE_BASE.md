@@ -856,6 +856,12 @@ Physics:
   still requires the service brake below 0.05
   (`src/physics/vehicle_dynamics.cpp:VehicleDynamics::step_drive`).
   See ENGINE_CONTRACT §11 and [the migration plan](VEHICLE_DYNAMICS_PLAN.md).
+- Axle differentials (#354) come from the transmission, per axle, through
+  the `differential` command (`src/resources/part_runtime.cpp:configure_differentials`,
+  `src/physics/vehicle_dynamics.cpp:differential_lock_torque`). An axle without
+  one is open unless the stock `difflock` value is set. Keyboard steering's
+  speed bound is centred on the direction of travel when countersteering
+  (`src/resources/part_runtime.cpp:steering_filter`).
 - Installed body low points are cached from real mesh vertices, not the
   chassis AABB's empty underside corners
   (`src/resources/part_runtime.cpp:rebuild_body_support`). Hidden meshes keep
@@ -4358,3 +4364,38 @@ Verified on the PR branch (f422ebb), by reading the code; not run in game.
 - Rebuild of the shipped class: `build/issue315-compile-root` (a game copy)
   reproduced the previous `patch/sl/Scripts/game/Garage.class` byte for byte
   before the edit; see SCRIPT_COMPILER.md "Shipped patch classes (#235)".
+
+## Differentials and drift (#354)
+
+- Before #354 every driven axle was open unless `chassis.diff_lock` was set
+  by the `difflock` command. The stock Transmission saves a `diffLock` and a
+  `frontDrive` (save version 2, `src/natives/save_json.cpp:part_spec`); the
+  old LSD block in `step_drive` turned that one value into a 1.5-way LSD with
+  a fixed 35 N m preload and a 0.4 coast share. That mapping is kept as the
+  fallback, and a value of 1 is a locked axle as before.
+- Kernel finding (`tests/test_vehicle_dynamics.cpp:drift_hold`): a 1,300 kg
+  rear-drive car with an open rear differential cannot hold a power slide. At
+  full throttle the unloaded inside rear (700 to 2,000 N against 5,700 N
+  outside) spins at about 145 rad/s while the outside rear stays near road
+  speed (36 rad/s), so the outside tyre keeps its lateral grip and the car
+  straightens: 0 to 22 % of 5 s held. A clutch LSD (50 N m, 0.6/0.3), a
+  Torsen (bias 3), a viscous coupling (200 N m s) or a spool held the same
+  slide 96 % of the time. Weight transfer already exists through the
+  per-corner spring loads; the open differential is what hid it.
+- Keyboard steering bounded the requested angle by a lateral acceleration of
+  0.85 g around the car's heading. At 15 m/s that is about 0.11 rad, plus at
+  most 0.12 rad of automatic correction, while holding a 25 degree slide
+  needs about 0.35 rad of countersteer. The bound is now centred on the
+  direction of travel when the driver steers towards the slide.
+- Differential models (`differential_lock_torque`): clutch LSD
+  `preload + share * |T_in|` (share = power on drive, coast on overrun,
+  clamped to 0..1), Torsen `|T_in| (bias - 1) / (bias + 1)`, viscous
+  `k |dw|` applied implicitly so it cannot overshoot equal speeds, locked
+  unbounded. `T_in` is the axle's share of the clutch impulse of the substep,
+  so a free-revving or declutched drivetrain leaves only the preload.
+- Locking happens before the tyre reaction of the same substep; a spool still
+  shows one substep of speed difference after the tyre step.
+- Not covered: a centre differential (front/rear split still follows the
+  wheels' `drive` weights), differential wear, and the Java transmission
+  tuning page (needs the stock Transmission source from the game folder).
+

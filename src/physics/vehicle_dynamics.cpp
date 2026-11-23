@@ -2,6 +2,7 @@
 #include "slrr/dyno_model.hpp"
 #include "slrr/vehicle_dynamics.hpp"
 #include <algorithm>
+#include <limits>
 #include <cmath>
 #include <numbers>
 #include <stdexcept>
@@ -706,6 +707,32 @@ void VehicleDynamics::update_gear(double rpm, double shaft,
   }
 }
 
+double differential_lock_torque(const DifferentialConfig &diff,
+                                double input_torque, double speed_difference) {
+  const double torque = std::isfinite(input_torque) ? std::abs(input_torque) : 0;
+  const auto share = [](double value) {
+    return std::isfinite(value) ? std::clamp(value, 0.0, 1.0) : 0.0;
+  };
+  switch (diff.type) {
+  case DifferentialType::ClutchLsd:
+    return (std::isfinite(diff.preload) ? std::max(0.0, diff.preload) : 0) +
+           share(input_torque >= 0 ? diff.power : diff.coast) * torque;
+  case DifferentialType::Torsen: {
+    // T_slow <= bias * T_fast with T_slow + T_fast = input torque.
+    const double bias = std::isfinite(diff.bias) ? std::max(1.0, diff.bias) : 1;
+    return torque * (bias - 1) / (bias + 1);
+  }
+  case DifferentialType::Viscous:
+    return (std::isfinite(diff.viscous) ? std::max(0.0, diff.viscous) : 0) *
+           std::abs(speed_difference);
+  case DifferentialType::Locked:
+    return std::numeric_limits<double>::infinity();
+  case DifferentialType::Open:
+    break;
+  }
+  return 0;
+}
+
 double VehicleDynamics::engine_limit_fraction() const {
   return std::clamp(limiter_factor(engine_omega * rpm_per_rad, previous_rpm_, drive.limit), 0.0, 1.0);
 }
@@ -842,29 +869,32 @@ void VehicleDynamics::step_drive() {
                              -std::expm1(-timestep / .07));
   }
 
-  // Différentiel autobloquant (LSD 1.5-way avec précharge minimale)
-  if (drive.differential_lock > 0 && weights > 0) {
-    const double lock_ratio = std::clamp(drive.differential_lock, 0.0, 1.0);
-    for (size_t left = 0; left < wheels.size(); left += 2) {
-      const size_t right = left + 1;
-      if (right >= wheels.size())
-        break;
-      const double left_weight = drive.wheels[left].weight;
-      const double right_weight = drive.wheels[right].weight;
-      if (!wheels[left].enabled || !wheels[right].enabled ||
-          left_weight <= 0 || right_weight <= 0)
+  // Axle differentials (#354). The drive impulse above reached each wheel
+  // by its weight: equal torque, the open differential. A locking
+  // differential then passes torque from the faster wheel of the axle to the
+  // slower one, at most its locking torque for this step.
+  if (weights > 0) {
+    for (size_t axle = 0; axle < drive.differentials.size(); ++axle) {
+      const size_t left = 2 * axle, right = left + 1;
+      const auto &diff = drive.differentials[axle];
+      if (diff.type == DifferentialType::Open || !wheels[left].enabled ||
+          !wheels[right].enabled || drive.wheels[left].weight <= 0 ||
+          drive.wheels[right].weight <= 0)
         continue;
-
-      double transfer =
-          (state[left].spin - state[right].spin) * wheel_inertia * 0.5;
-      if (lock_ratio < 1.0) {
-        const double axle_share = (left_weight + right_weight) / weights;
-        const double preload = 35.0 * lock_ratio * timestep;
-        // Plein verrouillage sous couple positif, ~40% en décélération (1.5-way)
-        const double ramp = drive_impulse >= 0.0 ? 1.0 : 0.4;
+      const double axle_share =
+          (drive.wheels[left].weight + drive.wheels[right].weight) / weights;
+      const double input_torque = drive_impulse * axle_share / timestep;
+      const double difference = state[left].spin - state[right].spin;
+      // Angular impulse that brings both wheels to the same speed.
+      const double equalize = difference * wheel_inertia * .5;
+      double transfer = equalize;
+      if (diff.type == DifferentialType::Viscous) {
+        // Implicit: the coupling cannot overshoot the equal-speed point.
+        transfer *= -std::expm1(-2 * std::max(0.0, diff.viscous) * timestep /
+                                wheel_inertia);
+      } else {
         const double limit =
-            preload +
-            std::abs(drive_impulse) * axle_share * lock_ratio * ramp;
+            differential_lock_torque(diff, input_torque, difference) * timestep;
         transfer = std::clamp(transfer, -limit, limit);
       }
       state[left].spin -= transfer / wheel_inertia;

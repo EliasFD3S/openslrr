@@ -106,6 +106,10 @@ struct Record {
   float steering_request = 0, steering_correction = 0;
   float steering_help = 0, abs_strength = 0, launch_help = 0;
   int transmission = 1;
+  // Axle differentials the installed transmission sent with `differential`
+  // during the last Chassis.updatevariables pass (#354).
+  std::array<physics::DifferentialConfig, 2> differentials{};
+  std::array<bool, 2> differential_set{};
   uint64_t driving_options_revision = 0;
   float damage_multiplier = -1.f;
   physics::Vec3 cockpit_offset;
@@ -1642,6 +1646,8 @@ void refresh_chassis(Object *chassis) {
   configure_anti_roll(*rec);
   if (field_int(chassis, "suspend_update")) return;
   ++refresh_depth;
+  // Only the installed transmission describes the differentials (#354).
+  rec->differential_set = {};
   // Only installed parts write spring and damper settings during this pass.
   // Clear the old contributions so removing a part cannot leave it active.
   for (auto& wheel : rec->wheels) {
@@ -2120,6 +2126,36 @@ bool part_command(Object *part, const std::string &command) {
     float value;
     if (!rec || !(input >> value) || !std::isfinite(value)) return false;
     rec->damage_multiplier = std::max(0.f, value);
+    return true;
+  }
+  if (verb == "differential") {
+    // `differential <axle> <type> <preload> <power> <coast> [bias] [viscous]`
+    // from the transmission's updatevariables (#354). Axle 0 front, 1 rear,
+    // 2 both; type follows physics::DifferentialType. Values are clamped by
+    // physics::differential_lock_torque, not here.
+    auto* rec = record(as_part(part));
+    int axle = 0, type = 0;
+    float preload = 0, power = 0, coast = 0, bias = 1, viscous = 0;
+    if (!rec || !(input >> axle >> type >> preload >> power >> coast)) return false;
+    input >> bias >> viscous;
+    if (axle < 0 || axle > 2 || type < 0 ||
+        type > static_cast<int>(physics::DifferentialType::Locked))
+      return false;
+    const auto finite = [](float value, float fallback) {
+      return std::isfinite(value) ? value : fallback;
+    };
+    physics::DifferentialConfig diff;
+    diff.type = static_cast<physics::DifferentialType>(type);
+    diff.preload = finite(preload, 0);
+    diff.power = finite(power, 0);
+    diff.coast = finite(coast, 0);
+    diff.bias = finite(bias, 1);
+    diff.viscous = finite(viscous, 0);
+    for (size_t i = 0; i < rec->differentials.size(); ++i)
+      if (axle == 2 || static_cast<size_t>(axle) == i) {
+        rec->differentials[i] = diff;
+        rec->differential_set[i] = true;
+      }
     return true;
   }
   if (verb == "difflock") {
@@ -3084,12 +3120,19 @@ void steering_filter(const SteeringGeometry &geometry, const SteeringInput &in,
   const float help = in.analog ? 0.f : geometry.help;
   float target = steer;
   const float wheelbase = geometry.ackermann > 0 ? geometry.ackermann : geometry.ackermann_length;
+  const auto local_velocity = body.orientation.inverse_rotate(velocity);
+  const double forward_speed = -local_velocity.z;
   if (help > 0 && wheelbase > 0 && speed > 0) {
     // For keyboard steering, bound the requested curvature as speed rises.
     // A rate limit alone still asks for full lock after a short button hold.
     constexpr double lateral_acceleration = .85 * 9.81;
     const double limit = std::atan(wheelbase * lateral_acceleration / (speed * speed * help));
-    target *= static_cast<float>(std::min(1., limit / max_steer));
+    // The bound is a curvature around the direction of travel, not the
+    // car's heading: in a slide, steering towards it (countersteer) may
+    // reach that direction plus the bound, or a drift cannot be held (#354).
+    const double slide = forward_speed > 0 ? -std::atan2(local_velocity.x, forward_speed) : 0.;
+    const double reach = target * slide > 0 ? std::abs(slide) + limit : limit;
+    target *= static_cast<float>(std::min(1., reach / max_steer));
   }
   const bool unwinding = target == 0.f || target * steering_input < 0 ||
                          std::abs(target) < std::abs(steering_input);
@@ -3100,8 +3143,6 @@ void steering_filter(const SteeringGeometry &geometry, const SteeringInput &in,
   const float max_delta = rate / (max_steer * physics::VehicleDynamics::update_frequency);
   steering_input += std::clamp(target - steering_input, -max_delta, max_delta);
 
-  const auto local_velocity = body.orientation.inverse_rotate(velocity);
-  const double forward_speed = -local_velocity.z;
   if (!controls || geometry.help <= 0.f || in.handbrake ||
       !grounded || forward_speed <= 0.) {
     steering_correction = 0.f;
@@ -3137,6 +3178,28 @@ struct DriveRefresh {
   bool autonomous = false, controls = false;
   float ai_steer = 0;
 };
+// Axle differentials for this tick (#354). An axle the transmission did not
+// describe with `differential` falls back to the stock Transmission's single
+// diffLock (the `difflock` command): a clutch LSD whose ramps lock that share
+// of the input torque on drive and 40% of it on overrun, with 35 N m of
+// preload at a full lock, and a locked axle at 1. Without either the axle
+// stays open.
+void configure_differentials(Object *chassis, Record &rec) {
+  auto &out = rec.dynamics.drive.differentials;
+  const double lock = std::clamp(comp(chassis, "diff_lock"), 0.f, 1.f);
+  for (size_t axle = 0; axle < out.size(); ++axle) {
+    if (rec.differential_set[axle]) {
+      out[axle] = rec.differentials[axle];
+    } else if (lock >= 1) {
+      out[axle] = {};
+      out[axle].type = physics::DifferentialType::Locked;
+    } else if (lock > 0) {
+      out[axle] = {physics::DifferentialType::ClutchLsd, 35 * lock, lock, .4 * lock};
+    } else {
+      out[axle] = {};
+    }
+  }
+}
 DriveRefresh configure_drive(Object *chassis, Record &rec, bool controlled) {
   DriveRefresh refresh;
   // Chassis.updatevariables leaves C_drag (fully_stripped_drag less the
@@ -3219,7 +3282,7 @@ DriveRefresh configure_drive(Object *chassis, Record &rec, bool controlled) {
   drive.handbrake = !autonomous && controls && in.drive_handbrake ? .3 : 0;
   drive.abs_strength = rec.abs_strength;
   drive.launch_help = rec.launch_help;
-  drive.differential_lock = std::clamp(comp(chassis, "diff_lock"), 0.f, 1.f);
+  configure_differentials(chassis, rec);
   drive.clutch = autonomous ? (ai.start ? 1.f : 0.f) : controls ? 1.f - std::clamp(in.drive_clutch, 0.f, 1.f) : 0.f;
   drive.idle = std::max(400.f, comp(chassis, "engine_rpm_idle"));
   drive.limit = std::max(drive.idle + 100.0, double(comp(chassis, "RPM_limit")));

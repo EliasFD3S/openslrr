@@ -702,6 +702,20 @@ the wheels → rotational speed → slip → tire forces → forces and moments 
 the body. A loss of grip is not proof that only a differential or an
 anti-roll bar is missing.
 
+The drive impulse reaches each driven wheel by its `drive` weight (equal
+torque: an open differential). Each axle then has its own differential
+(`DriveInput::differentials`, #354): open, clutch LSD (preload plus a ramp
+share of the input torque, separately on drive and overrun), Torsen (torque
+bias ratio), viscous (N m per rad/s of wheel speed difference) or locked.
+`differential_lock_torque` bounds the angular impulse passed from the faster
+wheel to the slower one each substep; nothing is hardcoded per car. The
+installed transmission sends its values with the `differential` command
+during `Chassis.updatevariables`; `refresh_chassis` forgets them first, so a
+removed transmission leaves the axles open. Without that command the stock
+`difflock` value (`diffLock` of the stock Transmission) still maps to a clutch
+LSD. An open rear differential cannot hold a power slide: the unloaded inside
+wheel spins up and the loaded outside wheel keeps its grip.
+
 The active tire code is in `tire_model.cpp`, integrated in
 `vehicle_dynamics.cpp`. The presence of `sl2_pacejka.cpp` in the repository
 does not mean the whole driving model uses that older model.

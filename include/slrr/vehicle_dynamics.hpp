@@ -157,6 +157,33 @@ struct WheelState {
 struct AntiRollConfig {
   double stiffness = 0, damping = 0;
 };
+// One axle's differential (#354). Torques are N m at the axle, speed
+// differences rad/s between its two wheels. Every coefficient comes from the
+// installed parts (see part_runtime.cpp:configure_differentials); the default
+// is the open differential the solver always had.
+enum class DifferentialType : uint8_t {
+  Open = 0,      // equal torque, free wheel speeds
+  ClutchLsd = 1, // plate LSD: preload plus ramp share of the input torque
+  Torsen = 2,    // torque sensing: the slow wheel takes up to `bias` times more
+  Viscous = 3,   // locking torque grows with the wheel speed difference
+  Locked = 4,    // spool / welded: both wheels turn together
+};
+struct DifferentialConfig {
+  DifferentialType type = DifferentialType::Open;
+  // Clutch LSD: breakaway torque, and the share (0..1) of the input torque
+  // the ramps turn into locking torque under drive and on overrun.
+  double preload = 0, power = 0, coast = 0;
+  // Torsen torque bias ratio (>= 1).
+  double bias = 1;
+  // Viscous coupling, N m per rad/s.
+  double viscous = 0;
+};
+// Largest torque the differential can pass from the faster wheel to the
+// slower one this step, for an input torque (positive = drive, negative =
+// overrun) and a wheel speed difference. Infinity for a locked axle.
+double differential_lock_torque(const DifferentialConfig &diff,
+                                double input_torque, double speed_difference);
+
 struct DriveWheel {
   double weight = 0, steer = 0, brake = 0, handbrake = 0, bearing = 0;
   double rolling_resistance = 0;
@@ -173,7 +200,8 @@ struct DriveInput {
   double brake_scale = 0, handbrake_scale = 0, bearing_scale = 0;
   double abs_strength = 0;
   double launch_help = 0;
-  double differential_lock = 0;
+  // Front (wheels 0/1) and rear (2/3) axle differentials.
+  std::array<DifferentialConfig, 2> differentials{};
   double inertia = 0, idle = 0, limit = 0, starter = 0;
   double clutch = 1;
   // Net open-throttle crank torque (Nm) at the requested rpm, including

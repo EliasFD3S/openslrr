@@ -869,6 +869,109 @@ SLRR_TEST(anti_roll_on_an_engineless_coasting_car_does_not_rewrite_tyre_loads) {
   }
 }
 
+SLRR_TEST(differential_lock_torque_follows_each_type) {
+  DifferentialConfig diff;
+  SLRR_REQUIRE(differential_lock_torque(diff, 500, 10) == 0);
+  diff = {DifferentialType::ClutchLsd, 60, .5, .2};
+  SLRR_REQUIRE(std::abs(differential_lock_torque(diff, 400, 3) - 260) < 1e-9);
+  SLRR_REQUIRE(std::abs(differential_lock_torque(diff, -400, 3) - 140) < 1e-9);
+  SLRR_REQUIRE(std::abs(differential_lock_torque(diff, 0, 3) - 60) < 1e-9);
+  diff.power = 5;  // ramp shares clamp to a full lock of the input torque
+  diff.preload = -10;
+  SLRR_REQUIRE(std::abs(differential_lock_torque(diff, 400, 3) - 400) < 1e-9);
+  diff = {};
+  diff.type = DifferentialType::Torsen;
+  diff.bias = 3;  // slow wheel 300, fast wheel 100: 200 passes across
+  SLRR_REQUIRE(std::abs(differential_lock_torque(diff, 400, 3) - 200) < 1e-9);
+  diff.bias = .5;
+  SLRR_REQUIRE(differential_lock_torque(diff, 400, 3) == 0);
+  diff = {};
+  diff.type = DifferentialType::Viscous;
+  diff.viscous = 20;
+  SLRR_REQUIRE(std::abs(differential_lock_torque(diff, 0, -4) - 80) < 1e-9);
+  diff.type = DifferentialType::Locked;
+  SLRR_REQUIRE(std::isinf(differential_lock_torque(diff, 0, 0)));
+  diff.type = DifferentialType::ClutchLsd;
+  diff.preload = std::numeric_limits<double>::quiet_NaN();
+  diff.power = std::numeric_limits<double>::quiet_NaN();
+  SLRR_REQUIRE(differential_lock_torque(diff, 400, 3) == 0);
+}
+
+// Full throttle out of a tight turn: the inside rear wheel is unloaded.
+double inside_wheelspin(DifferentialConfig diff) {
+  Car car;
+  car.dynamics.drive.differentials[1] = diff;
+  car.dynamics.drive.automatic_shift = false;
+  car.dynamics.gear = 1;
+  car.run(4, .4, 0, 0);
+  car.run(1.5, .35, 0, .5);
+  car.run(1, 1, 0, .5);
+  const auto& s = car.dynamics.state;
+  SLRR_REQUIRE(std::isfinite(s[2].spin) && std::isfinite(s[3].spin));
+  return std::abs(s[2].spin - s[3].spin);
+}
+
+SLRR_TEST(locking_differentials_keep_the_rear_wheels_together) {
+  const double open = inside_wheelspin({});
+  const double lsd = inside_wheelspin({DifferentialType::ClutchLsd, 80, .6, .3});
+  DifferentialConfig locked;
+  locked.type = DifferentialType::Locked;
+  const double spool = inside_wheelspin(locked);
+  // The spool still shows the difference one step of tyre reaction makes.
+  SLRR_REQUIRE(open > 10);
+  SLRR_REQUIRE(lsd < open * .3);
+  SLRR_REQUIRE(spool < open * .3);
+}
+
+// Rear-drive car flicked into a slide, then held with countersteer and
+// throttle. Returns the share of 5 s spent between 11 and 70 degrees.
+double drift_hold(DifferentialConfig diff) {
+  Car car;
+  auto& d = car.dynamics;
+  d.drive.differentials[1] = diff;
+  d.drive.automatic_shift = false;
+  d.drive.torque = [](double rpm) { return 1.5 * std::clamp(150 + rpm * .02, 0., 235.); };
+  d.gear = 1;
+  const auto slip = [&] {
+    const auto v = d.body.orientation.inverse_rotate(d.body.velocity);
+    return std::atan2(v.x, std::max(.1, std::abs(v.z)));
+  };
+  const auto step = [&](double throttle, double handbrake, double steer) {
+    d.drive.throttle = throttle;
+    d.drive.handbrake = handbrake;
+    for (int i = 0; i < 2; ++i) d.drive.wheels[i].steer = steer;
+    d.advance(1. / 60, flat_ground);
+  };
+  for (int i = 0; i < 600 && d.body.velocity.length() < 13; ++i) {
+    if (d.body.velocity.length() > 8) d.gear = 2;
+    step(1, 0, 0);
+  }
+  for (int i = 0; i < 30; ++i) step(1, i < 18, .45);
+  int held = 0;
+  double integral = 0;
+  for (int i = 0; i < 6 * 60; ++i) {
+    const double beta = slip(), error = std::abs(beta) - .45;
+    integral = std::clamp(integral - error * 2. / 60, -1., 1.);
+    step(std::clamp(.7 - error * 3 + integral, 0., 1.), 0,
+         std::clamp((beta < 0 ? 1 : -1) * (std::abs(beta) * .9 + error * 1.2), -.6, .6));
+    SLRR_REQUIRE(d.body.position.finite());
+    if (i >= 60 && std::abs(slip()) > .2 && std::abs(slip()) < 1.2 &&
+        d.body.velocity.length() > 5)
+      ++held;
+  }
+  return held / 300.;
+}
+
+SLRR_TEST(a_locking_rear_differential_holds_a_power_slide) {
+  // The open differential spins up the unloaded inside wheel: the loaded
+  // outside wheel keeps its grip and the car straightens.
+  SLRR_REQUIRE(drift_hold({}) < .4);
+  SLRR_REQUIRE(drift_hold({DifferentialType::ClutchLsd, 50, .6, .3}) > .9);
+  DifferentialConfig locked;
+  locked.type = DifferentialType::Locked;
+  SLRR_REQUIRE(drift_hold(locked) > .9);
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
       tyre_grip_follows_the_tyre_script,
@@ -906,6 +1009,9 @@ int main() {
       invalid_anti_roll_coefficients_individually_act_as_zero,
       extreme_anti_roll_coefficients_stay_finite_at_the_paired_weight_cap,
       anti_roll_on_an_engineless_coasting_car_does_not_rewrite_tyre_loads,
+      differential_lock_torque_follows_each_type,
+      locking_differentials_keep_the_rear_wheels_together,
+      a_locking_rear_differential_holds_a_power_slide,
   };
   return slrr::standalone::run("vehicle_dynamics", tests);
 }
