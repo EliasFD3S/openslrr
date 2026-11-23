@@ -931,15 +931,25 @@ These loss curves are empirical, not a new manifold or combustion calibration.
 Stock outputs intentionally change under the issue owner's physical-consistency
 direction; see [the investigation](PHYSICS_TICK_SPIKE.md).
 
-The #203 Java port-flow and fuel-heat patches were withdrawn in #352: they
-lowered stock outputs unevenly (36% to 100% of each engine's previous
-maxHP). Stock `CylinderHead`, `Block_Inline`, `Block_Vee` and
-`AirFuelDeliverySystem` are authoritative again. Instead the cycle scales
-indicated torque by `engine_stock_calibration` (2.0,
-`include/slrr/dyno_model.hpp`): net power then equals the legacy
-N·W·rpm/60 − rpm³·2·10⁻⁸ exactly, so every stock engine keeps its maxHP and
-peak rpm, while torque stays P/ω. The `stock_engine_power` suite checks the
-24 stock racers against values measured before #215.
+The #203 Java port patch computes `in/out_min/max` from capped curtain area:
+`c = clamp(efficiency * discharge * A_eff * U_ref * 0.001 / V_swept, 0, 1)`
+in SI. The declared ideal-air M=1 reference has `U_ref = 198.629616711 m/s`.
+The existing 0.9 breather factor stays empirical; this does not make the native
+linear pressure relaxation an exact compressible valve solver. The shared
+CylinderHead helper must ship with both updated block classes; DOHC/SOHC/OHV
+continue supplying the same disk-area/lift proxy, and Vee averaging is unchanged.
+Efficiency now restricts minimum as well as maximum flow multiplicatively, so
+authored nonzero closed lifts can change leakage. No DynoData field/schema or
+native signature changes. See [patch installation/reproduction](../patch/README.md#port-flow-normalization-203).
+
+The fuel patch (`AirFuelDeliverySystem`) keeps the stock `mixture_H` (stock
+heat × mixture match × 1.55) since #352, so engine mods keep their scale; the
+#203 handbook heat stays in the source, commented out. Instead the cycle scales
+indicated torque by `engine_stock_calibration` (2.8,
+`include/slrr/dyno_model.hpp`) so the 24 stock racers keep their pre-#215
+maxHP on average; the port-flow law still spreads them from 45% to 152%.
+`stock_engine_power` pins each racer. See
+[patch](../patch/README.md#stock-engine-power-352).
 
 ### Nitrous driving and exhaust (#303, #304)
 

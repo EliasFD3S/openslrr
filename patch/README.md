@@ -1,6 +1,6 @@
 # OpenSLRR Enhanced
 
-Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the base `Swaybar.class`, 24 racer classes and 17 racer chassis CFGs (`_main_*.cfg`). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`); they replace nothing. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
+Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes and `AirFuelDeliverySystem.class`), 24 racer classes and 17 racer chassis CFGs (`_main_*.cfg`). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`); they replace nothing. Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. `AirFuelDeliverySystem.class` keeps the stock fuel heat (#352). The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
 
 The **Video Options** menu applies the resolution and the Enhanced settings in game. Exterior scenery range is 3 km. The scenery shadow map and the vehicle shadow map each use a resolution of 2048 × 2048. **Ctrl+F12 → Renderer** also sets how many reflection faces are computed per frame.
 
@@ -153,13 +153,69 @@ In-game check: with Local lights on, enter each club garage (first, second and
 third) and check that every ceiling fitting lights the floor under it; leave and
 re-enter, then switch Local lights off and on.
 
-## Engine classes (#352)
+## Port-flow normalization (#203)
 
-The #203 port-flow and fuel-heat classes are no longer part of the patch: the
-host now keeps every stock engine's power without them. If you installed them,
-put back the stock `parts/scripts/enginepart/AirFuelDeliverySystem.class`,
-`parts/scripts/enginepart/block/Block_Inline.class`,
-`parts/scripts/enginepart/block/Block_Vee.class` and
-`parts/scripts/enginepart/slidingenginepart/reciprocatingenginepart/CylinderHead.class`
-from your game backup; with them the engines would make about twice their
-stock power.
+Install the complete `parts` subtree, including `CylinderHead.class`,
+`Block_Inline.class` and `Block_Vee.class`, then restart. The shared head helper
+replaces squared disk-area/lift volume with capped valve-curtain area times a
+nominal ideal-air flow speed and the existing 1-ms reference interval, divided
+by cylinder swept volume. Both Vee banks use it before averaging. Native DynoData
+field meanings and fuel/save schemas are unchanged.
+
+The reference speed is derived from NASA's M=1 nozzle capacity at 293.15 K,
+not fitted to stock horsepower. The stock 0.9 breather factor remains empirical.
+This is a dimensional correction inside the legacy pressure-relaxation model,
+not a complete pressure-dependent compressible valve solver. Existing nonzero
+closed lifts now imply area-based leakage too; SuperDuty's authored 1.27-mm
+minimum therefore changes noticeably. Outputs and tuning behavior change.
+See [derivation, provenance and numeric examples](../docs/PHYSICS_TICK_SPIKE.md#derived-correction-now-shipped).
+
+To reproduce the included TUFA with the embedded Windows compiler, first follow
+the [build recipe](../README.md#build) and build target `compile_game_sources`.
+Copy the patch's `parts` subtree into a **private** game copy, then run:
+
+```powershell
+.\build\Release\compile_game_sources.exe data\game parts/scripts/enginepart/slidingenginepart/reciprocatingenginepart
+.\build\Release\compile_game_sources.exe data\game parts/scripts/enginepart/block
+powershell -File scripts/run_save_io_tests.ps1 -Suite port_flow
+```
+
+The compiler reports one head class and two block classes. The tests execute the
+shipped helper in the VM and cover SI/script-unit agreement, low-lift linearity,
+throat saturation, volume/valve-count/wear/efficiency scaling and zero geometry.
+
+## Fuel heat (#203, reverted in #352)
+
+`AirFuelDeliverySystem.class` uses the stock heat values (about 1.1 MJ/kg
+times 1.55) again, so engine mods tuned for the stock scale keep working. The
+host's stock calibration (`engine_stock_calibration`, #352) keeps the 24 stock
+racers at their pre-#215 maxHP on average instead. The #203 handbook heat
+stays in the source, commented out: lower heating value divided by the
+stoichiometric air:fuel ratio, per kg of charge:
+
+| Fuel | Lower heating value | Stoichiometric ratio | Heat at the best mixture |
+| --- | --- | --- | --- |
+| 95, 98, 100 octane | 43.4 MJ/kg | 14.7:1 | 2.952 MJ/kg (98 and 100 keep their stock 0.05% and 0.07% more) |
+| Methanol | 19.9 MJ/kg | 6.47:1 | 3.076 MJ/kg |
+| Diesel | 43.4 MJ/kg | 14.5:1 | 2.993 MJ/kg |
+
+The stock mixture-match factor (0.8 to 1 away from a fuel's best ratio) and
+compression window apply as in the stock game. Install it with the rest of
+`parts`; it adds no field and changes no method signature. To rebuild it, copy
+`parts` into a private game copy and run:
+
+```powershell
+.\build\Release\compile_game_sources.exe data\game parts/scripts/enginepart/src
+powershell -File scripts/run_save_io_tests.ps1 -Suite port_flow
+```
+
+The suite runs `updatevariables` in the VM for every fuel at three mixtures.
+
+## Stock engine power (#352)
+
+With the SI torque law and the port-flow law, the host scales indicated torque
+by 2.8 so the 24 stock racers keep their pre-#215 maxHP on average. The
+port-flow law still moves engines apart: from 45% (SuperDuty 500) to 152%
+(Baiern CoupeSport) of their previous maxHP. `stock_engine_power` pins every
+racer's figure with this patch installed.
+

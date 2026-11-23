@@ -88,9 +88,9 @@ current gaps to SLRR_rev code are in
   them on stock, start the compiled `build/<suite>-tests/<suite>-after.exe`
   from a short folder (MAX_PATH) holding a `game` junction to a stock install
   and a `patch` junction to the repo's `patch/`. On 2026-11-23 the merged
-  #215 branch passed them this way. `stock_engine_power` needs the stock
-  engine classes: with the withdrawn #203 port-flow/fuel classes installed
-  it reads about twice the stock power.
+  #215 branch passed them this way. `stock_engine_power` installs `patch/`
+  over the game itself, like the patched swaybars case. `port_flow` instead
+  needs `data/game` = stock with `patch/parts` (minus `src/`) installed over it.
 - Stock Java sources, when present, follow this layout:
 
   | Layer | Path in the install or source tree |
@@ -1072,13 +1072,14 @@ These are entry points, not fixes. Each needs its own reproduction.
   experiment covers digital/analog plate response, cut hysteresis and latched
   BOV events without enabling new production controls. `interpolation_ms`
   measures pose publication inside Physics, not downstream renderer caches.
-- **#352 stock engine power.** The #203 port-flow and fuel-heat Java patches
-  lowered stock maxHP unevenly (36%-100%, 65% on average over the 24 stock
-  racers) and were withdrawn. `include/slrr/dyno_model.hpp:engine_stock_calibration`
-  (2.0) scales indicated torque so net power equals the legacy formula
-  exactly; `tests/test_stock_engine_power.cpp` pins the 24 racers' maxHP and
-  peak rpm measured on `614eef1`. Measurements and the per-change split are in
-  [PHYSICS_TICK_SPIKE.md](PHYSICS_TICK_SPIKE.md#stock-calibration-352).
+- **#352 stock engine power.** After #215 stock maxHP fell to 36-100% (65% on
+  average over the 24 stock racers). The fuel-heat patch now keeps the stock
+  heat (handbook value commented out, so mods keep their scale), the port-flow
+  law stays, and `include/slrr/dyno_model.hpp:engine_stock_calibration` (2.8)
+  scales indicated torque so the racers keep their previous maxHP on average
+  (45%-152% individually). `tests/test_stock_engine_power.cpp` pins each racer.
+  Without the port-flow law, exactly 2 reproduces the legacy power formula.
+  Details: [PHYSICS_TICK_SPIKE.md](PHYSICS_TICK_SPIKE.md#stock-calibration-352).
 
 ## 12. Self-check
 

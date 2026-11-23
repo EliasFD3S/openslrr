@@ -6,9 +6,9 @@ on `d60b907`, including #205's shared-world collision changes. The
 allows changed stock outputs for physically consistent torque/power. This branch
 corrects those units and the driving loss path; **handling/output changes are
 intentional**. The default clock remains 120 Hz; native APIs are unchanged.
-The Java port-flow and fuel-heat patches described here were withdrawn in
-[#352](https://github.com/EliasFD3S/openslrr/issues/352): see
-[Stock calibration](#stock-calibration-352).
+The included Java patch also corrects port-flow normalization; its fuel-heat
+change was reverted and replaced by a host calibration in
+[#352](#stock-calibration-352).
 Following the [maintainers' review](https://github.com/EliasFD3S/openslrr/pull/215#issuecomment-7069913565),
 physics now steps on its own thread ([§1](#physics-thread)). The compile-time
 rate override and [standalone experiment](../tests/test_physics_tick_rate.cpp)
@@ -23,8 +23,8 @@ support further work. New default controls are not part of this branch.
 | Adaptive setting | Only selects render interpolation; it never selects a physics clock. References listed below. | Removing Classic is a separate UI/compatibility decision. |
 | Throttle | A spike-only digital/analog shaping, plate/airflow, hysteresis and latched-BOV prototype runs inside the actual solver's high-frequency test loop, retaining the existing crank/idle/clutch. | It is not enabled in production controls; stock TUFA lacks the named telemetry declarations, and boost fraction is not absolute manifold pressure. |
 | Torque/power | Corrected cycle work to SI net crank torque, derived sampled watts from torque × ω, selected net torque peaks and removed the runtime ×2 gain/duplicate WOT loss. | Stock outputs change with owner authorization. Thermochemistry, friction and stock-car calibration remain empirical. |
-| Port flow (withdrawn, #352) | Replaced squared lift-volume normalization with capped valve-curtain area × reference exchange speed × 1 ms / swept volume, shared by Inline and both Vee banks. Compiled script patch is included. | This is a declared nominal-flow normalization, not a full compressible valve solver or measured stock calibration. |
-| Fuel heat (withdrawn, #352) | Stock raw 95-octane H was 1.0995 MJ/kg, 1.704225 MJ/kg after a ×1.55 factor at the script's optimal AFR 12.5. The patch uses lower heating value / stoichiometric AFR per kg of charge (gasoline 2.952 MJ/kg) without the factor; the compression window keeps the stock values. | Values are handbook fuel data, not a combustion calibration; dissociation and variable heat capacity are not modelled. |
+| Port flow | Replaced squared lift-volume normalization with capped valve-curtain area × reference exchange speed × 1 ms / swept volume, shared by Inline and both Vee banks. Compiled script patch is included. | This is a declared nominal-flow normalization, not a full compressible valve solver or measured stock calibration. |
+| Fuel heat (reverted, #352) | Stock raw 95-octane H was 1.0995 MJ/kg, 1.704225 MJ/kg after a ×1.55 factor at the script's optimal AFR 12.5. The patch uses lower heating value / stoichiometric AFR per kg of charge (gasoline 2.952 MJ/kg) without the factor; the compression window keeps the stock values. | Values are handbook fuel data, not a combustion calibration; dissociation and variable heat capacity are not modelled. |
 | Stability | Neutral idle/limiter/lift and one synthetic launch are sampled at 120–1000 Hz and five inertias. | These fixtures do not establish stability for every car, collision, terrain, input or rendering cadence. |
 
 ## 1. Clock and ownership
@@ -348,10 +348,10 @@ measured Cd. Manifold/header flow efficiency η multiplies both minimum and maxi
 flow; it no longer increases minimum leakage when placed in a denominator. Tuning
 can make η exceed 1, so ηCd is not asserted to be a strict physical bound.
 
-The shared [CylinderHead helper](https://github.com/EliasFD3S/openslrr/blob/d661d25/patch/parts/scripts/enginepart/slidingenginepart/reciprocatingenginepart/src/CylinderHead.java)
+The shared [CylinderHead helper](../patch/parts/scripts/enginepart/slidingenginepart/reciprocatingenginepart/src/CylinderHead.java)
 serves DOHC/SOHC/OHV proxies without subtype exceptions. Both
-[Inline](https://github.com/EliasFD3S/openslrr/blob/d661d25/patch/parts/scripts/enginepart/block/src/Block_Inline.java) and
-[Vee banks](https://github.com/EliasFD3S/openslrr/blob/d661d25/patch/parts/scripts/enginepart/block/src/Block_Vee.java) call it,
+[Inline](../patch/parts/scripts/enginepart/block/src/Block_Inline.java) and
+[Vee banks](../patch/parts/scripts/enginepart/block/src/Block_Vee.java) call it,
 then retain the existing Vee average. Intake/exhaust zero geometry or efficiency
 is handled independently. Sources **and compiled TUFA** ship in [the patch](../patch/README.md).
 No new DynoData schema/native API is needed; the earlier draft's claim that every
@@ -364,7 +364,7 @@ At fixed gas state, doubling all lengths halves the 1-ms capacity/volume ratio;
 the old squared law instead multiplied it by eight.
 
 Actual authored geometry (wear=1; source π=3.1416), verified by executing the
-compiled Java helper in VM tests (`tests/test_port_flow.cpp`, removed in #352):
+compiled Java helper in [VM tests](../tests/test_port_flow.cpp):
 
 | Intake | Bore/stroke mm | d / lift mm | η | Legacy c | New c |
 | --- | --- | --- | --- | --- | --- |
@@ -408,7 +408,7 @@ recalibration/decoupling, not a constant-only patch.
 
 The [owner's follow-up](https://github.com/EliasFD3S/openslrr/issues/203#issuecomment-7069947601)
 repeats the 1.09 MJ/kg report. The patched
-[AirFuelDeliverySystem](https://github.com/EliasFD3S/openslrr/blob/d661d25/patch/parts/scripts/enginepart/src/AirFuelDeliverySystem.java)
+[AirFuelDeliverySystem](../patch/parts/scripts/enginepart/src/AirFuelDeliverySystem.java)
 now uses `H = LHV / (A/F)stoich`, per kg of charge, and drops the ×1.55
 factor: `mixture_H = H × (0.8 + 0.2 × match)`. The cycle's charge mass is
 inducted air at ambient density, so heat per kg of air at the stoichiometric
@@ -426,7 +426,7 @@ The fuel values are handbook figures chosen here, not measured fuels. The
 compression window keeps the stock heat: `minComp`/`maxComp` use
 `stock H × match × 1.55`, as Fuel Revamp 1.2 decoupled them, so every stock
 engine stays dynoable. At 95's best mixture `mixture_H` rises from 1.704225 to
-2.952381 MJ/kg (×1.73). The VM suite `port_flow` (removed in #352) ran `updatevariables` for
+2.952381 MJ/kg (×1.73). The VM suite `port_flow` runs `updatevariables` for
 every fuel at three mixtures.
 
 Same benchmark, horizontal speed at 2/3/4/5 s of full throttle: main `786e5b4`
@@ -528,7 +528,7 @@ vehicle/route. CSV zone values are window means, not hitch-frame attribution.
 In game the stock engines showed much less power after #215. Measured on the
 stock MWM install (`vehicle_spawn_stock`, DynoData `maxHP` of each of the 24
 stock racers), main `d661d25` with `patch/parts` gave 36% (SuperDuty 500) to
-100% (Baiern CoupeSport) of the `614eef1` values, 65% on average. Separated:
+100% (Baiern CoupeSport) of the `614eef1` values, 65% on average:
 
 | Change | Share of the previous maxHP |
 | --- | --- |
@@ -536,16 +536,16 @@ stock racers), main `d661d25` with `patch/parts` gave 36% (SuperDuty 500) to
 | + fuel heat patch | 84–93%, uniform |
 | + port-flow patch | 36–100% |
 
-The port-flow law changes each engine differently, so no single factor can
-restore it. Both Java patches are withdrawn; the cycle scales indicated torque
-by `engine_stock_calibration = 2.0`. Then net power
-`N·2W/(4π)·ω − F·ω` equals the legacy `N·W·rpm/60 − rpm³·2·10⁻⁸` exactly:
-all 24 racers keep their maxHP and peak rpm (`tests/test_stock_engine_power.cpp`).
-Torque stays P/ω, so displayed peak torque is about 26% above the legacy table
-torque, which understated power by 4/π. Driving still uses the net curve
-without the legacy ×2 gain, so cars accelerate less than before #215 (the owner
-accepts this with the new throttle model). The witness self-check uses the
-same factor. The port-flow and fuel-heat derivations above stay as research.
+The owner kept the port-flow law and asked to restore the stock fuel heat so
+mods keep their scale: the handbook heat is commented out in
+`AirFuelDeliverySystem.java`. The cycle then scales indicated torque by
+`engine_stock_calibration = 2.8`, fitted so the 24 racers keep their previous
+maxHP on average (99.75%). Individually they range from 45% (SuperDuty 500:
+the closed-lift leakage and wide valves) to 152% (Baiern CoupeSport). Without
+the port-flow law a factor of exactly 2 would reproduce the legacy power formula
+for every engine. Torque stays P/ω; driving uses the net curve without the
+legacy ×2 gain. `tests/test_stock_engine_power.cpp` pins each racer with the
+patch installed. The witness self-check uses the same factor.
 
 ## 6. Remaining contract/design work
 

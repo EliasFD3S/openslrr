@@ -9,12 +9,11 @@
 namespace slrr {
 
 inline constexpr double engine_rpm_to_rad = std::numbers::pi / 30.0;
-// Stock calibration (#352). The recovered cycle work W is on the legacy
-// scale: with this factor, net power N*2W/(4*pi)*omega - F*omega equals the
-// legacy N*W*rpm/60 - rpm^3*2e-8 exactly, so every stock MWM engine keeps its
-// maxHP and peak rpm while torque stays P/omega. It replaces the #215 fuel-heat
-// and port-flow Java patches, which lowered stock outputs unevenly.
-inline constexpr double engine_stock_calibration = 2.0;
+// Stock calibration (#352): scales indicated cycle torque so the 24 stock
+// MWM racers keep their pre-#215 maxHP on average with the SI torque law,
+// the #203 port-flow law and the stock fuel heat (tests/test_stock_engine_power).
+// Fitted, not physical; the port-flow law still moves engines apart.
+inline constexpr double engine_stock_calibration = 2.8;
 
 // The recovered cubic mechanical loss, shared by dyno and crank integration.
 // At WOT the sampled curve is already net of this loss; do not subtract twice.
