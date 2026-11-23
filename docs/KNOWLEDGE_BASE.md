@@ -1075,9 +1075,11 @@ These are entry points, not fixes. Each needs its own reproduction.
 - **#352 stock engine power.** After #215 stock maxHP fell to 36-100% (65% on
   average over the 24 stock racers). The fuel-heat patch now keeps the stock
   heat (handbook value commented out, so mods keep their scale), the port-flow
-  law stays, and `include/slrr/dyno_model.hpp:engine_stock_calibration` (2.8)
+  law stays, and `include/slrr/dyno_model.hpp:engine_stock_calibration` (2.54)
   scales indicated torque so the racers keep their previous maxHP on average
-  (45%-152% individually). `tests/test_stock_engine_power.cpp` pins each racer.
+  (81%-139% individually). The Prime/SuperDuty cams' 1.27 mm closed lift (the
+  0.050 in duration height) leaked under the curtain law and is 0 in the patch.
+  `tests/test_stock_engine_power.cpp` pins each racer.
   Without the port-flow law, exactly 2 reproduces the legacy power formula.
   Details: [PHYSICS_TICK_SPIKE.md](PHYSICS_TICK_SPIKE.md#stock-calibration-352).
 

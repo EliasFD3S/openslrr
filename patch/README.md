@@ -1,6 +1,6 @@
 # OpenSLRR Enhanced
 
-Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes and `AirFuelDeliverySystem.class`), 24 racer classes and 17 racer chassis CFGs (`_main_*.cfg`). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`); they replace nothing. Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. `AirFuelDeliverySystem.class` keeps the stock fuel heat (#352). The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
+Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes, `AirFuelDeliverySystem.class` and eight Prime/SuperDuty camshaft classes), 24 racer classes and 17 racer chassis CFGs (`_main_*.cfg`). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`); they replace nothing. Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. `AirFuelDeliverySystem.class` keeps the stock fuel heat (#352). The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
 
 The **Video Options** menu applies the resolution and the Enhanced settings in game. Exterior scenery range is 3 km. The scenery shadow map and the vehicle shadow map each use a resolution of 2048 × 2048. **Ctrl+F12 → Renderer** also sets how many reflection faces are computed per frame.
 
@@ -214,8 +214,11 @@ The suite runs `updatevariables` in the VM for every fuel at three mixtures.
 ## Stock engine power (#352)
 
 With the SI torque law and the port-flow law, the host scales indicated torque
-by 2.8 so the 24 stock racers keep their pre-#215 maxHP on average. The
-port-flow law still moves engines apart: from 45% (SuperDuty 500) to 152%
-(Baiern CoupeSport) of their previous maxHP. `stock_engine_power` pins every
+by 2.54 so the 24 stock racers keep their pre-#215 maxHP on average. The
+`parts/engines/MC_Prime_SuperDuty` camshafts of the Prime and SuperDuty set
+their closed lift to 0 instead of 1.27 mm (0.050 in, where cam duration is
+measured), which leaked under the curtain law; their sources are under `src/`.
+The port-flow law still moves engines apart: from 81% (Duhen Racing SunStrip
+2.0) to 139% (SuperDuty Extra 750) of their previous maxHP. `stock_engine_power` pins every
 racer's figure with this patch installed.
-
+

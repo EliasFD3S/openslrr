@@ -945,9 +945,11 @@ native signature changes. See [patch installation/reproduction](../patch/README.
 The fuel patch (`AirFuelDeliverySystem`) keeps the stock `mixture_H` (stock
 heat × mixture match × 1.55) since #352, so engine mods keep their scale; the
 #203 handbook heat stays in the source, commented out. Instead the cycle scales
-indicated torque by `engine_stock_calibration` (2.8,
+indicated torque by `engine_stock_calibration` (2.54,
 `include/slrr/dyno_model.hpp`) so the 24 stock racers keep their pre-#215
-maxHP on average; the port-flow law still spreads them from 45% to 152%.
+maxHP on average; the port-flow law still spreads them from 81% to 139%.
+The Prime and SuperDuty camshafts' 1.27 mm closed lift (the 0.050 in duration
+checking height) is set to 0 in the patch: with the curtain law it leaked.
 `stock_engine_power` pins each racer. See
 [patch](../patch/README.md#stock-engine-power-352).
 

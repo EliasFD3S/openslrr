@@ -12,8 +12,8 @@ inline constexpr double engine_rpm_to_rad = std::numbers::pi / 30.0;
 // Stock calibration (#352): scales indicated cycle torque so the 24 stock
 // MWM racers keep their pre-#215 maxHP on average with the SI torque law,
 // the #203 port-flow law and the stock fuel heat (tests/test_stock_engine_power).
-// Fitted, not physical; the port-flow law still moves engines apart.
-inline constexpr double engine_stock_calibration = 2.8;
+// Fitted, not physical; the port-flow law still moves engines apart (81-139%).
+inline constexpr double engine_stock_calibration = 2.54;
 
 // The recovered cubic mechanical loss, shared by dyno and crank integration.
 // At WOT the sampled curve is already net of this loss; do not subtract twice.

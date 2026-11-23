@@ -539,9 +539,19 @@ stock racers), main `d661d25` with `patch/parts` gave 36% (SuperDuty 500) to
 The owner kept the port-flow law and asked to restore the stock fuel heat so
 mods keep their scale: the handbook heat is commented out in
 `AirFuelDeliverySystem.java`. The cycle then scales indicated torque by
-`engine_stock_calibration = 2.8`, fitted so the 24 racers keep their previous
-maxHP on average (99.75%). Individually they range from 45% (SuperDuty 500:
-the closed-lift leakage and wide valves) to 152% (Baiern CoupeSport). Without
+`engine_stock_calibration = 2.54`, fitted so the 24 racers keep their previous
+maxHP on average (100.1%).
+
+The largest outliers came from authored data, not the law: the Prime and
+SuperDuty camshafts give a 1.27 mm closed lift, which is 0.050 in, the height
+at which cam duration is measured. Legacy squared it into a negligible leak;
+the curtain law made it a real opening (SuperDuty 45%, Prime 60%, MC GTLE 68%
+with the factor fitted before). The patch sets those eight closed lifts to 0.
+The recompiled camshaft classes match the installed ones except for two float
+constants that round one ULP differently. Individually the racers now range
+from 81% (Duhen Racing SunStrip 2.0) to 139% (SuperDuty Extra 750); 18 of 24
+are within 15%. The remaining spread follows each head's valve size, lift and
+cylinder volume under the curtain law. Without
 the port-flow law a factor of exactly 2 would reproduce the legacy power formula
 for every engine. Torque stays P/ω; driving uses the net curve without the
 legacy ×2 gain. `tests/test_stock_engine_power.cpp` pins each racer with the
