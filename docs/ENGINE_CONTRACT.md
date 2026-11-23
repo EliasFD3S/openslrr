@@ -931,23 +931,15 @@ These loss curves are empirical, not a new manifold or combustion calibration.
 Stock outputs intentionally change under the issue owner's physical-consistency
 direction; see [the investigation](PHYSICS_TICK_SPIKE.md).
 
-The #203 Java port patch computes `in/out_min/max` from capped curtain area:
-`c = clamp(efficiency * discharge * A_eff * U_ref * 0.001 / V_swept, 0, 1)`
-in SI. The declared ideal-air M=1 reference has `U_ref = 198.629616711 m/s`.
-The existing 0.9 breather factor stays empirical; this does not make the native
-linear pressure relaxation an exact compressible valve solver. The shared
-CylinderHead helper must ship with both updated block classes; DOHC/SOHC/OHV
-continue supplying the same disk-area/lift proxy, and Vee averaging is unchanged.
-Efficiency now restricts minimum as well as maximum flow multiplicatively, so
-authored nonzero closed lifts can change leakage. No DynoData field/schema or
-native signature changes. See [patch installation/reproduction](../patch/README.md#port-flow-normalization-203).
-
-The #203 fuel patch (`AirFuelDeliverySystem`) sets `mixture_H` to the heat per
-kg of charge at a fuel's best mixture, lower heating value / stoichiometric
-air:fuel ratio (95 octane 2.952 MJ/kg), times the stock mixture-match factor,
-without the old ×1.55. `minComp`/`maxComp` still follow the stock heat values,
-so the compression window of every stock engine is unchanged. The native dyno
-consumes `mixture_H` as before. See [patch](../patch/README.md#fuel-heat-203).
+The #203 Java port-flow and fuel-heat patches were withdrawn in #352: they
+lowered stock outputs unevenly (36% to 100% of each engine's previous
+maxHP). Stock `CylinderHead`, `Block_Inline`, `Block_Vee` and
+`AirFuelDeliverySystem` are authoritative again. Instead the cycle scales
+indicated torque by `engine_stock_calibration` (2.0,
+`include/slrr/dyno_model.hpp`): net power then equals the legacy
+N·W·rpm/60 − rpm³·2·10⁻⁸ exactly, so every stock engine keeps its maxHP and
+peak rpm, while torque stays P/ω. The `stock_engine_power` suite checks the
+24 stock racers against values measured before #215.
 
 ### Nitrous driving and exhaust (#303, #304)
 

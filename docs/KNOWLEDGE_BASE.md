@@ -80,15 +80,17 @@ current gaps to SLRR_rev code are in
   (`src/main.cpp:main`, `src/platform/game_root.cpp:find_game_root`).
 - `data/` is gitignored and holds the local install and reference sources.
   Never commit game data.
-- Asset test suites (`car_lights`, `swaybars`, `race_vehicle`, `nitrous`)
+- Asset test suites (`car_lights`, `swaybars`, `race_vehicle`, `nitrous`,
+  `stock_engine_power`)
   read the stock install from `game/` (else `data/game`) relative to the repo
   root. If `patch/` has been copied into that `game/`, they fail: patched
   racer classes install sway bars and the headlight checks differ. To run
   them on stock, start the compiled `build/<suite>-tests/<suite>-after.exe`
   from a short folder (MAX_PATH) holding a `game` junction to a stock install
-  and a `patch` junction to the repo's `patch/`. `port_flow` instead needs
-  `data/game` = stock with `patch/parts` (minus `src/`) installed over it.
-  On 2026-11-23 the merged #215 branch passed all of them this way.
+  and a `patch` junction to the repo's `patch/`. On 2026-11-23 the merged
+  #215 branch passed them this way. `stock_engine_power` needs the stock
+  engine classes: with the withdrawn #203 port-flow/fuel classes installed
+  it reads about twice the stock power.
 - Stock Java sources, when present, follow this layout:
 
   | Layer | Path in the install or source tree |
@@ -1070,6 +1072,13 @@ These are entry points, not fixes. Each needs its own reproduction.
   experiment covers digital/analog plate response, cut hysteresis and latched
   BOV events without enabling new production controls. `interpolation_ms`
   measures pose publication inside Physics, not downstream renderer caches.
+- **#352 stock engine power.** The #203 port-flow and fuel-heat Java patches
+  lowered stock maxHP unevenly (36%-100%, 65% on average over the 24 stock
+  racers) and were withdrawn. `include/slrr/dyno_model.hpp:engine_stock_calibration`
+  (2.0) scales indicated torque so net power equals the legacy formula
+  exactly; `tests/test_stock_engine_power.cpp` pins the 24 racers' maxHP and
+  peak rpm measured on `614eef1`. Measurements and the per-change split are in
+  [PHYSICS_TICK_SPIKE.md](PHYSICS_TICK_SPIKE.md#stock-calibration-352).
 
 ## 12. Self-check
 

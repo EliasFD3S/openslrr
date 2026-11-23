@@ -314,7 +314,8 @@ bool step(Bank& s) {
     const double pressure_work = s.get(kMeanPressure) * swept;
     // One four-stroke cycle turns the crank through 4*pi radians.
     const double omega = s.get(kRpm) * engine_rpm_to_rad;
-    const double indicated_torque = s.get(kCylinders) * pressure_work / (4 * std::numbers::pi);
+    const double indicated_torque =
+        engine_stock_calibration * s.get(kCylinders) * pressure_work / (4 * std::numbers::pi);
     const double friction = engine_friction_torque(s.get(kRpm));
     s.set(kTorque, indicated_torque - friction);
     s.set(kGrossPower, indicated_torque * omega);
@@ -744,7 +745,7 @@ bool dyno_self_check(char* msg, std::size_t msg_cap) {
     return fail("dyno table shape");
   // Preserve the recovered cycle-work witness, not its legacy non-SI scales.
   constexpr double witness_work = 82.08709716796875 * 8;
-  const double witness_torque = witness_work / (4 * std::numbers::pi) -
+  const double witness_torque = engine_stock_calibration * witness_work / (4 * std::numbers::pi) -
                                 engine_friction_torque(437);
   if (!near(fresh.stats.displacement, 0.0019011663971468806, 1e-9) ||
       !near(fresh.stats.compression, 10.50583267211914, 2e-6) ||
