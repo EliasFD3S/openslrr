@@ -1,0 +1,21 @@
+{
+  "name": "openslrr-site",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Presentation site for OpenSLRR, built to the root of the pages branch.",
+  "scripts": {
+    "dev": "vite",
+    "prebuild": "node -e \"require('fs').rmSync('../site',{recursive:true,force:true})\"",
+    "build": "vite build",
+    "preview": "vite preview --outDir .."
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "4.3.4",
+    "vite": "5.4.11"
+  }
+}

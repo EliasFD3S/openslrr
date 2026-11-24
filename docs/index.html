@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>OpenSLRR</title>
+  <meta name="theme-color" content="#ffffff">
+  <meta name="color-scheme" content="light dark">
+  <link rel="preload" href="./assets/satoshi-500-ByP-Zb-9.woff2" as="font" type="font/woff2" crossorigin>
+  <script>
+    try {
+      var theme = localStorage.getItem("openslrr-theme")
+      document.documentElement.dataset.theme = theme === "dark" ? "dark" : "light"
+      if (theme === "dark") document.querySelector('meta[name="theme-color"]').setAttribute("content", "#0d1117")
+    } catch (e) {
+      document.documentElement.dataset.theme = "light"
+    }
+  </script>
+  <script type="module" crossorigin src="./assets/index-7dd8cb2b.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-31fbcbfa.css">
+</head>
+<body>
+  <div id="root"></div>
+</body>
+</html>
