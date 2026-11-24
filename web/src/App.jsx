@@ -3,7 +3,9 @@ import Gauge from "./components/Gauge.jsx"
 import { useCountUp, useInView, useScrolled } from "./hooks.js"
 
 const REPO = "https://github.com/EliasFD3S/openslrr"
-const RELEASES = `${REPO}/releases/latest`
+// No prebuilt release yet: Download leads to the build guide. When the first
+// release is out, point DOWNLOAD at `${REPO}/releases/latest`.
+const DOWNLOAD = "./docs/#/build"
 const BUILD_GUIDE = "./docs/#/build"
 const DOCS = "./docs/"
 const NB = " " // keeps a number and its unit together
@@ -121,7 +123,7 @@ function Hero() {
           scripts and cars, on a modern 64-bit Direct3D{NB}11 renderer.
         </p>
         <div className="actions">
-          <a className="pill pill-primary" href={RELEASES} target="_blank" rel="noreferrer">
+          <a className="pill pill-primary" href={DOWNLOAD}>
             Download
           </a>
           <a className="pill" href={DOCS}>Read the docs</a>
@@ -301,10 +303,10 @@ function Download() {
             <h3>Play</h3>
             <ol>
               <li>Install <b translate="no">Street Legal Racing: Redline 2.2.1 MWM</b>. OpenSLRR uses its data; none of it is distributed here.</li>
-              <li>Download the latest OpenSLRR build &amp; unpack it.</li>
+              <li>Build OpenSLRR with the build guide (there is no prebuilt release yet).</li>
               <li>Point it at your game folder and start it.</li>
             </ol>
-            <a className="pill pill-primary" href={RELEASES} target="_blank" rel="noreferrer">Get the latest release</a>
+            <a className="pill pill-primary" href={DOWNLOAD}>Open the build guide</a>
           </Reveal>
           <Reveal className="plate" index={1}>
             <h3>Build from source</h3>
