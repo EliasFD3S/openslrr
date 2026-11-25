@@ -165,10 +165,24 @@ native signature changes. See [patch installation/reproduction](../../patch/READ
 
 The #203 fuel patch (`AirFuelDeliverySystem`) sets `mixture_H` to the heat per
 kg of charge at a fuel's best mixture, lower heating value / stoichiometric
-air:fuel ratio (95 octane 2.952 MJ/kg), times the stock mixture-match factor,
-without the old ×1.55. `minComp`/`maxComp` still follow the stock heat values,
-so the compression window of every stock engine is unchanged. The native dyno
-consumes `mixture_H` as before. See [patch](../../patch/README.md#fuel-heat-203).
+air:fuel ratio of the fuel blend (95 is E5, 98 is E10: 2.953 and 2.954 MJ/kg),
+times the stock mixture-match factor, without the old ×1.55 (#407).
+
+Knock (#407): the fuel sets `DynoData.knockCompression`, the knock-limited
+static compression of a naturally aspirated 20 °C charge (95: 10.5, 98: 11.5,
+100: 12.5, methanol: 15; 0 for diesel and any other fuel system, which
+disables it). For every dyno row, `prepare()` in `src/physics/dyno_model.cpp`
+compresses the unburned charge to TDC with n = 1.3 from the boosted intake
+pressure and the intake temperature (intercooling and nitrous cooling
+included), then finds the naturally aspirated compression with the same
+Douaud-Eyzat ignition delay (tau ~ p^-1.7 exp(3800/T)). Above the limit it
+scales the burned heat by 1 − 0.025 × excess, down to 0.6, like a spark
+retard. The boost heating `prepare()` applies to combustion (T × sqrt(1 + boost))
+is left out of the knock state: DynoData carries no intercooler, so every
+stock turbo would knock as if it had none. The driving curve is the dyno curve,
+so the loss applies on the road too. `minComp`/`maxComp` no longer follow the
+mixture; they only refuse engines that cannot run on the fuel. See
+[patch](../../patch/README.md#fuel-heat-blends-and-knock-203-407).
 
 ## Nitrous driving and exhaust (#303, #304)
 

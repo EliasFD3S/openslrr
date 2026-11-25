@@ -1,6 +1,6 @@
 # OpenSLRR Enhanced
 
-Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes, `AirFuelDeliverySystem.class` and eight SuperDuty camshafts), 24 racer classes and 17 racer chassis CFGs (`_main_*.cfg`). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. `AirFuelDeliverySystem.class` adds fuel heat. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
+Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes, eight SuperDuty camshafts and the four fuel classes: `AirFuelDeliverySystem`, `FuelInjectorSystem`, `DynoData` and the SL Tuners methanol fuel rail), 24 racer classes and 17 racer chassis CFGs (`_main_*.cfg`). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. The fuel classes add fuel heat, ethanol blends and knock; install them together. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
 
 **Options** (main menu and in-game menu) opens a full-screen screen built on `java.render.osdx` ([docs/ui/osd-v2.md](../docs/ui/osd-v2.md)): Video, Graphics, Sound, Controls (live axis meters, gamma, dead zones, steering speed sensitivity, force feedback), Devices (connected controllers, battery, rumble test, axis calibration) and Game tabs, an info panel that explains the setting under the pointer, and a notification when a preset is applied. Key redefinition, axes and the control files open the classic pages. The classic pages below are still in `OptionsDialog`. The **Video Options** menu applies the resolution and the Enhanced settings in game. A **Preset** choice (Low, Medium, High, Ultra) sets them all at once; changing one setting afterwards shows Custom. **Advanced** opens a second page: VSync, prop detail, fog, car lights, headlight shadows, street lamps, view distance (500–3,000 m, 3 km by default) and the number of street lamps that cast shadows. **Advanced Game Options** has the pedestrian density slider again (0.5–1.5; an old saved value below 0.5 returns to 1.5). The scenery shadow map and the vehicle shadow map each use a resolution of 2048 × 2048. **Ctrl+F12 → Renderer** also sets how many reflection faces are computed per frame.
 
@@ -225,28 +225,57 @@ To rebuild, copy the stock game into a private root, put the sources in
 `parts/engines/MC_Prime_SuperDuty/scripts/src` and run
 `compile_game_sources.exe <root> parts/engines/MC_Prime_SuperDuty/scripts/src`.
 
-## Fuel heat (#203)
+## Fuel heat, blends and knock (#203, #407)
 
-`AirFuelDeliverySystem.class` sets the heat each fuel releases per kg of
-charge to its lower heating value divided by its stoichiometric air:fuel ratio,
-instead of about 1.1 MJ/kg times 1.55:
+Four `parts` classes carry the fuel model; install them together:
+`parts/scripts/enginepart/AirFuelDeliverySystem.class`,
+`parts/scripts/enginepart/airfueldeliverysystem/FuelInjectorSystem.class`,
+`parts/scripts/DynoData.class` and
+`parts/engines/Einvagen_Duhen_Ishima_Focer/scripts/SL_Tuners_methanol_fuel_rail.class`.
 
-| Fuel | Lower heating value | Stoichiometric ratio | Heat at the best mixture |
-| --- | --- | --- | --- |
-| 95, 98, 100 octane | 43.4 MJ/kg | 14.7:1 | 2.952 MJ/kg (98 and 100 keep their stock 0.05% and 0.07% more) |
-| Methanol | 19.9 MJ/kg | 6.47:1 | 3.076 MJ/kg |
-| Diesel | 43.4 MJ/kg | 14.5:1 | 2.993 MJ/kg |
+Each fuel releases its lower heating value divided by its stoichiometric
+air:fuel ratio per kg of charge (#203). Pump 95 is E5 and pump 98 is E10
+(ethanol by volume), so their ratio and heating value follow the blend; 100
+octane race fuel has no ethanol (#407):
 
-The stock mixture-match factor (0.8 to 1 away from a fuel's best ratio) still
-applies. The allowed compression window still follows the stock heat values,
-so no stock engine falls outside it. Engines make about 1.7 times the torque
-of the stock heat value; dyno figures and tuning change. Install it with the
-rest of `parts`; it adds no field and changes no method signature. To rebuild
-it, copy `parts` into a private game copy and run:
+| Fuel | Lower heating value | Stoichiometric ratio | Best power | Heat | Knock limit | Allowed compression |
+| --- | --- | --- | --- | --- | --- | --- |
+| 95 (E5) | 42.52 MJ/kg | 14.40:1 | 12.38:1 | 2.953 MJ/kg | 10.5:1 | 6.5–16.0:1 |
+| 98 (E10) | 41.65 MJ/kg | 14.10:1 | 12.13:1 | 2.954 MJ/kg | 11.5:1 | 6.5–17.0:1 |
+| 100 (E0) | 43.40 MJ/kg | 14.70:1 | 12.64:1 | 2.952 MJ/kg | 12.5:1 | 6.5–18.0:1 |
+| Methanol | 19.90 MJ/kg | 6.47:1 | 5.05:1 | 3.076 MJ/kg | 15.0:1 | 8.0–20.5:1 |
+| Diesel | 43.40 MJ/kg | 14.50:1 | 18.13:1 | 2.993 MJ/kg | none | 14.0–24.0:1 |
+
+Best power is lambda 0.86 for gasolines, 0.78 for methanol and 1.25 (lean,
+smoke limit) for diesel. The stock mixture-match factor (0.8 to 1 away from
+the best ratio) still applies. Per kg of air the gasolines release almost the
+same heat, as real fuels do: octane acts through knock.
+
+The knock limit is the highest static compression a naturally aspirated 20 °C
+charge runs at full spark advance. `FuelInjectorSystem` passes it to the dyno
+as the new `DynoData.knockCompression` field; the host retards the spark above
+it (about 2.5% of the heat per compression point, down to 60%), boost and
+intercooling included ([driving model](../docs/vehicles/driving-model.md)).
+The allowed compression only refuses engines that cannot run on the fuel: it
+no longer moves with the mixture, and its maximum is the knock limit + 5.5.
+The tuning slider and the mixture clamp go down to 4:1, so methanol reaches its
+best mixture. The SL Tuners methanol rail now defaults to 5.5:1 with a fuel
+flow limit of 0.0655 (stock 0.02 at 18:1, the same air flow). A saved methanol
+injection above 10:1 is scaled by 5.05/16 on load, keeping its richness
+relative to the old 16:1 optimum.
+
+`DynoData.class` gains one field and recompiles from `sources/` with the known
+one-ULP differences in its float defaults. To rebuild, copy the stock game into
+a private root (never the installed game or a hard-linked view), put the four
+sources in its `src` folders and compile, in this order:
 
 ```powershell
-.\build\Release\compile_game_sources.exe data\game parts/scripts/enginepart/src
+.\build\Release\compile_game_sources.exe <root> parts/scripts/src
+.\build\Release\compile_game_sources.exe <root> parts/scripts/enginepart/src
+.\build\Release\compile_game_sources.exe <root> parts/scripts/enginepart/airfueldeliverysystem/src
+.\build\Release\compile_game_sources.exe <root> parts/engines/Einvagen_Duhen_Ishima_Focer/scripts/src
 powershell -File scripts/run_save_io_tests.ps1 -Suite port_flow
 ```
 
-The suite runs `updatevariables` in the VM for every fuel at three mixtures.
+The suite runs `updatevariables` in the VM for every fuel at four mixtures and
+the host dyno with and without knock, boost and intercooling.

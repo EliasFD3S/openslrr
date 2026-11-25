@@ -585,17 +585,18 @@ the 2.84–3.15 MJ/kg the report quotes.
 
 | Fuel | LHV | (A/F)stoich | H |
 | --- | --- | --- | --- |
-| 95 octane | 43.4 MJ/kg | 14.7 | 2.952381 MJ/kg |
-| 98 / 100 octane | 43.4 MJ/kg | 14.7 | 95 × stock 1100000/1099500 and 1100250/1099500 |
+| 95 octane (E5, #407) | 42.52 MJ/kg | 14.40 | 2.953219 MJ/kg |
+| 98 octane (E10, #407) | 41.65 MJ/kg | 14.10 | 2.954088 MJ/kg |
+| 100 octane (E0) | 43.4 MJ/kg | 14.7 | 2.952381 MJ/kg |
 | Methanol | 19.9 MJ/kg | 6.47 (CH₃OH + 1.5 O₂) | 3.075734 MJ/kg |
 | Diesel | 43.4 MJ/kg | 14.5 | 2.993103 MJ/kg |
 
-The fuel values are handbook figures chosen here, not measured fuels. The
-compression window keeps the stock heat: `minComp`/`maxComp` use
-`stock H × match × 1.55`, as Fuel Revamp 1.2 decoupled them, so every stock
-engine stays dynoable. At 95's best mixture `mixture_H` rises from 1.704225 to
-2.952381 MJ/kg (×1.73). The VM suite `port_flow` runs `updatevariables` for
-every fuel at three mixtures.
+The fuel values are handbook figures chosen here, not measured fuels. #203
+kept the stock-heat compression window (`stock H × match × 1.55`); #407
+replaced it with fixed per-fuel windows and a knock retard in the host dyno,
+described in [driving-model.md](driving-model.md) and [patch](../../patch/README.md#fuel-heat-blends-and-knock-203-407).
+At 95's best mixture `mixture_H` rose from 1.704225 to 2.95 MJ/kg (×1.73).
+The VM suite `port_flow` runs `updatevariables` for every fuel at four mixtures.
 
 Same benchmark, horizontal speed at 2/3/4/5 s of full throttle: main `786e5b4`
 32.4/52.4/62.7/75.1 km/h (it still has the ×2 driving gain), this branch before

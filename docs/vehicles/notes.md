@@ -743,3 +743,35 @@ curves are positive from 1,000 rpm with the stock peak region (figures in
 Not checked in game. Their output now exceeds the real engines (Hauler 500
 342 PS / 561 Nm peak against a Ram 5.9's 248 PS / 454 Nm): left to the engine
 re-spec ([planning](../planning/stock-respec.md)).
+
+## Fuel blends and knock (#407)
+
+Cause: reviewer feedback on the #203 fuel model. The three gasolines used one
+stoichiometric ratio (14.7) although pump 95 is E5 and 98 is E10; their stock
+`knock` values (1099500/1100000/1100250) left octane without effect; the
+mixture clamp and the tuning slider stopped at 8:1, above methanol's
+stoichiometric 6.47:1, and methanol's "optimal" was 16:1. The FT_GAS_95 branch
+had no braces. The compression window (6.8–17:1 at the best mixture) was too
+wide to model knock, and a strict octane window would refuse stock engines:
+from their stock part lists, the Einvagen PerPro GTA reaches 11.75:1 and the
+Duhen D18V 11.2:1 on 95.
+
+Fix: blend-dependent stoichiometric ratio and heating value, real best-power
+mixtures, a 4–20:1 mixture range, fixed per-fuel compression windows and a
+knock limit sent to the host (`DynoData.knockCompression`), where the dyno
+retards the spark above it, boost and intercooling included. Details:
+[driving-model.md](driving-model.md) and
+[patch](../../patch/README.md#fuel-heat-blends-and-knock-203-407).
+
+Choices to revisit with the engine re-spec: knock limits 10.5/11.5/12.5/15,
+2.5% heat per compression point, the knock state at intake temperature (no
+boost heating, since DynoData has no intercooler), and methanol rail flow
+0.0655. Fuel Revamp 1.2 (Gorgoil/slrr-javas) uses hard windows only
+(95: 6.5–14.5, 98: –15, 100: –15.5, methanol 9.5–18); its maxima would refuse
+stock builds up to the old 17:1, so this patch keeps them as a soft knock.
+
+Validation: `port_flow` suite 5/5 on a private copy of the stock game with
+`patch/parts` (fuel values at four mixtures, the 4:1 clamp, and the host dyno:
+knock limit 8.5 costs 5.3% peak torque on the 10.5:1 synthetic engine, limit 4
+costs 17%, 0.8 bar of boost makes a 10.6 limit knock, intercooling 0.9 reduces
+it). Not checked in game.
