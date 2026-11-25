@@ -58,10 +58,12 @@ class HostInputDevices {
 
   // Force feedback (SDL haptics) on the steering axis of a ControlSet device
   // id. level -1..1 pushes the device's own axis towards its positive end;
-  // damper 0..1. Only one device plays at a time: another slot, or
+  // damper 0..1; vibration 0..1 at vibration_hz (a sine, where the wheel
+  // has one). Only one device plays at a time: another slot, or
   // stop_force(), stops the previous one. Nothing plays while unfocused.
   bool has_force_feedback(int device) const;
-  void set_force(int device, float level, float damper);
+  void set_force(int device, float level, float damper, float vibration = 0,
+                 float vibration_hz = 0);
   void stop_force();
   // A short push one way then the other (Options > Devices > TEST).
   bool test_force(int index);
@@ -82,9 +84,9 @@ class HostInputDevices {
     // one) does not make it a pad: it keeps its raw channels and filters.
     bool pad = false;
     SDL_Haptic* haptic = nullptr;
-    SDL_HapticEffectID constant = -1, damper = -1;
-    bool playing = false;
-    float level = 0, damping = 0;  // last values sent
+    SDL_HapticEffectID constant = -1, damper = -1, sine = -1;
+    bool playing = false, shaking = false;
+    float level = 0, damping = 0, shake = 0, shake_hz = 0;  // last values sent
     std::string name;
     int axes = 0, buttons = 0, hats = 0;
     std::vector<float> values, rest;
@@ -99,7 +101,8 @@ class HostInputDevices {
   bool initialized_ = false;
   bool haptic_ready_ = false;
   Device* slot_device(int slot);
-  void send_force(Device& device, float level, float damper);
+  void send_force(Device& device, float level, float damper, float vibration = 0,
+                  float vibration_hz = 0);
   bool focused_ = false;
   std::vector<Device> devices_;
   std::array<float, 24> pad_{};

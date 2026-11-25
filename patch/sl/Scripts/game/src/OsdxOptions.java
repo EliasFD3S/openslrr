@@ -372,6 +372,8 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		sl = m.addItem( "FORCE FEEDBACK", OptionsDialog.CMD_FFB + 0, Config.FFB_strength, 0.0, 1.0, 0, "Strength of the front tyres' pull in a force feedback wheel (percent). 0 turns it off." );
 		sl.printValue( "%.0f", 100.0 );
 		m.addToggle( "INVERT FFB", OptionsDialog.CMD_FFB_INVERT, OptionsDialog.getRendererOption(25), "Turn on if the wheel pulls away from the centre instead of back to it." );
+		sl = m.addItem( "FFB DETAIL", OptionsDialog.CMD_FFB_DETAIL, OptionsDialog.getRendererOption(26), 0.0, 200.0, 21, "Bumps, kerbs, impacts and tyre scrub vibration on top of the steering pull (percent). 0 keeps only the pull." );
+		sl.printValue( "%.0f" );
 		sl = m.addItem( "EMULATED FFB", OptionsDialog.CMD_FFB + 1, Config.FFB_strength_emulated, 0.0, 0.1, 0, "Steering resistance emulated on devices without force feedback." );
 		sl.printValue( "%.0f", 1000.0 );
 	}

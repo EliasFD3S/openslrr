@@ -65,6 +65,7 @@ void load_host_options(const std::string& root) {
             integer_option(line,"shadowed_lamps",graphics.shadowed_lamps,0,6) ||
             integer_option(line,"steer_speed_sensitivity",
                            host_input_tuning().steer_speed_sensitivity,0,100)) {}
+    else if (integer_option(line, "ffb_detail", host_input_tuning().ffb_detail, 0, 200)) {}
     else if (line == "ffb_invert=1") host_input_tuning().ffb_invert = true;
     else if (line == "ffb_invert=0") host_input_tuning().ffb_invert = false;
     else for (const auto& entry : {std::pair{"anisotropic_filtering", &graphics.anisotropic_filtering},
@@ -119,7 +120,8 @@ bool save_host_options() {
       << "audio_reverb=" << host_sfx_spatial_options().reverb << '\n'
       << "steer_speed_sensitivity="
       << std::clamp(host_input_tuning().steer_speed_sensitivity,0,100) << '\n'
-      << "ffb_invert=" << host_input_tuning().ffb_invert << '\n';
+      << "ffb_invert=" << host_input_tuning().ffb_invert << '\n'
+      << "ffb_detail=" << std::clamp(host_input_tuning().ffb_detail, 0, 200) << '\n';
   out.close();
   if (!out) std::fprintf(stderr, "[options] could not save %s\n", host_options_path.c_str());
   return bool(out);

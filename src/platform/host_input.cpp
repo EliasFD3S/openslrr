@@ -198,7 +198,8 @@ void host_input_capture_cancel() { capture.reset(); }
 const InputCapture& host_input_capture() { return capture; }
 float host_input_capture_progress() { return capture.settle_progress(capture_clock()); }
 
-void host_input_force_feedback(float torque, float damper) {
+void host_input_force_feedback(float torque, float damper, float detail, float vibration,
+                               float vibration_hz) {
   const auto& options = host_game_options();
   if (ffb_device < 0 || !options.ffb || options.ffb_strength <= 0.f) {
     host_input_force_feedback_stop();
@@ -206,8 +207,11 @@ void host_input_force_feedback(float torque, float damper) {
   }
   const float invert = host_input_tuning().ffb_invert ? -1.f : 1.f;
   const float strength = options.ffb_strength;
-  host_input_devices().set_force(ffb_device, torque * ffb_sign * invert * strength,
-                                 damper * strength);
+  const float detail_gain = std::clamp(host_input_tuning().ffb_detail, 0, 200) / 100.f;
+  host_input_devices().set_force(ffb_device,
+                                 (torque + detail * detail_gain) * ffb_sign * invert * strength,
+                                 damper * strength, vibration * detail_gain * strength,
+                                 vibration_hz);
 }
 
 void host_input_force_feedback_stop() { host_input_devices().stop_force(); }

@@ -591,5 +591,33 @@ SDL direction convention for a positive level is assumed (INVERT FFB covers a
 wheel that disagrees), and the strength and feel are not tuned on hardware.
 
 Not done: emulated force feedback for devices without it
-(`Config.FFB_strength_emulated`), road texture, kerbs and impacts, and a
-per-car caster from the suspension geometry.
+(`Config.FFB_strength_emulated`) and a per-car caster from the suspension
+geometry.
+
+## Force feedback detail (#399)
+
+Play test of #395: the pull was right but bumps, kerbs, impacts and scrub
+were not felt. `SteeringFeedback::update` now also returns:
+
+- a bump kick, 0.6 per m/s of the two front suspension rates
+  (`WheelState::speed`) moving apart, limited to 0.5 and faded below 5 m/s: a
+  bump under the left wheel shortens it and drags it back, so the wheel turns
+  left. A dip across both wheels gives no kick;
+- an impact jolt: `commit_batch` keeps the controlled car's hardest hit
+  (10 m/s and harder is full scale, positive on a hit on the left of the car)
+  and the wheel rings at 12 Hz, dying out over about 0.1 s;
+- a vibration: past the grip peak, 0.4 per unit of slip angle over the peak
+  (at most 0.3) at 20-30 Hz; on a rough road, half the smoothed sum of both
+  front suspension rates (at most 0.3) at 35-60 Hz. It plays as an
+  `SDL_HAPTIC_SINE` on wheels that have one.
+
+Kicks and jolts add to the constant force; FFB DETAIL (host option 26, 0-200
+%, default 100) scales them and the vibration, then FORCE FEEDBACK scales all.
+
+Validation: `vehicle_dynamics` 40/40 (new: kicks by side, none for a dip
+across both wheels, a jolt that dies within 0.5 s, scrub vibration past the
+peak only); `sdl_input`, `race_vehicle`, `race_brain` pass; the Valo City
+bench drive ends with `drive done` and exit 0, with the same speed trace as
+`main`. Not checked on a force feedback wheel. Roll on turn-in moves the two
+suspensions apart too, so it gives a small kick; kerbs are felt only through
+the suspension (the SCM surface type is not read).

@@ -37,6 +37,9 @@ struct InputTuning {
   // Force feedback direction flip (option 25), for a wheel whose driver
   // reports its force axis the other way round.
   bool ffb_invert = false;
+  // Force feedback detail (option 26, percent, 0-200): bump kicks, impact
+  // jolts and vibration on top of the tyres' aligning torque.
+  int ffb_detail = 100;
 };
 InputTuning& host_input_tuning();
 // Persist host-only graphics alongside the stock options, without changing Config.

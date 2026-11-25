@@ -106,7 +106,9 @@ InputKind host_input_device_kind(int device);
 // steering torque in logical units (-1..1, positive turns left), damper 0..1;
 // Options' strength, the invert switch and the binding's direction apply.
 // Stop when no car is driven (menus, loading, a script-driven car).
-void host_input_force_feedback(float torque, float damper);
+// detail (bump kicks, impact jolts) and the vibration follow FFB DETAIL.
+void host_input_force_feedback(float torque, float damper, float detail = 0,
+                               float vibration = 0, float vibration_hz = 0);
 void host_input_force_feedback_stop();
 // ControlSet device id that receives force feedback now, -1 none.
 int host_input_force_feedback_device();

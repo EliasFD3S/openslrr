@@ -93,6 +93,14 @@ void HostInputDevices::open_haptic(Device& d) {
     effect.condition.right_sat[0] = effect.condition.left_sat[0] = 0xFFFF;
     d.damper = SDL_CreateHapticEffect(d.haptic, &effect);
   }
+  if (features & SDL_HAPTIC_SINE) {
+    SDL_HapticEffect effect{};
+    effect.type = SDL_HAPTIC_SINE;
+    effect.periodic.direction.type = SDL_HAPTIC_STEERING_AXIS;
+    effect.periodic.length = SDL_HAPTIC_INFINITY;
+    effect.periodic.period = 40;
+    d.sine = SDL_CreateHapticEffect(d.haptic, &effect);
+  }
   if (features & SDL_HAPTIC_GAIN) SDL_SetHapticGain(d.haptic, 100);
   // The game's torque replaces the wheel's own spring.
   if (features & SDL_HAPTIC_AUTOCENTER) SDL_SetHapticAutocenter(d.haptic, 0);
@@ -102,15 +110,16 @@ void HostInputDevices::stop_haptic(Device& d) {
   if (!d.haptic || !d.playing) return;
   if (d.constant >= 0) SDL_StopHapticEffect(d.haptic, d.constant);
   if (d.damper >= 0) SDL_StopHapticEffect(d.haptic, d.damper);
-  d.playing = false;
-  d.level = d.damping = 0;
+  if (d.sine >= 0 && d.shaking) SDL_StopHapticEffect(d.haptic, d.sine);
+  d.playing = d.shaking = false;
+  d.level = d.damping = d.shake = d.shake_hz = 0;
 }
 
 void HostInputDevices::close(Device& device) {
   stop_haptic(device);
   if (device.haptic) SDL_CloseHaptic(device.haptic);
   device.haptic = nullptr;
-  device.constant = device.damper = -1;
+  device.constant = device.damper = device.sine = -1;
   if (device.gamepad) SDL_CloseGamepad(device.gamepad);
   else if (device.joystick) SDL_CloseJoystick(device.joystick);
   device.gamepad = nullptr;
@@ -429,7 +438,8 @@ bool HostInputDevices::has_force_feedback(int slot) const {
   return d && d->haptic && d->constant >= 0;
 }
 
-void HostInputDevices::send_force(Device& d, float level, float damper) {
+void HostInputDevices::send_force(Device& d, float level, float damper, float vibration,
+                                  float vibration_hz) {
   level = std::clamp(level, -1.f, 1.f);
   damper = std::clamp(damper, 0.f, 1.f);
   // DirectInput updates are not free: skip changes below one step in 256.
@@ -458,14 +468,40 @@ void HostInputDevices::send_force(Device& d, float level, float damper) {
     if (d.damper >= 0) SDL_RunHapticEffect(d.haptic, d.damper, 1);
     d.playing = true;
   }
+  if (d.sine < 0) return;
+  vibration = std::clamp(vibration, 0.f, 1.f);
+  vibration_hz = std::clamp(vibration_hz, 5.f, 100.f);
+  if (vibration < 1.f / 128) {
+    if (d.shaking) SDL_StopHapticEffect(d.haptic, d.sine);
+    d.shaking = false;
+    d.shake = 0;
+    return;
+  }
+  if (!d.shaking || std::abs(vibration - d.shake) >= 1.f / 128 ||
+      std::abs(vibration_hz - d.shake_hz) >= 1.f) {
+    SDL_HapticEffect effect{};
+    effect.type = SDL_HAPTIC_SINE;
+    effect.periodic.direction.type = SDL_HAPTIC_STEERING_AXIS;
+    effect.periodic.length = SDL_HAPTIC_INFINITY;
+    effect.periodic.period = static_cast<Uint16>(std::lround(1000.f / vibration_hz));
+    effect.periodic.magnitude = static_cast<Sint16>(std::lround(vibration * 32767.f));
+    SDL_UpdateHapticEffect(d.haptic, d.sine, &effect);
+    d.shake = vibration;
+    d.shake_hz = vibration_hz;
+  }
+  if (!d.shaking) {
+    SDL_RunHapticEffect(d.haptic, d.sine, 1);
+    d.shaking = true;
+  }
 }
 
-void HostInputDevices::set_force(int slot, float level, float damper) {
+void HostInputDevices::set_force(int slot, float level, float damper, float vibration,
+                                 float vibration_hz) {
   if (force_slot_ != slot) stop_force();
   Device* d = slot_device(slot);
   if (!focused_ || !d || !d->haptic || d->constant < 0 || slot == test_slot_) return;
   force_slot_ = slot;
-  send_force(*d, level, damper);
+  send_force(*d, level, damper, vibration, vibration_hz);
 }
 
 void HostInputDevices::stop_force() {
