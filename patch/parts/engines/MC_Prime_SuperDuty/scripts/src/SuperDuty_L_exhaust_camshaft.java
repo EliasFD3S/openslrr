@@ -24,7 +24,7 @@ public class SuperDuty_L_exhaust_camshaft extends DOHC_Camshaft
 		static_input_lobe_separation	= 230.0;
 		static_input_lift_in_open	= 0.0;
 		static_input_lift_in_close	= 0.0;
-		static_input_lift_out_open	= 13.462;
+		static_input_lift_out_open	= 6.2;
 		// OpenSLRR #409: a closed valve is seated. 1.27 mm (0.050 in) is
 		// the lift at which cam duration is measured, not a leak.
 		static_input_lift_out_close	= 0.0;

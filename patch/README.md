@@ -1,6 +1,6 @@
 # OpenSLRR Enhanced
 
-Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes, eight SuperDuty camshafts and the four fuel classes: `AirFuelDeliverySystem`, `FuelInjectorSystem`, `DynoData` and the SL Tuners methanol fuel rail), 24 racer classes and 17 racer chassis CFGs (`_main_*.cfg`). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. The fuel classes add fuel heat, ethanol blends and knock; install them together. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
+Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes, the re-specced stock engine parts (#411) and the four fuel classes: `AirFuelDeliverySystem`, `FuelInjectorSystem`, `DynoData` and the SL Tuners methanol fuel rail), 24 racer classes and 17 racer chassis CFGs (`_main_*.cfg`). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. The fuel classes add fuel heat, ethanol blends and knock; install them together. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
 
 **Options** (main menu and in-game menu) opens a full-screen screen built on `java.render.osdx` ([docs/ui/osd-v2.md](../docs/ui/osd-v2.md)): Video, Graphics, Sound, Controls (live axis meters, gamma, dead zones, steering speed sensitivity, force feedback), Devices (connected controllers, battery, rumble test, axis calibration) and Game tabs, an info panel that explains the setting under the pointer, and a notification when a preset is applied. Key redefinition, axes and the control files open the classic pages. The classic pages below are still in `OptionsDialog`. The **Video Options** menu applies the resolution and the Enhanced settings in game. A **Preset** choice (Low, Medium, High, Ultra) sets them all at once; changing one setting afterwards shows Custom. **Advanced** opens a second page: VSync, prop detail, fog, car lights, headlight shadows, street lamps, view distance (500–3,000 m, 3 km by default) and the number of street lamps that cast shadows. **Advanced Game Options** has the pedestrian density slider again (0.5–1.5; an old saved value below 0.5 returns to 1.5). The scenery shadow map and the vehicle shadow map each use a resolution of 2048 × 2048. **Ctrl+F12 → Renderer** also sets how many reflection faces are computed per frame.
 
@@ -224,6 +224,87 @@ stock classes with only the known one-ULP float differences before the edit.
 To rebuild, copy the stock game into a private root, put the sources in
 `parts/engines/MC_Prime_SuperDuty/scripts/src` and run
 `compile_game_sources.exe <root> parts/engines/MC_Prime_SuperDuty/scripts/src`.
+
+## Stock engine re-spec (#411)
+
+The stock racers get realistic dyno curves with the current engine
+calculations (#203 port-flow law and fuel heat, #407 fuel blends and knock,
+#409 cams). There is no power coefficient anywhere: only engine part data
+changes. Targets are each car's real counterpart, and the base game's
+hierarchy for the race versions; weights are unchanged.
+
+Bore, stroke, slots and part fitments are unchanged, so every catalog part
+still fits. The levers are the head breathing factors the stock data already
+uses (`intake/exhaust_efficiency_tuning`, stock 1.0–1.25, now 0.96–1.56),
+boost (wastegate settings at realistic values: 0.8–1.5 bar), cam lift, one
+piston crown and one redline. The Hauler's SuperDuty 500 and Extra 750 now
+come with the MC cams (as the unused Hauler branches of `MC_block` already
+listed); the SuperDuty cams stay on the MC GTLE alone. Wastegate and boost
+defaults only reach newly assembled cars: an owned turbo keeps its saved
+setting, while head breathing and cam data apply at once. The cam swap also
+reaches only new Haulers: an owned one keeps its SuperDuty cams and makes
+335 PS / 550 Nm (Extra 750: 398 PS / 680 Nm) instead of 246 / 397.
+
+Stock-car dyno (host dyno, net crank power, ch = PS):
+
+| Car | Real counterpart | Before: #407 + #409 (PS / Nm) | After (PS @ rpm / Nm @ rpm) | Target (PS / Nm) |
+| --- | --- | --- | --- | --- |
+| Baiern CoupeSport | BMW 325i (E36) | 195 / 240 | 195 @6,250 / 240 @4,750 (unchanged) | 192 / 245 |
+| Baiern DevilSport | BMW M3 3.2 (E36) | 271 / 329 | 318 @6,250 / 371 @5,250 | 321 / 350 |
+| Baiern CoupeSport GT III | race E36 M3 | 340 / 390 | 393 @7,250 / 416 @5,250 | ~360 / 390 |
+| Duhen SunStrip 1.5 DVC | CRX del Sol 1.5 | 107 / 138 | 107 @7,000 / 138 @3,000 (unchanged) | 103 / 133 |
+| Duhen SunStrip 1.8 DVC | Honda 1.8 (B18B class) | 117 / 151 | 140 @6,750 / 170 @4,750 | 140 / 168 |
+| Duhen SunStrip 2.2 DVC | Honda 2.2 VTEC (H22A class) | 125 / 219 | 185 @6,250 / 252 @4,000 | 185 / 206 |
+| Duhen Racing SunStrip 2.0 CDVC | race turbo | 165 / 163 | 260 @8,000 / 241 @7,250 | ~260 / 260 |
+| Einvagen 110 GT | Golf III 1.8 | 96 / 157 | 91 @4,750 / 150 @3,500 | 90 / 145 |
+| Einvagen 110 GTK | Golf G60 class (supercharged 1.8) | 126 / 205 | 133 @5,000 / 215 @3,750 | 160 / 225 |
+| Einvagen 140 GTA | Golf III VR6 power | 146 / 227 | 173 @5,250 / 256 @4,250 | 174 / 235 |
+| Ishima Enula WRY | Impreza 2.0 | 109 / 180 | 124 @6,000 / 188 @3,500 | 125 / 180 |
+| Ishima Enula WRZ | Impreza WRX | 139 / 219 | 195 @5,500 / 265 @4,750 | 218 / 290 |
+| Ishima Enula WR SuperTurizmo | Impreza 22B STi | 205 / 265 | 230 @6,750 / 292 @5,250 | 280 / 363 |
+| Shimutshibu Focer RC 200 | Lancer 2.0 NA (4G63 class) | 125 / 194 | 151 @6,250 / 212 @3,750 | 150 / 180 |
+| Shimutshibu Focer RC 300 | Lancer Evo VI | 172 / 238 | 283 @7,000 / 327 @5,250 | 280 / 373 |
+| Shimutshibu Focer WRC | Evo WRC | 245 / 375 | 298 @6,000 / 420 @3,750 | ~300 / 500 |
+| MC GT | Camaro Z28 LT1 | 235 / 366 | 293 @6,250 / 402 @3,750 | 279 / 441 |
+| MC GTB | Camaro Z28 LS1 | 249 / 374 | 308 @6,250 / 410 @4,000 | 309 / 454 |
+| MC GTLE | Camaro SS / 8.1 big block | 360 / 611 | 346 @5,250 / 599 @3,000 | 345 / 600 |
+| Emer Nonus Street GT | Skyline R34 (NA, 25GT class) | 171 / 228 | 212 @6,500 / 265 @4,750 | 210 / 255 |
+| Emer MotorSport Nonus GT II | JGTC R34 | 407 / 457 | 485 @8,750 / 491 @5,000 | ~480 / 480 |
+| Prime DLH 500 | big-block muscle car | 285 / 433 | 338 @6,250 / 465 @3,750 | ~340 / 480 |
+| Hauler's SuperDuty 500 | Dodge Ram 1500 5.9 | 341 / 558 | 246 @4,500 / 397 @4,000 | 248 / 454 |
+| Hauler's SuperDuty Extra 750 | Ram 2500 V10 power | 501 / 898 | 305 @4,500 / 522 @3,750 | 304 / 610 |
+
+Changed parts (`parts/engines/*/scripts`, sources under `src/`):
+
+| Part | Change |
+| --- | --- |
+| `Baiern_Devils_6SFi_3_6_block` | redline 7,250 → 7,600 rpm (M3 3.2) |
+| `Baiern_Devils_6SFi_cylinder_head` | breathing 1.25 → 1.44 |
+| `Duhen_88er_cylinder_head`, `Duhen_93er_cylinder_head` | breathing 1.14, 1.36 (declared 1.0, 1.0) |
+| `Einvagen_110_GT_cylinder_head` | breathing 0.96 (none declared: 1.0) |
+| `Einvagen_PerPro_GTA_cylinder_head` | breathing 1.27 |
+| `Einvagen_110_GTK_pistons` | crown −25.61 → −20 cc: compression 7.5 → 8.0:1 |
+| `Einvagen_GTK_9psi_supercharger` | boost 0.62 → 0.80 bar (description updated) |
+| `Ishima_WR_head_cylinder_head` | breathing 1.10 |
+| `Ishima_WRZ_turbocharger` | wastegate 0.4 → 1.0 bar, adjustable up to 1.0 (description updated) |
+| `Shimutshibu_RC_DDSA1C/DDSB3C/DDSB8C_cylinder_head` | breathing 1.16 / 1.38 / 1.16 |
+| `Shimutshibu_RC_M3FCR15W7_turbocharger`, `..._MWFCR22W12_turbocharger` | wastegate 0.65 → 1.0 bar, 1.25 → 1.5 bar |
+| `SuperDuty_500_H4L/H4R_cylinder_head` | breathing 1.38 in / 1.50 ex; Hauler stock lists use the MC cams |
+| `SuperDuty_{L,R}_{intake,exhaust}_camshaft` | lift 19 → 8.8 mm in, 13.5 → 6.2 mm ex (now GTLE only) |
+| `SuperDuty_E750_supercharger` | boost ceiling 1.15 → 0.42 bar |
+| `MC_Prime_SuperDuty_{L,R}_DOHC_cylinder_head` | breathing 1.32 in / 1.43 ex |
+| `Emer_StreetGT_cylinder_head`, `Emer_MotorSport_GT2_cylinder_head` | breathing 1.18, 1.56 |
+
+At realistic boost the WRZ (−10 %), the SuperTurizmo (−18 %) and the GTK
+(−17 %) stay below their real counterparts: their heads are shared with the
+naturally aspirated versions, and the knock model has no intercooler. The
+torque peaks of several engines sit higher in the rev range than the real
+ones (stock cam timing is unchanged).
+
+To rebuild, copy the stock game into a private root, put the sources in each
+family's `scripts/src` and run `compile_game_sources.exe <root>
+parts/engines/<family>/scripts/src`. Every edited source rebuilt its stock
+class before the edit, with only the known one-ULP float constants differing.
 
 ## Fuel heat, blends and knock (#203, #407)
 

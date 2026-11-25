@@ -775,3 +775,32 @@ Validation: `port_flow` suite 5/5 on a private copy of the stock game with
 knock limit 8.5 costs 5.3% peak torque on the 10.5:1 synthetic engine, limit 4
 costs 17%, 0.8 bar of boost makes a 10.6 limit knock, intercooling 0.9 reduces
 it). Not checked in game.
+
+## Stock engine re-spec (#411)
+
+Goal (owner): realistic specs considering the real models and the base game's
+performance, not pixel perfect, with no hardcoded power coefficient.
+
+Findings: with the stock flow law (X²/V) the 24 stock racers reach 79–93 % of
+the base game's displayed power (that display counted the cycle power twice);
+the #203 curtain law moves each engine by −45 % to 0 % depending on its
+valves, so the data had to be re-specced per engine. Reverting #203 was
+declined.
+
+Method: a throwaway VM probe assembles all 24 cars (`vehicle_spawn_stock`) on
+a private copy of the stock game plus `patch/`, reads the host dyno in 4 s,
+and a bisection adjusts one lever per car (a part only that car or its group
+uses), in dependency order. Bore, stroke and fitments stay, so catalog parts
+still fit. The coupling of the five SuperDuty-headed V8s needed one stock-list
+change: the Haulers now get the MC cams (the GTLE kept the SuperDuty cams,
+which need 8.8 / 6.2 mm lift for it).
+
+Validation: final probe on the branch, results and every changed value in
+[patch](../../patch/README.md#stock-engine-re-spec-411). Every family keeps its
+trim order. Not checked in game.
+
+Left: WRZ, SuperTurizmo and GTK stay 10–18 % below their real power at
+realistic boost (shared heads, no intercooler in the knock model); torque peaks
+sit at higher rpm than real on several engines; owned turbo cars keep their
+saved wastegate setting; owned Haulers keep their SuperDuty cams (335 PS
+instead of 246).

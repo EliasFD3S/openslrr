@@ -99,6 +99,14 @@ Hauler's SuperDuty 500 torque (Nm) by rpm:
   targets below, like most cars after the #203 fuel heat; the engine data
   re-spec brings them back.
 
+## Outcome (#411)
+
+The owner chose realistic targets over the base game's displayed power, kept
+the #203 flow law and the stock weights, and did not ask for real
+displacements. #411 re-specs performance data only; results per car are in
+[patch](../../patch/README.md#stock-engine-re-spec-411). The real-car table
+below remains the reference for targets.
+
 ## Engines and weight
 
 | In game | Real target | Engine now | Engine target | PS now → target | Nm now → target | Mass now → target |
