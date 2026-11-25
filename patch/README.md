@@ -1,6 +1,6 @@
 # OpenSLRR Enhanced
 
-Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes, the re-specced stock engine parts (#411) and the four fuel classes: `AirFuelDeliverySystem`, `FuelInjectorSystem`, `DynoData` and the SL Tuners methanol fuel rail), 24 racer classes and 17 racer chassis CFGs (`_main_*.cfg`). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. The fuel classes add fuel heat, ethanol blends and knock; install them together. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
+Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes, the re-specced stock engine parts (#411), `SuperCharger` and `Pulley` (#415) and the four fuel classes: `AirFuelDeliverySystem`, `FuelInjectorSystem`, `DynoData` and the SL Tuners methanol fuel rail), 24 racer classes and 17 racer chassis CFGs (`_main_*.cfg`). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. The fuel classes add fuel heat, ethanol blends and knock; install them together. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
 
 **Options** (main menu and in-game menu) opens a full-screen screen built on `java.render.osdx` ([docs/ui/osd-v2.md](../docs/ui/osd-v2.md)): Video, Graphics, Sound, Controls (live axis meters, gamma, dead zones, steering speed sensitivity, force feedback), Devices (connected controllers, battery, rumble test, axis calibration) and Game tabs, an info panel that explains the setting under the pointer, and a notification when a preset is applied. Key redefinition, axes and the control files open the classic pages. The classic pages below are still in `OptionsDialog`. The **Video Options** menu applies the resolution and the Enhanced settings in game. A **Preset** choice (Low, Medium, High, Ultra) sets them all at once; changing one setting afterwards shows Custom. **Advanced** opens a second page: VSync, prop detail, fog, car lights, headlight shadows, street lamps, view distance (500–3,000 m, 3 km by default) and the number of street lamps that cast shadows. **Advanced Game Options** has the pedestrian density slider again (0.5–1.5; an old saved value below 0.5 returns to 1.5). The scenery shadow map and the vehicle shadow map each use a resolution of 2048 × 2048. **Ctrl+F12 → Renderer** also sets how many reflection faces are computed per frame.
 
@@ -225,6 +225,57 @@ To rebuild, copy the stock game into a private root, put the sources in
 `parts/engines/MC_Prime_SuperDuty/scripts/src` and run
 `compile_game_sources.exe <root> parts/engines/MC_Prime_SuperDuty/scripts/src`.
 
+## Superchargers: positive displacement, pulleys and belt (#415)
+
+Superchargers used the turbocharger law, a bell curve of boost around an
+"optimal" speed: the Hauler's SuperDuty Extra 750 blower added +10 Nm at
+1,000 rpm, peaked near 3,300 rpm and cost no drive power. They now follow a
+positive-displacement (Roots, scroll) law in the host dyno, with no power
+coefficient:
+
+- **Delivery** follows the blower's speed, engine rpm × drive ratio. At full
+  speed it reaches 1 + `P_turbo_max` times the inlet pressure (the stock value
+  at the stock ratio); internal leakage returns a fixed flow, so the delivered
+  share is 1 − `leak_rpm` / blower rpm (300 rpm by default). The bypass caps
+  the boost at `P_turbo_waste`.
+- **Heating**: T2 = T1 (1 + (PR^0.286 − 1) / `adiabatic_efficiency`); Roots
+  0.55 by default, the GTK's scroll blower 0.65. The charge density follows
+  PR × T1 / T2. Knock still uses the intake temperature, as for turbos (no
+  intercooler data).
+- **Drive power**: the crank pays mdot × cp × (T2 − T1) for every dyno row.
+- **Pulleys**: the drive ratio is the crank pulley's `surface_diameter` over
+  the blower's `pulley_diameter`. `Pulley.fillDynoData` reports the crank
+  pulley to the dyno; the Vee-8 supercharger driver pulley is 90 mm (stock
+  ratio 1.5 with the E750's 60 mm pulley), and the SL Tuners Roots blower's
+  pulley is 36 mm (its stock 2.5). A blower without a driver pulley part keeps
+  its stock ratio.
+- **Belt**: as wide as the blower pulley, it carries 27 N per mm of width
+  (8 mm pitch timing belt) times its condition (`getWear`). When the drive
+  needs more power than the belt carries at the pulley's rim speed, the belt
+  slips: the dyno row is computed again with the blower speed the belt holds.
+
+Java: `DynoData` gains `charger_type`, `charger_leak_rpm`,
+`charger_efficiency`, `charger_belt_force`, `charger_pulley_radius` and
+`crank_pulley_diameter` (copied by `clone`, kept from the bank that carries
+the blower in `beAverageOf`, reset by `clear`). `SuperCharger` and `Pulley`
+ship patched (`parts/scripts/enginepart/airfueldeliverysystem/charger` and
+`.../reciprocatingenginepart`); turbochargers keep the old law.
+
+Stock data: the E750 blower gives 0.31 bar at full speed (the stock ratio);
+the GTK blower 0.8 bar with efficiency 0.65 (its stock 3.1 bar, clamped by a
+0.62 bar bypass, was a turbo-law workaround).
+
+| Car | Torque at 1,000 / 2,000 / 4,000 rpm, peak | Naturally aspirated twin |
+| --- | --- | --- |
+| Einvagen 110 GTK | 78 / 139 / 198 Nm, 124 PS | 110 GT: 65 / 111 / 148 Nm, 91 PS |
+| Hauler's SuperDuty Extra 750 | 194 / 310 / 478 Nm, 300 PS | SuperDuty 500: 191 / 279 / 397 Nm, 246 PS |
+
+The GTK stays below a real G60 (160 PS): without an intercooler the hot
+charge limits it. Rebuild order: `parts/scripts/src` (DynoData), then
+`.../reciprocatingenginepart/src` (Pulley, with CylinderHead), then
+`.../airfueldeliverysystem/charger/src` (SuperCharger), then the engine
+families.
+
 ## Stock engine re-spec (#411)
 
 The stock racers get realistic dyno curves with the current engine
@@ -257,7 +308,7 @@ Stock-car dyno (host dyno, net crank power, ch = PS):
 | Duhen SunStrip 2.2 DVC | Honda 2.2 VTEC (H22A class) | 125 / 219 | 185 @6,250 / 252 @4,000 | 185 / 206 |
 | Duhen Racing SunStrip 2.0 CDVC | race turbo | 165 / 163 | 260 @8,000 / 241 @7,250 | ~260 / 260 |
 | Einvagen 110 GT | Golf III 1.8 | 96 / 157 | 91 @4,750 / 150 @3,500 | 90 / 145 |
-| Einvagen 110 GTK | Golf G60 class (supercharged 1.8) | 126 / 205 | 133 @5,000 / 215 @3,750 | 160 / 225 |
+| Einvagen 110 GTK | Golf G60 class (supercharged 1.8) | 126 / 205 | 124 @5,000 / 198 @3,750 (#415) | 160 / 225 |
 | Einvagen 140 GTA | Golf III VR6 power | 146 / 227 | 173 @5,250 / 256 @4,250 | 174 / 235 |
 | Ishima Enula WRY | Impreza 2.0 | 109 / 180 | 124 @6,000 / 188 @3,500 | 125 / 180 |
 | Ishima Enula WRZ | Impreza WRX | 139 / 219 | 195 @5,500 / 265 @4,750 | 218 / 290 |
@@ -272,7 +323,7 @@ Stock-car dyno (host dyno, net crank power, ch = PS):
 | Emer MotorSport Nonus GT II | JGTC R34 | 407 / 457 | 485 @8,750 / 491 @5,000 | ~480 / 480 |
 | Prime DLH 500 | big-block muscle car | 285 / 433 | 338 @6,250 / 465 @3,750 | ~340 / 480 |
 | Hauler's SuperDuty 500 | Dodge Ram 1500 5.9 | 341 / 558 | 246 @4,500 / 397 @4,000 | 248 / 454 |
-| Hauler's SuperDuty Extra 750 | Ram 2500 V10 power | 501 / 898 | 305 @4,500 / 522 @3,750 | 304 / 610 |
+| Hauler's SuperDuty Extra 750 | Ram 2500 V10 power | 501 / 898 | 300 @4,500 / 478 @4,000 (#415) | 304 / 610 |
 
 Changed parts (`parts/engines/*/scripts`, sources under `src/`):
 

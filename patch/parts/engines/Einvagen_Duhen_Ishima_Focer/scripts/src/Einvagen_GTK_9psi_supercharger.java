@@ -25,7 +25,9 @@ public class Einvagen_GTK_9psi_supercharger extends SuperCharger
 
 		calculateOptandRange (1500.0, 7000.0);
 		default_rpm_turbo_mul = 1.0;
-		P_turbo_max	= 3.1;
+		P_turbo_max	= 0.8;
+		adiabatic_efficiency = 0.65;
+		belt_slot_ID = 16;
 		P_turbo_waste	= 0.8;
 	}
 

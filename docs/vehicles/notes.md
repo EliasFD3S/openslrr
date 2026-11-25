@@ -804,3 +804,27 @@ realistic boost (shared heads, no intercooler in the knock model); torque peaks
 sit at higher rpm than real on several engines; owned turbo cars keep their
 saved wastegate setting; owned Haulers keep their SuperDuty cams (335 PS
 instead of 246).
+
+## Superchargers: positive displacement, pulleys and belt (#415)
+
+Cause: the owner found that the Hauler's SuperDuty Extra 750 supercharger
+gave no felt power. Superchargers ran on the turbo bell curve
+(`turbo_pressure`): +10 Nm at 1,000 rpm, +31 Nm at 1,500 rpm, peak near
+3,300 rpm, no drive cost. The driver pulley's `surface_diameter` was never set
+and the belt was only checked for presence.
+
+Fix: positive-displacement law in the host (delivery with leakage, adiabatic
+heating, drive power, belt slip), drive ratio from the crank and blower
+pulleys, belt capacity from its width and condition; data re-spec of the E750
+(0.31 bar) and GTK (0.8 bar, efficiency 0.65) blowers to keep #411's targets.
+Details in [patch](../../patch/README.md#superchargers-positive-displacement-pulleys-and-belt-415).
+
+Validation: `SuperCharger` and `Pulley` rebuild their stock classes byte for
+byte before the edit; `port_flow` suite 6/6 (boost rises with rpm and beats the
+turbo law at low rpm, a less efficient blower and a slipping belt cost torque,
+no belt limit never holds back); the 24-car probe changes only the GTK and the
+Extra 750. Not checked in game.
+
+Left: no intercooler data (GTK 124 PS against a G60's 160); the leak speed,
+efficiencies and belt rating are handbook values, not measurements; the
+blower pulley is not a player tuning (no save-format change).

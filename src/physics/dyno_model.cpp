@@ -126,11 +126,18 @@ enum Word : int {
   kPeakHorsepowerRpm = 113,
   kPeakGrossRpm = 114,
   kPeakNetRpm = 115,
-  kKnockCompression = 116
+  kKnockCompression = 116,
+  kChargerType = 117,
+  kChargerLeak = 118,
+  kChargerEfficiency = 119,
+  kChargerBelt = 120,
+  kChargerPulley = 121,
+  kChargerSlip = 122,
+  kChargerDrive = 123
 };
 
 struct Bank {
-  float v[117]{};
+  float v[124]{};
   double get(int i) const { return v[i]; }
   void set(int i, double x) { v[i] = static_cast<float>(x); }
 };
@@ -263,6 +270,34 @@ double turbo_pressure(const Bank& s, double rpm) {
   return std::min(response * s.get(kTurboPressure), s.get(kWastePressure));
 }
 
+// #415 positive-displacement supercharger (DynoData.charger_type 1). The
+// blower moves a fixed volume per turn, so its delivery follows its own speed,
+// rpm * drive ratio (rpm_turbo_mul, from the crank and blower pulleys). At full
+// speed it reaches 1 + P_turbo_max times the inlet pressure; internal leakage
+// returns a volume flow that does not depend on speed, so the delivered share
+// is 1 - leak / blower rpm. A slipping belt turns the blower slower (slip < 1).
+// The bypass valve caps the boost at P_turbo_waste.
+bool positive_displacement(const Bank& s) { return s.get(kChargerType) > 0.5; }
+
+double positive_displacement_pressure(const Bank& s, double rpm) {
+  const double blower = rpm * s.get(kTurboMultiplier) * s.get(kChargerSlip);
+  if (!(blower > 0)) return 0;
+  const double delivered = std::max(0.0, 1.0 - s.get(kChargerLeak) / blower);
+  const double ratio = (1.0 + s.get(kTurboPressure)) * s.get(kChargerSlip) * delivered;
+  return std::clamp(ratio - 1.0, 0.0, std::max(0.0, s.get(kWastePressure)));
+}
+
+double charger_pressure(const Bank& s, double rpm) {
+  return positive_displacement(s) ? positive_displacement_pressure(s, rpm) : turbo_pressure(s, rpm);
+}
+
+// Adiabatic compression: T2 = T1 (1 + (PR^((g-1)/g) - 1) / efficiency), g = 1.4.
+double compressor_outlet_temperature(const Bank& s, double pressure_ratio) {
+  const double efficiency = std::max(0.05, static_cast<double>(s.get(kChargerEfficiency)));
+  return s.get(kIntakeTemperature) *
+         (1.0 + (std::pow(pressure_ratio, 0.4 / 1.4) - 1.0) / efficiency);
+}
+
 // #407 knock. The fuel sets the knock-limited static compression of a
 // naturally aspirated 20 C charge (DynoData.knockCompression, 0 = no knock).
 // The unburned charge at TDC is compressed polytropically (n = 1.3, as in
@@ -275,6 +310,9 @@ double turbo_pressure(const Bank& s, double rpm) {
 double knock_equivalent_compression(const Bank& s) {
   const double compression = s.get(kCompression);
   const double pressure = s.get(kEffectivePressure) / 101325.0;
+  // Superchargers (#415) are treated as turbos here: their outlet heating
+  // drives density and drive power, not knock, for the same missing
+  // intercooler data.
   const double temperature = s.get(kIntakeTemperature);
   if (!(compression > 1) || !(pressure > 0) || !(temperature > 0)) return compression;
   const auto delay = [](double pressure_ratio, double tdc_temperature) {
@@ -315,7 +353,13 @@ void prepare(Bank& s) {
   s.set(kEffectiveHeat, s.get(kMixtureHeat));
   s.set(kEffectiveTemperature, s.get(kIntakeTemperature));
   s.set(kEffectiveDensity, s.get(kIntakeDensity));
-  if (s.get(kTurboMultiplier) > 0 && s.get(kTurboRange) > 0) {
+  if (positive_displacement(s) && s.get(kTurboMultiplier) > 0) {
+    const double ratio = 1.0 + positive_displacement_pressure(s, s.get(kRpm));
+    const double outlet = compressor_outlet_temperature(s, ratio);
+    s.set(kEffectivePressure, ratio * s.get(kIntakePressure));
+    s.set(kEffectiveTemperature, outlet);
+    s.set(kEffectiveDensity, s.get(kIntakeDensity) * ratio * s.get(kIntakeTemperature) / outlet);
+  } else if (s.get(kTurboMultiplier) > 0 && s.get(kTurboRange) > 0) {
     const double boost = std::sqrt(turbo_pressure(s, s.get(kRpm)) + 1.0);
     s.set(kEffectivePressure, boost * boost * s.get(kIntakePressure));
     s.set(kEffectiveTemperature, s.get(kIntakeTemperature) * boost);
@@ -495,6 +539,52 @@ struct Curve {
   std::vector<float> nitro_watts;
 };
 
+bool converge_row(Bank& s) {
+  prepare(s);
+  s.set(kDt, s.get(kPeriod) * 0.0043290043249726295);
+  reset_cycle(s);
+  if (!cycle(s)) return false;
+  double previous = s.get(kMeanPressure);
+  for (int repeat = 0; repeat < 10; ++repeat) {
+    if (!cycle(s)) return false;
+    if (std::fabs(previous / s.get(kMeanPressure) - 1.0) < 0.05) break;
+    previous = previous * 0.4 + s.get(kMeanPressure) * 0.6;
+  }
+  return true;
+}
+
+// #415 blower drive. The crank turns the blower: the power it takes is the
+// compression work of the delivered air, mdot cp (T2 - T1), cp = 1005 J/(kg K).
+// The belt transmits at most charger_belt_force (N) at the blower pulley's
+// rim speed; above that it slips, the blower turns slower and the row is
+// computed again with the speed the belt can hold.
+bool blower_drive(Bank& s) {
+  const double omega = s.get(kRpm) * engine_rpm_to_rad;
+  const auto drive_power = [&] {
+    const double ratio = s.get(kEffectivePressure) / s.get(kIntakePressure);
+    const double heating = compressor_outlet_temperature(s, ratio) - s.get(kIntakeTemperature);
+    return std::max(0.0, s.get(kAirConsumption) * 1005.0 * heating);
+  };
+  double power = drive_power();
+  const double force = s.get(kChargerBelt), radius = s.get(kChargerPulley);
+  if (force > 0 && radius > 0) {
+    for (int i = 0; i < 4; ++i) {
+      const double rim = omega * s.get(kTurboMultiplier) * s.get(kChargerSlip) * radius;
+      const double capacity = force * rim;
+      if (!(power > capacity * 1.01)) break;
+      s.set(kChargerSlip, std::clamp(s.get(kChargerSlip) * capacity / power, 0.0, 1.0));
+      if (!converge_row(s)) return false;
+      power = drive_power();
+    }
+  }
+  const double drive = omega > 0 ? power / omega : 0;
+  s.set(kChargerDrive, drive);
+  s.set(kTorque, s.get(kTorque) - drive);
+  s.set(kNetPower, s.get(kTorque) * omega);
+  s.set(kHorsepower, s.get(kNetPower) * 0.001341);
+  return true;
+}
+
 bool table(Bank& s, int step_rpm, std::vector<float>* torque, std::vector<float>* power) {
   zero_range(s, kPeakPressure, kPeakNetRpm);
   const int count = static_cast<int>(std::trunc(std::trunc(s.get(kMaximumRpm)) / step_rpm));
@@ -508,16 +598,9 @@ bool table(Bank& s, int step_rpm, std::vector<float>* torque, std::vector<float>
     s.set(kPeriod, 120.0 / s.get(kRpm));
     s.set(kAngularSpeed, s.get(kRpm) * 0.10471975803375244);
     s.set(kPistonSpeed, s.get(kAngularSpeed) * s.get(kCrank));
-    prepare(s);
-    s.set(kDt, s.get(kPeriod) * 0.0043290043249726295);
-    reset_cycle(s);
-    if (!cycle(s)) return false;
-    double previous = s.get(kMeanPressure);
-    for (int repeat = 0; repeat < 10; ++repeat) {
-      if (!cycle(s)) return false;
-      if (std::fabs(previous / s.get(kMeanPressure) - 1.0) < 0.05) break;
-      previous = previous * 0.4 + s.get(kMeanPressure) * 0.6;
-    }
+    s.set(kChargerSlip, 1);
+    if (!converge_row(s)) return false;
+    if (positive_displacement(s) && !blower_drive(s)) return false;
     if (s.get(kPeakGrossPower) < s.get(kGrossPower)) {
       s.set(kPeakGrossPower, s.get(kGrossPower));
       s.set(kPeakGrossRpm, s.get(kRpm));
@@ -637,6 +720,16 @@ bool calculate_into(Session* session, const std::unordered_map<std::string, floa
   s.set(kIntakeDuration, s.get(kIntakeClose) - s.get(kIntakeOpen));
   s.set(kExhaustDuration, s.get(kExhaustClose) - s.get(kExhaustOpen));
   s.set(kTurboPlateau, 0);
+  const std::pair<int, const char*> charger[] = {
+      {kChargerType, "charger_type"}, {kChargerLeak, "charger_leak_rpm"},
+      {kChargerEfficiency, "charger_efficiency"}, {kChargerBelt, "charger_belt_force"},
+      {kChargerPulley, "charger_pulley_radius"}};
+  for (const auto& [index, name] : charger) {
+    const float value = field_of(fields, name, 0.f);
+    if (!std::isfinite(value)) return bad(name);
+    s.set(index, value);
+  }
+  s.set(kChargerSlip, 1);
   const float knock = field_of(fields, "knockCompression", 0.f);
   if (!std::isfinite(knock)) return bad("knockCompression");
   s.set(kKnockCompression, knock);
@@ -765,7 +858,7 @@ float dyno_boost_fraction(void* key, float rpm) {
   if (it == g_sessions.end() || !std::isfinite(rpm)) return 0.f;
   const auto& state = it->second.state;
   const double maximum = std::min(state.get(kTurboPressure), state.get(kWastePressure));
-  return maximum > 0 ? static_cast<float>(std::clamp(turbo_pressure(state, rpm) / maximum, 0.0, 1.0))
+  return maximum > 0 ? static_cast<float>(std::clamp(charger_pressure(state, rpm) / maximum, 0.0, 1.0))
                      : 0.f;
 }
 
