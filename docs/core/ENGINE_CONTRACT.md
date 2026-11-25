@@ -870,6 +870,13 @@ a script orbit camera around its target (relative azimuth 0 is behind it);
 its rate runs on game time unless `simulate 1` keeps the camera on real time.
 `zoom aov rate` eases the view angle toward aov at rate per second (a negative
 rate snaps).
+The driving chase and interior views (not a script-attached camera or the
+free camera) are an openslrr addition over the native fixed 42 degrees: their
+view angle widens with the smoothed chassis speed (smoothstep from 30 to
+250 km/h, up to 62 degrees) and starts from the current speed's angle when the
+view is activated. In the chase view only, smoothed forward acceleration
+moves the eye up to 1.2 m back while pulling and 0.8 m closer while braking
+(`update_chase_feel` in `gameref.cpp`).
 
 SDL3 owns joystick/gamepad discovery and polling on that same host thread;
 Win32 still owns the window, keyboard scan codes and mouse. Devices 0/1 remain

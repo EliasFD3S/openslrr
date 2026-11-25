@@ -8355,6 +8355,15 @@ bool part_camera_pose(void* car, int camera, float* matrix) {
   std::copy(frame.begin(), frame.end(), matrix);
   return true;
 }
+bool part_car_velocity(void* car, float* velocity) {
+  const auto* rec = record(as_part(static_cast<Object*>(car)));
+  if (!rec || !velocity) return false;
+  const auto& v = rec->dynamics.body.velocity;
+  velocity[0] = static_cast<float>(v.x);
+  velocity[1] = static_cast<float>(v.y);
+  velocity[2] = static_cast<float>(v.z);
+  return true;
+}
 bool part_car_ground(void *key, float *y) {
   if (!key || !y || !car(static_cast<Object *>(key)))
     return false;

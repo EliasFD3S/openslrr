@@ -495,6 +495,7 @@ void gameref_activate_camera(GameRefState& camera, GameRefState& viewport, int p
   camera.cam_pri = priority;
   camera.cam_active = true;
   camera.cam_seq = ++g_camera_sequence;
+  camera.chase_fov = 0.f;  // re-entered views restart from the current speed
 }
 
 bool gameref_scene_command(void* key, const std::string& line) {
@@ -852,6 +853,33 @@ static void held_follow_pose(GameRefState& cam, const float* center, float headi
   for (int i = 0; i < 3; ++i) cam.eye_s[i] = center[i] + d[i] * scale;
 }
 
+// Chase camera speed feel. The native follow view keeps a fixed 42 degree
+// angle, so 160 km/h in a bend looked like 60. The angle widens with speed
+// (smoothstep from 30 to 250 km/h, up to +20 degrees) and the forward
+// acceleration feeds the eye distance. Both are smoothed so physics ticks
+// landing unevenly on render frames do not shake the view.
+constexpr float kChaseFov = 42.f;
+static void update_chase_feel(GameRefState& cam, void* car, const float* frame, float dt) {
+  // Until the first timed step the pose reads kChaseFov.
+  const bool fresh = cam.chase_fov <= 0.f;
+  if (dt <= 0.f) return;
+  float v[3];
+  if (!part_car_velocity(car, v)) return;
+  // A view switched to at speed starts from that speed's angle, not 42.
+  if (fresh) cam.chase_speed = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+  // Chassis -Z is forward; signed speed so reversing does not count as pulling.
+  const float back = std::hypot(frame[8], frame[10]);
+  const float forward = back > 1e-6f ? -(v[0] * frame[8] + v[2] * frame[10]) / back : 0.f;
+  const float speed = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+  const float prev = cam.chase_speed;
+  cam.chase_speed += (speed - prev) * -std::expm1(-dt * 4.f);
+  const float accel = forward >= 0.f ? (cam.chase_speed - prev) / dt : 0.f;
+  cam.chase_accel += (std::clamp(accel, -15.f, 15.f) - cam.chase_accel) * -std::expm1(-dt * 2.5f);
+  const float t = std::clamp((cam.chase_speed * 3.6f - 30.f) / 220.f, 0.f, 1.f);
+  const float goal = kChaseFov + 20.f * t * t * (3.f - 2.f * t);
+  cam.chase_fov = fresh ? goal : cam.chase_fov + (goal - cam.chase_fov) * -std::expm1(-dt * 2.f);
+}
+
 static bool driving_camera_pose(GameRefState& cam, float* eye, float* at,
                                 float* up, float dt) {
   using physics::Vec3;
@@ -880,6 +908,9 @@ static bool driving_camera_pose(GameRefState& cam, float* eye, float* at,
   PartMatrix frame;
   if (!target || !part_camera_pose(target->key, cam.cockpit_index, frame.data()))
     return false;
+  // The interior view widens with speed like the chase view (only its eye
+  // stays fixed); a script-attached camera keeps its own zoom.
+  if (!attached) update_chase_feel(cam, target->key, frame.data(), dt);
   if (cam.cockpit_index >= 0) {
     std::copy_n(frame.data() + 12, 3, eye);
     for (int i = 0; i < 3; ++i) at[i] = eye[i] - frame[8 + i];
@@ -895,6 +926,9 @@ static bool driving_camera_pose(GameRefState& cam, float* eye, float* at,
   const double distance = cam.follow_variant == 4 ? 11. : cam.follow_variant == 3 ? 12. :
       std::clamp(cam.cam_distance > 0.f ? cam.cam_distance : 7.f,
                  cam.script_dist_min, cam.script_dist_max);
+  // Speed feel: the eye drops back while the car pulls and closes in while
+  // it brakes. Only the drawn radius moves; the rope tow keeps `distance`.
+  const double reach = distance + std::clamp(cam.chase_accel * .12, -.8, 1.2);
   // Native follow camera (update 0x438b60; its angle gain stays 0): the body
   // feels only the dist spring along the eye-car line and perpendicular
   // damping, so time never undoes a look and a parked car keeps it. Driving
@@ -916,8 +950,8 @@ static bool driving_camera_pose(GameRefState& cam, float* eye, float* at,
   const double azimuth = std::atan2(frame[8], frame[10]) + cam.orbit_yaw +
                          (cam.follow_variant == 4 ? 3.141592653589793 : 0);
   const double lift = cam.follow_variant == 4 ? 1.9 : cam.follow_variant == 3 ? 2.4 : 1.4;
-  const double radius = std::hypot(distance, lift);
-  const double elevation = std::clamp(std::atan2(lift, distance) + cam.orbit_pitch, -1.35, 1.35);
+  const double radius = std::hypot(reach, lift);
+  const double elevation = std::clamp(std::atan2(lift, reach) + cam.orbit_pitch, -1.35, 1.35);
   const Vec3 offset{std::sin(azimuth) * std::cos(elevation) * radius,
                     std::sin(elevation) * radius,
                     std::cos(azimuth) * std::cos(elevation) * radius};
@@ -962,7 +996,8 @@ static bool world_camera_pose(float eye[3], float at[3], float* fov, float* znea
     cam->half_aov += (cam->aov_goal - cam->half_aov) * -std::expm1(-dt * cam->aov_rate);
   if (driving_camera_pose(*cam, eye, at, up, dt)) {
     const bool cockpit = cam->camera_attached && !cam->follow_variant;
-    if (fov) *fov = cockpit ? cam->half_aov : 42.f;
+    const bool chase = !cockpit && !cam->camera_free;
+    if (fov) *fov = cockpit ? cam->half_aov : chase && cam->chase_fov > 0.f ? cam->chase_fov : kChaseFov;
     // Outside the cockpit, reserve more depth precision for close body seams.
     if (znear) *znear = cockpit ? .03f : .20f;
     if (zfar) *zfar = 3000.f;

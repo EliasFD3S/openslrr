@@ -100,6 +100,8 @@ Object *part_showing_texture(uint32_t texture);
 // hangs on this point; `look` stays on the chassis origin.
 bool part_car_ground(void *key, float *y);
 bool part_camera_pose(void* car, int camera, float* matrix);
+// World linear velocity of a car's chassis body, in m/s.
+bool part_car_velocity(void* car, float* velocity);
 // Chassis owning a render node, with its active-world script frame.
 void *part_shadow_source(void *render, float *frame);
 // Advance only cars belonging to the active world, at a fixed physics step.
