@@ -148,7 +148,8 @@ TireForces tire_friction_limits(double load, double alignment,
 
 TireForces tire_forces(double load, double alignment, double wheel_speed,
                        double road_speed, double lateral_speed,
-                       const TireParameters &tire, double camber) {
+                       const TireParameters &tire, double camber,
+                       double sliding_speed) {
   const double aligned_load = std::max(0.0, load * alignment);
   if (aligned_load <= 0.0)
     return {0.0, 0.0};
@@ -193,14 +194,20 @@ TireForces tire_forces(double load, double alignment, double wheel_speed,
 
   // Low speed: the force grows with the sliding speed, not the slip, so a
   // car at rest is not pushed around by a finite slip of nearly nothing.
+  // That is the patch's actual sliding speed, not the relaxed one: bounded by
+  // the lagged value, a car that stops sliding was still pushed for about
+  // 0.2 s (relaxation / 1.5 m/s) and swung back and forth like a spring.
+  // Below 3 m/s the tyre also never pushes along the way it slides.
   // The camber thrust is part of the sideways force and capped the same way.
   // The cap per m/s of sliding grows with the road speed above 2 m/s: a
   // fixed cap would also bound the cornering stiffness at speed (0.95 x
   // 16.7 m/s = 16 per radian at 60 km/h, softer than the stock tyre; #418).
   const double cap_gain = std::max(1.0, reference / 2);
-  const double lateral_cap = (std::abs(lateral_speed) + std::abs(k.shift) * reference) *
+  const double sliding = std::isnan(sliding_speed) ? lateral_speed : sliding_speed;
+  const double lateral_cap = (std::abs(sliding) + std::abs(k.shift) * reference) *
                              aligned_load * 0.95 * cap_gain;
   lateral = std::copysign(std::min(std::abs(lateral), lateral_cap), lateral);
+  if (lateral * sliding > 0) lateral *= rolling;
   const double longitudinal_cap = std::abs(slip_speed) * aligned_load * 0.85 * cap_gain;
   longitudinal = std::copysign(std::min(std::abs(longitudinal), longitudinal_cap), longitudinal);
   return {longitudinal, lateral};

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <limits>
+
 namespace slrr::physics {
 
 // The values a tyre script writes through WheelRef (stock Tyre.java), in the
@@ -53,8 +55,12 @@ TireForces tire_friction_limits(double load, double alignment,
 // alignment scales the load before the curves are evaluated. camber is the
 // tyre's inclination against the road in radians, positive when its top
 // leans towards +lateral (the thrust then pushes towards +lateral).
+// sliding_speed is the contact patch's actual lateral speed when
+// lateral_speed is a relaxed (lagged) value; it bounds the low-speed force
+// (NaN: the same as lateral_speed).
 TireForces tire_forces(double load, double alignment, double wheel_speed,
                        double road_speed, double lateral_speed,
-                       const TireParameters& tire, double camber = 0);
+                       const TireParameters& tire, double camber = 0,
+                       double sliding_speed = std::numeric_limits<double>::quiet_NaN());
 
 } // namespace slrr::physics

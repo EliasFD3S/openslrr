@@ -981,3 +981,52 @@ Limitations: the coefficients are OpenSLRR choices, not measured tyre data;
 the pressure does not change the rolling radius, the contact patch length
 or the longitudinal relaxation; without the patched classes the host keeps
 0.3 m and the stock behaviour.
+
+## A sideways slide swung back like a spring (#426)
+
+Cause: the low-speed lateral cap (0.95 × load per m/s of sliding) used the
+relaxed lateral speed, which lags the patch's real sliding by relaxation /
+1.5 m/s (0.2 s) once the car has stopped rolling. A car that came to rest
+in a slide kept being pushed by its tyres after it stopped, the other way
+and back: a lagged damper, about 1 Hz. It was reported on the Baiern GT III.
+
+Fix (`src/physics/tire_model.cpp:tire_forces`): `VehicleDynamics` also
+passes the patch's actual lateral speed, which bounds the low-speed force;
+below 3 m/s (the camber thrust's fade) a force pushing along the slide is
+scaled down to zero at rest. Above 3 m/s nothing changes.
+
+Validation:
+
+- `tests/test_vehicle_dynamics.cpp:a_sideways_slide_stops_without_swinging_back`
+  (braked car let go at 4 m/s sideways): the contact patches swung back at
+  0.787 m/s before, 0.004 m/s after; 46 tests pass. What remains at the
+  centre of mass (0.2 m/s) is the body rolling back on its springs.
+- Physics Lab at 1000 Hz: every scenario unchanged except the side kerb
+  bump, 1.11 g against 1.12 g.
+- In game: a GT III bench drive in Valo City runs without errors. The stop
+  itself has not been judged in game.
+
+## A lowered car rode on its exhaust (#426)
+
+Cause: `rebuild_body_support` took the lowest mesh vertex of every installed
+part except running gear and hinged panels. On the Baiern GT III the stock
+exhaust pipe (under the front floor) and `muffler_12` (behind the rear axle)
+hang 3-4 cm below the side skirts and touched the road at rest: they carried
+up to 1.5 kN, about 13 % of the car's weight, and slid on it at the body's
+0.4 friction. Under power the rear tyres got 2,517 N each instead of about
+3,000 N, so the rear broke loose with a little throttle and the car went
+sideways at full throttle; it also bounced on the contacts, which felt like
+springs without dampers.
+
+Fix (`src/resources/part_runtime.cpp:rebuild_body_support`): parts that are
+a `java.game.parts.EnginePart` (exhaust pipes, tips and mufflers, the engine
+itself) are no longer body supports. The GT III's supports are now its side
+skirts, bumper and anti-roll bar; at rest and under power the four tyres
+carry the whole weight (rear 3,018 N each while accelerating).
+
+Validation: `slrr_host` Release; GT III bench drive in Valo City with a
+temporary log of the support points and tyre loads. The handling has not
+been judged in game yet.
+
+Limitations: an exhaust or sump hanging lower than the body now passes
+through kerbs and the ground instead of scraping.
