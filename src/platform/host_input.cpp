@@ -1,3 +1,4 @@
+#include "host_input_capture.hpp"
 #include "host_input_mapping.hpp"
 #include "host_input_devices.hpp"
 #include "slrr/host_input.hpp"
@@ -48,6 +49,32 @@ struct Hotkey {
 };
 std::vector<Hotkey> hotkeys;
 uint64_t next_hotkey = 0;
+
+InputCapture capture;
+
+double capture_clock() {
+  using namespace std::chrono;
+  return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
+// Every channel the rebind listener may take, on every device at once.
+std::vector<CaptureChannel> capture_channels() {
+  std::vector<CaptureChannel> out;
+  for (int i = 1; i < static_cast<int>(keys.size()); ++i)
+    out.push_back({0, i, host_input_physical_axis(0, i), false, false});
+  // Pointer motion is never taken; the left button (the click that opened the
+  // listener, or a click elsewhere) cancels it.
+  for (int i = 3; i < static_cast<int>(mouse.size()); ++i)
+    out.push_back({1, i, mouse[static_cast<size_t>(i)], false, i == 3});
+  auto& devices = host_input_devices();
+  for (int slot = kPad; slot < 3 + devices.count(); ++slot) {
+    if (!devices.capturable(slot)) continue;
+    for (int i = 0; i < devices.channels(slot); ++i)
+      if (devices.available(slot, i))
+        out.push_back({slot, i, devices.axis(slot, i), devices.analog_axis(slot, i), false});
+  }
+  return out;
+}
 
 bool captures_binding(Object* focus) {
   if (!focus) return false;
@@ -144,6 +171,18 @@ void host_input_poll_keys() {
   host_input_devices().poll(focused);
   pad = host_input_devices().pad();
 #endif
+  if (capture.state() != InputCapture::Idle) capture.update(capture_clock(), capture_channels());
+}
+
+void host_input_capture_begin() { capture.begin(capture_clock()); }
+void host_input_capture_cancel() { capture.reset(); }
+const InputCapture& host_input_capture() { return capture; }
+float host_input_capture_progress() { return capture.settle_progress(capture_clock()); }
+
+InputKind host_input_device_kind(int device) {
+  if (device == 0) return InputKind::Keyboard;
+  if (device == 1) return InputKind::Mouse;
+  return device >= kPad ? host_input_devices().kind(device) : InputKind::None;
 }
 
 const char* host_input_device_name(int device) {
@@ -258,11 +297,16 @@ void host_input_update_controller(Object* controller, float dt) {
   // Stock AXIS_TURN_LEFTRIGHT is positive to the left, like the chassis yaw.
   in.drive_steer = axis(1);
   in.drive_steer_analog = false;
+  in.drive_steer_kind = InputKind::None;
   if (controller && controller->input) {
+    auto analog_axis = [](int device, int axis) {
+      return host_input_devices().analog_axis(device, axis);
+    };
     in.drive_steer_analog = input_mapping::steering_is_analog(
-        *controller->input, host_input_physical_axis, pad,
-        [](int device, int axis) { return host_input_devices().analog_axis(device, axis); },
-        physical_available);
+        *controller->input, host_input_physical_axis, pad, analog_axis, physical_available);
+    in.drive_steer_kind = input_mapping::steering_kind(
+        *controller->input, host_input_physical_axis, pad, analog_axis,
+        host_input_device_kind, physical_available);
     // Steering skips the stock ControlSet smoothing (#383): its power 1.5
     // curve gave a half-turned wheel or stick 35 % of the lock, and its rate
     // (Config.steerSpeed 0.01) lagged about 400 ms behind the input. An analog
@@ -296,6 +340,7 @@ void host_input_update_controller(Object* controller, float dt) {
     in.drive_brake = 0.f;
     in.drive_steer = 0.f;
     in.drive_steer_analog = false;
+    in.drive_steer_kind = InputKind::None;
     in.drive_handbrake = false;
     in.drive_reverse = false;
   }

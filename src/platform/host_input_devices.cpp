@@ -95,6 +95,9 @@ void HostInputDevices::poll(bool focused) {
     if (SDL_IsGamepad(ids[i])) incoming.gamepad = SDL_OpenGamepad(ids[i]);
     incoming.joystick = incoming.gamepad ? SDL_GetGamepadJoystick(incoming.gamepad) : SDL_OpenJoystick(ids[i]);
     if (!incoming.joystick) continue;
+    const auto type = SDL_GetJoystickType(incoming.joystick);
+    incoming.pad = incoming.gamepad &&
+        (type == SDL_JOYSTICK_TYPE_GAMEPAD || type == SDL_JOYSTICK_TYPE_UNKNOWN);
     incoming.name = device_name(incoming.joystick);
     // Identical devices without a serial/path can only be distinguished by
     // discovery order. Do not collapse two simultaneously connected peripherals.
@@ -119,10 +122,10 @@ void HostInputDevices::poll(bool focused) {
 
   // Keep the legacy alias on the same gamepad until it is unplugged.
   auto primary = std::find_if(devices_.begin(), devices_.end(), [&](const Device& d) {
-    return d.id == primary_ && d.gamepad;
+    return d.id == primary_ && d.pad && d.gamepad;
   });
   if (primary == devices_.end())
-    primary = std::find_if(devices_.begin(), devices_.end(), [](const Device& d) { return d.gamepad != nullptr; });
+    primary = std::find_if(devices_.begin(), devices_.end(), [](const Device& d) { return d.pad && d.gamepad; });
   primary_ = primary == devices_.end() ? 0 : primary->id;
 
   for (auto& device : devices_) {
@@ -246,6 +249,26 @@ bool HostInputDevices::available(int slot, int axis) const {
   if (!d || !d->joystick || axis >= static_cast<int>(d->values.size())) return false;
   if (axis >= d->axes) return true;
   return SDL_GetJoystickAxisInitialState(d->joystick, axis, nullptr);
+}
+
+InputKind HostInputDevices::kind(int slot) const {
+  if (slot == 2) return InputKind::Pad;
+  const auto* d = device(slot);
+  if (!d) return InputKind::None;
+  return d->pad ? InputKind::Pad : InputKind::Wheel;
+}
+
+int HostInputDevices::channels(int slot) const {
+  if (slot == 2) return static_cast<int>(pad_.size());
+  const auto* d = device(slot);
+  return d ? static_cast<int>(d->values.size()) : 0;
+}
+
+bool HostInputDevices::capturable(int slot) const {
+  if (!focused_) return false;
+  if (slot == 2) return primary_ != 0;
+  const auto* d = device(slot);
+  return d && d->joystick && d->id != primary_;
 }
 
 void HostInputDevices::refresh() {

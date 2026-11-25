@@ -1,4 +1,5 @@
 #include "save_io_fixture.hpp"
+#include "../src/platform/host_input_capture.hpp"
 #include "../src/platform/host_input_devices.hpp"
 #include "../src/platform/host_input_mapping.hpp"
 #include <SDL3/SDL_hints.h>
@@ -10,10 +11,12 @@ namespace {
 struct Peripheral {
   SDL_JoystickID id = 0;
   SDL_Joystick* joystick = nullptr;
-  Peripheral(const char* name, int product, int axes, int buttons, int hats = 0, bool pad = false) {
+  // mapped_wheel: a wheel SDL also maps as a gamepad (pad masks, wheel type).
+  Peripheral(const char* name, int product, int axes, int buttons, int hats = 0, bool pad = false,
+             bool mapped_wheel = false) {
     SDL_VirtualJoystickDesc desc{};
     SDL_INIT_INTERFACE(&desc);
-    desc.type = pad ? SDL_JOYSTICK_TYPE_GAMEPAD : SDL_JOYSTICK_TYPE_WHEEL;
+    desc.type = pad && !mapped_wheel ? SDL_JOYSTICK_TYPE_GAMEPAD : SDL_JOYSTICK_TYPE_WHEEL;
     desc.vendor_id = 0x1234;
     desc.product_id = product;
     desc.naxes = axes; desc.nbuttons = buttons; desc.nhats = hats;
@@ -59,12 +62,21 @@ void multi_peripheral_input() {
   Peripheral wheel("Fixture wheel", 1, 1, 2, 1);
   Peripheral pedals("Fixture pedals", 2, 3, 0);
   Peripheral shifter("Fixture shifter", 3, 0, 8);
+  // Found before the pads: it must not become the device 2 alias.
+  Peripheral mapped_wheel("Fixture mapped wheel", 5, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT, 0, true, true);
   Peripheral first_pad("Fixture pad", 4, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT, 0, true);
   Peripheral second_pad("Fixture pad", 4, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT, 0, true);
   for (int i = 0; i < 3; ++i) pedals.axis(i, -32768);
   devices.poll(true);
   const int w = find_device("Fixture wheel"), p = find_device("Fixture pedals"), s = find_device("Fixture shifter");
   const int first = find_device("Fixture pad");
+  const int mw = find_device("Fixture mapped wheel");
+  SLRR_REQUIRE(devices.kind(2) == InputKind::Pad && devices.kind(first) == InputKind::Pad);
+  SLRR_REQUIRE(devices.kind(w) == InputKind::Wheel && devices.kind(p) == InputKind::Wheel);
+  SLRR_REQUIRE(devices.kind(mw) == InputKind::Wheel && devices.capturable(mw));
+  SLRR_REQUIRE(!devices.capturable(first) && devices.capturable(first + 1));
+  SLRR_REQUIRE(host_input_device_kind(0) == InputKind::Keyboard && host_input_device_kind(1) == InputKind::Mouse);
+  SLRR_REQUIRE(devices.channels(w) == 1 + 2 + 4);
   SLRR_REQUIRE(host_input_device_name(first + 1) != nullptr);
   SLRR_REQUIRE(std::string(host_input_device_name(first)) != host_input_device_name(first + 1));
   SLRR_REQUIRE(host_input_device_name(first + 2) == nullptr);
@@ -149,11 +161,13 @@ void multi_peripheral_input() {
   SLRR_REQUIRE(close_to(host_input_controller_axis(&controller, 28), .75f));
   host_input_update_controller(&controller, 1.f / 60);
   SLRR_REQUIRE(host_input().drive_steer_analog && host_input().drive_shift == 1);
+  SLRR_REQUIRE(host_input().drive_steer_kind == InputKind::Wheel);
   // Keyboard override stays digital while the wheel's physical channel is analog.
   host_input_key(30, true);
   add(1, 0, 30, 0, 1, 0, 1);
   host_input_update_controller(&controller, 1.f / 60);
   SLRR_REQUIRE(!host_input().drive_steer_analog);
+  SLRR_REQUIRE(host_input().drive_steer_kind == InputKind::Keyboard);
   host_input_clear_keys();
   add(54, 2, 20, -.8f, 1, 0, 1);
   SLRR_REQUIRE(close_to(controller.input->bindings.back().from, .1f)); // Legacy range conversion only.
@@ -204,8 +218,107 @@ void multi_peripheral_input() {
   host_input_update_controller(&controller, 1.f / 60);
   SLRR_REQUIRE(!host_input().drive_nitro);
 }
+
+// The rebind listener on a rig: a shifter in gear, a toggle, end-stop pedals,
+// a centred wheel and a noisy axis on four devices at once.
+void capture_on_a_rig() {
+  using C = CaptureChannel;
+  InputCapture c;
+  double t = 0;
+  std::vector<C> rig = {
+      {0, 0x1e, 0, false, false},     // key A
+      {1, 3, 1, false, true},         // left mouse still down from the click
+      {3, 0, 0, true, false},         // wheel, centred
+      {4, 0, -1, true, false},        // throttle pedal at its end stop
+      {4, 1, 1, true, false},         // reversed clutch pedal
+      {5, 2, 1, false, false},        // H-shifter in 2nd gear: never released
+      {6, 7, 0, false, false},        // button box button
+  };
+  auto frames = [&](double seconds) {
+    for (double end = t + seconds; t < end; t += 1.0 / 60) c.update(t, rig);
+  };
+  c.begin(t);
+  frames(.1);
+  SLRR_REQUIRE(c.state() == InputCapture::Releasing);
+  rig[1].value = 0;  // the click ends
+  frames(.2);
+  SLRR_REQUIRE(c.state() == InputCapture::Releasing && c.settle_progress(t) < 1);
+  frames(.2);
+  SLRR_REQUIRE(c.state() == InputCapture::Listening && c.held() == 1);  // the shifter
+  frames(.5);
+  SLRR_REQUIRE(c.state() == InputCapture::Listening);  // a held gear does not bind
+  // The last device on the list wins when it is the one touched.
+  rig[6].value = 1;
+  frames(1.0 / 60);
+  SLRR_REQUIRE(c.state() == InputCapture::Holding && c.device() == 6 && c.axis() == 7 && !c.analog());
+  frames(.5);
+  SLRR_REQUIRE(c.state() == InputCapture::Holding);
+  rig[6].value = 0;
+  frames(1.0 / 60);
+  SLRR_REQUIRE(c.state() == InputCapture::Done && c.device() == 6);
+  frames(1);
+  SLRR_REQUIRE(c.state() == InputCapture::Done);  // kept until read
+
+  // End-stop pedal: its rest and the far end, also when pressed in steps.
+  c.begin(t);
+  frames(.4);
+  SLRR_REQUIRE(c.state() == InputCapture::Listening);
+  rig[3].value = -.7f;  // below the threshold from -1
+  frames(.1);
+  SLRR_REQUIRE(c.state() == InputCapture::Listening);
+  rig[3].value = .2f;
+  frames(.1);
+  rig[3].value = 1;
+  frames(.1);
+  SLRR_REQUIRE(c.state() == InputCapture::Holding && c.device() == 4 && c.axis() == 0 && c.analog());
+  rig[3].value = -1;
+  frames(.1);
+  SLRR_REQUIRE(c.state() == InputCapture::Done && c.rest() == -1 && c.peak() == 1);
+
+  // Centred wheel turned left; the reversed clutch keeps its +1 rest.
+  c.begin(t);
+  frames(.4);
+  rig[2].value = -.8f;
+  frames(.1);
+  rig[2].value = 0;
+  frames(.1);
+  SLRR_REQUIRE(c.state() == InputCapture::Done && c.device() == 3 && c.rest() == 0 && c.peak() < -.7f);
+  c.begin(t);
+  frames(.4);
+  rig[5].value = 0;  // shifter to neutral: not a press
+  frames(.2);
+  SLRR_REQUIRE(c.state() == InputCapture::Listening);
+  rig[5].value = 1;  // back into gear after it rested at 0: now a press
+  frames(.1);
+  SLRR_REQUIRE(c.state() == InputCapture::Holding && c.device() == 5);
+  // A toggle that stays on is accepted after kHoldMax.
+  frames(InputCapture::kHoldMax + .1);
+  SLRR_REQUIRE(c.state() == InputCapture::Done && c.device() == 5);
+
+  // A noisy axis cannot keep the listener releasing forever.
+  rig.push_back({7, 0, 0, true, false});
+  c.begin(t);
+  for (double end = t + InputCapture::kSettleMax + .1; t < end; t += 1.0 / 60) {
+    rig.back().value = rig.back().value > 0 ? -.06f : .06f;
+    c.update(t, rig);
+  }
+  SLRR_REQUIRE(c.state() == InputCapture::Listening);
+  frames(.2);
+  SLRR_REQUIRE(c.state() == InputCapture::Listening);
+
+  // The left mouse button cancels; a device plugged in while listening
+  // starts at its own rest instead of binding at once.
+  rig.push_back({8, 0, -1, true, false});
+  frames(.1);
+  SLRR_REQUIRE(c.state() == InputCapture::Listening);
+  rig[1].value = 1;
+  frames(1.0 / 60);
+  SLRR_REQUIRE(c.state() == InputCapture::Cancelled);
+  c.reset();
+  SLRR_REQUIRE(c.state() == InputCapture::Idle);
+}
 }  // namespace
 int main() {
-  const standalone::Test tests[] = {multi_peripheral_input};
+  const standalone::Test tests[] = {multi_peripheral_input, capture_on_a_rig};
   return standalone::run("sdl_input", tests);
 }

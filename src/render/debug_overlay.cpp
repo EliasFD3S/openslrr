@@ -776,8 +776,10 @@ void draw_vehicle(const PartPhysicsState& state) {
 
 void draw_input() {
   const auto& input = host_input();
-  ImGui::Text("Steering %+.3f (%s)", input.drive_steer,
-              input.drive_steer_analog ? "analog" : "digital");
+  constexpr const char* kinds[] = {"none", "keyboard", "mouse", "pad", "wheel"};
+  ImGui::Text("Steering %+.3f (%s, %s)", input.drive_steer,
+              input.drive_steer_analog ? "analog" : "digital",
+              kinds[static_cast<int>(input.drive_steer_kind) + 1]);
   ImGui::Text("Throttle %.3f | Brake %.3f | Clutch %.3f",
               input.drive_throttle, input.drive_brake, input.drive_clutch);
   ImGui::Text("Handbrake %s | Reverse %s | Shift %+.2f",

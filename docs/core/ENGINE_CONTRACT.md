@@ -877,17 +877,39 @@ Win32 still owns the window, keyboard scan codes and mouse. Devices 0/1 remain
 24 split-positive channels/default controls as a compatibility alias for the
 primary SDL gamepad. Slots 3+ expose every peripheral's signed axes, then buttons,
 then four positive directions per hat (up/down/left/right). The primary pad is
-captured through the alias only. Explicit peripheral bindings replace the matching
-pad driving default; wheel axes use analog steering rather than keyboard ramps.
-Disconnected/unfocused bindings are skipped, not evaluated at signed zero.
+captured through the alias only, and only an SDL device of gamepad type can be
+it: a wheel that SDL also maps as a gamepad keeps its raw channels. Explicit
+peripheral bindings replace the matching pad driving default; wheel axes use
+analog steering rather than keyboard ramps. Disconnected/unfocused bindings are
+skipped, not evaluated at signed zero.
+
+Each device id has a class (`host_input_device_kind`, `InputDevices.kind`):
+keyboard, mouse, pad (device 2 and SDL gamepads) or wheel (every other SDL
+peripheral: wheel base, pedals, shifter, button box). Filters are chosen per
+class, never per product: keys are digital and ramped by `steering_filter`,
+pad sticks keep their noise floor and dead zone, wheel axes are read as they
+are. `HostInput::drive_steer_kind` says which class steers in this frame.
+
+The rebind listener is `InputCapture` (`src/platform/host_input_capture.hpp`),
+fed every channel of every device each frame by `host_input_poll_keys`. It
+waits until no channel moves for 0.3 s (2 s at most, for a noisy axis),
+snapshots that as the rest, ignores what is still held (an H-shifter in gear,
+a toggle), takes the channel that moves farthest from its rest, and waits for
+its release (2 s at most, for a toggle that stays on). Device order never
+decides, and one channel that never rests cannot block it. The left mouse
+button cancels; Esc clears the binding. `InputDevices.applyCapture` writes the
+range: 0..1 for a key or button, rest..far end for an axis at an end stop, the
+half it moved into for a centred axis (TURN LEFT/RIGHT on a raw axis bind both
+halves). Screens show the steps (release, listen, release again) and set
+`capturingInput` so hotkeys stay off meanwhile.
 
 ControlSet saves exact device names and snapshots enumeration when constructed.
 Names include a GUID plus serial-or-path identity hash; slots remain reserved on
 disconnect and are reused on reconnect. Reopen control options after adding a new
 device. Without a serial, changing USB ports can change identity; indistinguishable
-same-model devices without a serial/path use discovery-order suffixes. Connect
-with controls released: raw-axis rebind detection compares with SDL's initial
-position so end-stop pedals do not block the listener. SDL haptics/force feedback
+same-model devices without a serial/path use discovery-order suffixes. A capture on a
+device plugged in after the set was made adds its name (`InputDevices.ensureDevice`)
+so the binding survives the save. SDL haptics/force feedback
 are not implemented. Regression: `scripts/run_save_io_tests.ps1 -Suite sdl_input`
 uses virtual peripherals; real rig calibration remains a separate hardware check.
 

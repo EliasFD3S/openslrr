@@ -311,6 +311,43 @@ hardware or full options-screen interaction is asserted. Evidence:
 `assets/validation/pad-fallback/after.txt`. Native coverage --check remains
 current; no native signatures or production Java changed.
 
+## Rebind listener on a sim rig (four peripherals)
+
+Report: on a rig with four peripherals (wheel base, pedals, shifter, button
+box) one control could not be assigned; the button stayed on "PRESS A KEY...".
+
+Cause, from the code (not reproduced on that rig): both Options screens
+(`OsdxOptions.captureTick`, `OptionsDialog.animate`) first waited until
+`Input.activeAxis` returned -1 on every device, then took the first device in
+list order with an active channel. A channel that never rests blocked the
+first step forever: an H-shifter in gear, a latched toggle, a rotary encoder
+position held as a button, or an axis whose SDL initial value differs from
+its rest. Even past that step, a lower device id with any active channel won
+over the one the player touched. The old screen also scanned only
+`controlSet.nDevices`, the devices present when the set was made. Separately,
+a wheel with an SDL gamepad mapping could become the primary pad, whose raw
+channels the listener never reads, so its extra buttons and pedals could not
+be bound.
+
+Fix: `InputCapture` (`src/platform/host_input_capture.hpp`) watches every
+channel of every device, snapshots the rest once nothing moves, ignores what
+stays held, takes the farthest move and waits for its release; each screen
+shows the steps in a dialog (`OsdxOptions.buildCapture`). Only an SDL device
+of gamepad type can be the primary pad. `InputDevices.applyCapture` derives the
+range from the rest and the direction instead of the old "above 0.95"
+guess. Device classes (`InputKind`: keyboard, mouse, pad, wheel) are exposed to
+the host filters and to Java; `drive_steer_kind` reports the steering class.
+
+Validation: Release build; `sdl_input` 2/2 (adds `capture_on_a_rig`: a stuck
+shifter, an end-stop and a reversed pedal, a centred wheel, a toggle, a noisy
+axis, a late device, the cancel click; and a gamepad-mapped wheel that must
+not take the pad alias); `pad_fallback` passes. Both patched screens compiled
+with `compile_game_sources` (the compile root first rebuilt HEAD's three
+classes byte for byte). Not run in game, not checked on a real rig.
+
+Not done: per-class filter settings (separate dead zone and gamma for pad and
+wheel); today the Options sliders still apply to every class.
+
 ## Pointer gestures and race cameras: review notes on PR #308 (#295-#299)
 
 Verified on the PR branch (f422ebb), by reading the code; not run in game.

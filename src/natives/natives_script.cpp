@@ -4,6 +4,7 @@
 #include "slrr/gameref.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
+#include "../platform/host_input_capture.hpp"
 #include "../platform/host_input_devices.hpp"
 #include "slrr/host_sfx.hpp"
 #include "slrr/host_music.hpp"
@@ -603,6 +604,34 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           host_input_devices().calibrate_reset(integer(a, 0));
           return Value::make_void();
         });
+    // Device class of a ControlSet device id (InputKind): 0 keyboard,
+    // 1 mouse, 2 pad, 3 wheel/sim peripheral, -1 none.
+    jvm.natives().register_method(kDevices, "kind", "(I)I",
+        [integer](Object*, const std::vector<Value>& a) {
+          return Value::make_int(static_cast<int>(host_input_device_kind(integer(a, 0))));
+        });
+    // The rebind listener (host_input_capture.hpp) over every device at once.
+    auto none = [](Object*, const std::vector<Value>&) { return Value::make_void(); };
+    jvm.natives().register_method(kDevices, "captureBegin", "()V",
+        [none](Object* o, const std::vector<Value>& a) { host_input_capture_begin(); return none(o, a); });
+    jvm.natives().register_method(kDevices, "captureCancel", "()V",
+        [none](Object* o, const std::vector<Value>& a) { host_input_capture_cancel(); return none(o, a); });
+    jvm.natives().register_method(kDevices, "captureState", "()I",
+        [](Object*, const std::vector<Value>&) { return Value::make_int(host_input_capture().state()); });
+    jvm.natives().register_method(kDevices, "captureDevice", "()I",
+        [](Object*, const std::vector<Value>&) { return Value::make_int(host_input_capture().device()); });
+    jvm.natives().register_method(kDevices, "captureAxis", "()I",
+        [](Object*, const std::vector<Value>&) { return Value::make_int(host_input_capture().axis()); });
+    jvm.natives().register_method(kDevices, "captureAnalog", "()I",
+        [](Object*, const std::vector<Value>&) { return Value::make_int(host_input_capture().analog()); });
+    jvm.natives().register_method(kDevices, "captureHeld", "()I",
+        [](Object*, const std::vector<Value>&) { return Value::make_int(host_input_capture().held()); });
+    jvm.natives().register_method(kDevices, "captureRest", "()F",
+        [](Object*, const std::vector<Value>&) { return Value::make_float(host_input_capture().rest()); });
+    jvm.natives().register_method(kDevices, "capturePeak", "()F",
+        [](Object*, const std::vector<Value>&) { return Value::make_float(host_input_capture().peak()); });
+    jvm.natives().register_method(kDevices, "captureProgress", "()F",
+        [](Object*, const std::vector<Value>&) { return Value::make_float(host_input_capture_progress()); });
   }
   jvm.natives().register_method(
       "java.io.Input", "activeAxis", "(I)I",
