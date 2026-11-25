@@ -19,6 +19,10 @@ struct TireParameters {
   double maximum_load = 0, load_smoothing = .4;
   // setFrictn_x: longitudinal friction factor.
   double longitudinal_grip = 1;
+  // WheelRef.setRelaxation (patched Tyre.SetInflation): the distance the tyre
+  // rolls for its lateral force to build, in metres. It grows as the pressure
+  // falls; 0.3 m, a typical road tyre, without the patched script.
+  double relaxation_length = .3;
   // Stored setCPatch tolerance in radians. Not consumed by the 8ac2ba9
   // force law; alignment is supplied separately as a load factor.
   double patch_angle = 0;

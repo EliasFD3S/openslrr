@@ -942,9 +942,6 @@ void solve_anti_roll(RigidBody& body, const std::array<WheelConfig, 4>& wheels,
 }
 
 constexpr double rpm_per_rad = 9.54929658551372;
-// Distance the tyre rolls for its lateral force to build (about a wheel
-// radius for a road tyre; a typical value, #383).
-constexpr double kLateralRelaxation = .3;
 constexpr double wheel_inertia = 1.6;
 
 Vec3 wheel_forward(const RigidBody &body, double steer, Quaternion hub = {}) {
@@ -1239,10 +1236,13 @@ void VehicleDynamics::step_drive() {
       s.slip_speed = s.spin * wheel.radius - road;
       s.lateral_speed = lateral;
       // Relaxation length, integrated implicitly: the deflection follows
-      // lateral / speed with a lag of relaxation / speed (12 ms at 90 km/h).
+      // lateral / speed with a lag of relaxation / speed (12 ms at 90 km/h
+      // for the 0.3 m of a tyre at its optimal pressure). The patched Tyre
+      // script lengthens it as the pressure falls.
       const double reference = std::max(1.5, std::abs(road));
-      s.slip_angle = (kLateralRelaxation * s.slip_angle + lateral * dt_) /
-                     (kLateralRelaxation + reference * dt_);
+      const double relaxation = std::clamp(cfg.tyre.relaxation_length, .05, 2.0);
+      s.slip_angle = (relaxation * s.slip_angle + lateral * dt_) /
+                     (relaxation + reference * dt_);
       const double relaxed_lateral = s.slip_angle * reference;
       // Camber against the road (#418): the hub's down axis leaning along the
       // tyre's lateral axis; positive when the tyre's top leans to +side.

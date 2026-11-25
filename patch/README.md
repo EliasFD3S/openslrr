@@ -77,10 +77,22 @@ conversion. Cars already
 bought keep their installed bar objects, which take the new class values
 when they load.
 
+## Tyre pressure (#424)
+
+Copy `parts` with the patched `Tyre.class` and `WheelRef.class` (sources in
+`src/`); install them together, since `Tyre` calls the new
+`WheelRef.setRelaxation`. The **Inflation** tuning slider now goes up to 1.5
+times the tyre's optimal pressure. Away from the optimum the tyre loses
+grip: under-inflated it is also softer, rolls with more resistance and takes
+longer to build its cornering force; over-inflated it is a little stiffer
+and rolls more freely. At the optimal pressure nothing changes. Details in
+[docs/vehicles/notes.md](../docs/vehicles/notes.md#tyre-pressure-424).
+
 ## Java natives
 
 | Class and signature | Behavior |
 | --- | --- |
+| `java.game.parts.WheelRef.setRelaxation(F)V` | Sets the tyre's lateral relaxation length in metres (clamped to 0.05–2; 0.3 by default). |
 | `java.game.OptionsDialog.getRendererOption(I)I` | Reads the active value for the requested identifier. An unknown identifier returns 0. |
 | `java.game.OptionsDialog.setRendererOption(II)V` | Applies the value to the session. Unknown identifiers are ignored. |
 
