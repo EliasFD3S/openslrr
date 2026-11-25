@@ -181,6 +181,12 @@ struct GameRefState {
   float move_s[3] = {};
   float eye_s[3] = {};
   float eye_vel[3] = {};
+  // Chase camera speed feel: smoothed chassis speed (m/s) and forward
+  // acceleration (m/s^2), and the view angle they produce. Advanced only on
+  // dt > 0 queries; dt = 0 queries read them.
+  float chase_speed = 0.f;
+  float chase_accel = 0.f;
+  float chase_fov = 0.f;
   // This frame's look axes (PE mouse rate). The orbit body consumes them.
   float ctl_x = 0.f;
   float ctl_y = 0.f;
