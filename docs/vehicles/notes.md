@@ -666,6 +666,36 @@ bench drive ends with `drive done` and exit 0, with the same speed trace as
 suspensions apart too, so it gives a small kick; kerbs are felt only through
 the suspension (the SCM surface type is not read).
 
+## Force feedback felt like a pad's rumble (#405)
+
+Report: on a wheel the vibrations were violent and felt like a pad's rumble
+motor rather than a steering wheel.
+
+Cause, from the code (#399): three parts played as buzz on a belt or gear
+wheel. The rough-road vibration was an `SDL_HAPTIC_SINE` at 35-60 Hz that ran
+whenever the front suspensions moved, so on almost every road at speed. The
+bump kick read the raw suspension rates, which change from one solver step
+to the next, so the constant force stepped every frame. The impact jolt rang
+at 12 Hz up to full scale. FFB DETAIL scaled all three together, up to 2x.
+
+Fix (`src/physics/steering_feedback.cpp`, `host_input.cpp`):
+
+- no periodic effect for the road; road texture comes only through the kicks;
+- kicks: rates low-passed over 25 ms, a 0.05 m/s dead band, 0.5 per m/s,
+  limited to 0.35;
+- impacts: one knock limited to 0.6 that decays over 0.05 s, no ring;
+- scrub vibration: 0.25 per unit of slip over the peak, at most 0.15, 18-26 Hz;
+- separate gains (host options 26-29: road feel, impacts, vibration at 50 %
+  by default, damper), a minimum force for the wheel's dead band (30) and a
+  low-pass on the summed force (31, 10 ms by default);
+- Options > Controls > FORCE FEEDBACK groups them with a WHEEL TYPE preset
+  (gear, belt or direct drive) and a TEST button.
+
+Validation: `vehicle_dynamics` 44/44 (kicks by side, none for a dip across
+both wheels, no kick from step-to-step chatter, one knock that never changes
+sign, scrub vibration at most 0.15); `sdl_input` 2/2. Not checked on a force
+feedback wheel; the preset values are a starting point, not measured.
+
 ## Wheels locked when a spin turns the car round
 
 Play test: in a spin, once the car travelled backwards it could not be

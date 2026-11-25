@@ -106,15 +106,20 @@ InputKind host_input_device_kind(int device);
 // steering torque in logical units (-1..1, positive turns left), damper 0..1;
 // Options' strength, the invert switch and the binding's direction apply.
 // Stop when no car is driven (menus, loading, a script-driven car).
-// detail (bump kicks, impact jolts) and the vibration follow FFB DETAIL.
-void host_input_force_feedback(float torque, float damper, float detail = 0,
-                               float vibration = 0, float vibration_hz = 0);
+// detail (bump kicks), impact (crash knocks), the damper and the vibration
+// each have their own Options gain (#405); the sum is low-passed over dt
+// (FFB SMOOTHING) and lifted past the wheel's dead band (FFB MIN FORCE).
+void host_input_force_feedback(float torque, float damper, float detail = 0, float impact = 0,
+                               float vibration = 0, float vibration_hz = 0, float dt = 0);
 void host_input_force_feedback_stop();
 // ControlSet device id that receives force feedback now, -1 none.
 int host_input_force_feedback_device();
 // Rebind listener (host_input_capture.hpp), advanced by host_input_poll_keys.
 class InputCapture;
-void host_input_capture_begin();
+// kinds: a mask of 1 << InputKind, the device classes that may be taken
+// (-1 every class). The Esc key (clears the binding) and the left mouse
+// button (cancels) always listen.
+void host_input_capture_begin(int kinds = -1);
 void host_input_capture_cancel();
 const InputCapture& host_input_capture();
 float host_input_capture_progress();

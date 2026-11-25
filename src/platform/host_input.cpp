@@ -77,17 +77,31 @@ double capture_clock() {
 }
 
 // Every channel the rebind listener may take, on every device at once.
+// Device classes the listener may take (1 << InputKind), see
+// host_input_capture_begin.
+int capture_kinds = -1;
+
+bool capture_kind(int device) {
+  const int kind = static_cast<int>(host_input_device_kind(device));
+  return kind >= 0 && (capture_kinds & (1 << kind));
+}
+
 std::vector<CaptureChannel> capture_channels() {
   std::vector<CaptureChannel> out;
+  constexpr int kEscape = 0x01;
+  const bool keyboard = capture_kind(0);
   for (int i = 1; i < static_cast<int>(keys.size()); ++i)
-    out.push_back({0, i, host_input_physical_axis(0, i), false, false});
+    if (keyboard || i == kEscape)
+      out.push_back({0, i, host_input_physical_axis(0, i), false, false});
   // Pointer motion is never taken; the left button (the click that opened the
   // listener, or a click elsewhere) cancels it.
+  const bool buttons = capture_kind(1);
   for (int i = 3; i < static_cast<int>(mouse.size()); ++i)
-    out.push_back({1, i, mouse[static_cast<size_t>(i)], false, i == 3});
+    if (buttons || i == 3)
+      out.push_back({1, i, mouse[static_cast<size_t>(i)], false, i == 3});
   auto& devices = host_input_devices();
   for (int slot = kPad; slot < 3 + devices.count(); ++slot) {
-    if (!devices.capturable(slot)) continue;
+    if (!devices.capturable(slot) || !capture_kind(slot)) continue;
     for (int i = 0; i < devices.channels(slot); ++i)
       if (devices.available(slot, i))
         out.push_back({slot, i, devices.axis(slot, i), devices.analog_axis(slot, i), false});
@@ -193,28 +207,53 @@ void host_input_poll_keys() {
   if (capture.state() != InputCapture::Idle) capture.update(capture_clock(), capture_channels());
 }
 
-void host_input_capture_begin() { capture.begin(capture_clock()); }
+void host_input_capture_begin(int kinds) {
+  capture_kinds = kinds;
+  capture.begin(capture_clock());
+}
 void host_input_capture_cancel() { capture.reset(); }
 const InputCapture& host_input_capture() { return capture; }
 float host_input_capture_progress() { return capture.settle_progress(capture_clock()); }
 
-void host_input_force_feedback(float torque, float damper, float detail, float vibration,
-                               float vibration_hz) {
+namespace {
+float ffb_smoothed = 0.f;  // the low-passed force, before the minimum force
+}
+
+void host_input_force_feedback(float torque, float damper, float detail, float impact,
+                               float vibration, float vibration_hz, float dt) {
   const auto& options = host_game_options();
   if (ffb_device < 0 || !options.ffb || options.ffb_strength <= 0.f) {
     host_input_force_feedback_stop();
     return;
   }
-  const float invert = host_input_tuning().ffb_invert ? -1.f : 1.f;
+  const auto& tuning = host_input_tuning();
+  auto gain = [](int percent) { return std::clamp(percent, 0, 200) / 100.f; };
   const float strength = options.ffb_strength;
-  const float detail_gain = std::clamp(host_input_tuning().ffb_detail, 0, 200) / 100.f;
-  host_input_devices().set_force(ffb_device,
-                                 (torque + detail * detail_gain) * ffb_sign * invert * strength,
-                                 damper * strength, vibration * detail_gain * strength,
+  float force = std::clamp((torque + detail * gain(tuning.ffb_detail) +
+                            impact * gain(tuning.ffb_impacts)) * strength, -1.f, 1.f);
+  // A light low-pass takes the frame-to-frame steps out of the force, which a
+  // belt or gear wheel otherwise plays as grain.
+  const float tau = std::clamp(tuning.ffb_smoothing, 0, 50) / 1000.f;
+  ffb_smoothed = tau > 0.f && dt > 0.f
+                     ? ffb_smoothed + (force - ffb_smoothed) * (1.f - std::exp(-dt / tau))
+                     : force;
+  force = ffb_smoothed;
+  // Minimum force: a wheel with a dead band ignores small forces; lift every
+  // non-zero force past it, keeping the response proportional above.
+  const float floor = std::clamp(tuning.ffb_min_force, 0, 20) / 100.f;
+  if (floor > 0.f && std::abs(force) > 1e-3f)
+    force = std::copysign(floor + (1.f - floor) * std::abs(force), force);
+  const float invert = tuning.ffb_invert ? -1.f : 1.f;
+  host_input_devices().set_force(ffb_device, force * ffb_sign * invert,
+                                 damper * gain(tuning.ffb_damper) * strength,
+                                 vibration * gain(tuning.ffb_vibration) * strength,
                                  vibration_hz);
 }
 
-void host_input_force_feedback_stop() { host_input_devices().stop_force(); }
+void host_input_force_feedback_stop() {
+  ffb_smoothed = 0.f;
+  host_input_devices().stop_force();
+}
 
 int host_input_force_feedback_device() { return ffb_device; }
 

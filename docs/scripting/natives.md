@@ -394,9 +394,12 @@ listener is `captureBegin`, `captureState` (0 idle, 1 releasing, 2 listening,
 3 holding, 4 done, 5 cancelled), `captureDevice`, `captureAxis`,
 `captureAnalog`, `captureRest`, `capturePeak`, `captureHeld`,
 `captureProgress` and `captureCancel`, over `InputCapture`
-(`src/platform/host_input_capture.hpp`). The Java helpers `applyCapture(cs, i)`,
-`ensureDevice(cs, device)` and `kindName(device)` live in the same class; both
-Options screens use them.
+(`src/platform/host_input_capture.hpp`). `captureBeginKinds(mask)` (#405)
+listens only to the device kinds in the mask (`1 << kind`); the Esc key and
+the left mouse button always listen, to clear and to cancel. The Java helpers
+`applyCapture(cs, i)`, `ensureDevice(cs, device)`, `kindName(device)`,
+`classKinds(cls)`, `classCount(cls)` and `forceFeedbackIndex()` live in the
+same class; both Options screens use the first three.
 
 ### Advanced video controls (#377)
 

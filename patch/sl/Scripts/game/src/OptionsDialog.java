@@ -58,6 +58,12 @@ public class OptionsDialog extends Dialog
 	final static int CMD_FFB_INVERT = 529;
 	// Force feedback detail: host option 26 (percent).
 	final static int CMD_FFB_DETAIL = 530;
+	// Force feedback settings (#405): host options 27-31.
+	final static int CMD_FFB_IMPACTS = 531;
+	final static int CMD_FFB_VIBRATION = 532;
+	final static int CMD_FFB_DAMPER = 533;
+	final static int CMD_FFB_MIN_FORCE = 534;
+	final static int CMD_FFB_SMOOTHING = 535;
 	final static int RENDERER_FRAMERATE_MODE = 5;
 	public static native int getRendererOption(int option);
 	public static native void setRendererOption(int option, int value);
@@ -1093,6 +1099,11 @@ public class OptionsDialog extends Dialog
 		else if (command == CMD_AUDIO_REVERB) setRendererOption(24, osd.multiValue);
 		else if (command == CMD_FFB_INVERT) setRendererOption(25, osd.multiValue);
 		else if (command == CMD_FFB_DETAIL) setRendererOption(26, osd.sliderValue);
+		else if (command == CMD_FFB_IMPACTS) setRendererOption(27, osd.sliderValue);
+		else if (command == CMD_FFB_VIBRATION) setRendererOption(28, osd.sliderValue);
+		else if (command == CMD_FFB_DAMPER) setRendererOption(29, osd.sliderValue);
+		else if (command == CMD_FFB_MIN_FORCE) setRendererOption(30, osd.sliderValue);
+		else if (command == CMD_FFB_SMOOTHING) setRendererOption(31, osd.sliderValue);
 		else if (command == CMD_AO_RADIUS) setRendererOption(12, osd.sliderValue);
 		else
 		if (command == CMD_ANISOTROPIC)

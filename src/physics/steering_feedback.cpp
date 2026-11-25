@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <numbers>
 
 namespace slrr::physics {
 namespace {
@@ -80,35 +79,29 @@ SteeringFeedbackOutput SteeringFeedback::update(const std::array<SteeringFeedbac
   // A bump under the left wheel shortens its suspension and drags that
   // wheel back: the steering turns left (positive), and the other way round.
   const double moving = std::clamp(speed / 5, 0.0, 1.0);
-  double kick = 0;
-  if (front[0].contact && front[1].contact)
-    kick = std::clamp(kBumpGain * (front[1].suspension_speed - front[0].suspension_speed),
-                      -kBumpLimit, kBumpLimit) * moving;
-  // An impact rings the wheel at 12 Hz and dies out in about 0.1 s.
-  if (std::abs(jolt) > std::abs(jolt_) * std::exp(-jolt_time_ / .06)) {
-    jolt_ = std::clamp(jolt, -1.0, 1.0);
+  // The rates are filtered and a dead band drops the solver's step-to-step
+  // chatter: unfiltered, the kick changed every frame and the wheel rattled.
+  const double apart = front[0].contact && front[1].contact
+                           ? front[1].suspension_speed - front[0].suspension_speed
+                           : 0;
+  bump_ += (apart - bump_) * (1 - std::exp(-dt / kBumpFilter));
+  const double past = std::max(0.0, std::abs(bump_) - kBumpDeadband);
+  out.detail = static_cast<float>(
+      std::copysign(std::min(kBumpGain * past, kBumpLimit), bump_) * moving);
+
+  // An impact knocks the wheel once and dies out in about 0.15 s. No ring:
+  // a geared wheel plays an oscillation as a rattle.
+  if (std::abs(jolt) > std::abs(jolt_) * std::exp(-jolt_time_ / kImpactDecay)) {
+    jolt_ = std::clamp(jolt, -kImpactLimit, kImpactLimit);
     jolt_time_ = 0;
   } else {
     jolt_time_ += dt;
   }
-  const double ring = jolt_ * std::exp(-jolt_time_ / .06) *
-                      std::cos(2 * std::numbers::pi * 12 * jolt_time_);
-  out.detail = static_cast<float>(std::clamp(kick + ring, -1.0, 1.0));
+  out.impact = static_cast<float>(jolt_ * std::exp(-jolt_time_ / kImpactDecay));
 
-  // Vibration: the front tyres scrubbing past their peak, or a rough road.
-  const double activity = touching ? std::abs(front[0].suspension_speed) +
-                                         std::abs(front[1].suspension_speed)
-                                   : 0;
-  road_ += (activity - road_) * (1 - std::exp(-dt / .1));
-  const double scrub = std::clamp(excess * .4, 0.0, .3) * fade;
-  const double rough = std::clamp(road_ * .5, 0.0, .3) * moving;
-  if (scrub >= rough) {
-    out.vibration = static_cast<float>(scrub);
-    out.vibration_hz = static_cast<float>(20 + 10 * std::min(excess, 1.0));
-  } else {
-    out.vibration = static_cast<float>(rough);
-    out.vibration_hz = static_cast<float>(std::min(60.0, 35 + speed * .3));
-  }
+  // Vibration: only the front tyres scrubbing past their peak, low and light.
+  out.vibration = static_cast<float>(std::clamp(excess * .25, 0.0, .15) * fade);
+  out.vibration_hz = static_cast<float>(18 + 8 * std::min(excess, 1.0));
   return out;
 }
 

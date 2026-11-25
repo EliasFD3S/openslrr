@@ -93,6 +93,12 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           case 24: return Value::make_int(host_sfx_spatial_options().reverb);
           case 25: return Value::make_int(host_input_tuning().ffb_invert);
           case 26: return Value::make_int(host_input_tuning().ffb_detail);
+          // Force feedback settings (#405).
+          case 27: return Value::make_int(host_input_tuning().ffb_impacts);
+          case 28: return Value::make_int(host_input_tuning().ffb_vibration);
+          case 29: return Value::make_int(host_input_tuning().ffb_damper);
+          case 30: return Value::make_int(host_input_tuning().ffb_min_force);
+          case 31: return Value::make_int(host_input_tuning().ffb_smoothing);
           default: return Value::make_int(0);
         }
       });
@@ -134,6 +140,11 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           case 24: host_sfx_spatial_options().reverb = value != 0; host_sfx_apply_spatial_options(); break;
           case 25: host_input_tuning().ffb_invert = value != 0; break;
           case 26: host_input_tuning().ffb_detail = std::clamp(value, 0, 200); break;
+          case 27: host_input_tuning().ffb_impacts = std::clamp(value, 0, 200); break;
+          case 28: host_input_tuning().ffb_vibration = std::clamp(value, 0, 200); break;
+          case 29: host_input_tuning().ffb_damper = std::clamp(value, 0, 200); break;
+          case 30: host_input_tuning().ffb_min_force = std::clamp(value, 0, 20); break;
+          case 31: host_input_tuning().ffb_smoothing = std::clamp(value, 0, 50); break;
           default: return Value::make_void();
         }
         host_save_graphics_options();
@@ -624,6 +635,12 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
     auto none = [](Object*, const std::vector<Value>&) { return Value::make_void(); };
     jvm.natives().register_method(kDevices, "captureBegin", "()V",
         [none](Object* o, const std::vector<Value>& a) { host_input_capture_begin(); return none(o, a); });
+    // Only the device classes in the mask (1 << kind) may be taken (#405).
+    jvm.natives().register_method(kDevices, "captureBeginKinds", "(I)V",
+        [none, integer](Object* o, const std::vector<Value>& a) {
+          host_input_capture_begin(integer(a, 0));
+          return none(o, a);
+        });
     jvm.natives().register_method(kDevices, "captureCancel", "()V",
         [none](Object* o, const std::vector<Value>& a) { host_input_capture_cancel(); return none(o, a); });
     jvm.natives().register_method(kDevices, "captureState", "()I",

@@ -7741,7 +7741,8 @@ void update_force_feedback(double frame_seconds, bool committed) {
   const auto out = steering_feedback.update(front, dynamics.body.velocity.length(),
                                             std::max(frame_seconds, 1e-3), feedback_jolt);
   feedback_jolt = 0;
-  host_input_force_feedback(out.torque, out.damper, out.detail, out.vibration, out.vibration_hz);
+  host_input_force_feedback(out.torque, out.damper, out.detail, out.impact, out.vibration,
+                            out.vibration_hz, static_cast<float>(frame_seconds));
 }
 
 void finish_physics_frame(double frame_seconds, double alpha, bool committed) {

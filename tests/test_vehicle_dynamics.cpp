@@ -972,23 +972,39 @@ SLRR_TEST(steering_feedback_kicks_on_bumps_and_jolts_on_impacts) {
   for (int i = 0; i < 30; ++i) feedback.update({front_tyre(0), front_tyre(0)}, 20, 1. / 60);
   // A bump under the left wheel (its suspension shortening) turns it left.
   auto left = front_tyre(0), right = front_tyre(0);
+  SteeringFeedbackOutput out;
   left.suspension_speed = -.4;
-  SLRR_REQUIRE(feedback.update({left, right}, 20, 1. / 60).detail > .1f);
+  for (int i = 0; i < 4; ++i) out = feedback.update({left, right}, 20, 1. / 60);
+  SLRR_REQUIRE(out.detail > .1f && out.detail <= SteeringFeedback::kBumpLimit + 1e-6);
   left.suspension_speed = 0;
   right.suspension_speed = -.4;
-  SLRR_REQUIRE(feedback.update({left, right}, 20, 1. / 60).detail < -.1f);
-  // Both wheels together (a dip across the road): no kick, some vibration.
+  for (int i = 0; i < 6; ++i) out = feedback.update({left, right}, 20, 1. / 60);
+  SLRR_REQUIRE(out.detail < -.1f);
+  // Both wheels together (a dip across the road): no kick, no vibration (a
+  // rough road no longer plays a sine, #405).
   left.suspension_speed = right.suspension_speed = -.4;
-  SteeringFeedbackOutput out;
   for (int i = 0; i < 20; ++i) out = feedback.update({left, right}, 20, 1. / 60);
-  SLRR_REQUIRE(std::abs(out.detail) < 1e-6f && out.vibration > .05f);
-  // An impact jolts the wheel, then dies out within a few tenths.
+  SLRR_REQUIRE(std::abs(out.detail) < 1e-3f && out.vibration == 0.f);
+  // The solver's step-to-step chatter (small rates flipping every frame)
+  // stays below the dead band: no rattle.
+  float chatter = 0;
+  for (int i = 0; i < 60; ++i) {
+    left.suspension_speed = i % 2 ? .08 : -.08;
+    right.suspension_speed = -left.suspension_speed;
+    chatter = std::max(chatter, std::abs(feedback.update({left, right}, 20, 1. / 60).detail));
+  }
+  SLRR_REQUIRE(chatter < .03f);
+  // An impact knocks the wheel once, then dies out within a few tenths,
+  // without changing sign (no ring).
   left.suspension_speed = right.suspension_speed = 0;
   for (int i = 0; i < 60; ++i) feedback.update({left, right}, 20, 1. / 60);
   out = feedback.update({left, right}, 20, 1. / 60, .8);
-  SLRR_REQUIRE(out.detail > .5f);
-  for (int i = 0; i < 30; ++i) out = feedback.update({left, right}, 20, 1. / 60);
-  SLRR_REQUIRE(std::abs(out.detail) < .01f);
+  SLRR_REQUIRE(out.impact > .4f && out.impact <= SteeringFeedback::kImpactLimit + 1e-6);
+  for (int i = 0; i < 30; ++i) {
+    out = feedback.update({left, right}, 20, 1. / 60);
+    SLRR_REQUIRE(out.impact >= 0.f);
+  }
+  SLRR_REQUIRE(out.impact < .01f);
 }
 
 SLRR_TEST(steering_feedback_vibrates_when_the_front_tyres_scrub) {
@@ -1000,7 +1016,9 @@ SLRR_TEST(steering_feedback_vibrates_when_the_front_tyres_scrub) {
     b = scrub.update({front_tyre(2 * peak), front_tyre(2 * peak)}, 20, 1. / 60);
   }
   SLRR_REQUIRE(a.vibration < .01f);
-  SLRR_REQUIRE(b.vibration > .2f && b.vibration_hz >= 20 && b.vibration_hz <= 30);
+  // Light and low: a scrub texture, not a rumble motor.
+  SLRR_REQUIRE(b.vibration > .1f && b.vibration <= .15f);
+  SLRR_REQUIRE(b.vibration_hz >= 18 && b.vibration_hz <= 26);
 }
 
 SLRR_TEST(steering_feedback_centres_a_car_in_a_turn) {
