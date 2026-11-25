@@ -59,84 +59,20 @@ std::vector<VideoMode> display_modes() {
 
 
 void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
+  // Host-only options by id: the table in host_game_options.cpp (#405).
   jvm.natives().register_method("java.game.OptionsDialog", "getRendererOption", "(I)I",
       [](Object*, const std::vector<Value>& args) {
-        const auto& graphics = host_enhanced_graphics();
-        switch (native_arg_integer(args, 0, -1)) {
-          case 0: return Value::make_int(graphics.msaa);
-          case 1: return Value::make_int(graphics.dynamic_reflections);
-          case 2: return Value::make_int(graphics.volumetric_clouds);
-          case 3: return Value::make_int(graphics.dynamic_lighting);
-          case 4: return Value::make_int(graphics.local_lights);
-          case 5: return Value::make_int(static_cast<int>(host_framerate_mode()));
-          case 6: return Value::make_int(graphics.anisotropic_filtering);
-          case 7: return Value::make_int(graphics.ao_method);
-          case 8: return Value::make_int(graphics.ao_quality);
-          case 9: return Value::make_int(graphics.shadow_quality);
-          case 10: return Value::make_int(graphics.shadow_smoothing);
-          case 11: return Value::make_int(graphics.ao_strength);
-          case 12: return Value::make_int(graphics.ao_radius);
-          // Advanced video page (#377).
-          case 13: return Value::make_int(graphics.vsync);
-          case 14: return Value::make_int(graphics.view_distance);
-          case 15: return Value::make_int(graphics.prop_detail);
-          case 16: return Value::make_int(graphics.fog);
-          case 17: return Value::make_int(graphics.car_lights);
-          case 18: return Value::make_int(graphics.headlight_shadows);
-          case 19: return Value::make_int(graphics.street_lamps);
-          case 20: return Value::make_int(graphics.shadowed_lamps);
-          // Controls (#383).
-          case 21: return Value::make_int(host_input_tuning().steer_speed_sensitivity);
-          // Spatial audio (#390).
-          case 22: return Value::make_int(host_sfx_spatial_options().positioning);
-          case 23: return Value::make_int(host_sfx_spatial_options().doppler);
-          case 24: return Value::make_int(host_sfx_spatial_options().reverb);
-          case 25: return Value::make_int(host_input_tuning().ffb_invert);
-          case 26: return Value::make_int(host_input_tuning().ffb_detail);
-          default: return Value::make_int(0);
-        }
+        int value = 0;
+        host_option_get(native_arg_integer(args, 0, -1), value);
+        return Value::make_int(value);
       });
   jvm.natives().register_method("java.game.OptionsDialog", "setRendererOption", "(II)V",
       [](Object*, const std::vector<Value>& args) {
-        auto& graphics = host_enhanced_graphics();
         if (args.size() < 2 ||
             (args[0].tag != ValueTag::Int && args[0].tag != ValueTag::Float) ||
             (args[1].tag != ValueTag::Int && args[1].tag != ValueTag::Float))
           return Value::make_void();
-        const int value = native_arg_integer(args, 1);
-        switch (native_arg_integer(args, 0, -1)) {
-          case 0: graphics.msaa = std::clamp(value, 0, 3); break;
-          case 1: graphics.dynamic_reflections = value != 0; break;
-          case 2: graphics.volumetric_clouds = value != 0; break;
-          case 3: graphics.dynamic_lighting = value != 0; break;
-          case 4: graphics.local_lights = value != 0; break;
-          case 5:
-            host_set_framerate_mode(value ? FramerateMode::Adaptive : FramerateMode::Classic);
-            return Value::make_void();
-          case 6: graphics.anisotropic_filtering = value != 0; break;
-          case 7: graphics.ao_method=std::clamp(value,0,2);break;
-          case 8: graphics.ao_quality=std::clamp(value,0,2);break;
-          case 9: graphics.shadow_quality=std::clamp(value,0,2);break;
-          case 10: graphics.shadow_smoothing=std::clamp(value,0,2);break;
-          case 11: graphics.ao_strength=std::clamp(value,0,200);break;
-          case 12: graphics.ao_radius=std::clamp(value,25,300);break;
-          case 13: graphics.vsync = value != 0; break;
-          case 14: graphics.view_distance = std::clamp(value, 500, 3000); break;
-          case 15: graphics.prop_detail = std::clamp(value, 0, 3); break;
-          case 16: graphics.fog = value != 0; break;
-          case 17: graphics.car_lights = value != 0; break;
-          case 18: graphics.headlight_shadows = value != 0; break;
-          case 19: graphics.street_lamps = value != 0; break;
-          case 20: graphics.shadowed_lamps = std::clamp(value, 0, 6); break;
-          case 21: host_input_tuning().steer_speed_sensitivity = std::clamp(value, 0, 100); break;
-          case 22: host_sfx_spatial_options().positioning = value != 0; host_sfx_apply_spatial_options(); break;
-          case 23: host_sfx_spatial_options().doppler = value != 0; host_sfx_apply_spatial_options(); break;
-          case 24: host_sfx_spatial_options().reverb = value != 0; host_sfx_apply_spatial_options(); break;
-          case 25: host_input_tuning().ffb_invert = value != 0; break;
-          case 26: host_input_tuning().ffb_detail = std::clamp(value, 0, 200); break;
-          default: return Value::make_void();
-        }
-        host_save_graphics_options();
+        host_option_set(native_arg_integer(args, 0, -1), native_arg_integer(args, 1));
         return Value::make_void();
       });
   jvm.natives().register_method("java.lang.System", "getConfigOptions", "()V",
@@ -624,6 +560,12 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
     auto none = [](Object*, const std::vector<Value>&) { return Value::make_void(); };
     jvm.natives().register_method(kDevices, "captureBegin", "()V",
         [none](Object* o, const std::vector<Value>& a) { host_input_capture_begin(); return none(o, a); });
+    // Only the device classes in the mask (1 << kind) may be taken (#405).
+    jvm.natives().register_method(kDevices, "captureBeginKinds", "(I)V",
+        [none, integer](Object* o, const std::vector<Value>& a) {
+          host_input_capture_begin(integer(a, 0));
+          return none(o, a);
+        });
     jvm.natives().register_method(kDevices, "captureCancel", "()V",
         [none](Object* o, const std::vector<Value>& a) { host_input_capture_cancel(); return none(o, a); });
     jvm.natives().register_method(kDevices, "captureState", "()I",

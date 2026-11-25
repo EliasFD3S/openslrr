@@ -37,6 +37,31 @@ framerate coexistence, the debug-save entry point, legacy and invalid files.
 These are real disk round-trips in an isolated fixture; the stock Config
 saveConfig remains counted/injected for retry-policy tests.
 
+## Host options file as JSON (#405)
+
+The host-only options (renderer option ids 0-31: video, audio, controls and
+force feedback) were read and written line by line in
+`host_game_options.cpp`, with a third copy of every range in the
+`getRendererOption`/`setRendererOption` switches; each new option meant
+three edits that could disagree.
+
+Now one table (`kOptions` in `host_game_options.cpp`) gives each option its
+id, JSON section and key, range and accessors; loading, saving and both
+natives use it. The file is `save/game/openslrr_options.json`
+(`src/platform/host_options_json.cpp`): `version`, then `video`, `audio` and
+`input` objects, booleans as `true`/`false`, the framerate mode by name. It is
+written to a `.tmp` file and renamed over the old one. On load a missing key
+keeps its default, a value out of range is clamped, a wrong type or unknown
+key is ignored; a file that does not parse is renamed to `.bad` and the
+defaults are used. When no JSON file exists, the key=value
+`save/game/openslrr_options` of older builds is read once and saved as JSON;
+it is left in place for those builds. A setter saves only when the value
+changed.
+
+Validation: `options_retry` (now also: the JSON layout, missing keys,
+clamps, wrong types, a damaged file, the migration, every id 0-31 through
+the file) and `script_safety` pass. Not run in game.
+
 ## Garage main-menu inventory save ordering (#59)
 
 The verified MWM Garage.class main-menu command saves before changing section.

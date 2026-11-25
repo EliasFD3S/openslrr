@@ -42,8 +42,18 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 	final static int	CMD_FILE_SAVE	= 1521;
 	final static int	CMD_FILE_NEW	= 1522;
 
-	final static int	SUBS = 4;		// car keys, game keys, suspension keys, files
+	// Car keys per device class (#405): the keyboard page is SUB_CAR, the pad
+	// and wheel pages follow the files; then the force feedback page.
+	final static int	CMD_CLASS		= 1320;	// + ControlSet.CLASS_*
+	final static int	CMD_FFB_TEST	= 1330;
+	final static int	CMD_FFB_PRESET	= 1331;
+
+	final static int	SUBS = 7;		// car keys, game keys, suspension keys, files, car pad, car wheel, FFB
+	final static int	SUB_CAR = 0;
 	final static int	SUB_FILES = 3;
+	final static int	SUB_CAR_PAD = 4;
+	final static int	SUB_CAR_WHEEL = 5;
+	final static int	SUB_FFB = 6;
 	final static int	FILE_ROWS = 8;
 
 	final static int	PAGES = 6;
@@ -123,6 +133,18 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 	int				fileCount;
 	int				fileSelected = -1;
 	Text			fileStatus;
+	// Car keys: the class page shown, and a line per page on its devices.
+	int				carClass;
+	Text[]			classNote = new Text[ControlSet.CLASSES];
+	// FORCE FEEDBACK page.
+	Text			ffbStatus;
+	MultiChoice		ffbPreset;
+	Slider			ffbVibration;
+	Slider			ffbDamper;
+	Slider			ffbMinForce;
+	Slider			ffbSmoothing;
+	int				ffbPresetting;	// 1 while a preset moves the sliders
+	int				captureClass = -1;	// ControlSet.CLASS_* listening, -1 all
 
 	// DEVICES: one card per connected controller
 	Rectangle[]		cardPlate = new Rectangle[CARDS];
@@ -181,10 +203,13 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		buildControls();	page[3] = osd.endGroup();
 		buildDevices();		page[4] = osd.endGroup();
 		buildGame();		page[5] = osd.endGroup();
-		buildKeys( 0 );		sub[0] = osd.endGroup();
+		buildCarKeys( ControlSet.CLASS_KEYBOARD );	sub[SUB_CAR] = osd.endGroup();
 		buildKeys( 1 );		sub[1] = osd.endGroup();
 		buildKeys( 2 );		sub[2] = osd.endGroup();
 		buildFiles();		sub[3] = osd.endGroup();
+		buildCarKeys( ControlSet.CLASS_PAD );	sub[SUB_CAR_PAD] = osd.endGroup();
+		buildCarKeys( ControlSet.CLASS_WHEEL );	sub[SUB_CAR_WHEEL] = osd.endGroup();
+		buildForceFeedback();	sub[SUB_FFB] = osd.endGroup();
 		buildCapture();		captureGroup = osd.endGroup();
 		for( int i=0; i<SUBS; i++ )
 			osd.hideGroup( sub[i] );
@@ -342,7 +367,8 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 
 		Style wide = new Style( 0.62, 0.064, Frontend.mediumFont, Text.ALIGN_CENTER, null );
 		m = osd.createMenu( wide, -0.48, TOP + 0.04 + 0.42, 0.0 );
-		m.addItem( "CAR CONTROLS", CMD_SUB + 0, "Keys and axes for throttle, brake, steering, gears, handbrake, clutch, nitro and horn." );
+		m.addItem( "CAR CONTROLS", CMD_SUB + SUB_CAR, "Keys and axes for throttle, brake, steering, gears, handbrake, clutch, nitro and horn, for the keyboard, a pad and a wheel apart." );
+		m.addItem( "FORCE FEEDBACK", CMD_SUB + SUB_FFB, "Strength, road feel, impacts, vibration and the wheel's dead band." );
 		m.addItem( "GAME CONTROLS", CMD_SUB + 1, "Keys for the radio, cruise control, look back and the map." );
 		m.addItem( "SUSPENSION CONTROLS", CMD_SUB + 2, "Keys for adjustable suspension: each corner, axle and side." );
 		m.addItem( "CONTROL FILES", CMD_SUB + 3, "Load or save a whole control set." );
@@ -369,13 +395,88 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		}
 		sl = m.addItem( "STEERING SPEED SENS.", OptionsDialog.CMD_STEER_SPEED, OptionsDialog.getRendererOption(21), 0.0, 100.0, 21, "How much a wheel or stick's full lock narrows with speed (percent). 0 keeps full lock at any speed." );
 		sl.printValue( "%.0f" );
-		sl = m.addItem( "FORCE FEEDBACK", OptionsDialog.CMD_FFB + 0, Config.FFB_strength, 0.0, 1.0, 0, "Strength of the front tyres' pull in a force feedback wheel (percent). 0 turns it off." );
+	}
+
+	// FORCE FEEDBACK sub-page (#405). Each part of the force has its own gain.
+	void buildForceFeedback()
+	{
+		header = new SectionHeader( osd, "FORCE FEEDBACK", -0.84, TOP - 0.06, 1.30 );
+		Style back = new Style( 0.32, 0.064, Frontend.mediumFont, Text.ALIGN_CENTER, null );
+		osd.createButton( back, 0.75, TOP - 0.03, "< CONTROLS", CMD_SUB_BACK ).setToolTip( "Back to the controls page." );
+
+		Menu m = column( LEFT, TOP + 0.08 );
+		Slider sl = m.addItem( "STRENGTH", OptionsDialog.CMD_FFB + 0, Config.FFB_strength, 0.0, 1.0, 0, "Overall force of the wheel (percent). 0 turns force feedback off." );
 		sl.printValue( "%.0f", 100.0 );
-		m.addToggle( "INVERT FFB", OptionsDialog.CMD_FFB_INVERT, OptionsDialog.getRendererOption(25), "Turn on if the wheel pulls away from the centre instead of back to it." );
-		sl = m.addItem( "FFB DETAIL", OptionsDialog.CMD_FFB_DETAIL, OptionsDialog.getRendererOption(26), 0.0, 200.0, 21, "Bumps, kerbs, impacts and tyre scrub vibration on top of the steering pull (percent). 0 keeps only the pull." );
+		sl = m.addItem( "ROAD FEEL", OptionsDialog.CMD_FFB_DETAIL, option(26), 0.0, 200.0, 21, "Bumps and kerbs under one front wheel kick the steering (percent)." );
 		sl.printValue( "%.0f" );
-		sl = m.addItem( "EMULATED FFB", OptionsDialog.CMD_FFB + 1, Config.FFB_strength_emulated, 0.0, 0.1, 0, "Steering resistance emulated on devices without force feedback." );
+		sl = m.addItem( "IMPACTS", OptionsDialog.CMD_FFB_IMPACTS, option(27), 0.0, 200.0, 21, "Knock in the wheel when the car hits something (percent)." );
+		sl.printValue( "%.0f" );
+		ffbVibration = m.addItem( "TYRE VIBRATION", OptionsDialog.CMD_FFB_VIBRATION, option(28), 0.0, 200.0, 21, "Light shudder while the front tyres scrub past their grip (percent). Lower it if the wheel buzzes." );
+		ffbVibration.printValue( "%.0f" );
+		ffbDamper = m.addItem( "DAMPER", OptionsDialog.CMD_FFB_DAMPER, option(29), 0.0, 200.0, 21, "Weight of the wheel when parked and friction at speed (percent)." );
+		ffbDamper.printValue( "%.0f" );
+		m.addToggle( "INVERT FFB", OptionsDialog.CMD_FFB_INVERT, option(25), "Turn on if the wheel pulls away from the centre instead of back to it." );
+
+		m = column( RIGHT, TOP + 0.08 );
+		ffbPreset = m.addItem( "WHEEL TYPE", CMD_FFB_PRESET, 0, list( "CUSTOM", "GEAR DRIVE", "BELT DRIVE", "DIRECT DRIVE", null ), "Sets the minimum force, smoothing, vibration and damper for the kind of wheel base. Changing one afterwards shows CUSTOM." );
+		ffbMinForce = m.addItem( "MIN FORCE", OptionsDialog.CMD_FFB_MIN_FORCE, option(30), 0.0, 20.0, 21, "Lifts small forces past the wheel's dead zone (percent). Gear driven wheels need some, direct drive none." );
+		ffbMinForce.printValue( "%.0f" );
+		ffbSmoothing = m.addItem( "SMOOTHING", OptionsDialog.CMD_FFB_SMOOTHING, option(31), 0.0, 50.0, 11, "Filters the force (milliseconds). Higher is smoother but a little later." );
+		ffbSmoothing.printValue( "%.0f" );
+		sl = m.addItem( "EMULATED FFB", OptionsDialog.CMD_FFB + 1, Config.FFB_strength_emulated, 0.0, 0.1, 0, "Steering resistance emulated on pads and wheels without force feedback." );
 		sl.printValue( "%.0f", 1000.0 );
+		m.addItem( "TEST", CMD_FFB_TEST, "Pulls the wheel left, then right, for a moment." );
+
+		ffbStatus = osd.createText( null, Frontend.smallFont, Text.ALIGN_LEFT, -0.84, TOP + 0.52 );
+		ffbStatus.changeColor( 0xFFB0B0B0 );
+	}
+
+	void refreshForceFeedback()
+	{
+		int i = InputDevices.forceFeedbackIndex();
+		if( i < 0 )
+			ffbStatus.changeText( "NO FORCE FEEDBACK WHEEL CONNECTED" );
+		else
+			ffbStatus.changeText( "FORCE FEEDBACK: " + InputDevices.name( i ) );
+	}
+
+	// A wheel type preset: minimum force, smoothing, vibration and damper.
+	void applyFfbPreset( int p )
+	{
+		if( p <= 0 )
+			return;
+		float minForce = 0.0;
+		float smoothing = 3.0;
+		float vibration = 80.0;
+		float damper = 100.0;
+		if( p == 1 )
+		{
+			minForce = 8.0;
+			smoothing = 15.0;
+			vibration = 30.0;
+			damper = 80.0;
+		}
+		else
+		if( p == 2 )
+		{
+			minForce = 4.0;
+			smoothing = 10.0;
+			vibration = 50.0;
+			damper = 100.0;
+		}
+		ffbPresetting = 1;
+		ffbSet( ffbMinForce, OptionsDialog.CMD_FFB_MIN_FORCE, minForce );
+		ffbSet( ffbSmoothing, OptionsDialog.CMD_FFB_SMOOTHING, smoothing );
+		ffbSet( ffbVibration, OptionsDialog.CMD_FFB_VIBRATION, vibration );
+		ffbSet( ffbDamper, OptionsDialog.CMD_FFB_DAMPER, damper );
+		ffbPresetting = 0;
+	}
+
+	void ffbSet( Slider s, int cmd, float v )
+	{
+		s.setValue( v );
+		owner.osd.sliderValue = v;
+		owner.osdCommand( cmd );
 	}
 
 	LevelBar liveMeter( String label, float y, int centred )
@@ -401,32 +502,116 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 
 	// ---------------------------------------------------------------- key pages
 
-	// kind 0: car, 1: game, 2: suspension. Control indices are the ControlSet
-	// ones the classic OptionsDialog pages use.
+	String className( int cls )
+	{
+		if( cls == ControlSet.CLASS_PAD )
+			return "GAMEPAD";
+		if( cls == ControlSet.CLASS_WHEEL )
+			return "WHEEL / SIM";
+		return "KEYBOARD & MOUSE";
+	}
+
+	// CAR CONTROLS of one device class (#405): tabs for the three classes,
+	// then a primary and a secondary binding per control, in that class's
+	// ControlSet slots. The listener only takes devices of the class.
+	void buildCarKeys( int cls )
+	{
+		header = new SectionHeader( osd, "CAR CONTROLS", -0.84, TOP - 0.06, 1.30 );
+		Style back = new Style( 0.32, 0.064, Frontend.mediumFont, Text.ALIGN_CENTER, null );
+		osd.createButton( back, 0.75, TOP - 0.03, "< CONTROLS", CMD_SUB_BACK ).setToolTip( "Back to the controls page." );
+
+		String[] names = new String[ControlSet.CLASSES];
+		for( int k=0; k<ControlSet.CLASSES; k++ )
+			names[k] = className( k );
+		TabBar bar = new TabBar( osd, 0.0, TOP + 0.06, 0.40, 0.07, names, CMD_CLASS );
+		bar.select( cls );
+
+		classNote[cls] = osd.createText( null, Frontend.smallFont, Text.ALIGN_CENTER, 0.0, TOP + 0.26 + ControlSet.CAR_CONTROLS*0.058 );
+		classNote[cls].changeColor( 0xFF808080 );
+
+		float top = TOP + 0.10;
+		Text t = osd.createText( "PRIMARY", Frontend.smallFont, Text.ALIGN_CENTER, -0.06, top + 0.08 );
+		t.changeColor( 0xFFB0B0B0 );
+		t = osd.createText( "SECONDARY", Frontend.smallFont, Text.ALIGN_CENTER, 0.52, top + 0.08 );
+		t.changeColor( 0xFFB0B0B0 );
+		String[] n = new String[ControlSet.CAR_CONTROLS];
+		n[0] = "ACCELERATE"; n[1] = "BRAKE"; n[2] = "TURN LEFT"; n[3] = "TURN RIGHT"; n[4] = "HAND BRAKE";
+		n[5] = "SHIFT UP"; n[6] = "SHIFT DOWN"; n[7] = "CLUTCH"; n[8] = "ENGAGE NOS"; n[9] = "HONK HORN";
+		for( int i=0; i<ControlSet.CAR_CONTROLS; i++ )
+		{
+			float y = top + 0.16 + i*0.058;
+			keyLabel( n[i], y );
+			int a = ControlSet.carSlot( cls, 0, i );
+			int b = ControlSet.carSlot( cls, 1, i );
+			keyRow( a, -0.06, y );
+			keyRow( b, 0.52, y );
+			controlName[a] = n[i] + " (" + className( cls ) + ")";
+			controlName[b] = n[i] + " (" + className( cls ) + ", SECONDARY)";
+		}
+	}
+
+	// Opens CAR CONTROLS: old files are sorted into the class slots first,
+	// then the page of the richest class connected (wheel, pad, keyboard).
+	void showCar()
+	{
+		if( owner.controlSet.sortCarControls() )
+			controlsDirty = 1;
+		int cls = ControlSet.CLASS_KEYBOARD;
+		if( InputDevices.classCount( ControlSet.CLASS_WHEEL ) > 0 )
+			cls = ControlSet.CLASS_WHEEL;
+		else
+		if( InputDevices.classCount( ControlSet.CLASS_PAD ) > 0 )
+			cls = ControlSet.CLASS_PAD;
+		showSub( carSub( cls ) );
+	}
+
+	int carSub( int cls )
+	{
+		if( cls == ControlSet.CLASS_PAD )
+			return SUB_CAR_PAD;
+		if( cls == ControlSet.CLASS_WHEEL )
+			return SUB_CAR_WHEEL;
+		return SUB_CAR;
+	}
+
+	// A class tab: the sibling page replaces this one in place.
+	void switchCarClass( int cls )
+	{
+		int k = carSub( cls );
+		if( activeSub == k || activeSub < 0 )
+			return;
+		osd.hideGroup( sub[activeSub] );
+		osd.showGroup( sub[k] );
+		activeSub = k;
+		carClass = cls;
+		refreshKeys();
+	}
+
+	void refreshClassNote()
+	{
+		Text t = classNote[carClass];
+		if( !t )
+			return;
+		int n = InputDevices.classCount( carClass );
+		if( carClass == ControlSet.CLASS_KEYBOARD )
+			t.changeText( "Keys and mouse buttons. Used together with the pad and the wheel." );
+		else
+		if( n == 0 )
+			t.changeText( "NO " + className( carClass ) + " CONNECTED: the bindings below wait for one." );
+		else
+			t.changeText( Integer.toString( n ) + " " + className( carClass ) + " DEVICE(S) CONNECTED. Only these listen when you assign." );
+	}
+
+	// kind 1: game, 2: suspension (car controls: buildCarKeys). Control
+	// indices are the ControlSet ones the classic OptionsDialog pages use.
 	void buildKeys( int kind )
 	{
-		String title = "CAR CONTROLS";
-		if( kind == 1 ) title = "GAME CONTROLS";
+		String title = "GAME CONTROLS";
 		if( kind == 2 ) title = "SUSPENSION CONTROLS";
 		header = new SectionHeader( osd, title, -0.84, TOP - 0.06, 1.30 );
 		Style back = new Style( 0.32, 0.064, Frontend.mediumFont, Text.ALIGN_CENTER, null );
 		osd.createButton( back, 0.75, TOP - 0.03, "< CONTROLS", CMD_SUB_BACK ).setToolTip( "Back to the controls page." );
 
-		if( kind == 0 )
-		{
-			keyColumnTitles( "PRIMARY", "SECONDARY" );
-			String[] n = new String[10];
-			n[0] = "ACCELERATE"; n[1] = "BRAKE"; n[2] = "TURN LEFT"; n[3] = "TURN RIGHT"; n[4] = "HAND BRAKE";
-			n[5] = "SHIFT UP"; n[6] = "SHIFT DOWN"; n[7] = "CLUTCH"; n[8] = "ENGAGE NOS"; n[9] = "HONK HORN";
-			for( int i=0; i<10; i++ )
-			{
-				float y = TOP + 0.10 + i*0.064;
-				keyLabel( n[i], y );
-				keyRow( i, -0.06, y );
-				keyRow( i + 15, 0.52, y );
-			}
-		}
-		else
 		if( kind == 1 )
 		{
 			keyColumnTitles( "KEY", null );
@@ -512,6 +697,7 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		for( int i=0; i<ControlSet.NCONTROLS; i++ )
 			if( keyButton[i] )
 				keyButton[i].changeLabelText( bindingName( i ) );
+		refreshClassNote();
 	}
 
 	// The assignment dialog replaces the key page while it listens.
@@ -534,7 +720,13 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		getKey = control;
 		getKeyStat = 0;
 		capturingInput = 1;
-		InputDevices.captureBegin();
+		// A car control listens only to its page's class (#405).
+		int cls = ControlSet.slotClass( control );
+		captureClass = cls;
+		if( cls >= 0 )
+			InputDevices.captureBeginKinds( InputDevices.classKinds( cls ) );
+		else
+			InputDevices.captureBegin();
 		if( activeSub >= 0 )
 			osd.hideGroup( sub[activeSub] );
 		osd.showGroup( captureGroup );
@@ -545,7 +737,10 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		capStep.changeText( "RELEASE EVERY CONTROL" );
 		capDetail.changeText( null );
 		capMeter.setValue( 0.0 );
-		info.setText( "Every connected device listens at once. Inputs that stay held (a shifter in gear, a switch) are ignored." );
+		if( cls >= 0 )
+			info.setText( "Only " + className( cls ) + " devices listen. Inputs that stay held (a shifter in gear, a switch) are ignored." );
+		else
+			info.setText( "Every connected device listens at once. Inputs that stay held (a shifter in gear, a switch) are ignored." );
 	}
 
 	void endCapture( String message )
@@ -589,6 +784,9 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 			int held = InputDevices.captureHeld();
 			if( held > 0 )
 				capDetail.changeText( Integer.toString( held ) + " INPUT(S) STILL HELD ARE IGNORED" );
+			else
+			if( captureClass >= 0 )
+				capDetail.changeText( "Only " + className( captureClass ) + " devices are listening." );
 			else
 				capDetail.changeText( "Every connected device is listening." );
 			capMeter.setValue( 0.0 );
@@ -765,8 +963,17 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		osd.showGroup( sub[k] );
 		animator.slideGroup( sub[k], OsdAnimator.FROM_RIGHT, 0.25, 0.35, 0.12, 1 );
 		activeSub = k;
+		if( k == SUB_CAR )
+			carClass = ControlSet.CLASS_KEYBOARD;
+		if( k == SUB_CAR_PAD )
+			carClass = ControlSet.CLASS_PAD;
+		if( k == SUB_CAR_WHEEL )
+			carClass = ControlSet.CLASS_WHEEL;
 		if( k == SUB_FILES )
 			refreshFiles();
+		else
+		if( k == SUB_FFB )
+			refreshForceFeedback();
 		else
 			refreshKeys();
 		info.setText( null );
@@ -1161,8 +1368,41 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 
 		if( cmd >= CMD_SUB && cmd < CMD_SUB + SUBS )
 		{
-			showSub( cmd - CMD_SUB );
+			if( cmd - CMD_SUB == SUB_CAR )
+				showCar();
+			else
+				showSub( cmd - CMD_SUB );
 			return;
+		}
+
+		if( cmd >= CMD_CLASS && cmd < CMD_CLASS + ControlSet.CLASSES )
+		{
+			switchCarClass( cmd - CMD_CLASS );
+			return;
+		}
+
+		if( cmd == CMD_FFB_TEST )
+		{
+			int w = InputDevices.forceFeedbackIndex();
+			if( w >= 0 && InputDevices.testForceFeedback( w ) )
+				toast.show( "TESTING " + InputDevices.name( w ), 1.5 );
+			else
+				toast.show( "NO FORCE FEEDBACK WHEEL CONNECTED", 2.5 );
+			return;
+		}
+
+		if( cmd == CMD_FFB_PRESET )
+		{
+			applyFfbPreset( ffbPreset.value );
+			return;
+		}
+
+		// A hand-set wheel setting leaves the preset.
+		if( ffbPresetting == 0 && ffbPreset.value != 0 )
+		{
+			if( cmd == OptionsDialog.CMD_FFB_MIN_FORCE || cmd == OptionsDialog.CMD_FFB_SMOOTHING ||
+				cmd == OptionsDialog.CMD_FFB_VIBRATION || cmd == OptionsDialog.CMD_FFB_DAMPER )
+				ffbPreset.setValue( 0 );
 		}
 
 		if( cmd == CMD_SUB_BACK )

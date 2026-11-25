@@ -68,7 +68,7 @@ bars when it is newly assembled (dealer, used cars, opponents):
 | 20 | Shadowed street lamps | 0–6 (default 6) |
 | 21 | Steering speed sensitivity | 0–100 percent (default 50): how much an analog wheel or stick's full lock narrows with speed; 0 keeps full lock at any speed, 100 narrows it like keyboard steering |
 
-The menu and ImGui share all of these options. They are saved in `save/game/openslrr_options` and persist across launches. Local lights (4) are independent of scenery sunlight (3): turning sunlight off keeps the garage lamps and their shadows. Resolution, the global shadow toggle, and flares use the game's existing configuration.
+The menu and ImGui share all of these options. They are saved in `save/game/openslrr_options.json` and persist across launches. Local lights (4) are independent of scenery sunlight (3): turning sunlight off keeps the garage lamps and their shadows. Resolution, the global shadow toggle, and flares use the game's existing configuration.
 
 AO affects indirect diffuse light in the main world view. It leaves direct sunlight,
 lamps, emission, reflections and UI unchanged. All AO qualities run at half
@@ -83,7 +83,7 @@ comparison filtering independently. Start with medium quality and soft edges.
 - **Classic (60 Hz)** draws each car at its last physics step, as before. When the frame rate is not exactly 60 FPS, car motion and turns appear stepped.
 - **Adaptive**, the default, draws each car between its last two physics steps, so it moves smoothly at any frame rate. The drawn car is up to one physics step (16.7 ms) behind the simulation.
 
-The physics is the same in both modes. The choice is saved in `save/game/openslrr_options`.
+The physics is the same in both modes. The choice is saved in `save/game/openslrr_options.json`.
 
 ## Pedestrians
 

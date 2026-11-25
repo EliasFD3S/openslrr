@@ -58,6 +58,7 @@ add_executable(slrr_host
   src/platform/host_sfx.cpp
   src/platform/host_music.cpp
   src/platform/host_game_options.cpp
+  src/platform/host_options_json.cpp
   src/platform/host_cursor.cpp
   src/platform/job_system.cpp
   src/platform/video_cinepak.cpp

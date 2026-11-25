@@ -348,6 +348,34 @@ classes byte for byte). Not run in game, not checked on a real rig.
 Not done: per-class filter settings (separate dead zone and gamma for pad and
 wheel); today the Options sliders still apply to every class.
 
+## Car controls per device class (#405)
+
+Request: the input classes split by #393 (keyboard, pad, wheel) should each
+have their own car controls in the menu, and the force feedback settings
+should go further.
+
+Change: the patched `ControlSet` has 118 controls; `carSlot(class, column,
+c)` gives each class a primary and a secondary slot per car control (stock
+0-9 and 15-24 stay the keyboard and mouse ones). In OSD v2, CAR CONTROLS has
+a tab per class (`OsdxOptions.buildCarKeys`, one sub-page each, a `TabBar`)
+and opens on the wheel tab when a wheel is connected, else the pad tab. The
+listener takes only the tab's class (`InputDevices.captureBeginKinds`), so a
+wheel at rest cannot steal a keyboard binding. On opening, `sortCarControls`
+moves a binding that sits in another class's slot (an older file, or the
+classic screen) to a free slot of its class. The steering halves pair inside
+any column (`ControlSet.carControl`). The force feedback settings moved from
+the RESPONSE column to their own sub-page (see the vehicles notes, #405).
+Game and suspension controls are unchanged.
+
+Validation: the io and game classes compiled with `compile_game_sources` (the
+stock `ControlSet.java` first rebuilt the MWM class with only 1-ULP float
+constant differences); `sdl_input` 2/2. Not run in game.
+
+Limitations: the classic Options screen still shows only slots 0-9 and
+15-24, so pad and wheel bindings sorted into their slots are not shown there
+(they still work). The stock game reads the file but drops the pad and wheel
+slots. Gamma and dead zone stay shared by every class.
+
 ## Pointer gestures and race cameras: review notes on PR #308 (#295-#299)
 
 Verified on the PR branch (f422ebb), by reading the code; not run in game.

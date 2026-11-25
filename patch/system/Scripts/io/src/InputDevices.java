@@ -50,6 +50,9 @@ public class InputDevices
 	public final static int	CAPTURE_DONE = 4;
 	public final static int	CAPTURE_CANCELLED = 5;
 	public static native void	captureBegin();
+	// Only the device kinds in the mask (1 << KIND_*) may be taken (#405);
+	// Esc and the left mouse button still clear and cancel.
+	public static native void	captureBeginKinds( int mask );
 	public static native void	captureCancel();		// back to idle
 	public static native int	captureState();
 	public static native int	captureDevice();	// ControlSet device id
@@ -95,16 +98,15 @@ public class InputDevices
 		}
 		cs.from_min[i] = 0.0;
 		cs.from_max[i] = dir;
-		// One half of a wheel or stick axis is no use without the other.
-		int column = 0;
-		if( i >= 15 )
-			column = 15;
+		// One half of a wheel or stick axis is no use without the other: TURN
+		// LEFT and TURN RIGHT are next to each other in every column.
+		int c = ControlSet.carControl( i );
 		int other = -1;
-		if( i - column == 2 )
-			other = column + 3;
+		if( c == 2 )
+			other = i + 1;
 		else
-		if( i - column == 3 )
-			other = column + 2;
+		if( c == 3 )
+			other = i - 1;
 		// Device 2 splits each stick into two positive channels already.
 		if( other < 0 || device < FIRST_DEVICE )
 			return 1;
@@ -130,6 +132,39 @@ public class InputDevices
 		}
 		cs.deviceName = names;
 		cs.nDevices = device + 1;
+	}
+
+	// The device kinds of a ControlSet.CLASS_* for captureBeginKinds.
+	public static int classKinds( int deviceClass )
+	{
+		if( deviceClass == ControlSet.CLASS_KEYBOARD )
+			return 3;	// 1 << KIND_KEYBOARD | 1 << KIND_MOUSE
+		if( deviceClass == ControlSet.CLASS_PAD )
+			return 4;	// 1 << KIND_PAD
+		if( deviceClass == ControlSet.CLASS_WHEEL )
+			return 8;	// 1 << KIND_WHEEL
+		return -1;
+	}
+
+	// Connected devices of a ControlSet.CLASS_* (keyboard and mouse: 1).
+	public static int classCount( int deviceClass )
+	{
+		if( deviceClass == ControlSet.CLASS_KEYBOARD )
+			return 1;
+		int n = 0;
+		for( int i = 0; i < count(); i++ )
+			if( connected( i ) && ControlSet.deviceClass( i + FIRST_DEVICE ) == deviceClass )
+				n++;
+		return n;
+	}
+
+	// The first connected device with force feedback, -1 none.
+	public static int forceFeedbackIndex()
+	{
+		for( int i = 0; i < count(); i++ )
+			if( connected( i ) && canForceFeedback( i ) )
+				return i;
+		return -1;
 	}
 
 	public static String kindName( int device )

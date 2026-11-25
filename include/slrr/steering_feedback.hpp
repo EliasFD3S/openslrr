@@ -14,8 +14,11 @@
 // wheel's range whatever its weight; the player's strength scales it.
 //
 // Detail (#399) comes on top: a bump under one front wheel kicks the wheel
-// (the two suspensions moving apart), an impact jolts it, and a vibration
-// plays while the front tyres slide or the road shakes the suspension.
+// (the two suspensions moving apart), an impact knocks it, and a light
+// vibration plays while the front tyres scrub past their peak. Road texture
+// goes through the kicks, a torque a wheel can render, not through a
+// periodic effect: a sine on every rough road made a belt or gear wheel
+// buzz like a pad's rumble motor (#405).
 #include "slrr/tire_model.hpp"
 
 #include <array>
@@ -35,8 +38,10 @@ struct SteeringFeedbackOutput {
   // Steering torque in logical steer units, -1..1: positive turns the wheel
   // to the left. Zero while nothing steers the front axle.
   float torque = 0;
-  // Bump kicks and impact jolts, same units, scaled apart by FFB DETAIL.
+  // Bump kicks (road feel), same units, scaled by FFB ROAD FEEL.
   float detail = 0;
+  // Impact knocks, same units, scaled by FFB IMPACTS.
+  float impact = 0;
   // Damper coefficient, 0..1: heavy when parked, light at speed.
   float damper = 0;
   // A vibration on the wheel: amplitude 0..1 and frequency (Hz).
@@ -50,8 +55,13 @@ class SteeringFeedback {
   static constexpr double kPneumaticTrail = .035, kMechanicalTrail = .015;
   // Below this road speed the slip angle is noise: the torque fades out.
   static constexpr double kFadeSpeed = 3.0;
-  // Kick per m/s of the two front suspensions moving apart, and its limit.
-  static constexpr double kBumpGain = .6, kBumpLimit = .5;
+  // Kick per m/s of the two front suspensions moving apart, past a dead
+  // band that drops the solver's chatter, and its limit.
+  static constexpr double kBumpGain = .5, kBumpDeadband = .05, kBumpLimit = .35;
+  // Low-pass on the suspension rates (s): a kick follows a bump, not a step.
+  static constexpr double kBumpFilter = .025;
+  // An impact's knock: its limit and decay (s).
+  static constexpr double kImpactLimit = .6, kImpactDecay = .05;
 
   // jolt: a new impact this frame, -1..1 (positive turns the wheel left),
   // zero for none. It decays over about 0.1 s.
@@ -68,7 +78,7 @@ class SteeringFeedback {
   double reference_load_ = 0;  // resting front load per wheel, smoothed
   float torque_ = 0;
   double jolt_ = 0, jolt_time_ = 0;
-  double road_ = 0;  // smoothed front suspension activity (m/s)
+  double bump_ = 0;  // filtered right minus left suspension rate (m/s)
 };
 
 }  // namespace slrr::physics

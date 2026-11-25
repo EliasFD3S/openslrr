@@ -909,7 +909,12 @@ disconnect and are reused on reconnect. Reopen control options after adding a ne
 device. Without a serial, changing USB ports can change identity; indistinguishable
 same-model devices without a serial/path use discovery-order suffixes. A capture on a
 device plugged in after the set was made adds its name (`InputDevices.ensureDevice`)
-so the binding survives the save. Regression: `scripts/run_save_io_tests.ps1 -Suite sdl_input`
+so the binding survives the save. The patched `ControlSet` (#405) has 118
+controls instead of 78: the car controls get a primary and a secondary slot
+per device class (`ControlSet.carSlot`: keyboard and mouse in the stock 0-9
+and 15-24, pad in 78-97, wheel in 98-117). The file format is unchanged; a
+stock reader skips the extra slots, so it loses only the pad and wheel
+bindings. Regression: `scripts/run_save_io_tests.ps1 -Suite sdl_input`
 uses virtual peripherals; real rig calibration remains a separate hardware check.
 
 Force feedback (#395) is SDL haptics on the host thread: a constant force
@@ -922,11 +927,14 @@ by the front tyres' peak torque at the resting front load. Its sign follows the
 binding's direction; `Config.ForceFeedBack`, `Config.FFB_strength` and host
 option 25 (invert) apply. It stops when no car is driven, under a modal, out
 of focus, and 0.25 s after the last committed batch. The wheel's own
-autocentre is turned off when it is opened. Detail (#399) adds bump kicks
-(the two front suspensions moving apart), a 12 Hz jolt on each impact of the
-controlled car, and a sine vibration while the front tyres scrub past their
-peak or the road shakes them; host option 26 (FFB DETAIL, 0-200 %) scales it
-apart from the aligning torque. `Config.FFB_strength_emulated`
+autocentre is turned off when it is opened. Detail (#399, reworked in #405)
+adds bump kicks (the filtered rates of the two front suspensions moving apart,
+past a dead band), a single decaying knock on each impact of the controlled
+car, and a light sine vibration only while the front tyres scrub past their
+peak; a rough road plays no periodic effect. Each part has its own host
+option, in percent: 26 road feel (saved as `ffb_detail`), 27 impacts, 28
+vibration, 29 damper; 30 is a minimum force (0-20 %) for a wheel's dead band
+and 31 a low-pass on the force (0-50 ms). `Config.FFB_strength_emulated`
 and `Controller.user_SetAxisForce`'s force coefficient are not implemented.
 
 Service brakes (#400): the host gain is 25 / `brake_inertia` (the handbrake
@@ -1009,7 +1017,7 @@ voice gets a constant-power pan from its direction, an inverse-distance gain
 group of the effects mixer, which the environment reverb/echo of the active
 section processes (garage, city, open track; menus dry). Unplaced voices
 (menus, UI) stay centred and dry. The three behaviours are host options 22-24
-(`openslrr_options`), switched from the SOUND page.
+(`openslrr_options.json`), switched from the SOUND page.
 `scene_ambience` plays the `sfx_loop`/`sfx_random` lines of map placements
 through `host_sfx`; it owns those voices and stops them when their ground
 shell leaves the active world.
