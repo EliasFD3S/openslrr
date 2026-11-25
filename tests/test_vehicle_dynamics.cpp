@@ -166,11 +166,11 @@ SLRR_TEST(tyre_grip_follows_the_tyre_script) {
   // A wider tyre of the same compound grips more; a softer compound too.
   SLRR_REQUIRE(peak_lateral(tyre(245), 3500) > peak_lateral(tyre(195), 3500) * 1.08);
   SLRR_REQUIRE(peak_lateral(tyre(205, 1.687), 3500) > peak_lateral(tyre(205, 1.495), 3500) * 1.08);
-  // Pin a sample of the combined-slip curve (#383): stock tyre, 3500 N,
-  // 5.7 degrees of slip angle.
+  // Pin a sample of the Magic Formula lateral curve (#418): stock tyre,
+  // 3500 N, 5.7 degrees of slip angle.
   const auto reference = tire_forces(3500, 1, 20, 20, 2, TireParameters{});
   SLRR_REQUIRE(reference.longitudinal == 0);
-  SLRR_REQUIRE(std::abs(reference.lateral + 3886.494694) < 1e-5);
+  SLRR_REQUIRE(std::abs(reference.lateral + 3973.602191) < 1e-5);
 }
 
 SLRR_TEST(tyre_stiffness_and_sliction_shape_the_curve) {
@@ -180,7 +180,9 @@ SLRR_TEST(tyre_stiffness_and_sliction_shape_the_curve) {
   const auto small = [](const TireParameters& t) {
     return std::abs(tire_forces(3000, 1, 60, 60, 60 * std::tan(.01), t).lateral);
   };
-  SLRR_REQUIRE(small(stiff) > small(soft) * 2.5);
+  // Above the stock 17.68 the slope grows with the square root (#418): 30
+  // acts as 23.
+  SLRR_REQUIRE(small(stiff) > small(soft) * 2.2);
   auto capped = stiff, above_cap = stiff;
   capped.stiffness = 60;  // the clamp
   above_cap.stiffness = 600;
@@ -203,10 +205,13 @@ SLRR_TEST(tyre_load_capacity_has_progressive_efficiency) {
   const double low = peak_lateral(t, 2000), high = peak_lateral(t, 13000);
   SLRR_REQUIRE(high > peak_lateral(t, 9000));
   SLRR_REQUIRE(high / 13000 < low / 2000);
-  auto linear = t;
-  linear.maximum_load = 0;
-  SLRR_REQUIRE(std::abs(peak_lateral(linear, 13000) / peak_lateral(linear, 2000) - 6.5) < 1e-9);
-  SLRR_REQUIRE(high < peak_lateral(linear, 13000));
+  // Without setMaxLoad the nominal load is 4000 N (#418): the friction still
+  // falls with load, as for a tyre rated at 8000 N.
+  auto unrated = t, rated = t;
+  unrated.maximum_load = 0;
+  rated.maximum_load = 8000;
+  SLRR_REQUIRE(std::abs(peak_lateral(unrated, 13000) - peak_lateral(rated, 13000)) < 1e-9);
+  SLRR_REQUIRE(peak_lateral(unrated, 13000) / peak_lateral(unrated, 2000) < 6.5);
 }
 
 SLRR_TEST(wheelspin_uses_up_cornering_grip) {
@@ -216,6 +221,28 @@ SLRR_TEST(wheelspin_uses_up_cornering_grip) {
   // The intended reference curve reduces lateral response before the
   // ellipse limit; it does not promise the old curve's 60% ratio.
   SLRR_REQUIRE(spinning < cornering * .8);
+}
+
+SLRR_TEST(camber_leaning_into_the_force_adds_grip) {
+  // Lateral speed to +side, force to -side (#418). A tyre whose top leans
+  // to -side (negative camber on the outside of the turn) adds camber
+  // thrust; leaning the other way takes it off, and either loses peak grip
+  // when it leans far.
+  const auto t = tyre(205);
+  constexpr double degree = std::numbers::pi / 180;
+  const auto lateral = [&](double camber) {
+    return -tire_forces(3500, 1, 20, 20, 20 * std::tan(4 * degree), t, camber).lateral;
+  };
+  SLRR_REQUIRE(lateral(-3 * degree) > lateral(0) * 1.02);
+  SLRR_REQUIRE(lateral(3 * degree) < lateral(0) * .98);
+  // Camber thrust at zero slip angle, towards the side the top leans to.
+  SLRR_REQUIRE(tire_forces(3500, 1, 20, 20, 0, t, 3 * degree).lateral > 100);
+  SLRR_REQUIRE(tire_forces(3500, 1, 20, 20, 0, t, -3 * degree).lateral < -100);
+  // A parked or barely rolling tyre is not pushed sideways by its camber.
+  SLRR_REQUIRE(tire_forces(3500, 1, 0, 0, 0, t, 3 * degree).lateral == 0);
+  // Far over (a wheel lying down) keeps a quarter of its grip at most.
+  const auto limits = tire_friction_limits(3500, 1, t, 1.2);
+  SLRR_REQUIRE(limits.lateral <= tire_friction_limits(3500, 1, t).lateral * .25 + 1e-9);
 }
 
 SLRR_TEST(parked_car_settles_without_vibration) {
@@ -415,7 +442,7 @@ SLRR_TEST(sliding_backwards_in_a_forward_gear_keeps_the_wheels_rolling) {
       for (int i = 2; i < 4; ++i) SLRR_REQUIRE(car.dynamics.state[i].spin * .31 < -8);
     else  // the drive turns the rear wheels forwards against the motion
       for (int i = 2; i < 4; ++i)
-        SLRR_REQUIRE(car.dynamics.state[i].spin > car.dynamics.state[0].spin + 5);
+        SLRR_REQUIRE(car.dynamics.state[i].spin > car.dynamics.state[0].spin + 3);
   }
 }
 
@@ -951,8 +978,9 @@ SLRR_TEST(steering_feedback_pulls_back_and_goes_light_past_the_peak) {
   float strongest = 0;
   for (double a = .005; a < .5; a += .005) strongest = std::max(strongest, std::abs(settled_torque(a)));
   SLRR_REQUIRE(strongest > .9f && strongest <= 1.f);
-  // A heavier car pulls the same share of the range at the same slip.
-  SLRR_REQUIRE(std::abs(settled_torque(.03, 20, 5000) - settled_torque(.03)) < .05f);
+  // A heavier car pulls about the same share of the range at the same slip;
+  // the cornering stiffness per newton falls with load (#418).
+  SLRR_REQUIRE(std::abs(settled_torque(.03, 20, 5000) - settled_torque(.03)) < .1f);
 }
 
 SLRR_TEST(steering_feedback_fades_when_parked_or_airborne) {
@@ -1095,6 +1123,7 @@ int main() {
       tyre_stiffness_and_sliction_shape_the_curve,
       tyre_load_capacity_has_progressive_efficiency,
       wheelspin_uses_up_cornering_grip,
+      camber_leaning_into_the_force_adds_grip,
       parked_car_settles_without_vibration,
       full_lock_at_speed_slides_instead_of_rolling_over,
       stored_instant_centres_do_not_change_the_intended_solver,

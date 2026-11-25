@@ -13,32 +13,53 @@ stock physics; do not restore the earlier solver just to make its old tests
 pass. The follow-up work awaiting approval is in
 [the vehicle-dynamics migration plan](dynamics-plan.md).
 
-`configure_drive` copies the tyre script's `WheelRef` values. Since #383 the
-tyre is one combined-slip Magic Formula curve, the structure of the original
-law (as recovered from the Steam EXE by nicolas-found42/sl-remastered,
-00454500), with OpenSLRR's own peak friction:
+`configure_drive` copies the tyre script's `WheelRef` values. Since #418 the
+tyre is a Pacejka Magic Formula after the MF 5.2 structure
+([tire_model.cpp](../../src/physics/tire_model.cpp)): separate pure lateral
+and longitudinal curves, load-dependent friction and cornering stiffness,
+camber, and combined slip by normalised slip. The script values set its
+coefficients; the MF coefficients are typical passenger/sport tyre values,
+OpenSLRR tuning, not recovered from the exe (#383 had one combined-slip curve
+after the original law, nicolas-found42/sl-remastered, 00454500):
 
 - Slip ratio kappa = (wheel - road) / road speed and slip angle
-  alpha = atan(lateral / road speed), both with a 1.5 m/s floor. The curve
-  takes the combined slip sqrt(sin(alpha)^2 + (cos(alpha) kappa frictn_x)^2)
-  and splits the force by its direction, so wheelspin or a locked wheel uses
-  up the cornering grip (power oversteer, drifts, burnouts).
-- D = effective load × peak friction. The effective load is the original's:
-  above `setMaxLoad` it grows by an arctangent, blended by
-  `setLoadSmooth × load_sensitivity`. The peak friction is 1.15 for the stock
-  tyre (`kPeakFriction`), times `setFriction` / 1.76863 (clamped 0.2–2.5).
+  alpha = atan(lateral / road speed), both with a 1.5 m/s floor.
+- Nominal load Fz0 = `setMaxLoad` / 2 (4000 N when unset); dfz = (Fz - Fz0) / Fz0.
+- D = Fz × mu, mu = 1.15 (`kPeakFriction`) × `setFriction` / 1.76863
+  (clamped 0.2–2.5) × (1 - 0.12 dfz × `setLoadSmooth` / 0.4 × load
+  sensitivity, floor 0.5) × camber grip. `frictn_x` scales the longitudinal D.
   Width, compound, profile and inflation enter through these script inputs.
 - C from `setSliction`, the slide/grip ratio its script documents: the curve
   ends at sliction × the peak (sliction clamped to 0.4–1; 1 keeps the peak).
-- B = stiffness / (C × peak friction): `setStiffness` is the zero-slip slope
-  per unit load, as in the original (clamped 4–60, times `lateral_response`).
-- E = -1, the original's `setPacejka(8)` value.
-- Stock tyre at 3500 N: lateral peak 1.07 at 8.1 degrees, 0.99 at 20 degrees;
-  longitudinal peak 1.07 at 14 % slip, 0.91 locked; at 6 degrees the lateral
-  force falls from 1.05 to 0.48 with 20 % wheelspin.
-- Low-slip forces are capped in proportion to the sliding speed and load.
+- Cornering stiffness Kya = s Fz0 sin(2 atan(Fz / (2 Fz0))) / sin(2 atan(0.5)):
+  the zero-slip slope per unit load is s at Fz0 and saturates with load
+  (0.625 s per newton at 2 Fz0). s is `setStiffness` (clamped 4–60, times
+  `lateral_response`) up to the stock 17.68, and its square root scaled to
+  that value above it: `Tyre.java` gives every low-profile tyre its clamp of
+  40, which peaked at 4.3 degrees; it now acts as 26.6. The longitudinal
+  curve uses the same slope. B = K / (C D), E = -1 (the original's
+  `setPacejka(8)`).
+- Camber (`setYpr` roll from `Suspension.setSuspensionGeometry`, plus body
+  roll, against the road): about one load per radian of camber stiffness,
+  0.6 of it as a slip-angle shift and 0.4 as a force shift (MF pHy3/pVy3), so
+  a tyre leaning into its force grips more; the friction falls by
+  3 × camber² (floor 0.25, which replaces the old cos² load factor). The
+  thrust fades in over the first 3 m/s of rolling.
+- Combined slip: each slip is divided by its pure curve's peak slip; the
+  resultant runs along each pure curve and splits by direction, so wheelspin
+  or a locked wheel uses up the cornering grip (power oversteer, drifts,
+  burnouts). The camber thrust fades in proportion.
+- Stock tyre at 3500 N: lateral peak 1.14 at 8.2 degrees, 1.05 at 20 degrees;
+  longitudinal peak 1.14 at 14 % slip, 0.97 locked; at 6 degrees the lateral
+  force falls from 1.11 to 0.51 with 20 % wheelspin; at 4 degrees, 0.95,
+  0.98 leaning 3 degrees into the force, 0.92 away. GT III rear (295/20,
+  stiffness 40): peak 1.56 at 6.4 degrees.
+- Low-speed caps: the force grows with the sliding speed, 0.95 (lateral) /
+  0.85 (longitudinal) × load per m/s, times max(1, road speed / 2 m/s). Before
+  #418 that factor was missing, so the cap also bounded the cornering
+  stiffness at speed (16 per radian at 60 km/h, softer than the stock tyre).
   `TireTuning` scales the lateral and longitudinal force (grip), the slope
-  (lateral response) and the load smoothing (load sensitivity).
+  (lateral response) and the load sensitivity.
   `setRollRes` supplies the wheel's rolling torque.
 - `VehicleDynamics` feeds the curve a relaxed slip angle: the tyre's lateral
   deflection builds over 0.3 m of rolling (`kLateralRelaxation`), integrated
@@ -47,9 +68,9 @@ law (as recovered from the Steam EXE by nicolas-found42/sl-remastered,
   materials (`friction`, `rollres`), which multiply the tyre's in the
   original.
 
-Wheel alignment now scales load by the square of the hub-down/road-normal
-cosine, with a 0.25 floor. The copied `setCPatch` tolerance (`patch_angle`) is
-not read by the solver. Likewise, `setInstantCenter` values and the
+Wheel alignment enters as camber (above); the load itself is no longer
+scaled. The copied `setCPatch` tolerance (`patch_angle`) is not read by the
+solver. Likewise, `setInstantCenter` values and the
 `WheelState::jacking` field are retained but have no active load effect:
 there is no instant-centre anti-dive/anti-squat force or jacking feedback.
 Wheel YPR and the existing arm/hub kinematics still affect contact geometry.
@@ -119,7 +140,7 @@ installed outer dually remains a rubber contact. Parked tyres use a 0.8
 friction upper bound; body and metal contacts use 0.4. These are host tuning.
 Rubber sticking is additionally bounded by the intended model's zero-slip
 friction-ellipse axes (`tire_friction_limits`), including script grip,
-alignment, progressive load efficiency and lateral smoothing. A zero
+load sensitivity and camber. A zero
 longitudinal grip cannot be replaced with free parking friction. The same
 capacity equations are shared with the dynamic curve; its forces do not
 change. Native traffic keeps its separate force policy.
