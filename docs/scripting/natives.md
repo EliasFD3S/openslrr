@@ -237,6 +237,15 @@ SDL's error text. The Cinepak audio position drives video timing, falling
 back continuously to wall time on EOF or a stopped track. Other VLC/Windows
 codec fallbacks retain their own audio outputs.
 
+`SfxRef.nplay(pos, radius, pitch, volume, flags, instance)` places the sound
+when `pos` is a Vector3 (#390): the resource's `mindist`/`maxdist` give the
+distance model (SLRR_rev's defaults 2.5 m and 60 m when absent) and a positive
+`radius` caps the audible range. A null `pos` plays an unplaced (menu) sound.
+The listener is the world camera; see ENGINE_CONTRACT §14. The stock
+OptionsDialog `MIXING` choice (DirectSound software/hardware 2D/3D) is
+replaced by 3D POSITIONING, DOPPLER and REVERB toggles (host options 22-24)
+in both OptionsDialog and the OSD v2 Options screen.
+
 ### Audio options
 
 The VM now keeps `Input.createHotkey` on Input rather than rewriting it to

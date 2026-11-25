@@ -127,6 +127,12 @@ and `OsdxOptions.java` in `sl/Scripts/game/src`. Results: 49 osdx classes
 The class index takes the first class file of a name in directory order, so
 remove backup folders (for example `_openslrr_backup_235/`) from the compile
 root: an old `OptionsDialog.class` there hides the fields of the current one.
+A run that changes `OptionsDialog` fields used by `OsdxOptions` needs a second
+run ("restart for loaded classes"): the first one reports `E_MEMBER` for the
+new fields. For #390 a compile root copied from the patched game without
+`save`, `music`, `screenshots` and `_openslrr_backup_235`, with only the two
+sources in `sl/Scripts/game/src`, rebuilt the HEAD sources byte for byte
+before the change was compiled.
 For the same reason copy only the `src/` folders of osdx into the compile
 root, not its `.class` files: an existing class file wins over its source, so
 the other classes would compile against the old declarations.

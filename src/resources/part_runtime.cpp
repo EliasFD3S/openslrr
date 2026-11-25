@@ -3369,6 +3369,27 @@ DriveRefresh configure_drive(Object *chassis, Record &rec, bool controlled) {
   return refresh;
 }
 
+// A car's sounds in the world (#390): placed at its body with its velocity,
+// for the listener pan, Doppler and environment reverb. `attenuate` false
+// keeps a gain the caller already scales by distance.
+HostSfxPlace car_place(const physics::Vec3 &position, const physics::Vec3 &velocity,
+                       float reference, float maximum, bool attenuate = true) {
+  HostSfxPlace place;
+  place.position[0] = float(position.x); place.position[1] = float(position.y); place.position[2] = float(position.z);
+  place.velocity[0] = float(velocity.x); place.velocity[1] = float(velocity.y); place.velocity[2] = float(velocity.z);
+  place.reference = reference;
+  place.maximum = maximum;
+  // SLRR_rev vehicle-audio.ts panners: inverse model, rolloff .25.
+  place.rolloff = .25f;
+  place.attenuate = attenuate;
+  return place;
+}
+// Engine, exhaust and nitro: the player's car is inside the reference
+// distance in the cockpit and chase views, so it stays centred at full gain.
+HostSfxPlace engine_place(const Record &rec) {
+  return car_place(rec.dynamics.body.position, rec.dynamics.body.velocity, 6.f, 400.f);
+}
+
 void update_engine_audio(Record &rec, bool active) {
   // MWM 452103: one trigger per press, not an injection loop. Holding an
   // empty kit through a refill is not a new press.
@@ -3379,8 +3400,8 @@ void update_engine_audio(Record &rec, bool active) {
     if (!path.empty()) {
       std::replace(path.begin(), path.end(), '\\', '/');
       host_sfx_stop(rec.nitro_voice);
-      rec.nitro_voice = host_sfx_play_file(
-          (std::filesystem::path(index->game_root()) / path).string(), rec.nitro_pitch);
+      rec.nitro_voice = host_sfx_play_at(
+          (std::filesystem::path(index->game_root()) / path).string(), engine_place(rec), rec.nitro_pitch);
     }
   }
   rec.nitro_sound_down = nitro_down;
@@ -3406,9 +3427,11 @@ void update_engine_audio(Record &rec, bool active) {
       if (gain > .001f) {
         const float pitch = std::clamp(rpm / item.pitch, .58f, 3.f);
         if (!item.voice)
-          item.voice = host_sfx_play_file(item.path, pitch, gain, true);
-        else
+          item.voice = host_sfx_play_at(item.path, engine_place(rec), pitch, gain, true);
+        else {
           host_sfx_update_loop(item.voice, pitch, gain);
+          host_sfx_set_place(item.voice, engine_place(rec));
+        }
       } else if (item.voice) {
         host_sfx_stop(item.voice);
         item.voice = 0;
@@ -3420,9 +3443,9 @@ void update_engine_audio(Record &rec, bool active) {
 // Tyre slide and collision sounds, after SLRR_rev 4ca11c2 vehicle-audio.ts.
 // The stock clips are sound.rpk `surface/slide` (SLIP3.WAV), `surface`'s
 // sharp-skid chirp skid_ok.wav and `collision` (Collision.wav), layered
-// with two objects.rpk metal hits for harder impacts. The host mixer has no
-// 3D voices, so the Web Audio panner's inverse distance model (ref, max,
-// rolloff .25) becomes a gain on the distance to the world camera.
+// with two objects.rpk metal hits for harder impacts. The Web Audio panner's
+// inverse distance model (ref, max, rolloff .25) is the host's placed-voice
+// model (#390); distance_gain only gates work for far cars.
 struct StockSound {
   std::string path;
   float volume = 1;
@@ -3480,16 +3503,19 @@ void update_slide_audio(Record &rec, bool active) {
   // One loop for the car, from its most slipping wheel: four wheel loops per
   // car would take the mixer's loop budget from the engines.
   const auto &slide = stock_sound(kSoundSurfaceSlide);
-  const float gain = place * static_cast<float>(std::clamp((slip - 2) / 10, 0.0, 1.0)) * .3f *
-                     level * slide.volume;
+  const float gain = (place > 0 ? 1.f : 0.f) *
+                     static_cast<float>(std::clamp((slip - 2) / 10, 0.0, 1.0)) * .3f * level * slide.volume;
+  const HostSfxPlace where = car_place(body.position, body.velocity, 2.f, 55.f);
   // SLRR_rev keeps the clip's pitch; a host addition raises it slightly with
   // the slip so a long slide is not one flat tone.
   const float pitch = static_cast<float>(std::clamp(.92 + (slip - 2) / 60, .92, 1.15));
   if (gain > .001f && !slide.path.empty()) {
     if (!rec.slide_voice || !host_sfx_is_playing(rec.slide_voice))
-      rec.slide_voice = host_sfx_play_file(slide.path, pitch, gain, true);
-    else
+      rec.slide_voice = host_sfx_play_at(slide.path, where, pitch, gain, true);
+    else {
       host_sfx_update_loop(rec.slide_voice, pitch, gain);
+      host_sfx_set_place(rec.slide_voice, where);
+    }
   } else if (rec.slide_voice) {
     host_sfx_stop(rec.slide_voice);
     rec.slide_voice = 0;
@@ -3497,7 +3523,7 @@ void update_slide_audio(Record &rec, bool active) {
   // The sharp chirp of a car snapping sideways, once per slide.
   const bool sharp = place > 0 && speed > 14 && sideways > 3.4;
   if (sharp && !rec.sharp_skid)
-    host_sfx_play_file(game_sound("sound/wav/surface/skid_ok.wav"), 1.f, .62f * level * place);
+    host_sfx_play_at(game_sound("sound/wav/surface/skid_ok.wav"), where, 1.f, .62f * level);
   rec.sharp_skid = sharp || (rec.sharp_skid && speed > 9 && sideways > 1.6);
 }
 
@@ -3536,15 +3562,16 @@ void play_impact_audio(Record &rec, const physics::VehicleDynamics::Impact &hit)
   const float speed = static_cast<float>(hit.speed);
   const float strength = std::clamp((speed - 2) / 18, 0.f, 1.f);
   const float pitch = std::clamp(.9f + speed / 90, .9f, 1.12f);
+  const HostSfxPlace where = car_place(hit.point, rec.dynamics.body.velocity, 3.f, 70.f);
   const auto &chassis = stock_sound(kSoundCollision);
   if (!chassis.path.empty())
-    host_sfx_play_file(chassis.path, pitch, (.32f + strength * .48f) * place * chassis.volume);
+    host_sfx_play_at(chassis.path, where, pitch, (.32f + strength * .48f) * chassis.volume);
   if (speed > 7)
-    host_sfx_play_file(game_sound("sound/wav/collision/MetalHit2.WAV"), pitch * .93f,
-                       (.15f + strength * .3f) * place);
+    host_sfx_play_at(game_sound("sound/wav/collision/MetalHit2.WAV"), where, pitch * .93f,
+                     .15f + strength * .3f);
   if (speed > 14)
-    host_sfx_play_file(game_sound("sound/wav/collision/Metal_plane_hit_04.WAV"), pitch * 1.05f,
-                       strength * .25f * place);
+    host_sfx_play_at(game_sound("sound/wav/collision/Metal_plane_hit_04.WAV"), where, pitch * 1.05f,
+                     strength * .25f);
 }
 
 // Native stock cars (traffic, fake racers) have no Java engine or SfxTables, so
@@ -3633,10 +3660,8 @@ void update_traffic_engine_audio() {
     const float distance = std::sqrt(chosen[n].distance_squared);
     const float level = scene_ambience_gain(kVolume * (.7f + .3f * throttle), kRefDistance, kRange,
                                             distance);
-    const auto &position = body.position;
-    const float side = (float(position.x) - eye[0]) * right[0] + (float(position.y) - eye[1]) * right[1] +
-                       (float(position.z) - eye[2]) * right[2];
-    const float pan = std::clamp(side / std::max(distance, kRefDistance), -1.f, 1.f);
+    // The traffic gain law stays; the host pans the car and adds Doppler.
+    const HostSfxPlace where = car_place(body.position, body.velocity, kRefDistance, kRange, false);
     // Heavier cars run lower; the offset is stable per car, within about +-6 %.
     const float mass = rec.config->mass > 100.f ? rec.config->mass : 1300.f;
     const uint32_t hash = static_cast<uint32_t>(
@@ -3655,9 +3680,12 @@ void update_traffic_engine_audio() {
       auto &voice = rec.traffic_voice[i];
       if (gain > .002f) {
         const float pitch = rpm / kSampleRpm[i] * character;
-        if (voice && host_sfx_is_playing(voice)) host_sfx_update_loop(voice, pitch, gain);
-        else voice = host_sfx_play_file(paths[i], pitch, gain, true);
-        host_sfx_set_loop_pan(voice, pan);
+        if (voice && host_sfx_is_playing(voice)) {
+          host_sfx_update_loop(voice, pitch, gain);
+          host_sfx_set_place(voice, where);
+        } else {
+          voice = host_sfx_play_at(paths[i], where, pitch, gain, true);
+        }
       } else if (voice) {
         host_sfx_stop(voice);
         voice = 0;
@@ -3671,12 +3699,12 @@ void update_traffic_engine_audio() {
       if (!rec.radio_voice || !host_sfx_is_playing(rec.radio_voice)) {
         auto file = index->payload_prop(radio, "sourcefile");
         std::replace(file.begin(), file.end(), '\\', '/');
-        rec.radio_voice = file.empty() ? 0 : host_sfx_play_file(
-            (std::filesystem::path(index->game_root()) / file).string(), 1.f, radio_gain, true);
+        rec.radio_voice = file.empty() ? 0 : host_sfx_play_at(
+            (std::filesystem::path(index->game_root()) / file).string(), where, 1.f, radio_gain, true);
       } else {
         host_sfx_update_loop(rec.radio_voice, 1.f, radio_gain);
+        host_sfx_set_place(rec.radio_voice, where);
       }
-      host_sfx_set_loop_pan(rec.radio_voice, pan);
     } else if (rec.radio_voice) {
       host_sfx_stop(rec.radio_voice);
       rec.radio_voice = 0;

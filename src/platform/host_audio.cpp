@@ -1,4 +1,5 @@
 #include "slrr/host_audio.hpp"
+#include "audio_reverb.hpp"
 #include <SDL3/SDL.h>
 #include <SDL3_mixer/SDL_mixer.h>
 #include <algorithm>
@@ -10,6 +11,30 @@ namespace {
 std::weak_ptr<HostAudio>& shared_audio() {
   static std::weak_ptr<HostAudio> audio;
   return audio;
+}
+// The reverb state lives for the whole process: the audio thread may still
+// call into it while a mixer is being destroyed.
+EnvironmentReverb& world_reverb() {
+  static EnvironmentReverb reverb;
+  return reverb;
+}
+// Dry world signal captured by the group callback for this mix block. Both
+// callbacks run on the effects mixer's audio thread, group first.
+std::vector<float> world_input;
+int world_input_samples = 0;
+void SDLCALL capture_world(void*, MIX_Group*, const SDL_AudioSpec*, float* pcm, int samples) {
+  if (world_input.size() < static_cast<size_t>(samples)) world_input.resize(static_cast<size_t>(samples));
+  std::copy(pcm, pcm + samples, world_input.begin());
+  world_input_samples = samples;
+}
+// After the final mix, so the tail keeps sounding once the world tracks stop
+// (the group is not mixed at all while none of its tracks plays).
+void SDLCALL add_world_reverb(void*, MIX_Mixer*, const SDL_AudioSpec* spec, float* pcm, int samples) {
+  if (!spec || spec->channels <= 0) return;
+  const bool captured = world_input_samples == samples;
+  world_reverb().process(captured ? world_input.data() : nullptr, pcm, samples / spec->channels,
+                         spec->channels, spec->freq);
+  world_input_samples = 0;
 }
 MIX_Mixer* open_group(const char* name) {
   // Each call opens a new logical device on the default output. SDL follows
@@ -115,7 +140,19 @@ MIX_Audio* host_audio_load_pcm(MIX_Mixer* mixer, const std::vector<float>& sampl
   return audio;
 }
 
+void host_audio_join_world(MIX_Track* track) {
+  if (!track) return;
+  if (auto audio = shared_audio().lock(); audio && audio->world)
+    MIX_SetTrackGroup(track, audio->world);
+}
+void host_audio_set_world_reverb(int preset) {
+  world_reverb().set_preset(std::clamp(preset, 0, 3));
+}
+int host_audio_world_reverb() { return world_reverb().preset(); }
+
 HostAudio::~HostAudio() {
+  if (effects) MIX_SetPostMixCallback(effects, nullptr, nullptr);
+  if (world) MIX_DestroyGroup(world);
   if (effects) MIX_DestroyMixer(effects);
   if (music) MIX_DestroyMixer(music);
   if (fmv) MIX_DestroyMixer(fmv);
@@ -129,6 +166,11 @@ std::shared_ptr<HostAudio> host_audio_acquire() {
   if (!audio->initialized || !(audio->effects = open_group("effects mixer")) ||
       !(audio->music = open_group("music mixer")) || !(audio->fmv = open_group("FMV mixer")))
     return {};
+  audio->world = MIX_CreateGroup(audio->effects);
+  if (host_audio_check(audio->world != nullptr, "world group")) {
+    MIX_SetGroupPostMixCallback(audio->world, capture_world, nullptr);
+    MIX_SetPostMixCallback(audio->effects, add_world_reverb, nullptr);
+  }
   shared_audio() = audio;
   const int version = MIX_Version();
   std::fprintf(stderr, "[audio] SDL_mixer %d.%d.%d initialized (%s)\n",

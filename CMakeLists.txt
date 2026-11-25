@@ -54,6 +54,7 @@ add_executable(slrr_host
   src/platform/host_input_devices.cpp
   src/platform/host_clipboard.cpp
   src/platform/host_audio.cpp
+  src/platform/audio_reverb.cpp
   src/platform/host_sfx.cpp
   src/platform/host_music.cpp
   src/platform/host_game_options.cpp
@@ -407,7 +408,7 @@ if(BUILD_TESTING)
   target_compile_options(vehicle_hud_damage PRIVATE /W3 /utf-8)
   add_test(NAME vehicle_hud_damage COMMAND vehicle_hud_damage)
   add_executable(audio_recovery tests/test_audio_recovery.cpp
-    src/platform/host_audio.cpp src/platform/host_sfx.cpp src/platform/host_music.cpp)
+    src/platform/host_audio.cpp src/platform/audio_reverb.cpp src/platform/host_sfx.cpp src/platform/host_music.cpp)
   target_include_directories(audio_recovery PRIVATE include)
   target_compile_options(audio_recovery PRIVATE /W3 /utf-8)
   target_compile_definitions(audio_recovery PRIVATE _CRT_SECURE_NO_WARNINGS)
