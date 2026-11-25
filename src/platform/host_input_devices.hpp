@@ -1,5 +1,7 @@
 #pragma once
 
+#include "slrr/host_input.hpp"
+
 #include <SDL3/SDL_gamepad.h>
 #include <array>
 #include <map>
@@ -23,6 +25,13 @@ class HostInputDevices {
   int active_axis(int device) const;
   bool analog_axis(int device, int axis) const;
   bool available(int device, int axis) const;
+  // Pad for device 2 and SDL gamepads; Wheel for every other peripheral.
+  InputKind kind(int device) const;
+  // Channels of a slot: signed axes, buttons, then four per hat.
+  int channels(int device) const;
+  // The rebind listener reads this slot's raw channels (the primary pad is
+  // read through device 2 instead).
+  bool capturable(int device) const;
   const std::array<float, 24>& pad() const { return pad_; }
 
   // Options > Controls (#345): what SDL3 knows about each device slot.
@@ -57,6 +66,9 @@ class HostInputDevices {
     SDL_JoystickID id = 0;
     SDL_Joystick* joystick = nullptr;
     SDL_Gamepad* gamepad = nullptr;
+    // An SDL gamepad mapping on a wheel (some Logitech/Thrustmaster bases have
+    // one) does not make it a pad: it keeps its raw channels and filters.
+    bool pad = false;
     std::string name;
     int axes = 0, buttons = 0, hats = 0;
     std::vector<float> values, rest;

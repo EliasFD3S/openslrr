@@ -110,6 +110,14 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 	int				getKeyStat;
 	// Read by the host: hotkeys (Esc) do not fire while a key is captured.
 	int				capturingInput;
+	// The assignment dialog over the key page (InputDevices.capture*).
+	int				captureGroup;
+	Text			capTitle;
+	Text			capStep;
+	Text			capDetail;
+	LevelBar		capMeter;
+	String[]		controlName = new String[ControlSet.NCONTROLS];
+	String			lastLabel;
 	Gadget[]		fileButton = new Gadget[FILE_ROWS];
 	String[]		fileName = new String[FILE_ROWS];
 	int				fileCount;
@@ -177,8 +185,10 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		buildKeys( 1 );		sub[1] = osd.endGroup();
 		buildKeys( 2 );		sub[2] = osd.endGroup();
 		buildFiles();		sub[3] = osd.endGroup();
+		buildCapture();		captureGroup = osd.endGroup();
 		for( int i=0; i<SUBS; i++ )
 			osd.hideGroup( sub[i] );
+		osd.hideGroup( captureGroup );
 
 		activePage = -1;
 		selectPage( 0 );
@@ -457,6 +467,7 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 
 	void keyLabel( String name, float y )
 	{
+		lastLabel = name;
 		Text t = osd.createText( name, Frontend.mediumFont, Text.ALIGN_RIGHT, -0.36, y - 0.5*Text.getHeight( Frontend.mediumFont, osd.getViewport() ) );
 		t.changeColor( 0xFFFFAE00 );
 	}
@@ -468,6 +479,9 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		Gadget b = osd.createButton( st, x, y, bindingName( control ), CMD_KEY + control );
 		b.setToolTip( "Click, then press the key or move the axis or button to use. ESC clears it." );
 		keyButton[control] = b;
+		controlName[control] = lastLabel;
+		if( control >= 15 && control < 30 )
+			controlName[control] = lastLabel + " (SECONDARY)";
 	}
 
 	String bindingName( int control )
@@ -497,94 +511,119 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 				keyButton[i].changeLabelText( bindingName( i ) );
 	}
 
+	// The assignment dialog replaces the key page while it listens.
+	void buildCapture()
+	{
+		osd.createRectangle( 0.0, -0.06, 1.40, 0.64, 1, 0xE0101418 );
+		osd.createRectangle( 0.0, -0.06 - 0.32 + 0.003, 1.40, 0.006, 2, 0xFFFFAE00 );
+		capTitle = osd.createText( null, Frontend.mediumFont, Text.ALIGN_CENTER, 0.0, -0.32 );
+		capTitle.changeColor( 0xFFFFAE00 );
+		capStep = osd.createText( null, Frontend.mediumFont, Text.ALIGN_CENTER, 0.0, -0.18 );
+		capDetail = osd.createText( null, Frontend.smallFont, Text.ALIGN_CENTER, 0.0, -0.08 );
+		capDetail.changeColor( 0xFFB0B0B0 );
+		capMeter = new LevelBar( osd, 0.0, 0.04, 1.0, 0.03, 0 );
+		Text t = osd.createText( "ESC: CLEAR THE BINDING     CLICK: CANCEL", Frontend.smallFont, Text.ALIGN_CENTER, 0.0, 0.14 );
+		t.changeColor( 0xFF808080 );
+	}
+
 	void startCapture( int control )
 	{
-		if( getKey >= 0 && keyButton[getKey] )
-			keyButton[getKey].changeLabelText( bindingName( getKey ) );
 		getKey = control;
 		getKeyStat = 0;
 		capturingInput = 1;
-		keyButton[control].changeLabelText( "PRESS A KEY..." );
-		info.setText( "Press the key, move the axis or press the button to use. ESC clears the binding." );
+		InputDevices.captureBegin();
+		if( activeSub >= 0 )
+			osd.hideGroup( sub[activeSub] );
+		osd.showGroup( captureGroup );
+		String name = controlName[control];
+		if( !name )
+			name = "CONTROL";
+		capTitle.changeText( "ASSIGN: " + name );
+		capStep.changeText( "RELEASE EVERY CONTROL" );
+		capDetail.changeText( null );
+		capMeter.setValue( 0.0 );
+		info.setText( "Every connected device listens at once. Inputs that stay held (a shifter in gear, a switch) are ignored." );
 	}
 
-	// Per frame while capturing (the classic OptionsDialog.animate remapper):
-	// wait for all inputs to be released, then take the first active one.
+	void endCapture( String message )
+	{
+		InputDevices.captureCancel();
+		osd.hideGroup( captureGroup );
+		if( activeSub >= 0 )
+			osd.showGroup( sub[activeSub] );
+		getKey = -1;
+		getKeyStat = 0;
+		capturingInput = 0;
+		refreshKeys();
+		info.setText( null );
+		if( message )
+			toast.show( message, 2.5 );
+	}
+
+	// Per frame while the dialog is up: release, listen, then wait for the
+	// release of what was found so the same press does not reach the menu.
 	void captureTick()
 	{
-		ControlSet cs = owner.controlSet;
-		int device;
-		int axis = -1;
-		int devices = InputDevices.FIRST_DEVICE + InputDevices.count();
-		for( device = 0; device < devices; device++ )
-		{
-			axis = Input.activeAxis( device );
-			if( axis >= 0 )
-				break;
-		}
-		if( getKeyStat == 0 )
-		{
-			if( axis < 0 )
-				getKeyStat = 1;
-			return;
-		}
+		int st = InputDevices.captureState();
 		if( getKeyStat == 1 )
 		{
-			if( axis < 0 )
-				return;
-			if( device == 0 && axis == Input.RCDIK_ESCAPE )
-				cs.change( getKey, -1, -1 );
-			else
-			{
-				float val = Input.getAxis( device, axis );
-				cs.change( getKey, device, axis );
-				int i;
-				for( i = 0; i < ControlSet.NCONTROLS; i++ )
-					if( i != getKey && cs.deviceID[i] == device && cs.axisID[i] == axis )
-						break;
-				if( device == 0 || val > 0.95 )
-				{
-					cs.from_min[getKey] = 0.0;
-					cs.from_max[getKey] = 1.0;
-				}
-				else
-				if( i < ControlSet.NCONTROLS )
-				{
-					// The same axis drives another control: each takes one half.
-					if( val < 0.0 )
-					{
-						cs.from_min[getKey] = 0.0;
-						cs.from_max[getKey] = -1.0;
-						cs.from_min[i] = 0.0;
-						cs.from_max[i] = 1.0;
-					}
-					else
-					{
-						cs.from_min[getKey] = 0.0;
-						cs.from_max[getKey] = 1.0;
-						cs.from_min[i] = 0.0;
-						cs.from_max[i] = -1.0;
-					}
-				}
-				else
-				{
-					cs.from_min[getKey] = -1.0;
-					cs.from_max[getKey] = 1.0;
-				}
-			}
-			GameLogic.player.controller.setcontrol( cs );
-			controlsDirty = 1;
-			keyButton[getKey].changeLabelText( bindingName( getKey ) );
-			getKeyStat = 2;
+			// Cancelled by a click: end once the button is up, or its release
+			// would click the row under the pointer.
+			if( Input.getAxis( 1, 3 ) < 0.5 )
+				endCapture( "ASSIGNMENT CANCELLED" );
 			return;
 		}
-		// Wait for the release, so the same press does not reach the menu.
-		if( axis < 0 )
+		if( st == InputDevices.CAPTURE_RELEASING )
 		{
-			getKey = -1;
-			capturingInput = 0;
-			info.setText( null );
+			capStep.changeText( "RELEASE EVERY CONTROL" );
+			capDetail.changeText( "Let go of the wheel, the pedals, the pad and the keys." );
+			capMeter.setValue( InputDevices.captureProgress() );
+			return;
 		}
+		if( st == InputDevices.CAPTURE_LISTENING )
+		{
+			capStep.changeText( "PRESS A KEY OR BUTTON, OR MOVE AN AXIS" );
+			int held = InputDevices.captureHeld();
+			if( held > 0 )
+				capDetail.changeText( Integer.toString( held ) + " INPUT(S) STILL HELD ARE IGNORED" );
+			else
+				capDetail.changeText( "Every connected device is listening." );
+			capMeter.setValue( 0.0 );
+			return;
+		}
+		int device = InputDevices.captureDevice();
+		int axis = InputDevices.captureAxis();
+		if( st == InputDevices.CAPTURE_HOLDING )
+		{
+			capStep.changeText( InputDevices.kindName( device ) + ": " + shortName( Input.axisName( device, axis ) ) );
+			capDetail.changeText( "Now release it." );
+			float d = InputDevices.capturePeak() - InputDevices.captureRest();
+			if( d < 0.0 )
+				d = -d;
+			if( InputDevices.captureAnalog() )
+				d = d * 0.5;
+			capMeter.setValue( d );
+			return;
+		}
+		if( st == InputDevices.CAPTURE_DONE )
+		{
+			ControlSet cs = owner.controlSet;
+			int control = getKey;
+			int r = InputDevices.applyCapture( cs, control );
+			GameLogic.player.controller.setcontrol( cs );
+			controlsDirty = 1;
+			String name = controlName[control];
+			if( r == 0 )
+				endCapture( name + " CLEARED" );
+			else
+			if( r == 2 )
+				endCapture( name + ": " + shortName( Input.axisName( device, axis ) ) + " (BOTH STEERING HALVES)" );
+			else
+				endCapture( name + ": " + shortName( Input.axisName( device, axis ) ) );
+			return;
+		}
+		// Cancelled by the left button, or reset behind our back.
+		getKeyStat = 1;
 	}
 
 	// ---------------------------------------------------------------- control files
@@ -734,10 +773,10 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 	{
 		if( activeSub < 0 )
 			return;
+		if( getKey >= 0 )
+			endCapture( null );
 		osd.hideGroup( sub[activeSub] );
 		activeSub = -1;
-		getKey = -1;
-		capturingInput = 0;
 		if( slideBack )
 		{
 			osd.showGroup( page[PAGE_CONTROLS] );
@@ -1037,6 +1076,8 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 	public void close()
 	{
 		open = 0;
+		if( getKey >= 0 )
+			InputDevices.captureCancel();
 		getKey = -1;
 		capturingInput = 0;
 		osd.removeAnimated( this );
@@ -1050,6 +1091,17 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 	public void handleEvent( Event e )
 	{
 		int cmd = e.cmd;
+
+		// The assignment dialog is modal: a click anywhere cancels it.
+		if( getKey >= 0 )
+		{
+			if( getKeyStat == 0 )
+			{
+				InputDevices.captureCancel();
+				getKeyStat = 1;
+			}
+			return;
+		}
 
 		int t = tabs.indexOf( cmd );
 		if( t >= 0 )
@@ -1108,8 +1160,7 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 
 		if( cmd >= CMD_KEY && cmd < CMD_KEY + ControlSet.NCONTROLS )
 		{
-			if( getKey < 0 || getKeyStat < 2 )
-				startCapture( cmd - CMD_KEY );
+			startCapture( cmd - CMD_KEY );
 			return;
 		}
 

@@ -1512,94 +1512,48 @@ public class OptionsDialog extends Dialog
 
 	public void animate()
 	{
-		//control remapper
+		//control remapper: the host listener (InputDevices.capture*) reads every
+		//device at once, ignores what stays held and waits for the release.
 		if (actGroup == redefineGroup || actGroup == redefine2Group || actGroup == redefineSuspGroup)
 		{
 			if (getKey >= 0 && getKey < NCONTROLS)
 			{
-				int		device;
-				int		axis = -1;
-
-				for( device = 0; device < controlSet.nDevices; device++ )
+				if (getKeyStat == 0)
 				{
-					axis = Input.activeAxis (device);
-					if( axis >= 0 )
-						break;
+					InputDevices.captureBegin();
+					getKeyStat = 1;
 				}
-
-				if (getKeyStat == 0) 
+				else
 				{
-					if (axis < 0) 
+					int st = InputDevices.captureState();
+					if (st == InputDevices.CAPTURE_DONE)
 					{
-						getKeyStat = 1;
-					}
-				} 
-				else 
-				if (getKeyStat == 1)
-				{
-					if( device == 0 && axis == Input.RCDIK_ESCAPE )
-					{
-						keyText[getKey].changeText( "Undefined" );
-						controlSet.change( getKey, -1, -1 );
+						InputDevices.applyCapture( controlSet, getKey );
 						player.controller.setcontrol( controlSet );
-						getKeyStat = 2;
 					}
-					else
+					if (st == InputDevices.CAPTURE_DONE || st == InputDevices.CAPTURE_CANCELLED || st == InputDevices.CAPTURE_IDLE)
 					{
-						if (axis >= 0) 
-						{
-							float val = Input.getAxis (device, axis);
-							keyText[getKey].changeText (Input.axisName (device, axis));
-							controlSet.change( getKey, device, axis);
-							int i;
-							for (i = 0; i < NCONTROLS; i++) 
-							{
-								if (i != getKey && controlSet.deviceID [i] == device && controlSet.axisID [i] == axis)
-									break;
-							}
-							if (device == 0 || val > 0.95f) 
-							{
-								controlSet.from_min [getKey] = 0.0f;
-								controlSet.from_max [getKey] = 1.0f;
-							} 
-							else 
-							{
-								if (i < NCONTROLS) 
-								{
-									if (val < 0.0f) 
-									{
-										controlSet.from_min [getKey] = 0.0f;
-										controlSet.from_max [getKey] = -1.0f;
-										controlSet.from_min [i] = 0.0f;
-										controlSet.from_max [i] = 1.0f;
-									} 
-									else 
-									{
-										controlSet.from_min [getKey] = 0.0f;
-										controlSet.from_max [getKey] = 1.0f;
-										controlSet.from_min [i] = 0.0f;
-										controlSet.from_max [i] = -1.0f;
-									}
-								} 
-								else 
-								{
-									controlSet.from_min [getKey] = -1.0f;
-									controlSet.from_max [getKey] = 1.0f;
-								}
-							}
-							player.controller.setcontrol( controlSet );
-							getKeyStat = 2;
-						}
-					}
-				} 
-				else 
-				{
-					if (axis < 0) 
-					{
+						InputDevices.captureCancel();
 						getKey = -1;
+						for (int i = 0; i < NCONTROLS; i++)
+						{
+							if (keyText[i])
+							{
+								if (controlSet.deviceID[i] < 0 || controlSet.axisID[i] < 0)
+									keyText[i].changeText( "Undefined" );
+								else
+									keyText[i].changeText( Input.axisName (controlSet.deviceID[i], controlSet.axisID[i]) );
+							}
+						}
 					}
 				}
 			}
+		}
+		else
+		if (getKey >= 0)
+		{
+			InputDevices.captureCancel();
+			getKey = -1;
 		}
 
 		//gas/brake/steer axis position updater

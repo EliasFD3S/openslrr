@@ -21,6 +21,12 @@ struct InputSmoothing {
   float speed = 1.f;
 };
 
+// Device class of a ControlSet device id. Each class gets its own filters:
+// keys are digital and ramped, pad sticks have a dead zone, a wheel and its
+// pedals, shifter and button boxes ("Wheel": every SDL peripheral that is not a
+// gamepad) are read as they are.
+enum class InputKind { None = -1, Keyboard = 0, Mouse = 1, Pad = 2, Wheel = 3 };
+
 struct ControllerInput {
   std::vector<InputBinding> bindings;
   std::unordered_map<int, InputSmoothing> smoothing;
@@ -65,6 +71,9 @@ struct HostInput {
   bool keys_pgdn = false;
   float drive_steer = 0, drive_throttle = 0, drive_brake = 0;
   bool drive_steer_analog = false;
+  // Class of the device steering now (None when nothing steers): the steering
+  // filters differ for keys, pad sticks and wheels.
+  InputKind drive_steer_kind = InputKind::None;
   float drive_clutch = 0.f, drive_shift = 0.f;
   float free_camera_x = 0.f, free_camera_y = 0.f, free_camera_z = 0.f;
   bool drive_horn = false;
@@ -92,6 +101,13 @@ const char* host_input_device_name(int device);
 std::string host_input_axis_name(int device, int axis);
 float host_input_physical_axis(int device, int axis);
 int host_input_active_axis(int device);
+InputKind host_input_device_kind(int device);
+// Rebind listener (host_input_capture.hpp), advanced by host_input_poll_keys.
+class InputCapture;
+void host_input_capture_begin();
+void host_input_capture_cancel();
+const InputCapture& host_input_capture();
+float host_input_capture_progress();
 void host_input_key(int scan, bool down);
 void host_input_clear_keys();
 int host_input_last_key();

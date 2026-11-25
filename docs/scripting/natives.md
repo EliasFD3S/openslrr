@@ -385,6 +385,16 @@ ranges change the raw axis values every binding sees
 (`src/platform/host_input_devices.cpp`). Rumble is only a test pulse:
 `Controller.user_SetAxisForce` still does not drive SDL haptics.
 
+`kind(device)` takes a ControlSet device id (not an index) and returns its
+class: 0 keyboard, 1 mouse, 2 pad, 3 wheel/sim peripheral, -1 none. The rebind
+listener is `captureBegin`, `captureState` (0 idle, 1 releasing, 2 listening,
+3 holding, 4 done, 5 cancelled), `captureDevice`, `captureAxis`,
+`captureAnalog`, `captureRest`, `capturePeak`, `captureHeld`,
+`captureProgress` and `captureCancel`, over `InputCapture`
+(`src/platform/host_input_capture.hpp`). The Java helpers `applyCapture(cs, i)`,
+`ensureDevice(cs, device)` and `kindName(device)` live in the same class; both
+Options screens use them.
+
 ### Advanced video controls (#377)
 
 IDs 13–20 back the Advanced Video Options page: VSync, view distance (500–3000 m),
