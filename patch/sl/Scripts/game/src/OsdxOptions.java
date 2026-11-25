@@ -307,14 +307,11 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		sl = m.addItem( "ENGINE", OptionsDialog.CMD_ENGINE_VOL, Sound.getVolume( Sound.CHANNEL_ENGINE ), "Volume of the engines (percent)." );
 		sl.printValue( "%.0f", 100.0 );
 
-		header = new SectionHeader( osd, "OUTPUT", 0.08, TOP - 0.06, 0.82 );
+		header = new SectionHeader( osd, "3D SOUND", 0.08, TOP - 0.06, 0.82 );
 		m = column( RIGHT, TOP + 0.04 );
-		int hw = Config.Sound_Mix_HW;
-		if( hw == 2 )
-			hw++;
-		if( Config.Sound_Mix_HW == 1 && Config.Sound_3D_HW == 1 )
-			hw++;
-		m.addItem( "MIXING", OptionsDialog.CMD_SOUND_HW, hw, list( "SOFTWARE", "HARDWARE 2D", "HARDWARE 3D", "AUTO", null ), "Where sounds are mixed. AUTO picks the best the device offers." );
+		m.addToggle( "3D POSITIONING", OptionsDialog.CMD_AUDIO_POSITIONING, option(22), "Pans world sounds by their direction from the camera and fades them with distance." );
+		m.addToggle( "DOPPLER", OptionsDialog.CMD_AUDIO_DOPPLER, option(23), "Pitch rises as a car comes towards the camera and falls as it moves away." );
+		m.addToggle( "REVERB", OptionsDialog.CMD_AUDIO_REVERB, option(24), "Room reverb in the garage, echo of the streets and of open tracks, for world sounds." );
 	}
 
 	void buildControls()

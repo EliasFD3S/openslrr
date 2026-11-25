@@ -8,6 +8,7 @@
 struct MIX_Mixer;
 struct MIX_Track;
 struct MIX_Audio;
+struct MIX_Group;
 
 namespace slrr {
 
@@ -20,6 +21,9 @@ struct HostAudio {
   MIX_Mixer* effects = nullptr;
   MIX_Mixer* music = nullptr;
   MIX_Mixer* fmv = nullptr;
+  // Effects tracks placed in the world (#390); the environment reverb and
+  // echo process this group only, so menus and the cockpit stay dry.
+  MIX_Group* world = nullptr;
   bool initialized = false;
   ~HostAudio();
 };
@@ -45,6 +49,13 @@ bool host_audio_decode_file(MIX_Mixer* mixer, const char* path, std::vector<floa
 // samples that may loop. `loaded_rate` receives the rate of the audio.
 MIX_Audio* host_audio_load_pcm(MIX_Mixer* mixer, const std::vector<float>& samples,
                                int channels, int rate, bool wrap, int* loaded_rate = nullptr);
+
+// Moves an effects track into the world group.
+void host_audio_join_world(MIX_Track* track);
+// Environment preset of the world reverb: 0 none (dry), 1 garage, 2 city,
+// 3 open (EnvironmentReverb::Preset).
+void host_audio_set_world_reverb(int preset);
+int host_audio_world_reverb();
 
 // Diagnostics and tests: the track behind an effect instance (null when the
 // instance is unknown) and the stock Cinepak FMV PCM track (null when none).

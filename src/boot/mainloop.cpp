@@ -12,6 +12,7 @@
 #include "slrr/natives_boot.hpp"
 #include "slrr/video_fmv.hpp"
 #include "slrr/host_music.hpp"
+#include "slrr/host_sfx.hpp"
 #include "slrr/host_game_options.hpp"
 #include "slrr/resource_loading.hpp"
 
@@ -254,6 +255,26 @@ void mainloop_sync_section_render(IRenderBackend& render,
     bgfx_set_garage_viewport(render, false, 0);
     bgfx_set_osd_overlay(render, true);
   }
+}
+
+// Reverb preset of the active section (#390): the garage is a small room,
+// city maps have facades, tracks are open. Menus and anything else are dry.
+HostSfxEnvironment section_environment(const std::string& name) {
+  const auto has = [&name](const char* part) { return name.find(part) != std::string::npos; };
+  if (has("Garage")) return HostSfxEnvironment::Garage;
+  if (has("City") || has("Valocity")) return HostSfxEnvironment::City;
+  if (has("Track") || has("ROC") || has("Roc")) return HostSfxEnvironment::Open;
+  return HostSfxEnvironment::None;
+}
+
+// The world camera is the audio listener; it moves the placed voices.
+void update_audio_listener(const SectionMachine& sections, float dt) {
+  float eye[3]{}, at[3]{}, up[3] = {0.f, 1.f, 0.f};
+  const bool valid = gameref_world_camera(eye, at, nullptr, nullptr, nullptr, up);
+  const float forward[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
+  host_sfx_set_listener(valid, eye, forward, up, dt);
+  host_sfx_set_environment(valid ? section_environment(sections.actual_name())
+                                 : HostSfxEnvironment::None);
 }
 
 void spin_mechanic_inventory(Jvm& jvm, float dt) {
@@ -935,6 +956,7 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     camera->follow_variant = mode == 3 || mode == 4 ? mode : 0;
   }
   gameref_advance_world_camera(frame_dt, static_cast<float>(jvm.time_warp()));
+  update_audio_listener(sections, frame_dt);
   dispatch_mechanic_pointer(jvm);
   dispatch_world_pointer(jvm);
 

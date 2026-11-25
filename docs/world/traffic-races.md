@@ -119,8 +119,9 @@ silently replacing it with a collision-filter toggle.
   released native car (traffic, fake racers) a loop from the three
   `cars/traffic/sounds/engines/diesel_5.0L` samples, cross-faded by an RPM
   modelled from speed through a stepped gearbox. The gain falls with the
-  distance to the world camera and the loop is panned left/right by the car's
-  side (`host_sfx_set_loop_pan`; plain stereo balance through `MIX_SetTrackStereo`, not 3D positioning). Pitch follows
+  distance to the world camera; the loop is a placed voice at the car's body
+  with its velocity (#390), so the host pans it, adds Doppler and the
+  environment reverb while keeping this gain law (`attenuate = false`). Pitch follows
   the CFG mass plus a stable per-car offset, so heavy and light cars differ.
   The CFG `sfx_loop` (`PartConfig::sfx_loop`; Erbilac and Wagon, a radio
   music loop) plays as that car's own loop within 40 m. Only the four nearest

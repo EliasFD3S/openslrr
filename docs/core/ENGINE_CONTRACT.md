@@ -956,6 +956,16 @@ drives the picture, with continuous wall-clock fallback if audio ends or
 fails. No third-party audio SDK is needed to build. Optional
 VLC/Windows codec fallbacks keep their library-owned audio outputs.
 Engine loops use the scripts' SfxTables.
+World sounds are placed voices (#390): `host_sfx_play_at`/`host_sfx_set_place`
+give a position (and velocity) in script space, and the world camera set each
+frame by `mainloop_frame` (`host_sfx_set_listener`) is the listener. A placed
+voice gets a constant-power pan from its direction, an inverse-distance gain
+(`reference`, `maximum`, `rolloff`; callers with their own gain law pass
+`attenuate = false`) and a Doppler factor on its pitch, and joins the world
+group of the effects mixer, which the environment reverb/echo of the active
+section processes (garage, city, open track; menus dry). Unplaced voices
+(menus, UI) stay centred and dry. The three behaviours are host options 22-24
+(`openslrr_options`), switched from the SOUND page.
 `scene_ambience` plays the `sfx_loop`/`sfx_random` lines of map placements
 through `host_sfx`; it owns those voices and stops them when their ground
 shell leaves the active world.

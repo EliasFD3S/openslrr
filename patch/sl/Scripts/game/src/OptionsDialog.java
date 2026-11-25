@@ -50,6 +50,10 @@ public class OptionsDialog extends Dialog
 	final static int CMD_SHADOWED_LAMPS = 524;
 	// Controls (#383): host option 21.
 	final static int CMD_STEER_SPEED = 525;
+	// Spatial audio (#390): host options 22-24, replacing the DirectSound MIXING choice.
+	final static int CMD_AUDIO_POSITIONING = 526;
+	final static int CMD_AUDIO_DOPPLER = 527;
+	final static int CMD_AUDIO_REVERB = 528;
 	final static int RENDERER_FRAMERATE_MODE = 5;
 	public static native int getRendererOption(int option);
 	public static native void setRendererOption(int option, int value);
@@ -522,7 +526,9 @@ public class OptionsDialog extends Dialog
 		m.addItem( "MUSIC VOLUME", CMD_MUSIC_VOL, Sound.getVolume(Sound.CHANNEL_MUSIC), null );
 		m.addItem( "ENGINE VOLUME", CMD_ENGINE_VOL, Sound.getVolume(Sound.CHANNEL_ENGINE), null );
 		m.addSeparator();
-		soundHWMulti = m.addItem( "MIXING", CMD_SOUND_HW, 0, soundHWText, null );
+		m.addItem( "3D POSITIONING", CMD_AUDIO_POSITIONING, getRendererOption(22), detailTextOO, "Pans world sounds by direction and fades them with distance" );
+		m.addItem( "DOPPLER", CMD_AUDIO_DOPPLER, getRendererOption(23), detailTextOO, "Pitch shift of sounds moving towards or away from the camera" );
+		m.addItem( "REVERB", CMD_AUDIO_REVERB, getRendererOption(24), detailTextOO, "Garage reverb, street and track echo for world sounds" );
 
 		m = osd.createMenu( butt2, 0.98, 0.85, 0 );
 		m.addItem( "BACK", CMD_OPTIONS );
@@ -1078,6 +1084,9 @@ public class OptionsDialog extends Dialog
 		else if (command == CMD_SHADOW_SMOOTHING) { setRendererOption(10, osd.multiValue); customPreset(); }
 		else if (command == CMD_AO_STRENGTH) setRendererOption(11, osd.sliderValue);
 		else if (command == CMD_STEER_SPEED) setRendererOption(21, osd.sliderValue);
+		else if (command == CMD_AUDIO_POSITIONING) setRendererOption(22, osd.multiValue);
+		else if (command == CMD_AUDIO_DOPPLER) setRendererOption(23, osd.multiValue);
+		else if (command == CMD_AUDIO_REVERB) setRendererOption(24, osd.multiValue);
 		else if (command == CMD_AO_RADIUS) setRendererOption(12, osd.sliderValue);
 		else
 		if (command == CMD_ANISOTROPIC)
@@ -1252,7 +1261,6 @@ public class OptionsDialog extends Dialog
 			if( Config.Sound_Mix_HW == 1 && Config.Sound_3D_HW == 1 )
 				soundHW++;
 
-			soundHWMulti.setValue( soundHW );
 
 			changeMode (soundGroup);
 		}

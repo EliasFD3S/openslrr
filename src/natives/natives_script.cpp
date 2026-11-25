@@ -86,6 +86,10 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           case 20: return Value::make_int(graphics.shadowed_lamps);
           // Controls (#383).
           case 21: return Value::make_int(host_input_tuning().steer_speed_sensitivity);
+          // Spatial audio (#390).
+          case 22: return Value::make_int(host_sfx_spatial_options().positioning);
+          case 23: return Value::make_int(host_sfx_spatial_options().doppler);
+          case 24: return Value::make_int(host_sfx_spatial_options().reverb);
           default: return Value::make_int(0);
         }
       });
@@ -122,6 +126,9 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           case 19: graphics.street_lamps = value != 0; break;
           case 20: graphics.shadowed_lamps = std::clamp(value, 0, 6); break;
           case 21: host_input_tuning().steer_speed_sensitivity = std::clamp(value, 0, 100); break;
+          case 22: host_sfx_spatial_options().positioning = value != 0; host_sfx_apply_spatial_options(); break;
+          case 23: host_sfx_spatial_options().doppler = value != 0; host_sfx_apply_spatial_options(); break;
+          case 24: host_sfx_spatial_options().reverb = value != 0; host_sfx_apply_spatial_options(); break;
           default: return Value::make_void();
         }
         host_save_graphics_options();
@@ -159,7 +166,33 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           : under_game(rpk.game_root(), rpk.payload_prop(resource_id_of(self), "sourcefile"));
       auto num=[&](size_t i,float fallback){return i>=args.size()?fallback:args[i].tag==ValueTag::Float?args[i].v.f:args[i].tag==ValueTag::Int?static_cast<float>(args[i].v.i):fallback;};
       if(path.empty())return Value::make_int(0);
-      return Value::make_int(host_sfx_play_file(path.string(),num(2,1),num(3,1),static_cast<int>(num(4,0))&1,static_cast<int>(num(5,0))));
+      const float pitch=num(2,1),volume=num(3,1);
+      const bool loop=static_cast<int>(num(4,0))&1;
+      const int32_t instance=static_cast<int>(num(5,0));
+      // A position places the sound in the world (#390): the resource's
+      // mindist/maxdist give the distance model, a positive radius caps it.
+      Object* where=native_arg_object(args,0);
+      float position[3]{};
+      bool placed=where!=nullptr;
+      const char* axes[3]={"x","y","z"};
+      for(int i=0;placed&&i<3;++i){
+        const auto f=where->fields.find(axes[i]);
+        placed=f!=where->fields.end()&&(f->second.tag==ValueTag::Float?std::isfinite(f->second.v.f):f->second.tag==ValueTag::Int);
+        if(placed)position[i]=f->second.tag==ValueTag::Float?f->second.v.f:static_cast<float>(f->second.v.i);
+      }
+      if(!placed)return Value::make_int(host_sfx_play_file(path.string(),pitch,volume,loop,instance));
+      HostSfxPlace place;
+      std::copy(position,position+3,place.position);
+      const auto prop=[&](const char* key,float fallback){
+        const auto text=rpk.payload_prop(resource_id_of(self),key);
+        const float value=text.empty()?fallback:std::strtof(text.c_str(),nullptr);
+        return std::isfinite(value)&&value>0.f?value:fallback;
+      };
+      place.reference=prop("mindist",2.5f);
+      place.maximum=(std::max)(place.reference,prop("maxdist",60.f));
+      const float radius=num(1,0);
+      if(std::isfinite(radius)&&radius>0.f)place.maximum=(std::max)(place.reference,radius);
+      return Value::make_int(host_sfx_play_at(path.string(),place,pitch,volume,loop,instance));
     });
   jvm.natives().register_method("java.util.resource.SfxRef", "stop", "(I)V",
     [](Object*,const std::vector<Value>& args){if(!args.empty())host_sfx_stop(args[0].v.i);return Value::make_void();});

@@ -148,7 +148,35 @@ and stereo sources. Validation: `money.wav`, `mnuselect.wav`,
 `Dialog_Message.wav`, `Elevator_Beep.wav`, `N2O_trigger.wav`, `engine/up.wav`
 and `Slip.wav` played through `host_sfx` and captured from the effects mixer
 match FMOD 2.04 offline renders band for band (0-22 kHz) and in peak/energy;
-`audio_recovery` and `video_safety` pass. Loop pitch
+`audio_recovery` and `video_safety` pass.
+
+Spatial audio (#390): world sounds were all centred. `SfxRef.nplay` ignored
+the position scripts pass (garage jack, City applause, shock absorbers), the
+player's car was never placed and only traffic had a hand-made pan. SLRR_rev
+4ca11c2 (its audio `vehicle-audio.ts` and `traffic-audio.ts`) uses Web Audio
+`PannerNode`s with the inverse distance model (`mindist`/`maxdist`, rolloff
+.25 for vehicles) and an HRTF pan, without Doppler or reverb. The host now has
+placed voices in `host_sfx` (constant-power pan, the same distance model,
+Doppler from the source velocity and the camera's smoothed velocity, c =
+343 m/s, factor clamped to 0.5-2 and smoothed per frame; a camera jump over
+25 m or 120 m/s is a cut, not motion) and a world group on the effects mixer.
+`audio_reverb.cpp` is a Freeverb network (Jezar's public-domain tunings) plus
+a damped feedback delay; the group callback captures the dry world signal and
+the mixer post-mix callback adds the wet signal, so the tail survives the end
+of the tracks (SDL_mixer skips an idle group). Presets by section: garage
+(room .62, wet .20, 38 ms echo), city (room .38, wet .12, 115 ms slapback),
+open track (wet .05, 260 ms echo); menus dry. Placed now: SfxRef sounds with a
+position, the player's and AI engines/exhaust/nitro (reference 6 m, so the
+cockpit and chase views stay centred), slide loop, skid chirp, impacts,
+traffic engines and radios, map ambience emitters (traffic and ambience keep
+their own gain laws). Validation: `audio_recovery` checks gain .2 at 10 m
+(reference 2, rolloff 1), full right pan, silence past the maximum, the
+Doppler ratio 343/313 for a source closing at 30 m/s on the track frequency
+ratio, the three option switches, and an impulse through each preset (rings
+and decays; None dry). In game (ValoCity bench drive, temporary probe) the
+city preset engaged and the wet signal sat about 10 dB under the world
+group; the Options SOUND page toggles save `audio_*` lines (screenshots in
+`assets/validation/issue390-spatial-audio/`). Not checked by ear. Loop pitch
 and gain updates now reject non-finite inputs via the same finite defaults
 as play_file. HostSfxStats exposes rejection/read/hit/cache diagnostics.
 

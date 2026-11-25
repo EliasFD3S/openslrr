@@ -1,6 +1,7 @@
 #include "slrr/host_game_options.hpp"
 #include "slrr/jvm.hpp"
 #include "host_input_devices.hpp"
+#include "slrr/host_sfx.hpp"
 #include <algorithm>
 #include <charconv>
 #include <chrono>
@@ -41,8 +42,10 @@ void load_host_options(const std::string& root) {
   host_options_path += "save\\game\\openslrr_options";
   host_enhanced_graphics() = {};
   host_input_tuning() = {};
+  host_sfx_spatial_options() = {};
   framerate_mode = FramerateMode::Adaptive;
   auto& graphics = host_enhanced_graphics();
+  auto& sound = host_sfx_spatial_options();
   std::ifstream in(host_options_path);
   for (std::string line; std::getline(in, line);)
     if (line == "framerate_mode=classic") framerate_mode = FramerateMode::Classic;
@@ -71,10 +74,14 @@ void load_host_options(const std::string& root) {
                                   std::pair{"fog", &graphics.fog},
                                   std::pair{"car_lights", &graphics.car_lights},
                                   std::pair{"headlight_shadows", &graphics.headlight_shadows},
-                                  std::pair{"street_lamps", &graphics.street_lamps}}) {
+                                  std::pair{"street_lamps", &graphics.street_lamps},
+                                  std::pair{"audio_positioning", &sound.positioning},
+                                  std::pair{"audio_doppler", &sound.doppler},
+                                  std::pair{"audio_reverb", &sound.reverb}}) {
       if (line == std::string(entry.first) + "=0") *entry.second = false;
       if (line == std::string(entry.first) + "=1") *entry.second = true;
     }
+  host_sfx_apply_spatial_options();
 }
 
 bool save_host_options() {
@@ -105,6 +112,9 @@ bool save_host_options() {
       << "headlight_shadows=" << graphics.headlight_shadows << '\n'
       << "street_lamps=" << graphics.street_lamps << '\n'
       << "shadowed_lamps=" << std::clamp(graphics.shadowed_lamps,0,6) << '\n'
+      << "audio_positioning=" << host_sfx_spatial_options().positioning << '\n'
+      << "audio_doppler=" << host_sfx_spatial_options().doppler << '\n'
+      << "audio_reverb=" << host_sfx_spatial_options().reverb << '\n'
       << "steer_speed_sensitivity="
       << std::clamp(host_input_tuning().steer_speed_sensitivity,0,100) << '\n';
   out.close();
