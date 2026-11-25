@@ -889,3 +889,31 @@ felt like soap sideways.
 - `src/physics/sl2_pacejka.cpp` (recovered SL2 formula, boot self-check
   only) is unchanged and still unused by the solver.
 - Not validated in game yet.
+
+## Stock anti-roll bars: per-car rates (#419)
+
+- All 48 stock bar classes had `force = 25000`, `damping = 2500`. With the
+  host couple a bar adds 2k per wheel in roll, so on 44 kN/m springs
+  (SunStrip 1.5, Einvagen 110 GT, Focer 200) it more than doubled the roll
+  stiffness.
+- New rates come from the real bar diameters (OEM part listings, bushing
+  sizes, forums; many low-confidence, see the table in
+  [patch](../../patch/README.md#per-car-bar-rates-419)) through the solid
+  torsion-bar formula with one assumed geometry per suspension type.
+  No published wheel rate or roll stiffness was found except Nismo's R34
+  catalogue. Race cars (GT III, Racing SunStrip, GT II), the GC8 front, the
+  Golf III rear (torsion beam, equivalent bar), the R34 stock bars and the
+  Prime DLH 500 are assumptions.
+- Compile: `build/swaybar-compile-root` with the patched `Swaybar.class`,
+  sources in `parts/running_gear/scripts/sways/src`,
+  `compile_game_sources.exe <root> parts/running_gear/scripts/sways`, with
+  the stock bar classes in place so `--float-mode auto` (#420) picks their
+  float conversion. The unmodified `sources/` bars then rebuild all 48 stock
+  classes byte for byte, and the patched ones differ only in force and
+  damping. Before #420, the MC GT-B/GT-LE bars (`brand_prestige_factor` 1.90,
+  2.65) came out one float ulp off and the Focer 200 pair one byte off.
+- Tests: `swaybars` patched-car case passes with the new values. Run from a
+  view whose `game` is stock (`build/stock-view` still has bars on its stock
+  cars, so tests 1-2 fail there, and tests 3, 4, 6, 8 fail on the two-ticks
+  expectation that predates the 1000 Hz solver, as on `main`).
+- Not validated in game yet.

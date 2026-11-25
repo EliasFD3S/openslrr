@@ -1,6 +1,6 @@
 # OpenSLRR Enhanced
 
-Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes, the re-specced stock engine parts (#411), `SuperCharger` and `Pulley` (#415) and the four fuel classes: `AirFuelDeliverySystem`, `FuelInjectorSystem`, `DynoData` and the SL Tuners methanol fuel rail), 24 racer classes and 17 racer chassis CFGs (`_main_*.cfg`). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. The fuel classes add fuel heat, ethanol blends and knock; install them together. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
+Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes, the re-specced stock engine parts (#411), `SuperCharger` and `Pulley` (#415) and the four fuel classes: `AirFuelDeliverySystem`, `FuelInjectorSystem`, `DynoData` and the SL Tuners methanol fuel rail, and the 48 stock anti-roll bars (#419)), 24 racer classes and 17 racer chassis CFGs (`_main_*.cfg`). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. The fuel classes add fuel heat, ethanol blends and knock; install them together. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
 
 **Options** (main menu and in-game menu) opens a full-screen screen built on `java.render.osdx` ([docs/ui/osd-v2.md](../docs/ui/osd-v2.md)): Video, Graphics, Sound, Controls (live axis meters, gamma, dead zones, steering speed sensitivity, force feedback), Devices (connected controllers, battery, rumble test, axis calibration) and Game tabs, an info panel that explains the setting under the pointer, and a notification when a preset is applied. Key redefinition, axes and the control files open the classic pages. The classic pages below are still in `OptionsDialog`. The **Video Options** menu applies the resolution and the Enhanced settings in game. A **Preset** choice (Low, Medium, High, Ultra) sets them all at once; changing one setting afterwards shows Custom. **Advanced** opens a second page: VSync, prop detail, fog, car lights, headlight shadows, street lamps, view distance (500–3,000 m, 3 km by default) and the number of street lamps that cast shadows. **Advanced Game Options** has the pedestrian density slider again (0.5–1.5; an old saved value below 0.5 returns to 1.5). The scenery shadow map and the vehicle shadow map each use a resolution of 2048 × 2048. **Ctrl+F12 → Renderer** also sets how many reflection faces are computed per frame.
 
@@ -35,6 +35,47 @@ bars when it is newly assembled (dealer, used cars, opponents):
   twice now name the car's own bars: Duhen SunStrip 1.5 DVC rear, Ishima Enula
   WRZ (and its stage-1 WRS list) and WR SuperTurizmo.
 - Cars already bought or saved keep their parts.
+
+### Per-car bar rates (#419)
+
+All 48 stock bars had `force = 25000` N/m and `damping = 2500` N s/m. The
+patched classes in `parts/running_gear/scripts/sways` (sources in `src/`) set
+each bar's rate at the wheel from the real car's bar diameter and no damping
+(a real bar is a spring). Rate = G π d⁴ / (32 L a²) × MR², with G = 79.3 GPa,
+an active length L = 1.0 m, a lever a = 0.22 m and a link-to-wheel ratio MR of
+0.9 (strut), 0.65 (double wishbone), 0.7 (multilink), 0.8 (live/solid axle)
+or 0.9 (Golf torsion beam, as an equivalent bar). The share column is the
+bar's part of that axle's roll stiffness with the stock springs,
+2k / (spring + 2k).
+
+| Bars | Real car | Front mm, N/m, share | Rear mm, N/m, share | Source |
+| --- | --- | --- | --- | --- |
+| Baiern CS | E36 325i | 24, 43,200, 55 % | 18, 8,300, 18 % | OEM parts |
+| Baiern DS | E36 M3 | 26.5, 64,300, 62 % | 19, 10,300, 21 % | retailer listings, low |
+| Baiern GT | race E36 M3 | 26.5, 64,300, 51 % | 19, 10,300, 14 % | no data: M3 bars |
+| SunStrip 15 | del Sol S | 21, 13,200, 37 % | 15, 3,400, 13 % | OEM parts |
+| SunStrip 18 | del Sol Si | 22, 15,900, 35 % | 15, 3,400, 11 % | OEM parts |
+| SunStrip 22 | del Sol VTi | 24, 22,500, 43 % | 15, 3,400, 10 % | OEM parts |
+| SunStrip 20 | race del Sol | 24, 22,500, 30 % | 22, 15,900, 24 % | street-race bars, low |
+| Einvagen GT/GTK/GTA | Golf III | 20, 20,800, 37–48 % | beam as 18, 13,700, 28–38 % | front OEM; rear assumed |
+| Ishima WRY/WRZ/WRS | Impreza GC8 | 20, 20,800, 35–45 % | 17, 10,900, 24–31 % | front assumed; rear derived, low |
+| Focer 200/300/WRC | Lancer Evo VI | 23, 36,500, 51–61 % | 21, 15,300, 31–42 % | OEM-fit bushes |
+| MC GT/GTB | Camaro Z28 | 30, 55,000, 67–68 % | 19, 13,400, 38–39 % | forums (solid assumed) |
+| MC GTLE | Camaro SS | 32, 71,300, 70 % | 19, 13,400, 31 % | forums |
+| Nonus SGT | R34 GT-R | 23, 22,100, 38 % | 22, 18,500, 33 % | no stock data: assumed |
+| Nonus GT2 | race R34 | 23, 22,100, 27 % | 27.2, 43,100, 42 % | Nismo catalogue |
+| Prime | none | 42,000, 55 % | 17,900, 30 % | share-based (no real car) |
+| SuperDuty 500 | Ram 1500 | 30, 55,000, 61 % | none, 0 | bushing kits, low |
+| SuperDuty 750 | Ram 2500 | 32, 107,900, 72 % | none, 0 | bushing kits, low |
+
+Before, a 25 kN/m bar more than doubled the roll stiffness of the soft cars
+(SunStrip 1.5, Einvagen 110 GT, Focer 200: about 44 kN/m springs) and added
+40 % on the GT III. With `--float-mode auto` (#420) the sources compile byte
+for byte to the stock classes apart from the force and damping constants;
+compile them over the stock classes so auto mode picks the stock float
+conversion. Cars already
+bought keep their installed bar objects, which take the new class values
+when they load.
 
 ## Java natives
 
