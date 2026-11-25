@@ -132,8 +132,10 @@ int main() {
   SLRR_REQUIRE(video_fmv_open("Data\\FMV\\Mono8.avi",1,0)==0);
   MIX_Audio* pcm_sound=cinepak_fmv_audio_track()?MIX_GetTrackAudio(cinepak_fmv_audio_track()):nullptr;
   SDL_AudioSpec pcm_spec{};
-  SLRR_REQUIRE(pcm_sound&&MIX_GetAudioDuration(pcm_sound)==8001&&MIX_GetAudioFormat(pcm_sound,&pcm_spec)&&
-               pcm_spec.freq==8000&&pcm_spec.channels==1&&pcm_spec.format==SDL_AUDIO_U8);
+  // 8 kHz PCM is upsampled linearly to the mixer rate (#389); every frame is kept.
+  SLRR_REQUIRE(pcm_sound&&MIX_GetAudioFormat(pcm_sound,&pcm_spec)&&pcm_spec.freq==host_audio_mixer_rate(mixer->fmv)&&
+               pcm_spec.channels==1&&pcm_spec.format==SDL_AUDIO_F32&&
+               uint64_t(MIX_GetAudioDuration(pcm_sound))==host_audio_output_frames(mixer->fmv,8001,8000));
   video_fmv_pump();Sleep(150);video_fmv_pump();
   SLRR_REQUIRE(video_fmv_is_playing()&&video_fmv_audio_running()); // Audio outlasts the two video frames.
   for(int i=0;i<400&&video_fmv_is_playing();++i){video_fmv_pump();Sleep(5);}

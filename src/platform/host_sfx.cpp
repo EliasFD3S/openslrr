@@ -90,20 +90,17 @@ std::shared_ptr<const WaveData> wave_data(const std::string& path,const std::str
   if (ec || size < 12 || size > 64 * 1024 * 1024) return {};
   const auto utf8 = std::filesystem::path(path).u8string();
   const char* file = reinterpret_cast<const char*>(utf8.c_str());
-  // Probe the decoded size before decoding: a small compressed cue must not
-  // bypass the per-wave bound by expanding in memory. Predecoded audio is
-  // held as 32-bit float samples.
-  MIX_Audio* probe = MIX_LoadAudio(audio.engine->effects, file, false);
-  if (!host_audio_check(probe != nullptr, "inspect effect")) return {};
-  SDL_AudioSpec spec{};
-  const Sint64 frames = MIX_GetAudioDuration(probe);
-  const bool known = MIX_GetAudioFormat(probe, &spec) && frames > 0 && spec.channels > 0;
-  MIX_DestroyAudio(probe);
-  if (!known || static_cast<uint64_t>(frames) * spec.channels * sizeof(float) > 64 * 1024 * 1024) return {};
-  data->bytes = static_cast<size_t>(frames) * spec.channels * sizeof(float);
-  // One decoded copy is shared by every one-shot and loop of this cue.
-  data->sound = MIX_LoadAudio(audio.engine->effects, file, true);
-  if (!host_audio_check(data->sound != nullptr, "load effect")) return {};
+  // One decoded copy is shared by every one-shot and loop of this cue. It
+  // may loop, so the upsampling wraps across its end. Decoding stops at the
+  // 64 MiB per-effect bound (32-bit float samples at the mixer rate).
+  std::vector<float> samples;
+  int channels = 0, rate = 0;
+  if (!host_audio_decode_file(audio.engine->effects, file, samples, channels, rate, 64 * 1024 * 1024))
+    return {};
+  data->sound = host_audio_load_pcm(audio.engine->effects, samples, channels, rate, true);
+  if (!data->sound) return {};
+  data->bytes = static_cast<size_t>(host_audio_output_frames(audio.engine->effects,
+      samples.size() / static_cast<size_t>(channels), rate)) * static_cast<size_t>(channels) * sizeof(float);
   const size_t bytes=data->bytes;
   if (bytes<=kWaveCacheBytes) {
     while (!wave_cache.empty() && (wave_cache_bytes+bytes>kWaveCacheBytes || wave_cache.size()>=kWaveCacheEntries)) {

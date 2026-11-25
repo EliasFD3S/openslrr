@@ -948,7 +948,10 @@ each a logical device on the default output with its own gain. SDL mixes on
 its own audio thread, so nothing needs a per-frame update;
 `host_music_update` only advances the playlist at EOF. Sound owners retain
 the shared service through shutdown, since destroying a mixer destroys its
-tracks. Stock Cinepak FMV PCM plays on the FMV mixer. Its playback position
+tracks. Effects and stock FMV PCM are upsampled to the mixer rate with
+linear interpolation and mono is centred at -3 dB, matching FMOD (#389);
+SDL's band-limited resampler would muffle the 11/22 kHz stock samples.
+Stock Cinepak FMV PCM plays on the FMV mixer. Its playback position
 drives the picture, with continuous wall-clock fallback if audio ends or
 fails. No third-party audio SDK is needed to build. Optional
 VLC/Windows codec fallbacks keep their library-owned audio outputs.

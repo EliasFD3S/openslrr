@@ -356,6 +356,7 @@ struct Movie {
   std::shared_ptr<HostAudio> audio;
   MIX_Track* voice = nullptr;  // Holds the only reference to the PCM.
   double audio_length = 0;
+  int audio_frame_rate = 0;  // Rate of the loaded PCM, after any upsampling.
   double audio_position = 0;
   double audio_wall = 0;
   bool audio_done = true;
@@ -432,14 +433,16 @@ struct Movie {
     if (!audio) audio = host_audio_acquire();
     if (!audio) { std::vector<uint8_t>().swap(pcm); return; }
     // AVI PCM keeps WAV's conventions: unsigned 8-bit, signed little-endian 16-bit.
-    SDL_AudioSpec spec{};
-    spec.format = info.audio_bits == 8 ? SDL_AUDIO_U8 : SDL_AUDIO_S16LE;
-    spec.channels = info.audio_channels;
-    spec.freq = info.audio_rate;
-    MIX_Audio* sound = MIX_LoadRawAudio(audio->fmv, pcm.data(), bytes, &spec);
-    // The raw load copies the samples. Free the staging buffer before playback.
+    std::vector<float> samples(bytes / (info.audio_bits / 8));
+    for (size_t i = 0; i < samples.size(); ++i)
+      samples[i] = info.audio_bits == 8
+          ? (static_cast<float>(pcm[i]) - 128.f) / 128.f
+          : static_cast<float>(static_cast<int16_t>(pcm[2 * i] | (pcm[2 * i + 1] << 8))) / 32768.f;
+    // Free the staging buffer before playback; the load copies the samples.
     std::vector<uint8_t>().swap(pcm);
-    if (!host_audio_check(sound != nullptr, "load Cinepak PCM")) return;
+    MIX_Audio* sound = host_audio_load_pcm(audio->fmv, samples, info.audio_channels,
+                                           info.audio_rate, false, &audio_frame_rate);
+    if (!sound) return;
     voice = MIX_CreateTrack(audio->fmv);
     const bool attached = host_audio_check(voice != nullptr, "Cinepak track") &&
                           host_audio_check(MIX_SetTrackAudio(voice, sound), "Cinepak audio");
@@ -506,7 +509,7 @@ struct Movie {
       const Sint64 samples = MIX_GetTrackPlaybackPosition(voice);
       const bool running = MIX_TrackPlaying(voice) && samples >= 0;
       if (running) {
-        audio_position = std::min(audio_length, static_cast<double>(samples) / info.audio_rate);
+        audio_position = std::min(audio_length, static_cast<double>(samples) / audio_frame_rate);
         audio_wall = wall;
       }
       // An exhausted or stopped track stops reporting. On EOF or an early device
