@@ -52,6 +52,25 @@ uint64_t next_hotkey = 0;
 
 InputCapture capture;
 
+// The force feedback wheel: the first steering binding on a device with
+// haptics, and the sign from the logical axis to that device's axis.
+int ffb_device = -1;
+float ffb_sign = 1.f;
+
+void choose_force_feedback(const ControllerInput* input) {
+  ffb_device = -1;
+  if (!input) return;
+  for (const auto& b : input->bindings) {
+    if (b.axis != 1 || b.device < 3 || !host_input_devices().has_force_feedback(b.device)) continue;
+    // Logical steer = lerp(low, high, (physical - from) / (to - from)).
+    const float slope = (b.to - b.from) * (b.high - b.low);
+    if (slope == 0.f) continue;
+    ffb_device = b.device;
+    ffb_sign = slope > 0 ? 1.f : -1.f;
+    return;
+  }
+}
+
 double capture_clock() {
   using namespace std::chrono;
   return duration<double>(steady_clock::now().time_since_epoch()).count();
@@ -179,6 +198,22 @@ void host_input_capture_cancel() { capture.reset(); }
 const InputCapture& host_input_capture() { return capture; }
 float host_input_capture_progress() { return capture.settle_progress(capture_clock()); }
 
+void host_input_force_feedback(float torque, float damper) {
+  const auto& options = host_game_options();
+  if (ffb_device < 0 || !options.ffb || options.ffb_strength <= 0.f) {
+    host_input_force_feedback_stop();
+    return;
+  }
+  const float invert = host_input_tuning().ffb_invert ? -1.f : 1.f;
+  const float strength = options.ffb_strength;
+  host_input_devices().set_force(ffb_device, torque * ffb_sign * invert * strength,
+                                 damper * strength);
+}
+
+void host_input_force_feedback_stop() { host_input_devices().stop_force(); }
+
+int host_input_force_feedback_device() { return ffb_device; }
+
 InputKind host_input_device_kind(int device) {
   if (device == 0) return InputKind::Keyboard;
   if (device == 1) return InputKind::Mouse;
@@ -298,6 +333,7 @@ void host_input_update_controller(Object* controller, float dt) {
   in.drive_steer = axis(1);
   in.drive_steer_analog = false;
   in.drive_steer_kind = InputKind::None;
+  choose_force_feedback(controller ? controller->input.get() : nullptr);
   if (controller && controller->input) {
     auto analog_axis = [](int device, int axis) {
       return host_input_devices().analog_axis(device, axis);

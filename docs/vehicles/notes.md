@@ -559,3 +559,37 @@ Limitations: at 120 Hz (`--physics-hz 120`) full-throttle wheelspin in a
 turn runs away and spins the car (stable from 160 Hz; the adaptive rate never
 goes below 250 Hz). The SCM surface friction is not read yet. No
 longitudinal relaxation, camber or aligning torque.
+
+## Force feedback (#395)
+
+Cause: no force reached a force feedback wheel. SDL was built with
+`SDL_HAPTIC` off (`CMakeLists.txt`), and nothing in the host sent an effect;
+the stock FORCE FEEDBACK slider (`Config.FFB_strength`) was stored only.
+
+Fix: `physics::SteeringFeedback` (`src/physics/steering_feedback.cpp`) turns the
+front tyres' state into a steering torque. A lateral force acts behind the
+patch centre: with the solver's axes (side = forward x up, steer positive to
+the left) its moment on the steering axis is trail x `tire_force.lateral`. The
+trail is a pneumatic part (3.5 cm at zero slip, gone at 1.5 times the slip
+angle of the lateral peak, which is found on the tyre's own curve) and a
+caster part (1.5 cm), so the torque peaks before the grip and keeps 30 % in a
+slide. It is divided by twice the peak of that moment at the resting front
+load (smoothed over 3 s), faded out below 3 m/s, and low-passed at 20 ms. A
+damper runs from 0.6 parked to 0.1 at speed. `host_input_force_feedback`
+sends it to the first steering binding on a haptic device, with the binding's
+sign, the strength slider and INVERT FFB (host option 25); SDL plays a
+constant force and a damper on `SDL_HAPTIC_STEERING_AXIS`. Options > Devices
+shows FORCE FEEDBACK and its TEST button turns the wheel left then right.
+
+Validation: Release build; `vehicle_dynamics` 38/38 with three new tests
+(sign and symmetry, lighter past the peak, full scale at most 1 and
+independent of load, fade when parked or airborne, a coasting car steered
+left is pulled right and vice versa); `sdl_input` 2/2. Java compiled (the
+compile root first rebuilt HEAD's classes byte for byte). A bench drive
+starts with haptics initialised. Not checked on a force feedback wheel: the
+SDL direction convention for a positive level is assumed (INVERT FFB covers a
+wheel that disagrees), and the strength and feel are not tuned on hardware.
+
+Not done: emulated force feedback for devices without it
+(`Config.FFB_strength_emulated`), road texture, kerbs and impacts, and a
+per-car caster from the suspension geometry.

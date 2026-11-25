@@ -369,8 +369,9 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		}
 		sl = m.addItem( "STEERING SPEED SENS.", OptionsDialog.CMD_STEER_SPEED, OptionsDialog.getRendererOption(21), 0.0, 100.0, 21, "How much a wheel or stick's full lock narrows with speed (percent). 0 keeps full lock at any speed." );
 		sl.printValue( "%.0f" );
-		sl = m.addItem( "FORCE FEEDBACK", OptionsDialog.CMD_FFB + 0, Config.FFB_strength, 0.0, 1.0, 0, "Force feedback strength on wheels that support it (percent)." );
+		sl = m.addItem( "FORCE FEEDBACK", OptionsDialog.CMD_FFB + 0, Config.FFB_strength, 0.0, 1.0, 0, "Strength of the front tyres' pull in a force feedback wheel (percent). 0 turns it off." );
 		sl.printValue( "%.0f", 100.0 );
+		m.addToggle( "INVERT FFB", OptionsDialog.CMD_FFB_INVERT, OptionsDialog.getRendererOption(25), "Turn on if the wheel pulls away from the centre instead of back to it." );
 		sl = m.addItem( "EMULATED FFB", OptionsDialog.CMD_FFB + 1, Config.FFB_strength_emulated, 0.0, 0.1, 0, "Steering resistance emulated on devices without force feedback." );
 		sl.printValue( "%.0f", 1000.0 );
 	}
@@ -803,8 +804,8 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 			cardInfo[k] = osd.createText( null, Frontend.smallFont, Text.ALIGN_LEFT, -0.84, y + 0.06 );
 			cardInfo[k].changeColor( 0xFFB0B0B0 );
 			cardActivity[k] = new LevelBar( osd, -0.60, y + 0.13, 0.48, 0.014, 0 );
-			cardRumble[k] = osd.createButton( btn, 0.30, y + 0.06, "RUMBLE", CMD_RUMBLE + k );
-			cardRumble[k].setToolTip( "Vibrate this controller for a moment (force feedback test)." );
+			cardRumble[k] = osd.createButton( btn, 0.30, y + 0.06, "TEST", CMD_RUMBLE + k );
+			cardRumble[k].setToolTip( "Vibrate this controller for a moment, or turn a force feedback wheel left then right." );
 			cardCalibrate[k] = osd.createButton( btn, 0.53, y + 0.06, "CALIBRATE", CMD_CALIBRATE + k );
 			cardCalibrate[k].setToolTip( "Press, move every axis (pedals, wheel, sticks) to both ends, then press DONE. The ranges are saved for this controller." );
 			cardReset[k] = osd.createButton( btn, 0.76, y + 0.06, "RESET", CMD_CALRESET + k );
@@ -819,7 +820,7 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		if( on )
 		{
 			cardPlate[k].setColor( 0x50000000 );
-			cardRumble[k].changeLabelText( "RUMBLE" );
+			cardRumble[k].changeLabelText( "TEST" );
 			cardReset[k].changeLabelText( "RESET" );
 			cardRumble[k].enable();
 			cardCalibrate[k].enable();
@@ -893,6 +894,9 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		else
 		if( power.length() > 0 )
 			t = t + "  -  " + power;
+		if( InputDevices.canForceFeedback( i ) )
+			t = t + "  -  FORCE FEEDBACK";
+		else
 		if( InputDevices.canRumble( i ) )
 			t = t + "  -  RUMBLE";
 		if( InputDevices.calibrating( i ) )
@@ -955,8 +959,15 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 			return;
 		if( cmd < CMD_CALIBRATE )
 		{
+			// A force feedback wheel turns one way, then the other.
+			if( InputDevices.canForceFeedback( i ) )
+			{
+				if( !InputDevices.testForceFeedback( i ) )
+					toast.show( "FORCE FEEDBACK TEST FAILED", 2.5 );
+			}
+			else
 			if( !InputDevices.canRumble( i ) || !InputDevices.rumble( i, 0.6, 600 ) )
-				toast.show( "NO RUMBLE ON THIS CONTROLLER", 2.5 );
+				toast.show( "NO RUMBLE OR FORCE FEEDBACK ON THIS CONTROLLER", 2.5 );
 		}
 		else
 		if( cmd < CMD_CALRESET )

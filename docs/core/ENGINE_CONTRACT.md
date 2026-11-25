@@ -909,9 +909,21 @@ disconnect and are reused on reconnect. Reopen control options after adding a ne
 device. Without a serial, changing USB ports can change identity; indistinguishable
 same-model devices without a serial/path use discovery-order suffixes. A capture on a
 device plugged in after the set was made adds its name (`InputDevices.ensureDevice`)
-so the binding survives the save. SDL haptics/force feedback
-are not implemented. Regression: `scripts/run_save_io_tests.ps1 -Suite sdl_input`
+so the binding survives the save. Regression: `scripts/run_save_io_tests.ps1 -Suite sdl_input`
 uses virtual peripherals; real rig calibration remains a separate hardware check.
+
+Force feedback (#395) is SDL haptics on the host thread: a constant force
+and a damper on the steering axis (`SDL_HAPTIC_STEERING_AXIS`) of the first
+steering binding whose device has haptics. The torque comes from the
+controlled car's front tyres after each committed physics batch
+(`part_runtime.cpp:update_force_feedback`, `physics::SteeringFeedback`): trail
+times lateral force, the pneumatic trail fading past the grip peak, normalised
+by the front tyres' peak torque at the resting front load. Its sign follows the
+binding's direction; `Config.ForceFeedBack`, `Config.FFB_strength` and host
+option 25 (invert) apply. It stops when no car is driven, under a modal, out
+of focus, and 0.25 s after the last committed batch. The wheel's own
+autocentre is turned off when it is opened. `Config.FFB_strength_emulated`
+and `Controller.user_SetAxisForce`'s force coefficient are not implemented.
 
 Car instruments can come from the stock layout or from the CFG. `HudSlot`
 covers, among other things, gauges, needles, odometer, damage, nitro, and

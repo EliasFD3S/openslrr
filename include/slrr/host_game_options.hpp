@@ -34,6 +34,9 @@ struct InputTuning {
   // percent: 0 keeps full lock at any speed, 100 narrows it like keyboard
   // steering (the angle a 1.2 g turn needs plus the tyre's peak slip).
   int steer_speed_sensitivity = 50;
+  // Force feedback direction flip (option 25), for a wheel whose driver
+  // reports its force axis the other way round.
+  bool ffb_invert = false;
 };
 InputTuning& host_input_tuning();
 // Persist host-only graphics alongside the stock options, without changing Config.
@@ -69,6 +72,9 @@ struct GameOptions {
   float deformation = 1.6f, internal_damage = 1.f, player_damage = .8f;
   float head_steer = 1.f, head_velocity = 1.f, head_acceleration = 1.f;
   float traffic_density = .2f, pedestrian_density = .1f;
+  // Stock Config.ForceFeedBack and FFB_strength (0..1).
+  bool ffb = true;
+  float ffb_strength = 1.f;
   bool operator==(const GameOptions&) const = default;
 };
 const GameOptions& host_game_options();

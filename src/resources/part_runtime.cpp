@@ -23,6 +23,7 @@
 #include "slrr/scx_mesh.hpp"
 #include "slrr/skeleton.hpp"
 #include "slrr/skid_marks.hpp"
+#include "slrr/steering_feedback.hpp"
 #include "slrr/suspension_geometry.hpp"
 #include "slrr/vehicle_dynamics.hpp"
 #include "slrr/vehicle_contacts.hpp"
@@ -7681,6 +7682,41 @@ void part_physics_join() {
 namespace {
 // The host's part after a batch ran: results into the records, then what the
 // frame draws from them.
+// Force feedback from the controlled car's front tyres, after each committed
+// batch. A frame without one (pause, a modal, a script holding the car) keeps
+// the torque for a moment, then lets go of the wheel.
+physics::SteeringFeedback steering_feedback;
+double feedback_idle = 0;
+void update_force_feedback(double frame_seconds, bool committed) {
+  Object* chassis = part_controlled_chassis();
+  Record* rec = chassis ? record(chassis) : nullptr;
+  const bool driving = rec && rec->config && rec->config->native_kind == "car" &&
+                       rec->config->has_steering && rec->physics_released &&
+                       !rec->state.parent && !osd_has_modal();
+  if (!driving) {
+    steering_feedback.reset();
+    feedback_idle = 0;
+    host_input_force_feedback_stop();
+    return;
+  }
+  if (!committed) {
+    feedback_idle += frame_seconds;
+    if (feedback_idle > .25) host_input_force_feedback_stop();
+    return;
+  }
+  feedback_idle = 0;
+  const auto& dynamics = rec->dynamics;
+  std::array<physics::SteeringFeedbackWheel, 2> front;
+  for (size_t i = 0; i < front.size(); ++i) {
+    const auto& s = dynamics.state[i];
+    front[i] = {s.contact && !dynamics.wheels[i].metal_contact, s.force, s.slip_angle,
+                s.tire_force.lateral, dynamics.drive.wheels[i].tyre};
+  }
+  const auto out = steering_feedback.update(front, dynamics.body.velocity.length(),
+                                            std::max(frame_seconds, 1e-3));
+  host_input_force_feedback(out.torque, out.damper);
+}
+
 void finish_physics_frame(double frame_seconds, double alpha, bool committed) {
   if (committed) {
     if (perf::enabled()) perf::add(perf::Zone::Vehicles, physics_batch.thread_ticks);
@@ -7697,6 +7733,7 @@ void finish_physics_frame(double frame_seconds, double alpha, bool committed) {
     }
     update_traffic_engine_audio();
   }
+  update_force_feedback(frame_seconds, committed);
   // After the batch, so the hinges see this frame's carrier motion.
   advance_flaps(frame_seconds);
   publish_render_poses(alpha);

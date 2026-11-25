@@ -3,6 +3,7 @@
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_hints.h>
+#include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_joystick.h>
 #include <SDL3/SDL_properties.h>
@@ -54,6 +55,9 @@ HostInputDevices::HostInputDevices() {
     std::fprintf(stderr, "[input] SDL3 initialization failed: %s\n", SDL_GetError());
     return;
   }
+  // Force feedback is optional: a failure only leaves every wheel without it.
+  haptic_ready_ = SDL_InitSubSystem(SDL_INIT_HAPTIC);
+  if (!haptic_ready_) std::fprintf(stderr, "[input] SDL3 haptics unavailable: %s\n", SDL_GetError());
   SDL_SetJoystickEventsEnabled(false);
   SDL_SetGamepadEventsEnabled(false);
   // SDL 3.2's helpers omit the update-complete events; this polling-only host
@@ -63,7 +67,50 @@ HostInputDevices::HostInputDevices() {
   poll(false);
 }
 
+void HostInputDevices::open_haptic(Device& d) {
+  if (!d.joystick || !SDL_IsJoystickHaptic(d.joystick)) return;
+  d.haptic = SDL_OpenHapticFromJoystick(d.joystick);
+  if (!d.haptic) return;
+  const Uint32 features = SDL_GetHapticFeatures(d.haptic);
+  if (features & SDL_HAPTIC_CONSTANT) {
+    SDL_HapticEffect effect{};
+    effect.type = SDL_HAPTIC_CONSTANT;
+    // SDL picks the wheel's steering axis; the level's sign is the direction.
+    effect.constant.direction.type = SDL_HAPTIC_STEERING_AXIS;
+    effect.constant.length = SDL_HAPTIC_INFINITY;
+    d.constant = SDL_CreateHapticEffect(d.haptic, &effect);
+  }
+  if (d.constant < 0) {  // rumble-only pads keep SDL_RumbleJoystick
+    SDL_CloseHaptic(d.haptic);
+    d.haptic = nullptr;
+    return;
+  }
+  if (features & SDL_HAPTIC_DAMPER) {
+    SDL_HapticEffect effect{};
+    effect.type = SDL_HAPTIC_DAMPER;
+    effect.condition.direction.type = SDL_HAPTIC_STEERING_AXIS;
+    effect.condition.length = SDL_HAPTIC_INFINITY;
+    effect.condition.right_sat[0] = effect.condition.left_sat[0] = 0xFFFF;
+    d.damper = SDL_CreateHapticEffect(d.haptic, &effect);
+  }
+  if (features & SDL_HAPTIC_GAIN) SDL_SetHapticGain(d.haptic, 100);
+  // The game's torque replaces the wheel's own spring.
+  if (features & SDL_HAPTIC_AUTOCENTER) SDL_SetHapticAutocenter(d.haptic, 0);
+}
+
+void HostInputDevices::stop_haptic(Device& d) {
+  if (!d.haptic || !d.playing) return;
+  if (d.constant >= 0) SDL_StopHapticEffect(d.haptic, d.constant);
+  if (d.damper >= 0) SDL_StopHapticEffect(d.haptic, d.damper);
+  d.playing = false;
+  d.level = d.damping = 0;
+}
+
 void HostInputDevices::close(Device& device) {
+  stop_haptic(device);
+  if (device.haptic) SDL_CloseHaptic(device.haptic);
+  device.haptic = nullptr;
+  device.constant = device.damper = -1;
   if (device.gamepad) SDL_CloseGamepad(device.gamepad);
   else if (device.joystick) SDL_CloseJoystick(device.joystick);
   device.gamepad = nullptr;
@@ -74,6 +121,7 @@ void HostInputDevices::close(Device& device) {
 
 HostInputDevices::~HostInputDevices() {
   for (auto& device : devices_) close(device);
+  if (haptic_ready_) SDL_QuitSubSystem(SDL_INIT_HAPTIC);
   if (initialized_) SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
 }
 
@@ -99,6 +147,7 @@ void HostInputDevices::poll(bool focused) {
     incoming.pad = incoming.gamepad &&
         (type == SDL_JOYSTICK_TYPE_GAMEPAD || type == SDL_JOYSTICK_TYPE_UNKNOWN);
     incoming.name = device_name(incoming.joystick);
+    if (haptic_ready_) open_haptic(incoming);
     // Identical devices without a serial/path can only be distinguished by
     // discovery order. Do not collapse two simultaneously connected peripherals.
     const auto base_name = incoming.name;
@@ -119,6 +168,19 @@ void HostInputDevices::poll(bool focused) {
     else *slot = std::move(incoming);
   }
   SDL_free(ids);
+
+  if (!focused) stop_force();
+  if (test_slot_ >= 0) {
+    // TEST: half force one way, then the other, then off.
+    const double left = test_until_ - SDL_GetTicks() / 1000.0;
+    Device* d = slot_device(test_slot_);
+    if (!d || !d->haptic || left <= 0 || !focused) {
+      if (d) stop_haptic(*d);
+      test_slot_ = -1;
+    } else {
+      send_force(*d, left > .3 ? .5f : -.5f, .2f);
+    }
+  }
 
   // Keep the legacy alias on the same gamepad until it is unplugged.
   auto primary = std::find_if(devices_.begin(), devices_.end(), [&](const Device& d) {
@@ -335,6 +397,7 @@ HostInputDevices::Info HostInputDevices::info(int index) const {
   out.battery = percent;
   out.rumble = SDL_GetBooleanProperty(SDL_GetJoystickProperties(d.joystick),
                                       SDL_PROP_JOYSTICK_CAP_RUMBLE_BOOLEAN, false);
+  out.force_feedback = d.haptic && d.constant >= 0;
   return out;
 }
 
@@ -355,6 +418,68 @@ bool HostInputDevices::rumble(int index, float strength, int milliseconds) {
   const auto level = static_cast<Uint16>(std::clamp(strength, 0.f, 1.f) * 65535.f);
   return SDL_RumbleJoystick(devices_[static_cast<size_t>(index)].joystick, level, level,
                             static_cast<Uint32>(std::clamp(milliseconds, 0, 5000)));
+}
+
+HostInputDevices::Device* HostInputDevices::slot_device(int slot) {
+  return slot >= 3 && static_cast<size_t>(slot - 3) < devices_.size() ? &devices_[slot - 3] : nullptr;
+}
+
+bool HostInputDevices::has_force_feedback(int slot) const {
+  const auto* d = device(slot);
+  return d && d->haptic && d->constant >= 0;
+}
+
+void HostInputDevices::send_force(Device& d, float level, float damper) {
+  level = std::clamp(level, -1.f, 1.f);
+  damper = std::clamp(damper, 0.f, 1.f);
+  // DirectInput updates are not free: skip changes below one step in 256.
+  if (!d.playing || std::abs(level - d.level) >= 1.f / 256) {
+    SDL_HapticEffect effect{};
+    effect.type = SDL_HAPTIC_CONSTANT;
+    effect.constant.direction.type = SDL_HAPTIC_STEERING_AXIS;
+    effect.constant.length = SDL_HAPTIC_INFINITY;
+    effect.constant.level = static_cast<Sint16>(std::lround(level * 32767.f));
+    SDL_UpdateHapticEffect(d.haptic, d.constant, &effect);
+    d.level = level;
+  }
+  if (d.damper >= 0 && (!d.playing || std::abs(damper - d.damping) >= .02f)) {
+    SDL_HapticEffect effect{};
+    effect.type = SDL_HAPTIC_DAMPER;
+    effect.condition.direction.type = SDL_HAPTIC_STEERING_AXIS;
+    effect.condition.length = SDL_HAPTIC_INFINITY;
+    effect.condition.right_sat[0] = effect.condition.left_sat[0] = 0xFFFF;
+    const auto coefficient = static_cast<Sint16>(std::lround(damper * 32767.f));
+    effect.condition.right_coeff[0] = effect.condition.left_coeff[0] = coefficient;
+    SDL_UpdateHapticEffect(d.haptic, d.damper, &effect);
+    d.damping = damper;
+  }
+  if (!d.playing) {
+    SDL_RunHapticEffect(d.haptic, d.constant, 1);
+    if (d.damper >= 0) SDL_RunHapticEffect(d.haptic, d.damper, 1);
+    d.playing = true;
+  }
+}
+
+void HostInputDevices::set_force(int slot, float level, float damper) {
+  if (force_slot_ != slot) stop_force();
+  Device* d = slot_device(slot);
+  if (!focused_ || !d || !d->haptic || d->constant < 0 || slot == test_slot_) return;
+  force_slot_ = slot;
+  send_force(*d, level, damper);
+}
+
+void HostInputDevices::stop_force() {
+  if (Device* d = slot_device(force_slot_)) stop_haptic(*d);
+  force_slot_ = -1;
+}
+
+bool HostInputDevices::test_force(int index) {
+  const int slot = index + 3;
+  if (!has_force_feedback(slot) || !focused_) return false;
+  if (force_slot_ == slot) stop_force();
+  test_slot_ = slot;
+  test_until_ = SDL_GetTicks() / 1000.0 + .6;
+  return true;
 }
 
 void HostInputDevices::set_calibration_file(std::string path) {
