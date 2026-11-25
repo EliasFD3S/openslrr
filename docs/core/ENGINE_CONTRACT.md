@@ -929,6 +929,12 @@ peak or the road shakes them; host option 26 (FFB DETAIL, 0-200 %) scales it
 apart from the aligning torque. `Config.FFB_strength_emulated`
 and `Controller.user_SetAxisForce`'s force coefficient are not implemented.
 
+Service brakes (#400): the host gain is 25 / `brake_inertia` (the handbrake
+50), and the chassis `brake_balance` is read as a front share
+(`include/slrr/brake_balance.hpp`): 0.5 puts 70 % of the braking on the front
+axle, an adjuster moves it from 100 % to 40 %. The total and each wheel's share
+of its axle come from the brake scripts.
+
 Car instruments can come from the stock layout or from the CFG. `HudSlot`
 covers, among other things, gauges, needles, odometer, damage, nitro, and
 turbo. Preserve the expected size, aspect, and coordinates. A reference image
