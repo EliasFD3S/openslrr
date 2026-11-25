@@ -895,7 +895,8 @@ Physics:
 - Installed body low points are cached from real mesh vertices, not the
   chassis AABB's empty underside corners
   (`src/resources/part_runtime.cpp:rebuild_body_support`). Hidden meshes keep
-  their supports; corner gear and hinged panels have separate contact paths.
+  their supports; corner gear and hinged panels have separate contact paths,
+  and engine parts (`EnginePart`, exhaust included) are not supports.
   Slot poses, deformation, repair and assembly changes invalidate the cache.
 - Missing-spring fixed-travel support is solved implicitly with body contacts
   in the current substep, before the tyre law consumes the load

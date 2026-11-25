@@ -57,7 +57,10 @@ after the original law, nicolas-found42/sl-remastered, 00454500):
   0.98 leaning 3 degrees into the force, 0.92 away. GT III rear (295/20,
   stiffness 40): peak 1.56 at 6.4 degrees.
 - Low-speed caps: the force grows with the sliding speed, 0.95 (lateral) /
-  0.85 (longitudinal) × load per m/s, times max(1, road speed / 2 m/s). Before
+  0.85 (longitudinal) × load per m/s, times max(1, road speed / 2 m/s). The
+  lateral cap uses the patch's actual sliding speed, not the relaxed one, and
+  below 3 m/s the tyre never pushes along the way it slides
+  ([notes](notes.md#a-sideways-slide-swung-back-like-a-spring-426)). Before
   #418 that factor was missing, so the cap also bounded the cornering
   stiffness at speed (16 per radian at 60 km/h, softer than the stock tyre).
   `TireTuning` scales the lateral and longitudinal force (grip), the slope
@@ -132,7 +135,9 @@ stop remains. An absent scripted compression limit falls back to CFG spring
 
 `rebuild_body_support` extracts actual low mesh vertices across left/right
 and four longitudinal sectors. It excludes running gear (already represented
-by wheels) and hinged panels (whose floor contact remains unsupported),
+by wheels), hinged panels (whose floor contact remains unsupported) and
+engine hardware (`EnginePart`: exhaust pipes, tips, mufflers; see
+[notes](notes.md#a-lowered-car-rode-on-its-exhaust-426)),
 respects slot poses/deformation, and refreshes after assembly changes,
 damage and repair. Hiding a mesh does not remove its physical support. In an
 upright car these samples replace fictitious underside AABB corners; the

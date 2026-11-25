@@ -1256,7 +1256,7 @@ void VehicleDynamics::step_drive() {
         force = {s.slip_speed * factor, -lateral * factor};
       } else {
         force = tire_forces(s.force, 1, s.spin * wheel.radius, road, relaxed_lateral,
-                            cfg.tyre, camber);
+                            cfg.tyre, camber, lateral);
       }
 
       const Vec3 arm = s.patch - body.position;

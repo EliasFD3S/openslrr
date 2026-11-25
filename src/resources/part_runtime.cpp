@@ -2491,6 +2491,13 @@ void rebuild_body_support(Object* chassis, Record& rec) {
       // existing no-floor-contact policy; do not freeze a swinging door here.
       if (mount != rec.config->slots.end() && (corner_gear(mount->type) || mount->has_flap))
         continue;
+      // Engine hardware (exhaust pipes, tips and mufflers, sumps) hangs below
+      // the floor and scrapes; it does not hold the car up. Counted as body
+      // supports, a lowered car's exhaust carried up to 1.5 kN at rest and
+      // dragged on the road at 0.4 friction: the rear lost its load and the
+      // car went sideways under power (Baiern GT III).
+      if (runtime && runtime->tree_instance_of(item.object, "java.game.parts.EnginePart"))
+        continue;
     }
     const auto part_frame = world_matrix(item.object);
     const auto from_part = part_matrix_multiply(to_chassis, part_frame);

@@ -259,6 +259,28 @@ SLRR_TEST(parked_car_settles_without_vibration) {
   for (const auto& wheel : car.dynamics.state) SLRR_REQUIRE(wheel.contact);
 }
 
+// A car sliding sideways comes to rest without swinging back: the relaxed
+// slip angle lags the sliding, and bounding the low-speed force by it pushed
+// the stopped car the other way, left and right like a spring.
+SLRR_TEST(a_sideways_slide_stops_without_swinging_back) {
+  Car car;
+  car.run(2, 0, 1, 0);
+  car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({4, 0, 0});
+  double back = 0;
+  for (int i = 0; i < 240; ++i) {
+    car.run(1. / 60, 0, 1, 0);
+    // At the contact patches: the body's roll on its springs is not a slide.
+    double patch = 0;
+    for (const auto& wheel : car.dynamics.state)
+      patch += car.dynamics.body.orientation.inverse_rotate(
+                   car.dynamics.body.point_velocity(wheel.patch)).x / 4;
+    back = std::min(back, patch);
+  }
+  std::printf("SLIDE stop: largest swing back %.3f m/s\n", -back);
+  SLRR_REQUIRE(back > -.05);
+  SLRR_REQUIRE(car.speed() < .05);
+}
+
 SLRR_TEST(full_lock_at_speed_slides_instead_of_rolling_over) {
   Car car;
   car.run(1, 0, 0, 0);
@@ -1125,6 +1147,7 @@ int main() {
       wheelspin_uses_up_cornering_grip,
       camber_leaning_into_the_force_adds_grip,
       parked_car_settles_without_vibration,
+      a_sideways_slide_stops_without_swinging_back,
       full_lock_at_speed_slides_instead_of_rolling_over,
       stored_instant_centres_do_not_change_the_intended_solver,
       more_grip_corners_harder,
