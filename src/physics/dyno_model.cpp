@@ -125,11 +125,12 @@ enum Word : int {
   kPeakTorqueRpm = 112,
   kPeakHorsepowerRpm = 113,
   kPeakGrossRpm = 114,
-  kPeakNetRpm = 115
+  kPeakNetRpm = 115,
+  kKnockCompression = 116
 };
 
 struct Bank {
-  float v[116]{};
+  float v[117]{};
   double get(int i) const { return v[i]; }
   void set(int i, double x) { v[i] = static_cast<float>(x); }
 };
@@ -262,6 +263,46 @@ double turbo_pressure(const Bank& s, double rpm) {
   return std::min(response * s.get(kTurboPressure), s.get(kWastePressure));
 }
 
+// #407 knock. The fuel sets the knock-limited static compression of a
+// naturally aspirated 20 C charge (DynoData.knockCompression, 0 = no knock).
+// The unburned charge at TDC is compressed polytropically (n = 1.3, as in
+// step()) from the boosted intake pressure and the intake temperature
+// (intercooling and nitrous cooling included). The boost heating of prepare()
+// is left out: DynoData carries no intercooler, and with that heating every
+// stock turbo engine would knock as if it had none. The equivalent
+// compression is the naturally aspirated one with the same Douaud-Eyzat
+// ignition delay, tau ~ p^-1.7 exp(3800/T).
+double knock_equivalent_compression(const Bank& s) {
+  const double compression = s.get(kCompression);
+  const double pressure = s.get(kEffectivePressure) / 101325.0;
+  const double temperature = s.get(kIntakeTemperature);
+  if (!(compression > 1) || !(pressure > 0) || !(temperature > 0)) return compression;
+  const auto delay = [](double pressure_ratio, double tdc_temperature) {
+    return -1.7 * std::log(pressure_ratio) + 3800.0 / tdc_temperature;
+  };
+  const double target = delay(pressure * std::pow(compression, 1.3),
+                              temperature * std::pow(compression, 0.3));
+  // The naturally aspirated delay falls monotonically with compression.
+  double low = 1, high = 200;
+  for (int i = 0; i < 60; ++i) {
+    const double mid = 0.5 * (low + high);
+    if (delay(std::pow(mid, 1.3), 293.15 * std::pow(mid, 0.3)) > target)
+      low = mid;
+    else
+      high = mid;
+  }
+  return 0.5 * (low + high);
+}
+
+// Spark retard costs about 2.5% of the burned heat per compression point
+// above the knock limit, down to 60%.
+double knock_heat_factor(const Bank& s) {
+  const double limit = s.get(kKnockCompression);
+  if (!(limit > 0)) return 1.0;
+  const double excess = knock_equivalent_compression(s) - limit;
+  return excess > 0 ? std::max(0.6, 1.0 - 0.025 * excess) : 1.0;
+}
+
 void prepare(Bank& s) {
   mixture(s);
   s.set(kSpark, advance_timing(s, kSparkStart, kSparkShift, kSparkRpm0, kSparkRpm1));
@@ -287,6 +328,7 @@ void prepare(Bank& s) {
   double shortening = s.get(kRpm) * s.get(kBurnSpeed);
   if (shortening >= 0.9) shortening = 0.9;
   s.set(kEffectiveBurnTime, (1.0 - shortening) * s.get(kBurnTime));
+  s.set(kEffectiveHeat, s.get(kEffectiveHeat) * knock_heat_factor(s));
 }
 
 bool valve_open(const Bank& s, int open, int close) {
@@ -595,6 +637,9 @@ bool calculate_into(Session* session, const std::unordered_map<std::string, floa
   s.set(kIntakeDuration, s.get(kIntakeClose) - s.get(kIntakeOpen));
   s.set(kExhaustDuration, s.get(kExhaustClose) - s.get(kExhaustOpen));
   s.set(kTurboPlateau, 0);
+  const float knock = field_of(fields, "knockCompression", 0.f);
+  if (!std::isfinite(knock)) return bad("knockCompression");
+  s.set(kKnockCompression, knock);
   const float intercooling = field_of(fields, "intercooling", 1.f);
   if (!std::isfinite(intercooling)) return bad("intercooling");
   s.set(kIntakeTemperature, intercooling * 293.15);

@@ -1105,9 +1105,10 @@ These are entry points, not fixes. Each needs its own reproduction.
   engine outputs: cycle torque is now SI net crank Nm, sampled power is T·ω,
   and driving consumes that curve without the legacy ×2 gain or duplicate WOT
   loss. The shipped Java head/Inline/Vee patch normalizes capped curtain area by
-  a declared 1-ms ideal-air reference exchange volume, replacing X²/V. Native
-  DynoData fields remain unchanged; full pressure-dependent flow, fuel calibration
-  and independent-thread ownership remain open. The actual-solver throttle
+  a declared 1-ms ideal-air reference exchange volume, replacing X²/V. The
+  only added DynoData field is the fuel's `knockCompression` (#407, read by name
+  by the host dyno); full pressure-dependent flow and independent-thread
+  ownership remain open. The actual-solver throttle
   experiment covers digital/analog plate response, cut hysteresis and latched
   BOV events without enabling new production controls. `interpolation_ms`
   measures pose publication inside Physics, not downstream renderer caches.

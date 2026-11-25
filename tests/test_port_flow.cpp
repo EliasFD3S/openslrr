@@ -3,12 +3,15 @@
 // Executes the shipped Java helper and fuel system in the VM, not C++
 // duplicates of them.
 #include "standalone_test.hpp"
+#include "slrr/dyno_model.hpp"
 #include "slrr/jvm.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <filesystem>
 #include <numbers>
+#include <string>
+#include <unordered_map>
 
 namespace {
 using namespace slrr;
@@ -54,7 +57,8 @@ bool near(double a, double b) {
 
 // The shipped AirFuelDeliverySystem.updatevariables, run in the VM.
 struct FuelHeat {
-  double heat = 0, min_compression = 0, max_compression = 0;
+  double heat = 0, min_compression = 0, max_compression = 0, knock_compression = 0,
+         optimal = 0;
 };
 FuelHeat fuel_heat(PortVm& f, int type, float ratio) {
   constexpr const char* kFuel = "java.game.parts.enginepart.AirFuelDeliverySystem";
@@ -71,7 +75,8 @@ FuelHeat fuel_heat(PortVm& f, int type, float ratio) {
     SLRR_REQUIRE(value.tag == ValueTag::Float && std::isfinite(value.v.f));
     return static_cast<double>(value.v.f);
   };
-  return {number("mixture_H"), number("minComp"), number("maxComp")};
+  return {number("mixture_H"), number("minComp"), number("maxComp"), number("knockComp"),
+          number("optimal_mixture_ratio")};
 }
 // The stock mixture-match factor 0.8 + 0.2 * match.
 double mixture_match(double ratio, double optimal) {
@@ -142,31 +147,87 @@ SLRR_TEST(missing_geometry_or_restriction_closes_only_that_port) {
   SLRR_REQUIRE(near(f.coefficient(restricted), f.coefficient(valid) * .5));
 }
 
-SLRR_TEST(fuel_heat_is_real_mixture_energy_with_the_stock_compression_window) {
+SLRR_TEST(fuel_heat_follows_the_ethanol_blend_and_octane_sets_the_knock_limit) {
   PortVm f;
   const auto close = [](double got, double want) { return std::abs(got - want) <= want * 1e-5; };
+  // Ethanol by volume to mass: 0.789 and 0.745 kg/l.
+  const auto blend = [](double volume, double gasoline, double ethanol) {
+    const double w = volume * .789 / (volume * .789 + (1 - volume) * .745);
+    return (1 - w) * gasoline + w * ethanol;
+  };
   struct Fuel {
     int type;
-    float optimal;
-    double heat, stock;  // J/kg at the best mixture; the stock heat value
+    double lhv, stoich, lambda, knock, min, max;
   };
-  for (const Fuel fuel : {Fuel{0, 12.5f, 43.4e6 / 14.7, 1099500},
-                          Fuel{1, 13.5f, 43.4e6 / 14.7 * 1100000 / 1099500, 1100000},
-                          Fuel{2, 14.f, 43.4e6 / 14.7 * 1100250 / 1099500, 1100250},
-                          Fuel{3, 16.f, 19.9e6 / 6.47, 1400000},
-                          Fuel{4, 11.f, 43.4e6 / 14.5, 1600000}}) {
-    for (float ratio : {fuel.optimal, 9.f, 17.f}) {
-      const double match = mixture_match(ratio, fuel.optimal);
+  const Fuel fuels[] = {
+      {0, blend(.05, 43.4e6, 26.8e6), blend(.05, 14.7, 9), .86, 10.5, 6.5, 16},
+      {1, blend(.10, 43.4e6, 26.8e6), blend(.10, 14.7, 9), .86, 11.5, 6.5, 17},
+      {2, 43.4e6, 14.7, .86, 12.5, 6.5, 18},
+      {3, 19.9e6, 6.47, .78, 15, 8, 20.5},
+      {4, 43.4e6, 14.5, 1.25, 0, 14, 24}};
+  SLRR_REQUIRE(std::abs(fuels[0].stoich - 14.40) < .01 && std::abs(fuels[1].stoich - 14.10) < .01);
+  for (const Fuel& fuel : fuels) {
+    const double optimal = fuel.stoich * fuel.lambda;
+    for (float ratio : {float(optimal), 4.5f, 9.f, 17.f}) {
       const auto got = fuel_heat(f, fuel.type, ratio);
-      SLRR_REQUIRE(close(got.heat, fuel.heat * match));
-      // The compression gates keep the stock x1.55 heat value.
-      SLRR_REQUIRE(close(got.min_compression, fuel.stock * match * 1.55 / 250000));
-      SLRR_REQUIRE(close(got.max_compression, fuel.stock * match * 1.55 / 100000));
+      SLRR_REQUIRE(close(got.optimal, optimal));
+      SLRR_REQUIRE(close(got.heat, fuel.lhv / fuel.stoich * mixture_match(ratio, optimal)));
+      // The compression window no longer moves with the mixture.
+      SLRR_REQUIRE(close(got.min_compression, fuel.min));
+      SLRR_REQUIRE(close(got.max_compression, fuel.max));
+      SLRR_REQUIRE(fuel.knock == 0 ? got.knock_compression == 0
+                                   : close(got.knock_compression, fuel.knock));
     }
   }
-  const auto pump = fuel_heat(f, 0, 12.5f);
-  std::printf("[port_flow] 95 octane at 12.5:1: %.0f J/kg, compression %.4f-%.4f\n",
-              pump.heat, pump.min_compression, pump.max_compression);
+  // Methanol's best power (about 5:1) is inside the mixture range; 4:1 is its floor.
+  const auto methanol = fuel_heat(f, 3, 5.0466f);
+  SLRR_REQUIRE(fuel_heat(f, 3, 4.f).heat < methanol.heat);
+  SLRR_REQUIRE(close(fuel_heat(f, 3, 3.f).heat, fuel_heat(f, 3, 4.f).heat));
+  for (int type = 0; type < 4; ++type) {
+    const auto best = fuel_heat(f, type, float(fuels[type].stoich * fuels[type].lambda));
+    std::printf("[port_flow] fuel %d: best %.2f:1, %.0f J/kg, knock %.1f, window %.1f-%.1f\n",
+                type, best.optimal, best.heat, best.knock_compression, best.min_compression,
+                best.max_compression);
+  }
+}
+
+SLRR_TEST(knock_retards_above_the_fuel_limit_with_boost) {
+  // Synthetic DynoData defaults: static compression 10.506:1.
+  using Fields = std::unordered_map<std::string, float>;
+  const auto peak = [](Fields fields) {
+    int key = 0;
+    slrr::DynoStats stats;
+    fields["maxRPM"] = 7000.f;
+    SLRR_REQUIRE(slrr::dyno_calculate(&key, fields, 28.f, &stats));
+    slrr::dyno_forget(&key);
+    SLRR_REQUIRE(std::abs(stats.compression - 10.5058) < 1e-3);
+    return double(stats.max_torque);
+  };
+  const double clean = peak({});
+  // No limit, or a limit above the engine, changes nothing.
+  SLRR_REQUIRE(peak({{"knockCompression", 0.f}}) == clean);
+  SLRR_REQUIRE(peak({{"knockCompression", 10.6f}}) == clean);
+  const double knocking = peak({{"knockCompression", 8.5f}});
+  const double severe = peak({{"knockCompression", 4.f}});
+  SLRR_REQUIRE(knocking < clean && knocking > .9 * clean);
+  SLRR_REQUIRE(severe < knocking && severe > .5 * clean);
+  // Boost raises the charge pressure at TDC: the same fuel knocks.
+  const Fields turbo{{"rpm_turbo_mul", 1.f}, {"rpm_turbo_opt", 3500.f},
+                     {"rpm_turbo_range", 3000.f}, {"P_turbo_max", .8f}};
+  auto boosted = turbo;
+  boosted["knockCompression"] = 10.6f;
+  const double boost_clean = peak(turbo);
+  const double boost_knock = peak(boosted);
+  SLRR_REQUIRE(boost_knock < boost_clean);
+  // Intercooling lowers the charge temperature and the knock.
+  auto cooled = boosted;
+  cooled["intercooling"] = .9f;
+  auto cooled_clean = turbo;
+  cooled_clean["intercooling"] = .9f;
+  SLRR_REQUIRE(peak(cooled) / peak(cooled_clean) > boost_knock / boost_clean);
+  std::printf("[port_flow] knock: N/A %.2f Nm, limit 8.5 %.2f, limit 4 %.2f; "
+              "0.8 bar %.2f, limit 10.6 %.2f\n",
+              clean, knocking, severe, boost_clean, boost_knock);
 }
 
 int main() {
@@ -174,7 +235,8 @@ int main() {
       curtain_geometry_has_linear_lift_and_a_throat_limit,
       reference_exchange_volume_agrees_in_si_and_script_units,
       missing_geometry_or_restriction_closes_only_that_port,
-      fuel_heat_is_real_mixture_energy_with_the_stock_compression_window,
+      fuel_heat_follows_the_ethanol_blend_and_octane_sets_the_knock_limit,
+      knock_retards_above_the_fuel_limit_with_boost,
   };
   return slrr::standalone::run("port_flow", tests);
 }
