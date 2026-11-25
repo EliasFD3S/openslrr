@@ -917,3 +917,67 @@ felt like soap sideways.
   cars, so tests 1-2 fail there, and tests 3, 4, 6, 8 fail on the two-ticks
   expectation that predates the 1000 Hz solver, as on `main`).
 - Not validated in game yet.
+
+## Tyre pressure (#424)
+
+Cause: the pressure reached the physics, but only through `setStiffness`.
+The installed MWM `Tyre.class` has the same `SetInflation` as `sources/`
+(it recompiles byte for byte), so the script was not at fault. In the
+original law (nicolas-found42/sl-remastered, `evaluateWheelCurve`) the curve has
+no peak (C = sliction = 0.81, D = 1.77 Fz), so a lower stiffness lowers the
+force at every slip the car uses: about 30 % less at 8 degrees when the stock
+tyre goes from 17.7 to 8. The #383/#418 curve has a peak of 1.15 that does
+not depend on the stiffness: a softer tyre reaches the same grip a few
+degrees later, so a deflated tyre felt the same. The stock script also caps
+the pressure at its optimum and lowers the rolling resistance when the tyre
+is under-inflated.
+
+A host law tying grip to stiffness does not work: every stock tyre has at
+least the stock 17.7 at its optimal pressure (195/50 21.1, 245/40 29.3,
+295/20 40), so a law referenced to the stock stiffness would either miss the
+low-profile tyres or change every car's grip at the optimal pressure. The
+pressure is judged against each tyre's own optimum, which only the script
+knows.
+
+Fix: patched `Tyre.SetInflation`
+(`patch/parts/scripts/rgearpart/reciprocatingrgearpart/src/Tyre.java`) with
+p = pressure / optimum:
+
+- pressure from 0.5 bar up to 1.5 times the optimum (the tuning slider too);
+- friction times 0.5 + 0.5 m below the optimum (m is the stock misinflation,
+  0.6 p³ + 0.4), times 1 - 0.3 (1 - 1/p) above it (smaller contact patch);
+- stiffness: the stock formula below the optimum, its pressure factor
+  1 + 0.2 (1 - 1/p) above it;
+- rolling resistance min_rollres / sqrt(p) (was m × min_rollres);
+- relaxation length 0.3 / sqrt(p) m through a new native
+  `WheelRef.setRelaxation(F)V` (patched `WheelRef.java`), read by
+  `VehicleDynamics` per wheel instead of the fixed 0.3 m.
+
+Stock 205/55 (optimum 2.0 bar):
+
+| Pressure | Friction | Stiffness | Rolling res. | Relaxation |
+| --- | --- | --- | --- | --- |
+| 0.5 bar | ×0.705 | 8.0 | ×2.00 | 0.60 m |
+| 1.0 bar | ×0.738 | 8.3 | ×1.41 | 0.42 m |
+| 1.5 bar | ×0.827 | 11.5 | ×1.15 | 0.35 m |
+| 2.0 bar | ×1 | 17.7 | ×1 | 0.30 m |
+| 2.5 bar | ×0.940 | 19.1 | ×0.89 | 0.27 m |
+| 3.0 bar | ×0.900 | 20.1 | ×0.82 | 0.25 m |
+
+At the optimal pressure every tyre keeps its previous values, so cars at
+their default pressure drive as before.
+
+Validation:
+
+- Compilation: `slrr_host` Release builds; `Tyre.java` and `WheelRef.java`
+  from `sources/` first recompiled byte for byte to the MWM classes (float
+  mode D for Tyre, header bytes 9-11 aside), then the patched sources
+  compiled (18,536 and 1,850 bytes).
+- In game: a Baiern bench drive in Valo City on a scratch game copy with the
+  two classes called `setRelaxation(0.3)` on the four wheels, without
+  errors. Driving at another pressure has not been tried yet.
+
+Limitations: the coefficients are OpenSLRR choices, not measured tyre data;
+the pressure does not change the rolling radius, the contact patch length
+or the longitudinal relaxation; without the patched classes the host keeps
+0.3 m and the stock behaviour.

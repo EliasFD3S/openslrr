@@ -28,7 +28,9 @@ after the original law, nicolas-found42/sl-remastered, 00454500):
 - D = Fz × mu, mu = 1.15 (`kPeakFriction`) × `setFriction` / 1.76863
   (clamped 0.2–2.5) × (1 - 0.12 dfz × `setLoadSmooth` / 0.4 × load
   sensitivity, floor 0.5) × camber grip. `frictn_x` scales the longitudinal D.
-  Width, compound, profile and inflation enter through these script inputs.
+  Width, compound, profile and inflation enter through these script inputs;
+  the patched `Tyre` ([notes](notes.md#tyre-pressure-424)) also scales the
+  friction with the pressure and allows over-inflation.
 - C from `setSliction`, the slide/grip ratio its script documents: the curve
   ends at sliction × the peak (sliction clamped to 0.4–1; 1 keeps the peak).
 - Cornering stiffness Kya = s Fz0 sin(2 atan(Fz / (2 Fz0))) / sin(2 atan(0.5)):
@@ -62,8 +64,10 @@ after the original law, nicolas-found42/sl-remastered, 00454500):
   (lateral response) and the load sensitivity.
   `setRollRes` supplies the wheel's rolling torque.
 - `VehicleDynamics` feeds the curve a relaxed slip angle: the tyre's lateral
-  deflection builds over 0.3 m of rolling (`kLateralRelaxation`), integrated
-  implicitly, a 12 ms lag at 90 km/h.
+  deflection builds over the tyre's relaxation length
+  (`TireParameters::relaxation_length`, from the patched
+  `WheelRef.setRelaxation`; 0.3 m at the optimal pressure and without the
+  patch), integrated implicitly, a 12 ms lag at 90 km/h for 0.3 m.
 - Not used yet: the surface friction and rolling resistance of the map's SCM
   materials (`friction`, `rollres`), which multiply the tyre's in the
   original.

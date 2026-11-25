@@ -65,6 +65,7 @@ struct WheelPhys {
   float cpatch_hw = 0, cpatch_ang = 0, cpatch_off = 0;
   float friction = 1.49f, frictn_x = 1, sliction = 1.4f, stiffness = 15.2f;
   float roll_res = 0.001f, bearing = 20, max_load = 8000, load_smooth = .4f;
+  float relaxation = .3f;  // setRelaxation (patched Tyre), metres
   float pacejka[17] = {1.4f, 0, 1.49f,  0,   15.2f,  0,    0, 0, -1.f,
                        0,    0, 8000.f, 1.f, 0.015f, 0.4f, 0, 0};
   float force = 0, damp_bound = 0, damp_rebound = 0;
@@ -3366,6 +3367,7 @@ DriveRefresh configure_drive(Object *chassis, Record &rec, bool controlled) {
     out.tyre.maximum_load = wheel.max_load;
     out.tyre.load_smoothing = wheel.load_smooth;
     out.tyre.longitudinal_grip = wheel.frictn_x;
+    out.tyre.relaxation_length = std::clamp(wheel.relaxation, .05f, 2.f);
     // setCPatch stores the sine of the scripted patch angle.
     out.tyre.patch_angle = std::asin(std::clamp(wheel.cpatch_ang, 0.f, 1.f));
     if (rec.dynamics.wheels[i].metal_contact) {
@@ -9473,6 +9475,11 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   });
   wheel("setRollRes", "(F)V", [put](Object *s, const std::vector<Value> &a) {
     return put(s, [&](WheelPhys &w) { w.roll_res = scalar(a, 0, 0); });
+  });
+  // OpenSLRR native declared by the patched WheelRef: the lateral relaxation
+  // length Tyre.SetInflation derives from the pressure.
+  wheel("setRelaxation", "(F)V", [put](Object *s, const std::vector<Value> &a) {
+    return put(s, [&](WheelPhys &w) { w.relaxation = scalar(a, 0, .3f); });
   });
   wheel("setBearing", "(F)V", [put](Object *s, const std::vector<Value> &a) {
     return put(s, [&](WheelPhys &w) { w.bearing = scalar(a, 0, 0); });
