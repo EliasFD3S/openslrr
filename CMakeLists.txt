@@ -423,6 +423,12 @@ if(BUILD_TESTING)
   target_compile_features(save_json PRIVATE cxx_std_20)
   target_compile_options(save_json PRIVATE /W3 /utf-8)
   add_test(NAME save_json COMMAND save_json)
+  add_executable(float_literal_mode tests/test_float_literal_mode.cpp
+    src/jvm/script_compiler.cpp src/jvm/tufa.cpp)
+  target_link_libraries(float_literal_mode PRIVATE slrr_script_compiler)
+  target_include_directories(float_literal_mode PRIVATE include)
+  target_compile_options(float_literal_mode PRIVATE /W3 /utf-8)
+  add_test(NAME float_literal_mode COMMAND float_literal_mode)
 endif()
 
 install(TARGETS slrr_host RUNTIME DESTINATION bin)

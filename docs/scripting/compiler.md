@@ -24,6 +24,17 @@ vendored install scanner. The return value is the number of source units
 attempted, matching the reference directory-walk contract, not the number of
 generated classes. Logs distinguish attempted/succeeded/failed/class counts.
 
+### Float literal conversion (#420)
+
+`System.compileAll` converts float literals as the Build 940 exe does
+(setting B of `third_party/slrrc/floatlit.hpp`). The stock MWM classes were
+compiled by x87 builds of the same routine (D for data classes, A for core
+scripts), so `compile_game_sources` defaults to `--float-mode auto`: each
+unit takes the setting whose literal bits occur in the class it replaces
+(its `.openslrr.bak` first), B when nothing tells them apart. Pass
+`--float-mode B` to reproduce classes built before #420; the shipped patch
+classes affected are listed in [notes.md](notes.md#float-literals-of-rebuilt-stock-classes-420).
+
 ### Multiple classes in a single container
 
 One Java-like source file can declare multiple classes. Its output is one
