@@ -127,8 +127,28 @@ the sample, so it survives cache eviction; root reset stops voices and clears
 cached data/counters. `host_audio` owns one SDL3_mixer mixer per group
 (effects, music, FMV) with independent gains; SDL mixes on its own thread.
 Sounds above the cache limit can play up to the 64 MiB per-effect bound,
-checked with an undecoded load (duration and format) before full decode. `wave_reads`
-counts uncached load attempts (probe plus decode), not OS file reads. Loop pitch
+checked while decoding (32-bit float frames at the mixer rate). `wave_reads`
+counts uncached load attempts, not OS file reads.
+
+Muffled low-rate effects (#389): after #386 the stock 11/22 kHz samples
+(cash register `frontend/sounds/money.wav`, U8 11025 Hz mono) sounded
+"underwater". FMOD's software mixer upsampled with linear interpolation, which
+keeps the spectral images above the source Nyquist frequency; SDL's
+band-limited resampler removes them (offline 48 kHz renders of `money.wav`:
+8-16 kHz at -65/-70 dB with FMOD, -115/-124 dB with SDL). `host_audio_load_pcm`
+now decodes effects and stock Cinepak PCM once, upsamples them linearly to the
+mixer rate (effects wrap at the loop boundary, as FMOD's looping samples did)
+and loads raw float PCM; pitch changes resample from the mixer rate. Mono is
+scaled by 1/sqrt(2), FMOD's centred-pan level: SDL copies mono to both front
+speakers at full gain, +3 dB over FMOD. WAV `smpl` loop points are ignored
+(`MIX_PROP_AUDIO_LOAD_IGNORE_LOOPS_BOOLEAN`): SDL_mixer reported an infinite
+duration for `sound/wav/surface/Slip.wav`, so the surface slip effect never
+loaded. The 7.1 default device is not involved: SDL fills only FL/FR for mono
+and stereo sources. Validation: `money.wav`, `mnuselect.wav`,
+`Dialog_Message.wav`, `Elevator_Beep.wav`, `N2O_trigger.wav`, `engine/up.wav`
+and `Slip.wav` played through `host_sfx` and captured from the effects mixer
+match FMOD 2.04 offline renders band for band (0-22 kHz) and in peak/energy;
+`audio_recovery` and `video_safety` pass. Loop pitch
 and gain updates now reject non-finite inputs via the same finite defaults
 as play_file. HostSfxStats exposes rejection/read/hit/cache diagnostics.
 
