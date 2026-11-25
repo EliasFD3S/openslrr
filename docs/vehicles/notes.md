@@ -665,3 +665,29 @@ bench drive ends with `drive done` and exit 0, with the same speed trace as
 `main`. Not checked on a force feedback wheel. Roll on turn-in moves the two
 suspensions apart too, so it gives a small kick; kerbs are felt only through
 the suspension (the SCM surface type is not read).
+
+## Wheels locked when a spin turns the car round
+
+Play test: in a spin, once the car travelled backwards it could not be
+caught, because every wheel locked. `step_drive` had a direction brake from
+the first drive model: with a forward gear and the car going backwards faster
+than 1 m/s (or reverse held while going forwards), it cut the throttle,
+decoupled the clutch and set the service brake to 1 on all four wheels, pedal
+or not. Nothing in SLRR_rev or the docs backs it.
+
+It is gone. A gear now only turns the driven wheels its own way through the
+clutch: going backwards in first, the undriven wheels roll freely and the
+throttle spins the driven ones forwards; holding reverse while rolling
+forwards spins them backwards once the auto clutch takes up (launch rpm), and
+the car then backs away. Only the brake pedal and handbrake brake.
+
+The vehicle tab of the debug overlay shows each wheel's script drive weight
+(`setDrive`). A stock Einvagen spawned on the Valo City bench reads
+FL/FR 1.00 and RL/RR 0.00, so front-wheel drive is applied as authored.
+
+Validation: `vehicle_dynamics` 44/44 (new: sliding backwards in first keeps
+the wheels rolling, with and without throttle; reverse while rolling forwards
+drives the wheels backwards and reverses the car). Before the fix the
+reverse case locked all four wheels within 0.15 s at 7 m/s with no brake
+pedal. Confirmed in game: a spin can be caught again. A manual (non-auto) clutch still
+couples a stalling engine to the driven wheels, as on a real car.

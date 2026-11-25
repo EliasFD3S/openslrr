@@ -8272,7 +8272,8 @@ bool part_physics_state(Object *key, PartPhysicsState &state) {
     const auto& wheel = rec->dynamics.state[i];
     state.tires[i] = {rec->dynamics.drive.wheels[i].steer,
                      wheel.slip_speed, wheel.lateral_speed, wheel.tire_force.longitudinal,
-                     wheel.tire_force.lateral, wheel.spin * rec->dynamics.wheels[i].radius};
+                     wheel.tire_force.lateral, wheel.spin * rec->dynamics.wheels[i].radius,
+                     rec->dynamics.drive.wheels[i].weight};
   }
   return true;
 }

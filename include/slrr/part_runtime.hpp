@@ -161,6 +161,7 @@ struct PartPhysicsState {
     double steer = 0, slip_speed = 0, lateral_speed = 0;
     double longitudinal_force = 0, lateral_force = 0;
     double wheel_speed = 0;  // spin x radius, m/s (#380 telemetry)
+    double drive = 0;        // the wheel's script drive weight (setDrive)
   };
   std::array<TireSample, 4> tires{};
   double speed_kph = 0, rpm = 0, yaw_rate = 0;

@@ -1048,17 +1048,19 @@ void VehicleDynamics::step_drive() {
   update_gear(rpm, shaft, road_shaft);
   const double ratio = drive.ratios[gear];
   const double forward_speed = body.velocity.dot(wheel_forward(body, 0));
-  const bool direction_brake =
-      (ratio < 0 && forward_speed > 1) || (ratio > 0 && forward_speed < -1);
+  // A gear only drives the wheels in its own direction through the clutch;
+  // moving against it never applies the brakes. The old direction brake
+  // locked every wheel whenever the car slid backwards in a forward gear,
+  // so a spin could not be caught.
   const bool automatic_shift = drive.automatic_shift && shift_time_ > 0;
-  const bool accelerator = drive.throttle > .1 && !direction_brake;
+  const bool accelerator = drive.throttle > .1;
   if (!engine_running && accelerator && !accelerator_down_)
     starter_remaining_ = 2;
   accelerator_down_ = accelerator;
   const bool starting = !engine_running && drive.starter > 0 &&
                         (accelerator || starter_remaining_ > 0);
   starter_remaining_ = std::max(0.0, starter_remaining_ - dt_);
-  service_brake_ = std::lerp(service_brake_, direction_brake ? 1.0 : drive.brake,
+  service_brake_ = std::lerp(service_brake_, drive.brake,
                              -std::expm1(-dt_ / .08));
   const double friction = engine_friction_torque(rpm);
   const double pumping = 14 + std::max(0.0, rpm - drive.idle) * .012;
@@ -1066,7 +1068,7 @@ void VehicleDynamics::step_drive() {
       rpm < drive.idle ? std::min(80.0, 25.0 + (drive.idle - rpm) * .25) : 0;
   const double combustion = std::clamp((rpm - 200) / 450, 0.0, 1.0);
   const double kph = std::abs(forward_speed) * 3.6;
-  double gas = direction_brake ? 0 : std::clamp(drive.throttle, 0.0, 1.0);
+  double gas = std::clamp(drive.throttle, 0.0, 1.0);
   // The driver's pedal before launch control: the auto clutch follows it
   // (#380). Following the reduced `gas` made a launch-control cut lower the
   // engagement rpm, so the clutch grabbed harder, the wheels spun more and
@@ -1108,7 +1110,7 @@ void VehicleDynamics::step_drive() {
   engine_omega = std::max(0.0, engine_omega + net * dt_ / drive.inertia);
 
   double drive_impulse = 0;
-  if (weights > 0 && ratio != 0 && shift_time_ == 0 && !direction_brake &&
+  if (weights > 0 && ratio != 0 && shift_time_ == 0 &&
       (engine_running || !drive.auto_clutch)) {
     const double transmission =
         wheel_inertia * weights * weights / square_weights;
