@@ -282,8 +282,9 @@ reaches the car's vehicle object and returns `1 / inverse mass` of the
 vehicle body (`[vehicle+0x13BC]`). `Part.getMass` (0x00469290) returns the
 part's own body mass. The host now returns `assembly_mass_center` for the
 chassis, the sum the physics body is built from, and keeps `Part.getMass`
-as the part's CFG mass. A chassis outside any car reports the sum of its own
-installed subtree; the executable may report 0 there (not checked).
+as the part's CFG mass. A chassis is always a car (the game keeps no
+chassis in the parts inventory, only in the car lot), so there is no
+loose-chassis case to match.
 
 Validation: `swaybars` test `chassis_mass_is_the_assembled_car` on the stock
 MWM game: Baiern CoupeSport body 838.5 kg, `Chassis.getMass` 1523.6 kg,
