@@ -133,11 +133,12 @@ enum Word : int {
   kChargerBelt = 120,
   kChargerPulley = 121,
   kChargerSlip = 122,
-  kChargerDrive = 123
+  kChargerDrive = 123,
+  kChargerCooled = 124
 };
 
 struct Bank {
-  float v[124]{};
+  float v[125]{};
   double get(int i) const { return v[i]; }
   void set(int i, double x) { v[i] = static_cast<float>(x); }
 };
@@ -355,10 +356,15 @@ void prepare(Bank& s) {
   s.set(kEffectiveDensity, s.get(kIntakeDensity));
   if (positive_displacement(s) && s.get(kTurboMultiplier) > 0) {
     const double ratio = 1.0 + positive_displacement_pressure(s, s.get(kRpm));
+    // The game has no intercooler part, so the charge-cooling share
+    // (charger_intercooled, 1 = back to intake temperature) defaults to 1 and
+    // bypasses the outlet heating; the drive power still pays for it.
     const double outlet = compressor_outlet_temperature(s, ratio);
+    const double cooled = std::clamp(static_cast<double>(s.get(kChargerCooled)), 0.0, 1.0);
+    const double charge = outlet - cooled * (outlet - s.get(kIntakeTemperature));
     s.set(kEffectivePressure, ratio * s.get(kIntakePressure));
-    s.set(kEffectiveTemperature, outlet);
-    s.set(kEffectiveDensity, s.get(kIntakeDensity) * ratio * s.get(kIntakeTemperature) / outlet);
+    s.set(kEffectiveTemperature, charge);
+    s.set(kEffectiveDensity, s.get(kIntakeDensity) * ratio * s.get(kIntakeTemperature) / charge);
   } else if (s.get(kTurboMultiplier) > 0 && s.get(kTurboRange) > 0) {
     const double boost = std::sqrt(turbo_pressure(s, s.get(kRpm)) + 1.0);
     s.set(kEffectivePressure, boost * boost * s.get(kIntakePressure));
@@ -730,6 +736,9 @@ bool calculate_into(Session* session, const std::unordered_map<std::string, floa
     s.set(index, value);
   }
   s.set(kChargerSlip, 1);
+  const float cooled = field_of(fields, "charger_intercooled", 1.f);
+  if (!std::isfinite(cooled)) return bad("charger_intercooled");
+  s.set(kChargerCooled, cooled);
   const float knock = field_of(fields, "knockCompression", 0.f);
   if (!std::isfinite(knock)) return bad("knockCompression");
   s.set(kKnockCompression, knock);

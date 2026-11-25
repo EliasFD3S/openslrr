@@ -24,7 +24,7 @@ public class SuperDuty_E750_supercharger extends SuperCharger
 
 		calculateOptandRange (400.0, 4000.0);
 		default_rpm_turbo_mul = 1.5;
-		P_turbo_max	= 0.31;
+		P_turbo_max	= 0.35;
 		belt_slot_ID = 15;
 	}
 

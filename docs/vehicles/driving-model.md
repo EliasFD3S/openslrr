@@ -186,7 +186,8 @@ mixture; they only refuse engines that cannot run on the fuel. See
 
 Superchargers (#415): `DynoData.charger_type` 1 selects a positive-displacement
 law in `prepare()` (delivery proportional to blower speed with internal
-leakage, adiabatic outlet temperature, density PR × T1 / T2) instead of the
+leakage, adiabatic outlet temperature for the drive power, charge cooled
+back to intake temperature by `charger_intercooled`, default 1) instead of the
 turbo bell curve, and `blower_drive()` in `src/physics/dyno_model.cpp`
 subtracts the blower's drive torque from each dyno row and lets an overloaded
 belt slip. `dyno_boost_fraction` follows the same law. See

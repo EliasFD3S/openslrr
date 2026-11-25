@@ -58,8 +58,8 @@ public class SuperDuty_500_H4R_cylinder_head extends DOHC_CylinderHead
 			if (the_car.model == Hauler_s_models.MODEL_SUPERDUTY_500)
 			{
 				addPart( parts.engines.MC_Prime_SuperDuty:0x000000B2r, "SuperDuty_R_exhaust_header", desc );
-				addPart( parts.engines.MC_Prime_SuperDuty:0x000000FDr, "MC_R_intake_camshaft", desc );
-				addPart( parts.engines.MC_Prime_SuperDuty:0x000000FCr, "MC_R_exhaust_camshaft", desc );
+				addPart( parts.engines.MC_Prime_SuperDuty:0x000000B5r, "SuperDuty_R_intake_camshaft", desc );
+				addPart( parts.engines.MC_Prime_SuperDuty:0x000000B7r, "SuperDuty_R_exhaust_camshaft", desc );
 				addPart( parts.engines.MC_Prime_SuperDuty:0x000000BAr, "SuperDuty_R_camshaft_bearing_bridge", desc );
 				addPart( parts.engines.MC_Prime_SuperDuty:0x000000BCr, "SuperDuty_R_cylinder_head_cover", desc );
 			}
@@ -67,8 +67,8 @@ public class SuperDuty_500_H4R_cylinder_head extends DOHC_CylinderHead
 			if (the_car.model == Hauler_s_models.MODEL_SUPERDUTY_EXTRA_750)
 			{
 				addPart( parts.engines.MC_Prime_SuperDuty:0x000000B2r, "SuperDuty_R_exhaust_header", desc );
-				addPart( parts.engines.MC_Prime_SuperDuty:0x000000FDr, "MC_R_intake_camshaft", desc );
-				addPart( parts.engines.MC_Prime_SuperDuty:0x000000FCr, "MC_R_exhaust_camshaft", desc );
+				addPart( parts.engines.MC_Prime_SuperDuty:0x000000B5r, "SuperDuty_R_intake_camshaft", desc );
+				addPart( parts.engines.MC_Prime_SuperDuty:0x000000B7r, "SuperDuty_R_exhaust_camshaft", desc );
 				addPart( parts.engines.MC_Prime_SuperDuty:0x000000BAr, "SuperDuty_R_camshaft_bearing_bridge", desc );
 				addPart( parts.engines.MC_Prime_SuperDuty:0x000000BCr, "SuperDuty_R_cylinder_head_cover", desc );
 			}

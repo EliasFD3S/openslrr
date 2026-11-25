@@ -792,8 +792,8 @@ a private copy of the stock game plus `patch/`, reads the host dyno in 4 s,
 and a bisection adjusts one lever per car (a part only that car or its group
 uses), in dependency order. Bore, stroke and fitments stay, so catalog parts
 still fit. The coupling of the five SuperDuty-headed V8s needed one stock-list
-change: the Haulers now get the MC cams (the GTLE kept the SuperDuty cams,
-which need 8.8 / 6.2 mm lift for it).
+change: the Haulers got the MC cams (the GTLE kept the SuperDuty cams at
+8.8 / 6.2 mm lift). #417 reverted both when it re-specced the Hauler engine.
 
 Validation: final probe on the branch, results and every changed value in
 [patch](../../patch/README.md#stock-engine-re-spec-411). Every family keeps its
@@ -825,6 +825,27 @@ turbo law at low rpm, a less efficient blower and a slipping belt cost torque,
 no belt limit never holds back); the 24-car probe changes only the GTK and the
 Extra 750. Not checked in game.
 
-Left: no intercooler data (GTK 124 PS against a G60's 160); the leak speed,
+Left: the charge heating is bypassed (no intercooler part, #417); the leak speed,
 efficiencies and belt rating are handbook values, not measurements; the
 blower pulley is not a player tuning (no save-format change).
+
+## Hauler's SuperDuty engine re-spec (#417)
+
+Cause: the owner found the Haulers far too weak (246 / 300 PS after #411) and
+asked for at least double; the stock description promised "500 Nm and nearly
+280 HP", the base game's dyno screen 388 / 529 HP. Their own parts capped them:
+7.85:1 compression, 4,500 rpm redline, rods at 5,250 rpm, crank at 5,500,
+gearbox at 6,000, and #411 had moved them to the small MC cams.
+
+Fix: Hauler-only parts re-specced (redline 6,500, part limits 7,250 rpm,
+10.4:1 pistons), SuperDuty cams back on the Haulers at stock lift, E750 0.35
+bar; supercharger charge heating bypassed (`charger_intercooled` defaults to
+1). Values in [patch](../../patch/README.md#haulers-superduty-engine-re-spec-417).
+
+Validation: every patched engine source (39) rebuilds its stock class; probe:
+SuperDuty 500 479 PS / 645 Nm, Extra 750 593 PS / 830 Nm, MC GTLE 459 PS
+(shares the cams), GTK 154 PS (heating bypass); the other 20 cars unchanged;
+`port_flow` 6/6. Not checked in game.
+
+Left: the Extra 750 plateaus near 590 PS (knock on its 10.4:1 pistons, shared
+with the 500, then belt slip above ~0.6 bar).
