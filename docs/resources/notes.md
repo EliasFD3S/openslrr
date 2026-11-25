@@ -180,6 +180,20 @@ group; the Options SOUND page toggles save `audio_*` lines (screenshots in
 and gain updates now reject non-finite inputs via the same finite defaults
 as play_file. HostSfxStats exposes rejection/read/hit/cache diagnostics.
 
+Exit crash (#396): since #390 every run that quits cleanly, and so every
+bench drive, ended in a segfault (exit 139). With stdout redirected the log
+looked cut mid-drive (`[bench] t=5.5`) because the buffered `[bench] drive
+done` line was lost. Under cdb the main thread was in `exit()` running
+static destructors while SDL's audio thread (`SDLAudioP*`) faulted in
+`EnvironmentReverb::process` on a comb buffer with a null data pointer. The
+mixers belong to `HostAudio`, whose last holders are statics in `host_sfx`
+and `host_music`, so the post-mix callbacks keep running during static
+destruction. `world_reverb()` was a function-local static built after those
+holders and therefore destroyed before them (as was `world_input`). Fix: both
+are heap objects that are never freed, so the audio thread can call the
+callbacks until the process ends. Validation: the ValoCity bench drive above
+reaches `[bench] drive done` and `[boot] game exit=0` and exits 0.
+
 `src/platform/host_music.cpp` tries at most one playlist pass when opening
 a track fails, preserving next/previous direction. A stream failure advances
 through the same bounded recovery path. A wholly unreadable set remains
