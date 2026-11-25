@@ -12,19 +12,27 @@ std::weak_ptr<HostAudio>& shared_audio() {
   static std::weak_ptr<HostAudio> audio;
   return audio;
 }
-// The reverb state lives for the whole process: the audio thread may still
-// call into it while a mixer is being destroyed.
+// State used by the audio thread is never destroyed (#396). The mixers are
+// owned by HostAudio, whose last holders are statics in host_sfx and
+// host_music, so SDL's audio thread keeps calling the post-mix callbacks
+// while exit() runs static destructors. A function-local static reverb is
+// built after those holders and therefore destroyed before them: the
+// callback then read freed comb buffers and the process crashed on exit.
 EnvironmentReverb& world_reverb() {
-  static EnvironmentReverb reverb;
-  return reverb;
+  static EnvironmentReverb* const reverb = new EnvironmentReverb;
+  return *reverb;
 }
 // Dry world signal captured by the group callback for this mix block. Both
 // callbacks run on the effects mixer's audio thread, group first.
-std::vector<float> world_input;
+std::vector<float>& world_input() {
+  static std::vector<float>* const input = new std::vector<float>;
+  return *input;
+}
 int world_input_samples = 0;
 void SDLCALL capture_world(void*, MIX_Group*, const SDL_AudioSpec*, float* pcm, int samples) {
-  if (world_input.size() < static_cast<size_t>(samples)) world_input.resize(static_cast<size_t>(samples));
-  std::copy(pcm, pcm + samples, world_input.begin());
+  auto& input = world_input();
+  if (input.size() < static_cast<size_t>(samples)) input.resize(static_cast<size_t>(samples));
+  std::copy(pcm, pcm + samples, input.begin());
   world_input_samples = samples;
 }
 // After the final mix, so the tail keeps sounding once the world tracks stop
@@ -32,7 +40,7 @@ void SDLCALL capture_world(void*, MIX_Group*, const SDL_AudioSpec*, float* pcm, 
 void SDLCALL add_world_reverb(void*, MIX_Mixer*, const SDL_AudioSpec* spec, float* pcm, int samples) {
   if (!spec || spec->channels <= 0) return;
   const bool captured = world_input_samples == samples;
-  world_reverb().process(captured ? world_input.data() : nullptr, pcm, samples / spec->channels,
+  world_reverb().process(captured ? world_input().data() : nullptr, pcm, samples / spec->channels,
                          spec->channels, spec->freq);
   world_input_samples = 0;
 }
