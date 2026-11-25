@@ -721,3 +721,25 @@ drives the wheels backwards and reverses the car). Before the fix the
 reverse case locked all four wheels within 0.15 s at 7 m/s with no brake
 pedal. Confirmed in game: a spin can be caught again. A manual (non-auto) clutch still
 couples a stalling engine to the driven wheels, as on a real car.
+
+## SuperDuty cams: negative torque below 2,500 rpm (#409)
+
+Cause: the owner saw negative power curves on the Hauler and the MC. A VM
+probe assembled the 24 stock racers (`vehicle_spawn_stock`) on private copies
+of the stock MWM game and read the host dyno: with the stock Java in SI units
+every curve is positive from 1,000 rpm; with the #203 patch the Hauler's
+SuperDuty 500 and Extra 750, the Prime DLH 500 and the MC GTLE are negative up
+to 2,000–2,500 rpm. Their eight SuperDuty cams declare a closed lift of 1.27 mm
+(0.050 in, the duration-measurement lift). The stock X²/V law made that leak
+negligible; the #203 linear curtain law makes it 12 % of the open flow.
+
+Fix: closed lift 0 in those eight cams (data re-spec, as every other cam). No
+coefficient and no change to the flow law.
+
+Validation: the eight sources rebuild the stock classes (only one-ULP float
+constants differ). The probe re-run changes exactly those four cars; their
+curves are positive from 1,000 rpm with the stock peak region (figures in
+[patch](../../patch/README.md#superduty-camshafts-seated-closed-valves-409)).
+Not checked in game. Their output now exceeds the real engines (Hauler 500
+342 PS / 561 Nm peak against a Ram 5.9's 248 PS / 454 Nm): left to the engine
+re-spec ([planning](../planning/stock-respec.md)).

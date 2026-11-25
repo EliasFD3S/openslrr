@@ -1,6 +1,6 @@
 # OpenSLRR Enhanced
 
-Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes and `AirFuelDeliverySystem.class`), 24 racer classes and 17 racer chassis CFGs (`_main_*.cfg`). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. `AirFuelDeliverySystem.class` adds fuel heat. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
+Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes, `AirFuelDeliverySystem.class` and eight SuperDuty camshafts), 24 racer classes and 17 racer chassis CFGs (`_main_*.cfg`). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. `AirFuelDeliverySystem.class` adds fuel heat. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
 
 **Options** (main menu and in-game menu) opens a full-screen screen built on `java.render.osdx` ([docs/ui/osd-v2.md](../docs/ui/osd-v2.md)): Video, Graphics, Sound, Controls (live axis meters, gamma, dead zones, steering speed sensitivity, force feedback), Devices (connected controllers, battery, rumble test, axis calibration) and Game tabs, an info panel that explains the setting under the pointer, and a notification when a preset is applied. Key redefinition, axes and the control files open the classic pages. The classic pages below are still in `OptionsDialog`. The **Video Options** menu applies the resolution and the Enhanced settings in game. A **Preset** choice (Low, Medium, High, Ultra) sets them all at once; changing one setting afterwards shows Custom. **Advanced** opens a second page: VSync, prop detail, fog, car lights, headlight shadows, street lamps, view distance (500–3,000 m, 3 km by default) and the number of street lamps that cast shadows. **Advanced Game Options** has the pedestrian density slider again (0.5–1.5; an old saved value below 0.5 returns to 1.5). The scenery shadow map and the vehicle shadow map each use a resolution of 2048 × 2048. **Ctrl+F12 → Renderer** also sets how many reflection faces are computed per frame.
 
@@ -175,8 +175,9 @@ The reference speed is derived from NASA's M=1 nozzle capacity at 293.15 K,
 not fitted to stock horsepower. The stock 0.9 breather factor remains empirical.
 This is a dimensional correction inside the legacy pressure-relaxation model,
 not a complete pressure-dependent compressible valve solver. Existing nonzero
-closed lifts now imply area-based leakage too; SuperDuty's authored 1.27-mm
-minimum therefore changes noticeably. Outputs and tuning behavior change.
+closed lifts now imply area-based leakage too. Outputs and tuning behavior
+change. The only cams with one, eight SuperDuty cams, are re-specced to a
+seated valve (#409, below).
 See [derivation, provenance and numeric examples](../docs/vehicles/physics-tick.md#derived-correction-now-shipped).
 
 To reproduce the included TUFA with the embedded Windows compiler, first follow
@@ -192,6 +193,37 @@ powershell -File scripts/run_save_io_tests.ps1 -Suite port_flow
 The compiler reports one head class and two block classes. The tests execute the
 shipped helper in the VM and cover SI/script-unit agreement, low-lift linearity,
 throat saturation, volume/valve-count/wear/efficiency scaling and zero geometry.
+
+## SuperDuty camshafts: seated closed valves (#409)
+
+`parts/engines/MC_Prime_SuperDuty/scripts` ships eight camshafts:
+`MC_Prime_SuperDuty_{L,R}_DOHC_{intake,exhaust}_camshaft` and
+`SuperDuty_{L,R}_{intake,exhaust}_camshaft`. They declared a closed-valve lift
+of 1.27 mm (0.050 in, the lift at which cam duration is measured); every
+other stock cam declares 0. The stock X²/V law made that leak about 0.5 % of
+the open flow, the #203 curtain law about 12 %, and the Hauler's SuperDuty 500,
+SuperDuty Extra 750, Prime DLH 500 and MC GTLE lost all torque below
+2,000–2,500 rpm (Hauler 500: −101 Nm at 1,000 rpm). The cams now declare 0, a
+seated valve; no coefficient changes. Closed lift only feeds the head's
+minimum flow and is not saved, so cars already bought pick it up.
+
+Stock-car dyno, net torque at 1,000 / 2,000 / 4,000 rpm and peak power
+(#203 patch, host dyno):
+
+| Car | Before | After |
+| --- | --- | --- |
+| Hauler's SuperDuty 500 | −101 / −56 / 181 Nm, 128 PS | 267 / 398 / 561 Nm, 342 PS |
+| Hauler's SuperDuty Extra 750 | −120 / −76 / 254 Nm, 180 PS | 296 / 546 / 880 Nm, 503 PS |
+| Prime DLH 500 | −140 / −49 / 170 Nm, 223 PS | 247 / 392 / 444 Nm, 298 PS |
+| MC GTLE | −177 / −28 / 253 Nm, 273 PS | 385 / 571 / 581 Nm, 361 PS |
+
+The curves now have the stock data's shape (positive from 1,000 rpm, same
+peak rpm region). Their level is above the real engines these cars stand for;
+that is the engine re-spec's job, not this fix. The eight sources rebuild the
+stock classes with only the known one-ULP float differences before the edit.
+To rebuild, copy the stock game into a private root, put the sources in
+`parts/engines/MC_Prime_SuperDuty/scripts/src` and run
+`compile_game_sources.exe <root> parts/engines/MC_Prime_SuperDuty/scripts/src`.
 
 ## Fuel heat (#203)
 
