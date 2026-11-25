@@ -292,4 +292,5 @@ the fix the same test reads 838.5 kg and fails. A VM probe reads Focer
 RC 200 / RC 300 / WRC at 1475.3 / 1492.9 / 1395.4 kg (757 kg before), so the
 WRC's kg/HP goes from 2.58 to about 4.76. Confirmed in game by the owner:
 the stock Focer WRC shows 1395 kg, 4.753 kg/HP and 0.332 kg/Nm (294 HP,
-420 Nm); with some parts removed the mass drops to 1241 kg.
+420 Nm); with some parts removed the mass drops to 1241 kg. A Baiern CoupeSport
+stripped to its bare body in the garage shows 838 kg, the `_main_` body alone.
