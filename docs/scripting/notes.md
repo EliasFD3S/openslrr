@@ -267,3 +267,27 @@ keys and clear/reset. Isolated 100,000 lookups / 8,000 nodes measured about
 2.71 s before and 0.81 ms after; not an in-game FPS measurement. Evidence:
 `assets/validation/live-lookup/before.txt` and
 `assets/validation/live-lookup/after.txt`. Gameplay validation is separate.
+
+## Chassis.getMass is the assembled car (#413)
+
+`Chassis.getMass` was bound to the same lambda as `Part.getMass`, so it
+returned the `_main_*.cfg` body alone: 838.5 kg for a Baiern CoupeSport and
+757 kg for every Focer, instead of the assembled car. The physics already
+used the whole installed tree. `CarInfo` showed the short mass and a kg/HP
+near half the real one (Focer WRC 2.58), and the catalog delivery price
+(`chassis.getMass()*5.8`) was low.
+
+The executable binds `Chassis.getMass` at 0x0043CAA0: from the chassis it
+reaches the car's vehicle object and returns `1 / inverse mass` of the
+vehicle body (`[vehicle+0x13BC]`). `Part.getMass` (0x00469290) returns the
+part's own body mass. The host now returns `assembly_mass_center` for the
+chassis, the sum the physics body is built from, and keeps `Part.getMass`
+as the part's CFG mass. A chassis outside any car reports the sum of its own
+installed subtree; the executable may report 0 there (not checked).
+
+Validation: `swaybars` test `chassis_mass_is_the_assembled_car` on the stock
+MWM game: Baiern CoupeSport body 838.5 kg, `Chassis.getMass` 1523.6 kg,
+equal to the `Part.getMass` sum and to the released physics body. Before
+the fix the same test reads 838.5 kg and fails. A VM probe reads Focer
+RC 200 / RC 300 / WRC at 1475.3 / 1492.9 / 1395.4 kg (757 kg before), so the
+WRC's kg/HP goes from 2.58 to about 4.76. Not checked in game.

@@ -8667,10 +8667,19 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
     return Value::make_float(p && p->config ? p->config->mass : 0.f);
   };
   bind("getMass", "()F", mass_of);
-  // Chassis.getMass is its own native (empty TREE). The catalog delivery
-  // price is chassis.getMass()*5.8; resolving only Part left that call at 0.
-  jvm.natives().register_method("java.game.parts.bodypart.Chassis", "getMass",
-                                "()F", mass_of);
+  // Chassis.getMass is its own native (empty TREE). The exe (0x0043CAA0)
+  // returns the assembled vehicle body's mass, not the chassis part's: it is
+  // what CarInfo (kg/HP), the Garage and the catalog delivery price
+  // (chassis.getMass()*5.8) read. Same sum the physics body is built from.
+  jvm.natives().register_method(
+      "java.game.parts.bodypart.Chassis", "getMass", "()F",
+      [](Object *s, const std::vector<Value> &) {
+        if (!record(s))
+          return Value::make_float(0.f);
+        float mass = 0, com[3];
+        assembly_mass_center(s, mass, com);
+        return Value::make_float(mass);
+      });
   for (const auto &property :
        std::vector<std::pair<std::string, float InstalledPart::*>>{
            {"Wear", &InstalledPart::wear}, {"Tear", &InstalledPart::tear}}) {
