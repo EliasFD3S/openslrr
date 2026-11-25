@@ -92,6 +92,7 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           case 23: return Value::make_int(host_sfx_spatial_options().doppler);
           case 24: return Value::make_int(host_sfx_spatial_options().reverb);
           case 25: return Value::make_int(host_input_tuning().ffb_invert);
+          case 26: return Value::make_int(host_input_tuning().ffb_detail);
           default: return Value::make_int(0);
         }
       });
@@ -132,6 +133,7 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           case 23: host_sfx_spatial_options().doppler = value != 0; host_sfx_apply_spatial_options(); break;
           case 24: host_sfx_spatial_options().reverb = value != 0; host_sfx_apply_spatial_options(); break;
           case 25: host_input_tuning().ffb_invert = value != 0; break;
+          case 26: host_input_tuning().ffb_detail = std::clamp(value, 0, 200); break;
           default: return Value::make_void();
         }
         host_save_graphics_options();

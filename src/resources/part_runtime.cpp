@@ -6105,6 +6105,9 @@ SimBatch prepare_batch(unsigned ticks, bool open = false, unsigned horizon_steps
 // The host's part after a batch: write the bodies back, then publish them and
 // apply damage, crush cages, loose-body lifetimes and scene changes in solver
 // order.
+// Force feedback: the hardest hit on the controlled car since the last
+// update (-1..1, positive turns the wheel left), from the committed impacts.
+double feedback_jolt = 0;
 void commit_batch(SimBatch& batch) {
   trace_flush();
   wind_clock += batch.solver_steps * physics::VehicleDynamics::timestep;
@@ -6178,6 +6181,14 @@ void commit_batch(SimBatch& batch) {
     const auto& car = batch.cars[impact.car];
     if (!current(car)) continue;
     damage_chassis(car.chassis, *car.rec, impact.body, impact.hit, car.controlled, released);
+    if (car.controlled && impact.hit.speed > 1) {
+      // A hit on the left of the car drags that side back: the wheel turns
+      // left. 10 m/s and harder is a full jolt.
+      const auto& body = impact.body;
+      const auto local = body.orientation.inverse_rotate(impact.hit.point - body.position);
+      const double jolt = std::copysign(std::min(1.0, impact.hit.speed / 10), -local.x);
+      if (std::abs(jolt) > std::abs(feedback_jolt)) feedback_jolt = jolt;
+    }
     auto& hit = loudest[impact.car];
     if (!hit || impact.hit.speed > hit->speed) hit = &impact.hit;
   }
@@ -7710,11 +7721,12 @@ void update_force_feedback(double frame_seconds, bool committed) {
   for (size_t i = 0; i < front.size(); ++i) {
     const auto& s = dynamics.state[i];
     front[i] = {s.contact && !dynamics.wheels[i].metal_contact, s.force, s.slip_angle,
-                s.tire_force.lateral, dynamics.drive.wheels[i].tyre};
+                s.tire_force.lateral, dynamics.drive.wheels[i].tyre, s.speed};
   }
   const auto out = steering_feedback.update(front, dynamics.body.velocity.length(),
-                                            std::max(frame_seconds, 1e-3));
-  host_input_force_feedback(out.torque, out.damper);
+                                            std::max(frame_seconds, 1e-3), feedback_jolt);
+  feedback_jolt = 0;
+  host_input_force_feedback(out.torque, out.damper, out.detail, out.vibration, out.vibration_hz);
 }
 
 void finish_physics_frame(double frame_seconds, double alpha, bool committed) {

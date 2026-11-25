@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 
 namespace slrr::physics {
 namespace {
@@ -37,17 +38,20 @@ double SteeringFeedback::trail(double alpha, double peak) {
 }
 
 SteeringFeedbackOutput SteeringFeedback::update(const std::array<SteeringFeedbackWheel, 2>& front,
-                                                double speed, double dt) {
+                                                double speed, double dt, double jolt) {
   SteeringFeedbackOutput out;
   speed = std::abs(speed);
   out.damper = static_cast<float>(.1 + .5 * std::exp(-speed / 4));
-  double moment = 0, load = 0;
+  const double fade = std::clamp(speed / kFadeSpeed, 0.0, 1.0);
+  double moment = 0, load = 0, excess = 0;
   int touching = 0;
   const TireParameters* tyre = nullptr;
   for (const auto& w : front) {
     if (!w.contact || !(w.load > 0)) continue;
     const double peak = peak_slip_angle(w.load, w.tyre);
-    moment += trail(std::atan(std::abs(w.slip_angle)), peak) * w.lateral;
+    const double alpha = std::atan(std::abs(w.slip_angle));
+    moment += trail(alpha, peak) * w.lateral;
+    excess = std::max(excess, alpha / peak - 1);
     load += w.load;
     ++touching;
     tyre = &w.tyre;
@@ -65,13 +69,46 @@ SteeringFeedbackOutput SteeringFeedback::update(const std::array<SteeringFeedbac
       const double t = kMaxProbe * i / kProbes;
       full = std::max(full, trail(std::atan(t), peak) * lateral_force(reference_load_, t, *tyre));
     }
-    const double fade = std::clamp(speed / kFadeSpeed, 0.0, 1.0);
     if (full > 0) target = std::clamp(moment / (2 * full) * fade, -1.0, 1.0);
   }
   // A light low-pass: the solver's relaxation already smooths the slip.
   const float alpha = static_cast<float>(1 - std::exp(-dt / .02));
   torque_ += (static_cast<float>(target) - torque_) * alpha;
   out.torque = torque_;
+
+  // Detail. Index 0 is the left wheel (the solver's side axis points right).
+  // A bump under the left wheel shortens its suspension and drags that
+  // wheel back: the steering turns left (positive), and the other way round.
+  const double moving = std::clamp(speed / 5, 0.0, 1.0);
+  double kick = 0;
+  if (front[0].contact && front[1].contact)
+    kick = std::clamp(kBumpGain * (front[1].suspension_speed - front[0].suspension_speed),
+                      -kBumpLimit, kBumpLimit) * moving;
+  // An impact rings the wheel at 12 Hz and dies out in about 0.1 s.
+  if (std::abs(jolt) > std::abs(jolt_) * std::exp(-jolt_time_ / .06)) {
+    jolt_ = std::clamp(jolt, -1.0, 1.0);
+    jolt_time_ = 0;
+  } else {
+    jolt_time_ += dt;
+  }
+  const double ring = jolt_ * std::exp(-jolt_time_ / .06) *
+                      std::cos(2 * std::numbers::pi * 12 * jolt_time_);
+  out.detail = static_cast<float>(std::clamp(kick + ring, -1.0, 1.0));
+
+  // Vibration: the front tyres scrubbing past their peak, or a rough road.
+  const double activity = touching ? std::abs(front[0].suspension_speed) +
+                                         std::abs(front[1].suspension_speed)
+                                   : 0;
+  road_ += (activity - road_) * (1 - std::exp(-dt / .1));
+  const double scrub = std::clamp(excess * .4, 0.0, .3) * fade;
+  const double rough = std::clamp(road_ * .5, 0.0, .3) * moving;
+  if (scrub >= rough) {
+    out.vibration = static_cast<float>(scrub);
+    out.vibration_hz = static_cast<float>(20 + 10 * std::min(excess, 1.0));
+  } else {
+    out.vibration = static_cast<float>(rough);
+    out.vibration_hz = static_cast<float>(std::min(60.0, 35 + speed * .3));
+  }
   return out;
 }
 

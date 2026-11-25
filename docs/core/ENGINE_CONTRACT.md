@@ -922,7 +922,11 @@ by the front tyres' peak torque at the resting front load. Its sign follows the
 binding's direction; `Config.ForceFeedBack`, `Config.FFB_strength` and host
 option 25 (invert) apply. It stops when no car is driven, under a modal, out
 of focus, and 0.25 s after the last committed batch. The wheel's own
-autocentre is turned off when it is opened. `Config.FFB_strength_emulated`
+autocentre is turned off when it is opened. Detail (#399) adds bump kicks
+(the two front suspensions moving apart), a 12 Hz jolt on each impact of the
+controlled car, and a sine vibration while the front tyres scrub past their
+peak or the road shakes them; host option 26 (FFB DETAIL, 0-200 %) scales it
+apart from the aligning torque. `Config.FFB_strength_emulated`
 and `Controller.user_SetAxisForce`'s force coefficient are not implemented.
 
 Car instruments can come from the stock layout or from the CFG. `HudSlot`

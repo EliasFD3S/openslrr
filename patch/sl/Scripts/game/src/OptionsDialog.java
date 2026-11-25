@@ -56,6 +56,8 @@ public class OptionsDialog extends Dialog
 	final static int CMD_AUDIO_REVERB = 528;
 	// Force feedback direction: host option 25.
 	final static int CMD_FFB_INVERT = 529;
+	// Force feedback detail: host option 26 (percent).
+	final static int CMD_FFB_DETAIL = 530;
 	final static int RENDERER_FRAMERATE_MODE = 5;
 	public static native int getRendererOption(int option);
 	public static native void setRendererOption(int option, int value);
@@ -1090,6 +1092,7 @@ public class OptionsDialog extends Dialog
 		else if (command == CMD_AUDIO_DOPPLER) setRendererOption(23, osd.multiValue);
 		else if (command == CMD_AUDIO_REVERB) setRendererOption(24, osd.multiValue);
 		else if (command == CMD_FFB_INVERT) setRendererOption(25, osd.multiValue);
+		else if (command == CMD_FFB_DETAIL) setRendererOption(26, osd.sliderValue);
 		else if (command == CMD_AO_RADIUS) setRendererOption(12, osd.sliderValue);
 		else
 		if (command == CMD_ANISOTROPIC)

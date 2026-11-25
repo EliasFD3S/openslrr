@@ -886,7 +886,7 @@ SLRR_TEST(anti_roll_on_an_engineless_coasting_car_does_not_rewrite_tyre_loads) {
 // (rad), the solver's sign: lateral speed to the right, force to the left.
 SteeringFeedbackWheel front_tyre(double a, double load = 3500) {
   const double t = std::tan(a);
-  return {true, load, t, tire_forces(load, 1, 20, 20, 20 * t, tyre(205)).lateral, tyre(205)};
+  return {true, load, t, tire_forces(load, 1, 20, 20, 20 * t, tyre(205)).lateral, tyre(205), 0};
 }
 float settled_torque(double a, double speed = 20, double load = 3500) {
   SteeringFeedback feedback;
@@ -927,6 +927,42 @@ SLRR_TEST(steering_feedback_fades_when_parked_or_airborne) {
   SLRR_REQUIRE(std::abs(out.torque) < 1e-3f);
 }
 
+SLRR_TEST(steering_feedback_kicks_on_bumps_and_jolts_on_impacts) {
+  SteeringFeedback feedback;
+  for (int i = 0; i < 30; ++i) feedback.update({front_tyre(0), front_tyre(0)}, 20, 1. / 60);
+  // A bump under the left wheel (its suspension shortening) turns it left.
+  auto left = front_tyre(0), right = front_tyre(0);
+  left.suspension_speed = -.4;
+  SLRR_REQUIRE(feedback.update({left, right}, 20, 1. / 60).detail > .1f);
+  left.suspension_speed = 0;
+  right.suspension_speed = -.4;
+  SLRR_REQUIRE(feedback.update({left, right}, 20, 1. / 60).detail < -.1f);
+  // Both wheels together (a dip across the road): no kick, some vibration.
+  left.suspension_speed = right.suspension_speed = -.4;
+  SteeringFeedbackOutput out;
+  for (int i = 0; i < 20; ++i) out = feedback.update({left, right}, 20, 1. / 60);
+  SLRR_REQUIRE(std::abs(out.detail) < 1e-6f && out.vibration > .05f);
+  // An impact jolts the wheel, then dies out within a few tenths.
+  left.suspension_speed = right.suspension_speed = 0;
+  for (int i = 0; i < 60; ++i) feedback.update({left, right}, 20, 1. / 60);
+  out = feedback.update({left, right}, 20, 1. / 60, .8);
+  SLRR_REQUIRE(out.detail > .5f);
+  for (int i = 0; i < 30; ++i) out = feedback.update({left, right}, 20, 1. / 60);
+  SLRR_REQUIRE(std::abs(out.detail) < .01f);
+}
+
+SLRR_TEST(steering_feedback_vibrates_when_the_front_tyres_scrub) {
+  const double peak = SteeringFeedback::peak_slip_angle(3500, tyre(205));
+  SteeringFeedback grip, scrub;
+  SteeringFeedbackOutput a, b;
+  for (int i = 0; i < 60; ++i) {
+    a = grip.update({front_tyre(.5 * peak), front_tyre(.5 * peak)}, 20, 1. / 60);
+    b = scrub.update({front_tyre(2 * peak), front_tyre(2 * peak)}, 20, 1. / 60);
+  }
+  SLRR_REQUIRE(a.vibration < .01f);
+  SLRR_REQUIRE(b.vibration > .2f && b.vibration_hz >= 20 && b.vibration_hz <= 30);
+}
+
 SLRR_TEST(steering_feedback_centres_a_car_in_a_turn) {
   for (double steer : {.05, -.05}) {
     Car car;
@@ -942,7 +978,7 @@ SLRR_TEST(steering_feedback_centres_a_car_in_a_turn) {
       for (int w = 0; w < 2; ++w) {
         const auto& st = car.dynamics.state[w];
         front[w] = {st.contact, st.force, st.slip_angle, st.tire_force.lateral,
-                    car.dynamics.drive.wheels[w].tyre};
+                    car.dynamics.drive.wheels[w].tyre, st.speed};
       }
       torque = feedback.update(front, car.speed(), 1. / 60).torque;
     }
@@ -955,6 +991,8 @@ int main() {
   const slrr::standalone::Test tests[] = {
       steering_feedback_pulls_back_and_goes_light_past_the_peak,
       steering_feedback_fades_when_parked_or_airborne,
+      steering_feedback_kicks_on_bumps_and_jolts_on_impacts,
+      steering_feedback_vibrates_when_the_front_tyres_scrub,
       steering_feedback_centres_a_car_in_a_turn,
       tyre_grip_follows_the_tyre_script,
       tyre_stiffness_and_sliction_shape_the_curve,
