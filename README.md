@@ -128,10 +128,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-run-branch.p
 ```
 
 The execution-policy override applies only to that PowerShell process and must
-be permitted by your organization. Replace `main` with the desired branch and
-the path with your SLRR 2.2.1 MWM installation. The helper fetches the branch
-into a separate checkout under
-`%LOCALAPPDATA%\OpenSLRR-branch-builds`, builds Release, and launches it. Pass
+be permitted by your organization. The helper prints the fetched branch commit
+before building and the exact executable path/commit before launch; check those
+messages to confirm which revision is running. Replace `main` with the desired branch and
+the path with your SLRR 2.2.1 MWM installation. The helper fetches the latest branch tip on every run and checks it out in a separate checkout under
+`%LOCALAPPDATA%\OpenSLRR-branch-builds`, builds Release, applies every payload
+folder from that checkout's `patch/` to `GameRoot`, verifies copied file hashes,
+and launches it. This installs the branch's compiled game scripts/UI and assets,
+not just the engine. Top-level patch documentation is not copied. Existing files
+are backed up before deployment under `<Workspace>/patch-backups/<unique-id>/`,
+with a manifest recording the commit and newly added files. Backups must remain
+outside `GameRoot` so old classes cannot shadow the new ones. A failed deployment
+stops launch; it may leave a partially applied patch (use the backup to restore).
+Files absent from the new patch are not removed automatically, so use a fresh
+copy of the stock game when switching branches to avoid leftover branch files.
+Do not run multiple helpers against the same game folder concurrently. Pass
 `-Workspace 'D:\OpenSLRR-builds'` to change the checkout location.
 `-ToolsCacheDir` enables the shared shader tool cache. Existing CMake cache
 settings persist between runs. The helper uses the bgfx.cmake pin and build/launch
