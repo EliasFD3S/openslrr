@@ -102,6 +102,14 @@ std::string host_input_axis_name(int device, int axis);
 float host_input_physical_axis(int device, int axis);
 int host_input_active_axis(int device);
 InputKind host_input_device_kind(int device);
+// Force feedback on the wheel that steers the player's car. torque is the
+// steering torque in logical units (-1..1, positive turns left), damper 0..1;
+// Options' strength, the invert switch and the binding's direction apply.
+// Stop when no car is driven (menus, loading, a script-driven car).
+void host_input_force_feedback(float torque, float damper);
+void host_input_force_feedback_stop();
+// ControlSet device id that receives force feedback now, -1 none.
+int host_input_force_feedback_device();
 // Rebind listener (host_input_capture.hpp), advanced by host_input_poll_keys.
 class InputCapture;
 void host_input_capture_begin();

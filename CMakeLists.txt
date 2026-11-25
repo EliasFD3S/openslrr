@@ -40,7 +40,7 @@ target_compile_options(compile_game_sources PRIVATE /utf-8)
 
 # Physics Lab (#380): offline vehicle-solver bench, any solver rate.
 add_executable(physics_lab tools/physics_lab.cpp
-  src/physics/vehicle_dynamics.cpp src/physics/tire_model.cpp
+  src/physics/vehicle_dynamics.cpp src/physics/tire_model.cpp src/physics/steering_feedback.cpp
   src/physics/suspension_geometry.cpp src/physics/dyno_model.cpp)
 target_include_directories(physics_lab PRIVATE include)
 target_compile_options(physics_lab PRIVATE /utf-8)
@@ -122,6 +122,7 @@ add_executable(slrr_host
   src/boot/drive_path.cpp
   src/physics/sl2_pacejka.cpp
   src/physics/tire_model.cpp
+  src/physics/steering_feedback.cpp
   src/physics/dyno_model.cpp
   src/physics/vehicle_dynamics.cpp
   src/physics/vehicle_contacts.cpp
@@ -192,7 +193,9 @@ set(SDL_TESTS OFF CACHE BOOL "" FORCE)
 set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
 set(SDL_AUDIO ON CACHE BOOL "" FORCE)
-foreach(_slrr_sdl_subsystem IN ITEMS VIDEO GPU RENDER CAMERA HAPTIC POWER SENSOR DIALOG)
+# Haptics drive force feedback wheels (DirectInput constant force and damper).
+set(SDL_HAPTIC ON CACHE BOOL "" FORCE)
+foreach(_slrr_sdl_subsystem IN ITEMS VIDEO GPU RENDER CAMERA POWER SENSOR DIALOG)
   set(SDL_${_slrr_sdl_subsystem} OFF CACHE BOOL "" FORCE)
 endforeach()
 FetchContent_Declare(SDL3

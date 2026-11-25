@@ -20,6 +20,9 @@ public class InputDevices
 	public static native int	canRumble( int i );
 	public static native float	activity( int i );	// 0..1, strongest input right now
 	public static native int	rumble( int i, float strength, int milliseconds );
+	// Force feedback (SDL haptics): a constant force on the steering axis.
+	public static native int	canForceFeedback( int i );
+	public static native int	testForceFeedback( int i );	// 0.6 s, left then right
 
 	// Axis range calibration: move every axis to both ends, then end it.
 	public static native void	calibrateBegin( int i );

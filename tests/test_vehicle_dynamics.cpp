@@ -5,12 +5,14 @@
 //       src/physics/suspension_geometry.cpp -o test_vehicle_dynamics
 #include "standalone_test.hpp"
 
+#include "slrr/steering_feedback.hpp"
 #include "slrr/tire_model.hpp"
 #include "slrr/vehicle_dynamics.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numbers>
 
 namespace {
 using namespace slrr::physics;
@@ -880,8 +882,80 @@ SLRR_TEST(anti_roll_on_an_engineless_coasting_car_does_not_rewrite_tyre_loads) {
   }
 }
 
+// Force feedback (steering_feedback.cpp). One front tyre at slip angle a
+// (rad), the solver's sign: lateral speed to the right, force to the left.
+SteeringFeedbackWheel front_tyre(double a, double load = 3500) {
+  const double t = std::tan(a);
+  return {true, load, t, tire_forces(load, 1, 20, 20, 20 * t, tyre(205)).lateral, tyre(205)};
+}
+float settled_torque(double a, double speed = 20, double load = 3500) {
+  SteeringFeedback feedback;
+  float torque = 0;
+  for (int i = 0; i < 120; ++i)
+    torque = feedback.update({front_tyre(a, load), front_tyre(a, load)}, speed, 1. / 60).torque;
+  return torque;
+}
+
+SLRR_TEST(steering_feedback_pulls_back_and_goes_light_past_the_peak) {
+  const double peak = SteeringFeedback::peak_slip_angle(3500, tyre(205));
+  SLRR_REQUIRE(peak > 6 * std::numbers::pi / 180 && peak < 10 * std::numbers::pi / 180);
+  // Heading left of the travel (lateral speed to the right): turn back right.
+  SLRR_REQUIRE(settled_torque(.03) < -.2f);
+  SLRR_REQUIRE(settled_torque(-.03) > .2f);
+  SLRR_REQUIRE(std::abs(settled_torque(.03) + settled_torque(-.03)) < 1e-6f);
+  // The aligning torque peaks before the grip, then the wheel goes light.
+  const float building = std::abs(settled_torque(.4 * peak));
+  const float sliding = std::abs(settled_torque(2 * peak));
+  SLRR_REQUIRE(sliding < building * .6f);
+  // Its scale is the front tyres' peak torque: never past full range.
+  float strongest = 0;
+  for (double a = .005; a < .5; a += .005) strongest = std::max(strongest, std::abs(settled_torque(a)));
+  SLRR_REQUIRE(strongest > .9f && strongest <= 1.f);
+  // A heavier car pulls the same share of the range at the same slip.
+  SLRR_REQUIRE(std::abs(settled_torque(.03, 20, 5000) - settled_torque(.03)) < .05f);
+}
+
+SLRR_TEST(steering_feedback_fades_when_parked_or_airborne) {
+  SLRR_REQUIRE(settled_torque(.05, 0) == 0.f);
+  SteeringFeedback feedback;
+  const auto parked = feedback.update({front_tyre(0), front_tyre(0)}, 0, 1. / 60);
+  const auto moving = feedback.update({front_tyre(0), front_tyre(0)}, 30, 1. / 60);
+  SLRR_REQUIRE(parked.damper > moving.damper * 2);
+  for (int i = 0; i < 60; ++i) feedback.update({front_tyre(.05), front_tyre(.05)}, 20, 1. / 60);
+  SteeringFeedbackOutput out;
+  for (int i = 0; i < 30; ++i) out = feedback.update({SteeringFeedbackWheel{}, SteeringFeedbackWheel{}}, 20, 1. / 60);
+  SLRR_REQUIRE(std::abs(out.torque) < 1e-3f);
+}
+
+SLRR_TEST(steering_feedback_centres_a_car_in_a_turn) {
+  for (double steer : {.05, -.05}) {
+    Car car;
+    car.run(1, 0, 0, 0);
+    car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -20});
+    for (auto& wheel : car.dynamics.state) wheel.spin = 20 / .31;
+    car.dynamics.drive.engaged = false;
+    SteeringFeedback feedback;
+    float torque = 0;
+    for (int i = 0; i < 90; ++i) {
+      car.run(1. / 60, 0, 0, steer);
+      std::array<SteeringFeedbackWheel, 2> front;
+      for (int w = 0; w < 2; ++w) {
+        const auto& st = car.dynamics.state[w];
+        front[w] = {st.contact, st.force, st.slip_angle, st.tire_force.lateral,
+                    car.dynamics.drive.wheels[w].tyre};
+      }
+      torque = feedback.update(front, car.speed(), 1. / 60).torque;
+    }
+    // Steered left (positive), the tyres turn the wheel back right.
+    SLRR_REQUIRE(steer > 0 ? torque < -.1f : torque > .1f);
+  }
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
+      steering_feedback_pulls_back_and_goes_light_past_the_peak,
+      steering_feedback_fades_when_parked_or_airborne,
+      steering_feedback_centres_a_car_in_a_turn,
       tyre_grip_follows_the_tyre_script,
       tyre_stiffness_and_sliction_shape_the_curve,
       tyre_load_capacity_has_progressive_efficiency,

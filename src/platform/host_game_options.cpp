@@ -65,6 +65,8 @@ void load_host_options(const std::string& root) {
             integer_option(line,"shadowed_lamps",graphics.shadowed_lamps,0,6) ||
             integer_option(line,"steer_speed_sensitivity",
                            host_input_tuning().steer_speed_sensitivity,0,100)) {}
+    else if (line == "ffb_invert=1") host_input_tuning().ffb_invert = true;
+    else if (line == "ffb_invert=0") host_input_tuning().ffb_invert = false;
     else for (const auto& entry : {std::pair{"anisotropic_filtering", &graphics.anisotropic_filtering},
                                   std::pair{"dynamic_reflections", &graphics.dynamic_reflections},
                                   std::pair{"volumetric_clouds", &graphics.volumetric_clouds},
@@ -116,7 +118,8 @@ bool save_host_options() {
       << "audio_doppler=" << host_sfx_spatial_options().doppler << '\n'
       << "audio_reverb=" << host_sfx_spatial_options().reverb << '\n'
       << "steer_speed_sensitivity="
-      << std::clamp(host_input_tuning().steer_speed_sensitivity,0,100) << '\n';
+      << std::clamp(host_input_tuning().steer_speed_sensitivity,0,100) << '\n'
+      << "ffb_invert=" << host_input_tuning().ffb_invert << '\n';
   out.close();
   if (!out) std::fprintf(stderr, "[options] could not save %s\n", host_options_path.c_str());
   return bool(out);
@@ -169,6 +172,8 @@ GameOptions read_options(Jvm& jvm) {
   options.head_acceleration = std::clamp(read("head_move_acc", 1.f), 0.f, 2.f);
   options.traffic_density = read("trafficDensity", .2f);
   options.pedestrian_density = read("pedestrianDensity", .1f);
+  options.ffb = integer("ForceFeedBack", 1) != 0;
+  options.ffb_strength = std::clamp(read("FFB_strength", 1.f), 0.f, 1.f);
   return options;
 }
 }

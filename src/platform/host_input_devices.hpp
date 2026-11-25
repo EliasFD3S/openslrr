@@ -3,6 +3,7 @@
 #include "slrr/host_input.hpp"
 
 #include <SDL3/SDL_gamepad.h>
+#include <SDL3/SDL_haptic.h>
 #include <array>
 #include <map>
 #include <string>
@@ -44,6 +45,7 @@ class HostInputDevices {
     int battery = -1;           // percent, -1 unknown
     std::string power;          // "WIRED", "CHARGING", "CHARGED", "BATTERY", ""
     bool rumble = false;
+    bool force_feedback = false;  // a constant force on the steering axis
     bool calibrated = false, calibrating = false;
   };
   int count() const { return static_cast<int>(devices_.size()); }
@@ -53,6 +55,16 @@ class HostInputDevices {
   // Strongest input on the device: half the axis distance from rest, or a button.
   float activity(int index) const;
   bool rumble(int index, float strength, int milliseconds);
+
+  // Force feedback (SDL haptics) on the steering axis of a ControlSet device
+  // id. level -1..1 pushes the device's own axis towards its positive end;
+  // damper 0..1. Only one device plays at a time: another slot, or
+  // stop_force(), stops the previous one. Nothing plays while unfocused.
+  bool has_force_feedback(int device) const;
+  void set_force(int device, float level, float damper);
+  void stop_force();
+  // A short push one way then the other (Options > Devices > TEST).
+  bool test_force(int index);
   // Axis range calibration: while calibrating, the raw minimum and maximum
   // of every axis are recorded; ending stores them and maps each axis range
   // onto -1..1. Saved per device name in save/game/openslrr_axis_calibration.
@@ -69,6 +81,10 @@ class HostInputDevices {
     // An SDL gamepad mapping on a wheel (some Logitech/Thrustmaster bases have
     // one) does not make it a pad: it keeps its raw channels and filters.
     bool pad = false;
+    SDL_Haptic* haptic = nullptr;
+    SDL_HapticEffectID constant = -1, damper = -1;
+    bool playing = false;
+    float level = 0, damping = 0;  // last values sent
     std::string name;
     int axes = 0, buttons = 0, hats = 0;
     std::vector<float> values, rest;
@@ -81,12 +97,20 @@ class HostInputDevices {
   void save_calibration() const;
   float calibrated(const Device& device, int axis, float raw) const;
   bool initialized_ = false;
+  bool haptic_ready_ = false;
+  Device* slot_device(int slot);
+  void send_force(Device& device, float level, float damper);
   bool focused_ = false;
   std::vector<Device> devices_;
   std::array<float, 24> pad_{};
   SDL_JoystickID primary_ = 0;
   const Device* device(int slot) const;
   static void close(Device& device);
+  static void open_haptic(Device& device);
+  static void stop_haptic(Device& device);
+  int force_slot_ = -1;          // device id playing force feedback
+  double test_until_ = 0;        // test_force pulse end (SDL ticks, s)
+  int test_slot_ = -1;
 };
 
 HostInputDevices& host_input_devices();

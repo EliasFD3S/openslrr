@@ -91,6 +91,7 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           case 22: return Value::make_int(host_sfx_spatial_options().positioning);
           case 23: return Value::make_int(host_sfx_spatial_options().doppler);
           case 24: return Value::make_int(host_sfx_spatial_options().reverb);
+          case 25: return Value::make_int(host_input_tuning().ffb_invert);
           default: return Value::make_int(0);
         }
       });
@@ -130,6 +131,7 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           case 22: host_sfx_spatial_options().positioning = value != 0; host_sfx_apply_spatial_options(); break;
           case 23: host_sfx_spatial_options().doppler = value != 0; host_sfx_apply_spatial_options(); break;
           case 24: host_sfx_spatial_options().reverb = value != 0; host_sfx_apply_spatial_options(); break;
+          case 25: host_input_tuning().ffb_invert = value != 0; break;
           default: return Value::make_void();
         }
         host_save_graphics_options();
@@ -573,6 +575,12 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
         [info](Object*, const std::vector<Value>& a) { return Value::make_int(info(a).hats); });
     jvm.natives().register_method(kDevices, "battery", "(I)I",
         [info](Object*, const std::vector<Value>& a) { return Value::make_int(info(a).battery); });
+    jvm.natives().register_method(kDevices, "canForceFeedback", "(I)I",
+        [info](Object*, const std::vector<Value>& a) { return Value::make_int(info(a).force_feedback); });
+    jvm.natives().register_method(kDevices, "testForceFeedback", "(I)I",
+        [integer](Object*, const std::vector<Value>& a) {
+          return Value::make_int(host_input_devices().test_force(integer(a, 0)));
+        });
     jvm.natives().register_method(kDevices, "canRumble", "(I)I",
         [info](Object*, const std::vector<Value>& a) { return Value::make_int(info(a).rumble); });
     jvm.natives().register_method(kDevices, "calibrated", "(I)I",
