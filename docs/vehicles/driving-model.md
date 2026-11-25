@@ -84,6 +84,8 @@ bars; the generic `addPart` drops any bar no mount can hold.
 `part_runtime` replaces each axle's configuration from its current installed
 `Swaybar` on authored mount 701 (front) or 702 (rear). Existing generic CFG
 compatibility remains authoritative, not the part class's model/axle name.
+The patched stock bars carry per-car rates from the real cars' bar diameters
+and no damping (#419, [patch](../../patch/README.md#per-car-bar-rates-419)).
 Finite nonnegative `force` / `damping` fields are scaled by clamped wear and
 tear; removing, moving, destroying or repairing the part is reflected by the
 next refresh/tick without an accumulated command or new save state. Extraction
