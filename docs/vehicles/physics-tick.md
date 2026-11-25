@@ -545,7 +545,9 @@ nominal choked exchange capacity. Unchoked orifice flow scales with
 or cam lift. This is not a pressure-ratio-dependent compressible mass/enthalpy
 solver or a flowbench calibration. Native min/max rectangular valve
 timing is unchanged. Authored nonzero closed lifts are treated as leakage;
-SuperDuty's 1.27-mm minimum changes substantially and may need data retuning.
+SuperDuty's 1.27-mm minimum made four stock engines lose all torque below
+2,500 rpm, so #409 re-specs those eight cams to 0 (a seated valve), see
+[patch](../../patch/README.md#superduty-camshafts-seated-closed-valves-409).
 The physical gas-state/seat/discharge details and absolute stock-car outputs remain
 unvalidated; these limitations do not justify retaining a unit-dependent X²/V law.
 

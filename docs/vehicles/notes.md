@@ -722,6 +722,28 @@ reverse case locked all four wheels within 0.15 s at 7 m/s with no brake
 pedal. Confirmed in game: a spin can be caught again. A manual (non-auto) clutch still
 couples a stalling engine to the driven wheels, as on a real car.
 
+## SuperDuty cams: negative torque below 2,500 rpm (#409)
+
+Cause: the owner saw negative power curves on the Hauler and the MC. A VM
+probe assembled the 24 stock racers (`vehicle_spawn_stock`) on private copies
+of the stock MWM game and read the host dyno: with the stock Java in SI units
+every curve is positive from 1,000 rpm; with the #203 patch the Hauler's
+SuperDuty 500 and Extra 750, the Prime DLH 500 and the MC GTLE are negative up
+to 2,000–2,500 rpm. Their eight SuperDuty cams declare a closed lift of 1.27 mm
+(0.050 in, the duration-measurement lift). The stock X²/V law made that leak
+negligible; the #203 linear curtain law makes it 12 % of the open flow.
+
+Fix: closed lift 0 in those eight cams (data re-spec, as every other cam). No
+coefficient and no change to the flow law.
+
+Validation: the eight sources rebuild the stock classes (only one-ULP float
+constants differ). The probe re-run changes exactly those four cars; their
+curves are positive from 1,000 rpm with the stock peak region (figures in
+[patch](../../patch/README.md#superduty-camshafts-seated-closed-valves-409)).
+Not checked in game. Their output now exceeds the real engines (Hauler 500
+342 PS / 561 Nm peak against a Ram 5.9's 248 PS / 454 Nm): left to the engine
+re-spec ([planning](../planning/stock-respec.md)).
+
 ## Fuel blends and knock (#407)
 
 Cause: reviewer feedback on the #203 fuel model. The three gasolines used one
@@ -753,3 +775,32 @@ Validation: `port_flow` suite 5/5 on a private copy of the stock game with
 knock limit 8.5 costs 5.3% peak torque on the 10.5:1 synthetic engine, limit 4
 costs 17%, 0.8 bar of boost makes a 10.6 limit knock, intercooling 0.9 reduces
 it). Not checked in game.
+
+## Stock engine re-spec (#411)
+
+Goal (owner): realistic specs considering the real models and the base game's
+performance, not pixel perfect, with no hardcoded power coefficient.
+
+Findings: with the stock flow law (X²/V) the 24 stock racers reach 79–93 % of
+the base game's displayed power (that display counted the cycle power twice);
+the #203 curtain law moves each engine by −45 % to 0 % depending on its
+valves, so the data had to be re-specced per engine. Reverting #203 was
+declined.
+
+Method: a throwaway VM probe assembles all 24 cars (`vehicle_spawn_stock`) on
+a private copy of the stock game plus `patch/`, reads the host dyno in 4 s,
+and a bisection adjusts one lever per car (a part only that car or its group
+uses), in dependency order. Bore, stroke and fitments stay, so catalog parts
+still fit. The coupling of the five SuperDuty-headed V8s needed one stock-list
+change: the Haulers now get the MC cams (the GTLE kept the SuperDuty cams,
+which need 8.8 / 6.2 mm lift for it).
+
+Validation: final probe on the branch, results and every changed value in
+[patch](../../patch/README.md#stock-engine-re-spec-411). Every family keeps its
+trim order. Not checked in game.
+
+Left: WRZ, SuperTurizmo and GTK stay 10–18 % below their real power at
+realistic boost (shared heads, no intercooler in the knock model); torque peaks
+sit at higher rpm than real on several engines; owned turbo cars keep their
+saved wastegate setting; owned Haulers keep their SuperDuty cams (335 PS
+instead of 246).
