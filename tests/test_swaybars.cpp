@@ -309,6 +309,32 @@ void stock_mounts_and_generic_compatibility() {
   }
 }
 
+// #413: the exe's Chassis.getMass returns the assembled vehicle body's mass
+// (CarInfo kg/HP, Garage, catalog delivery price). Part.getMass stays the
+// part's own CFG mass, so the chassis alone reads its _main_ body only.
+void chassis_mass_is_the_assembled_car() {
+  SwaybarFixture f;
+  auto *car = f.spawn(kBaiern);
+  auto mass = [&](const char *owner, Object *part) {
+    const auto value = f.registry.invoke(owner, "getMass", "()F", part, {});
+    SLRR_REQUIRE(value.tag == ValueTag::Float && std::isfinite(value.v.f));
+    return double(value.v.f);
+  };
+  double sum = 0;
+  for (const auto &part : part_installed_tree(car))
+    sum += mass("java.game.parts.Part", part.object);
+  const double body = mass("java.game.parts.Part", car);
+  const double total = mass("java.game.parts.bodypart.Chassis", car);
+  f.coast(car); // the released body carries the assembled physics mass
+  const double physics = f.state(car).mass;
+  std::printf("CHASSIS MASS body=%.1f total=%.1f sum=%.1f physics=%.1f\n", body,
+              total, sum, physics);
+  SLRR_REQUIRE(std::fabs(body - 838.5) < .5);
+  SLRR_REQUIRE(std::fabs(total - sum) < .01 * sum);
+  SLRR_REQUIRE(std::fabs(total - physics) < .01 * total);
+  SLRR_REQUIRE(total > 1300 && total < 1700);
+}
+
 void refresh_remove_transfer_and_destroy_are_isolated() {
   SwaybarFixture f;
   auto *a = f.spawn(kDuhen), *b = f.spawn(kDuhen);
@@ -641,6 +667,7 @@ void installed_damping_reduces_contacted_stock_chassis_roll() {
 int main() {
   const standalone::Test tests[] = {
       stock_mounts_and_generic_compatibility,
+      chassis_mass_is_the_assembled_car,
       refresh_remove_transfer_and_destroy_are_isolated,
       invalid_coefficients_disable_the_pair_without_poisoning_physics,
       native_wear_tear_attenuate_and_stock_repair_restores,
