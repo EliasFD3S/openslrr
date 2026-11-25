@@ -295,3 +295,53 @@ WRC's kg/HP goes from 2.58 to about 4.76. Confirmed in game by the owner:
 the stock Focer WRC shows 1395 kg, 4.753 kg/HP and 0.332 kg/Nm (294 HP,
 420 Nm); with some parts removed the mass drops to 1241 kg. A Baiern CoupeSport
 stripped to its bare body in the garage shows 838 kg, the `_main_` body alone.
+
+## Float literals of rebuilt stock classes (#420)
+
+Recompiling an unmodified stock source gave one-ulp differences in some
+float constants (`swaybar_MC_GTB_front` `1.90`: stock `0x3FF33333`, ours
+`0x3FF33334`; `swaybar_MC_GTLE_front` `2.65`: stock `0x4029999A`, ours
+`0x40299999`), so byte-exact checks of patched classes failed on floats
+alone ("known one-ULP differences" in `patch/README.md`).
+
+Cause: the vendored compiler converts literals with the Build 940 exe's
+`sscanf("%f")` loop in SSE single precision (setting B,
+`third_party/slrrc/floatlit.hpp`). The stock MWM classes were compiled
+by x87 builds of the same loop. Checking, for each `sources/**/src/*.java`
+that has a stock class, which setting gives the bits found in that class:
+no file needs B; D (double precision, values in registers) fits 394 files,
+almost all data classes (cars, engines, running gear); A (24-bit precision
+control) fits 37 core scripts (`sl/Scripts/game`, `Part`, `DynoData`,
+`Block`, `Wheel`, `Osd`, `Gadget`, `ControlSet`, three car `_VT` classes).
+142 of the D files are not correctly rounded, so a library parse
+(round to nearest) is not the fix either.
+
+Fix: `script_compile_all` takes `ScriptCompileOptions::float_mode`
+(`include/slrr/script_compiler.hpp`). `System.compileAll` keeps B, the
+conversion of the game's own compiler. `compile_game_sources` defaults to
+`auto` (`--float-mode A|B|C|D|auto`): per source unit,
+`src/jvm/script_compiler.cpp:choose_float_mode` scans the float tokens,
+and each literal whose bits differ between the settings votes for the
+settings whose four bytes occur in the existing class (its
+`.openslrr.bak` when present). Most votes win; ties go B, D, A, C, so a
+unit with no evidence keeps B. The vendored compiler is unchanged.
+
+Validation (compile root copied from the stock MWM install,
+`tests/test_float_literal_mode.cpp` 5/5):
+
+- 48 stock anti-roll bar sources: B 42 of 48 byte for byte (MC GTB, GTLE
+  and Focer 200 pairs differ by one byte each); auto 48 of 48.
+- `sources/` `DynoData.java`: B 14 bytes off the stock class, auto 0.
+- The 9 patch sources under `patch/parts/scripts` rebuild their shipped
+  classes byte for byte with `--float-mode B`. With auto against the stock
+  classes they differ only in the float bytes the vote predicts.
+
+Shipped patch classes compiled with B that auto would rebuild with other
+float bits against a stock reference (one byte per literal): D for
+`Block_Inline`, `Block_Vee`, `CylinderHead`, `AirFuelDeliverySystem`, the
+Baiern Devils 3.6 block, the Einvagen 110 GTK pistons, the Shimutshibu
+DDSB8C head and 16 MC/Prime/SuperDuty engine classes; A for `DynoData`,
+`Catalog`, `Garage`, `OptionsDialog` and `ControlSet`. The other 107
+(racer scripts, new osdx and render classes, the rest) are unchanged.
+They were not regenerated: rebuild one with `--float-mode B` to reproduce
+the shipped bytes, or with auto when it should match stock.

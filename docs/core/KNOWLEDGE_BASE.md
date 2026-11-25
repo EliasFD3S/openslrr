@@ -123,6 +123,9 @@ current gaps to SLRR_rev code are in
   `script_compile_all` rather than using the former local no-op stubs.
   Build with `cmake --build build --config Release --target compile_game_sources`,
   then run `build/Release/compile_game_sources.exe <game-root> <directory>`.
+  `--float-mode A|B|C|D|auto` comes first; the default `auto` keeps each
+  unit's float literals as the class it replaces has them, while
+  `System.compileAll` stays on B (#420, [scripting/notes.md](../scripting/notes.md)).
   The directory is relative to the root. Use a copied game root: compilation
   writes class files and retains first originals as `.openslrr.bak`.
   Exit codes: 0 for successful compilation, 1 for failures or no source units,
