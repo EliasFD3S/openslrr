@@ -398,6 +398,45 @@ SLRR_TEST(abs_releases_a_locked_wheel_while_the_road_moves) {
   SLRR_REQUIRE(cars[1].speed() < 20);
 }
 
+SLRR_TEST(sliding_backwards_in_a_forward_gear_keeps_the_wheels_rolling) {
+  // A spun car travels backwards in first gear: nothing may brake the
+  // wheels, with or without the accelerator, so the slide stays catchable.
+  for (double throttle : {0., 1.}) {
+    Car car;
+    car.run(1, 0, 0, 0);
+    car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, 15});
+    for (auto& wheel : car.dynamics.state) wheel.spin = -15 / .31;
+    car.dynamics.gear = 1;
+    car.run(.5, throttle, 0, 0);
+    SLRR_REQUIRE(car.dynamics.gear == 1);
+    for (int i = 0; i < 2; ++i)  // the undriven front wheels roll freely
+      SLRR_REQUIRE(car.dynamics.state[i].spin * .31 < -8);
+    if (throttle == 0)
+      for (int i = 2; i < 4; ++i) SLRR_REQUIRE(car.dynamics.state[i].spin * .31 < -8);
+    else  // the drive turns the rear wheels forwards against the motion
+      for (int i = 2; i < 4; ++i)
+        SLRR_REQUIRE(car.dynamics.state[i].spin > car.dynamics.state[0].spin + 5);
+  }
+}
+
+SLRR_TEST(reverse_while_rolling_forwards_drives_the_wheels_backwards) {
+  Car car;
+  car.run(1, 0, 0, 0);
+  car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -8});
+  for (auto& wheel : car.dynamics.state) wheel.spin = 8 / .31;
+  car.dynamics.drive.reverse = true;
+  // The auto clutch takes up once the engine reaches its launch rpm, then
+  // the drive turns the rear wheels backwards; the brakes stay off.
+  car.run(.5, 1, 0, 0);
+  SLRR_REQUIRE(car.dynamics.gear == 7);
+  SLRR_REQUIRE(car.dynamics.state[0].spin * .31 > 4);  // fronts unbraked
+  for (int i = 2; i < 4; ++i)
+    SLRR_REQUIRE(car.dynamics.state[i].spin < car.dynamics.state[0].spin - 5);
+  car.run(4, 1, 0, 0);
+  SLRR_REQUIRE(car.dynamics.body.velocity.dot(
+                   car.dynamics.body.orientation.rotate({0, 0, -1})) < -1);
+}
+
 SLRR_TEST(nitrous_blends_the_wet_bank_without_changing_dry_drive) {
   Car dry, wet, unavailable;
   for (Car* car : {&dry, &wet, &unavailable}) {
@@ -1048,6 +1087,8 @@ int main() {
       a_car_without_an_engine_coasts_and_still_brakes,
       preapplied_brakes_hold_against_drive_in_both_directions,
       abs_releases_a_locked_wheel_while_the_road_moves,
+      sliding_backwards_in_a_forward_gear_keeps_the_wheels_rolling,
+      reverse_while_rolling_forwards_drives_the_wheels_backwards,
       nitrous_blends_the_wet_bank_without_changing_dry_drive,
       body_drag_and_lift_follow_half_rho_v_squared,
       sliding_sideways_meets_the_side_area_without_lift,

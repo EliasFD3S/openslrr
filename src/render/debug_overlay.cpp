@@ -754,7 +754,8 @@ void draw_vehicle(const PartPhysicsState& state) {
     const auto& tire = state.tires[i];
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
-    ImGui::Text("%s %s", names[i], state.contact[i] ? "ground" : "air");
+    ImGui::Text("%s %s | drive %.2f", names[i], state.contact[i] ? "ground" : "air",
+                tire.drive);
     ImGui::TableNextColumn();
     ImGui::Text("%.0f N / %+.1f deg", state.force[i], tire.steer * kDegrees);
     ImGui::TableNextColumn();
