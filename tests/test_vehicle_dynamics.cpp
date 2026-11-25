@@ -5,6 +5,7 @@
 //       src/physics/suspension_geometry.cpp -o test_vehicle_dynamics
 #include "standalone_test.hpp"
 
+#include "slrr/brake_balance.hpp"
 #include "slrr/steering_feedback.hpp"
 #include "slrr/tire_model.hpp"
 #include "slrr/vehicle_dynamics.hpp"
@@ -987,8 +988,47 @@ SLRR_TEST(steering_feedback_centres_a_car_in_a_turn) {
   }
 }
 
+// Brake distribution (brake_balance.hpp): the stock Baiern CoupeSport discs,
+// 3718 Nm front and 2928 Nm rear before Brake.java's split.
+std::array<double, 4> stock_split(double balance) {
+  return {3718 * (1 - balance), 3718 * (1 - balance), 2928 * balance, 2928 * balance};
+}
+double front_share(const std::array<double, 4>& b) {
+  return (b[0] + b[1]) / (b[0] + b[1] + b[2] + b[3]);
+}
+
+SLRR_TEST(stock_brake_balance_puts_seventy_percent_on_the_front) {
+  auto b = stock_split(.5);
+  const double before = b[0] + b[1] + b[2] + b[3];
+  SLRR_REQUIRE(std::abs(front_share(b) - .559) < .001);
+  slrr::distribute_brakes(b, 2, .5);
+  SLRR_REQUIRE(std::abs(front_share(b) - .7) < 1e-9);
+  SLRR_REQUIRE(std::abs(b[0] + b[1] + b[2] + b[3] - before) < 1e-6);
+  SLRR_REQUIRE(b[0] == b[1] && b[2] == b[3]);
+}
+
+SLRR_TEST(the_brake_adjuster_moves_the_front_share) {
+  double previous = 2;
+  for (double balance : {0.0, .2, .35, .5, .65, .8, 1.0}) {
+    auto b = stock_split(balance);
+    slrr::distribute_brakes(b, 2, balance);
+    const double share = front_share(b);
+    SLRR_REQUIRE(share < previous && share >= .4 - 1e-9 && share <= 1 + 1e-9);
+    // At an end of the adjuster the empty axle is rebuilt from the other one.
+    if (balance > 0 && balance < 1)
+      SLRR_REQUIRE(std::abs(b[0] + b[1] + b[2] + b[3] - .5 * 2 * (3718 + 2928)) < 1e-6);
+    previous = share;
+  }
+  // A car with no rear brakes keeps what the scripts gave.
+  std::array<double, 4> front_only{1000, 1000, 0, 0};
+  slrr::distribute_brakes(front_only, 2, .5);
+  SLRR_REQUIRE(front_only[0] == 1000 && front_only[2] == 0);
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
+      stock_brake_balance_puts_seventy_percent_on_the_front,
+      the_brake_adjuster_moves_the_front_share,
       steering_feedback_pulls_back_and_goes_light_past_the_peak,
       steering_feedback_fades_when_parked_or_airborne,
       steering_feedback_kicks_on_bumps_and_jolts_on_impacts,

@@ -22,6 +22,7 @@
 #include "slrr/scene_collision.hpp"
 #include "slrr/scx_mesh.hpp"
 #include "slrr/skeleton.hpp"
+#include "slrr/brake_balance.hpp"
 #include "slrr/skid_marks.hpp"
 #include "slrr/steering_feedback.hpp"
 #include "slrr/suspension_geometry.hpp"
@@ -3322,9 +3323,16 @@ DriveRefresh configure_drive(Object *chassis, Record &rec, bool controlled) {
   drive.bearing_scale = .1 / brake_inertia;
   // DiscBrake supplies torque. Normalize the CFG gains before using the
   // physical wheel inertia, which is already expressed in SI units.
-  const double inertia_gain = 50 / brake_inertia;
-  drive.brake_scale = inertia_gain * std::max(0.f, rec.config->brake_power) / 1000;
-  drive.handbrake_scale = inertia_gain * std::max(0.f, rec.config->handbrake_power) / 2000;
+  // kBrakeGain (#400) sets where the pedal locks the wheels. With 50 the stock
+  // Baiern CoupeSport (brake_inertia 32) locked its rears at 40 % pedal and
+  // all four at 50 %, so the upper half of the travel did nothing. With 25
+  // and the 70 % front split (brake_balance.hpp) the deceleration follows the
+  // pedal and the wheels lock near full pedal. The handbrake keeps 50: it is
+  // meant to lock the rears at once.
+  constexpr double kBrakeGain = 25, kHandbrakeGain = 50;
+  drive.brake_scale = kBrakeGain / brake_inertia * std::max(0.f, rec.config->brake_power) / 1000;
+  drive.handbrake_scale =
+      kHandbrakeGain / brake_inertia * std::max(0.f, rec.config->handbrake_power) / 2000;
   // Without an engine there is no gearbox either: neutral, wheels roll free.
   drive.gears = engine ? std::clamp(field_int(chassis, "gears"), 1, 6) : 0;
   const double final_drive = comp(chassis, "rearend_ratio");
@@ -3367,6 +3375,13 @@ DriveRefresh configure_drive(Object *chassis, Record &rec, bool controlled) {
       out.rolling_resistance = .04;
     }
   }
+  // The chassis brake balance as a front share (brake_balance.hpp).
+  std::array<double, 4> brakes{};
+  for (size_t i = 0; i < brakes.size(); ++i) brakes[i] = drive.wheels[i].brake;
+  const auto balance = chassis->fields.find("brake_balance");
+  distribute_brakes(brakes, 2,
+                    balance == chassis->fields.end() ? .5 : comp(chassis, "brake_balance"));
+  for (size_t i = 0; i < brakes.size(); ++i) drive.wheels[i].brake = brakes[i];
   return refresh;
 }
 

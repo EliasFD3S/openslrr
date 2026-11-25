@@ -594,6 +594,50 @@ Not done: emulated force feedback for devices without it
 (`Config.FFB_strength_emulated`) and a per-car caster from the suspension
 geometry.
 
+## Brake strength and balance (#400)
+
+Play test with a pedal set: "the brakes brake far too hard". A probe with the
+stock Baiern CoupeSport's torques (script discs 3718 Nm front, 2928 Nm rear
+before Brake.java's split, `brake_inertia` 32) on the solver, 100-0 km/h,
+linear pedal:
+
+| Pedal | Before | After |
+|---|---|---|
+| 20 % | 0.47 g | 0.24 g |
+| 40 % | 0.86 g, rears lock | 0.47 g |
+| 50 % | all four locked | 0.58 g |
+| 70 % | locked | 0.81 g |
+| 80 % | locked | 0.84 g, fronts lock |
+| 100 % | 0.89 g, 43.5 m | 0.89 g, 43.0 m; with ABS 0.98 g, 40.4 m |
+
+Cause: the host gain `50 / brake_inertia` gave about 2.5 g of brake torque.
+Halving it alone failed `race_vehicle` (ROC line error 9.3 and 11.1 m
+against 9): the stock split (`brake_balance` 0.5, rear discs x b and front x
+(1 - b)) left about 56 % of the braking on the front, so once the brakes no
+longer locked all four wheels the rears locked first and the AI's Enula spun
+braking into a bend at 125 km/h (yaw -1.7 rad/s). With everything locked the
+car had slid straight, which hid the split. An AI-side ABS, a higher AI brake
+gain, a pedal cap and releasing the brake while steering each moved the
+error from one car to the other.
+
+Fix: `kBrakeGain` 25 (the handbrake keeps 50), and `distribute_brakes`
+(`include/slrr/brake_balance.hpp`) reads the chassis `brake_balance` as a
+front share: 0.5 gives 70 %, an adjuster (`brake_balance_can_be_set`: Focer
+RC 300 and WRC, Enula WR SuperTurizmo, Baiern GT III...) moves it from 100 %
+(b = 0) to 40 % (b = 1). The total is what the stock split gives at b = 0.5
+and each wheel keeps its share of its axle; saved cars keep their balance
+value. The race AI is unchanged.
+
+Validation: `vehicle_dynamics` 42/42 (two new tests: 70 % at the stock
+balance with the total kept, the adjuster moving the share monotonically
+within 40-100 %, a car without rear brakes left alone); `race_vehicle`
+passes with line errors 5.9 and 6.2 m (6.6 and 8.4 before) and stops from
+170 and 133 km/h; `race_brain`, `traffic_runtime`, `physics_recovery` pass;
+the Valo City bench ends with `drive done`, exit 0. `swaybars` fails 4 of 8
+from `build/sr`, identically on `main`. Not tried by a player yet; the
+default brake gamma (`Config.brakePower` 2.5) still softens the start of the
+pedal on top of this.
+
 ## Force feedback detail (#399)
 
 Play test of #395: the pull was right but bumps, kerbs, impacts and scrub
