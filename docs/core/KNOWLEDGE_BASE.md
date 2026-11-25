@@ -1106,8 +1106,9 @@ These are entry points, not fixes. Each needs its own reproduction.
   and driving consumes that curve without the legacy ×2 gain or duplicate WOT
   loss. The shipped Java head/Inline/Vee patch normalizes capped curtain area by
   a declared 1-ms ideal-air reference exchange volume, replacing X²/V. The
-  only added DynoData field is the fuel's `knockCompression` (#407, read by name
-  by the host dyno); full pressure-dependent flow and independent-thread
+  added DynoData fields are the fuel's `knockCompression` (#407) and the
+  supercharger's `charger_*`/`crank_pulley_diameter` (#415), read by name by the
+  host dyno; full pressure-dependent flow and independent-thread
   ownership remain open. The actual-solver throttle
   experiment covers digital/analog plate response, cut hysteresis and latched
   BOV events without enabling new production controls. `interpolation_ms`

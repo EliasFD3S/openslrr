@@ -184,6 +184,15 @@ so the loss applies on the road too. `minComp`/`maxComp` no longer follow the
 mixture; they only refuse engines that cannot run on the fuel. See
 [patch](../../patch/README.md#fuel-heat-blends-and-knock-203-407).
 
+Superchargers (#415): `DynoData.charger_type` 1 selects a positive-displacement
+law in `prepare()` (delivery proportional to blower speed with internal
+leakage, adiabatic outlet temperature for the drive power, charge cooled
+back to intake temperature by `charger_intercooled`, default 1) instead of the
+turbo bell curve, and `blower_drive()` in `src/physics/dyno_model.cpp`
+subtracts the blower's drive torque from each dyno row and lets an overloaded
+belt slip. `dyno_boost_fraction` follows the same law. See
+[patch](../../patch/README.md#superchargers-positive-displacement-pulleys-and-belt-415).
+
 ## Nitrous driving and exhaust (#303, #304)
 
 The Part chassis owns a native nitrous aggregate, separate from the script's

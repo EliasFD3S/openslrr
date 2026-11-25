@@ -79,6 +79,14 @@ public class DynoData extends Native
 	float	minCompression		= 0;
 	float	maxCompression		= 0;
 	float	knockCompression	= 0;	// OpenSLRR #407: fuel knock limit, 0 = none
+
+	// OpenSLRR #415: positive-displacement supercharger (charger_type 1) //
+	float	charger_type		= 0;	// 0 = turbo law, 1 = positive displacement
+	float	charger_leak_rpm	= 0;	// blower rpm whose flow equals the internal leakage
+	float	charger_efficiency	= 0;	// adiabatic compression efficiency
+	float	charger_belt_force	= 0;	// N, effective belt tension before slip (0 = no limit)
+	float	charger_pulley_radius	= 0;	// m, blower pulley
+	float	crank_pulley_diameter	= 0;	// mm, blower driver pulley on the crank (0 = none)
 	String	fuelType = "";
 	float	maxTorque		= 0;
 	float	maxHP			= 0;
@@ -211,6 +219,13 @@ public class DynoData extends Native
 		nitro_cooling	= 1.0;
 		nitro_consumption = 0.0;
 
+		charger_type		= 0.0;
+		charger_leak_rpm	= 0.0;
+		charger_efficiency	= 0.0;
+		charger_belt_force	= 0.0;
+		charger_pulley_radius	= 0.0;
+		crank_pulley_diameter	= 0.0;
+
 		mixture_ratio	= 14.0;
 		mixture_H	= 1000000.0;
 		max_fuel_consumption	= 0.0;
@@ -262,6 +277,23 @@ public class DynoData extends Native
 		nitro_H		     = (one.nitro_H              + other.nitro_H)*0.5;
 		nitro_cooling        = (one.nitro_cooling        + other.nitro_cooling)*0.5;
 		nitro_consumption    = (one.nitro_consumption    + other.nitro_consumption)*0.5;
+		// one blower feeds both banks: keep the bank that carries it //
+		if (other.charger_type > one.charger_type)
+		{
+			charger_type = other.charger_type;
+			charger_leak_rpm = other.charger_leak_rpm;
+			charger_efficiency = other.charger_efficiency;
+			charger_belt_force = other.charger_belt_force;
+			charger_pulley_radius = other.charger_pulley_radius;
+		}
+		else
+		{
+			charger_type = one.charger_type;
+			charger_leak_rpm = one.charger_leak_rpm;
+			charger_efficiency = one.charger_efficiency;
+			charger_belt_force = one.charger_belt_force;
+			charger_pulley_radius = one.charger_pulley_radius;
+		}
 
 		mixture_ratio        = (one.mixture_ratio        + other.mixture_ratio)*0.5;
 		mixture_H            = (one.mixture_H            + other.mixture_H)*0.5;
@@ -307,6 +339,12 @@ public class DynoData extends Native
 		clonedDynoData.nitro_H		= nitro_H;
 		clonedDynoData.nitro_cooling	= nitro_cooling;
 		clonedDynoData.nitro_consumption= nitro_consumption;
+		clonedDynoData.charger_type	= charger_type;
+		clonedDynoData.charger_leak_rpm	= charger_leak_rpm;
+		clonedDynoData.charger_efficiency	= charger_efficiency;
+		clonedDynoData.charger_belt_force	= charger_belt_force;
+		clonedDynoData.charger_pulley_radius	= charger_pulley_radius;
+		clonedDynoData.crank_pulley_diameter	= crank_pulley_diameter;
 
 		clonedDynoData.mixture_ratio = mixture_ratio;
 		clonedDynoData.mixture_H = mixture_H;

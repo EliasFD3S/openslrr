@@ -230,6 +230,61 @@ SLRR_TEST(knock_retards_above_the_fuel_limit_with_boost) {
               clean, knocking, severe, boost_clean, boost_knock);
 }
 
+SLRR_TEST(positive_displacement_blower_boosts_from_low_rpm_and_costs_drive_power) {
+  // Synthetic DynoData defaults with an E750-like blower: drive ratio 1.5,
+  // 0.5 bar at full speed, the stock turbo-law window kept for comparison.
+  using Fields = std::unordered_map<std::string, float>;
+  struct Row { double torque[8]; float boost[8]; };
+  const float rpms[8] = {1000, 1500, 2000, 3000, 4000, 5000, 6000, 6750};
+  const auto run = [&](Fields fields) {
+    int key = 0;
+    slrr::DynoStats stats;
+    fields["maxRPM"] = 7000.f;
+    SLRR_REQUIRE(slrr::dyno_calculate(&key, fields, 28.f, &stats));
+    Row row{};
+    for (int i = 0; i < 8; ++i) {
+      row.torque[i] = slrr::dyno_sample(&key, rpms[i], 0, false);
+      row.boost[i] = slrr::dyno_boost_fraction(&key, rpms[i]);
+    }
+    slrr::dyno_forget(&key);
+    return row;
+  };
+  const Fields blower{{"rpm_turbo_mul", 1.5f}, {"rpm_turbo_opt", 4950.f},
+                      {"rpm_turbo_range", 4050.f}, {"P_turbo_max", .5f}, {"P_turbo_waste", .5f}};
+  auto roots = blower;
+  roots.insert({{"charger_type", 1.f}, {"charger_leak_rpm", 300.f}, {"charger_efficiency", .55f},
+                {"charger_pulley_radius", .03f}, {"charger_belt_force", 1620.f}});
+  const Row na = run({}), legacy = run(blower), pd = run(roots);
+  for (int i = 1; i < 8; ++i) {
+    // Delivery follows blower speed: boost rises with rpm, never in a bell.
+    SLRR_REQUIRE(pd.boost[i] >= pd.boost[i - 1]);
+    SLRR_REQUIRE(pd.torque[i] > na.torque[i]);
+  }
+  // Already most of its boost at 2,000 rpm, where the turbo law has little.
+  SLRR_REQUIRE(pd.boost[2] > .6f && pd.boost[2] > legacy.boost[2]);
+  SLRR_REQUIRE(pd.boost[0] > legacy.boost[0]);
+  // A less efficient blower heats the charge more and takes more drive power.
+  auto hot = roots;
+  hot["charger_efficiency"] = .35f;
+  const Row worse = run(hot);
+  for (int i = 2; i < 8; ++i) SLRR_REQUIRE(worse.torque[i] < pd.torque[i]);
+  // A belt that cannot carry the drive slips: less boost, less torque at speed.
+  auto weak = roots;
+  weak["charger_belt_force"] = 60.f;
+  const Row slipping = run(weak);
+  SLRR_REQUIRE(slipping.boost[6] < pd.boost[6] && slipping.torque[6] < pd.torque[6]);
+  // Without a belt limit (0) the blower is never held back.
+  auto free_belt = roots;
+  free_belt["charger_belt_force"] = 0.f;
+  const Row unlimited = run(free_belt);
+  for (int i = 0; i < 8; ++i) SLRR_REQUIRE(unlimited.torque[i] >= pd.torque[i] - 1e-3);
+  std::printf("[port_flow] blower Nm at 1000/2000/4000/6000: NA %.0f/%.0f/%.0f/%.0f, "
+              "turbo law %.0f/%.0f/%.0f/%.0f, roots %.0f/%.0f/%.0f/%.0f, slipping belt %.0f at 6000\n",
+              na.torque[0], na.torque[2], na.torque[4], na.torque[6], legacy.torque[0],
+              legacy.torque[2], legacy.torque[4], legacy.torque[6], pd.torque[0], pd.torque[2],
+              pd.torque[4], pd.torque[6], slipping.torque[6]);
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
       curtain_geometry_has_linear_lift_and_a_throat_limit,
@@ -237,6 +292,7 @@ int main() {
       missing_geometry_or_restriction_closes_only_that_port,
       fuel_heat_follows_the_ethanol_blend_and_octane_sets_the_knock_limit,
       knock_retards_above_the_fuel_limit_with_boost,
+      positive_displacement_blower_boosts_from_low_rpm_and_costs_drive_power,
   };
   return slrr::standalone::run("port_flow", tests);
 }
