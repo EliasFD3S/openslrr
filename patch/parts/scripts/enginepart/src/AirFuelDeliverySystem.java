@@ -19,6 +19,23 @@ public class AirFuelDeliverySystem extends EnginePart
 	static int	FT_METHANOL	= 3;
 	static int	FT_DIESEL	= 4;
 
+	// OpenSLRR #407: handbook fuel data. Pump 95 is E5 and pump 98 is E10
+	// (ethanol by volume); 100 octane race fuel has no ethanol.
+	static float	GASOLINE_LHV		= 43400000.0;	// J/kg //
+	static float	GASOLINE_AFR		= 14.7;
+	static float	GASOLINE_DENSITY	= 0.745;	// kg/l //
+	static float	ETHANOL_LHV		= 26800000.0;
+	static float	ETHANOL_AFR		= 9.0;
+	static float	ETHANOL_DENSITY		= 0.789;
+	static float	METHANOL_LHV		= 19900000.0;
+	static float	METHANOL_AFR		= 6.47;	// CH3OH + 1.5 O2 //
+	static float	DIESEL_LHV		= 43400000.0;
+	static float	DIESEL_AFR		= 14.5;
+
+	// The mixture range reaches methanol's best power (about 5:1).
+	static float	MIN_MIXTURE_RATIO	= 4.0;
+	static float	MAX_MIXTURE_RATIO	= 20.0;
+
 	// input //
 	float	mixture_ratio		= 1.0;
 	float	optimal_mixture_ratio	= 1.0;
@@ -43,6 +60,7 @@ public class AirFuelDeliverySystem extends EnginePart
 
 	float	minComp			= 0.0;
 	float	maxComp			= 0.0;
+	float	knockComp		= 0.0;
 
 	public AirFuelDeliverySystem(){}
 
@@ -55,30 +73,89 @@ public class AirFuelDeliverySystem extends EnginePart
 
 	public void calcStuffs()
 	{
-		if (fuel_type == FT_GAS_98)
-			optimal_mixture_ratio = 13.5/1.0;
+		optimal_mixture_ratio = bestPowerRatio(fuel_type);
+	}
+
+	// Ethanol mass fraction of a pump gasoline, from its share by volume.
+	public float ethanolMassFraction( int ft )
+	{
+		float volume = 0.0;
+
+		if (ft == FT_GAS_95)
+			volume = 0.05;
 		else
-		if (fuel_type == FT_GAS_100)
-			optimal_mixture_ratio = 14.0/1.0;
+		if (ft == FT_GAS_98)
+			volume = 0.10;
+
+		float ethanol = volume*ETHANOL_DENSITY;
+		return ethanol/(ethanol+(1.0-volume)*GASOLINE_DENSITY);
+	}
+
+	// Stoichiometric air:fuel ratio by mass.
+	public float stoichiometricRatio( int ft )
+	{
+		if (ft == FT_METHANOL)
+			return METHANOL_AFR;
 		else
-		if (fuel_type == FT_METHANOL)
-			optimal_mixture_ratio = 16.0/1.0;
+		if (ft == FT_DIESEL)
+			return DIESEL_AFR;
+
+		float w = ethanolMassFraction(ft);
+		return (1.0-w)*GASOLINE_AFR+w*ETHANOL_AFR;
+	}
+
+	// Lower heating value, J/kg of fuel.
+	public float lowerHeatingValue( int ft )
+	{
+		if (ft == FT_METHANOL)
+			return METHANOL_LHV;
 		else
-		if (fuel_type == FT_DIESEL)
-			optimal_mixture_ratio = 11.0/1.0;
+		if (ft == FT_DIESEL)
+			return DIESEL_LHV;
+
+		float w = ethanolMassFraction(ft);
+		return (1.0-w)*GASOLINE_LHV+w*ETHANOL_LHV;
+	}
+
+	// Best-power mixture: gasolines at lambda 0.86, methanol at 0.78; diesel
+	// stays lean of stoichiometric (smoke limit, lambda 1.25).
+	public float bestPowerRatio( int ft )
+	{
+		if (ft == FT_METHANOL)
+			return stoichiometricRatio(ft)*0.78;
 		else
-			optimal_mixture_ratio = 12.5/1.0; // FT_GAS_95 //
+		if (ft == FT_DIESEL)
+			return stoichiometricRatio(ft)*1.25;
+
+		return stoichiometricRatio(ft)*0.86;
+	}
+
+	// Highest static compression that runs at full spark advance on a
+	// naturally aspirated 20 C charge. The host retards the spark above it,
+	// boost and intercooling included. Diesel has no spark knock.
+	public float knockLimitedCompression( int ft )
+	{
+		if (ft == FT_GAS_98)
+			return 11.5;
+		else
+		if (ft == FT_GAS_100)
+			return 12.5;
+		else
+		if (ft == FT_METHANOL)
+			return 15.0;
+		else
+		if (ft == FT_DIESEL)
+			return 0.0;
+
+		return 10.5; // FT_GAS_95 //
 	}
 
 	public void updatevariables()
 	{
 //		System.log("----->>>>> updating "+name+":");
-		// OpenSLRR #203: H is the heat released per kg of inducted charge at the
-		// fuel's best mixture: lower heating value / stoichiometric air:fuel ratio.
-		// The stock values (knock, in J/kg) were about 2.7 times too low and needed a
-		// x1.55 factor; they now set only the compression window.
-		float H; // J/kg //
-		float knock; // stock heat value, J/kg //
+		// OpenSLRR #203/#407: H is the heat released per kg of inducted air at
+		// the fuel's best mixture, lower heating value / stoichiometric ratio
+		// of the fuel blend.
 		int ft = getFuelType();
 
 		if (ft == FT_METHANOL)
@@ -86,18 +163,10 @@ public class AirFuelDeliverySystem extends EnginePart
 		else
 			police_check_fine_value = 0;
 
-		if (ft == FT_GAS_95)
-//			System.log("  fuel type: 95 octane pump gas");
-			knock = 1099500.0;
-			optimal_mixture_ratio = 12.5/1.0;
-			optimal_burn_time_base	= 0.00250;
-			optimal_burn_time_offset= 0.00080;
-
+		// stock flame speeds //
 		if (ft == FT_GAS_98)
 		{
 //			System.log("  fuel type: 98 octane pump gas");
-			knock = 1100000.0;
-			optimal_mixture_ratio = 13.5/1.0;
 			optimal_burn_time_base	= 0.00247;
 			optimal_burn_time_offset= 0.00075;
 		}
@@ -105,8 +174,6 @@ public class AirFuelDeliverySystem extends EnginePart
 		if (ft == FT_GAS_100)
 		{
 //			System.log("  fuel type: 100 octane premium gas");
-			knock = 1100250.0;
-			optimal_mixture_ratio = 14.0/1.0;
 			optimal_burn_time_base	= 0.00242;
 			optimal_burn_time_offset= 0.00065;
 		}
@@ -114,8 +181,6 @@ public class AirFuelDeliverySystem extends EnginePart
 		if (ft == FT_METHANOL)
 		{
 //			System.log("  fuel type: racing methanol");
-			knock = 1400000.0;
-			optimal_mixture_ratio = 16.0/1.0;
 			optimal_burn_time_base	= 0.00225;
 			optimal_burn_time_offset= 0.00040;
 		}
@@ -123,22 +188,20 @@ public class AirFuelDeliverySystem extends EnginePart
 		if (ft == FT_DIESEL)
 		{
 //			System.log("  fuel type: diesel oil");
-			knock = 1600000.0;
-			optimal_mixture_ratio = 11.0/1.0;
 			optimal_burn_time_base	= 0.00340;
 			optimal_burn_time_offset= 0.00030;
 		}
-		
-		// Gasoline 43.4 MJ/kg at 14.7:1; the grades keep their stock ratios.
-		if (ft == FT_METHANOL)
-			H = 19900000.0/6.47;	// 19.9 MJ/kg at 6.47:1
 		else
-		if (ft == FT_DIESEL)
-			H = 43400000.0/14.5;	// 43.4 MJ/kg at 14.5:1
-		else
-			H = 43400000.0/14.7*(knock/1099500.0);
+		{
+//			System.log("  fuel type: 95 octane pump gas");
+			optimal_burn_time_base	= 0.00250;
+			optimal_burn_time_offset= 0.00080;
+		}
 
-		float ratio = clampTo(getMixtureRatio(), 8.0, 20.0);
+		optimal_mixture_ratio = bestPowerRatio(ft);
+		float H = lowerHeatingValue(ft)/stoichiometricRatio(ft); // J/kg //
+
+		float ratio = clampTo(getMixtureRatio(), MIN_MIXTURE_RATIO, MAX_MIXTURE_RATIO);
 		float ratio_detuning_ratio;
 
 //		System.log("     current air:fuel ratio: "+ratio+":1.0");
@@ -157,14 +220,31 @@ public class AirFuelDeliverySystem extends EnginePart
  		mixture_H = H*(0.8+0.2*(1.0-ratio_detuning_ratio));
 		time_burn = (optimal_burn_time_base+optimal_burn_time_offset*ratio_detuning_ratio)*0.25;
 
-		// The allowed compression still follows the stock heat value, so every
-		// stock engine stays within its window.
-		float knock_H = knock*(0.8+0.2*(1.0-ratio_detuning_ratio))*1.55;
-		minComp = knock_H/250000.0;
-		maxComp = knock_H/100000.0;
+		// Knock is a spark retard in the host. The window below only refuses
+		// engines that cannot run on the fuel at all: a diesel needs
+		// compression ignition, and far above the knock limit the retard no
+		// longer prevents pre-ignition.
+		knockComp = knockLimitedCompression(ft);
+		if (ft == FT_DIESEL)
+		{
+			minComp = 14.0;
+			maxComp = 24.0;
+		}
+		else
+		if (ft == FT_METHANOL)
+		{
+			minComp = 8.0;
+			maxComp = knockComp+5.5;
+		}
+		else
+		{
+			minComp = 6.5;
+			maxComp = knockComp+5.5;
+		}
 
 //		System.log("     minComp = "+minComp);
 //		System.log("     maxComp = "+maxComp);
+//		System.log("     knockComp = "+knockComp);
 
 //		System.log("     detuning_coeff.: "+(ratio_detuning_ratio*100.0)+"%");
 //		System.log("     burn time: "+(time_burn*1000.0)+" ms");
@@ -180,10 +260,10 @@ public class AirFuelDeliverySystem extends EnginePart
 	public String getFuelTypeName()
 	{
 		if (fuel_type == FT_GAS_95)
-			return "95 octane pump gas";
+			return "95 octane pump gas (E5)";
 		else
 		if (fuel_type == FT_GAS_98)
-			return "98 octane pump gas";
+			return "98 octane pump gas (E10)";
 		else
 		if (fuel_type == FT_GAS_100)
 			return "100 octane premium gas";
