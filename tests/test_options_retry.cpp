@@ -1,6 +1,7 @@
 #include "save_io_fixture.hpp"
 #include "slrr/script_compiler.hpp"
 #include "slrr/host_game_options.hpp"
+#include <iterator>
 #include <thread>
 using namespace slrr;
 int main() {
@@ -39,7 +40,8 @@ int main() {
  host_game_options_dirty();host_game_options_update(f.vm,true);SLRR_REQUIRE(attempts==5);
  host_game_options_update(f.vm,true);SLRR_REQUIRE(attempts==5);
  register_script_natives(f.vm,f.packs,f.sections);
- const auto host_file=f.root/"save/game/openslrr_options";
+ const auto host_file=f.root/"save/game/openslrr_options.json";
+ const auto legacy_file=f.root/"save/game/openslrr_options";
  auto set_graphics=[&](int key,int value){f.registry.invoke("java.game.OptionsDialog","setRendererOption","(II)V",nullptr,{Value::make_int(key),Value::make_int(value)});};
  for(int mode=0;mode<=3;++mode){
    set_graphics(0,mode);
@@ -76,12 +78,51 @@ int main() {
  // Debug menu uses the same persistence entry point.
  g={};g.msaa=2;SLRR_REQUIRE(host_save_graphics_options());
  g={};host_game_options_load(f.vm);SLRR_REQUIRE(g.msaa==2 && g.dynamic_reflections);
- std::ofstream(host_file)<<"framerate_mode=classic\n";
- host_game_options_load(f.vm);SLRR_REQUIRE(g==EnhancedGraphics{});
- std::ofstream(host_file)<<"msaa=999\nlocal_lights=invalid\nvolumetric_clouds=0\nanisotropic_filtering=invalid\n";
+ std::puts("PASS graphics disk round-trip: all MSAA modes, booleans, framerate coexistence, debug path");
+ // JSON (#405): sections, booleans as true/false, the framerate by name.
+ {
+   std::ifstream in(host_file);const std::string text{std::istreambuf_iterator<char>(in),{}};
+   SLRR_REQUIRE(text.find("\"version\": 1")!=std::string::npos);
+   SLRR_REQUIRE(text.find("\"framerate_mode\": \"classic\"")!=std::string::npos);
+   SLRR_REQUIRE(text.find("\"msaa\": 2")!=std::string::npos);
+   SLRR_REQUIRE(text.find("\"dynamic_reflections\": true")!=std::string::npos);
+   SLRR_REQUIRE(text.find("\"input\": {")!=std::string::npos);
+ }
+ // Missing keys keep their defaults; out-of-range values clamp; wrong types
+ // and unknown keys are ignored.
+ std::ofstream(host_file)<<R"({"version":1,"video":{"framerate_mode":"classic"}})";
+ host_game_options_load(f.vm);SLRR_REQUIRE(g==EnhancedGraphics{} && host_framerate_mode()==FramerateMode::Classic);
+ std::ofstream(host_file)<<R"({"version":1,"video":{"msaa":999,"local_lights":"x","volumetric_clouds":false,"fog":0,"anisotropic_filtering":[1]},"input":{"ffb_damper":150,"ffb_min_force":-4,"ffb_invert":true},"extra":{"a":{"b":1}}})";
  host_game_options_load(f.vm);
- SLRR_REQUIRE(g.msaa==1 && g.local_lights && !g.volumetric_clouds && g.anisotropic_filtering);
- std::puts("PASS graphics disk round-trip: all MSAA modes, booleans, framerate coexistence, debug path, legacy and malformed files");
+ SLRR_REQUIRE(g.msaa==3 && g.local_lights && !g.volumetric_clouds && !g.fog && g.anisotropic_filtering);
+ SLRR_REQUIRE(host_input_tuning().ffb_damper==150 && host_input_tuning().ffb_min_force==0 && host_input_tuning().ffb_invert);
+ // A damaged file: defaults, kept aside as .bad, replaced by the next save.
+ std::ofstream(host_file)<<R"({"video":{"msaa":0,)";
+ host_game_options_load(f.vm);
+ SLRR_REQUIRE(g==EnhancedGraphics{} && fs::exists(host_file.string()+".bad") && !fs::exists(host_file));
+ set_graphics(0,0);SLRR_REQUIRE(fs::exists(host_file));
+ g={};host_game_options_load(f.vm);SLRR_REQUIRE(g.msaa==0);
+ // The key=value file of older builds is taken over once, then kept.
+ fs::remove(host_file);
+ std::ofstream(legacy_file)<<"framerate_mode=classic\nmsaa=2\nlocal_lights=invalid\nvolumetric_clouds=0\nffb_detail=40\nffb_invert=1\n";
+ host_game_options_load(f.vm);
+ SLRR_REQUIRE(g.msaa==2 && g.local_lights && !g.volumetric_clouds && host_framerate_mode()==FramerateMode::Classic);
+ SLRR_REQUIRE(host_input_tuning().ffb_detail==40 && host_input_tuning().ffb_invert);
+ SLRR_REQUIRE(fs::exists(host_file) && fs::exists(legacy_file));
+ std::ofstream(legacy_file)<<"msaa=0\n";
+ host_game_options_load(f.vm);SLRR_REQUIRE(g.msaa==2);  // the JSON wins
+ // Every renderer option id reads back what was set, through the file.
+ for(int key=0;key<=31;++key){
+   int before=0;SLRR_REQUIRE(host_option_get(key,before));
+   int target=before==0?1:0;
+   set_graphics(key,target);
+   host_game_options_load(f.vm);
+   int after=-1;SLRR_REQUIRE(host_option_get(key,after));
+   // AO radius (12) and view distance (14) clamp 0/1 up to their minimum.
+   SLRR_REQUIRE(after==target || ((key==12 || key==14) && after>1));
+ }
+ int unknown=0;SLRR_REQUIRE(!host_option_get(32,unknown));
+ std::puts("PASS options JSON: sections and types, defaults for missing keys, clamps, damaged file, legacy migration, every id");
  if(const char* root=std::getenv("SLRR_COMPILE_OPTIONS_ROOT")) {
    const auto report=script_compile_all(root,"options-build");
    SLRR_REQUIRE(report.attempted==1 && report.succeeded==1 && report.failed==0);

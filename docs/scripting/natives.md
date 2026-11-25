@@ -58,7 +58,7 @@ that category. It is not a compatibility score or a complete runtime trace.
 | `RenderRef.setMatrix(int, ResourceRef, Vector3, Ypr)` | Writes that bone's local pose. With another render as `bone_ref`, this render is parented on that bone. Script positions are metres. |
 | `Thread.setDaemon` | Sets and clears the per-thread flag. Shutdown still cancels every fiber. |
 | `System.simTime`, `timeWarp` | The simulation clock follows the warp factor, and setting it returns the previous factor. Physics uses the scaled elapsed time. UI clocks, sleeps and host timer dispatch use real time. |
-| `System.setMeasure`, `getConfigOptions` | The measure setting controls digital vehicle instruments. The options refresh reads gameplay settings and schedules a debounced save when they change. Failed saves suspend automatic retries until another change; forced shutdown saves can retry. Enhanced graphics are stored separately in save/game/openslrr_options. |
+| `System.setMeasure`, `getConfigOptions` | The measure setting controls digital vehicle instruments. The options refresh reads gameplay settings and schedules a debounced save when they change. Failed saves suspend automatic retries until another change; forced shutdown saves can retry. Enhanced graphics and the other host-only options are stored separately in save/game/openslrr_options.json. |
 | `RenderRef.setFlare`, `Navigator.updateNavigator`, `GroundRef.getNearestCross` | Directional flares use the scene's texture and an approximate sprite layout. The GPS camera and markers follow scene objects. The crossing query now reads the selected ground TRC and honours the desired crossing distance (v221 host semantics). |
 | `GfxEngine.numDisplayModes`, `currDisplayMode`, `displayModeName`, `changeVideoMode` | Enumerate available Win32 32-bit display modes with an 800×600 fallback, identify the current resolution, and apply validated mode changes through the host options path. |
 | `Camera.setFog` | Stores the color and the near and far distances on the driving camera. The fade uses those distances. The color argument is replaced by the day and twilight sky color before the shader reads it. |
@@ -351,8 +351,8 @@ Existing natives `java.game.OptionsDialog.getRendererOption(I)I` and
 `setRendererOption(II)V` use option index **6** for anisotropic filtering.
 Getter returns 0/1. Setter treats zero as off and nonzero as on and saves via
 the existing host graphics persistence path. Default is on; malformed/missing
-keys retain that default. `save/game/openslrr_options` stores
-`anisotropic_filtering=0|1`; stock Config's binary layout is unchanged.
+keys retain that default. `save/game/openslrr_options.json` stores
+`"anisotropic_filtering": true|false` under `video`; stock Config's binary layout is unchanged.
 
 The patched OptionsDialog video menu and debug Renderer checkbox share this
 value. The setting takes effect on subsequent rendered frames, enables bgfx's
@@ -406,7 +406,7 @@ same class; both Options screens use the first three.
 IDs 13–20 back the Advanced Video Options page: VSync, view distance (500–3000 m),
 prop detail (0–3, a LOD distance multiplier of 2, 1.4, 1 or 0.7 on top of the
 debug LOD bias), fog, car lights, headlight shadows, street lamps and the number
-of shadowed street lamps (0–6). They persist in `save/game/openslrr_options` like
+of shadowed street lamps (0–6). They persist in `save/game/openslrr_options.json` like
 IDs 0–12. Each one only lowers what the matching F12 Renderer switch allows: the
 renderer checks both (`host_enhanced_graphics()` and `render_debug()`). The
 video page's Preset choice is script-side: `OptionsDialog.applyPreset` calls the

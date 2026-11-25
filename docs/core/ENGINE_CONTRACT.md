@@ -1017,7 +1017,7 @@ voice gets a constant-power pan from its direction, an inverse-distance gain
 group of the effects mixer, which the environment reverb/echo of the active
 section processes (garage, city, open track; menus dry). Unplaced voices
 (menus, UI) stay centred and dry. The three behaviours are host options 22-24
-(`openslrr_options`), switched from the SOUND page.
+(`openslrr_options.json`), switched from the SOUND page.
 `scene_ambience` plays the `sfx_loop`/`sfx_random` lines of map placements
 through `host_sfx`; it owns those voices and stops them when their ground
 shell leaves the active world.

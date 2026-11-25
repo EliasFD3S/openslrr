@@ -91,7 +91,7 @@ Contract: [contract.md](contract.md#shadows).
   A thin-stripe GPU regression checks fractional response, but reported moving
   pole-shadow scintillation still needs manual validation; do not mark it fixed.
 - `OptionsDialog.get/setRendererOption` index 6 controls anisotropic filtering
-  (off/hardware maximum, default on), saved in openslrr_options and shared with
+  (off/hardware maximum, default on), saved in openslrr_options.json and shared with
   the debug checkbox. World colour/detail samplers opt in, comparison maps and
   UI do not. Patched OptionsDialog source/container are shipped and installed.
 - See assets/validation/shadow-performance-filtering.txt for measured changes;

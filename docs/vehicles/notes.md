@@ -535,7 +535,7 @@ DEAD ZONE. The pad's left stick lost its fixed XInput dead zone (7849 of
 32767, 24 %, which felt like a dead zone on the steering) for a 5 % noise
 floor (`kLeftStickFloor`), so the slider's dead zone is the one that counts.
 A new STEERING SPEED SENS. slider (host option 21, `InputTuning`, saved in
-`openslrr_options`) blends an analog device's full lock towards the keyboard
+`openslrr_options.json`) blends an analog device's full lock towards the keyboard
 window as speed rises: 0 keeps full lock, 50 (default) halfway, 100 like the
 keyboard. `SteeringGeometry::speed_sensitivity` carries it to the physics
 thread.

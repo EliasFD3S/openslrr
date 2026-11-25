@@ -50,7 +50,14 @@ struct InputTuning {
 };
 InputTuning& host_input_tuning();
 // Persist host-only graphics alongside the stock options, without changing Config.
+// Saved as JSON in save/game/openslrr_options.json (#405); the key=value
+// save/game/openslrr_options of older builds is read once and kept.
 bool host_save_graphics_options();
+// A host-only option by its OptionsDialog renderer option id (0-31, see the
+// table in host_game_options.cpp). get returns false for an unknown id; set
+// clamps to the option's range, applies it and saves when it changed.
+bool host_option_get(int id, int& value);
+bool host_option_set(int id, int value);
 // Options -> Advanced Game Options -> Framerate Adaptive Behaviour.
 // Classic draws cars at their last 60 Hz physics tick, as before. Adaptive
 // draws them between ticks. Saved in save/game/openslrr_options.
