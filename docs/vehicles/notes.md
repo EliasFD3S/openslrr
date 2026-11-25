@@ -849,3 +849,43 @@ SuperDuty 500 479 PS / 645 Nm, Extra 750 593 PS / 830 Nm, MC GTLE 459 PS
 
 Left: the Extra 750 plateaus near 590 PS (knock on its 10.4:1 pistons, shared
 with the 500, then belt slip above ~0.6 bar).
+
+## Pacejka tyre with camber (#418)
+
+Report: the Baiern CoupeSport GT III (255/25 and 295/20 R19 soft compound)
+felt like soap sideways.
+
+- Cause 1, the low-speed caps. `tire_forces` capped the lateral force at
+  0.95 x load per m/s of lateral speed (0.85 longitudinal) at every speed.
+  In slip-angle terms that bounds the cornering stiffness to 0.95 x road
+  speed per radian: 16 at 60 km/h, below the stock tyre's 17.7 and the GT
+  III's 40. Stiff tyres were mushy at small slip angles. The cap gain now
+  grows with road speed above 2 m/s.
+- Cause 2, the curve. `Tyre.java` gives every low-profile tyre its
+  stiffness clamp of 40, so the #383 curve peaked at 4.3 degrees and fell
+  off. The slope above the stock 17.68 now enters as a square root (40 acts
+  as 26.6; GT III rear peak 1.56 at 6.4 degrees).
+- No camber effect existed: camber only scaled the load by cos^2. Static
+  camber does reach the hub (`Suspension.setSuspensionGeometry`, e.g. GT III
+  front -1 degree), and body roll adds to it.
+- New model: MF 5.2-style pure lateral/longitudinal curves, friction falling
+  with load (-0.12 per dfz at load smoothing 0.4), saturating cornering
+  stiffness, camber thrust (shift + force shift) and camber grip loss,
+  combined slip by normalised slip. See
+  [driving-model.md](driving-model.md#intended-driving-model-revision-8ac2ba9).
+- Physics Lab, 1000 Hz, before -> after:
+  - saloon: skidpad 0.985 -> 0.977 g, 100-0 43.0 -> 40.4 m, step-steer yaw
+    peak 0.62 -> 0.69 s, burnout wheel speed 11.8 -> 4.4 m/s (the stock tyre's
+    peak at 3500 N rises from 1.07 to 1.14 now the arctangent load
+    efficiency is gone, so 235 Nm hardly breaks the rear loose);
+  - CoupeSport sport suspension: skidpad 0.994 -> 1.018 g;
+  - GT III: skidpad 1.245 -> 1.317 g, 100-0 34.3 -> 31.6 m, step-steer yaw
+    peak 0.50 -> 0.28 s, power-oversteer rear slip 8.9 -> 6.4 degrees.
+- Tests: `vehicle_dynamics` 45/45 (golden value, stiffness ratio, unrated
+  load, heavy-car feedback share and reverse-sliding wheelspin margin
+  updated; new camber test). `physics_recovery` 9/9. `race_vehicle` still
+  fails its first ROC lap (max error 11.0 m against 9), as on `main` (12.2 m);
+  the second lap improves from 7.5 m in 131.7 s to 3.5 m in 108.4 s.
+- `src/physics/sl2_pacejka.cpp` (recovered SL2 formula, boot self-check
+  only) is unchanged and still unused by the solver.
+- Not validated in game yet.

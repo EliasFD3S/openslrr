@@ -14,8 +14,8 @@ struct TireParameters {
   double stiffness = 17.6839;
   // setSliction: slide/grip ratio, the share of the peak a full slide keeps.
   double sliction = .814;
-  // setMaxLoad / setLoadSmooth: reference load and lateral smoothing.
-  // Load efficiency decreases above half capacity; zero keeps load linear.
+  // setMaxLoad / setLoadSmooth: the nominal load is half of maximum_load
+  // (4000 N when zero); load_smoothing sets how fast friction falls with load.
   double maximum_load = 0, load_smoothing = .4;
   // setFrictn_x: longitudinal friction factor.
   double longitudinal_grip = 1;
@@ -36,17 +36,21 @@ struct TireTuning {
 };
 TireTuning& tire_tuning();
 
-// Peak force along and across the tyre (N): the curve's D with host grip
-// tuning. Static holding uses these bounds without requiring motion.
+// Peak force along and across the tyre (N): the curves' D, with the load
+// sensitivity, camber and host grip tuning. Static holding uses these bounds
+// without requiring motion.
 TireForces tire_friction_limits(double load, double alignment,
-                                const TireParameters& tire);
+                                const TireParameters& tire, double camber = 0);
 
-// One Magic Formula curve on the combined slip (#383), shaped by the script
-// inputs and host tuning. Positive longitudinal pushes along the wheel
-// heading; lateral opposes lateral_speed. alignment scales the load before
-// the curve is evaluated.
+// Pacejka Magic Formula tyre (#418): pure lateral and longitudinal curves
+// with load-dependent friction and stiffness, camber, and combined slip by
+// normalised slip, shaped by the script inputs and host tuning. Positive
+// longitudinal pushes along the wheel heading; lateral opposes lateral_speed.
+// alignment scales the load before the curves are evaluated. camber is the
+// tyre's inclination against the road in radians, positive when its top
+// leans towards +lateral (the thrust then pushes towards +lateral).
 TireForces tire_forces(double load, double alignment, double wheel_speed,
                        double road_speed, double lateral_speed,
-                       const TireParameters& tire);
+                       const TireParameters& tire, double camber = 0);
 
 } // namespace slrr::physics

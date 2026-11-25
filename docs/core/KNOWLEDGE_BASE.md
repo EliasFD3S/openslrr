@@ -1155,8 +1155,10 @@ Each answer names its evidence.
     idempotent request and consumes it at the physics boundary
     (`src/resources/gameref.cpp:gameref_process_collision_requests`).
 13. *Which tyre model drives the car?* `src/physics/tire_model.cpp:tire_forces`,
-    not `sl2_pacejka.cpp`. Since #383 one combined-slip curve shaped by script
-    friction, stiffness, sliction, load capacity/smoothing and `frictn_x`;
+    not `sl2_pacejka.cpp`. Since #418 a Magic Formula (MF 5.2 structure:
+    pure lateral/longitudinal curves, load sensitivity, camber, normalised
+    combined slip) shaped by script friction, stiffness, sliction, load
+    capacity/smoothing and `frictn_x`, with the hub's camber against the road;
     `configure_drive` also copies the patch tolerance, but the solver does
     not use that field (`src/resources/part_runtime.cpp:configure_drive`).
     Native traffic has its own load-limited force path within the same

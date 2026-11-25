@@ -42,6 +42,8 @@ bool sport_suspension = false;
 // travel each way, rear drive). --mixed keeps the left/right tyre swap the
 // game's assembly produced.
 bool gt3 = false, gt3_mixed = false;
+// --bars K,D: the same anti-roll bar (N/m, N s/m) on both axles.
+double bar_force = 0, bar_damping = 0;
 
 struct Car {
   VehicleDynamics dynamics;
@@ -113,6 +115,7 @@ struct Car {
       f[13] = .05f;
       dynamics.body.set_frame(f);
     }
+    for (auto& bar : dynamics.anti_roll) bar = {bar_force, bar_damping};
     auto& drive = dynamics.drive;
     drive.gears = 5;
     const double ratios[] = {0, 12.9, 7.9, 5.6, 4.4, 3.6, 0, -12};
@@ -407,11 +410,18 @@ std::string curb_side(const std::string& csv) { return kerb_case("curb_side", cs
 // longitudinal friction and its slip ratio, a locked wheel, and the lateral
 // friction left at 6 degrees with 20 % wheelspin (combined slip).
 std::string tyre_curve(const std::string& csv) {
-  const auto tyre = sport_tyre(205);
+  auto tyre = sport_tyre(205);
+  if (gt3) {  // the GT III rear tyre
+    tyre.friction = 2.272;
+    tyre.stiffness = 40;
+    tyre.sliction = .836;
+    tyre.maximum_load = 12413;
+  }
   constexpr double load = 3500, road = 20, pi = 3.141592653589793;
-  const auto lateral_mu = [&](double degrees, double kappa) {
+  const auto lateral_mu = [&](double degrees, double kappa, double camber = 0) {
     const double lateral = road * std::tan(degrees * pi / 180);
-    return std::abs(tire_forces(load, 1, road * (1 + kappa), road, lateral, tyre).lateral) / load;
+    return std::abs(tire_forces(load, 1, road * (1 + kappa), road, lateral, tyre,
+                                camber * pi / 180).lateral) / load;
   };
   const auto longitudinal_mu = [&](double kappa) {
     return std::abs(tire_forces(load, 1, road * (1 + kappa), road, 0, tyre).longitudinal) / load;
@@ -431,12 +441,15 @@ std::string tyre_curve(const std::string& csv) {
     if (f && i % 5 == 0) std::fprintf(f, "%.2f,%.4f,%.3f,%.4f%c", alpha, y, -kappa, x, 10);
   }
   if (f) std::fclose(f);
-  char out[240];
+  // Camber: the lateral friction at 4 degrees with the top leaning 3 degrees
+  // into the force (negative camber on the outside tyre), and away from it.
+  const double into = lateral_mu(4, 0, -3), away = lateral_mu(4, 0, 3);
+  char out[320];
   std::snprintf(out, sizeof out,
-                "lat peak %.3f at %.1f deg, at 20 deg %.3f | long peak %.3f at %.1f %%, locked %.3f | "
-                "lat at 6 deg: %.3f, with 20 %% spin %.3f",
-                peak_y, peak_alpha, lateral_mu(20, 0), peak_x, peak_kappa * 100,
-                longitudinal_mu(-1), lateral_mu(6, 0), lateral_mu(6, .2));
+                "lat peak %.3f at %.1f deg, at 10 deg %.3f, at 20 deg %.3f | long peak %.3f at %.1f %%, "
+                "locked %.3f | lat at 6 deg: %.3f, with 20 %% spin %.3f | 4 deg camber -3: %.3f, 0: %.3f, +3: %.3f",
+                peak_y, peak_alpha, lateral_mu(10, 0), lateral_mu(20, 0), peak_x, peak_kappa * 100,
+                longitudinal_mu(-1), lateral_mu(6, 0), lateral_mu(6, .2), into, lateral_mu(4, 0), away);
   return out;
 }
 
@@ -508,6 +521,8 @@ int main(int argc, char** argv) {
       launch_help = std::atof(argv[++i]);
     } else if (!std::strcmp(argv[i], "--gt3")) {
       gt3 = true;
+    } else if (!std::strcmp(argv[i], "--bars") && i + 1 < argc) {
+      std::sscanf(argv[++i], "%lf,%lf", &bar_force, &bar_damping);
     } else if (!std::strcmp(argv[i], "--mixed")) {
       gt3_mixed = true;
     } else if (!std::strcmp(argv[i], "--sport")) {

@@ -1244,10 +1244,10 @@ void VehicleDynamics::step_drive() {
       s.slip_angle = (kLateralRelaxation * s.slip_angle + lateral * dt_) /
                      (kLateralRelaxation + reference * dt_);
       const double relaxed_lateral = s.slip_angle * reference;
-      const double tilt =
-          body.orientation.rotate(s.hub_rotation.rotate({0, -1, 0}))
-              .dot(s.normal);
-      const double alignment = std::max(.25, tilt * tilt);
+      // Camber against the road (#418): the hub's down axis leaning along the
+      // tyre's lateral axis; positive when the tyre's top leans to +side.
+      const Vec3 hub_down = body.orientation.rotate(s.hub_rotation.rotate({0, -1, 0}));
+      const double camber = std::asin(std::clamp(-hub_down.dot(side), -1.0, 1.0));
       TireForces force{};
       if (wheel.metal_contact) {
         // Hub/disc contact is sliding metal, never the removed tyre's curve.
@@ -1255,8 +1255,8 @@ void VehicleDynamics::step_drive() {
         const double factor = slip > 1e-9 ? .4 * s.force / slip : 0;
         force = {s.slip_speed * factor, -lateral * factor};
       } else {
-        force = tire_forces(s.force, alignment, s.spin * wheel.radius, road, relaxed_lateral,
-                            cfg.tyre);
+        force = tire_forces(s.force, 1, s.spin * wheel.radius, road, relaxed_lateral,
+                            cfg.tyre, camber);
       }
 
       const Vec3 arm = s.patch - body.position;
@@ -1435,7 +1435,8 @@ void VehicleDynamics::step(const Terrain &terrain) {
     TireForces caps{mu * s.force, mu * s.force};
     if (!wheels[i].metal_contact && !drive.native_traffic) {
       const double tilt = body.orientation.rotate(s.hub_rotation.rotate({0, -1, 0})).dot(s.normal);
-      const auto peaks = tire_friction_limits(s.force, std::max(.25, tilt * tilt), cfg.tyre);
+      const double camber = std::acos(std::clamp(std::abs(tilt), 0.0, 1.0));
+      const auto peaks = tire_friction_limits(s.force, 1, cfg.tyre, camber);
       caps.longitudinal = std::min(caps.longitudinal, peaks.longitudinal);
       caps.lateral = std::min(caps.lateral, peaks.lateral);
     }
