@@ -444,6 +444,7 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
       {0, -hw - .02, .1}, {0, hw + .02, .1}, {-.4, -hw - .02, .1}, {-.4, hw + .02, .1},
       {.4, -hw - .02, .1}, {.4, hw + .02, .1}};
   constexpr size_t kPoints = sizeof(points) / sizeof(points[0]);
+  constexpr size_t kTreadPoints = 13;  // the centre line and the tread edges
   const size_t used = hw > 1e-3 ? kPoints : 7;
   // After the grid, one refined point per direction (front, back, left,
   // right) at the exact position of the nearest step.
@@ -455,6 +456,13 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
     forward.y = across.y = 0;
     forward = forward.length() > 1e-6 ? forward.normalized() : Vec3{0, 0, -1};
     across = across.length() > 1e-6 ? across.normalized() : Vec3{1, 0, 0};
+    // The tread's material (#452): grip and drag averaged over the tread
+    // samples (the centre line and both tread edges, not the sidewall), so
+    // a tyre half on the grass loses part of its grip; the marks, sound and
+    // bounce from the centre sample (else the first tread sample).
+    double friction_sum = 0, rolling_sum = 0;
+    int tread_samples = 0;
+    GroundSurface centre;
     for (size_t k = 0; k < used; ++k) {
       auto &f = footprint[k];
       const double along = points[k].along * w.radius;
@@ -465,6 +473,17 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
       f.ground = {point.x, hit.height, point.z};
       f.normal = hit.normal.normalized();
       f.reach = std::sqrt(std::max(0.0, w.radius * w.radius - along * along)) - points[k].drop;
+      if (k < kTreadPoints) {
+        if (k == 0 || !tread_samples) centre = hit.surface;
+        friction_sum += hit.surface.friction;
+        rolling_sum += hit.surface.rolling;
+        ++tread_samples;
+      }
+    }
+    s.surface = centre;
+    if (tread_samples) {
+      s.surface.friction = static_cast<float>(friction_sum / tread_samples);
+      s.surface.rolling = static_cast<float>(rolling_sum / tread_samples);
     }
     // Grid points are centimetres apart, so a kerb edge between two of them
     // would lift the wheel in steps (a step of a few centimetres bottoms the
@@ -1318,9 +1337,11 @@ void VehicleDynamics::step_drive() {
                     pad_friction_factor(cfg.hardware, s.brake_temperature) *
                     fluid_pressure_factor(cfg.hardware, s.fluid_temperature),
                 true);
-    // The tyre's grip at its tread temperature (#446).
+    // The tyre's grip at its tread temperature (#446), on the ground's
+    // material (#452).
     TireParameters tyre = cfg.tyre;
-    tyre.friction *= tyre_grip_factor(cfg.tyre_heat, s.tyre_temperature.surface);
+    tyre.friction *= tyre_grip_factor(cfg.tyre_heat, s.tyre_temperature.surface) *
+                     s.surface.friction;
     double sliding_power = 0, rolling_power = 0;
     apply_brake(torque_step * drive.handbrake * cfg.handbrake * drive.handbrake_scale, true);
 
@@ -1347,7 +1368,7 @@ void VehicleDynamics::step_drive() {
       if (wheel.metal_contact) {
         // Hub/disc contact is sliding metal, never the removed tyre's curve.
         const double slip = std::hypot(s.slip_speed, lateral);
-        const double factor = slip > 1e-9 ? .4 * s.force / slip : 0;
+        const double factor = slip > 1e-9 ? .4 * s.surface.friction * s.force / slip : 0;
         force = {s.slip_speed * factor, -lateral * factor};
       } else {
         force = tire_forces(s.force, 1, s.spin * wheel.radius, road, relaxed_lateral,
@@ -1365,7 +1386,8 @@ void VehicleDynamics::step_drive() {
       force.longitudinal = std::clamp(force.longitudinal, -limit, limit);
       s.tire_force = force;
       // Tyre heat: the friction work of the sliding patch and the rubber's
-      // hysteresis as it rolls.
+      // hysteresis as it rolls (not the soft ground's drag, which works the
+      // ground).
       sliding_power = std::abs(force.longitudinal * s.slip_speed) + std::abs(force.lateral * lateral);
       rolling_power = s.force * (cfg.rolling_resistance > 0 ? cfg.rolling_resistance : .01) *
                       std::abs(road);
@@ -1374,7 +1396,8 @@ void VehicleDynamics::step_drive() {
       const double rolling_torque =
           s.spin == 0 ? 0
                       : std::copysign(
-                            s.force * wheel.radius * cfg.rolling_resistance,
+                            s.force * wheel.radius *
+                                (cfg.rolling_resistance + s.surface.rolling),
                             s.spin);
       s.spin -=
           (force.longitudinal * wheel.radius + rolling_torque + s.spin * .15) *
@@ -1475,6 +1498,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
     if (!s.contact)
       continue;
     s.normal = hit.normal.normalized();
+    s.surface = hit.surface;
     double force = suspension_force(
         length, body.point_velocity(hard).dot(s.normal), w.rest, w.maximum,
         w.spring, w.bump_damping, w.rebound_damping);
@@ -1540,13 +1564,14 @@ void VehicleDynamics::step(const Terrain &terrain) {
     const double speed = (v - s.normal * v.dot(s.normal)).length();
     if (!parked && !(braked && speed < .05 && std::abs(s.spin * wheels[i].radius) < .05))
       continue;
-    const double mu = wheels[i].metal_contact ? .4 : .8;
+    const double mu = (wheels[i].metal_contact ? .4 : .8) * s.surface.friction;
     TireForces caps{mu * s.force, mu * s.force};
     if (!wheels[i].metal_contact && !drive.native_traffic) {
       const double tilt = body.orientation.rotate(s.hub_rotation.rotate({0, -1, 0})).dot(s.normal);
       const double camber = std::acos(std::clamp(std::abs(tilt), 0.0, 1.0));
       TireParameters tyre = cfg.tyre;
-      tyre.friction *= tyre_grip_factor(cfg.tyre_heat, s.tyre_temperature.surface);
+      tyre.friction *= tyre_grip_factor(cfg.tyre_heat, s.tyre_temperature.surface) *
+                       s.surface.friction;
       const auto peaks = tire_friction_limits(s.force, 1, tyre, camber);
       caps.longitudinal = std::min(caps.longitudinal, peaks.longitudinal);
       caps.lateral = std::min(caps.lateral, peaks.lateral);
@@ -1587,8 +1612,15 @@ void VehicleDynamics::step(const Terrain &terrain) {
         if (speed > ground_impact.speed)
           ground_impact = {point, ground.normal, speed};
       }
-      const double friction = tyre && drive.torque && drive.inertia > 0 ? 0 : .6;
-      body.contact(point, ground.normal, restitution, friction);
+      // The original's body contact (#452): the lower of the body's 0.6 and
+      // the ground's friction, and the mean of the body's bounce (0.2) and
+      // the ground's collcoeff, here scaling the host restitution. It stops
+      // at 0.5: Dead_Island's sand says 15, which would throw a car.
+      const double friction =
+          tyre && drive.torque && drive.inertia > 0 ? 0
+                                                    : std::min(.6, double(ground.surface.friction));
+      const double bounce = (.2 + std::max(0.0, double(ground.surface.bounce))) * .5;
+      body.contact(point, ground.normal, std::min(.5, restitution * bounce / .2), friction);
       if (overlap > depth) {
         depth = overlap;
         correction = ground.normal.normalized();

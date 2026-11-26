@@ -41,6 +41,9 @@ void spawn_ground_shell(Jvm& jvm, const RpkIndex& rpk, Object* ground) {
     return;
   GameRefState* st = gameref_get(ground);
   if (!st || st->type_id == 0) return;
+  // 00463220 builds the ground with Config.ground_friction (1 when <= 0).
+  const Value friction = jvm.get_static("java.util.Config", "ground_friction");
+  scene_instances_set_ground_friction(friction.tag == ValueTag::Float ? friction.v.f : 1.f);
   const auto primary = static_cast<uint32_t>(st->type_id);
   std::vector<uint32_t> pending{primary};
   std::unordered_set<uint32_t> visited;

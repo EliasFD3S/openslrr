@@ -51,7 +51,7 @@ void set_alpha(size_t index, double alpha0, double alpha1) {
 }
 
 bool push_quad(V3 a, V3 b, V3 normal, V3 forward, double width, double alpha0, double alpha1,
-               Segment &out) {
+               uint32_t color, Segment &out) {
   V3 direction = sub(b, a);
   direction = sub(direction, scale(normal, dot(direction, normal)));
   if (dot(direction, direction) < 1e-5) direction = forward;
@@ -73,7 +73,7 @@ bool push_quad(V3 a, V3 b, V3 normal, V3 forward, double width, double alpha0, d
   auto *v = &vertices[cursor * 4];
   for (int i = 0; i < 4; ++i)
     v[i] = {static_cast<float>(corners[i][0]), static_cast<float>(corners[i][1]),
-            static_cast<float>(corners[i][2]), 0.f};
+            static_cast<float>(corners[i][2]), 0.f, color};
   out.index = cursor;
   out.version = ++versions[cursor];
   set_alpha(cursor, alpha0, alpha1);
@@ -87,7 +87,8 @@ void add_mark(Track &track, const SkidWheelSample &wheel, V3 a, V3 b, double wid
   const double alpha0 = (stationary ? std::max(.3, smooth_fade(start)) : smooth_fade(start)) * opacity;
   const double alpha1 = (stationary ? std::max(.42, smooth_fade(end)) : smooth_fade(end)) * opacity;
   Segment segment;
-  if (push_quad(a, b, wheel.normal, wheel.forward, width, alpha0, alpha1, segment)) {
+  if (push_quad(a, b, wheel.normal, wheel.forward, width, alpha0, alpha1, wheel.mark_color,
+                segment)) {
     segment.start = start;
     segment.end = end;
     segment.alpha0 = alpha0;

@@ -192,6 +192,7 @@ struct Record {
   float nitro_pitch = 1;
   // Tyre slide loop and collision one-shots (update_slide_audio, play_impact_audio).
   int32_t slide_voice = 0;
+  std::string slide_path;  // the clip slide_voice plays (#452)
   bool sharp_skid = false;
   std::chrono::steady_clock::time_point last_impact_sound{};
   // MWM keeps a native aggregate, initially empty; `reload` fills it.
@@ -3521,11 +3522,11 @@ struct StockSound {
   std::string path;
   float volume = 1;
 };
-const StockSound &stock_sound(uint32_t local) {
+// A sound resource by its full id: its file and RSD volume.
+const StockSound &sound_resource(uint32_t id) {
   static std::unordered_map<uint32_t, StockSound> cache;
-  auto [it, fresh] = cache.try_emplace(local);
+  auto [it, fresh] = cache.try_emplace(id);
   if (fresh && index) {
-    const uint32_t id = RpkIndex::make_full_id(index->open_lib("sound.rpk"), local);
     auto path = index->payload_prop(id, "sourcefile");
     if (!path.empty()) {
       std::replace(path.begin(), path.end(), '\\', '/');
@@ -3535,6 +3536,10 @@ const StockSound &stock_sound(uint32_t local) {
     if (!volume.empty()) it->second.volume = std::clamp(std::strtof(volume.c_str(), nullptr), 0.f, 1.f);
   }
   return it->second;
+}
+const StockSound &stock_sound(uint32_t local) {
+  static const StockSound none;
+  return index ? sound_resource(RpkIndex::make_full_id(index->open_lib("sound.rpk"), local)) : none;
 }
 std::string game_sound(const char *relative) {
   return index ? (std::filesystem::path(index->game_root()) / relative).string() : std::string{};
@@ -3562,25 +3567,38 @@ void update_slide_audio(Record &rec, bool active) {
   const auto &body = rec.dynamics.body;
   const double speed = body.velocity.length();
   double slip = 0, sideways = 0;
+  GroundSurface ground;  // under the most slipping wheel (#452)
   for (size_t i = 0; i < rec.dynamics.state.size(); ++i) {
     const auto &s = rec.dynamics.state[i];
     // A hub on the road scrapes metal; it does not squeal.
     if (!s.contact || s.force <= 0 || rec.dynamics.wheels[i].metal_contact) continue;
-    slip = std::max(slip, std::hypot(s.slip_speed, s.lateral_speed));
+    const double wheel_slip = std::hypot(s.slip_speed, s.lateral_speed);
+    if (wheel_slip > slip) ground = s.surface;
+    slip = std::max(slip, wheel_slip);
     sideways = std::max(sideways, std::abs(s.lateral_speed));
   }
   const float place = active ? distance_gain(body.position, 2.f, 55.f) : 0.f;
   const float level = skid_loudness(speed);
   // One loop for the car, from its most slipping wheel: four wheel loops per
   // car would take the mixer's loop budget from the engines.
-  const auto &slide = stock_sound(kSoundSurfaceSlide);
+  // The ground material's skid_SFX, at its scale against the default 0.6.
+  const auto &slide = ground.slide_sound && !sound_resource(ground.slide_sound).path.empty()
+                          ? sound_resource(ground.slide_sound)
+                          : stock_sound(kSoundSurfaceSlide);
   const float gain = (place > 0 ? 1.f : 0.f) *
-                     static_cast<float>(std::clamp((slip - 2) / 10, 0.0, 1.0)) * .3f * level * slide.volume;
+                     static_cast<float>(std::clamp((slip - 2) / 10, 0.0, 1.0)) * .3f * level *
+                     slide.volume * std::clamp(ground.slide_volume / .6f, 0.f, 3.f);
   const HostSfxPlace where = car_place(body.position, body.velocity, 2.f, 55.f);
   // SLRR_rev keeps the clip's pitch; a host addition raises it slightly with
   // the slip so a long slide is not one flat tone.
   const float pitch = static_cast<float>(std::clamp(.92 + (slip - 2) / 60, .92, 1.15));
   if (gain > .001f && !slide.path.empty()) {
+    // Another ground's loop restarts the voice with its clip.
+    if (rec.slide_voice && rec.slide_path != slide.path) {
+      host_sfx_stop(rec.slide_voice);
+      rec.slide_voice = 0;
+    }
+    rec.slide_path = slide.path;
     if (!rec.slide_voice || !host_sfx_is_playing(rec.slide_voice))
       rec.slide_voice = host_sfx_play_at(slide.path, where, pitch, gain, true);
     else {
@@ -3620,6 +3638,7 @@ void update_skid_marks(Record &rec, double dt) {
     sample.point = {s.patch.x, s.patch.y, s.patch.z};
     sample.normal = {s.normal.x, s.normal.y, s.normal.z};
     sample.forward = {forward.x, forward.y, forward.z};
+    sample.mark_color = s.surface.mark_color;
     skid_marks_update(key, i, sample, dt, speed);
   }
 }
@@ -5528,6 +5547,7 @@ void sim_step_car(SimBatch& batch, size_t index, unsigned tick, unsigned substep
         return false;
       ground.height = hit.height;
       ground.normal = {hit.normal[0], hit.normal[1], hit.normal[2]};
+      ground.surface = hit.surface;
       return true;
     };
     // Wind blows on cars out in the world, not in the garage or a preview.

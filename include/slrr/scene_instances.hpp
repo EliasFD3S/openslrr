@@ -213,6 +213,9 @@ struct GroundMapData {
   std::vector<Placement> placements;
 };
 GroundMapData scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id);
+// Config.ground_friction, read by the ground native before it parses its
+// maps: it multiplies every ground material's friction (#452).
+void scene_instances_set_ground_friction(float friction);
 void scene_instances_add_ground_props(const GroundMapData& map);
 // Light `render` children of the map's placements (type-13 resources, #237),
 // in the ground shell's local script space. Null when the map has none or its
@@ -272,6 +275,7 @@ uint64_t scene_instances_floor_revision();
 struct SceneFloorHit {
   float height = 0;
   float normal[3] = {0, 1, 0};
+  GroundSurface surface;  // the map SCM material's, else plain road (#452)
 };
 // Renderer-space projection onto the sampled receiver, along the scene light.
 bool scene_shadow_projection(const float *script_frame,
@@ -292,6 +296,7 @@ struct SceneFloorPatch {
   struct Triangle {
     float bounds[4];  // min x, max x, min z, max z
     float v[3][3];
+    GroundSurface surface;
   };
   float x0 = 0, z0 = 0, x1 = -1, z1 = -1;
   void *ignore = nullptr;

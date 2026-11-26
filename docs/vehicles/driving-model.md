@@ -72,9 +72,22 @@ after the original law, nicolas-found42/sl-remastered, 00454500):
   (`TireParameters::relaxation_length`, from the patched
   `WheelRef.setRelaxation`; 0.3 m at the optimal pressure and without the
   patch), integrated implicitly, a 12 ms lag at 90 km/h for 0.3 m.
-- Not used yet: the surface friction and rolling resistance of the map's SCM
-  materials (`friction`, `rollres`), which multiply the tyre's in the
-  original.
+- Ground surface (#452, [notes](notes.md#ground-surface-friction-and-rolling-resistance-452)):
+  each map collision face carries its SCM material (`GroundSurface`).
+  Friction and rolling are averaged over the 13 tread samples. The
+  friction (× `Config.ground_friction`) multiplies `TireParameters::friction`
+  (force law and sticking limits, metal and parked contacts too); the
+  rolling coefficient adds to the tyre's in the wheel's rolling torque, not
+  to the tread heat. SCM `friction` is used as is, `rollres` × 0.05
+  (`kRollresCoefficient`), not the original's speed-proportional drag. A
+  body contact takes min(0.6, ground friction), and `collcoeff` (the
+  original's shape bounce) scales its restitution, capped at 0.5. The
+  material's `skid_SMcolor` colours the tyre marks and its `skid_SFX`
+  replaces the slide loop. A material without values takes a class from
+  its name or SCY texture (`ground_surface_for_name`): grass 0.65 / 0.08,
+  sand 0.6 / 0.15, gravel 0.7 / 0.03, dirt 0.7 / 0.04, each with a mark
+  colour; a paved name stays road. Objects, garage shells and props are
+  road, as in the original.
 
 Wheel alignment enters as camber (above); the load itself is no longer
 scaled. In strut mode (`setHub` mode 0) the strut fit replaces the hub

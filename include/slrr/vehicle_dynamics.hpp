@@ -1,5 +1,6 @@
 #pragma once
 #include "slrr/brake_system.hpp"
+#include "slrr/ground_surface.hpp"
 #include "slrr/tire_model.hpp"
 #include "slrr/tyre_thermal.hpp"
 #include <array>
@@ -77,6 +78,8 @@ private:
 struct GroundHit {
   double height = 0;
   Vec3 normal{0, 1, 0};
+  // The ground material (#452): see GroundSurface.
+  GroundSurface surface;
 };
 // from_y is a ray origin/ceiling, not a default ground height. False = air.
 using Terrain =
@@ -150,6 +153,9 @@ struct WheelState {
   // reserved legacy field; the intended solver does not add it to the load.
   double length = 0, speed = 0, force = 0, jacking = 0;
   Vec3 center, normal{0, 1, 0}, hub, patch;
+  // The ground under the tread (#452): friction and rolling averaged over
+  // the tread samples, the rest from the centre.
+  GroundSurface surface;
   Quaternion hub_rotation;
   double spin = 0, rotation = 0;
   double slip_speed = 0, lateral_speed = 0;
