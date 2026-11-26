@@ -422,7 +422,9 @@ struct SceneShadowRegression {
                 ahead0,ahead2,ahead1,far0,far2,rear0,rear2,red0,red,green0,green,front_red);
     // Beams light the road ahead, a lost headlight takes about half away,
     // nothing reaches behind the car; brake lights add red only, behind.
-    SLRR_REQUIRE(ahead2>ahead0+25*60 && far2>far0+25*15);
+    // The road 24 m ahead lies above these 5-degree-down beams: the low-beam
+    // cutoff and the quadratic falloff leave it a little light.
+    SLRR_REQUIRE(ahead2>ahead0+25*60 && far2>far0+25*5 && far2-far0<(ahead2-ahead0)/3);
     SLRR_REQUIRE(ahead1>ahead0+(ahead2-ahead0)/4 && ahead1<ahead2-(ahead2-ahead0)/4);
     SLRR_REQUIRE(rear2==rear0);
     SLRR_REQUIRE(red>red0+25*20 && green-green0<(red-red0)/8 && front_red==ahead0);

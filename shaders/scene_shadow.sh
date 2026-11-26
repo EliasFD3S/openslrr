@@ -216,11 +216,16 @@ float lampTileVisibilityFast(mat4 sampleMatrix,vec4 tileInfo,vec2 size,vec3 worl
 // Car lights (#279) are spot lamps: lightData(192+i,0) holds the beam
 // direction and the cosine of the outer half-angle, lightData(128+i,0).w the
 // inner one. Omnidirectional lamps (street lamps) store an outer cosine of -2.
+// lightData(128+i,2).x is the low-beam cutoff: that share of the light goes
+// above the beam axis (+1 to +3.4 degrees), so trees and walls ahead are not
+// lit like the road the beam is aimed at.
 float lampCone(int i,vec3 toward)
 {
     vec4 spot=lightData(192+i,0);
     if(spot.w<-1.5) return 1.0;
-    return smoothstep(spot.w,lightData(128+i,0).w,dot(-toward,spot.xyz));
+    float cone=smoothstep(spot.w,lightData(128+i,0).w,dot(-toward,spot.xyz));
+    float above=-toward.y-spot.y;
+    return cone*(1.0-lightData(128+i,2).x*smoothstep(0.02,0.06,above));
 }
 vec3 lampRadiance(int i,vec3 n,vec3 delta,float d2)
 {

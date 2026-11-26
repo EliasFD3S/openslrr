@@ -559,7 +559,8 @@ city at night.
   come right after the shadowed lamps. Hue from the resource diffuse
   normalised to its peak; power and cone are constants because the authored
   0.2 diffuse and 108–116° cone were shaped by the textures above: headlight
-  intensity 3 × part power, range min(authored, 60 m), authored attenuation,
+  intensity 3.5 × part power, range min(authored, 60 m), attenuation
+  1/(1 + (d/12 m)²) and a low-beam cutoff (see "Headlight beam shape" below),
   half-angles 14°/30°; brake light intensity 1.5, range 6 m, attenuation
   1 0 0.3, half-angles 55°/85° around its authored backward direction.
   Shader: `shaders/scene_shadow.sh:lampCone`, direction and outer cosine at
@@ -582,6 +583,48 @@ city at night.
 - Not done: headlight shadows came in #283 (below); the `attH`/`attV` beam pattern (a round
   cone instead), lens flares, reverse and indicator lights, native traffic
   cars without part records, not validated in game yet.
+
+## Headlight beam shape: trees lit like day at night
+
+- Symptom (Elias, forest road at 04:55): trees and bushes up to 40–50 m
+  ahead glow saturated green while the road stays dark; leaves look
+  speckled. Diagnosed from the shader, not a material.
+- Cause: the #279 headlights used the authored linear attenuation
+  `1 .03 0` with intensity 3 and a round cone. The road is hit at a grazing
+  angle (`n·L` ≈ 0.09 at 8 m), a trunk or a leaf facing the car at ≈ 1, so
+  everything vertical got about ten times the road's light: 1.9× the
+  texture per lamp at 20 m, still 1.4× at 40 m. Leaves with scattered normals
+  then go from black to saturated pixel by pixel.
+- Stock data: `racers/textures/light_beams/attV.ptx` (256², JPEG at offset
+  0x24) is the vertical profile the original projected. Row means, centre
+  row 128: the band below the centre peaks (rows 150–190), rows above fall
+  to 15–40 % of it and fade to 0 at the top. Its angular mapping to the
+  authored phi is not established, so only that shape is used.
+- Fix: `update_car_lights` gives headlights the attenuation
+  `{1, 0, 1/12²}` (`kHeadlightFalloff`) and intensity 3.5, which keeps the
+  road 8 m ahead at its #279 level (0.21 per lamp) and gives a surface
+  facing the car 0.94 at 20 m and 0.29 at 40 m. `LampLight::above_axis_cut`
+  (headlights 0.75, `kHeadlightAboveAxis` = 0.25 kept) goes to light-data
+  row 2 column 128+i; `shaders/scene_shadow.sh:lampCone` removes that share
+  between +1.1° and +3.4° above the beam axis (sine difference 0.02–0.06).
+  Street lamps write 0 there and are unchanged.
+- Test: `scene_shadow_gpu` case `car_lights`: the test beams point 5° down,
+  so the road 24 m ahead is above their axis; its check is now "lit, and
+  less than a third of the 10 m patch's gain". Measured: 10 m ahead
+  9510 → 9627 with two headlights (unchanged level), one 5520 → 5583, 24 m
+  ahead 3600 → 1785; brake light and headlight shadow cases unchanged; the
+  whole suite passes.
+- Roadside bushes (Elias, in game after the above): trees were fixed, but
+  grass and bush cards below the beam axis still glowed. Their normals face
+  a side of the card, so a headlight at 0.7 m lit them at `n·L` ≈ 1 while
+  the ground behind them got ≈ 0.03. `shaders/fs_mesh.sc` now passes the up
+  normal to `lampLighting` for cutout surfaces (`u_alphaTest.x` set): lamps
+  light grass, bushes and leaves as the ground they stand on. Sun, ambient
+  and the other light paths keep the authored normal. Side effect: canopies
+  above a headlight get nothing from it, and a cutout fence is lit like the
+  road; street lamps above still light foliage from above.
+- Not done: no texture lookup of `attV`/`attH` (a smooth analytic cutoff);
+  bushes not yet re-checked in game.
 
 ## Headlight shadows (#283)
 
