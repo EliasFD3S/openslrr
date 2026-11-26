@@ -863,8 +863,10 @@ bool LibBgfxBackend::bind_point_light(bool enabled) {
           (flags & 0x02000000u) != 0;
       const bool vertex_mix = group && group->mix_vertex_color;
       const bool fixture_emitter=group && group->self_illuminated;
+      // fs_mesh lets the sun light either face of an authored two-sided card.
+      const float two_sided = authored_alpha && (flags & 0x02000000u) ? 4.f : 0.f;
       const float settings[4] = {alpha_test, instance.emissive_overlay ? 2.f : instance.sky || blend || vertex_mix || fixture_emitter ? 1.f : preview ? .5f : 0.f,
-                                 foliage_coverage ? 2.f : blend ? 1.f : 0.f, material_mix ? -2.f : vertex_mix ? -1.f :
+                                 two_sided + (foliage_coverage ? 2.f : blend ? 1.f : 0.f), material_mix ? -2.f : vertex_mix ? -1.f :
                                  baked_vertex_light(part.geo.ground_polygons && !preview) ? -3.f :
                                  !blend && preview && tex.idx != white_tex_.idx ? 1.f : 0.f};
       const uint32_t color = preview || instance.cull_backfaces ? instance.color : 0xffffffu;
@@ -1006,9 +1008,10 @@ void LibBgfxBackend::draw_props_instanced(uint16_t view_id, const ScenePart& par
         (reset_flags_ & BGFX_RESET_MSAA_MASK) && (flags & 0x02000000u) != 0;
     const bool vertex_mix = group && group->mix_vertex_color;
     const bool fixture_emitter = group && group->self_illuminated;
+    const float two_sided = authored_alpha && (flags & 0x02000000u) ? 4.f : 0.f;
     const float settings[4] = {alpha_test,
                                emissive ? 2.f : blend || vertex_mix || fixture_emitter ? 1.f : 0.f,
-                               foliage_coverage ? 2.f : blend ? 1.f : 0.f,
+                               two_sided + (foliage_coverage ? 2.f : blend ? 1.f : 0.f),
                                material_mix ? -2.f : vertex_mix ? -1.f :
                                baked_vertex_light(part.geo.ground_polygons) ? -3.f : 0.f};
     // The tint draw_instance builds from the placement colour, computed in
@@ -1220,8 +1223,9 @@ void LibBgfxBackend::draw_prop_batches(uint16_t view_id,
               (reset_flags_ & BGFX_RESET_MSAA_MASK) &&
               (flags & 0x02000000u) != 0;
           const bool vertex_mix = group && group->mix_vertex_color;
+          const float two_sided = v4 && (flags & 0x02000000u) ? 4.f : 0.f;
           const float settings[4] = {alpha_test, vertex_mix ? 1.f : 0.f,
-                                     foliage_coverage ? 2.f : 0.f,
+                                     two_sided + (foliage_coverage ? 2.f : 0.f),
                                      material_mix ? -2.f : vertex_mix ? -1.f : 0.f};
           bgfx::TextureHandle mix = BGFX_INVALID_HANDLE;
           if (group && part.geo.position_scale == 1.f && group->mix_index != 0xffff &&
