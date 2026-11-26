@@ -374,18 +374,26 @@ void host_input_update_controller(Object* controller, float dt) {
   auto axis = [&](int id) { return host_input_controller_axis(controller, id); };
   // Stock AXIS_TURN_LEFTRIGHT is positive to the left, like the chassis yaw.
   in.drive_steer = axis(1);
-  in.drive_steer_analog = false;
-  in.drive_steer_kind = InputKind::None;
   choose_force_feedback(controller ? controller->input.get() : nullptr);
-  if (controller && controller->input) {
+  if (!controller || !controller->input) {
+    in.drive_steer_analog = false;
+    in.drive_steer_kind = InputKind::None;
+  } else {
     auto analog_axis = [](int device, int axis) {
       return host_input_devices().analog_axis(device, axis);
     };
-    in.drive_steer_analog = input_mapping::steering_is_analog(
-        *controller->input, host_input_physical_axis, pad, analog_axis, physical_available);
-    in.drive_steer_kind = input_mapping::steering_kind(
+    // A binding counts as active past 1 % of its travel. Below that, keep the
+    // class that steered last: 1 % of a 900-degree wheel is 4.5 degrees, and
+    // treating it as a key there applied the keyboard window and help at
+    // speed, a dead zone around the centre and a notch when leaving it.
+    const auto kind = input_mapping::steering_kind(
         *controller->input, host_input_physical_axis, pad, analog_axis,
         host_input_device_kind, physical_available);
+    if (kind != InputKind::None) {
+      in.drive_steer_analog = input_mapping::steering_is_analog(
+          *controller->input, host_input_physical_axis, pad, analog_axis, physical_available);
+      in.drive_steer_kind = kind;
+    }
     // Steering skips the stock ControlSet smoothing (#383): its power 1.5
     // curve gave a half-turned wheel or stick 35 % of the lock, and its rate
     // (Config.steerSpeed 0.01) lagged about 400 ms behind the input. An analog
