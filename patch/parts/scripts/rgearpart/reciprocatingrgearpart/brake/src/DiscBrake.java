@@ -72,7 +72,7 @@ public class DiscBrake extends Brake
 			else
 				piston = 54.0;
 		}
-		float area = number_of_calipers*3.14159265*piston*piston/4000000.0;
+		float area = number_of_calipers*Math.PI*piston*piston/4000000.0;
 		float arm = radius-0.025;
 		if (arm < 0.05)
 			arm = 0.05;

@@ -1,8 +1,37 @@
 # OpenSLRR Enhanced
 
-Copy the `sl`, `system`, `parts`, `cars` and `particles` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes, the re-specced stock engine parts (#411), `SuperCharger` and `Pulley` (#415) and the four fuel classes: `AirFuelDeliverySystem`, `FuelInjectorSystem`, `DynoData` and the SL Tuners methanol fuel rail, the 48 stock anti-roll bars (#419), and `Brake`, `DiscBrake` and the 48 stock brakes (#446), the 96 stock suspension corners (#450)), `system/Scripts/lang/Math.class` (#450, #463), 24 racer classes, the 24 racer chassis CFGs (`_main_*.cfg`) and the part CFGs that now carry a mass (tyres, running gear, accessories, exhausts, mufflers, seats, steering wheels, wings). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. The fuel classes add fuel heat, ethanol blends and knock; install them together. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
+Copy the `sl`, `system`, `parts`, `cars`, `particles` and `MW_Mod` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, `TestTrack.class`, `City.class`, `CarLot.class`, `ROCTrack.class`, `MainMenu.class`, `MW_Mod/Scripts/DealerTrack.class` (#465), the `parts` classes (the base `Swaybar.class`, the three port-flow classes, the re-specced stock engine parts (#411), `SuperCharger` and `Pulley` (#415) and the four fuel classes: `AirFuelDeliverySystem`, `FuelInjectorSystem`, `DynoData` and the SL Tuners methanol fuel rail, the 48 stock anti-roll bars (#419), and `Brake`, `DiscBrake` and the 48 stock brakes (#446), the 96 stock suspension corners (#450)), `system/Scripts/lang/Math.class` (#450, #463), 24 racer classes, the 24 racer chassis CFGs (`_main_*.cfg`) and the part CFGs that now carry a mass (tyres, running gear, accessories, exhausts, mufflers, seats, steering wheels, wings). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. The fuel classes add fuel heat, ethanol blends and knock; install them together. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
 
 **Options** (main menu and in-game menu) opens a full-screen screen built on `java.render.osdx` ([docs/ui/osd-v2.md](../docs/ui/osd-v2.md)): Video, Graphics, Sound, Controls (live axis meters, gamma, dead zones, steering speed sensitivity, force feedback), Devices (connected controllers, battery, rumble test, axis calibration) and Game tabs, an info panel that explains the setting under the pointer, and a notification when a preset is applied. Key redefinition, axes and the control files open the classic pages. The classic pages below are still in `OptionsDialog`. The **Video Options** menu applies the resolution and the Enhanced settings in game. A **Preset** choice (Low, Medium, High, Ultra) sets them all at once; changing one setting afterwards shows Custom. **Advanced** opens a second page: VSync, prop detail, fog, car lights, headlight shadows, street lamps, view distance (500–3,000 m, 3 km by default), the number of street lamps that cast shadows and the tyre smoke density (0–400 % of the default, also in **Graphics → World**). **Advanced Game Options** has the pedestrian density slider again (0.5–1.5; an old saved value below 0.5 returns to 1.5). The scenery shadow map and the vehicle shadow map each use a resolution of 2048 × 2048. **Ctrl+F12 → Renderer** also sets how many reflection faces are computed per frame.
+
+## Scripts use the Math functions (#465)
+
+Copy `sl`, `MW_Mod` and `parts` with `system/Scripts/lang/Math.class`: the
+classes below read `Math.PI`, `Math.HALF_PI` or `Math.DEG2RAD` and call
+`Math.wrapAngle`, `Math.clamp`, `Math.randomInt` or `Math.randomRange`
+(#463), so they need the patched `Math` class and do not run in the
+original game.
+
+- `TestTrack`, `City`, `CarLot`, `ROCTrack`: half turns and start headings
+  use `Math.PI` instead of 3.14 / 3.140 / 3.142 (and -1.571 is
+  `-Math.HALF_PI`); `TestTrack` compares the car's heading with the start's
+  through `Math.wrapAngle` instead of a hand-made wrap with the wrong sign.
+- `MainMenu`: the random driver face in the player setup can be the last of
+  the 60 (`Math.randomInt`).
+- `MW_Mod/Scripts/DealerTrack`: the car that leaves a full dealer can be
+  the last one, and the parked cars' random steering is -0.5 to 0.5 as its
+  comment says (`Math.randomRange`; the stock expression mixed a string and
+  a number).
+- `Tyre` (degrees to radians, the mirrored tyre's half turn, the
+  inflation clamp), `DiscBrake`, `CylinderHead`, `Block_Inline` and
+  `Block_Vee` (pi was 3.14159265 or 3.1416).
+
+These stock sources were first rebuilt against their MWM classes: the same
+bytes apart from the compile stamp (also in each inner class) and the case
+of two resource paths (`misc` / `Misc`, `prime` / `Prime`). `Track` and
+`CarSelect` rebuild to other sizes (MWM changed them) and keep their hand
+written values; so does `Suspension`'s own `DEG2RAD`, which is the same
+number.
 
 ## Tyre flat spots (#461)
 

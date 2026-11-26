@@ -77,8 +77,8 @@ public class CylinderHead extends ReciprocatingEnginePart
 		else
 			police_check_fine_value = 0;
 
-		intake_tunnel_area = w*(intake_valve_diam*intake_valve_diam*0.25*0.01*3.1416*number_of_intake_valves_per_cylinder);
-		exhaust_tunnel_area = w*(exhaust_valve_diam*exhaust_valve_diam*0.25*0.01*3.1416*number_of_exhaust_valves_per_cylinder);
+		intake_tunnel_area = w*(intake_valve_diam*intake_valve_diam*0.25*0.01*Math.PI*number_of_intake_valves_per_cylinder);
+		exhaust_tunnel_area = w*(exhaust_valve_diam*exhaust_valve_diam*0.25*0.01*Math.PI*number_of_exhaust_valves_per_cylinder);
 	}
 
 	// #203: opening_volume is the stock disk-area * lift proxy (cm^3).

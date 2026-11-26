@@ -371,3 +371,25 @@ Validation:
   `Math.class` reads `Math.PI` and `Math.DEG2RAD` and calls `clamp`,
   `lerp`, `abs`, `min`, `max`, `sign`, `sin` and `randomInt`.
 - Not validated in game.
+
+### Game scripts use them (#465)
+
+The patched scripts and the stock ones whose sources rebuild their MWM
+class (same bytes but the compile stamp, repeated in each inner class, and
+the case of `misc`/`Misc` and `prime`/`Prime` in two resource paths) now use
+them: `TestTrack` (`Math.wrapAngle` for its heading check, `Math.PI` start
+directions), `City`, `CarLot` and `ROCTrack` (half turns and headings),
+`MainMenu` (`Math.randomInt(numId)`: the 60th face can be drawn),
+`MW_Mod/Scripts/DealerTrack` (`Math.randomInt(Car.length)`, and
+`Math.randomRange(-0.5, 0.5)` for the steering its comment describes),
+`Tyre`, `DiscBrake`, `CylinderHead`, `Block_Inline` and `Block_Vee`.
+`Track` and `CarSelect` rebuild to other sizes (MWM changes) and are left
+alone; `Suspension.DEG2RAD` is the same value. The compiler references
+`Math.PI` and the other constants as fields rather than folding them, so
+the classes grow by a few dozen bytes and need the patched `Math.class`.
+
+Validation: the classes compiled with `compile_game_sources` in
+`build/brake-compile-root`; bench drives in `build/needle-game` with them
+(TestTrack: same speeds as before, 30.8 / 55.3 km/h at 3 / 5 s; a career
+through `MainMenu`, the garage and Tsukuba) with no script message. Not
+exercised: `City`, `CarLot`, `ROCTrack`, the dealer.

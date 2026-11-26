@@ -86,7 +86,7 @@ public class Block_Vee extends Block
 			im.fillDynoData(dynodata,slotIDOnSlot(intake_manifold_slot_ID));
 		}
 
-		float bore_area = bore*bore*0.01*0.25*3.1416;
+		float bore_area = bore*bore*0.01*0.25*Math.PI;
 		float cylinder_volume = 1000000000000000.0;
 
 		Piston piston=null;

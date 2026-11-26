@@ -96,12 +96,8 @@ public class Tyre extends ReciprocatingRGearPart
 	{
 		if (inflation != I || forced)
 		{
-			inflation = I;
-
-			if (inflation < 0.5)
-				inflation = 0.5;
-			if (inflation > optimal_inflation*1.5)	// OpenSLRR: up to 50 % over-inflation
-				inflation = optimal_inflation*1.5;
+			// OpenSLRR: up to 50 % over-inflation
+			inflation = Math.clamp(I, 0.5, optimal_inflation*1.5);
 
 			float misinflation;
 
@@ -162,7 +158,7 @@ public class Tyre extends ReciprocatingRGearPart
 			loadcap = 8000.0*(tyre_width/205.0)*Math.pow(pressure,0.25);
 //			loadcap = 4000.0+(0.75+profile_ratio/0.4*0.25)*(0.9+0.1*t)*(tyre_width-165.0)*9.81*load_mul*1.350/friction/fric_mul; // tyre: max load capacity (Ns = kgs*gravity)
 //			loadcap /= rubber_rigidity;
-			CPatchMaximumAngle = 3.1415926535897932384626433832795/180.0 * (CPatchMinA+(0.6+(405.0-tyre_width)/405.0*0.4) /* *misinflation */ *profile_ratio*(CPatchMaxA-CPatchMinA));
+			CPatchMaximumAngle = Math.DEG2RAD * (CPatchMinA+(0.6+(405.0-tyre_width)/405.0*0.4) /* *misinflation */ *profile_ratio*(CPatchMaxA-CPatchMinA));
 //			System.log(name+"->CPatchMaximumAngle = "+CPatchMaximumAngle);
 			// OpenSLRR (#450): cornering stiffness per unit load from the sidewall
 			// (aspect ratio to the 1/4 power, 17.68 for a 45-series sport tyre),
@@ -238,7 +234,7 @@ public class Tyre extends ReciprocatingRGearPart
 			if ((whlID>=0) && ((whlID % 2)==1))
 				setSlotPos(1, new Vector3(0.0,0.0,0.0), new Ypr(0.0,0.0,0.0) );
 			else
-				setSlotPos(1, new Vector3(0.0,0.0,0.0), new Ypr(3.142,0.0,0.0) );
+				setSlotPos(1, new Vector3(0.0,0.0,0.0), new Ypr(Math.PI,0.0,0.0) );
 		}
 	}
 
