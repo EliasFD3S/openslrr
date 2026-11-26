@@ -36,14 +36,14 @@ public class Prime_FR_McPherson_strut extends Suspension
 			WheelRef wheel = the_car.getWheel(wheelID);
 			if (wheel)
 			{
-				// OpenSLRR (#450): front geometry of the none, laid out at the static ride height
+				// OpenSLRR (#450): front geometry of the none, laid out at the static ride height, 5 deg of caster (#458)
 				wheel.setArm( 0.2960,
-				              -0.3148, 0.1827, 0.0000,
+				              -0.3148, 0.1826, -0.0002,
 				              0.0000, 0.0000, 1.0000);
 				wheel.setHub( 0.0000,
 				              0.0770, -0.0430, -0.0040,
-				              -0.0710, 0.4070, 0.0000,
-				              -0.1306, 0.7212, 0.0000);
+				              -0.0710, 0.4057, 0.0329,
+				              -0.1306, 0.7191, 0.0491);
 
 				the_car.setSlotPos(101+wheelID, new Vector3(0.124,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(0.113,0,0), null );

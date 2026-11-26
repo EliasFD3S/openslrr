@@ -931,9 +931,10 @@ Force feedback (#395) is SDL haptics on the host thread: a constant force
 and a damper on the steering axis (`SDL_HAPTIC_STEERING_AXIS`) of the first
 steering binding whose device has haptics. The torque comes from the
 controlled car's front tyres after each committed physics batch
-(`part_runtime.cpp:update_force_feedback`, `physics::SteeringFeedback`): trail
-times lateral force, the pneumatic trail fading past the grip peak, normalised
-by the front tyres' peak torque at the resting front load. Its sign follows the
+(`part_runtime.cpp:update_force_feedback`, `physics::SteeringFeedback`): the
+tyres' aligning torque (`TireForces::aligning`, #458) plus the caster trail
+times the lateral force, and the kingpin's jacking (`kingpin_lift_rate`),
+normalised by the front tyres' peak torque at the resting front load. Its sign follows the
 binding's direction; `Config.ForceFeedBack`, `Config.FFB_strength` and host
 option 25 (invert) apply. It stops when no car is driven, under a modal, out
 of focus, and 0.25 s after the last committed batch. The wheel's own

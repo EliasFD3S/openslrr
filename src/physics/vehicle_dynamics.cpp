@@ -411,7 +411,7 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
   }
   s.length = std::clamp(s.length, w.minimum, w.maximum);
   const auto project = [&](double length) {
-    return body_point(body, wheel_pose(w, length).hub_origin);
+    return body_point(body, wheel_pose(w, length, nullptr, steer).hub_origin);
   };
   const auto sample = [&](Vec3 world, GroundHit &hit) {
     return down.y < -.05 &&
@@ -450,8 +450,9 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
   // right) at the exact position of the nearest step.
   std::array<Footprint, kPoints + 4> footprint{};
   const auto sample_footprint = [&](Vec3 hub) {
-    const Quaternion turn = body.orientation * wheel_pose(w, s.length).hub_rotation *
-                            wheel_steering(steer);
+    const auto pose = wheel_pose(w, s.length, nullptr, steer);
+    const Quaternion turn = body.orientation * pose.hub_rotation *
+                            wheel_steering(pose.steer_axis, steer);
     Vec3 forward = turn.rotate({0, 0, -1}), across = turn.rotate({1, 0, 0});
     forward.y = across.y = 0;
     forward = forward.length() > 1e-6 ? forward.normalized() : Vec3{0, 0, -1};
@@ -664,7 +665,7 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
     } else if (suspension > 0) {
       body.add_force(axis_dir * -suspension, hard);
     }
-    const auto pose = wheel_pose(w, l1);
+    const auto pose = wheel_pose(w, l1, nullptr, steer);
     s.length = l1;
     s.speed = v1;
     s.contact = contact;
@@ -672,6 +673,7 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
     s.normal = contact ? n : Vec3{0, 1, 0};
     s.hub = pose.hub_origin;
     s.hub_rotation = pose.hub_rotation;
+    s.steer_axis = pose.steer_axis;
     s.center = body_point(body, pose.hub_origin);
     s.patch = s.center - s.normal * w.radius;
     return;
@@ -748,7 +750,7 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
     if (w.unsprung > 0) travel = std::clamp((length - s.length) / dt, -10.0, 10.0);
     speed = 0;
   }
-  const auto pose = wheel_pose(w, length);
+  const auto pose = wheel_pose(w, length, nullptr, steer);
   const Vec3 hub_w = body_point(body, pose.hub_origin);
   const Vec3 normal = contact_normal;
   // The damper works on the suspension's own travel rate. On the ground it
@@ -794,6 +796,7 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
   s.normal = normal;
   s.hub = pose.hub_origin;
   s.hub_rotation = pose.hub_rotation;
+  s.steer_axis = pose.steer_axis;
   s.center = hub_w;
   s.patch = s.center - normal * w.radius;
 }
@@ -967,6 +970,14 @@ Vec3 wheel_forward(const RigidBody &body, double steer, Quaternion hub = {}) {
   return body.orientation.rotate(
       (hub * wheel_steering(steer)).rotate({0, 0, -1}));
 }
+// The steered hub (#458): turned about its kingpin, so caster leans the
+// outer wheel's top into the turn.
+Quaternion steered_hub(const WheelState &s, double steer) {
+  return (s.hub_rotation * wheel_steering(s.steer_axis, steer)).normalized();
+}
+Vec3 wheel_forward(const RigidBody &body, double steer, const WheelState &s) {
+  return body.orientation.rotate(steered_hub(s, steer).rotate({0, 0, -1}));
+}
 
 double limiter_factor(double rpm, double previous, double limit) {
   const double predicted = 2 * rpm - previous;
@@ -1071,7 +1082,7 @@ void VehicleDynamics::step_drive() {
     shaft += w * s.spin;
     square_weights += w * w;
     if (s.contact && wheels[i].radius > 0) {
-      const Vec3 forward = wheel_forward(body, cfg.steer, s.hub_rotation);
+      const Vec3 forward = wheel_forward(body, cfg.steer, s);
       const Vec3 tangent =
           (forward - s.normal * forward.dot(s.normal)).normalized();
       const double road_speed = body.point_velocity(s.patch).dot(tangent);
@@ -1299,7 +1310,7 @@ void VehicleDynamics::step_drive() {
     const auto brake = [](double speed, double amount) {
       return std::copysign(std::max(0.0, std::abs(speed) - amount), speed);
     };
-    const Vec3 heading = wheel_forward(body, cfg.steer, s.hub_rotation);
+    const Vec3 heading = wheel_forward(body, cfg.steer, s);
     const Vec3 forward =
         (heading - s.normal * heading.dot(s.normal)).normalized();
     const Vec3 side = forward.cross(s.normal);
@@ -1342,6 +1353,7 @@ void VehicleDynamics::step_drive() {
     TireParameters tyre = cfg.tyre;
     tyre.friction *= tyre_grip_factor(cfg.tyre_heat, s.tyre_temperature.surface) *
                      s.surface.friction;
+    tyre.radius = wheel.radius;
     double sliding_power = 0, rolling_power = 0;
     apply_brake(torque_step * drive.handbrake * cfg.handbrake * drive.handbrake_scale, true);
 
@@ -1362,7 +1374,7 @@ void VehicleDynamics::step_drive() {
       const double relaxed_lateral = s.slip_angle * reference;
       // Camber against the road (#418): the hub's down axis leaning along the
       // tyre's lateral axis; positive when the tyre's top leans to +side.
-      const Vec3 hub_down = body.orientation.rotate(s.hub_rotation.rotate({0, -1, 0}));
+      const Vec3 hub_down = body.orientation.rotate(steered_hub(s, cfg.steer).rotate({0, -1, 0}));
       const double camber = std::asin(std::clamp(-hub_down.dot(side), -1.0, 1.0));
       TireForces force{};
       if (wheel.metal_contact) {
@@ -1383,7 +1395,9 @@ void VehicleDynamics::step_drive() {
       const double inverse_spin = wheel.radius * wheel.radius / wheel_inertia;
       const double limit =
           std::abs(s.slip_speed) / (dt_ * (inverse_mass + inverse_spin));
+      const double unclamped = force.longitudinal;
       force.longitudinal = std::clamp(force.longitudinal, -limit, limit);
+      force.aligning += force.offset * (force.longitudinal - unclamped);
       s.tire_force = force;
       // Tyre heat: the friction work of the sliding patch and the rubber's
       // hysteresis as it rolls (not the soft ground's drag, which works the
@@ -1393,6 +1407,9 @@ void VehicleDynamics::step_drive() {
                       std::abs(road);
       body.add_force(forward * force.longitudinal + side * force.lateral,
                      s.patch);
+      // The aligning torque (#458) turns the wheel back towards its travel;
+      // the steering holds it, so the body takes it about the patch normal.
+      body.add_torque(s.normal * force.aligning);
       const double rolling_torque =
           s.spin == 0 ? 0
                       : std::copysign(
@@ -1457,7 +1474,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
       s.length = w.minimum;
       s.speed = 0;
       s.seeded = true;
-      const auto pose = wheel_pose(w, s.length);
+      const auto pose = wheel_pose(w, s.length, nullptr, drive.wheels[i].steer);
       const Vec3 hub = body_point(body, pose.hub_origin);
       GroundHit hit;
       if (terrain(hub.x, hub.z, ceiling, hit)) {
@@ -1471,6 +1488,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
         const double damper = speed >= 0 ?
             (w.rebound_damping > 0 ? w.rebound_damping : .7 * w.bump_damping) : w.bump_damping;
         s.hub_rotation = pose.hub_rotation;
+        s.steer_axis = pose.steer_axis;
         if (s.contact)
           fixed_contacts[fixed_count++] = fixed_support(body, s.patch, s.normal,
               depth, w.metal_contact, dt_, static_cast<int>(i), damper);
@@ -1494,6 +1512,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
     const double length = (hard.y - hit.height - w.radius) / -down.y;
     s.length = std::clamp(length, w.minimum, w.maximum);
     s.hub_rotation = w.hub_alignment;
+    s.steer_axis = {0, 1, 0};
     s.contact = length < w.maximum;
     if (!s.contact)
       continue;
@@ -1507,7 +1526,8 @@ void VehicleDynamics::step(const Terrain &terrain) {
     body.add_force(s.normal * s.force, hard);
 
     const Vec3 point =
-        body_point(body, wheel_pose(w, s.length).hub_origin) - s.normal * w.radius;
+        body_point(body, wheel_pose(w, s.length, nullptr, drive.wheels[i].steer).hub_origin) -
+        s.normal * w.radius;
     s.patch = point;
   }
 
@@ -1528,7 +1548,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
       auto &s = state[i];
       if (!wheels[i].enabled || !s.contact)
         continue;
-      auto forward = wheel_forward(body, drive.wheels[i].steer, s.hub_rotation);
+      auto forward = wheel_forward(body, drive.wheels[i].steer, s);
       forward = (forward - s.normal * forward.dot(s.normal)).normalized();
       auto side = forward.cross(s.normal).normalized(),
            velocity = body.point_velocity(s.patch);
@@ -1567,7 +1587,8 @@ void VehicleDynamics::step(const Terrain &terrain) {
     const double mu = (wheels[i].metal_contact ? .4 : .8) * s.surface.friction;
     TireForces caps{mu * s.force, mu * s.force};
     if (!wheels[i].metal_contact && !drive.native_traffic) {
-      const double tilt = body.orientation.rotate(s.hub_rotation.rotate({0, -1, 0})).dot(s.normal);
+      const double tilt =
+          body.orientation.rotate(steered_hub(s, cfg.steer).rotate({0, -1, 0})).dot(s.normal);
       const double camber = std::acos(std::clamp(std::abs(tilt), 0.0, 1.0));
       TireParameters tyre = cfg.tyre;
       tyre.friction *= tyre_grip_factor(cfg.tyre_heat, s.tyre_temperature.surface) *
@@ -1585,7 +1606,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
     double limit_x = caps.longitudinal * remaining * dt_;
     const double limit_y = caps.lateral * remaining * dt_;
     if (!parked && !drive.native_traffic) limit_x = std::min(limit_x, s.holding_impulse);
-    Vec3 heading = wheel_forward(body, cfg.steer, s.hub_rotation);
+    Vec3 heading = wheel_forward(body, cfg.steer, s);
     heading = (heading - s.normal * heading.dot(s.normal)).normalized();
     Vec3 surface = s.patch;
     GroundHit hit;
@@ -1667,9 +1688,10 @@ void VehicleDynamics::sync_wheels() {
   for (size_t i = 0; i < wheels.size(); ++i) {
     const auto &w = wheels[i];
     auto &s = state[i];
-    const auto pose = wheel_pose(w, s.length);
+    const auto pose = wheel_pose(w, s.length, nullptr, drive.wheels[i].steer);
     s.hub = pose.hub_origin;
     s.hub_rotation = pose.hub_rotation;
+    s.steer_axis = pose.steer_axis;
     s.center = body_point(body, s.hub);
   }
 }

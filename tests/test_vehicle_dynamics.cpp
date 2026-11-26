@@ -9,6 +9,7 @@
 
 #include "slrr/brake_balance.hpp"
 #include "slrr/steering_feedback.hpp"
+#include "slrr/suspension_geometry.hpp"
 #include "slrr/tire_model.hpp"
 #include "slrr/vehicle_dynamics.hpp"
 
@@ -247,6 +248,151 @@ SLRR_TEST(camber_leaning_into_the_force_adds_grip) {
   SLRR_REQUIRE(limits.lateral <= tire_friction_limits(3500, 1, t).lateral * .25 + 1e-9);
 }
 
+SLRR_TEST(aligning_torque_turns_the_tyre_towards_its_travel) {
+  // Mz (#458): lateral speed to +side, force to -side, and the moment turns
+  // the heading towards +side (negative): it has the lateral force's sign.
+  const auto t = tyre(205);
+  constexpr double degree = std::numbers::pi / 180;
+  const auto at = [&](double angle, double load = 3500, double wheel = 20) {
+    return tire_forces(load, 1, wheel, 20, 20 * std::tan(angle * degree), t);
+  };
+  SLRR_REQUIRE(at(0).aligning == 0);
+  SLRR_REQUIRE(at(2).aligning < 0 && at(-2).aligning > 0);
+  SLRR_REQUIRE(std::abs(at(2).aligning + at(-2).aligning) < 1e-9);
+  // Its lever at small slip: 0.09 R0 at the nominal load (6500 / 2 N).
+  const auto small = tire_forces(3250, 1, 20, 20, 20 * std::tan(.2 * degree), t);
+  SLRR_REQUIRE(std::abs(small.aligning / small.lateral - .09 * .31) < 1e-3);
+  // It peaks before the lateral force does, then the wheel goes light and
+  // past the full slide the trail turns negative, less than half as strong.
+  const double peak = SteeringFeedback::peak_slip_angle(3500, t) / degree;
+  double strongest = 0, strongest_at = 0;
+  for (double a = .1; a < 30; a += .1)
+    if (-at(a).aligning > strongest) strongest = -at(a).aligning, strongest_at = a;
+  SLRR_REQUIRE(strongest_at < .75 * peak && strongest > 40 && strongest < 200);
+  SLRR_REQUIRE(-at(peak).aligning < .5 * strongest);
+  SLRR_REQUIRE(at(25).aligning > 0 && at(25).aligning < .5 * strongest);
+  // More load, a longer patch: more torque at the same slip angle.
+  SLRR_REQUIRE(-at(2, 5000).aligning > -at(2).aligning * 1.3);
+  // Braking or wheelspin at the same slip angle uses up the patch: lighter.
+  SLRR_REQUIRE(-at(2, 3500, 16).aligning < -at(2).aligning * .7);
+  SLRR_REQUIRE(-at(2, 3500, 24).aligning < -at(2).aligning * .7);
+  // A larger wheel has a longer patch.
+  auto big = t;
+  big.radius = .36;
+  SLRR_REQUIRE(tire_forces(3500, 1, 20, 20, 20 * std::tan(2 * degree), big).aligning <
+               at(2).aligning * 1.1);
+  // The patch moves with the lateral force, about 2 cm at 4 kN on a tyre
+  // of about 200 kN/m, and the longitudinal force acting there turns the
+  // wheel: braking towards the turn (lighter), traction away (heavier).
+  const auto braking = at(2, 3500, 19.4), driving = at(2, 3500, 20.6);
+  SLRR_REQUIRE(at(6).offset < -.01 && at(6).offset > -.03);
+  SLRR_REQUIRE(-driving.aligning > -braking.aligning + 10);
+  // A softer, longer patch (under-inflated: a longer relaxation length) has
+  // a longer trail; the scale is capped.
+  auto soft = t;
+  soft.relaxation_length = .42;
+  const auto soft_small = tire_forces(3250, 1, 20, 20, 20 * std::tan(.2 * degree), soft);
+  SLRR_REQUIRE(std::abs(soft_small.aligning / soft_small.lateral - 1.4 * .09 * .31) < 2e-3);
+  // Parked: no moment.
+  SLRR_REQUIRE(tire_forces(3500, 1, 0, 0, 0, t).aligning == 0);
+}
+
+SLRR_TEST(caster_trail_reads_the_strut_axis) {
+  // The stock Baiern CoupeSport front left strut (#450): its axis has no
+  // side-view inclination, so no caster is authored.
+  WheelConfig w;
+  w.enabled = true;
+  w.center = {-.709, -.590, -1.480};
+  w.radius = .31;
+  w.rest = w.maximum = .265;
+  w.minimum = .178;
+  w.anchor = .390;
+  w.arm_length = .296;
+  w.arm_pivot = w.center + Vec3{.3116, .1365, 0};
+  w.arm_axis = {0, 0, 1};
+  w.has_hub = true;
+  w.hub = {0, -.077f, -.043f, -.004f, .071f, .407f, 0, .1207f, .7043f, 0};
+  SLRR_REQUIRE(std::isnan(caster_trail(w, .25)));
+  // The strut top moved 5 cm back (+z) for about 5 degrees of caster:
+  // the axis meets the ground ahead of the patch.
+  w.hub[9] = .05f;
+  const double trail = caster_trail(w, .25);
+  SLRR_REQUIRE(trail > .01 && trail < .08);
+  // Leaning forward, it meets the ground behind.
+  w.hub[9] = -.05f;
+  SLRR_REQUIRE(caster_trail(w, .25) < 0);
+  // A trailing arm (no strut) has none.
+  w.hub[0] = -1;
+  SLRR_REQUIRE(std::isnan(caster_trail(w, .25)));
+}
+
+// The patched Nonus GT II front left strut (#458): 7 degrees of caster.
+WheelConfig caster_strut() {
+  WheelConfig w;
+  w.enabled = true;
+  w.center = {-.705, -.596, -1.351};
+  w.radius = .33;
+  w.rest = w.maximum = .26;
+  w.minimum = .12;
+  w.anchor = .390;
+  w.arm_length = .296;
+  w.arm_pivot = w.center + Vec3{.3212, .1945, -.0009};
+  w.arm_axis = {0, 0, 1};
+  w.has_hub = true;
+  w.hub = {0, -.077f, -.043f, -.004f, .071f, .4049f, .0409f, .1572f, .7311f, .0688f};
+  return w;
+}
+
+SLRR_TEST(a_strut_with_caster_steers_about_its_kingpin) {
+  const auto w = caster_strut();
+  constexpr double degree = std::numbers::pi / 180;
+  bool fitted = false;
+  const auto pose = wheel_pose(w, .175, &fitted);
+  SLRR_REQUIRE(fitted);
+  // The kingpin leans back by the caster and in by about 16 degrees (ball
+  // joint to strut top).
+  const Vec3 kingpin = pose.hub_rotation.rotate(pose.steer_axis);
+  SLRR_REQUIRE(std::abs(std::atan2(kingpin.z, kingpin.y) - 7 * degree) < .2 * degree);
+  SLRR_REQUIRE(kingpin.x > .2 && kingpin.x < .4);
+  // Its trail: R tan(caster) and the ball joint's offset, a few cm ahead.
+  const double trail = caster_trail(w, .175);
+  SLRR_REQUIRE(trail > .03 && trail < .06);
+  // The static camber (-3 degrees: the top leans inboard, +x) is the fit's.
+  // Camber against the wheel's own heading: the tilt of its top towards
+  // its inboard side (+x when straight).
+  const auto camber = [&](double steer) {
+    const auto turn = pose.hub_rotation * wheel_steering(pose.steer_axis, steer);
+    const Vec3 up = turn.rotate({0, 1, 0}), forward = turn.rotate({0, 0, -1});
+    const Vec3 inboard = Vec3{-forward.z, 0, forward.x}.normalized();
+    return -std::asin(up.dot(inboard)) / degree;
+  };
+  SLRR_REQUIRE(std::abs(camber(0) + 3) < .1);
+  // At 20 degrees the caster leans the outer wheel's top into the turn by
+  // about 2.4 degrees and stands the inner one up; the kingpin's inclination
+  // adds about 1.1 degrees of positive camber to both.
+  SLRR_REQUIRE(camber(-20 * degree) < camber(0) - 1);
+  SLRR_REQUIRE(camber(20 * degree) > camber(0) + 3);
+  // The heading turns by the steering angle.
+  const Vec3 forward = (pose.hub_rotation * wheel_steering(pose.steer_axis, 20 * degree)).rotate({0, 0, -1});
+  SLRR_REQUIRE(std::abs(std::atan2(-forward.x, -forward.z) - 20 * degree) < .3 * degree);
+  // Jacking: steered either way the inclination lifts the car, so the
+  // rate's even part centres the wheel; caster's part, odd, lifts one side
+  // and lowers the other (it cancels between the two wheels).
+  const double left = kingpin_lift_rate(w, .175, 20 * degree);
+  const double right = kingpin_lift_rate(w, .175, -20 * degree);
+  SLRR_REQUIRE(left - right > .005);
+  // At 3500 N and 20 degrees, about 40 N m per wheel against the lock.
+  SLRR_REQUIRE(3500 * (left - right) / 2 > 20 && 3500 * (left - right) / 2 < 60);
+  SLRR_REQUIRE(std::isnan(kingpin_lift_rate(WheelConfig{}, .2, 0)));
+  // The hub itself swings about the kingpin: steered either way, its centre
+  // drops (the car rises on its spring) and moves along the arc.
+  const auto at = [&](double steer) { return wheel_pose(w, .175, nullptr, steer).hub_origin; };
+  const Vec3 straight = at(0), turned_left = at(20 * degree), turned_right = at(-20 * degree);
+  SLRR_REQUIRE(straight.y - turned_left.y + straight.y - turned_right.y > .002);
+  SLRR_REQUIRE(std::abs(turned_left.z - turned_right.z) > .02);
+  SLRR_REQUIRE((wheel_pose(w, .175).hub_origin - straight).length() == 0);
+}
+
 SLRR_TEST(parked_car_settles_without_vibration) {
   Car car;
   car.run(3, 0, 0, 0);
@@ -317,8 +463,12 @@ SLRR_TEST(more_grip_corners_harder) {
     // slip tyre (#383) spins the car instead of measuring its grip.
     car.dynamics.drive.engaged = false;
     car.run(2, 0, 0, .1);
-    const auto omega = car.dynamics.body.omega();
-    lateral[i] = std::abs(omega.y) * car.speed();
+    // The tyres' lateral force, not yaw rate x speed: after 2 s at 0.1 rad
+    // of steer the car slides at 0.2-0.3 rad of slip, where the yaw rate
+    // swings with any small moment (the tyres' aligning torque, #458).
+    double force = 0;
+    for (const auto& wheel : car.dynamics.state) force += wheel.tire_force.lateral;
+    lateral[i] = std::abs(force) / car.dynamics.body.mass;
   }
   SLRR_REQUIRE(lateral[1] > lateral[0] * 1.08);
 }
@@ -981,7 +1131,8 @@ SLRR_TEST(anti_roll_on_an_engineless_coasting_car_does_not_rewrite_tyre_loads) {
 // (rad), the solver's sign: lateral speed to the right, force to the left.
 SteeringFeedbackWheel front_tyre(double a, double load = 3500) {
   const double t = std::tan(a);
-  return {true, load, t, tire_forces(load, 1, 20, 20, 20 * t, tyre(205)).lateral, tyre(205), 0};
+  const auto f = tire_forces(load, 1, 20, 20, 20 * t, tyre(205));
+  return {true, load, t, f.lateral, tyre(205), 0, f.aligning};
 }
 float settled_torque(double a, double speed = 20, double load = 3500) {
   SteeringFeedback feedback;
@@ -1091,14 +1242,29 @@ SLRR_TEST(steering_feedback_centres_a_car_in_a_turn) {
       std::array<SteeringFeedbackWheel, 2> front;
       for (int w = 0; w < 2; ++w) {
         const auto& st = car.dynamics.state[w];
-        front[w] = {st.contact, st.force, st.slip_angle, st.tire_force.lateral,
-                    car.dynamics.drive.wheels[w].tyre, st.speed};
+        auto t = car.dynamics.drive.wheels[w].tyre;
+        t.radius = car.dynamics.wheels[w].radius;
+        front[w] = {st.contact, st.force, st.slip_angle, st.tire_force.lateral, t, st.speed,
+                    st.tire_force.aligning, caster_trail(car.dynamics.wheels[w], st.length)};
       }
       torque = feedback.update(front, car.speed(), 1. / 60).torque;
     }
     // Steered left (positive), the tyres turn the wheel back right.
     SLRR_REQUIRE(steer > 0 ? torque < -.1f : torque > .1f);
   }
+}
+
+SLRR_TEST(steering_feedback_centres_a_rolling_wheel_from_its_kingpin) {
+  // Barely rolling, the tyres' torque has faded; the kingpin's still centres.
+  auto left = front_tyre(0), right = front_tyre(0);
+  left.jacking = right.jacking = -20;  // steered left: pushes right
+  SteeringFeedback feedback;
+  float rolling = 0, parked = 0;
+  for (int i = 0; i < 30; ++i) rolling = feedback.update({left, right}, 1, 1. / 60).torque;
+  SteeringFeedback stopped;
+  for (int i = 0; i < 30; ++i) parked = stopped.update({left, right}, 0, 1. / 60).torque;
+  SLRR_REQUIRE(rolling < -.02f);
+  SLRR_REQUIRE(parked == 0.f);
 }
 
 // Brake distribution (brake_balance.hpp): the stock Baiern CoupeSport discs,
@@ -1464,6 +1630,9 @@ int main() {
       tyre_load_capacity_has_progressive_efficiency,
       wheelspin_uses_up_cornering_grip,
       camber_leaning_into_the_force_adds_grip,
+      aligning_torque_turns_the_tyre_towards_its_travel, caster_trail_reads_the_strut_axis,
+      a_strut_with_caster_steers_about_its_kingpin,
+      steering_feedback_centres_a_rolling_wheel_from_its_kingpin,
       parked_car_settles_without_vibration,
       a_sideways_slide_stops_without_swinging_back,
       full_lock_at_speed_slides_instead_of_rolling_over,

@@ -28,10 +28,21 @@ struct TireParameters {
   // Stored setCPatch tolerance in radians. Not consumed by the 8ac2ba9
   // force law; alignment is supplied separately as a load factor.
   double patch_angle = 0;
+  // Loaded radius (m), the scale of the pneumatic trail (#458); zero is
+  // 0.31 m, the stock Baiern wheel.
+  double radius = 0;
 };
 
 struct TireForces {
-  double longitudinal, lateral;
+  double longitudinal = 0, lateral = 0;
+  // Self-aligning torque (N m, #458) about the contact normal: the lateral
+  // force acting a pneumatic trail behind the patch centre. Positive turns
+  // the heading towards -lateral, the solver's left: trail x lateral.
+  double aligning = 0;
+  // The patch's lateral offset from the wheel plane (m, along +lateral) that
+  // the lateral force's carcass deflection makes; aligning includes
+  // offset x longitudinal.
+  double offset = 0;
 };
 
 struct TireTuning {
@@ -55,6 +66,11 @@ TireForces tire_friction_limits(double load, double alignment,
 // alignment scales the load before the curves are evaluated. camber is the
 // tyre's inclination against the road in radians, positive when its top
 // leans towards +lateral (the thrust then pushes towards +lateral).
+// aligning is the tyre's moment about the wheel's vertical (#458): the slip
+// force behind an MF pneumatic trail that grows with the load and the
+// patch length (the relaxation length, which the pressure sets) and is gone
+// a little past the lateral peak of the combined slip, plus the
+// longitudinal force at the patch's lateral offset.
 // sliding_speed is the contact patch's actual lateral speed when
 // lateral_speed is a relaxed (lagged) value; it bounds the low-speed force
 // (NaN: the same as lateral_speed).
