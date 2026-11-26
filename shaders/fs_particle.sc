@@ -90,7 +90,7 @@ void main() {
 		float bodyS = fbm2(qs * 1.6);
 		float densityS = saturate(zs * 1.5 - (1.0 - bodyS) * 0.9) * (1.0 - smoothstep(0.35, 1.0, rs));
 		float aS = densityS * v_color0.a;
-		gl_FragColor = vec4(vec3(1.0 - aS * 0.75, 1.0 - aS * 0.75, 1.0 - aS * 0.75),
+		gl_FragColor = vec4(vec3(1.0 - aS * 0.4, 1.0 - aS * 0.4, 1.0 - aS * 0.4),
 		                    gl_FragCoord.z - v_texcoord1.x * zs * u_particleParams.y);
 		return;
 	}
@@ -134,22 +134,28 @@ void main() {
 		float body = fbm3(q * 1.1) * 0.94;
 		float detail = fbm2(q * 3.3 + vec3(5.2, 1.3, 7.7)) * 0.94;
 		float shape = z * 1.5 - (1.0 - body) * 0.85 - (1.0 - detail) * 0.18;
-		// Soft rims: neighbouring puffs merge into one cloud instead of
-		// reading as separate balls.
-		float density = saturate(shape) * (1.0 - smoothstep(0.35, 1.0, r2));
-		density = pow(max(density, 1e-4), 1.25);
+		// Soft rims from the centre out: neighbouring puffs merge into one
+		// cloud instead of reading as separate balls.
+		float density = saturate(shape) * (1.0 - smoothstep(0.1, 1.0, r2));
 		// The authored puff (the cfg's texture) still shapes the cloud.
 		vec4 tex = texture2D(s_texColor, c * 0.5 + 0.5);
 		density *= mix(1.0, tex.a, 0.3);
-		// Thick smoke scatters light many times: lift the authored colour toward
-		// white so a grey cfg colour reads as tyre smoke, not oil smoke.
-		vec3 albedo = mix(v_color0.rgb * mix(vec3(1.0, 1.0, 1.0), tex.rgb, 0.25), vec3(0.92, 0.92, 0.92), 0.25);
+		// Thick smoke scatters light many times: lift a grey cfg colour toward
+		// white so it reads as tyre smoke, not oil smoke; a coloured dust
+		// (sand) keeps its colour.
+		vec3 tinted = v_color0.rgb * mix(vec3(1.0, 1.0, 1.0), tex.rgb, 0.25);
+		float hi = max(tinted.r, max(tinted.g, tinted.b));
+		float saturation = (hi - min(tinted.r, min(tinted.g, tinted.b))) / max(hi, 1e-3);
+		vec3 albedo = mix(tinted, vec3(0.93, 0.93, 0.93), 0.6 * (1.0 - saturate(saturation * 4.0)));
 
 		// Light reaching this pixel crosses the puff from the sun side: an
 		// optical depth growing from the lit face to the far face.
-		float ndl = dot(n, sun);
+		// Lit as a cloud, not as balls: the puff's own normal bends toward the
+		// sky so a cloud of puffs shades as one body.
+		vec3 nl = normalize(mix(n, vec3(0.0, 1.0, 0.0), 0.55));
+		float ndl = dot(nl, sun);
 		float across = 1.0 - (ndl * 0.5 + 0.5);
-		float shadow = exp(-1.5 * across * (0.3 + density * z));
+		float shadow = exp(-0.9 * across * (0.3 + density * z));
 		// Forward scattering: bright rims when looking toward the sun
 		// through the thin edges (Henyey-Greenstein, g 0.6, isotropic = 1).
 		vec3 view = normalize(v_worldPos - u_particleCam[3].xyz);
@@ -157,17 +163,17 @@ void main() {
 		float g = 0.6;
 		float hg = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * cosTheta, 1e-3), 1.5);
 		float rim = hg * 0.12 * (1.0 - density) * (1.0 - z * 0.5);
-		vec3 direct = sunLight * sunVisible * (shadow * (0.4 + 0.6 * saturate(ndl * 0.5 + 0.5)) + rim);
+		vec3 direct = sunLight * sunVisible * (shadow * (0.6 + 0.4 * saturate(ndl * 0.5 + 0.5)) + rim);
 		// Sky from above, darker underneath; a little light scattered many
 		// times inside the cloud keeps its core from going black.
-		vec3 ambient = sky * (0.7 + 0.3 * saturate(n.y * 0.5 + 0.5)) + sunLight * mix(0.04, 0.1, sunVisible);
+		vec3 ambient = sky * (0.8 + 0.2 * saturate(nl.y * 0.5 + 0.5)) + sunLight * mix(0.04, 0.1, sunVisible);
 		// No brighter than a white surface facing the sun: a desert sun must
 		// not burn the cloud to white.
 		vec3 light = direct + ambient;
 		vec3 limit = (sunLight + sky) * 0.95;
 		// Lamps scatter through the whole puff, thin edges as much as the core.
 		colour = albedo * (min(light, limit) + lamps * (0.55 + 0.45 * z));
-		alpha = density * v_color0.a * 0.85;
+		alpha = density * v_color0.a * 0.55;
 		// No hard line where the puff meets the road.
 		alpha *= saturate(groundHeight / (radius * 0.45 + 0.05));
 	}

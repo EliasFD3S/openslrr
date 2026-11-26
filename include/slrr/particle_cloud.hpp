@@ -72,6 +72,20 @@ struct Particle {
   float age = 0, life = 1;
   float seed = 0;
   uint16_t cloud = 0;  // index in particle_clouds()
+  // A young particle turns about an axis (a tyre's), the swirl fading over
+  // its first half second: smoke wrapping round the wheel (#454).
+  std::array<float, 3> swirl_center{}, swirl_axis{};
+  float swirl = 0;  // rad/s about swirl_axis, 0 none
+};
+
+// One particle placed by the caller (emit), with the cloud's sizes, colours
+// and lifetimes; the cfg's velocity domain adds a little scatter.
+struct ParticleSpawn {
+  std::array<float, 3> position{}, velocity{};
+  std::array<float, 3> ground{}, ground_normal{0, 1, 0};
+  std::array<float, 3> swirl_center{}, swirl_axis{};
+  float swirl = 0;
+  float min_size = 0;  // the birth width at least this (a tyre's)
 };
 
 // The emitter, shaped like the stock ParticleSystem natives (init, setFreq,
@@ -104,6 +118,10 @@ class ParticleSystem {
   }
   // setDirectSource: emit `count` particles now, whatever the frequency.
   void emit_direct(int count);
+  // The particles due after dt seconds at the current frequency (the cfg's
+  // rate times it), for a caller that places each one itself (emit).
+  int due(double dt);
+  void emit(const ParticleSpawn &spawn);
   void set_counter(uint32_t counter) { counter_ = counter; }
   uint32_t counter() const { return counter_; }
   // modePermanent: keep emitting while the frequency is above zero, without
@@ -139,7 +157,7 @@ uint16_t particle_cloud_find(uint32_t key);
 const std::vector<ParticleCloudConfig> &particle_clouds();
 
 // The shared pool, capped at kMaxParticles (the oldest give way).
-constexpr size_t kMaxParticles = 3000;
+constexpr size_t kMaxParticles = 6000;
 // Steps every particle: the cloud's gravity and damping toward the wind,
 // a little turbulence, the floor plane of its emission.
 void particles_update(double dt);

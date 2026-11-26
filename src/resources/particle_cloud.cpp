@@ -250,6 +250,55 @@ void ParticleSystem::spawn() {
   ++counter_;
 }
 
+int ParticleSystem::due(double dt) {
+  if (!ready_ || cloud_ >= g_clouds.size() || !(dt > 0)) return 0;
+  carry_ += static_cast<double>(custom_ ? rate_ : g_clouds[cloud_].rate) *
+            std::max(0.f, frequency_) * dt;
+  carry_ = std::min(carry_, 64.0);
+  const int count = static_cast<int>(carry_);
+  carry_ -= count;
+  if (!permanent_) frequency_ = 0;
+  return count;
+}
+
+void ParticleSystem::emit(const ParticleSpawn &spawn) {
+  if (cloud_ >= g_clouds.size()) return;
+  const auto &c = g_clouds[cloud_];
+  auto &rng = random_engine();
+  Particle p;
+  const V3 scatter = c.velocity.sample(rng);
+  const float scale = c.velscale > 0 ? c.velscale : 1.f;
+  for (size_t k = 0; k < 3; ++k) {
+    p.position[k] = spawn.position[k];
+    p.velocity[k] = spawn.velocity[k] + scatter[k] * .4f * scale;
+  }
+  p.ground = spawn.ground;
+  p.ground_normal = spawn.ground_normal;
+  p.swirl_center = spawn.swirl_center;
+  p.swirl_axis = spawn.swirl_axis;
+  p.swirl = spawn.swirl;
+  p.color0 = c.source_color.sample(rng);
+  p.color1 = c.dest_color.sample(rng);
+  for (auto *colour : {&p.color0, &p.color1})
+    for (auto &channel : *colour) channel = std::clamp(channel, 0.f, 1.f);
+  p.size0 = std::max(spawn.min_size, c.source_size.sample(rng)[0]);
+  p.size1 = std::max(p.size0, c.dest_size.sample(rng)[0]);
+  p.alpha0 = std::clamp(c.source_alpha.sample(rng)[0], 0.f, 1.f);
+  p.alpha1 = std::clamp(c.dest_alpha.sample(rng)[0], 0.f, 1.f);
+  p.angle0 = c.source_angle.sample(rng)[0];
+  p.angle1 = c.dest_angle.sample(rng)[0];
+  p.life = std::max(.05f, c.lifetime.sample(rng)[0]);
+  p.seed = uniform(rng);
+  p.cloud = cloud_;
+  if (g_particles.size() < kMaxParticles) {
+    g_particles.push_back(p);
+  } else {
+    g_overwrite = (g_overwrite + 1) % g_particles.size();
+    g_particles[g_overwrite] = p;
+  }
+  ++counter_;
+}
+
 void ParticleSystem::emit_direct(int count) {
   for (int i = 0; i < count; ++i) spawn();
 }
@@ -306,6 +355,19 @@ void particles_update(double dt) {
       // not toward rest, so lingering smoke drifts away.
       const float keep = std::exp(-(1.f - c.damping[k]) * h);
       p.velocity[k] = wind[k] + (p.velocity[k] - wind[k]) * keep;
+    }
+    if (p.swirl != 0.f) {
+      // Wrapped round the tyre: the velocity turns about its axis while
+      // young, as the rubber smoke the tread drags round the wheel arch.
+      const float k = std::exp(-p.age / .35f);
+      const auto &a = p.swirl_axis;
+      const float r[3] = {p.position[0] - p.swirl_center[0], p.position[1] - p.swirl_center[1],
+                          p.position[2] - p.swirl_center[2]};
+      const float t[3] = {a[1] * r[2] - a[2] * r[1], a[2] * r[0] - a[0] * r[2],
+                          a[0] * r[1] - a[1] * r[0]};
+      const float blend = std::min(1.f, 6.f * h) * k;
+      for (size_t i = 0; i < 3; ++i)
+        p.velocity[i] += (t[i] * p.swirl - p.velocity[i]) * blend * .5f;
     }
     if (cloud) {
       // Slow eddies so a cloud of puffs rolls and spreads instead of rising

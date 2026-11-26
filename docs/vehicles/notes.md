@@ -1786,6 +1786,39 @@ Fifth pass (from the exe instead of host choices):
   slide (temporary hook) raised up to 769 particles and 370 mark quads, and
   the Dead_Island bench (no hook) raised sand dust and marks.
 
+Sixth pass (Elias's test: "the smoke makes little balls"; asked for an
+amount from the tyre's state and smoke from the wheel arches, as in CSP):
+
+- Amount: `emit_tyre_dust` now takes the friction power at the patch,
+  |Fx slip| + |Fy lateral| (the thermal model's sliding heat). Rubber smoke
+  gets the cfg's rate per 15 kW, times 0.08 + 0.92 × smoothstep of the tread
+  surface temperature from 110 to 230 °C (Elias's burnout read 318 °C on
+  the HUD). Loose ground and debris get the rate per 30 kW, with no
+  temperature. The exe's emission gate (σ > 0.4) is dropped for smoke and
+  kept for marks; `tyre_smoke_density` defaults to 100 % again.
+- Place: `ParticleSystem::due` and `emit` place each particle. Smoke is born
+  round the tyre, at angle 1.7 × u^1.6 from the patch up the side the tread
+  runs to, ±half the tread width across, and at least 1.6 tyre radii wide.
+- Motion: each particle leaves with 0.6 × the car's speed, 0.3 × the slip
+  speed (capped at 18 m/s) along the tread, 0.4-1.8 m/s outward from the
+  arch and a little up. It swirls about the axle at 0.12 × the wheel's
+  spin, capped at 10 rad/s, fading in 0.35 s. The pool grows to 6000.
+- Look:
+  - Each puff's own normal bends 55 % toward the sky, and the self-shadow
+    and diffuse contrast are lower, so a cloud shades as one body.
+  - The rims soften from r² 0.1, and alpha × 0.55 (from 0.85) lets more
+    puffs overlap.
+  - A grey cfg colour is lifted 60 % toward white, scaled down by its
+    saturation, so sand keeps its colour.
+  - The shadow map keeps at most 40 % of the sun per puff.
+- Validation: `tyre_effects` 10/10 (with `placed_emission_swirls`);
+  `options_retry` passes. In game (temporary hooks, since removed):
+  - The handbrake drift heated the tread to only 40-75 °C, so it made
+    little smoke, as the law intends.
+  - With 80 kW forced on the rear wheels, smoke rose from the rear tyre and
+    its arch as a white continuous cloud, a whiteout around the camera as
+    in Elias's CSP reference.
+
 Limitations:
 
 - The tyre's longitudinal scale in σ (wheel+0x218) is taken as 1; its

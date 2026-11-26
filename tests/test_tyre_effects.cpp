@@ -246,12 +246,41 @@ SLRR_TEST(original_effect_law) {
   SLRR_REQUIRE(skid_scrub(s) > 0);
 }
 
+// Placed emission (emit_tyre_dust): due() counts the cloud's rate times the
+// frequency, emit() keeps the position, the birth width floor and a swirl
+// that turns a young particle about the axle.
+SLRR_TEST(placed_emission_swirls) {
+  particles_clear();
+  particles_set_wind(0, 0);
+  const uint16_t cloud = particle_cloud_register(0x7fff0402u, parse_particle_cloud(kAsphalt));
+  ParticleSystem system;
+  system.init(cloud);
+  system.set_freq(2);
+  SLRR_REQUIRE(system.due(.5) == 20);  // 20/s x 2 x 0.5 s
+  SLRR_REQUIRE(system.due(.5) == 0);   // not permanent: the frequency drops
+  ParticleSpawn spawn;
+  spawn.position = {0, .3f, -1};
+  spawn.ground_normal = {0, 1, 0};
+  spawn.swirl_center = {0, .3f, 0};
+  spawn.swirl_axis = {1, 0, 0};
+  spawn.swirl = 8;
+  spawn.min_size = .5f;
+  system.emit(spawn);
+  SLRR_REQUIRE(particles().size() == 1 && particles()[0].size0 >= .5f);
+  SLRR_REQUIRE(near(particles()[0].position[2], -1.f));
+  particles_update(.05);
+  // About +x at r = (0, 0, -1): the tangent cross(x, r) is +y.
+  SLRR_REQUIRE(particles()[0].velocity[1] > .5f);
+  particles_clear();
+}
+
 }  // namespace
 
 int main() {
   const slrr::standalone::Test tests[] = {
       parses_stock_asphalt_cloud, parses_debris_and_samples_domains, emits_rises_and_dies,
       debris_lands_on_its_ground, parses_skid_configs, textured_mark_tiles,
-      style_rings_follow_maxcount, script_domains_without_floor, original_effect_law};
+      style_rings_follow_maxcount, script_domains_without_floor, original_effect_law,
+      placed_emission_swirls};
   return slrr::standalone::run("tyre_effects", tests);
 }

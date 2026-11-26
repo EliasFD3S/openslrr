@@ -452,15 +452,25 @@ particles:2 (asphalt smoke) and particles:0xA (the asphalt mark).
   the wind (not toward rest), slow eddies, and the emission's ground plane.
 - **Emission.** One emitter per wheel (`emit_tyre_dust`, `part_runtime.cpp`),
   fed with the wheel state the frame published.
-  - The exe's law (0x453680, 0x451280, `tyre_combined_slip`). The combined
-    slip σ = √(sin² a + (cos a × k)²) of the slip state 0x43BBD0 keeps, with
-    its stock constants. Nothing below σ 0.4, on any ground. Above it, the
-    cloud emits at its cfg's rate × max(1, (σ − 0.4) × 0.2), and a mark
-    exists.
-  - Option 33, `tyre_smoke_density` (percent, default 250, 100 = the exe),
-    multiplies clouds for the volumetric look. The part above 100 % shrinks
-    for big long-lived clouds by size² × lifetime against asphalt.cfg's.
-    Debris keeps the exe's rate.
+  - Amount, from the tyre: the friction power at the patch, |Fx slip| +
+    |Fy lateral| (what the tyre thermal model heats with). It gives the
+    cfg's rate per 15 kW for rubber smoke, scaled by the tread surface's
+    temperature (8 % cold, full from 230 °C, ramp from 110 °C). Loose
+    ground (rolling drag) and debris give the rate per 30 kW, with no
+    temperature.
+  - Place: round the tyre, from the patch up the side the tread runs to (the
+    back of a spinning wheel, the front of a locked one), across the tread
+    width.
+  - Motion and size: the particles leave with 0.6 × the car's speed, the
+    tread's surface speed and an outward push from the arch. They turn about
+    the axle while young (`Particle::swirl`, fading in 0.35 s), and smoke is
+    born at least 1.6 tyre radii wide.
+  - Option 33, `tyre_smoke_density` (percent, default 100), scales the
+    amount. The part above 100 % shrinks for big long-lived clouds by size²
+    × lifetime against asphalt.cfg's.
+  - Marks keep the exe's law (0x453680, `tyre_combined_slip`). The combined
+    slip σ = √(sin² a + (cos a × k)²) uses 0x43BBD0's stock constants, and a
+    mark exists above σ 0.4.
   - Native traffic within 60 m of the camera smokes and lays marks too (the
     driven and scripted cars within 120 m); it still plays no slide loop.
 - **Script natives.** The nine `ParticleSystem` natives

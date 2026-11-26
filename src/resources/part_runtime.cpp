@@ -44,6 +44,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <memory>
+#include <random>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
@@ -3623,10 +3624,19 @@ void update_slide_audio(Record &rec, bool active) {
   rec.sharp_skid = sharp || (rec.sharp_skid && speed > 9 && sideways > 1.6);
 }
 
-// Feeds a wheel's emitter (#454): the ground's skid_PS cloud at the contact
-// patch, thrown back by the spinning tread and dragged a little by the car's
-// wake. It emits by the exe's law (tyre_effect_frequency: nothing below a
-// combined slip of 0.4, then at least the cfg's rate), on every ground.
+// Feeds a wheel's emitter (#454) with the ground's skid_PS cloud, from the
+// tyre's own state rather than a slip threshold:
+// - How much: the friction power at the patch, |Fx slip| + |Fy lateral|
+//   (the heat the tyre thermal model takes from sliding), the cfg's rate per
+//   15 kW (30 kW of dust for loose ground). Rubber smoke
+//   also needs a hot tread: from a trace at 110 deg C to full at 230 deg C
+//   of the tread surface. Dust, gravel and grass (a ground with rolling
+//   drag) rise from the power alone.
+// - Where: round the tyre, from the patch up the side the tread runs to
+//   (the back of a spinning wheel, the front of a locked one), across the
+//   tread width. The particles leave with the tread's surface speed, turn
+//   about the axle while young (Particle::swirl) and drift out of the arch
+//   to the car's outside, carried at first by the car's own speed.
 void emit_tyre_dust(Record &rec, size_t i, const SkidWheelSample &sample,
                     const GroundSurface &ground, double dt) {
   const uint16_t cloud = surface_particle_cloud(*index, ground.skid_particles);
@@ -3637,36 +3647,71 @@ void emit_tyre_dust(Record &rec, size_t i, const SkidWheelSample &sample,
     emitter.init(cloud);
     rec.tyre_cloud[i] = cloud;
   }
+  if (!sample.contact || !(sample.force > 0) || i >= rec.dynamics.state.size()) return;
+  const auto &s = rec.dynamics.state[i];
+  const auto &wheel = rec.dynamics.wheels[i];
   const auto &body = rec.dynamics.body;
-  const double frequency =
-      sample.contact && sample.force > 0 ? tyre_effect_frequency(sample.sigma) : 0.0;
-  if (!(frequency > 0)) return;
-  const auto &n = sample.normal;
-  const auto &f = sample.forward;
-  const double throw_back = std::clamp(sample.slip_speed, -12.0, 12.0) * .2;
-  std::array<float, 3> velocity{};
-  std::array<float, 3> position{}, normal{};
-  const double car[3] = {body.velocity.x, body.velocity.y, body.velocity.z};
-  for (size_t k = 0; k < 3; ++k) {
-    const double wake = car[k] * .3;
-    velocity[k] = static_cast<float>(wake - f[k] * throw_back);
-    position[k] = static_cast<float>(sample.point[k] + n[k] * .06);
-    normal[k] = static_cast<float>(n[k]);
-  }
-  emitter.set_source(position, velocity, normal);
-  // Tyre smoke density (option 33, percent of the exe's rate): the soft
-  // volumetric puffs need more of them than the original's sprites to build
-  // a thick cloud. The part above 100 % shrinks for big long-lived clouds by
-  // their size squared times their lifetime against asphalt.cfg's (sand.cfg's
-  // 3-6 m puffs living 4-6 s would bury the car). Debris keeps the exe's rate.
   const auto &config = particle_clouds()[cloud];
-  const double density =
-      std::clamp(host_enhanced_graphics().tyre_smoke_density, 0, 400) * .01;
+  const double power = std::abs(s.tire_force.longitudinal * s.slip_speed) +
+                       std::abs(s.tire_force.lateral * s.lateral_speed);
+  const bool soft = ground.rolling > 0 || config.type == 1;
+  double rate = 0;
+  if (soft) {
+    rate = power / 30000.0;
+  } else {
+    const double hot = std::clamp((s.tyre_temperature.surface - 110.0) / 120.0, 0.0, 1.0);
+    rate = power / 15000.0 * (.08 + .92 * hot * hot * (3 - 2 * hot));
+  }
+  // Tyre smoke density (option 33, percent): the part above 100 % shrinks
+  // for big long-lived clouds by their size squared times their lifetime
+  // against asphalt.cfg's (sand.cfg's 3-6 m puffs would bury the car).
+  const double density = std::clamp(host_enhanced_graphics().tyre_smoke_density, 0, 400) * .01;
   const double share = std::min(
       1.0, particle_cloud_coverage_reference() / std::max(particle_cloud_coverage(config), .01));
-  const double boost = config.type == 1 ? 1.0 : std::max(0.0, 1 + (density - 1) * share);
-  emitter.set_freq(static_cast<float>(boost * frequency));
-  emitter.advance(dt);
+  rate *= config.type == 1 ? 1.0 : std::max(0.0, 1 + (density - 1) * share);
+  emitter.set_freq(static_cast<float>(std::min(rate, 12.0)));
+  const int count = emitter.due(dt);
+  if (count <= 0) return;
+  static std::mt19937 rng(0x454u);
+  std::uniform_real_distribution<double> unit(0.0, 1.0);
+  const physics::Vec3 axle = body.orientation.rotate({1, 0, 0});
+  const physics::Vec3 forward = body.orientation.rotate({0, 0, -1});
+  const physics::Vec3 down = s.normal * -1.0;
+  // The tread leaves the patch backwards when it spins faster than the road
+  // (and forwards when it is held back): the side the smoke wraps round.
+  const double tread = s.spin * wheel.radius;  // tread speed at the hub's frame
+  const physics::Vec3 run = forward * (sample.slip_speed >= 0 ? -1.0 : 1.0);
+  // Outside of the car: the arch's open side.
+  const double side = (s.center - body.position).dot(axle) >= 0 ? 1.0 : -1.0;
+  const double half_width = wheel.half_width > 0 ? wheel.half_width : .1;
+  const double radius = std::max(.15, wheel.radius);
+  for (int n = 0; n < count; ++n) {
+    // Mostly at the patch, some up the back of the tyre to the arch.
+    const double angle = 1.7 * std::pow(unit(rng), 1.6);
+    const double across = (unit(rng) * 2 - 1) * half_width;
+    const physics::Vec3 at = s.center + down * (radius * std::cos(angle)) +
+                             run * (radius * 1.05 * std::sin(angle)) + axle * across;
+    // The tread surface's direction at that angle, and its speed (capped).
+    const physics::Vec3 along = run * std::cos(angle) - down * std::sin(angle);
+    const double surface = std::min(std::abs(sample.slip_speed), 18.0) * .3;
+    const physics::Vec3 v = body.velocity * .6 + along * surface +
+                            axle * (side * (.4 + unit(rng) * 1.4)) + s.normal * (.3 + unit(rng) * .5);
+    ParticleSpawn spawn;
+    spawn.position = {float(at.x), float(at.y), float(at.z)};
+    spawn.velocity = {float(v.x), float(v.y), float(v.z)};
+    spawn.ground = {float(s.patch.x), float(s.patch.y), float(s.patch.z)};
+    spawn.ground_normal = {float(s.normal.x), float(s.normal.y), float(s.normal.z)};
+    if (!soft) {
+      // Turning with the tyre, about the axle through the hub.
+      spawn.swirl_center = {float(s.center.x), float(s.center.y), float(s.center.z)};
+      spawn.swirl_axis = {float(axle.x), float(axle.y), float(axle.z)};
+      spawn.swirl = static_cast<float>(std::clamp(-tread / radius * .12, -10.0, 10.0));
+      // Born as big as the tyre that makes it: thick at the wheel, not a
+      // spray of small balls.
+      spawn.min_size = static_cast<float>(radius * 1.6);
+    }
+    emitter.emit(spawn);
+  }
 }
 
 // Skid marks from the wheel state this frame published (not per solver
