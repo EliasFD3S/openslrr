@@ -468,7 +468,8 @@ particles:2 (asphalt smoke) and particles:0xA (the asphalt mark).
     the axle while young (`Particle::swirl`, fading in 0.35 s), and smoke is
     born at least 1.6 tyre radii wide.
   - Option 33, `tyre_smoke_density` (percent, default 100), scales the
-    amount. The part above 100 % shrinks for big long-lived clouds by size²
+    amount. **Options → Graphics → TYRE SMOKE** and Advanced Video Options
+    set it (0-400 %). The part above 100 % shrinks for big long-lived clouds by size²
     × lifetime against asphalt.cfg's.
   - Marks keep the exe's law (0x453680, `tyre_combined_slip`). The combined
     slip σ = √(sin² a + (cos a × k)²) uses 0x43BBD0's stock constants, and a

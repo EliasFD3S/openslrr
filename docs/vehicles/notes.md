@@ -1902,6 +1902,19 @@ little drops instead of an irregular shape):
 - In game (forced smoke, temporary hook since removed): irregular
   translucent wisps over the road, light ground shading.
 
+Options screens (Elias: put the density in the Options menu):
+
+- `OptionsDialog.CMD_TYRE_SMOKE` (537) sets option 33 from a TYRE SMOKE
+  slider (0-400 %, steps of 50) on both screens: the Graphics tab's WORLD
+  column (`OsdxOptions`) and Advanced Video Options (`OptionsDialog`). It is
+  not a preset setting, so moving it keeps the preset.
+- Compiled with `compile_game_sources` in `build/opts454-root` (a real copy
+  of `sl` and `system` with the patch's classes, the other folders as
+  junctions to a stock root). HEAD's four `sl/Scripts/game` sources first
+  rebuilt the shipped classes byte for byte. `OsdxOptions` needs a second
+  run once the new `OptionsDialog.class` carries the constant.
+- Not checked in game yet.
+
 Limitations:
 
 - Water has no physics: no buoyancy or drag from its density and viscosity.
