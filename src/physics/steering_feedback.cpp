@@ -9,9 +9,11 @@ constexpr double kProbeSpeed = 20;  // m/s; the curve is in slip, not speed
 constexpr double kMaxProbe = .6;    // tan(slip angle), about 31 degrees
 constexpr int kProbes = 120;
 
+TireForces probe(double load, double tan_alpha, const TireParameters& tyre) {
+  return tire_forces(load, 1, kProbeSpeed, kProbeSpeed, kProbeSpeed * tan_alpha, tyre);
+}
 double lateral_force(double load, double tan_alpha, const TireParameters& tyre) {
-  return std::abs(tire_forces(load, 1, kProbeSpeed, kProbeSpeed, kProbeSpeed * tan_alpha, tyre)
-                      .lateral);
+  return std::abs(probe(load, tan_alpha, tyre).lateral);
 }
 }  // namespace
 
@@ -29,11 +31,10 @@ double SteeringFeedback::peak_slip_angle(double load, const TireParameters& tyre
   return std::atan(best_tan);
 }
 
-double SteeringFeedback::trail(double alpha, double peak) {
-  // The pneumatic trail is gone once the whole patch slides, about half again
-  // past the force peak: the aligning torque peaks before the grip does.
-  const double pneumatic = kPneumaticTrail * std::max(0.0, 1 - std::abs(alpha) / (1.5 * peak));
-  return pneumatic + kMechanicalTrail;
+double SteeringFeedback::moment(double load, double tan_alpha, const TireParameters& tyre,
+                                double caster_trail) {
+  const auto f = probe(load, tan_alpha, tyre);
+  return f.aligning + caster_trail * f.lateral;
 }
 
 SteeringFeedbackOutput SteeringFeedback::update(const std::array<SteeringFeedbackWheel, 2>& front,
@@ -42,16 +43,19 @@ SteeringFeedbackOutput SteeringFeedback::update(const std::array<SteeringFeedbac
   speed = std::abs(speed);
   out.damper = static_cast<float>(.1 + .5 * std::exp(-speed / 4));
   const double fade = std::clamp(speed / kFadeSpeed, 0.0, 1.0);
-  double moment = 0, load = 0, excess = 0;
+  double steering = 0, jacking = 0, load = 0, excess = 0, caster = 0;
   int touching = 0;
   const TireParameters* tyre = nullptr;
   for (const auto& w : front) {
     if (!w.contact || !(w.load > 0)) continue;
     const double peak = peak_slip_angle(w.load, w.tyre);
     const double alpha = std::atan(std::abs(w.slip_angle));
-    moment += trail(alpha, peak) * w.lateral;
+    const double trail = std::isfinite(w.caster_trail) ? w.caster_trail : kDefaultCasterTrail;
+    steering += w.aligning + trail * w.lateral;
+    if (std::isfinite(w.jacking)) jacking += w.jacking;
     excess = std::max(excess, alpha / peak - 1);
     load += w.load;
+    caster += trail;
     ++touching;
     tyre = &w.tyre;
   }
@@ -62,13 +66,16 @@ SteeringFeedbackOutput SteeringFeedback::update(const std::array<SteeringFeedbac
     // must change the torque, not its scale.
     if (reference_load_ <= 0) reference_load_ = per_wheel;
     else reference_load_ += (per_wheel - reference_load_) * (1 - std::exp(-dt / 3.0));
-    const double peak = peak_slip_angle(reference_load_, *tyre);
+    // Positive slip turns the wheel right (a negative moment).
     double full = 0;
-    for (int i = 1; i <= kProbes; ++i) {
-      const double t = kMaxProbe * i / kProbes;
-      full = std::max(full, trail(std::atan(t), peak) * lateral_force(reference_load_, t, *tyre));
-    }
-    if (full > 0) target = std::clamp(moment / (2 * full) * fade, -1.0, 1.0);
+    for (int i = 1; i <= kProbes; ++i)
+      full = std::max(full, -moment(reference_load_, kMaxProbe * i / kProbes, *tyre,
+                                    caster / touching));
+    // The weight's centring needs the tyre to roll: a parked tyre's scrub
+    // holds the wheel where it is.
+    const double rolling = std::clamp(speed / kJackingSpeed, 0.0, 1.0);
+    if (full > 0)
+      target = std::clamp((steering * fade + jacking * rolling) / (2 * full), -1.0, 1.0);
   }
   // A light low-pass: the solver's relaxation already smooths the slip.
   const float alpha = static_cast<float>(1 - std::exp(-dt / .02));

@@ -36,14 +36,14 @@ public class SunStrip_22_FR_McPherson_strut extends Suspension
 			WheelRef wheel = the_car.getWheel(wheelID);
 			if (wheel)
 			{
-				// OpenSLRR (#450): front geometry of the del Sol, laid out at the static ride height
+				// OpenSLRR (#450): front geometry of the del Sol, laid out at the static ride height, 2 deg of caster (#458)
 				wheel.setArm( 0.2960,
 				              -0.3159, 0.1914, 0.0000,
 				              0.0000, 0.0000, 1.0000);
 				wheel.setHub( 0.0000,
 				              0.0770, -0.0430, -0.0040,
-				              -0.0710, 0.4070, 0.0000,
-				              -0.1217, 0.7272, 0.0000);
+				              -0.0710, 0.4068, 0.0124,
+				              -0.1217, 0.7270, 0.0174);
 
 				the_car.setSlotPos(101+wheelID, new Vector3(0.124,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(0.113,0,0), null );

@@ -2903,9 +2903,9 @@ void pose_wheels(Object *chassis, Record &rec) {
     if (!cfg.enabled) continue;
     const auto base = part_pose_matrix(rec.config->wheels[i]);
     const auto inverse = part_matrix_inverse_rigid(base);
-    const auto frames = physics::wheel_pose(cfg, state.length, &rec.geometry_solved[i]);
-    const auto hub_steered = frames.hub_rotation *
-                             physics::wheel_steering(wheel_steering_angle(rec, i));
+    const double steer = wheel_steering_angle(rec, i);
+    const auto frames = physics::wheel_pose(cfg, state.length, &rec.geometry_solved[i], steer);
+    const auto hub_steered = frames.hub_rotation * physics::wheel_steering(frames.steer_axis, steer);
     rec.travel_frame[i] = part_matrix_multiply(
         physics::corner_matrix(frames.arm_origin, rec.geometry_solved[i]
             ? frames.arm_rotation : frames.hub_rotation), inverse);
@@ -8013,8 +8013,14 @@ void update_force_feedback(double frame_seconds, bool committed) {
   std::array<physics::SteeringFeedbackWheel, 2> front;
   for (size_t i = 0; i < front.size(); ++i) {
     const auto& s = dynamics.state[i];
-    front[i] = {s.contact && !dynamics.wheels[i].metal_contact, s.force, s.slip_angle,
-                s.tire_force.lateral, dynamics.drive.wheels[i].tyre, s.speed};
+    const auto& wheel = dynamics.wheels[i];
+    auto tyre = dynamics.drive.wheels[i].tyre;
+    tyre.radius = wheel.radius;
+    front[i] = {s.contact && !wheel.metal_contact, s.force, s.slip_angle,
+                s.tire_force.lateral, tyre, s.speed, s.tire_force.aligning,
+                physics::caster_trail(wheel, s.length),
+                -s.force * physics::kingpin_lift_rate(wheel, s.length,
+                                                      dynamics.drive.wheels[i].steer)};
   }
   const auto out = steering_feedback.update(front, dynamics.body.velocity.length(),
                                             std::max(frame_seconds, 1e-3), feedback_jolt);

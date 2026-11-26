@@ -246,6 +246,29 @@ weights) after the real car:
 | Prime DLH 500 | none | -1.0, -0.6 | -1.5, 0.10, -0.7 |
 | SuperDuty 500 / 750 | Ram 1500 / 2500 | +0.3, -0.5 | live axle: 0, 0 |
 
+**Caster (#458).** The stock struts had none: their strut axis and top lay
+in the front-view plane. Each front strut now leans back by its real car's
+factory figure where one was found (E36 325i +3°50', M3 +6°38', Golf III
++1°45', Impreza 3°, Lancer Evolution VIII 3°55', 4th-generation Camaro +3°,
+Ram 1500 +3.4°), a typical one otherwise (del Sol, R34, race cars, Prime). The host steers the hub about
+that kingpin (ball joint to strut top), so the outer wheel's top leans into
+the turn, and force feedback takes the caster trail from it. The hub frame's
+strut line is solved with the hub's pitch so that camber, toe, gain and the
+wheel's position at rest are unchanged (host `wheel_pose`: within 0.04 deg
+and 1 mm on all 48 fronts).
+
+| Cars | Caster (deg) | Trail (cm) | Camber at 20 deg of lock, outer / inner |
+| --- | --- | --- | --- |
+| Baiern CS / DS / GT III | 3.85 / 6.6 / 6.6 | 2.2 / 3.5 / 3.6 | -0.8 / +1.8, -2.1 / +2.4, -4.0 / +0.4 |
+| SunStrip 1.5 / 1.8 / 2.2 / Racing | 2.0 (race 3.5) | 1.3 (race 2.1) | +0.3 / +1.7 (race -2.5 / -0.2) |
+| Einvagen 110 GT / GTK / 140 GTA | 1.75 | 1.2 | -0.1 / +1.1 |
+| Enula WRY / WRZ / WRS | 3.0 | 1.8 | -0.3 / +1.7 (WRS -0.5 / +1.5) |
+| Focer RC 200 / 300 / WRC | 3.9 (WRC 5.0) | 2.2 (WRC 2.8) | -0.6 / +2.0 (WRC -2.6 / +0.8) |
+| MC GT / GTB / GTLE | 3.0 | 1.8 | 0.0 / +2.0 |
+| Nonus Street GT / GT II | 5.5 / 7.0 | 3.0 / 3.8 | -1.9 / +1.8, -4.2 / +0.5 |
+| Prime DLH 500 | 5.0 | 2.8 | -1.7 / +1.8 |
+| SuperDuty 500 / 750 | 3.4 | 2.0 | +0.1 / +2.4 |
+
 **Tyres.** The friction was the compound times 0.5 + 0.5 x width / 275, so
 width alone added 32 % between a 195 and a 345; low-profile tyres sat at the
 stiffness clamp of 40; rolling resistance was 0.004. Now:

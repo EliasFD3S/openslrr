@@ -47,6 +47,26 @@ constexpr double kCamberStiffness = 1;
 // the square root keeps a low-profile tyre's clamp of 40 from peaking at
 // 4 degrees (stock tyre 17.68: unchanged; 40: 26.6).
 constexpr double kStockStiffness = 17.6839;
+// Pneumatic trail (#458), after MF 5.2's Dt0 = Fz (R0 / Fz0) (qDz1 + qDz2
+// dfz), t = Dt cos(Ct atan(Bt alpha)) cos(alpha). 0.09 R0 is 2.8 cm on the
+// stock 0.31 m wheel at its nominal load, growing with the load like the
+// patch. Bt puts the trail's zero at 1.5 times the lateral peak's slip
+// (about 10 per radian on the stock tyre, MF's typical qBz1), so the torque
+// peaks at about half the peak slip; past it the trail turns negative, as a
+// real tyre's does (-0.2 Dt at 20 degrees with Ct 1.4).
+constexpr double kTrailLoad = .09, kTrailLoadChange = -.01, kTrailShape = 1.4;
+constexpr double kTrailZero = 1.5;
+constexpr double kDefaultRadius = .31;
+// The trail scales with the patch length, which the pressure sets; the host
+// gets the pressure only through the patched Tyre script's relaxation length
+// (0.3 sqrt(profile height / (113 mm x pressure / optimum))), 0.3 m for a
+// 205/55 at its optimum and without the patch.
+constexpr double kReferenceRelaxation = .3;
+// The patch's lateral offset under a lateral force: the carcass' lateral
+// stiffness is the cornering stiffness over the relaxation length
+// (stretched string, sigma = C_alpha / C_y), about 200 kN/m on the stock
+// tyre. Capped at 5 cm.
+constexpr double kMaximumOffset = .05;
 
 double magic_formula(double slip, double b, double c, double d, double e) {
   const double bx = b * slip;
@@ -92,6 +112,8 @@ struct Curves {
   double by = 0, bx = 0, dy = 0, dx = 0;
   double shift = 0, thrust = 0;  // camber: slip-angle shift, force shift
   double alpha_peak = 0, kappa_peak = 0;
+  double trail = 0;  // Dt (m)
+  double kya = 0;    // cornering stiffness (N/rad)
 };
 
 Curves curves(double load, double camber, const TireParameters& tire) {
@@ -122,6 +144,12 @@ Curves curves(double load, double camber, const TireParameters& tire) {
   k.bx = k.dx > 0 ? kya / (k.c * k.dx) : 0;
   k.alpha_peak = peak_slip(k.by, k.c, kCurvature);
   k.kappa_peak = peak_slip(k.bx, k.c, kCurvature);
+  const double radius = tire.radius > 0 ? tire.radius : kDefaultRadius;
+  const double relaxation = std::clamp(tire.relaxation_length, .05, 2.0);
+  k.trail = std::clamp(radius * (load / fz0) * (kTrailLoad + kTrailLoadChange * k.dfz), 0.0,
+                       .2 * radius) *
+            std::clamp(relaxation / kReferenceRelaxation, .5, 1.5);
+  k.kya = kya;
 
   // Camber thrust towards the side the tyre's top leans to.
   const double camber_force = kCamberStiffness * load * gamma;
@@ -178,14 +206,23 @@ TireForces tire_forces(double load, double alignment, double wheel_speed,
   const double sy = std::tan(alpha_y) / std::tan(std::min(1.4, k.alpha_peak));
   const double sx = kappa / k.kappa_peak;
   const double rho = std::hypot(sx, sy);
-  double lateral = 0, longitudinal = 0;
+  double lateral = 0, longitudinal = 0, trail = 0;
   if (rho > 1e-12) {
-    const double fy = magic_formula(std::atan(rho * std::tan(std::min(1.4, k.alpha_peak))),
-                                    k.by, k.c, k.dy, kCurvature);
+    // The combined slip as one equivalent slip angle on the lateral curve.
+    const double alpha_eq = std::atan(rho * std::tan(std::min(1.4, k.alpha_peak)));
+    const double fy = magic_formula(alpha_eq, k.by, k.c, k.dy, kCurvature);
     const double fx = magic_formula(rho * k.kappa_peak, k.bx, k.c, k.dx, kCurvature);
     lateral = -fy * sy / rho;
     longitudinal = fx * sx / rho;
+    const double bt = std::tan(std::numbers::pi / (2 * kTrailShape)) /
+                      std::max(1e-3, kTrailZero * std::min(1.4, k.alpha_peak));
+    trail = k.trail * std::cos(kTrailShape * std::atan(bt * alpha_eq)) * std::cos(alpha);
+  } else {
+    trail = k.trail;
   }
+  // The slip force's share of the lateral force acts behind the patch; the
+  // camber thrust, at its centre, adds no moment.
+  const double slip_lateral = lateral * tuning.lateral_grip;
   // Camber thrust fades as wheelspin or locking takes the grip.
   const double share = rho > 1e-12 ? std::abs(sy) / rho : 1;
   lateral += k.thrust * share;
@@ -206,11 +243,20 @@ TireForces tire_forces(double load, double alignment, double wheel_speed,
   const double sliding = std::isnan(sliding_speed) ? lateral_speed : sliding_speed;
   const double lateral_cap = (std::abs(sliding) + std::abs(k.shift) * reference) *
                              aligned_load * 0.95 * cap_gain;
+  const double uncapped = lateral;
   lateral = std::copysign(std::min(std::abs(lateral), lateral_cap), lateral);
   if (lateral * sliding > 0) lateral *= rolling;
   const double longitudinal_cap = std::abs(slip_speed) * aligned_load * 0.85 * cap_gain;
   longitudinal = std::copysign(std::min(std::abs(longitudinal), longitudinal_cap), longitudinal);
-  return {longitudinal, lateral};
+  // The low-speed caps scale the moment with the force.
+  const double kept = std::abs(uncapped) > 1e-12 ? lateral / uncapped : 1;
+  // The lateral force pulls the patch its way; the longitudinal force,
+  // acting there, adds offset x Fx (#458): braking in a turn turns the wheel
+  // into the turn and lightens the steering, traction adds to it.
+  const double relaxation = std::clamp(tire.relaxation_length, .05, 2.0);
+  const double offset =
+      k.kya > 0 ? std::clamp(lateral * relaxation / k.kya, -kMaximumOffset, kMaximumOffset) : 0;
+  return {longitudinal, lateral, trail * slip_lateral * kept + offset * longitudinal, offset};
 }
 
 } // namespace slrr::physics

@@ -1956,3 +1956,136 @@ Limitations:
 - Rendering constants of the volumetric model have no original
   counterpart: the colour lift, the lamp gain and caps, and the 0.8 m width
   cap.
+
+## Tyre aligning torque (#458)
+
+Cause: the tyre model gave no aligning torque (Mz). Force feedback stood in
+for it with a fixed lever on the lateral force (a 3.5 cm pneumatic trail
+fading linearly to zero at 1.5 times the peak slip angle, plus 1.5 cm of
+caster), and nothing applied it to the car. The wheels steered about the
+hub's vertical, whatever the strut.
+
+Findings:
+
+- No stock front strut authored caster: the 48 `*_FL/FR_McPherson_strut`
+  classes (stock and the #450 patch) gave `setHub` a strut axis and top with
+  z = 0, so the steering axis had no side-view inclination (0.3 degrees from
+  the hub offset). A trail read from it would be zero on every stock car.
+- The host fits a strut hub by the shortest rotation from the hub-frame
+  strut line (`S L - HP`) to the body's (ball joint to strut top). That
+  rotation is the wanted camber only if its axis is square to the line:
+  leaning both lines back by the caster added up to 0.28 degrees of toe
+  (Baiern GT III).
+
+Fix:
+
+- `tire_forces` returns `TireForces::aligning`: the pneumatic trail times
+  the slip part of the lateral force (the camber thrust acts at the patch
+  centre), plus the longitudinal force at the patch's lateral offset
+  (`TireForces::offset`). The trail follows MF 5.2: Dt = R0 × Fz / Fz0 ×
+  (0.09 - 0.01 dfz), at most 0.2 R0, times cos(1.4 atan(Bt α_eq)) cos α.
+  R0 is `TireParameters::radius` (the solver sets the wheel's; 0.31 m when
+  unset). Bt puts the zero at 1.5 times the lateral peak's slip (9.6 per
+  radian on the stock tyre, near MF's typical 10). α_eq is the combined
+  slip on the lateral curve, so wheelspin or braking lightens the torque.
+  The low-speed caps scale it with the force.
+- Pressure: the trail scales with the relaxation length over 0.3 m (0.5 to
+  1.5). The patched Tyre script sets it to 0.3 sqrt(sidewall / 113 mm /
+  pressure ratio), the only pressure signal the host gets, so an
+  under-inflated tyre's longer patch has a longer trail.
+- Offset: the lateral force moves the patch by Fy × relaxation / cornering
+  stiffness (the stretched string's sigma = C_alpha / C_y, about 200 kN/m on
+  the stock tyre), capped at 5 cm. Braking at that offset turns the wheel
+  into the turn and lightens the steering, traction does the opposite;
+  `step_drive` corrects it after its own longitudinal clamp.
+- `step_drive` applies Mz to the body about the patch normal
+  (`RigidBody::add_torque`): the steering holds the wheel, so the car takes
+  the moment.
+- Caster in the patch ([README](../../patch/README.md#tyres-and-suspension-geometry-450)):
+  each front strut leans back by its real car's factory figure where one
+  was found (E36 325i +3°50' and M3 +6°38' from BMW TIS, Golf III +1°45',
+  Impreza 3°, Lancer Evolution VIII 3°55' for the Evo VI, 4th-generation
+  Camaro +3°, Ram 1500 2WD +3.4°), a typical one otherwise (del Sol 2°,
+  R34 5.5°, the race cars, Prime). The generator solves the hub's pitch and the hub-frame strut
+  lean (two equations: the fit's rotation axis square to the line, the body
+  line at the caster), so camber, toe, camber gain and the wheel's position
+  at rest are unchanged; the ball joint and the arm pivot move by under
+  1 mm along z.
+- Kingpin steering: `solve_corner_geometry` returns the hub-frame kingpin
+  (`CornerFrames::steer_axis`, the fitted strut line); `WheelState` keeps it
+  beside `hub_rotation`, and the solver (heading, footprint, camber, parked
+  contacts) and the rendered wheel turn the hub about it
+  (`wheel_steering(axis, angle)`). The angle is raised by 1 / cos(lean) so
+  that the heading on the road is still the steering angle. Other wheels
+  keep the hub's vertical.
+- Kingpin swing and jacking: `wheel_pose(wheel, length, fitted, steer)`
+  swings a strut's hub origin about the kingpin, so the steered wheel
+  centre moves on its arc and the inclination lowers it either way: the
+  solver's contact (linked and unlinked wheels, footprint, `sync_wheels`)
+  and the rendered wheel use it, and the car rises on its springs (1.5 mm
+  at 20 degrees of lock on the stock Baiern strut, parked). The steering is
+  kinematic, so the weight's push on the rack only reaches the driver:
+  `kingpin_lift_rate` gives how fast the tyre's lowest point drops as the hub
+  turns, and `SteeringFeedback` adds -load × rate (from 0.5 m/s, without
+  the tyre torque's 3 m/s fade). The stock strut's ball joint sits 7.7 cm
+  outboard of the wheel centre, so its kingpin meets the ground about 17 cm
+  outside the patch and the wheel would rise as it steered: the swing and
+  the rate use the fit's axis direction through a road car's ground point
+  (the caster trail ahead and a 1 cm scrub radius outboard,
+  `kTypicalScrubRadius`). Moving the ball joint itself would move the
+  rendered arm.
+- `SteeringFeedback` uses the tyre's Mz plus a caster trail times the lateral
+  force, normalised as before. The trail comes from
+  `caster_trail(WheelConfig, length)`: where the kingpin meets the ground
+  ahead of the patch, when it leans at least 1 degree in side view;
+  otherwise 1.5 cm (`kDefaultCasterTrail`).
+- `more_grip_corners_harder` measured yaw rate times speed of a car sliding
+  at 0.2-0.3 of tan slip, where the aligning torque's tens of N m moved the
+  1.25-grip car's figure from +10 % to +3 %. It now compares the tyres'
+  lateral force over the mass (+31 %).
+
+Stock tyre at 3500 N (Baiern, 0.31 m): trail 2.4 cm at small slip, 1.6 cm
+at 4 degrees, 0.5 cm at the 8.2 degree lateral peak, -0.6 cm at 20 degrees;
+Mz peaks at 57 N m at 3.4 degrees. At 4 degrees with 20 % brake slip it is
+-23 N m (the offset term turns the wheel into the turn). The trail at 1
+degree is 1.4 / 2.4 / 3.3 cm at 2000 / 3500 / 5000 N.
+
+Validation:
+
+- Compilation: `slrr_host` and `physics_lab` Release; the 48 patched front
+  strut classes in `build/brake-compile-root` (48 of 48). Standalone
+  `vehicle_dynamics` 63/63 with four new tests (Mz sign, lever, peak, load,
+  combined slip, offset, pressure and wheel size; `caster_trail` on an
+  untilted and a tilted strut and a trailing arm; the Nonus GT II strut's
+  kingpin, trail, camber at 20 degrees of lock, road heading and jacking;
+  the kingpin's centring in force feedback while rolling, not parked; the
+  hub's swing); `missing_support` 17/17 with a new test (the stock Baiern on
+  struts, parked and steered 20 degrees, rises 1.5 mm and does not move);
+  `physics_tick_rate` 9/9.
+- Geometry: the 96 patched corners through the host's `wheel_pose`:
+  position at rest within 1 mm and camber within 0.01 degree of #456, toe
+  within 0.06 degree; caster trails 1.2-3.8 cm; jacking 22-38 N m per
+  wheel at 20 degrees of lock under 3500 N.
+- `physics_lab --hz 1000` against main (its car has no strut, so this is
+  Mz alone): skidpad 0.977 g at 0.122 rad of steer before, 0.968 g at
+  0.136 rad after; step steer steady yaw 0.338 to 0.318 rad/s, peak at
+  0.57 s instead of 0.69 s; power oversteer rear slip 28.8 to 24.8 degrees;
+  launch, brake, coast, burnout, curbs and tyre curves unchanged.
+- Bench drive (Baiern CoupeSport, TestTrack, patch classes in
+  `build/needle-game`, 15 s full throttle): loads and drives, no script
+  message (three times: the typical and the factory casters, then the hub
+  swing). It meets the track's end wall at about 9-10 s, as the previous
+  classes did.
+- Not checked in game in a turn or on a force feedback wheel.
+
+Limitations: no camber moment in Mz (the brush model puts the camber thrust
+at the patch centre; MF's Mzr needs turn slip, not modelled, and its
+coefficients); the trail and offset coefficients are MF's typical values,
+not a measured tyre, and the pressure acts only through the script's
+relaxation length; the del Sol, R34, race-car and Prime casters are typical
+figures; the kingpin's ground point uses a typical scrub radius because the
+stock ball joint sits outboard of the wheel; the steering is kinematic, so
+the jacking torque reaches the force feedback, not the steering angle of a
+keyboard or pad player; the swing was not looked at in game at full lock
+(the bench drives straight), where the wheel moves several cm along the
+arch.

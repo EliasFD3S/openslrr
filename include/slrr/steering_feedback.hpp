@@ -3,11 +3,12 @@
 //
 // A tyre's lateral force acts behind the centre of its contact patch, so it
 // turns the wheel back towards its direction of travel: the self-aligning
-// torque. Its lever is the pneumatic trail, which shrinks as the tyre slides
-// (the wheel goes light past the grip peak), plus the caster's mechanical
-// trail, which does not. With the solver's axes (side = forward x up, steer
-// positive to the left) the torque on the steering axis is trail x lateral
-// force, in the steer's own sign.
+// torque, which the tyre model gives (TireForces::aligning, #458). Its lever,
+// the pneumatic trail, shrinks as the tyre slides (the wheel goes light past
+// the grip peak). The caster's mechanical trail adds a lever that does not.
+// With the solver's axes (side = forward x up, steer positive to the left)
+// the torque on the steering axis is aligning + caster trail x lateral force,
+// in the steer's own sign.
 //
 // The torque is normalised by what the front tyres give at their grip peak
 // under the car's resting front load, so a car pulls the same share of the
@@ -25,13 +26,21 @@
 
 namespace slrr::physics {
 
+// Caster trail when the suspension sets none (m): no stock strut does (#458).
+inline constexpr double kDefaultCasterTrail = .015;
+
 struct SteeringFeedbackWheel {
   bool contact = false;
   double load = 0;        // tyre load (N), WheelState::force
   double slip_angle = 0;  // relaxed tan(slip angle), WheelState::slip_angle
   double lateral = 0;     // lateral force (N), WheelState::tire_force.lateral
-  TireParameters tyre;
+  TireParameters tyre;    // with its radius, the scale of the pneumatic trail
   double suspension_speed = 0;  // m/s, WheelState::speed (length rate)
+  double aligning = 0;    // N m, WheelState::tire_force.aligning
+  double caster_trail = kDefaultCasterTrail;  // m, caster_trail()
+  // Kingpin jacking torque (N m, positive turns left): -load x
+  // kingpin_lift_rate(), zero without a strut (#458).
+  double jacking = 0;
 };
 
 struct SteeringFeedbackOutput {
@@ -50,11 +59,10 @@ struct SteeringFeedbackOutput {
 
 class SteeringFeedback {
  public:
-  // Pneumatic trail at zero slip and the caster trail (m). Only their ratio
-  // matters after normalisation: the torque keeps 30 % past the peak.
-  static constexpr double kPneumaticTrail = .035, kMechanicalTrail = .015;
   // Below this road speed the slip angle is noise: the torque fades out.
   static constexpr double kFadeSpeed = 3.0;
+  // The kingpin's centring comes in once the tyre rolls (m/s).
+  static constexpr double kJackingSpeed = .5;
   // Kick per m/s of the two front suspensions moving apart, past a dead
   // band that drops the solver's chatter, and its limit.
   static constexpr double kBumpGain = .5, kBumpDeadband = .05, kBumpLimit = .35;
@@ -71,8 +79,10 @@ class SteeringFeedback {
 
   // Slip angle (rad) where this tyre's lateral force peaks under `load`.
   static double peak_slip_angle(double load, const TireParameters& tyre);
-  // trail(alpha): the lever of the lateral force at slip angle alpha (rad).
-  static double trail(double alpha, double peak);
+  // The steering moment (N m) of one tyre at tan(slip angle) under `load`:
+  // its aligning torque plus the caster trail's lever on its lateral force.
+  static double moment(double load, double tan_alpha, const TireParameters& tyre,
+                       double caster_trail);
 
  private:
   double reference_load_ = 0;  // resting front load per wheel, smoothed

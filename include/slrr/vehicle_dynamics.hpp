@@ -61,6 +61,7 @@ public:
   void set_omega(Vec3 angular_velocity);
   Vec3 point_velocity(Vec3 point) const;
   void add_force(Vec3 force, Vec3 point);
+  void add_torque(Vec3 torque) { torque_ += torque; }
   void impulse(Vec3 impulse, Vec3 point);
   void integrate(double dt);
   // Split semi-implicit integration for constraints that must remove slip
@@ -157,6 +158,8 @@ struct WheelState {
   // the tread samples, the rest from the centre.
   GroundSurface surface;
   Quaternion hub_rotation;
+  // The steering axis in the hub's frame (CornerFrames::steer_axis, #458).
+  Vec3 steer_axis{0, 1, 0};
   double spin = 0, rotation = 0;
   double slip_speed = 0, lateral_speed = 0;
   // Relaxed tan(slip angle): the tyre's lateral deflection builds over its

@@ -52,6 +52,25 @@ after the original law, nicolas-found42/sl-remastered, 00454500):
   resultant runs along each pure curve and splits by direction, so wheelspin
   or a locked wheel uses up the cornering grip (power oversteer, drifts,
   burnouts). The camber thrust fades in proportion.
+- Aligning torque (#458, [notes](notes.md#tyre-aligning-torque-458)):
+  `TireForces::aligning` = pneumatic trail × the slip part of the lateral
+  force (not the camber thrust). Trail after MF 5.2: Dt = R0 × Fz / Fz0 ×
+  (0.09 - 0.01 dfz), at most 0.2 R0 (R0 = `TireParameters::radius`, the
+  wheel's), times cos(1.4 atan(Bt α_eq)) cos α, with Bt putting the zero at
+  1.5 × the lateral peak's slip; α_eq is the combined slip on the lateral
+  curve, so wheelspin or braking lightens it too. The trail scales with the
+  relaxation length over 0.3 m (the script's pressure signal). The
+  longitudinal force adds its moment at the patch's lateral offset, Fy x
+  relaxation / cornering stiffness (at most 5 cm). The low-speed caps scale
+  it with the force. The body takes it about the patch normal; force
+  feedback adds the caster trail ([notes](notes.md#tyre-aligning-torque-458)).
+- Steering axis (#458): a strut wheel turns about its kingpin
+  (`CornerFrames::steer_axis`, ball joint to strut top), with the angle
+  raised by 1 / cos(lean) so the road heading is the steering angle; caster
+  then leans the outer wheel's top into the turn. Its hub origin swings
+  about the kingpin (`wheel_pose(..., steer)`, through a road car's ground
+  point), so steering lifts the car; force feedback adds that jacking's
+  torque. Other wheels turn about the hub's vertical.
 - Stock tyre at 3500 N: lateral peak 1.14 at 8.2 degrees, 1.05 at 20 degrees;
   longitudinal peak 1.14 at 14 % slip, 0.97 locked; at 6 degrees the lateral
   force falls from 1.11 to 0.51 with 20 % wheelspin; at 4 degrees, 0.95,
