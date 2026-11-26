@@ -115,6 +115,10 @@ InputKind host_input_device_kind(int device);
 void host_input_force_feedback(float torque, float damper, float detail = 0, float impact = 0,
                                float vibration = 0, float vibration_hz = 0, float dt = 0);
 void host_input_force_feedback_stop();
+// ABS pulse (#446): a short rumble on the controller the brake is bound to,
+// if it has a rumble motor (strength 0-1). Wheels get theirs through the
+// force feedback vibration.
+void host_input_brake_pulse(float strength);
 // ControlSet device id that receives force feedback now, -1 none.
 int host_input_force_feedback_device();
 // Rebind listener (host_input_capture.hpp), advanced by host_input_poll_keys.

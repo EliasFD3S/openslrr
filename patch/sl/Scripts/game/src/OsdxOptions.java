@@ -1263,10 +1263,11 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		sl.printValue( "%.0f", 100.0 );
 		sl = m.addItem( "STEERING HELP", OptionsDialog.CMD_STEERHELP, Config.player_steeringhelp, "Steering assistance (percent)." );
 		sl.printValue( "%.0f", 100.0 );
-		sl = m.addItem( "ABS", OptionsDialog.CMD_ABS_SLIDER, Config.player_abs, "Anti-lock brakes (percent)." );
+		sl = m.addItem( "ABS", OptionsDialog.CMD_ABS_SLIDER, Config.player_abs, "Anti-lock brakes. 0 is off; 100 keeps the wheels nearest their best grip, lower settings let them slip further before the brakes are released." );
 		sl.printValue( "%.0f", 100.0 );
-		sl = m.addItem( "ASR", OptionsDialog.CMD_ASR_SLIDER, Config.player_asr, "Traction control (percent)." );
+		sl = m.addItem( "ASR", OptionsDialog.CMD_ASR_SLIDER, Config.player_asr, "Traction control: cuts the engine and brakes a spinning driven wheel. 0 is off; lower settings allow more wheelspin." );
 		sl.printValue( "%.0f", 100.0 );
+		m.addToggle( "TEMPERATURES", OptionsDialog.CMD_HUD_TEMPERATURES, option(32), "Shows each tyre's and brake's temperature above the gauges: blue cold, green working, yellow to red overheating. A red brake mark is boiling fluid." );
 
 		header = new SectionHeader( osd, "WORLD AND DISPLAY", 0.08, TOP - 0.06, 0.82 );
 		m = column( RIGHT, TOP + 0.04 );

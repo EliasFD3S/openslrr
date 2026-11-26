@@ -2,7 +2,9 @@
 // Build by hand like the other standalone tests, from the repository root:
 //   g++ -std=c++20 -O2 -Iinclude -Itests tests/test_vehicle_dynamics.cpp
 //       src/physics/vehicle_dynamics.cpp src/physics/tire_model.cpp
-//       src/physics/suspension_geometry.cpp -o test_vehicle_dynamics
+//       src/physics/brake_system.cpp src/physics/tyre_thermal.cpp
+//       src/physics/suspension_geometry.cpp
+//       -o test_vehicle_dynamics
 #include "standalone_test.hpp"
 
 #include "slrr/brake_balance.hpp"
@@ -438,7 +440,11 @@ SLRR_TEST(abs_releases_a_locked_wheel_while_the_road_moves) {
     for (auto& wheel : car.dynamics.drive.wheels) wheel.brake = 10000;
     car.run(1, 0, 0, 0);
     car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -20});
-    // Start locked: ABS must let the tyre reaction spin it back up.
+    for (auto& wheel : car.dynamics.state) wheel.spin = 20 / .31;
+    // Braking from 72 km/h, the wheels suddenly locked (#446: the ABS
+    // estimates the car's speed from the wheels it has seen rolling): ABS
+    // must let the tyre reaction spin them back up.
+    car.run(.05, 0, 1, 0);
     for (auto& wheel : car.dynamics.state) wheel.spin = 0;
     car.run(.3, 0, 1, 0);
   }
@@ -1205,11 +1211,247 @@ SLRR_TEST(releasing_a_hard_brake_at_speed_takes_up_without_a_jolt) {
   SLRR_REQUIRE(worst < .08);
 }
 
+// Brakes as hardware and the ABS/ASR driving aids (#446).
+
+// A straight stop from `kph` at full pedal; returns the distance and the
+// time any wheel spent below 30 % of the car's speed.
+struct Stop {
+  double distance = 0, locked = 0;
+};
+Stop full_stop(Car& car, double kph) {
+  car.run(1, 0, 0, 0);
+  car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -kph / 3.6});
+  for (auto& wheel : car.dynamics.state) wheel.spin = kph / 3.6 / .31;
+  car.dynamics.gear = 0;
+  const Vec3 start = car.dynamics.body.position;
+  Stop out;
+  for (int tick = 0; tick < 60 * 15 && car.speed() > .1; ++tick) {
+    car.run(1. / 60, 0, 1, 0);
+    for (const auto& w : car.dynamics.state)
+      if (car.speed() > 3 && std::abs(w.spin) * .31 < .3 * car.speed()) out.locked += 1. / 60 / 4;
+  }
+  const Vec3 d = car.dynamics.body.position - start;
+  out.distance = std::hypot(d.x, d.z);
+  return out;
+}
+
+SLRR_TEST(abs_keeps_the_wheels_turning_and_stops_shorter_than_locked) {
+  Stop result[2];
+  for (int abs = 0; abs < 2; ++abs) {
+    Car car;
+    for (auto& wheel : car.dynamics.drive.wheels) wheel.brake = 5000;  // locks at once
+    car.dynamics.drive.abs_strength = abs;
+    result[abs] = full_stop(car, 100);
+  }
+  SLRR_REQUIRE(result[0].locked > 1);
+  SLRR_REQUIRE(result[1].locked < .05);
+  SLRR_REQUIRE(result[1].distance < result[0].distance - 1);
+  SLRR_REQUIRE(result[1].distance > 25);  // still bounded by the tyres
+}
+
+SLRR_TEST(abs_cycles_one_wheel_holds_the_rear_axle_together_and_delays_the_yaw) {
+  AbsModulator abs;
+  const std::array<bool, 4> all{true, true, true, true};
+  std::array<double, 4> wheels{30, 30, 30, 30}, rates{};
+  // Front left and rear left on ice: their wheels drop towards a lock.
+  double minimum_left = 1, high_side = 0;
+  for (int step = 0; step < 400; ++step) {
+    const bool locking = abs.pressure(0) > .3;
+    wheels[0] = wheels[2] = locking ? 18 : 29;
+    rates[0] = rates[2] = locking ? -60 : 40;
+    abs.update(.001, 1, 1, 30, 9, wheels, rates, all, all, 2);
+    minimum_left = std::min(minimum_left, abs.pressure(0));
+    if (step == 100) high_side = abs.pressure(1);
+    SLRR_REQUIRE(abs.pressure(2) == abs.pressure(3));  // select-low rear
+    SLRR_REQUIRE(abs.pressure(0) <= 1 && abs.pressure(1) <= 1);
+  }
+  SLRR_REQUIRE(minimum_left < .3);
+  SLRR_REQUIRE(abs.active());
+  // The grippy front wheel may not take the full pedal at once.
+  SLRR_REQUIRE(high_side < .9);
+  SLRR_REQUIRE(abs.pressure(1) > high_side);
+}
+
+SLRR_TEST(abs_lets_the_wheels_lock_below_walking_pace) {
+  AbsModulator abs;
+  const std::array<bool, 4> all{true, true, true, true};
+  abs.update(.001, .8, 1, 1.5, 9, {0, 0, 0, 0}, {-50, -50, -50, -50}, all, all, 2);
+  for (size_t i = 0; i < 4; ++i) SLRR_REQUIRE(abs.pressure(i) == .8);
+  SLRR_REQUIRE(!abs.active());
+}
+
+SLRR_TEST(the_reference_speed_follows_the_accelerometer_while_every_wheel_locks) {
+  ReferenceSpeed reference;
+  reference.reset(30);
+  const std::array<bool, 4> all{true, true, true, true}, none{};
+  for (int step = 0; step < 350; ++step)
+    reference.update(.001, -9, true, {0, 0, 0, 0}, all, none);
+  SLRR_REQUIRE(std::abs(reference.speed() - (30 - 9 * .35)) < .1);
+  // Released wheels that never spin back up: the car has stopped. An impact
+  // spike on the accelerometer does not hold the estimate up either.
+  ReferenceSpeed stopped;
+  stopped.reset(2);
+  stopped.update(.001, 5000, true, {0, 0, 0, 0}, all, none);
+  SLRR_REQUIRE(stopped.speed() < 2.1);
+  for (int step = 0; step < 450; ++step)
+    stopped.update(.001, 0, true, {0, 0, 0, 0}, all, none);
+  SLRR_REQUIRE(stopped.speed() == 0);
+  // A wheel spinning back up on ice keeps the estimate.
+  ReferenceSpeed ice;
+  ice.reset(20);
+  for (int step = 0; step < 800; ++step)
+    ice.update(.001, -1, true, {step * .015, 0, 0, 0}, all, none);
+  SLRR_REQUIRE(ice.speed() > 18);
+  // Driving: the undriven wheels give the speed, not the spinning ones.
+  ReferenceSpeed driving;
+  driving.reset(10);
+  const std::array<bool, 4> front{true, true, false, false};
+  for (int step = 0; step < 200; ++step)
+    driving.update(.001, 3, false, {10.3, 10.3, 16, 16}, all, front);
+  SLRR_REQUIRE(std::abs(driving.speed() - 10.3) < .05);
+}
+
+SLRR_TEST(asr_limits_wheelspin_in_second_gear_at_speed) {
+  double slip[2];
+  for (int asr = 0; asr < 2; ++asr) {
+    Car car;
+    car.dynamics.drive.torque = [](double rpm) { return std::clamp(300 + rpm * .06, 0., 650.); };
+    for (auto& wheel : car.dynamics.drive.wheels) wheel.tyre.friction *= .5;  // wet road
+    car.dynamics.drive.asr_strength = asr;
+    car.run(1, 0, 0, 0);
+    car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -14});
+    for (auto& wheel : car.dynamics.state) wheel.spin = 14 / .31;
+    car.dynamics.gear = 2;
+    car.dynamics.engine_omega = 14 / .31 * car.dynamics.drive.ratios[2];
+    slip[asr] = 0;
+    for (int tick = 0; tick < 120; ++tick) {
+      car.run(1. / 60, 1, 0, 0);
+      if (tick > 30)
+        slip[asr] = std::max(slip[asr], car.dynamics.state[2].spin * .31 - car.speed());
+    }
+  }
+  SLRR_REQUIRE(slip[0] > 5);
+  SLRR_REQUIRE(slip[1] < 2.5);
+}
+
+SLRR_TEST(asr_brakes_the_one_spinning_wheel_of_an_open_axle) {
+  TractionControl asr;
+  const std::array<bool, 4> all{true, true, true, true}, rear{false, false, true, true};
+  for (int step = 0; step < 300; ++step)
+    asr.update(.001, 1, true, 5, {5, 5, 11, 5.2}, rear, all);
+  SLRR_REQUIRE(asr.brake(2) > .05);
+  SLRR_REQUIRE(asr.brake(3) < 1e-6 && asr.brake(0) < 1e-6);
+  SLRR_REQUIRE(asr.torque_factor() < .9);
+  SLRR_REQUIRE(asr.active());
+  // The driver lifting or braking hands everything back.
+  for (int step = 0; step < 500; ++step)
+    asr.update(.001, 1, false, 5, {5, 5, 11, 5.2}, rear, all);
+  SLRR_REQUIRE(asr.brake(2) < .01 && asr.torque_factor() > .98);
+}
+
+SLRR_TEST(pad_friction_has_a_cold_bite_a_working_window_and_fades) {
+  const auto street = brake_hardware(0, 2, .286), race = brake_hardware(2, 2, .286),
+             carbon = brake_hardware(0, 3, .286);
+  SLRR_REQUIRE(pad_friction_factor(street, 25) > .85 && pad_friction_factor(street, 25) < 1);
+  SLRR_REQUIRE(pad_friction_factor(street, 200) == 1);
+  SLRR_REQUIRE(pad_friction_factor(street, 600) < .65);
+  SLRR_REQUIRE(pad_friction_factor(race, 25) < pad_friction_factor(street, 25));
+  SLRR_REQUIRE(pad_friction_factor(race, 600) == 1);
+  SLRR_REQUIRE(pad_friction_factor(carbon, 600) > pad_friction_factor(street, 600));
+  SLRR_REQUIRE(pad_friction_factor(BrakeHardware{}, 900) == 1);  // stock scripts
+  // A vented rotor stores more heat and sheds it faster than a solid one.
+  const auto solid = brake_hardware(0, 0, .286);
+  SLRR_REQUIRE(rotor_heat_capacity(street) > rotor_heat_capacity(solid));
+  SLRR_REQUIRE(rotor_cooling(street, 25, 300) > rotor_cooling(solid, 25, 300));
+  SLRR_REQUIRE(rotor_cooling(street, 40, 300) > rotor_cooling(street, 5, 300));
+}
+
+SLRR_TEST(a_stop_heats_the_rotors_and_unspecified_brakes_stay_cold) {
+  Car hot, cold;
+  for (int i = 0; i < 4; ++i) {
+    hot.dynamics.drive.wheels[i].brake = i < 2 ? 2400 : 1100;
+    hot.dynamics.drive.wheels[i].hardware = brake_hardware(0, i < 2 ? 2 : 0, i < 2 ? .286 : .276);
+  }
+  hot.dynamics.drive.abs_strength = 1;
+  full_stop(hot, 100);
+  full_stop(cold, 100);
+  // 1300 kg from 100 km/h is 500 kJ: about 40 deg C on each disc (the
+  // fronts take two thirds of it, but the solid rears store half as much).
+  const double front = hot.dynamics.state[0].brake_temperature;
+  SLRR_REQUIRE(front > 50 && front < 150);
+  SLRR_REQUIRE(hot.dynamics.state[2].brake_temperature > kAmbientTemperature + 20);
+  for (const auto& wheel : cold.dynamics.state)
+    SLRR_REQUIRE(wheel.brake_temperature == kAmbientTemperature);
+  // Coasting on, the rotor cools.
+  hot.run(1, 0, 0, 0);  // the pedal released first
+  hot.dynamics.body.velocity = hot.dynamics.body.orientation.rotate({0, 0, -25});
+  for (auto& wheel : hot.dynamics.state) wheel.spin = 25 / .31;
+  hot.run(20, 0, 0, 0);
+  SLRR_REQUIRE(hot.dynamics.state[0].brake_temperature < front - 5);
+}
+
+SLRR_TEST(tyres_warm_up_rolling_and_sliding_and_set_the_grip) {
+  const auto street = tyre_thermal_spec(0, .31, .205), race = tyre_thermal_spec(2, .31, .205);
+  // Ten minutes at 100 km/h on 3500 N: the hysteresis warms the carcass to a
+  // road tyre's 40-70 deg C, the tread a little less.
+  TyreTemperature cruise;
+  for (int step = 0; step < 600000; ++step)
+    cruise = step_tyre_temperature(street, cruise, 0, 3500 * .012 * 27.8, kAmbientTemperature,
+                                   27.8, .001);
+  SLRR_REQUIRE(cruise.carcass > 40 && cruise.carcass < 70);
+  SLRR_REQUIRE(cruise.surface > 30 && cruise.surface < cruise.carcass);
+  // A burnout (20 kW of sliding) heats the tread within seconds.
+  TyreTemperature burnout;
+  for (int step = 0; step < 4000; ++step)
+    burnout = step_tyre_temperature(street, burnout, 20000, 0, kAmbientTemperature, 0, .001);
+  SLRR_REQUIRE(burnout.surface > 60);
+  SLRR_REQUIRE(burnout.carcass < burnout.surface);
+  // Grip: cold below the window, full in it, falling past it; a racing
+  // compound is weaker cold than a street one.
+  SLRR_REQUIRE(tyre_grip_factor(street, 25) < 1 && tyre_grip_factor(street, 25) > .9);
+  SLRR_REQUIRE(tyre_grip_factor(street, 70) == 1);
+  SLRR_REQUIRE(tyre_grip_factor(street, 180) < .85);
+  SLRR_REQUIRE(tyre_grip_factor(race, 25) < tyre_grip_factor(street, 25));
+  SLRR_REQUIRE(tyre_grip_factor(race, 100) == 1);
+  // Without the patched Tyre: ambient and the scripted grip.
+  const TyreThermalSpec none;
+  SLRR_REQUIRE(tyre_grip_factor(none, 300) == 1);
+  SLRR_REQUIRE(step_tyre_temperature(none, {200, 200}, 1e5, 1e4, 600, 30, 1).surface ==
+               kAmbientTemperature);
+  // A hot brake warms the carcass through the rim.
+  TyreTemperature rim;
+  for (int step = 0; step < 60000; ++step)
+    rim = step_tyre_temperature(street, rim, 0, 0, 500, 0, .001);
+  SLRR_REQUIRE(rim.carcass > kAmbientTemperature + 2);
+}
+
+SLRR_TEST(hot_brake_fluid_boils_and_the_pressure_falls) {
+  const auto brake = brake_hardware(0, 2, .286);
+  double fluid = kAmbientTemperature;
+  SLRR_REQUIRE(fluid_pressure_factor(brake, fluid) == 1);
+  for (int step = 0; step < 120000; ++step) fluid = step_fluid_temperature(brake, fluid, 700, .001);
+  SLRR_REQUIRE(fluid > 230);
+  SLRR_REQUIRE(fluid_pressure_factor(brake, fluid) < 1 && fluid_pressure_factor(brake, fluid) >= .4);
+  for (int step = 0; step < 300000; ++step) fluid = step_fluid_temperature(brake, fluid, 100, .001);
+  SLRR_REQUIRE(fluid_pressure_factor(brake, fluid) == 1);
+  SLRR_REQUIRE(fluid_pressure_factor(BrakeHardware{}, 400) == 1);
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
       hard_braking_declutches_so_the_engine_never_pushes_the_rear_wheels,
       coasting_engine_braking_fades_with_the_speed,
       releasing_a_hard_brake_at_speed_takes_up_without_a_jolt,
+      tyres_warm_up_rolling_and_sliding_and_set_the_grip,
+      hot_brake_fluid_boils_and_the_pressure_falls,
+      abs_keeps_the_wheels_turning_and_stops_shorter_than_locked,
+      abs_cycles_one_wheel_holds_the_rear_axle_together_and_delays_the_yaw,
+      abs_lets_the_wheels_lock_below_walking_pace,
+      the_reference_speed_follows_the_accelerometer_while_every_wheel_locks,
+      asr_limits_wheelspin_in_second_gear_at_speed,
+      asr_brakes_the_one_spinning_wheel_of_an_open_axle,
+      pad_friction_has_a_cold_bite_a_working_window_and_fades,
+      a_stop_heats_the_rotors_and_unspecified_brakes_stay_cold,
       stock_brake_balance_puts_seventy_percent_on_the_front,
       the_brake_adjuster_moves_the_front_share,
       steering_feedback_pulls_back_and_goes_light_past_the_peak,

@@ -56,10 +56,18 @@ InputCapture capture;
 // haptics, and the sign from the logical axis to that device's axis.
 int ffb_device = -1;
 float ffb_sign = 1.f;
+// The controller the brake (axis 29) is bound to, for the ABS pulse (#446).
+int brake_device = -1;
 
 void choose_force_feedback(const ControllerInput* input) {
   ffb_device = -1;
+  brake_device = -1;
   if (!input) return;
+  for (const auto& b : input->bindings)
+    if (b.axis == 29 && b.device >= 3) {
+      brake_device = b.device;
+      break;
+    }
   for (const auto& b : input->bindings) {
     if (b.axis != 1 || b.device < 3 || !host_input_devices().has_force_feedback(b.device)) continue;
     // Logical steer = lerp(low, high, (physical - from) / (to - from)).
@@ -248,6 +256,12 @@ void host_input_force_feedback(float torque, float damper, float detail, float i
                                  damper * gain(tuning.ffb_damper) * strength,
                                  vibration * gain(tuning.ffb_vibration) * strength,
                                  vibration_hz);
+}
+
+void host_input_brake_pulse(float strength) {
+  const auto& options = host_game_options();
+  if (brake_device < 3 || !options.ffb || strength <= 0.f) return;
+  host_input_devices().rumble(brake_device - 3, std::clamp(strength, 0.f, 1.f) * options.ffb_strength, 90);
 }
 
 void host_input_force_feedback_stop() {

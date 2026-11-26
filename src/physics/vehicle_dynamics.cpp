@@ -1041,8 +1041,7 @@ double VehicleDynamics::engine_limit_fraction() const {
 
 void VehicleDynamics::step_drive() {
   const double rpm = engine_omega * rpm_per_rad;
-  double weights = 0, shaft = 0, road_shaft = 0, square_weights = 0,
-         launch_slip = 0;
+  double weights = 0, shaft = 0, road_shaft = 0, square_weights = 0;
   for (size_t i = 0; i < wheels.size(); ++i) {
     if (!wheels[i].enabled)
       continue;
@@ -1058,11 +1057,6 @@ void VehicleDynamics::step_drive() {
           (forward - s.normal * forward.dot(s.normal)).normalized();
       const double road_speed = body.point_velocity(s.patch).dot(tangent);
       road_shaft += w * road_speed / wheels[i].radius;
-      if (drive.launch_help > 0 && w > 0)
-        launch_slip = std::max(
-            launch_slip, (std::abs(s.spin) * wheels[i].radius -
-                          std::abs(road_speed)) /
-                             std::max(2.5, std::abs(road_speed)));
     }
   }
   if (weights > 0) {
@@ -1093,25 +1087,54 @@ void VehicleDynamics::step_drive() {
   const double combustion = std::clamp((rpm - 200) / 450, 0.0, 1.0);
   const double kph = std::abs(forward_speed) * 3.6;
   double gas = std::clamp(drive.throttle, 0.0, 1.0);
-  // The driver's pedal before launch control: the auto clutch follows it
+  // The driver's pedal before traction control: the auto clutch follows it
   // (#380). Following the reduced `gas` made a launch-control cut lower the
   // engagement rpm, so the clutch grabbed harder, the wheels spun more and
   // the cut deepened until the clutch locked in a few milliseconds.
   const double pedal = gas;
-  if (drive.launch_help <= 0 || !engine_running || drive.clutch < .5 ||
-      drive.brake > 0 || drive.handbrake > .2 || gas < .2 ||
-      (gear != 1 && gear != 7) || kph >= 30) {
-    launch_active_ = false;
-    launch_factor_ = 1;
-  } else if (launch_active_ || (kph < 2 && gas >= .6)) {
-    launch_active_ = true;
-    const double target =
-        std::clamp(1 - std::max(0.0, launch_slip - .15) * 2, .05, 1.0);
-    launch_factor_ = std::lerp(
-        launch_factor_, target,
-        -std::expm1(-dt_ / (target < launch_factor_ ? .04 : .15)));
-    gas *= std::lerp(1.0, launch_factor_, drive.launch_help);
+
+  // ABS/ASR sensors (#446): the wheels' circumferential speeds along the
+  // direction of travel, their rates and the longitudinal accelerometer.
+  // Near standstill the direction is the gear's.
+  const double direction = forward_speed > .5    ? 1
+                           : forward_speed < -.5 ? -1
+                           : gear == 7           ? -1
+                           : gear > 0            ? 1
+                                                 : travel_direction_;
+  std::array<double, 4> wheel_speed{};
+  std::array<bool, 4> enabled{}, contact{}, driven{}, undriven{};
+  for (size_t i = 0; i < wheels.size(); ++i) {
+    enabled[i] = wheels[i].enabled;
+    contact[i] = enabled[i] && state[i].contact;
+    driven[i] = enabled[i] && drive.wheels[i].weight > 0;
+    undriven[i] = enabled[i] && !driven[i];
+    wheel_speed[i] = state[i].spin * wheels[i].radius * direction;
   }
+  if (!sensors_seeded_ || direction != travel_direction_) {
+    wheel_speed_previous_ = wheel_speed;
+    wheel_acceleration_ = {};
+    forward_speed_previous_ = forward_speed;
+    reference_.reset(std::abs(forward_speed));
+    travel_direction_ = direction;
+    sensors_seeded_ = true;
+  }
+  for (size_t i = 0; i < wheels.size(); ++i) {
+    const double rate = (wheel_speed[i] - wheel_speed_previous_[i]) / dt_;
+    wheel_acceleration_[i] += (rate - wheel_acceleration_[i]) * -std::expm1(-dt_ / .004);
+  }
+  wheel_speed_previous_ = wheel_speed;
+  const double acceleration = (forward_speed - forward_speed_previous_) / dt_ * direction;
+  forward_speed_previous_ = forward_speed;
+  const double reference =
+      reference_.update(dt_, acceleration, service_brake_ > .02 || drive.handbrake > .05,
+                        wheel_speed, contact, undriven);
+  // ASR: engine torque cut on driven-wheel slip, in any gear and at any
+  // speed, while the driver accelerates and does not brake.
+  const bool asr_allowed = engine_running && gear != 0 && drive.clutch >= .5 &&
+                           drive.brake < .05 && drive.handbrake < .2 && gas > .05 &&
+                           !automatic_shift;
+  gas *= asr_.update(dt_, drive.asr_strength, asr_allowed, reference, wheel_speed, driven,
+                     contact);
   // Hard braking with the auto clutch declutches, as a driver does for a
   // hard stop (#448). A closed clutch adds the engine's inertia times the
   // ratio squared to the driven wheels: 0.38 x 12.9^2 = 63 kg m^2 in first
@@ -1244,6 +1267,10 @@ void VehicleDynamics::step_drive() {
     starter_remaining_ = 0;
   }
 
+  // ABS: the hydraulic unit sets each caliper's pressure from the pedal's.
+  abs_.update(dt_, service_brake_, drive.abs_strength, reference, std::max(0.0, -acceleration),
+              wheel_speed, wheel_acceleration_, enabled, contact, 2);
+
   for (size_t i = 0; i < wheels.size(); ++i) {
     const auto &wheel = wheels[i];
     const auto &cfg = drive.wheels[i];
@@ -1263,25 +1290,39 @@ void VehicleDynamics::step_drive() {
     // Consume one brake-impulse budget, before traction sees the driven spin.
     // Any unused budget can hold a locked wheel against the tyre reaction
     // below; applying the full brake a second time would double its torque.
-    double remaining_brake = 0;
-    const auto apply_brake = [&](double amount) {
+    // The friction brakes' work heats the rotor (#446); the bearing's does
+    // not. `remaining_friction` is the friction brakes' part of the budget.
+    double remaining_brake = 0, remaining_friction = 0, heat = 0;
+    const auto apply_brake = [&](double amount, bool friction) {
       amount = std::max(0.0, amount);
       const double before = s.spin;
       s.spin = brake(s.spin, amount);
-      remaining_brake += std::max(0.0, amount - std::abs(before - s.spin));
+      const double unused = std::max(0.0, amount - std::abs(before - s.spin));
+      remaining_brake += unused;
+      if (friction) {
+        remaining_friction += unused;
+        heat += .5 * wheel_inertia * (before * before - s.spin * s.spin);
+      }
     };
-    apply_brake(500 * dt_ * cfg.bearing * drive.bearing_scale);
+    apply_brake(500 * dt_ * cfg.bearing * drive.bearing_scale, false);
     const double torque_step = dt_ / wheel_inertia;
-    double service = torque_step * service_brake_ * cfg.brake * drive.brake_scale;
-    if (drive.abs_strength > 0 && s.contact && std::abs(road) >= 3 &&
-        s.spin * road >= 0) {
-      const double minimum = std::abs(road) / std::max(.01, wheel.radius) * .85;
-      const double allowed = std::max(0.0, std::abs(s.spin) - minimum);
-      service = std::lerp(service, std::min(service, allowed),
-                          std::clamp(drive.abs_strength, 0.0, 1.0));
-    }
-    apply_brake(service);
-    apply_brake(torque_step * drive.handbrake * cfg.handbrake * drive.handbrake_scale);
+    // The caliper's pressure (ABS, or the ASR braking a spinning wheel) and
+    // the pad friction at the rotor's temperature.
+    double pressure = std::max(abs_.pressure(i), asr_.brake(i));
+    // With ABS its electronic distribution replaces the valve (#446).
+    if (i >= 2 && drive.abs_strength <= 0 && drive.rear_valve_knee > 0 &&
+        pressure > drive.rear_valve_knee)
+      pressure = drive.rear_valve_knee + (pressure - drive.rear_valve_knee) * drive.rear_valve_slope;
+    s.brake_pressure = pressure;
+    apply_brake(torque_step * pressure * cfg.brake * drive.brake_scale *
+                    pad_friction_factor(cfg.hardware, s.brake_temperature) *
+                    fluid_pressure_factor(cfg.hardware, s.fluid_temperature),
+                true);
+    // The tyre's grip at its tread temperature (#446).
+    TireParameters tyre = cfg.tyre;
+    tyre.friction *= tyre_grip_factor(cfg.tyre_heat, s.tyre_temperature.surface);
+    double sliding_power = 0, rolling_power = 0;
+    apply_brake(torque_step * drive.handbrake * cfg.handbrake * drive.handbrake_scale, true);
 
     if (!s.contact || s.force <= 0) {
       s.spin *= 1 - .25 * dt_ / wheel_inertia;
@@ -1310,7 +1351,7 @@ void VehicleDynamics::step_drive() {
         force = {s.slip_speed * factor, -lateral * factor};
       } else {
         force = tire_forces(s.force, 1, s.spin * wheel.radius, road, relaxed_lateral,
-                            cfg.tyre, camber, lateral);
+                            tyre, camber, lateral);
       }
 
       const Vec3 arm = s.patch - body.position;
@@ -1323,6 +1364,11 @@ void VehicleDynamics::step_drive() {
           std::abs(s.slip_speed) / (dt_ * (inverse_mass + inverse_spin));
       force.longitudinal = std::clamp(force.longitudinal, -limit, limit);
       s.tire_force = force;
+      // Tyre heat: the friction work of the sliding patch and the rubber's
+      // hysteresis as it rolls.
+      sliding_power = std::abs(force.longitudinal * s.slip_speed) + std::abs(force.lateral * lateral);
+      rolling_power = s.force * (cfg.rolling_resistance > 0 ? cfg.rolling_resistance : .01) *
+                      std::abs(road);
       body.add_force(forward * force.longitudinal + side * force.lateral,
                      s.patch);
       const double rolling_torque =
@@ -1336,6 +1382,15 @@ void VehicleDynamics::step_drive() {
     }
     const double before_hold = s.spin;
     s.spin = brake(s.spin, remaining_brake);
+    if (remaining_brake > 0)
+      heat += .5 * wheel_inertia * (before_hold * before_hold - s.spin * s.spin) *
+              remaining_friction / remaining_brake;
+    s.brake_temperature =
+        step_rotor_temperature(cfg.hardware, s.brake_temperature, heat, road, dt_);
+    s.fluid_temperature =
+        step_fluid_temperature(cfg.hardware, s.fluid_temperature, s.brake_temperature, dt_);
+    s.tyre_temperature = step_tyre_temperature(cfg.tyre_heat, s.tyre_temperature, sliding_power,
+                                               rolling_power, s.brake_temperature, road, dt_);
     const double unspent = std::max(0.0, remaining_brake - std::abs(before_hold - s.spin));
     s.holding_impulse = unspent * wheel_inertia / std::max(.01, wheel.radius);
     s.rotation =
@@ -1490,7 +1545,9 @@ void VehicleDynamics::step(const Terrain &terrain) {
     if (!wheels[i].metal_contact && !drive.native_traffic) {
       const double tilt = body.orientation.rotate(s.hub_rotation.rotate({0, -1, 0})).dot(s.normal);
       const double camber = std::acos(std::clamp(std::abs(tilt), 0.0, 1.0));
-      const auto peaks = tire_friction_limits(s.force, 1, cfg.tyre, camber);
+      TireParameters tyre = cfg.tyre;
+      tyre.friction *= tyre_grip_factor(cfg.tyre_heat, s.tyre_temperature.surface);
+      const auto peaks = tire_friction_limits(s.force, 1, tyre, camber);
       caps.longitudinal = std::min(caps.longitudinal, peaks.longitudinal);
       caps.lateral = std::min(caps.lateral, peaks.lateral);
     }
@@ -1636,8 +1693,9 @@ void VehicleDynamics::reset_drive() {
   engine_omega = previous_rpm_ = shift_time_ = 0;
   starter_remaining_ = service_brake_ = 0;
   gear = previous_shift_ = 0;
-  launch_active_ = false;
-  launch_factor_ = 1;
+  abs_.reset();
+  asr_.reset();
+  sensors_seeded_ = false;
   accelerator_down_ = engine_running = forced_reverse_ = false;
 }
 

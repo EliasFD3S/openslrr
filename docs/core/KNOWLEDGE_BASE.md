@@ -507,6 +507,11 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   z = 0 plane spans +-1.469 (`SCALE_3D`) vertically and +-1.469 x aspect
   horizontally, scaled by 5.48 / (5.48 - z). Font readout anchors are screen
   NDC, y down. The stock table keeps its own 16:9 calibration.
+- The four lamps (`led_ABS`/`led_ASR`/`led_HB`/`led_ER`, cars 0x61-0x64)
+  share the gauge plate's anchor in build 606; their meshes place them on
+  the plate. ABS and ASR light while the aid intervenes, the handbrake lamp
+  with the lever (#446). Host option 32 adds a brake and tyre temperature
+  panel above the damage gauge (`src/render/bgfx_osd.cpp:draw_vehicle_hud`).
 - HUD values come from `src/resources/part_runtime.cpp:part_vehicle_hud`:
   RPM, km/h, mileage, nitro, turbo, gear, and the damage gauge's parts.
   RPM and km/h come from `src/resources/part_runtime.cpp:gauge_rpm` and

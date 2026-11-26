@@ -545,6 +545,11 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
 
   // Stock assets and their panel-relative placement in build 606. Center the
   // odometer in its box and keep the full car-health glyph inside its frame.
+  // Build 606 gives the four lamps (led_ABS 0x61, led_ASR 0x62, led_HB 0x63,
+  // led_ER 0x64) the gauge plate's anchor (newosd 0x55 at 0x446261, the lamps
+  // at 0x44669A-0x4467C2: 3.24, -2.4, -3.58); each mesh places its own lamp
+  // on the plate (#446). The handbrake lamp sat at -.227, .925 before and
+  // never showed on the plate.
   const VehicleHudLayout stock{{
       {true, cars_resource(0x55), {.742f, .994f, 0}},
       {true, cars_resource(0x56), {.326f, 1.781f, 0}, {.48f, -.0001f, -.48f, .48f}},
@@ -552,10 +557,12 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
       {true, cars_resource(0x58), {.222f, .887f, 0}, {}, 0xff4fe015, "%03.0f"},
       {true, cars_resource(0x58), {.407f, .889f, 0}, {}, 0xff4fe015, "N123456R"},
       {true, cars_resource(0x58), {-.357f, .767f, 0}, {}, 0xff4fe015, "%07.0f"},
-      {true, cars_resource(0x63), {-.227f, .925f, 0}},
+      {true, cars_resource(0x63), {.742f, .994f, 0}},
       {true, cars_resource(0x57), {.646f, .631f, 0}},
       {true, cars_resource(0x5c), {-.126f, .843f, 0}, {}, 0xff000000},
       {true, cars_resource(0x5c), {-.126f, .948f, 0}, {}, 0xff000000},
+      {true, cars_resource(0x61), {.742f, .994f, 0}},
+      {true, cars_resource(0x62), {.742f, .994f, 0}},
   }};
   const float pixel_aspect = static_cast<float>(height_) / width_;
   // Size the stock strip from the viewport width while preserving its aspect.
@@ -571,7 +578,11 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
     const HudSlot slot = static_cast<HudSlot>(i);
     const auto &override = (*hud.layout)[i];
     const HudElement& item = override.defined ? override : stock[i];
-    if (!item.resource || (slot == HudSlot::Handbrake && !hud.handbrake)) continue;
+    // Build 606 lights led_ABS / led_ASR while the aid intervenes: car flags
+    // 0x1000000 / 0x2000000, set at 0x44E0E1 / 0x44E290, read at 0x452746.
+    if (!item.resource || (slot == HudSlot::Handbrake && !hud.handbrake) ||
+        (slot == HudSlot::Abs && !hud.abs) || (slot == HudSlot::Asr && !hud.asr))
+      continue;
 
     // A loose --vehicle-osd cfg has no owning RPK. Car packs list cars.rpk as
     // dependency slot 2, so qualify those ids exactly as an installed car cfg
@@ -723,6 +734,101 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
          angle, 0, 0, item.color, false,
          slot == HudSlot::Gauge && !override.defined && !mesh->groups.empty() &&
              mesh->groups.front().material_type == 3u);
+  }
+  // Brake and tyre temperatures (#446, host option 32): a top view of the car
+  // above the stock gauge, front up. Each corner has a tyre bar coloured by
+  // its tread and two readouts in the stock LCD font: the tread's temperature
+  // next to the tyre, the rotor's below it after a small brake mark (red
+  // while the fluid boils). Blue is cold, green the working window, yellow
+  // to red past it.
+  if (hud.temperatures && std::any_of(hud.corners.begin(), hud.corners.end(),
+                                      [](const VehicleHudState::Corner &c) {
+                                        return c.brake || c.tyre;
+                                      })) {
+    using Rgb = std::array<float, 3>;
+    const auto heat = [](float factor, bool cold) -> Rgb {
+      const Rgb blue{.25f, .55f, 1.f}, green{.3f, .9f, .35f}, yellow{1.f, .85f, .2f},
+          red{1.f, .22f, .18f};
+      const auto mix = [](const Rgb &a, const Rgb &b, float t) {
+        t = std::clamp(t, 0.f, 1.f);
+        return Rgb{a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t};
+      };
+      if (cold) return mix(blue, green, (factor - .85f) / .15f);
+      const float t = (1.f - factor) / .3f;
+      return t < .5f ? mix(green, yellow, t * 2) : mix(yellow, red, t * 2 - 1);
+    };
+    const Rgb grey{.45f, .45f, .48f};
+    const auto box = [&](float x, float y, float half_w, float half_h, const Rgb &c, float a) {
+      OsdWidget w;
+      w.x = x;
+      w.y = y;
+      w.half_w = half_w * pixel_aspect;  // half sizes in screen-height units
+      w.half_h = half_h;
+      w.background = true;
+      draw_osd_quad(w, c[0] * a, c[1] * a, c[2] * a, a);
+    };
+    const auto argb = [](const Rgb &c) {
+      const auto byte = [](float v) { return uint32_t(std::lround(std::clamp(v, 0.f, 1.f) * 255)); };
+      return 0xff000000u | byte(c[0]) << 16 | byte(c[1]) << 8 | byte(c[2]);
+    };
+    const auto font_resource = scene_instances_geometry(cars_resource(0x58));
+    const ScxGeometry *font = font_resource.get();
+    const float text_y = .00018f * stock_scale, text_x = text_y * pixel_aspect;
+    // Width of a readout, and the readout itself from its left edge.
+    const auto measure = [&](const char *text) {
+      float width = 0;
+      for (const char *c = text; *c; ++c) {
+        const size_t start = size_t(static_cast<unsigned char>(*c)) * 4;
+        if (!font || (start + 4) * 3 > font->positions.size()) continue;
+        width += (font->positions[start * 3 + 3] - font->positions[start * 3] + 20.f) * text_x;
+      }
+      return width;
+    };
+    const auto write = [&](const char *text, float x, float y, uint32_t color) {
+      if (!font || !font->info.ok) return;
+      for (const char *c = text; *c; ++c) {
+        const size_t start = size_t(static_cast<unsigned char>(*c)) * 4;
+        if ((start + 4) * 3 > font->positions.size()) continue;
+        const float *p = font->positions.data() + start * 3;
+        const float w = p[3] - p[0], h = p[7] - p[1];
+        if (w <= 0 || h <= 0 || w > 2000 || h > 2000) continue;
+        draw(*font, start, 4, quad, 6, x, y, text_x, text_y, 0, p[0], p[1], color);
+        x += (w + 20.f) * text_x;
+      }
+    };
+    // Above the damage gauge, right of the car.
+    const float s = stock_scale;
+    const float cx = .8f, cy = stock_y(0) - .56f * s;
+    box(cx, cy, .2f * s, .18f * s, {0, 0, 0}, .55f);
+    box(cx, cy, .03f * s, .11f * s, grey, .5f);  // the body
+    for (size_t i = 0; i < hud.corners.size(); ++i) {
+      const auto &c = hud.corners[i];
+      const bool right = i % 2 == 1, rear = i >= 2;
+      const float side = right ? 1.f : -1.f;
+      const float tx = cx + side * .055f * s * pixel_aspect;
+      const float ty = cy + (rear ? .09f : -.09f) * s;
+      box(tx, ty, .016f * s, .045f * s, c.tyre ? heat(c.grip, c.tread_cold) : grey, .95f);
+      char tread[8], rotor[8];
+      std::snprintf(tread, sizeof tread, "%.0f", c.tyre ? std::clamp(c.tread, 0.f, 999.f) : 0.f);
+      std::snprintf(rotor, sizeof rotor, "%.0f", c.brake ? std::clamp(c.rotor, 0.f, 999.f) : 0.f);
+      // Readouts on the outer side: the left column right-aligned.
+      const float edge = tx + side * .028f * s * pixel_aspect;
+      const float mark = .007f * s;
+      const auto left_of = [&](const char *text, float extra) {
+        return right ? edge + extra : edge - measure(text) - extra;
+      };
+      // Two rows: the tread's readout on top, the rotor's below, each about
+      // 0.06 high at this scale.
+      if (c.tyre) write(tread, left_of(tread, 0), ty - .068f * s, argb(heat(c.grip, c.tread_cold)));
+      if (c.brake) {
+        const Rgb brake = c.boiling ? Rgb{1.f, .1f, .1f} : heat(c.pad, c.pad_cold);
+        const float gap = 2.6f * mark * pixel_aspect;
+        const float x = left_of(rotor, gap);
+        box(right ? edge + mark * pixel_aspect : edge - mark * pixel_aspect, ty + .03f * s, mark,
+            mark, brake, .95f);
+        write(rotor, x, ty + .006f * s, argb(brake));
+      }
+    }
   }
 }
 

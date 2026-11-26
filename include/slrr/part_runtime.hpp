@@ -174,6 +174,15 @@ struct PartPhysicsState {
   int gear = 0;
   // Drive inputs the solver applies (#380 telemetry).
   double throttle = 0, brake = 0, clutch = 0;
+  // Brakes and driving aids (#446): rotor temperature (deg C), caliper
+  // pressure (fraction of full pedal), the controller's reference speed.
+  std::array<double, 4> brake_temperature{}, brake_pressure{};
+  // Brake fluid and tyre tread / carcass temperatures (deg C); whether the
+  // patched scripts gave the brake and the tyre a spec.
+  std::array<double, 4> fluid_temperature{}, tyre_surface{}, tyre_carcass{};
+  std::array<bool, 4> brake_specified{}, tyre_specified{};
+  bool abs_active = false, asr_active = false;
+  double reference_speed = 0;
 };
 // Solver statistics over the last second (#380): rate, steps actually run
 // per second and the physics thread's busy fraction (free-running mode).
@@ -222,6 +231,18 @@ struct VehicleHudState {
   float nitro = 0, turbo = 0;
   int gear = 0;
   bool handbrake = false;
+  // ABS / ASR intervening this step (#446): the stock lamps light then.
+  bool abs = false, asr = false;
+  // Brake and tyre temperatures per wheel (#446), front left, front right,
+  // rear left, rear right, for the panel host option 32 turns on.
+  struct Corner {
+    bool brake = false, tyre = false;  // the patched scripts gave a spec
+    float rotor = 25, fluid = 25, tread = 25, carcass = 25;  // deg C
+    float pad = 1, grip = 1;  // friction relative to the working value
+    bool pad_cold = false, tread_cold = false, boiling = false;
+  };
+  std::array<Corner, 4> corners{};
+  bool temperatures = false;
   // Engine (category 1), body (category 2) and wheel parts of the car. A
   // part absent from the tree is absent here, so its gauge blip goes away.
   std::array<VehicleHudPart, 192> parts{};
