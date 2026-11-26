@@ -277,6 +277,7 @@ void ParticleSystem::emit(const ParticleSpawn &spawn) {
   p.swirl_center = spawn.swirl_center;
   p.swirl_axis = spawn.swirl_axis;
   p.swirl = spawn.swirl;
+  p.buoyancy = spawn.buoyancy;
   p.color0 = c.source_color.sample(rng);
   p.color1 = c.dest_color.sample(rng);
   for (auto *colour : {&p.color0, &p.color1})
@@ -350,7 +351,7 @@ void particles_update(double dt) {
     const V3 wind = {g_wind[0], 0.f, g_wind[1]};
     const bool cloud = c.type != 1;
     for (size_t k = 0; k < 3; ++k) {
-      p.velocity[k] += c.gravity[k] * h;
+      p.velocity[k] += c.gravity[k] * p.buoyancy * h;
       // The air carries the particle: damping relaxes it toward the wind,
       // not toward rest, so lingering smoke drifts away.
       const float keep = std::exp(-(1.f - c.damping[k]) * h);
@@ -383,7 +384,7 @@ void particles_update(double dt) {
     // The ground plane at the emission point: a puff spreads along it, a
     // pebble lands and slides to rest.
     const float t = std::clamp(p.age / p.life, 0.f, 1.f);
-    const float radius = (p.size0 + (p.size1 - p.size0) * t) * .5f;
+    const float radius = particle_width(p) * .5f;
     const float floor = cloud ? radius * .3f : .01f;
     const auto &n = p.ground_normal;
     if (n[0] == 0.f && n[1] == 0.f && n[2] == 0.f) continue;  // no floor
@@ -410,6 +411,11 @@ void particles_update(double dt) {
 }
 
 const std::vector<Particle> &particles() { return g_particles; }
+
+float particle_width(const Particle &p) {
+  const float t = std::clamp(p.age / std::max(p.life, .05f), 0.f, 1.f);
+  return p.size0 + (p.size1 - p.size0) * std::sqrt(t);
+}
 
 void particles_clear() {
   g_particles.clear();

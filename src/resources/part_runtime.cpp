@@ -3628,9 +3628,9 @@ void update_slide_audio(Record &rec, bool active) {
 // tyre's own state rather than a slip threshold:
 // - How much: the friction power at the patch, |Fx slip| + |Fy lateral|
 //   (the heat the tyre thermal model takes from sliding), the cfg's rate per
-//   15 kW (30 kW of dust for loose ground). Rubber smoke
-//   also needs a hot tread: from a trace at 110 deg C to full at 230 deg C
-//   of the tread surface. Dust, gravel and grass (a ground with rolling
+//   8 kW (30 kW of dust for loose ground). Rubber smoke
+//   also needs a hot tread: a quarter of it cold, full from 160 deg C of
+//   the tread surface (ramp from 60 deg C). Dust, gravel and grass (a ground with rolling
 //   drag) rise from the power alone.
 // - Where: round the tyre, from the patch up the side the tread runs to
 //   (the back of a spinning wheel, the front of a locked one), across the
@@ -3659,8 +3659,8 @@ void emit_tyre_dust(Record &rec, size_t i, const SkidWheelSample &sample,
   if (soft) {
     rate = power / 30000.0;
   } else {
-    const double hot = std::clamp((s.tyre_temperature.surface - 110.0) / 120.0, 0.0, 1.0);
-    rate = power / 15000.0 * (.08 + .92 * hot * hot * (3 - 2 * hot));
+    const double hot = std::clamp((s.tyre_temperature.surface - 60.0) / 100.0, 0.0, 1.0);
+    rate = power / 8000.0 * (.25 + .75 * hot * hot * (3 - 2 * hot));
   }
   // Tyre smoke density (option 33, percent): the part above 100 % shrinks
   // for big long-lived clouds by their size squared times their lifetime
@@ -3701,6 +3701,8 @@ void emit_tyre_dust(Record &rec, size_t i, const SkidWheelSample &sample,
     spawn.velocity = {float(v.x), float(v.y), float(v.z)};
     spawn.ground = {float(s.patch.x), float(s.patch.y), float(s.patch.z)};
     spawn.ground_normal = {float(s.normal.x), float(s.normal.y), float(s.normal.z)};
+    // Smoke and dust hang in the air; only debris keeps the cfg's gravity.
+    spawn.buoyancy = config.type == 1 ? 1.f : .15f;
     if (!soft) {
       // Turning with the tyre, about the axle through the hub.
       spawn.swirl_center = {float(s.center.x), float(s.center.y), float(s.center.z)};

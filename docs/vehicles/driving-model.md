@@ -454,8 +454,10 @@ particles:2 (asphalt smoke) and particles:0xA (the asphalt mark).
   fed with the wheel state the frame published.
   - Amount, from the tyre: the friction power at the patch, |Fx slip| +
     |Fy lateral| (what the tyre thermal model heats with). It gives the
-    cfg's rate per 15 kW for rubber smoke, scaled by the tread surface's
-    temperature (8 % cold, full from 230 °C, ramp from 110 °C). Loose
+    cfg's rate per 8 kW for rubber smoke, scaled by the tread surface's
+    temperature (25 % cold, full from 160 °C, ramp from 60 °C). Smoke and
+    dust feel 15 % of their cfg's gravity, and a puff swells with the square
+    root of its age. The patch retunes asphalt.cfg (4-7.5 m, 4-9 s). Loose
     ground (rolling drag) and debris give the rate per 30 kW, with no
     temperature.
   - Place: round the tyre, from the patch up the side the tread runs to (the

@@ -478,7 +478,7 @@ void LibBgfxBackend::draw_particles(const float* view, const float* projection,
     const auto& p = list[i];
     if (p.cloud >= clouds.size()) continue;
     const float t = std::clamp(p.age / p.life, 0.f, 1.f);
-    const float radius = (p.size0 + (p.size1 - p.size0) * t) * .5f;
+    const float radius = particle_width(p) * .5f;
     const float x = p.position[0], y = p.position[1], z = -p.position[2];
     const float depth = view[2] * x + view[6] * y + view[10] * z + view[14];
     // The billboard lies at its centre's depth, and fs_particle.sc fades a
@@ -514,7 +514,7 @@ void LibBgfxBackend::draw_particles(const float* view, const float* projection,
       const auto& p = list[order[begin + j].index];
       const auto& config = clouds[p.cloud];
       const float t = std::clamp(p.age / p.life, 0.f, 1.f);
-      const float radius = (p.size0 + (p.size1 - p.size0) * t) * .5f;
+      const float radius = particle_width(p) * .5f;
       // The cfg's alpha ramp, eased (t^1.5) so a cloud holds its body before
       // it thins out, faded in over its first 0.15 s so a puff swells
       // instead of popping.

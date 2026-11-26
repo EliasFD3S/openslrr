@@ -1736,7 +1736,7 @@ void LibBgfxBackend::update_smoke_shadow(const VideoOptions& video) {
     const auto& p = list[i];
     if (p.cloud >= clouds.size() || clouds[p.cloud].type == 1) continue;
     const float life = std::clamp(p.age / p.life, 0.f, 1.f);
-    const float radius = (p.size0 + (p.size1 - p.size0) * life) * .5f;
+    const float radius = particle_width(p) * .5f;
     const bx::Vec3 c{p.position[0], p.position[1], -p.position[2]};
     const float axis[3] = {bx::dot(c, right), bx::dot(c, up), bx::dot(c, t)};
     for (int k = 0; k < 3; ++k) {
@@ -1793,7 +1793,7 @@ void LibBgfxBackend::update_smoke_shadow(const VideoOptions& video) {
   for (uint32_t j = 0; j < n; ++j) {
     const auto& p = list[chosen[j]];
     const float life = std::clamp(p.age / p.life, 0.f, 1.f);
-    const float radius = (p.size0 + (p.size1 - p.size0) * life) * .5f;
+    const float radius = particle_width(p) * .5f;
     // The same alpha as draw_particles.
     const float alpha = std::clamp((p.alpha0 + (p.alpha1 - p.alpha0) * std::pow(life, 1.5f)) *
                                        std::clamp(p.age / .15f, 0.f, 1.f), 0.f, 1.f);

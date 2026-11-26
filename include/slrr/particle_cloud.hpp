@@ -76,7 +76,14 @@ struct Particle {
   // its first half second: smoke wrapping round the wheel (#454).
   std::array<float, 3> swirl_center{}, swirl_axis{};
   float swirl = 0;  // rad/s about swirl_axis, 0 none
+  // The share of the cfg's gravity this particle feels (tyre smoke hangs
+  // in the air instead of rising at the cfg's 2 m/s).
+  float buoyancy = 1;
 };
+
+// A particle's width now: it swells fast, then slowly (sqrt of its age
+// fraction), so a fresh puff joins the cloud instead of a small drop.
+float particle_width(const Particle &p);
 
 // One particle placed by the caller (emit), with the cloud's sizes, colours
 // and lifetimes; the cfg's velocity domain adds a little scatter.
@@ -86,6 +93,7 @@ struct ParticleSpawn {
   std::array<float, 3> swirl_center{}, swirl_axis{};
   float swirl = 0;
   float min_size = 0;  // the birth width at least this (a tyre's)
+  float buoyancy = 1;
 };
 
 // The emitter, shaped like the stock ParticleSystem natives (init, setFreq,

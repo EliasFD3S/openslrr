@@ -1819,6 +1819,21 @@ amount from the tyre's state and smoke from the wheel arches, as in CSP):
     its arch as a white continuous cloud, a whiteout around the camera as
     in Elias's CSP reference.
 
+Seventh pass (Elias's test: too little smoke, "small drops pulled up far too
+fast"):
+
+- Tyre smoke and dust feel 15 % of their cfg's gravity
+  (`Particle::buoyancy`): asphalt.cfg's +2 m/s² with damping 0.01 lifted
+  puffs at about 2 m/s.
+- `particle_width` grows a puff by the square root of its age fraction, so
+  it swells within its first second.
+- Smoke gives the cfg's rate per 8 kW, a quarter of it cold and all of it
+  from 160 °C (ramp from 60 °C); puff alpha × 0.7.
+- `patch/particles/scripts/particle_clouds/asphalt.cfg` (Elias ships the
+  patch):
+  - puffs born 0.6 m wide that swell to 4-7.5 m and live 4-9 s;
+  - lighter greys, gravity 0.6, damping 0.15, 30 per second.
+
 Limitations:
 
 - The tyre's longitudinal scale in σ (wheel+0x218) is taken as 1; its

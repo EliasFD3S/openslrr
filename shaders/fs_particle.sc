@@ -173,7 +173,7 @@ void main() {
 		vec3 limit = (sunLight + sky) * 0.95;
 		// Lamps scatter through the whole puff, thin edges as much as the core.
 		colour = albedo * (min(light, limit) + lamps * (0.55 + 0.45 * z));
-		alpha = density * v_color0.a * 0.55;
+		alpha = density * v_color0.a * 0.7;
 		// No hard line where the puff meets the road.
 		alpha *= saturate(groundHeight / (radius * 0.45 + 0.05));
 	}
