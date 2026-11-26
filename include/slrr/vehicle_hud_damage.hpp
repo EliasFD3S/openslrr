@@ -20,6 +20,14 @@ struct HudDamageBlip {
   float condition = 1;
 };
 
+// Damage blip tint: green when intact, yellow at half, red when destroyed.
+inline uint32_t hud_damage_color(float condition) {
+  const float c = std::isfinite(condition) ? std::clamp(condition, 0.f, 1.f) : 1.f;
+  const auto red = static_cast<uint32_t>(255.f * std::min(1.f, 2.f * (1.f - c)));
+  const auto green = static_cast<uint32_t>(255.f * std::min(1.f, 2.f * c));
+  return 0xff000000u | (red << 16) | (green << 8);
+}
+
 inline bool hud_fender_glyph(unsigned char glyph) {
   return glyph == 'p' || glyph == 'q' || glyph == 'u' || glyph == 'v';
 }

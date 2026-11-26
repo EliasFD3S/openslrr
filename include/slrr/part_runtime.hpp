@@ -226,6 +226,8 @@ struct VehicleHudState {
   // part absent from the tree is absent here, so its gauge blip goes away.
   std::array<VehicleHudPart, 192> parts{};
   size_t part_count = 0;
+  // The chassis itself (wear * tear); colours the car outline glyph.
+  float chassis_condition = 1;
 };
 void part_set_hud_preview(const std::string &path);
 bool part_vehicle_hud(VehicleHudState &state);
