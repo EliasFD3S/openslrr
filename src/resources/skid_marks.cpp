@@ -198,7 +198,46 @@ std::vector<float> numbers(std::string_view text) {
 
 }  // namespace
 
+double tyre_combined_slip(double slip_speed, double lateral_speed, double road_speed,
+                          double longitudinal_scale) {
+  constexpr double kLongitudinalLimit = 1, kLateralLimit = 1, kLongitudinalRelaxation = .3,
+                   kLateralRelaxation = .5, kTransitionScale = .1, kSpeedThreshold = .1,
+                   kLongitudinalDamping = .1, kLateralDamping = .2;
+  if (!std::isfinite(slip_speed) || !std::isfinite(lateral_speed) || !std::isfinite(road_speed))
+    return 0;
+  const double speed = std::abs(road_speed);
+  const double transition = std::clamp((speed - kSpeedThreshold) * kTransitionScale, 0.0, 1.0);
+  double target_long = 0, target_angle = 0;
+  if (speed > kSpeedThreshold) {
+    target_long = slip_speed / speed;
+    target_angle = std::atan(lateral_speed / speed);
+  }
+  const double relaxed_long =
+      std::clamp(slip_speed / (500 * kLongitudinalDamping * kLongitudinalRelaxation),
+                 -kLongitudinalLimit, kLongitudinalLimit);
+  const double relaxed_angle =
+      std::clamp(lateral_speed / (500 * kLateralDamping * kLateralRelaxation), -kLateralLimit,
+                 kLateralLimit);
+  const double k = target_long * transition + (1 - transition) * relaxed_long;
+  const double a = target_angle * transition + (1 - transition) * relaxed_angle;
+  const double scaled = std::cos(a) * k * longitudinal_scale;
+  return std::sqrt(std::sin(a) * std::sin(a) + scaled * scaled);
+}
+
+double tyre_effect_frequency(double sigma) {
+  return sigma > kSkidEffectSlip ? std::max(1.0, (sigma - kSkidEffectSlip) * .2) : 0.0;
+}
+
+double tyre_effect_intensity(double sigma) {
+  return std::clamp(sigma - kSkidEffectSlip, 0.0, 1.0);
+}
+
 double skid_scrub(const SkidWheelSample &wheel) {
+  if (wheel.sigma >= 0)
+    // The exe's gate and intensity; a just-started mark is still visible.
+    return wheel.contact && wheel.force > 0 && wheel.sigma > kSkidEffectSlip
+               ? std::max(.05, tyre_effect_intensity(wheel.sigma))
+               : 0.0;
   if (!wheel.contact || wheel.force < 300) return 0;
   const double longitudinal = std::abs(wheel.slip_ratio) > .25 ? std::abs(wheel.slip_speed) : 0;
   const double lateral = std::abs(wheel.lateral_speed) > 5.5 ? std::abs(wheel.lateral_speed) : 0;
@@ -219,7 +258,13 @@ void skid_marks_update(uintptr_t car, size_t wheel, const SkidWheelSample &sampl
     track.style = sample.style;
   }
   const double strength = skid_scrub(sample);
-  const double opacity = skid_mark_opacity(vehicle_speed);
+  // The exe's mark alpha: the colour's, times the load fraction, times the
+  // emission factor (at least 1, so the colour's alpha caps it). SLRR_rev's
+  // speed law without the original's slip.
+  const double opacity = sample.sigma >= 0
+                             ? std::clamp(sample.load_fraction, 0.0, 1.0) *
+                                   std::min(1.0, tyre_effect_frequency(sample.sigma))
+                             : skid_mark_opacity(vehicle_speed);
   // A short hold bridges a frame or two of grip inside one slide.
   track.hold = strength > 0 ? .22 : std::max(0.0, track.hold - dt);
   if (!sample.contact || !(track.hold > 0)) {

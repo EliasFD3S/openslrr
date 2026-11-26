@@ -1737,9 +1737,64 @@ Fourth pass (the smoke shadow's reach):
   tinted a pedestrian standing in it. The car's rear, inside its own smoke,
   turned blue.
 
+Fifth pass (from the exe instead of host choices):
+
+- The wheel's effects (0x453680, per wheel with load and a ground shape):
+  - The ground record keeps `skid_PS` as a link at +0x5C (handler 0x462C60),
+    `skid_SFX` at +0x6C, `skid_SM` at +0x7C (0x462E00) and `skid_SMcolor` at
+    +0x8C (0x462FA0).
+  - σ ≤ 0.05 or σ − 0.4 ≤ 0 releases both of the wheel's systems.
+  - Above that, the wheel creates the `psws` particle system from the
+    `skid_PS` link, with callback 0x451280, and the `smws` mark from the
+    `skid_SM` link, with callback 0x451540.
+  - σ is the wheel's +0x154, written by the tyre force (0x4561B2,
+    0x456426) as √(sin² a + (cos a × k × scale)²). sl-remastered's
+    `calculateTireSlipForce` has the same magnitude.
+- `psws` (0x451280):
+  - frequency (+0xC) = max(1, (σ − 0.4) × 0.2); a positive value clears the
+    idle bit.
+  - The source sits on the tread, ±0.15 of its width at random, lifted to
+    0.1 m above the ground along the normal.
+- `smws` (0x451540):
+  - The point is the contact point plus 0.04 × the normal.
+  - Its alpha is A(`skid_SMcolor`) × min(load / wheel+0x214, 1) × the same
+    max(1, ...) factor.
+  - 0x521620 keeps a ring of `maxcount` points per wheel's system.
+- `updateWheelSlip` constants (0x60E02C-0x60E048): limits 1 and 1,
+  relaxations 0.3 and 0.5, transition 0.1, threshold 0.1 m/s, damping 0.1
+  and 0.2. Its relaxed branch's steady state is slip / 15 and lateral / 50,
+  about 20 ms to settle, so `tyre_combined_slip` takes it once per frame.
+- Host changes:
+  - `tyre_combined_slip`, `tyre_effect_frequency` and
+    `tyre_effect_intensity` (`skid_marks.cpp`) replace the SLRR_rev and
+    OpenSLRR thresholds and the soft ground's rolling dust (the exe has
+    none).
+  - Marks take the exe's gate and alpha (the load fraction, against half the
+    tyre's `maximum_load`, 4000 N when unset). Their width follows the exe's
+    intensity min(σ − 0.4, 1).
+  - The extra density is option 33, `tyre_smoke_density`.
+- `modePermanent`, the idle trigger traced:
+  - The source actions (0x51C050 and siblings) set the active bit
+    0x80000000 when they run.
+  - On an idle system, a source action is marked done and dropped
+    (0x51C061). An idle system with no particle left is finished (0x51B3B0).
+  - `script_particles_update` now drops an idle system's sources and wakes
+    it on a positive `setFreq` or a new source. The 200 m rule is gone.
+- Validation: `tyre_effects` 9/9, with `original_effect_law`: a standing
+  burnout gives σ 1; a 22° drift without wheelspin gives 0.37, under the
+  gate, and a little wheelspin crosses it. In game, a ValoCity handbrake
+  slide (temporary hook) raised up to 769 particles and 370 mark quads, and
+  the Dead_Island bench (no hook) raised sand dust and marks.
+
 Limitations:
 
-- The idle distance (200 m) is the host's reading of the exe's idle flag.
-  Its real trigger, beyond "no child active", is not traced.
-- The thresholds, the 2.5× rate, the colour lift, the lamp gain and caps and
-  the 0.8 m width cap are OpenSLRR choices.
+- The tyre's longitudinal scale in σ (wheel+0x218) is taken as 1; its
+  source field is not traced. The nominal load of the mark alpha
+  (wheel+0x214) is taken as half the tyre's maximum load.
+- The marks keep their own rings (`maxcount` × 14 quads per style, not
+  `maxcount` points per wheel) and a 1 cm lift instead of the exe's 4 cm,
+  which would float on this renderer's flat quads.
+- The mark width's driver in the exe is not traced.
+- Rendering constants of the volumetric model have no original
+  counterpart: the colour lift, the lamp gain and caps, and the 0.8 m width
+  cap.

@@ -82,6 +82,7 @@ const HostOption kOptions[] = {
     SLRR_GRAPHICS_BOOL(18, headlight_shadows),
     SLRR_GRAPHICS_BOOL(19, street_lamps),
     SLRR_GRAPHICS_INT(20, shadowed_lamps, 0, 6),
+    SLRR_GRAPHICS_INT(33, tyre_smoke_density, 0, 400),
     // Spatial audio (#390).
     SLRR_AUDIO_BOOL(22, "audio_positioning", positioning),
     SLRR_AUDIO_BOOL(23, "audio_doppler", doppler),

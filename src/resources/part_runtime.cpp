@@ -3623,28 +3623,10 @@ void update_slide_audio(Record &rec, bool active) {
   rec.sharp_skid = sharp || (rec.sharp_skid && speed > 9 && sideways > 1.6);
 }
 
-// How hard a wheel smokes or throws its ground, 0..1 (#454). Asphalt smokes
-// from a burnout or a drift: SLRR_rev's tireSmoke load gate (500 N), with
-// the strength ramping over 4-12 m/s of the whole scrub, longitudinal and
-// sideways, so a drift smokes as in CSP and not only a burnout. Soft ground (any rolling drag: grass, sand,
-// gravel) gives way at a lighter scrub and is thrown up by a fast wheel even
-// when it grips.
-double tyre_dust_strength(const SkidWheelSample &sample, const GroundSurface &ground,
-                          double speed) {
-  if (!sample.contact) return 0;
-  const double scrub = std::hypot(sample.slip_speed, sample.lateral_speed);
-  if (ground.rolling > 0) {
-    if (sample.force < 200) return 0;
-    const double slide = std::clamp((scrub - 1.5) / 5, 0.0, 1.0);
-    const double roll = .45 * std::clamp((std::abs(speed) - 6) / 20, 0.0, 1.0);
-    return std::max(slide, roll);
-  }
-  if (sample.force < 500) return 0;
-  return std::clamp((scrub - 4) / 8, 0.0, 1.0);
-}
-
-// Feeds a wheel's emitter: the ground's skid_PS cloud at the contact patch,
-// thrown back by the spinning tread and dragged a little by the car's wake.
+// Feeds a wheel's emitter (#454): the ground's skid_PS cloud at the contact
+// patch, thrown back by the spinning tread and dragged a little by the car's
+// wake. It emits by the exe's law (tyre_effect_frequency: nothing below a
+// combined slip of 0.4, then at least the cfg's rate), on every ground.
 void emit_tyre_dust(Record &rec, size_t i, const SkidWheelSample &sample,
                     const GroundSurface &ground, double dt) {
   const uint16_t cloud = surface_particle_cloud(*index, ground.skid_particles);
@@ -3656,8 +3638,9 @@ void emit_tyre_dust(Record &rec, size_t i, const SkidWheelSample &sample,
     rec.tyre_cloud[i] = cloud;
   }
   const auto &body = rec.dynamics.body;
-  const double strength = tyre_dust_strength(sample, ground, body.velocity.length());
-  if (!(strength > 0)) return;
+  const double frequency =
+      sample.contact && sample.force > 0 ? tyre_effect_frequency(sample.sigma) : 0.0;
+  if (!(frequency > 0)) return;
   const auto &n = sample.normal;
   const auto &f = sample.forward;
   const double throw_back = std::clamp(sample.slip_speed, -12.0, 12.0) * .2;
@@ -3671,18 +3654,18 @@ void emit_tyre_dust(Record &rec, size_t i, const SkidWheelSample &sample,
     normal[k] = static_cast<float>(n[k]);
   }
   emitter.set_source(position, velocity, normal);
-  // The soft volumetric puffs need more of them than the original's sprites
-  // to build a thick cloud: asphalt smoke emits two and a half times its
-  // cfg's rate. Other clouds keep the screen the same amount of smoke, by
-  // their size squared times their lifetime against asphalt's (sand.cfg's
-  // 3-6 m puffs living 4-6 s would bury the car). Debris keeps its rate.
+  // Tyre smoke density (option 33, percent of the exe's rate): the soft
+  // volumetric puffs need more of them than the original's sprites to build
+  // a thick cloud. The part above 100 % shrinks for big long-lived clouds by
+  // their size squared times their lifetime against asphalt.cfg's (sand.cfg's
+  // 3-6 m puffs living 4-6 s would bury the car). Debris keeps the exe's rate.
   const auto &config = particle_clouds()[cloud];
-  const double coverage = particle_cloud_coverage(config);
-  const double boost =
-      config.type == 1
-          ? 1.0
-          : std::clamp(2.5 * particle_cloud_coverage_reference() / std::max(coverage, .01), .4, 2.5);
-  emitter.set_freq(static_cast<float>(boost * std::pow(strength, 1.2)));
+  const double density =
+      std::clamp(host_enhanced_graphics().tyre_smoke_density, 0, 400) * .01;
+  const double share = std::min(
+      1.0, particle_cloud_coverage_reference() / std::max(particle_cloud_coverage(config), .01));
+  const double boost = config.type == 1 ? 1.0 : std::max(0.0, 1 + (density - 1) * share);
+  emitter.set_freq(static_cast<float>(boost * frequency));
   emitter.advance(dt);
 }
 
@@ -3709,6 +3692,11 @@ void update_skid_marks(Record &rec, double dt, float range = 120.f) {
     sample.normal = {s.normal.x, s.normal.y, s.normal.z};
     sample.forward = {forward.x, forward.y, forward.z};
     sample.mark_color = s.surface.mark_color;
+    // The exe's combined slip and the load fraction of its mark alpha (the
+    // nominal load: half the tyre's maximum, 4000 N when unset).
+    sample.sigma = tyre_combined_slip(s.slip_speed, s.lateral_speed, road);
+    const double max_load = rec.dynamics.drive.wheels[i].tyre.maximum_load;
+    sample.load_fraction = std::min(1.0, s.force / (max_load > 0 ? max_load * .5 : 4000.0));
     if (index) sample.style = surface_skid_style(*index, s.surface.skid_mark);
     skid_marks_update(key, i, sample, dt, speed);
     if (i < rec.tyre_dust.size() && index) emit_tyre_dust(rec, i, sample, s.surface, dt);

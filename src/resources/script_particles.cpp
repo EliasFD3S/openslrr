@@ -28,13 +28,15 @@ struct System {
   uint16_t cloud = 0xffff;
   float frequency = 1.f;
   bool stopped = false;
-  // modePermanent: the exe's handler (0x47F150) sets bit 0x20000000 of the
-  // node's flags (+0x6C). Its update (0x520D60) clears the active bit
-  // 0x80000000, lets the children set it again, and marks the node idle
-  // (0x40000000) when neither active nor permanent. Here a system that is not
-  // permanent idles (stops emitting) when its parent is farther than
-  // kIdleMetres from the camera; a permanent one always emits.
+  // modePermanent: the exe's handler (0x47F150) sets bit 0x20000000 of
+  // the node's flags (+0x6C). Every update (0x520D60) clears the active
+  // bit 0x80000000, the source actions set it when they emit (0x51C83B...),
+  // and a node with neither bit goes idle (0x40000000). An idle system's
+  // sources are dropped as they run (0x51C061) and it ends once its last
+  // particle dies (0x51B3B0); a positive setFreq wakes it (0x451525).
+  // Permanent systems never idle, so their sources survive a stop.
   bool permanent = false;
+  bool idle = false;
   std::map<std::string, Action> actions;
   float matrix[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
   bool placed = false;  // matrix holds the parent's pose this frame
@@ -129,6 +131,7 @@ void script_particles_source(const void *self, const std::string &alias, const V
     action.rate = std::clamp(rate, 0.f, 20000.f);
   }
   it->second.stopped = false;
+  it->second.idle = false;
 }
 
 void script_particles_counter(const void *self, const std::string &alias, const Vec3f &pos,
@@ -174,7 +177,9 @@ void script_particles_stop(const void *self) {
 
 void script_particles_freq(const void *self, float frequency) {
   const auto it = g_systems.find(self);
-  if (it != g_systems.end()) it->second.frequency = std::isfinite(frequency) ? frequency : 0.f;
+  if (it == g_systems.end()) return;
+  it->second.frequency = std::isfinite(frequency) ? frequency : 0.f;
+  if (it->second.frequency > 0) it->second.idle = false;
 }
 
 void script_particles_permanent(const void *self, bool permanent) {
@@ -202,29 +207,36 @@ bool script_particles_exists(const void *self) { return g_systems.count(self) !=
 
 void script_particles_update(double dt) {
   if (!(dt > 0)) return;
-  constexpr float kIdleMetres = 200.f;
-  float eye[3]{}, at[3]{}, up[3] = {0.f, 1.f, 0.f};
-  const bool camera = gameref_world_camera(eye, at, nullptr, nullptr, nullptr, up);
   for (auto &[self, system] : g_systems) {
     system.placed = system.parent &&
                     scene_instances_script_matrix(const_cast<void *>(system.parent), system.matrix);
     if (!system.placed || system.cloud == 0xffff) continue;
-    if (!system.permanent && camera) {
-      const float dx = system.matrix[12] - eye[0], dy = system.matrix[13] - eye[1],
-                  dz = system.matrix[14] - eye[2];
-      if (dx * dx + dy * dy + dz * dz > kIdleMetres * kIdleMetres) continue;
-    }
-    for (auto &[alias, action] : system.actions) {
-      if (action.counter) continue;
+    bool active = false;
+    for (auto it = system.actions.begin(); it != system.actions.end();) {
+      auto &action = it->second;
+      if (action.counter) {
+        ++it;
+        continue;
+      }
+      // An idle system drops its sources as they come up.
+      if (system.idle) {
+        it = system.actions.erase(it);
+        continue;
+      }
       place(system, action);
       if (action.direct_pending) {
         action.direct_pending = false;
         action.emitter.emit_direct(static_cast<int>(std::lround(action.direct_count)));
+        active = true;
       }
-      if (system.stopped || !(action.rate > 0)) continue;
-      action.emitter.set_freq(std::max(0.f, system.frequency));
-      action.emitter.advance(dt);
+      if (!system.stopped && action.rate > 0 && system.frequency > 0) {
+        action.emitter.set_freq(system.frequency);
+        action.emitter.advance(dt);
+        active = true;
+      }
+      ++it;
     }
+    if (!active && !system.permanent) system.idle = true;
   }
 }
 

@@ -43,7 +43,29 @@ struct SkidWheelSample {
   std::array<double, 3> forward{0, 0, 1};
   uint32_t mark_color = 0;           // the ground's skid_SMcolor (ARGB), 0 none (#452)
   uint16_t style = 0;                // skid_mark_styles() index (#454)
+  // The original's combined slip (tyre_combined_slip), or -1 for SLRR_rev's
+  // scrub law. With it, a mark exists while sigma > 0.4, as in the exe.
+  double sigma = -1;
+  // Tyre load over its nominal load, at most 1: the exe's mark alpha factor.
+  double load_fraction = 1;
 };
+
+// The exe's combined tyre slip (#454), the value its wheel keeps at +0x154:
+// sqrt(sin(a)^2 + (cos(a) k scale)^2) of the slip state 0x43BBD0 updates
+// (k longitudinal, a the slip angle), with that function's stock constants
+// (0x60E02C-0x60E048: limits 1 and 1, relaxations 0.3 and 0.5, transition
+// 0.1 above 0.1 m/s, damping 0.1 and 0.2). Its relaxed branch is a first-
+// order filter of about 20 ms, so the host takes its steady state
+// (slip / 15, lateral / 50) once per frame.
+double tyre_combined_slip(double slip_speed, double lateral_speed, double road_speed,
+                          double longitudinal_scale = 1);
+// The exe's skid effect laws (0x453680, 0x451280, 0x451540): nothing below
+// sigma 0.4; the wheel's particle system emits at its cfg rate times
+// max(1, (sigma - 0.4) * 0.2), and the mark's alpha takes that same factor.
+constexpr double kSkidEffectSlip = .4;
+double tyre_effect_frequency(double sigma);
+// The intensity the exe keeps beside them, min(sigma - 0.4, 1) (0 below).
+double tyre_effect_intensity(double sigma);
 
 struct SkidMarkVertex {
   float x, y, z;

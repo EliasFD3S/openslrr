@@ -117,9 +117,9 @@ The nine `ParticleSystem` natives are bound since #454
 source actions emit into the tyre effects' particle pool in the parent's
 frame, `getCounter` counts the cloud's particles in the counter's sphere, and
 a source's `bone` follows that bone of the parent's skeleton.
-`modePermanent` keeps a system emitting at any distance, while others idle
-past 200 m of the camera. This is the host's reading of the exe's flag
-0x20000000, which keeps a node from its idle bit; see
+`modePermanent` follows the exe's flag 0x20000000: a system that is not
+permanent goes idle after an update with no source emitting, drops its
+sources, and wakes on a positive `setFreq`; see
 [vehicles/notes.md](../vehicles/notes.md#tyre-smoke-ground-dust-and-textured-skid-marks-454).
 A parent outside the active world (the commented-out `Osd` cursor effects,
 the only stock callers) emits nothing.

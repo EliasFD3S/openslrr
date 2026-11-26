@@ -225,12 +225,33 @@ SLRR_TEST(script_domains_without_floor) {
   particles_clear();
 }
 
+// The exe's combined slip and effect laws (#454): a standing burnout
+// saturates the relaxed slip at 1; a 22 degree drift without wheelspin
+// stays under the 0.4 gate, a little wheelspin crosses it.
+SLRR_TEST(original_effect_law) {
+  SLRR_REQUIRE(near(static_cast<float>(tyre_combined_slip(0, 0, 10)), 0.f));
+  SLRR_REQUIRE(near(static_cast<float>(tyre_combined_slip(20, 0, 0)), 1.f));
+  const double drift = tyre_combined_slip(0, 8, 20);
+  SLRR_REQUIRE(drift > .36 && drift < .38);
+  SLRR_REQUIRE(tyre_combined_slip(4, 8, 20) > kSkidEffectSlip);
+  SLRR_REQUIRE(tyre_effect_frequency(.3) == 0 && tyre_effect_frequency(1) == 1);
+  SLRR_REQUIRE(near(static_cast<float>(tyre_effect_frequency(10)), 1.92f));
+  SLRR_REQUIRE(near(static_cast<float>(tyre_effect_intensity(1)), .6f));
+  SkidWheelSample s;
+  s.contact = true;
+  s.force = 3000;
+  s.sigma = .39;
+  SLRR_REQUIRE(skid_scrub(s) == 0);
+  s.sigma = .5;
+  SLRR_REQUIRE(skid_scrub(s) > 0);
+}
+
 }  // namespace
 
 int main() {
   const slrr::standalone::Test tests[] = {
       parses_stock_asphalt_cloud, parses_debris_and_samples_domains, emits_rises_and_dies,
       debris_lands_on_its_ground, parses_skid_configs, textured_mark_tiles,
-      style_rings_follow_maxcount, script_domains_without_floor};
+      style_rings_follow_maxcount, script_domains_without_floor, original_effect_law};
   return slrr::standalone::run("tyre_effects", tests);
 }

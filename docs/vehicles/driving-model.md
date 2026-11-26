@@ -452,13 +452,15 @@ particles:2 (asphalt smoke) and particles:0xA (the asphalt mark).
   the wind (not toward rest), slow eddies, and the emission's ground plane.
 - **Emission.** One emitter per wheel (`emit_tyre_dust`, `part_runtime.cpp`),
   fed with the wheel state the frame published.
-  - Asphalt smokes once the combined scrub (longitudinal and sideways) passes
-    4 m/s, at full strength from 12 m/s, under a load over 500 N. Burnouts
-    and drifts both smoke.
-  - Soft ground (any rolling drag) gives way from 1.5 m/s of scrub, and is
-    thrown up at up to 0.45 strength by a fast wheel even while it grips.
-  - Asphalt smoke emits 2.5× its cfg's rate. Other clouds are scaled to
-    smoke's screen coverage: size² × lifetime. Debris keeps its own rate.
+  - The exe's law (0x453680, 0x451280, `tyre_combined_slip`). The combined
+    slip σ = √(sin² a + (cos a × k)²) of the slip state 0x43BBD0 keeps, with
+    its stock constants. Nothing below σ 0.4, on any ground. Above it, the
+    cloud emits at its cfg's rate × max(1, (σ − 0.4) × 0.2), and a mark
+    exists.
+  - Option 33, `tyre_smoke_density` (percent, default 250, 100 = the exe),
+    multiplies clouds for the volumetric look. The part above 100 % shrinks
+    for big long-lived clouds by size² × lifetime against asphalt.cfg's.
+    Debris keeps the exe's rate.
   - Native traffic within 60 m of the camera smokes and lays marks too (the
     driven and scripted cars within 120 m); it still plays no slide loop.
 - **Script natives.** The nine `ParticleSystem` natives
@@ -466,8 +468,9 @@ particles:2 (asphalt smoke) and particles:0xA (the asphalt mark).
   `init` resolves the RenderRef type to a cloud, each source action emits in
   its parent's frame at the parent's current pose, with no ground plane. A
   source names a bone of the parent's skeleton to follow it.
-  `modePermanent` keeps a system emitting at any distance; without it a
-  system idles past 200 m of the camera (the exe's idle flag, see notes).
+  `modePermanent` follows the exe's node flags: an update in which no
+  source emits sends a system that is not permanent idle, which drops its
+  sources; a positive `setFreq` or a new source wakes it.
 - **Traffic audio.** At most two native traffic cars within 40 m play the
   slide loop.
 - **Rendering.** `draw_particles` runs after the marks in the world view.
@@ -496,7 +499,9 @@ particles:2 (asphalt smoke) and particles:0xA (the asphalt mark).
 - **Marks.** A textured style splits its quads at the texture tiles
   (`height` metres). The first tile is the `uv_end` cap, the rest repeat
   `uv_normal`, and a finished track closes with the cap mirrored. The width
-  follows the scrub from the cfg's minimum to its maximum, capped at 0.8 m.
+  follows the exe's intensity min(σ − 0.4, 1) from the cfg's minimum to its
+  maximum, capped at 0.8 m. Its alpha is the exe's: the colour's alpha × the
+  load over the nominal load (at most 1).
   Each style keeps its own ring of `maxcount` × 14 quads (1400 for the stock
   100), so one ground's marks never erase another's.
   Marks multiply the ground (DST_COLOR, INV_SRC_ALPHA) with the texture
