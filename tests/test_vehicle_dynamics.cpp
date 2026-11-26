@@ -1132,8 +1132,38 @@ SLRR_TEST(the_brake_adjuster_moves_the_front_share) {
   SLRR_REQUIRE(front_only[0] == 1000 && front_only[2] == 0);
 }
 
+SLRR_TEST(hard_braking_declutches_so_the_engine_never_pushes_the_rear_wheels) {
+  // #448: a 100-0 stop with the automatic box and the auto clutch. The box
+  // downshifts to first near 44 km/h; with the clutch closed the engine's
+  // reflected inertia (0.38 x 12.9^2 kg m^2) pushed the rear wheels and
+  // their braking force fell from about 1.8 to 0.5 kN below 37 km/h.
+  // Rear brakes too weak to lock the wheels stand in for the ABS, which
+  // keeps them rolling: a locked wheel hides the engine's push.
+  Car car;
+  for (int i = 2; i < 4; ++i) car.dynamics.drive.wheels[i].brake = 700;
+  while (car.speed() * 3.6 < 100) car.run(1. / 60, 1, 0, 0);
+  double high = 0, low = 0;
+  int high_n = 0, low_n = 0;
+  while (car.speed() > .5) {
+    car.run(1. / 60, 0, 1, 0);
+    const double kph = car.speed() * 3.6;
+    const double rear = std::abs(car.dynamics.state[2].tire_force.longitudinal) +
+                        std::abs(car.dynamics.state[3].tire_force.longitudinal);
+    if (kph < 70 && kph > 50) high += rear, ++high_n;
+    if (kph < 37 && kph > 10) low += rear, ++low_n;
+  }
+  SLRR_REQUIRE(high_n > 0 && low_n > 0);
+  high /= high_n;
+  low /= low_n;
+  std::printf("BRAKE rear force 50-70 km/h %.0f N, 10-37 km/h %.0f N, gear %d\n", high, low,
+              car.dynamics.gear);
+  SLRR_REQUIRE(low > high * .85);
+  SLRR_REQUIRE(car.dynamics.gear == 1);  // stopped in first, ready to launch
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
+      hard_braking_declutches_so_the_engine_never_pushes_the_rear_wheels,
       stock_brake_balance_puts_seventy_percent_on_the_front,
       the_brake_adjuster_moves_the_front_share,
       steering_feedback_pulls_back_and_goes_light_past_the_peak,

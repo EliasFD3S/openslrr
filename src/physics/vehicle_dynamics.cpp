@@ -992,6 +992,19 @@ void VehicleDynamics::update_gear(double rpm, double shaft,
     gear = 1;
   if (!drive.automatic_shift)
     return;
+  if (braking_clutch_ > .5 && gear > 1 && gear != 7) {
+    // Declutched for a hard stop (#448): the engine no longer follows the
+    // wheels, which may also be locked, so pick the gear from the road
+    // speed. The box is then in the gear for that speed when the brake is
+    // released, and in first at rest instead of the gear it braked in.
+    if (std::abs(road_shaft * drive.ratios[gear]) * rpm_per_rad <
+            drive.limit * .65 &&
+        drive.ratios[gear - 1] > 0) {
+      --gear;
+      shift_time_ = .22;
+    }
+    return;
+  }
   if (gear <= 0 || gear == 7 || shaft <= 2)
     return;
   const double ratio = drive.ratios[gear];
@@ -1085,6 +1098,22 @@ void VehicleDynamics::step_drive() {
         -std::expm1(-dt_ / (target < launch_factor_ ? .04 : .15)));
     gas *= std::lerp(1.0, launch_factor_, drive.launch_help);
   }
+  // Hard braking with the auto clutch declutches, as a driver does for a
+  // hard stop (#448). A closed clutch adds the engine's inertia times the
+  // ratio squared to the driven wheels: 0.38 x 12.9^2 = 63 kg m^2 in first
+  // against 1.6 per wheel. Braking then mostly slowed the engine, which
+  // pushed the rear wheels (rear tyre force 1.8 -> 0.5 kN below 37 km/h on
+  // a 100-0 stop) once the box had downshifted to first. SLRR_rev's
+  // brakingClutchHelp opens only near stall speed; the reflected inertia
+  // loads the wheels in any gear, so this opens whatever the rpm. It opens
+  // in 40 ms and takes up again over 250 ms when the brake is released.
+  const double braking_target =
+      drive.auto_clutch && pedal <= .05
+          ? std::clamp((drive.brake - .5) / .3, 0.0, 1.0)
+          : 0.0;
+  braking_clutch_ = std::lerp(
+      braking_clutch_, braking_target,
+      -std::expm1(-dt_ / (braking_target > braking_clutch_ ? .04 : .25)));
   double combustion_torque = 0;
   if (engine_running && rpm < drive.limit && !automatic_shift) {
     const double limiter = engine_limit_fraction();
@@ -1137,6 +1166,7 @@ void VehicleDynamics::step_drive() {
       const double low_speed = std::clamp((12 - kph) / 10, 0.0, 1.0);
       grip *= 1 - stall_risk * low_speed;
     }
+    grip *= 1 - braking_clutch_;
     engine_omega = std::max(0.0, engine_omega + closed_delta * grip);
     drive_impulse =
         -mismatch * (1 - mix) * grip * exchange_rate / ratio * transmission;

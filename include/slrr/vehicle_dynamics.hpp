@@ -261,6 +261,8 @@ private:
   double previous_rpm_ = 0, shift_time_ = 0;
   double starter_remaining_ = 0, service_brake_ = 0;
   double launch_factor_ = 1;
+  // How far the auto clutch is opened for a hard stop, 0..1 (#448).
+  double braking_clutch_ = 0;
   int previous_shift_ = 0;
   bool accelerator_down_ = false, forced_reverse_ = false;
   bool launch_active_ = false;

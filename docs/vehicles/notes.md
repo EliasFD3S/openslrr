@@ -1119,3 +1119,41 @@ through the centre.
 
 Limitations: a wheel touched first after a key is still treated as a key until
 it passes 1 % of its travel. Not validated in game with a wheel yet.
+
+## Hard braking in first: the engine pushed the rear wheels (#448)
+
+Cause: with the automatic box and the auto clutch, a hard stop downshifted to
+first (about 44 km/h on the Physics Lab car) with the clutch closed. A closed
+clutch adds the engine's inertia times the ratio squared to the driven
+wheels: 0.38 × 12.9² ≈ 63 kg·m² in first, against 1.6 kg·m² per wheel. The
+rear brakes then mostly slowed the engine, which pushed the rear wheels: with
+the real ABS of #446 (`physics_lab --scenario brake --respec --abs 1`) the
+rear tyre force fell from about 4.7 to 2.7–3.4 kN (both wheels) below 37 km/h.
+The `stall_risk` opening in `step_drive` only acts below 12 km/h with the
+accelerator released, and `SLRR_rev:src/engine/driving-helping.ts:brakingClutchHelp` only near stall speed.
+
+Fix (`VehicleDynamics::step_drive`, `update_gear`):
+- The auto clutch opens with the brake pedal while the accelerator is
+  released (`braking_clutch_`: 0 at a brake of 0.5, fully open at 0.8), in
+  every gear and at any rpm, since the reflected inertia loads the wheels in
+  any gear. It opens in 40 ms and takes up again over 250 ms on release. A
+  manual clutch (`auto_clutch` false) is unchanged.
+- While it is open the automatic box picks the gear from the road speed
+  instead of the wheel and engine speeds (the wheels may be locked, the
+  engine no longer follows them), so it stops in first, ready to launch. An
+  ABS-less locked stop used to stay in its gear once the wheels stopped.
+
+Validation: `hard_braking_declutches_so_the_engine_never_pushes_the_rear_wheels`
+(rear brakes too weak to lock stand in for the ABS) failed before the fix
+(3.8 kN at 50–70 km/h, 1.4 kN at 10–37 km/h) and passes after (4.3 / 4.2 kN,
+stopped in first). Physics Lab at 1000 Hz on the #446 branch with
+`--respec --abs 1`: the rear force holds about 5 kN down to 10 km/h, and the
+100-0 goes from 39.85 m / 3.053 s to 38.84 m / 2.873 s. On main (no real ABS,
+the rear wheels lock) the 100-0 goes from 40.43 m to 41.15 m: the closed
+clutch had kept the locked rear wheels turning. Other Lab scenarios unchanged.
+
+Limitations: the engine is not rev-matched when the clutch takes up again
+after a hard stop released at speed; the 250 ms take-up spreads the jolt
+rather than removing it. The engine keeps the rpm of the last downshift blip
+and falls to idle in about 2 s while declutched. Hard braking loses engine
+braking. Not validated in game.
