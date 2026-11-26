@@ -1512,7 +1512,10 @@ void LibBgfxBackend::update_car_lights() {
         lamp.color = hue(light.diffuse, {1.f, .96f, .88f});
         lamp.intensity = kHeadlightIntensity;
         lamp.range = std::min(light.range > 0.f ? light.range : kHeadlightRange, kHeadlightRange);
-        lamp.attenuation = light.attenuation;
+        // Not the authored 1 .03 0: the stock lit vertices through attH/attV,
+        // and a linear falloff left trees 40 m ahead at 70 % of the road.
+        lamp.attenuation = {1.f, 0.f, 1.f / (kHeadlightFalloff * kHeadlightFalloff)};
+        lamp.above_axis_cut = 1.f - kHeadlightAboveAxis;
         lamp.cos_inner = std::cos(kHeadlightInnerDegrees * 3.14159265f / 180.f);
         lamp.cos_outer = std::cos(kHeadlightOuterDegrees * 3.14159265f / 180.f);
       } else {

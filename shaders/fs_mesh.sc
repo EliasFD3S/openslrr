@@ -267,7 +267,12 @@ void main()
     vec3 fixtureDiffuse,fixtureHighlight;
     fixtureLighting(n,vec3(0.0,1.0,0.0),v_worldPos,1.0,false,fixtureDiffuse,fixtureHighlight);
     illumination+=fixtureDiffuse;
-    illumination+=lampLighting(n,v_worldPos);
+    // Cutout cards (grass, bushes, leaves) have normals that face a side of
+    // the card, not the plant: a headlight at bumper height lit them like a
+    // wall while the ground beside them stayed grazing-dark. Lamps light them
+    // as the ground they stand on.
+    bool cutoutCard=u_alphaTest.x>0.5 || u_alphaTest.x<0.0;
+    illumination+=lampLighting(cutoutCard?vec3(0.0,1.0,0.0):n,v_worldPos);
 	illumination += interiorSunDiffuse(n,v_worldPos);
 	vec3 shaded = tex.rgb * bake * tint * placement * illumination;
 	if (u_alphaTest.y > 1.5) {

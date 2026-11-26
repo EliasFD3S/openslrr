@@ -410,6 +410,8 @@ void LibBgfxBackend::upload_light_data() {
             ? float(lamp.shadow_tile + 1) : 0.f);
     put(128 + x, 0, lamp.attenuation[0], lamp.attenuation[1], lamp.attenuation[2], lamp.cos_inner);
     put(192 + x, 0, lamp.direction[0], lamp.direction[1], lamp.direction[2], lamp.cos_outer);
+    // Row 2 from 128 (after the headlight shadow rects): beam shaping.
+    put(128 + x, 2, lamp.above_axis_cut, 0.f, 0.f, 0.f);
   }
   const size_t shadowed = lamp_shadow_atlas_bound_
       ? std::min({lamp_shadow_count_, scenery_lamps_.size(), kLampSpecial}) : size_t(0);

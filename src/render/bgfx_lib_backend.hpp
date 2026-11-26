@@ -653,7 +653,13 @@ class LibBgfxBackend final : public IRenderBackend {
   static constexpr size_t kCarLights=16;
   // Tuned in scene_shadow_gpu case car_lights; see docs/rendering/lighting.md #279.
   static constexpr float kCarLightMaxDistance=150.f;
-  static constexpr float kHeadlightIntensity=3.f, kHeadlightRange=60.f;
+  // Headlights fall off as 1/(1 + (d/kHeadlightFalloff)^2): the road 8 m
+  // ahead keeps its #279 level, a tree 40 m away gets about a fifth of it.
+  // Above the beam axis kHeadlightAboveAxis of the light remains, the stock
+  // attV profile (racers light_beams/attV.ptx, rows above the centre 15-40 %
+  // of the band below it).
+  static constexpr float kHeadlightIntensity=3.5f, kHeadlightRange=60.f, kHeadlightFalloff=12.f;
+  static constexpr float kHeadlightAboveAxis=.25f;
   static constexpr float kHeadlightInnerDegrees=14.f, kHeadlightOuterDegrees=30.f;
   static constexpr float kBrakeLightIntensity=1.5f, kBrakeLightRange=6.f, kBrakeLightQuadratic=.3f;
   static constexpr float kBrakeLightInnerDegrees=55.f, kBrakeLightOuterDegrees=85.f;

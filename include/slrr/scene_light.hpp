@@ -34,6 +34,9 @@ struct LampLight {
   // is an omnidirectional lamp.
   std::array<float, 3> direction{0, 0, 0};
   float cos_inner = -1.f, cos_outer = -2.f;
+  // Low-beam cutoff: share of the light taken away above the beam axis
+  // (0: round cone, street lamps; headlights keep 1 - this above it).
+  float above_axis_cut = 0.f;
   // Car lights (#283): the chassis the light is installed on, whether it is
   // a headlight beam, and its tile in the headlight shadow atlas (-1: none).
   const void *car = nullptr;
