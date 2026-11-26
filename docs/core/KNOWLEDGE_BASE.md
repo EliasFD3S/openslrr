@@ -392,7 +392,8 @@ flare, FMV, OSD and HUD, previews, ImGui, `bgfx::frame`.
   `src/natives/natives_resref.cpp:spawn_ground_shell`, which builds
   `GroundMapData` through `scene_instances_ground_map`.
 - Compiled ground data contains RSD placements
-  (`gametype 0x<pack:id> params x,y,z,yaw,pitch,roll[,seed]`), `EXTP`
+  (`gametype 0x<pack:id> params x,y,z,yaw,pitch,roll[,seed]`; a placement
+  with no `params` line sits at the map origin), `EXTP`
   exterior packs, `PHYS` collision triangles and `POLY` render sections
   (`src/resources/scene_instances.cpp:append_ground_placement`,
   `src/resources/scene_instances.cpp:append_ground_collision`).

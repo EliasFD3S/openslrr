@@ -546,8 +546,13 @@ void append_ground_placement(GroundWalk& walk, std::string_view text) {
   const auto type = std::from_chars(text.data(), end, placement.type, 16);
   if (type.ec != std::errc{}) return;
   text.remove_prefix(type.ptr - text.data());
-  const auto params = text.find_first_not_of("\r\n");
-  if (params == std::string_view::npos) return;
+  const auto params = text.find_first_not_of(std::string_view("\r\n\0", 3));
+  if (params == std::string_view::npos) {
+    // No params line: the native sits at the map origin. Track Wizard places
+    // a track's render-only meshes this way (`gametype 0x...` alone).
+    walk.placements.push_back(placement);
+    return;
+  }
   text.remove_prefix(params);
   constexpr std::string_view params_prefix = "params ";
   if (!text.starts_with(params_prefix)) return;
@@ -3068,14 +3073,10 @@ GroundMapData scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id
 
 namespace {
 bool ground_prop_config(const RpkIndex& rpk, uint32_t type, PartConfig& out) {
-  const auto bytes = rpk.read_payload(type);
-  if (bytes.size() < 10 || std::memcmp(bytes.data(), "ICFG", 4) != 0) return false;
-  const auto separator = std::find(bytes.begin() + 8, bytes.end(), 0);
-  if (separator == bytes.end()) return false;
-  const auto offset = static_cast<size_t>(separator - bytes.begin());
-  const std::string_view subtype(reinterpret_cast<const char*>(bytes.data() + 8), offset - 8);
+  std::string subtype;
+  std::string cfg = rpk.native_config(type, &subtype);
+  if (cfg.empty()) return false;
   if (subtype != "object" && subtype != "trlight" && subtype != "building") return false;
-  std::string cfg(reinterpret_cast<const char*>(bytes.data() + offset + 1), bytes.size() - offset - 1);
   // Several stock lane supports have a malformed yaw token on their second render.
   constexpr std::string_view joined_yaw = "-1.570.000000";
   for (size_t pos = cfg.find(joined_yaw); pos != std::string::npos;
@@ -3083,7 +3084,7 @@ bool ground_prop_config(const RpkIndex& rpk, uint32_t type, PartConfig& out) {
     cfg.replace(pos, joined_yaw.size(), "-1.570");
   out = parse_part_config(cfg, &rpk, RpkIndex::pack_from_full(type));
   out.resource = type;
-  out.native_kind = std::string(subtype);
+  out.native_kind = subtype;
   return true;
 }
 
