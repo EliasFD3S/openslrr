@@ -56,4 +56,8 @@ public class WheelRef extends Native
 	// 1 grooved, 2 vented, 3 carbon) and rotor diameter in metres.
 	public native void setBrakeSpec( float pad, float rotor, float diameter );
 
+	// OpenSLRR (#446): the tyre's compound for its temperature and grip
+	// (Tyre.tcSTREET 0, tcSPORT 1, tcSUPERSPORT 2, tcDRAGRADIAL 3).
+	public native void setTyreSpec( float compound );
+
 }

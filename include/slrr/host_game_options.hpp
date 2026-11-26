@@ -49,11 +49,17 @@ struct InputTuning {
   int ffb_smoothing = 10;  // option 31, 0-50 ms: low-pass on the force
 };
 InputTuning& host_input_tuning();
+// Host-only HUD settings (#446), saved with the others.
+struct HudTuning {
+  // Option 32: the brake and tyre temperature panel (0 off, 1 on).
+  bool temperatures = true;
+};
+HudTuning& host_hud_tuning();
 // Persist host-only graphics alongside the stock options, without changing Config.
 // Saved as JSON in save/game/openslrr_options.json (#405); the key=value
 // save/game/openslrr_options of older builds is read once and kept.
 bool host_save_graphics_options();
-// A host-only option by its OptionsDialog renderer option id (0-31, see the
+// A host-only option by its OptionsDialog renderer option id (0-32, see the
 // table in host_game_options.cpp). get returns false for an unknown id; set
 // clamps to the option's range, applies it and saves when it changed.
 bool host_option_get(int id, int& value);

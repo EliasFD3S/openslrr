@@ -1212,17 +1212,65 @@ Validation:
   below 7 km/h. ASR did not intervene in the stock launch (no wheelspin).
   Not driven by hand, not tried on the other 23 cars.
 
-Limitations: the pad curves, cooling and capacities are typical published
-shapes, not measured parts; the reference cars and some calipers are
-assumptions (no published data for the race cars and the Prime). The
-sizing assumed real-car masses; the game's CoupeSport weighs 1524 kg, not
-1400. There is no tyre heat, no pad wear from heat, no brake fluid boiling
-and no HUD lamp or pedal pulse for ABS/ASR; the Options sliders still read
-"percent". The race AI uses the patched brakes without ABS. A brake class
-that is not a `DiscBrake` (the unused `DrumBrake`, a mod's own) keeps the
-stock torque law, which a car with physical brakes takes at face value
-(about twice too strong). Unchanged and
-outside this issue: braking hard with the automatic gearbox, it shifts down
-to first at about 44 km/h with the auto clutch closed, and the engine's
-reflected inertia then pushes the rear wheels (the rear force fell from
-1.8 to 0.5 kN in the Lab).
+### HUD lamps, temperatures and the first limitations (#446)
+
+- HUD lamps: build 606 reads `osd_abs` / `osd_asr` (handlers 0x445520 /
+  0x4455B0) and lights `led_ABS` (cars 0x61) and `led_ASR` (0x62) while the
+  aid intervenes: car flags 0x1000000 / 0x2000000, set where the ABS / ASR
+  factor drops (0x44E0E1, 0x44E290) and read at 0x452746 / 0x452779. The
+  four lamps (`led_HB` 0x63 and `led_ER` 0x64 too) take the gauge plate's
+  anchor (newosd 0x55, 3.24, -2.4, -3.59 at 0x446261; the lamps 3.24, -2.4,
+  -3.58), each mesh placing its lamp on the plate. The host table had the
+  handbrake lamp at -0.227, 0.925, by eye, so it never showed on the plate;
+  all three now share the plate's anchor. `HudSlot::Abs` / `Asr` parse the
+  CFG lines like the other slots.
+- Tyre temperature (`src/physics/tyre_thermal.cpp`): a tread lump (8 % of
+  the tyre's mass, the #430 tread and sidewall densities) heated by half the
+  sliding work at the patch, a carcass lump heated by the rolling resistance
+  and by the rotor through the rim (1.5 W/K), 25 W/K between them; convection
+  growing with speed, and the road under the tread. The patched `Tyre` sends
+  its compound (`WheelRef.setTyreSpec`); the grip follows the tread
+  temperature on a curve per compound (street full from 40 to 90 deg C, the
+  soft racing compound from 80 to 115, all weaker cold and overheated).
+- Brake fluid: follows 45 % of the rotor's rise with a 40 s lag; past
+  230 deg C (DOT 4) the pressure at the pads falls, to 0.4 at 290 deg C.
+- OSD panel (host option 32, Options > Game > TEMPERATURES, on by default):
+  a top view above the damage gauge, each corner a tyre bar and two
+  readouts in the stock LCD font, the tread above and the rotor below a
+  brake mark; blue cold, green in the window, yellow to red past it, a red
+  mark while the fluid boils.
+- ABS feedback: a 14 Hz force feedback vibration on a wheel, and a light
+  rumble on the controller the brake is bound to.
+- The race AI gets ABS on cars with physical brakes. A wheel without a
+  spec on such a car keeps the stock law's gain.
+- The ABS and ASR sliders describe what they do instead of "percent".
+
+Validation:
+
+- `vehicle_dynamics` 56/56 (two more: tyre heat and grip, fluid boiling);
+  `options_retry` passes with option 32 in its every-id round trip (33 is
+  now the unknown id). `Tyre`, `WheelRef`, `OptionsDialog` and `OsdxOptions`
+  compiled in the compile root; HEAD's `OptionsDialog` rebuilt byte for
+  byte, HEAD's `OsdxOptions` came out 24 bytes larger than the shipped
+  class with the same strings (constant-pool order of a two-pass build).
+- Physics Lab (`--respec` adds a sport tyre's heat): ten minutes at
+  100 km/h, treads 34-35 deg C, carcasses 45-48; the skidpad ramp leaves
+  the outer front at 88 deg C and the outer rear at 71; a burnout heats the
+  rear tread by 17 deg C in 4 s.
+- In game (Baiern bench, ABS forced on by a temporary hook): with every lamp
+  forced on, ABS, ASR and the handbrake light on their plate spots; in a real
+  ABS stop only the ABS lamp lights. The panel shows the four corners, clear
+  of the damage gauge.
+
+Limitations: the pad, tyre and cooling curves are typical published shapes,
+not measured parts; the reference cars and some calipers are assumptions
+(no published data for the race cars and the Prime). The sizing assumed
+real-car masses; the game's CoupeSport weighs 1524 kg, not 1400. The tyre
+temperature does not change the pressure, wear or the tyre's stiffness, and
+there is no tyre smoke. Pads do not wear faster when hot. The ABS pulse is
+a vibration, not a pedal kick (no device has one). The race AI has no ASR.
+The emergency lamp (`led_ER`, `osd_emergency`) is not lit; what lit it in
+build 606 is not traced. Unchanged and outside this issue: braking hard with
+the automatic gearbox, it shifts down to first at about 44 km/h with the
+auto clutch closed, and the engine's reflected inertia then pushes the rear
+wheels (the rear force fell from 1.8 to 0.5 kN in the Lab).

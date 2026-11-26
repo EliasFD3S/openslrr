@@ -78,6 +78,9 @@ struct WheelPhys {
   // setBrakeSpec (patched DiscBrake, #446): pad compound, rotor type and
   // rotor diameter (m). A zero diameter: the stock scripts, no spec.
   float brake_pad = 0, brake_rotor = 0, brake_diameter = 0;
+  // setTyreSpec (patched Tyre, #446): the compound, Tyre.tcSTREET (0) to
+  // tcDRAGRADIAL (3); -1 without the patch.
+  float tyre_compound = -1;
   int opp = -1;
   float arm[7]{}, hub[10]{};
   bool authored_position = false;
@@ -3367,6 +3370,9 @@ DriveRefresh configure_drive(Object *chassis, Record &rec, bool controlled) {
   // up to 30 bar (30 % pedal), then 0.3 of the rise.
   drive.rear_valve_knee = physical_brakes ? .3 : 0;
   drive.rear_valve_slope = physical_brakes ? .3 : 1;
+  // Opponents and other driverless cars with real brakes get ABS, as cars of
+  // that power had (#446); the player's comes from the Options slider.
+  if (autonomous && physical_brakes) drive.abs_strength = 1;
   // Without an engine there is no gearbox either: neutral, wheels roll free.
   drive.gears = engine ? std::clamp(field_int(chassis, "gears"), 1, 6) : 0;
   const double final_drive = comp(chassis, "rearend_ratio");
@@ -3392,8 +3398,18 @@ DriveRefresh configure_drive(Object *chassis, Record &rec, bool controlled) {
     out.weight = std::max(0.f, wheel.drive);
     out.brake = std::max(0.f, wheel.brake);
     out.handbrake = std::max(0.f, wheel.hbrake);
+    // A brake class without a spec (DrumBrake, a mod's own) on a car with
+    // physical brakes keeps the stock law's gain (#446).
+    if (physical_brakes && !(wheel.brake_diameter > 0)) {
+      out.brake *= kBrakeGain / brake_inertia;
+      out.handbrake *= kHandbrakeGain / brake_inertia / kPhysicalHandbrakeGain;
+    }
     out.bearing = std::max(0.f, wheel.bearing);
     out.hardware = physics::brake_hardware(wheel.brake_pad, wheel.brake_rotor, wheel.brake_diameter);
+    out.tyre_heat = wheel.tyre_compound >= 0
+        ? physics::tyre_thermal_spec(wheel.tyre_compound, rec.dynamics.wheels[i].radius,
+                                     2 * rec.dynamics.wheels[i].half_width)
+        : physics::TyreThermalSpec{};
     out.rolling_resistance = std::max(0.f, wheel.roll_res);
     out.tyre.friction = wheel.friction;
     out.tyre.stiffness = wheel.stiffness;
@@ -3408,6 +3424,7 @@ DriveRefresh configure_drive(Object *chassis, Record &rec, bool controlled) {
       // The missing rim's script no longer refreshes its tyre parameters.
       // Do not copy them into a contact on the remaining disc/caliper.
       out.tyre = {};
+      out.tyre_heat = {};
       out.rolling_resistance = .04;
     }
   }
@@ -7778,8 +7795,16 @@ void update_force_feedback(double frame_seconds, bool committed) {
   const auto out = steering_feedback.update(front, dynamics.body.velocity.length(),
                                             std::max(frame_seconds, 1e-3), feedback_jolt);
   feedback_jolt = 0;
-  host_input_force_feedback(out.torque, out.damper, out.detail, out.impact, out.vibration,
-                            out.vibration_hz, static_cast<float>(frame_seconds));
+  // ABS at work (#446): the pump and valves shake the car; the wheel gets a
+  // 14 Hz buzz and a pad the brake is bound to a light rumble.
+  float vibration = out.vibration, vibration_hz = out.vibration_hz;
+  if (dynamics.abs_active()) {
+    if (vibration < .3f) vibration_hz = 14.f;
+    vibration = std::max(vibration, .3f);
+    host_input_brake_pulse(.35f);
+  }
+  host_input_force_feedback(out.torque, out.damper, out.detail, out.impact, vibration,
+                            vibration_hz, static_cast<float>(frame_seconds));
 }
 
 void finish_physics_frame(double frame_seconds, double alpha, bool committed) {
@@ -8190,6 +8215,26 @@ bool part_vehicle_hud(VehicleHudState &state) {
   state.gear = rec->physics_released ? rec->dynamics.gear : 0;
   // The lamp lights past 5 % of the travel, not on an axis resting near zero.
   state.handbrake = rec->dynamics.drive.handbrake > kHandbrakeFull * .05;
+  state.abs = rec->dynamics.abs_active();
+  state.asr = rec->dynamics.asr_active();
+  state.temperatures = host_hud_tuning().temperatures;
+  for (size_t i = 0; i < state.corners.size(); ++i) {
+    const auto &cfg = rec->dynamics.drive.wheels[i];
+    const auto &wheel = rec->dynamics.state[i];
+    auto &c = state.corners[i];
+    c.brake = rec->dynamics.wheels[i].enabled && cfg.hardware.specified;
+    c.tyre = rec->dynamics.wheels[i].enabled && cfg.tyre_heat.specified;
+    c.rotor = static_cast<float>(wheel.brake_temperature);
+    c.fluid = static_cast<float>(wheel.fluid_temperature);
+    c.tread = static_cast<float>(wheel.tyre_temperature.surface);
+    c.carcass = static_cast<float>(wheel.tyre_temperature.carcass);
+    c.pad = static_cast<float>(physics::pad_friction_factor(cfg.hardware, wheel.brake_temperature));
+    c.grip = static_cast<float>(physics::tyre_grip_factor(cfg.tyre_heat, c.tread));
+    // Below its window the friction still rises with temperature.
+    c.pad_cold = physics::pad_friction_factor(cfg.hardware, wheel.brake_temperature + 10) > c.pad + 1e-4;
+    c.tread_cold = physics::tyre_grip_factor(cfg.tyre_heat, c.tread + 5) > c.grip + 1e-4;
+    c.boiling = physics::fluid_pressure_factor(cfg.hardware, wheel.fluid_temperature) < 1;
+  }
   return true;
 }
 
@@ -8308,6 +8353,11 @@ bool part_physics_state(Object *key, PartPhysicsState &state) {
   for (size_t i = 0; i < 4; ++i) {
     state.brake_temperature[i] = rec->dynamics.state[i].brake_temperature;
     state.brake_pressure[i] = rec->dynamics.state[i].brake_pressure;
+    state.fluid_temperature[i] = rec->dynamics.state[i].fluid_temperature;
+    state.tyre_surface[i] = rec->dynamics.state[i].tyre_temperature.surface;
+    state.tyre_carcass[i] = rec->dynamics.state[i].tyre_temperature.carcass;
+    state.brake_specified[i] = rec->dynamics.drive.wheels[i].hardware.specified;
+    state.tyre_specified[i] = rec->dynamics.drive.wheels[i].tyre_heat.specified;
     state.length[i] = rec->dynamics.state[i].length;
     state.force[i] = rec->dynamics.state[i].force;
     state.contact[i] = rec->dynamics.state[i].contact;
@@ -9602,6 +9652,11 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
       w.brake_rotor = scalar(a, 1, 0);
       w.brake_diameter = std::max(0.f, scalar(a, 2, 0));
     });
+  });
+  // OpenSLRR native declared by the patched WheelRef (#446): the tyre's
+  // compound (Tyre.tcSTREET 0, tcSPORT 1, tcSUPERSPORT 2, tcDRAGRADIAL 3).
+  wheel("setTyreSpec", "(F)V", [put](Object *s, const std::vector<Value> &a) {
+    return put(s, [&](WheelPhys &w) { w.tyre_compound = std::max(0.f, scalar(a, 0, 0)); });
   });
   wheel("setOppWheel", "(I)V", [put](Object *s, const std::vector<Value> &a) {
     return put(s, [&](WheelPhys &w) { w.opp = number(a, 0); });

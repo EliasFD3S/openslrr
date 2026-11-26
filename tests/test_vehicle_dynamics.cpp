@@ -2,7 +2,8 @@
 // Build by hand like the other standalone tests, from the repository root:
 //   g++ -std=c++20 -O2 -Iinclude -Itests tests/test_vehicle_dynamics.cpp
 //       src/physics/vehicle_dynamics.cpp src/physics/tire_model.cpp
-//       src/physics/brake_system.cpp src/physics/suspension_geometry.cpp
+//       src/physics/brake_system.cpp src/physics/tyre_thermal.cpp
+//       src/physics/suspension_geometry.cpp
 //       -o test_vehicle_dynamics
 #include "standalone_test.hpp"
 
@@ -1316,8 +1317,57 @@ SLRR_TEST(a_stop_heats_the_rotors_and_unspecified_brakes_stay_cold) {
   SLRR_REQUIRE(hot.dynamics.state[0].brake_temperature < front - 5);
 }
 
+SLRR_TEST(tyres_warm_up_rolling_and_sliding_and_set_the_grip) {
+  const auto street = tyre_thermal_spec(0, .31, .205), race = tyre_thermal_spec(2, .31, .205);
+  // Ten minutes at 100 km/h on 3500 N: the hysteresis warms the carcass to a
+  // road tyre's 40-70 deg C, the tread a little less.
+  TyreTemperature cruise;
+  for (int step = 0; step < 600000; ++step)
+    cruise = step_tyre_temperature(street, cruise, 0, 3500 * .012 * 27.8, kAmbientTemperature,
+                                   27.8, .001);
+  SLRR_REQUIRE(cruise.carcass > 40 && cruise.carcass < 70);
+  SLRR_REQUIRE(cruise.surface > 30 && cruise.surface < cruise.carcass);
+  // A burnout (20 kW of sliding) heats the tread within seconds.
+  TyreTemperature burnout;
+  for (int step = 0; step < 4000; ++step)
+    burnout = step_tyre_temperature(street, burnout, 20000, 0, kAmbientTemperature, 0, .001);
+  SLRR_REQUIRE(burnout.surface > 60);
+  SLRR_REQUIRE(burnout.carcass < burnout.surface);
+  // Grip: cold below the window, full in it, falling past it; a racing
+  // compound is weaker cold than a street one.
+  SLRR_REQUIRE(tyre_grip_factor(street, 25) < 1 && tyre_grip_factor(street, 25) > .9);
+  SLRR_REQUIRE(tyre_grip_factor(street, 70) == 1);
+  SLRR_REQUIRE(tyre_grip_factor(street, 180) < .85);
+  SLRR_REQUIRE(tyre_grip_factor(race, 25) < tyre_grip_factor(street, 25));
+  SLRR_REQUIRE(tyre_grip_factor(race, 100) == 1);
+  // Without the patched Tyre: ambient and the scripted grip.
+  const TyreThermalSpec none;
+  SLRR_REQUIRE(tyre_grip_factor(none, 300) == 1);
+  SLRR_REQUIRE(step_tyre_temperature(none, {200, 200}, 1e5, 1e4, 600, 30, 1).surface ==
+               kAmbientTemperature);
+  // A hot brake warms the carcass through the rim.
+  TyreTemperature rim;
+  for (int step = 0; step < 60000; ++step)
+    rim = step_tyre_temperature(street, rim, 0, 0, 500, 0, .001);
+  SLRR_REQUIRE(rim.carcass > kAmbientTemperature + 2);
+}
+
+SLRR_TEST(hot_brake_fluid_boils_and_the_pressure_falls) {
+  const auto brake = brake_hardware(0, 2, .286);
+  double fluid = kAmbientTemperature;
+  SLRR_REQUIRE(fluid_pressure_factor(brake, fluid) == 1);
+  for (int step = 0; step < 120000; ++step) fluid = step_fluid_temperature(brake, fluid, 700, .001);
+  SLRR_REQUIRE(fluid > 230);
+  SLRR_REQUIRE(fluid_pressure_factor(brake, fluid) < 1 && fluid_pressure_factor(brake, fluid) >= .4);
+  for (int step = 0; step < 300000; ++step) fluid = step_fluid_temperature(brake, fluid, 100, .001);
+  SLRR_REQUIRE(fluid_pressure_factor(brake, fluid) == 1);
+  SLRR_REQUIRE(fluid_pressure_factor(BrakeHardware{}, 400) == 1);
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
+      tyres_warm_up_rolling_and_sliding_and_set_the_grip,
+      hot_brake_fluid_boils_and_the_pressure_falls,
       abs_keeps_the_wheels_turning_and_stops_shorter_than_locked,
       abs_cycles_one_wheel_holds_the_rear_axle_together_and_delays_the_yaw,
       abs_lets_the_wheels_lock_below_walking_pace,

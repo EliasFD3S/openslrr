@@ -51,6 +51,13 @@ double pad_friction_factor(const BrakeHardware& brake, double temperature);
 double step_rotor_temperature(const BrakeHardware& brake, double temperature, double heat,
                               double speed, double dt);
 
+// Brake fluid in the caliper (deg C): it follows 45 % of the rotor's rise
+// above ambient with a 40 s lag. DOT 4 boils at 230 deg C: past it the
+// vapour takes up pedal travel and the pressure that reaches the pads falls
+// (to 0.4 at 290 deg C). The fluid cools back and the brakes recover.
+double step_fluid_temperature(const BrakeHardware& brake, double fluid, double rotor, double dt);
+double fluid_pressure_factor(const BrakeHardware& brake, double fluid);
+
 // Reference speed (m/s, along the direction of travel) as an ABS/ASR
 // controller estimates it: the accelerometer integrated between samples,
 // pulled to the fastest wheel while braking (the wheels can only be slower

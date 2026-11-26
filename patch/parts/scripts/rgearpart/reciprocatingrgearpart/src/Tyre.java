@@ -60,6 +60,9 @@ public class Tyre extends ReciprocatingRGearPart
 //	float	load_progress = 0.000;
 
 	float	load_mul=1.000;
+	// OpenSLRR (#446): the compound for the host's tyre temperature
+	// (tcSTREET 0 ... tcDRAGRADIAL 3), sent with WheelRef.setTyreSpec.
+	float	rubber_type = 0.0;
 
 	// debug vars, remove them after use //
 	float	slide_cm;
@@ -163,6 +166,7 @@ public class Tyre extends ReciprocatingRGearPart
 			// OpenSLRR: the lateral relaxation length grows as the pressure falls.
 			if (optimal_inflation > 0.0)
 				w.setRelaxation( 0.3/Math.sqrt(inflation/optimal_inflation) );
+			w.setTyreSpec( rubber_type );
 			w.setBearing( 20.0 );
 
 			/*
@@ -196,6 +200,7 @@ public class Tyre extends ReciprocatingRGearPart
 	public void SetupRubber( int RT )
 	{
 		String compound_label;
+		rubber_type = RT;
 
 		if (RT == tcSPORT) // sport tyre //
 		{

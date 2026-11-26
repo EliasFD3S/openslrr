@@ -186,7 +186,14 @@ descriptions the piston size and torque.
 
 Cars already bought keep their brake objects, which take the new values
 when they load. Without these classes the host keeps the stock torques (#400)
-and no heat. Details in
+and no heat.
+
+The patched `Tyre.class` (with the #424 pressure changes) also sends its
+compound through `WheelRef.setTyreSpec`, so each tyre has a temperature that
+sets its grip: a street tyre works from cold, a soft racing tyre needs to be
+warmed. **Options → Game → TEMPERATURES** (on by default, `OptionsDialog` and
+`OsdxOptions`) shows each tyre's and brake's temperature above the gauges.
+The HUD lights its stock ABS and ASR lamps while they work. Details in
 [docs/vehicles/notes.md](../docs/vehicles/notes.md#brakes-as-hardware-abs-and-asr-446).
 
 ## Java natives
@@ -194,6 +201,7 @@ and no heat. Details in
 | Class and signature | Behavior |
 | --- | --- |
 | `java.game.parts.WheelRef.setRelaxation(F)V` | Sets the tyre's lateral relaxation length in metres (clamped to 0.05–2; 0.3 by default). |
+| `java.game.parts.WheelRef.setTyreSpec(F)V` | Tyre compound for its temperature and grip: `Tyre.tcSTREET` 0, `tcSPORT` 1, `tcSUPERSPORT` 2, `tcDRAGRADIAL` 3 (#446). |
 | `java.game.parts.WheelRef.setBrakeSpec(FFF)V` | Brake hardware: pad compound (0 street, 1 fast road, 2 race), rotor type (0 solid, 1 grooved, 2 vented, 3 carbon) and rotor diameter in metres (clamped to 0.15–0.5). A positive diameter makes the car's brakes physical (#446). |
 | `java.game.OptionsDialog.getRendererOption(I)I` | Reads the active value for the requested identifier. An unknown identifier returns 0. |
 | `java.game.OptionsDialog.setRendererOption(II)V` | Applies the value to the session. Unknown identifiers are ignored. |
@@ -222,6 +230,7 @@ and no heat. Details in
 | 19 | Street lamps | 0 off, non-zero on (default on) |
 | 20 | Shadowed street lamps | 0–6 (default 6) |
 | 21 | Steering speed sensitivity | 0–100 percent (default 50): how much an analog wheel or stick's full lock narrows with speed; 0 keeps full lock at any speed, 100 narrows it like keyboard steering |
+| 32 | Temperatures | 0 off, 1 on (default): the brake and tyre temperature panel above the gauges (#446) |
 
 The menu and ImGui share all of these options. They are saved in `save/game/openslrr_options.json` and persist across launches. Local lights (4) are independent of scenery sunlight (3): turning sunlight off keeps the garage lamps and their shadows. Resolution, the global shadow toggle, and flares use the game's existing configuration.
 

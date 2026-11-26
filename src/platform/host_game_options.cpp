@@ -97,6 +97,10 @@ const HostOption kOptions[] = {
     SLRR_INPUT_INT(29, ffb_damper, 0, 200),
     SLRR_INPUT_INT(30, ffb_min_force, 0, 20),
     SLRR_INPUT_INT(31, ffb_smoothing, 0, 50),
+    // HUD (#446).
+    HostOption{32, "hud", "temperatures", 0, 1, true,
+               +[] { return int(host_hud_tuning().temperatures); },
+               +[](int v) { host_hud_tuning().temperatures = v != 0; }, {}},
 };
 #undef SLRR_GRAPHICS_INT
 #undef SLRR_GRAPHICS_BOOL
@@ -299,6 +303,10 @@ GameOptions read_options(Jvm& jvm) {
 }
 InputTuning& host_input_tuning() {
   static InputTuning tuning;
+  return tuning;
+}
+HudTuning& host_hud_tuning() {
+  static HudTuning tuning;
   return tuning;
 }
 EnhancedGraphics& host_enhanced_graphics() {

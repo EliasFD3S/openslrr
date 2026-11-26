@@ -1261,8 +1261,13 @@ void VehicleDynamics::step_drive() {
       pressure = drive.rear_valve_knee + (pressure - drive.rear_valve_knee) * drive.rear_valve_slope;
     s.brake_pressure = pressure;
     apply_brake(torque_step * pressure * cfg.brake * drive.brake_scale *
-                    pad_friction_factor(cfg.hardware, s.brake_temperature),
+                    pad_friction_factor(cfg.hardware, s.brake_temperature) *
+                    fluid_pressure_factor(cfg.hardware, s.fluid_temperature),
                 true);
+    // The tyre's grip at its tread temperature (#446).
+    TireParameters tyre = cfg.tyre;
+    tyre.friction *= tyre_grip_factor(cfg.tyre_heat, s.tyre_temperature.surface);
+    double sliding_power = 0, rolling_power = 0;
     apply_brake(torque_step * drive.handbrake * cfg.handbrake * drive.handbrake_scale, true);
 
     if (!s.contact || s.force <= 0) {
@@ -1292,7 +1297,7 @@ void VehicleDynamics::step_drive() {
         force = {s.slip_speed * factor, -lateral * factor};
       } else {
         force = tire_forces(s.force, 1, s.spin * wheel.radius, road, relaxed_lateral,
-                            cfg.tyre, camber, lateral);
+                            tyre, camber, lateral);
       }
 
       const Vec3 arm = s.patch - body.position;
@@ -1305,6 +1310,11 @@ void VehicleDynamics::step_drive() {
           std::abs(s.slip_speed) / (dt_ * (inverse_mass + inverse_spin));
       force.longitudinal = std::clamp(force.longitudinal, -limit, limit);
       s.tire_force = force;
+      // Tyre heat: the friction work of the sliding patch and the rubber's
+      // hysteresis as it rolls.
+      sliding_power = std::abs(force.longitudinal * s.slip_speed) + std::abs(force.lateral * lateral);
+      rolling_power = s.force * (cfg.rolling_resistance > 0 ? cfg.rolling_resistance : .01) *
+                      std::abs(road);
       body.add_force(forward * force.longitudinal + side * force.lateral,
                      s.patch);
       const double rolling_torque =
@@ -1323,6 +1333,10 @@ void VehicleDynamics::step_drive() {
               remaining_friction / remaining_brake;
     s.brake_temperature =
         step_rotor_temperature(cfg.hardware, s.brake_temperature, heat, road, dt_);
+    s.fluid_temperature =
+        step_fluid_temperature(cfg.hardware, s.fluid_temperature, s.brake_temperature, dt_);
+    s.tyre_temperature = step_tyre_temperature(cfg.tyre_heat, s.tyre_temperature, sliding_power,
+                                               rolling_power, s.brake_temperature, road, dt_);
     const double unspent = std::max(0.0, remaining_brake - std::abs(before_hold - s.spin));
     s.holding_impulse = unspent * wheel_inertia / std::max(.01, wheel.radius);
     s.rotation =
@@ -1477,7 +1491,9 @@ void VehicleDynamics::step(const Terrain &terrain) {
     if (!wheels[i].metal_contact && !drive.native_traffic) {
       const double tilt = body.orientation.rotate(s.hub_rotation.rotate({0, -1, 0})).dot(s.normal);
       const double camber = std::acos(std::clamp(std::abs(tilt), 0.0, 1.0));
-      const auto peaks = tire_friction_limits(s.force, 1, cfg.tyre, camber);
+      TireParameters tyre = cfg.tyre;
+      tyre.friction *= tyre_grip_factor(cfg.tyre_heat, s.tyre_temperature.surface);
+      const auto peaks = tire_friction_limits(s.force, 1, tyre, camber);
       caps.longitudinal = std::min(caps.longitudinal, peaks.longitudinal);
       caps.lateral = std::min(caps.lateral, peaks.lateral);
     }

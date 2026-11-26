@@ -1,6 +1,7 @@
 #pragma once
 #include "slrr/brake_system.hpp"
 #include "slrr/tire_model.hpp"
+#include "slrr/tyre_thermal.hpp"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -160,6 +161,9 @@ struct WheelState {
   // Rotor temperature (deg C) and the service brake pressure reaching the
   // caliper after ABS/ASR, as a fraction of full pedal (#446).
   double brake_temperature = kAmbientTemperature, brake_pressure = 0;
+  // Brake fluid in the caliper (deg C) and the tyre's tread and carcass.
+  double fluid_temperature = kAmbientTemperature;
+  TyreTemperature tyre_temperature;
   TireForces tire_force{};
 };
 // Optional host anti-roll approximation, in N/m and N s/m. Invalid or
@@ -174,6 +178,9 @@ struct DriveWheel {
   // Pad, rotor and diameter from WheelRef.setBrakeSpec (#446); unspecified
   // brakes stay cold and never fade.
   BrakeHardware hardware;
+  // Compound and size from WheelRef.setTyreSpec (#446); unspecified tyres
+  // stay at ambient with their scripted grip.
+  TyreThermalSpec tyre_heat;
 };
 struct DriveInput {
   bool native_traffic = false; // SLRR_rev TrafficVehicle tyre-force driver.

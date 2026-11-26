@@ -105,6 +105,17 @@ double step_rotor_temperature(const BrakeHardware& b, double temperature, double
   return std::clamp(next, kAmbientTemperature, 1500.0);
 }
 
+double step_fluid_temperature(const BrakeHardware& b, double fluid, double rotor, double dt) {
+  if (!b.specified) return kAmbientTemperature;
+  const double target = kAmbientTemperature + .45 * (rotor - kAmbientTemperature);
+  return fluid + (target - fluid) * -std::expm1(-dt / 40);
+}
+
+double fluid_pressure_factor(const BrakeHardware& b, double fluid) {
+  if (!b.specified) return 1;
+  return 1 - std::clamp((fluid - 230) / 60, 0.0, 1.0) * .6;
+}
+
 double ReferenceSpeed::update(double dt, double acceleration, bool braking,
                               const std::array<double, 4>& wheels,
                               const std::array<bool, 4>& contact,

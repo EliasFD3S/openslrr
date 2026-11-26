@@ -204,6 +204,19 @@ Notes and measurements: [notes](notes.md#brakes-as-hardware-abs-and-asr-446).
   replaces the valve) and share the lower pressure (select-low). A front
   wheel alone modulating limits the other front to its pressure plus a
   margin growing over 0.8 s. Below 2 m/s the pressure follows the pedal.
+- **Fluid.** The caliper's fluid follows 45 % of the rotor's rise above
+  ambient with a 40 s lag; past 230 deg C (DOT 4) the pressure reaching the
+  pads falls, to 0.4 at 290 deg C.
+- **Tyres** (`src/physics/tyre_thermal.cpp`): with the patched `Tyre`
+  (`WheelRef.setTyreSpec`, the compound), each tyre has a tread and a
+  carcass temperature. Half the sliding work at the patch heats the tread,
+  the rolling resistance and the rotor (through the rim) heat the carcass;
+  both cool faster with speed. The tread temperature scales the tyre's
+  friction (`TireParameters::friction`) for the force law and the sticking
+  limits alike, through a curve per compound.
+- **Feedback.** While ABS works, a force feedback wheel buzzes at 14 Hz and
+  the pad the brake is bound to rumbles; the HUD lights the stock ABS / ASR
+  lamps. Driverless cars with physical brakes have ABS.
 - **ASR** (`TractionControl`, Options ASR slider): while the driver
   accelerates (clutch engaged, no brake, no shift), the engine torque factor
   follows the driven axles' mean slip past 8 % or 0.8 m/s (20 % or 2 m/s at

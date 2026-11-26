@@ -110,6 +110,7 @@ struct Car {
         d.brake = i < 2 ? 2409 : 1252;
         d.handbrake = i < 2 ? 0 : 1252;
         d.hardware = brake_hardware(0, i < 2 ? 2 : 0, i < 2 ? .286 : .276);
+        d.tyre_heat = tyre_thermal_spec(1, w.radius, 2 * w.half_width);  // sport tyre
       }
       d.tyre = sport_tyre(205);
       if (gt3) {
@@ -355,6 +356,20 @@ std::string fade(const std::string& csv) {
   return out;
 }
 
+// Ten minutes at 100 km/h: the tyres' steady temperatures.
+std::string cruise(const std::string& csv) {
+  Run run("cruise");
+  reach(run, 100);
+  hold(run, 100, 600);
+  run.write_csv(csv, VehicleDynamics::frequency);
+  const auto& st = run.car.dynamics.state;
+  char out[200];
+  std::snprintf(out, sizeof out, "front tread %.0f C carcass %.0f C, rear tread %.0f C carcass %.0f C",
+                st[0].tyre_temperature.surface, st[0].tyre_temperature.carcass,
+                st[2].tyre_temperature.surface, st[2].tyre_temperature.carcass);
+  return out;
+}
+
 // Split friction: the left wheels on ice (friction x 0.25) during a full
 // stop from 100 km/h, the driver steering to hold the heading (at most
 // 0.15 rad, reacting after 0.3 s). Reports the stop, the largest yaw rate
@@ -402,9 +417,13 @@ std::string skidpad(const std::string& csv) {
     if (g > best) { best = g; best_steer = steer; }
   }
   run.write_csv(csv, VehicleDynamics::frequency);
-  char out[200];
-  std::snprintf(out, sizeof out, "max lateral %.3f g at steer %.3f rad, final speed %.1f km/h",
-                best, best_steer, run.speed() * kKph);
+  const auto& st = run.car.dynamics.state;
+  char out[240];
+  std::snprintf(out, sizeof out,
+                "max lateral %.3f g at steer %.3f rad, final speed %.1f km/h, treads %.0f/%.0f/%.0f/%.0f C",
+                best, best_steer, run.speed() * kKph, st[0].tyre_temperature.surface,
+                st[1].tyre_temperature.surface, st[2].tyre_temperature.surface,
+                st[3].tyre_temperature.surface);
   return out;
 }
 
@@ -590,8 +609,8 @@ std::string burnout(const std::string& csv) {
   moved = std::hypot(d.x, d.z);
   run.write_csv(csv, VehicleDynamics::frequency);
   char out[200];
-  std::snprintf(out, sizeof out, "rear wheel speed max %.2f m/s, car moved %.3f m",
-                spin, moved);
+  std::snprintf(out, sizeof out, "rear wheel speed max %.2f m/s, car moved %.3f m, rear tread %.0f C",
+                spin, moved, run.car.dynamics.state[2].tyre_temperature.surface);
   return out;
 }
 
@@ -639,7 +658,7 @@ int main(int argc, char** argv) {
                                 {"curb_angle", curb_angle}, {"curb_side", curb_side},
                                 {"tyre_curve", tyre_curve},
                                 {"power_oversteer", power_oversteer}, {"fade", fade},
-                                {"split_mu", split_mu}};
+                                {"split_mu", split_mu}, {"cruise", cruise}};
   for (const auto& s : scenarios) {
     if (only != "all" && only != s.name) continue;
     for (unsigned hz : rates) {

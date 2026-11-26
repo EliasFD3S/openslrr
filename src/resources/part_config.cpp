@@ -202,7 +202,7 @@ PartConfig parse_part_config(const std::string &source,
       if (command.starts_with("osd_")) {
         constexpr const char *names[] = {"osd_gauge", "osd_rpmpin", "osd_spdpin",
             "osd_rpm", "osd_speed", "osd_gear", "osd_mileage", "osd_hbrake",
-            "osd_damage", "osd_nos", "osd_turbo"};
+            "osd_damage", "osd_nos", "osd_turbo", "osd_abs", "osd_asr"};
         const auto field = std::find(std::begin(names), std::end(names), command);
         if (field == std::end(names)) continue;
         const size_t slot = static_cast<size_t>(field - std::begin(names));
