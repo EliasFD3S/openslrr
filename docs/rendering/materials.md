@@ -39,6 +39,32 @@ Issue #129 in-game follow-up: the user confirmed the foliage fix works on
 This confirms the reported Valo foliage appearance; separate validation of
 every AA mode and other two-sided cutout assets has not been claimed.
 
+## Two-sided cards under the sun (Track Wizard foliage)
+
+Track Wizard addons (Côte d'Arbroz) build grass, bushes and trees from
+crossed SCX4 cards in a 1-bit DXT1 atlas, flags 0x22000000 (alpha test and
+two-sided), reference 128, no lightmap. Each card has one normal per quad,
+bent about 45 degrees up toward the card's authored front. With the dynamic
+sun, `fs_mesh` used `max(dot(n, sun), 0)`: a card whose front faced away from
+a low sun got almost no direct light while the crossing card stayed lit, so
+every clump showed dark, angular half-planes. The legacy fixed light already
+used `abs(n.l)`; an `abs` alone does not help here because n.l is near zero,
+not negative.
+
+Authored two-sided SCX4 surfaces (flag 0x02000000 on map placements, single
+and batched) now add 4 to `u_alphaTest.z`. When the sun is on the other side
+of the card than the normal, `fs_mesh` mirrors the normal through the card's
+geometric plane (screen-space derivatives of the world position) for the sun
+term only. Single-sided surfaces, lightmapped maps, local lights, lamps and
+fixtures are unchanged; sun shadows between crossing cards remain.
+
+Validation: in game on a copy of `game/` with the addon (bench drive, 13:00,
+MSAA on), the dark half-planes are lit; clumps in tree shadow stay dark.
+A/B runs showed the darkness persisted without AO and without sun cascades,
+and an unlit texture-only frame was uniform, which ruled out the atlas, AO
+and shadows. Valo City and other two-sided cutouts were not rechecked.
+Captures: `assets/validation/two-sided-foliage/`.
+
 ## Issues #132 / #116: vehicle material backface culling
 
 `src/render/bgfx_lighting.cpp` previously drew all vehicle sections without
