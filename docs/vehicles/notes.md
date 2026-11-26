@@ -1508,3 +1508,111 @@ which the host has; objects stay road, as in the original (their faces have
 no SCM; the object CFG `friction` key, used by no stock object, is not
 read); the fallback values and mark colours are typical figures, not
 measured; the race AI and traffic do not adapt to grass or sand.
+
+## Tyre smoke, ground dust and textured skid marks (#454)
+
+Cause: the host drew no tyre smoke or ground dust (raised since #381), and its
+marks were flat, untextured strips. #452 read the map materials' friction but
+left their `skid_PS` and `skid_SM` effects unread.
+
+Facts:
+
+- Stock ids. `particles.rpk` maps 2 and 0x101 to `particle_clouds/asphalt.cfg`
+  (texture 0x15, asphalt.tga), 0x102 to grass, 0x103 to pebbles, 0x104 to sand
+  (Dead_Island's `0x00030104 Sand smoke`) and 0x107 to red pebbles. It maps
+  0xA and 0x201 to `skids/sliding/asphalt.cfg` (texture 9) and 0x202 to
+  `grass.cfg` (texture 0xD). MW_Mod 0x47 is `MW_Mod\scripts\Skid_Grass.cfg`
+  with `Skid_Grass.png`. The defaults 2 and 0xA are sl-remastered's
+  `ground_config.cpp`, which also writes the default mark colour as
+  0x80000000.
+- Cloud format. The cfgs follow McAllister's Particle System API.
+  - asphalt.cfg: 20 particles/s, 0.3 m growing to 2-5.25 m, 1.5-5 s, colour
+    0.9 fading to 0.25-0.55 grey, gravity +2, damping 0.01, velocity
+    `sphere 1 1 1`.
+  - sand.cfg: 40/s, 3-6 m puffs living 4-6 s.
+  - grass.cfg: `type 1` debris, 300/s, 1-4 cm, gravity -9.81, `velscale 2`,
+    `sphere 0 0 0 0.1 2.5`.
+  - Every `bounce` line is commented out. grass.cfg writes `move m0 0 0` for
+    blades that still fly, so `move` is not read.
+- Skid format. `maxcount 100`, `width min max`, `height` (metres per texture
+  tile), `uv_end` and `uv_normal` (u0 v0 u1 v1), `fade`. Every texture is
+  RGBA with a transparent background.
+
+Fix:
+
+- `ground_surface.cpp` reads `skid_PS` and `skid_SM`. The name fallbacks
+  bring a stock cloud and the stock grass mark, and no longer a colour:
+  grass gets 0x102, sand and dirt 0x104, gravel 0x103, all with mark 0x202.
+  `attach_ground_surfaces` resolves the ids against the ground pack's slots,
+  and a fallback's `0xffff....` against particles.rpk.
+- `surface_effects.cpp` reads the RPK entry and its cfg once, then registers
+  the cloud or the mark style.
+- `particle_cloud.cpp` parses the clouds and runs the emitters and the shared
+  pool. The emitter is shaped like the stock natives.
+  - A three-number sphere is an ellipsoid of radii around the origin, not a
+    fixed velocity. With five numbers it is a centre and a shell between the
+    two radii.
+  - Damping relaxes toward a 1.2 m/s breeze rather than toward rest. Clouds
+    get slow eddies. A puff stays 0.3 radius above its emission ground, and
+    debris lands and slides to rest.
+- `emit_tyre_dust` and `tyre_dust_strength` (`part_runtime.cpp`) set the
+  thresholds and rates described in
+  [driving-model.md](driving-model.md#tyre-smoke-ground-dust-and-skid-marks-454).
+  The emitters run in `update_skid_marks`, once per host frame;
+  `particles_update` runs every frame in `finish_physics_frame`. Map unload
+  clears both.
+- `fs_particle.sc` and `draw_particles` draw the volumetric impostors.
+  - Density is the sphere's thickness eroded by two fbm layers that roll
+    upward over time. The edges are softened so neighbouring puffs merge.
+  - Lighting: an optical depth toward the sun (`exp(-1.5 * across * ...)`),
+    HG g = 0.6 rims, sky ambient lighter from above, plus 0.1 × sun of
+    multiple scattering. It is capped at a white surface facing the sun.
+  - The colour is lifted 25 % toward white, so a grey cfg colour reads as
+    tyre smoke rather than oil smoke.
+  - The cfg's alpha ramp is eased (t^1.5), with a 0.15 s fade-in.
+  - The AO prepass depth gives soft intersections. Without it, the ground
+    plane still softens the base, and puffs within 1.5 m of the camera fade.
+- `draw_skid_marks` draws one batch per style through the particle program
+  in mark mode. Textured tracks split at their tiles (`add_mark`), and the
+  finish re-caps the last tile with `uv_end` mirrored (`set_uv`).
+
+Validation:
+
+- Compilation: `slrr_host` Release builds. The standalone tests pass:
+  `tests/test_tyre_effects.cpp` (6 tests: stock asphalt and grass cfgs,
+  domain sampling, emission and lifetime, debris landing, skid cfg, textured
+  tiling and the end cap) and `tests/test_ground_surface.cpp` (7 tests,
+  including the new `skid_effect_ids`).
+- Load logs (`build/needle-game`):
+  - ValoCity registers asphalt smoke (00470002), the asphalt mark (0047000a),
+    grass debris and the grass mark.
+  - Dead_Island resolves Sand2 to `[ps 00470104 sm 00450047]`, which is
+    sand.cfg and MW_Mod's Skid_Grass (`width 0.10-2.00 tile 0.70`). Sand
+    falls back to `[ps 00470104 sm 00470202]`.
+- In game, with temporary env-gated hooks since removed:
+  - ValoCity, real slide: a bench drive with handbrake and full lock from
+    5 s slid the car. The pool grew to 1100 particles with 454 mark quads,
+    textured marks on the road, and dirt marks and clippings on the lawn.
+  - ValoCity, forced rear-wheel smoke for the screenshots: a lit grey cloud
+    behind the car, merged and soft at the ground.
+  - Dead_Island bench (no hook): the spinning rear wheel raises a rolling
+    sand column and lays the Skid_Grass mark.
+  - GPU cost (`--perf-log`, 2560×1440): `gpu_world_ms` 5.6 and 6.4 against
+    3.6 and 3.9 while about 300 puffs filled the screen near the camera.
+    The frame stayed near 140 FPS.
+- Not seen: night lighting (the smoke takes no headlight or lamp light), the
+  pebbles and red-pebbles clouds, and a map that sets `skid_PS` to another
+  pack.
+
+Limitations:
+
+- The smoke takes neither lamp or headlight light nor shadows, and casts no
+  shadow.
+- Soft intersections need AO; without it only the emission's ground plane
+  softens the base.
+- The stock `ParticleSystem` natives (`init`, `setFreq`...) are still not
+  bound to these emitters, so scripted effects (sparks, waterfalls) stay
+  absent.
+- `maxcount` is read but unused (one 1400-quad ring); `move` is not read; the
+  thresholds, the 2.5× rate, the colour lift and the 0.8 m width cap are
+  OpenSLRR choices. Traffic raises no smoke.

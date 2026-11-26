@@ -407,6 +407,8 @@ class LibBgfxBackend final : public IRenderBackend {
   void draw_sun_flare(const float* view, const float* projection, uint16_t view_id);
   void draw_nitro_flares(const float* view, const float* projection, uint16_t view_id);
   void draw_skid_marks(uint16_t view_id);
+  // Tyre smoke and ground dust (#454): volumetric impostors, after the marks.
+  void draw_particles(const float* view, const float* projection, uint16_t view_id);
 
   void draw_previews();
 
@@ -566,6 +568,14 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::UniformHandle u_alpha_test_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_color_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle vehicle_program_ = BGFX_INVALID_HANDLE;
+  // Particles and textured skid marks (#454, vs/fs_particle.sc).
+  bgfx::ProgramHandle particle_program_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_particle_sun_ = BGFX_INVALID_HANDLE, u_particle_sun_color_ = BGFX_INVALID_HANDLE,
+      u_particle_ambient_ = BGFX_INVALID_HANDLE, u_particle_cam_ = BGFX_INVALID_HANDLE,
+      u_particle_params_ = BGFX_INVALID_HANDLE, u_particle_depth_ = BGFX_INVALID_HANDLE,
+      s_particle_depth_ = BGFX_INVALID_HANDLE;
+  // Binds the particle program's light, camera and soft-depth uniforms.
+  void bind_particle_uniforms(const float* view, uint16_t view_id);
   bgfx::UniformHandle s_mix_=BGFX_INVALID_HANDLE,s_env_=BGFX_INVALID_HANDLE,s_bake_=BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_layers_=BGFX_INVALID_HANDLE,u_channels_=BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_base_uv_=BGFX_INVALID_HANDLE,u_mix_uv_=BGFX_INVALID_HANDLE,u_env_uv_=BGFX_INVALID_HANDLE,u_diffuse_=BGFX_INVALID_HANDLE,u_spec_=BGFX_INVALID_HANDLE,u_sun_diff_=BGFX_INVALID_HANDLE,u_sun_amb_=BGFX_INVALID_HANDLE,u_sun_spec_=BGFX_INVALID_HANDLE,u_sun_dir_=BGFX_INVALID_HANDLE;

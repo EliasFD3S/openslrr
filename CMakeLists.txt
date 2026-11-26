@@ -89,6 +89,8 @@ add_executable(slrr_host
   src/resources/part_config.cpp
   src/resources/part_runtime.cpp
   src/resources/skid_marks.cpp
+  src/resources/particle_cloud.cpp
+  src/resources/surface_effects.cpp
   src/resources/pedestrian_lines.cpp
   src/formats/walk.cpp
   src/formats/rest.cpp
@@ -357,7 +359,7 @@ target_include_directories(slrr_host PRIVATE
 
 bgfx_compile_shaders(
   TYPE VERTEX
-  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_osd_text.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh_inst.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_skin.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_ao.sc"
+  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_osd_text.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh_inst.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_skin.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_ao.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_particle.sc"
   VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
   OUTPUT_DIR "${SLRR_SHADER_OUT}"
   INCLUDE_DIRS "${_bgfx_shader_inc}"
@@ -367,7 +369,7 @@ bgfx_compile_shaders(
 )
 bgfx_compile_shaders(
   TYPE FRAGMENT
-  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_osd_text.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_static_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_ao.sc"
+  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_osd_text.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_static_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_ao.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_particle.sc"
   VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
   OUTPUT_DIR "${SLRR_SHADER_OUT}"
   INCLUDE_DIRS "${_bgfx_shader_inc}"
@@ -438,6 +440,12 @@ if(BUILD_TESTING)
   target_compile_features(ground_surface PRIVATE cxx_std_20)
   target_compile_options(ground_surface PRIVATE /W3 /utf-8)
   add_test(NAME ground_surface COMMAND ground_surface)
+  add_executable(tyre_effects tests/test_tyre_effects.cpp src/resources/particle_cloud.cpp
+    src/resources/skid_marks.cpp)
+  target_include_directories(tyre_effects PRIVATE include)
+  target_compile_features(tyre_effects PRIVATE cxx_std_20)
+  target_compile_options(tyre_effects PRIVATE /W3 /utf-8)
+  add_test(NAME tyre_effects COMMAND tyre_effects)
 endif()
 
 install(TARGETS slrr_host RUNTIME DESTINATION bin)

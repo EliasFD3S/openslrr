@@ -112,6 +112,9 @@ being replaced by success-returning mocks.
 | `ParticleSystem` | 9 | `init`, `stop`, `setFreq`, `setDirectSource`, `setSource`, `setCounter`, `getCounter`, `delAction`, `modePermanent` |
 
 There are 12 missing active signatures and 3 missing leftovers, for 15 total.
+The host's tyre effects (#454) have an emitter of the same shape
+(`slrr::ParticleSystem`, `include/slrr/particle_cloud.hpp`) that runs the stock
+`particle_clouds/*.cfg`. Binding these natives to it is the remaining step.
 No PhysicsRef signature remains absent from the stock table.
 
 ## Roadmap

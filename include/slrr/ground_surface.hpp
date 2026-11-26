@@ -25,7 +25,21 @@ struct GroundSurface {
   // surface/slide) and its volume scale (the original's default 0.6).
   uint32_t slide_sound = 0;
   float slide_volume = .6f;
+  // SCM `skid_PS` and `skid_SM` (#454): the full ids of the RPK entries
+  // naming the particle cloud (`particle <cfg>`) and the skid mark
+  // (`skidmark <cfg>`), each with its texture. 0 is the original's default,
+  // particles:2 (asphalt smoke) and particles:0xA (the asphalt mark).
+  // Before the ground pack resolves them, a high word of 0xffff is a local
+  // id of particles.rpk (the name fallbacks use it).
+  uint32_t skid_particles = 0;
+  uint32_t skid_mark = 0;
 };
+
+// particles.rpk entries of the stock clouds and marks (`0xffff0000 | id`).
+constexpr uint32_t kParticlesLocal = 0xffff0000u;
+constexpr uint32_t kCloudAsphalt = 0x2, kCloudGrass = 0x102, kCloudPebbles = 0x103,
+                   kCloudSand = 0x104;
+constexpr uint32_t kSkidAsphalt = 0xA, kSkidGrass = 0x202;
 
 // One map SCM material: its name and the values its block sets.
 struct GroundMaterialEntry {
@@ -37,18 +51,20 @@ struct GroundMaterialEntry {
   uint32_t mark_color = 0;   // SCM `skid_SMcolor`
   uint32_t slide_sound = 0;  // SCM `skid_SFX` id as written (ground pack slots)
   float slide_volume = 1.f;  // its scale, 1 when omitted
+  uint32_t skid_particles = 0;  // SCM `skid_PS` id as written (ground pack slots)
+  uint32_t skid_mark = 0;       // SCM `skid_SM` id as written
 };
 
 // The SCM a ground native names: the text form (`materials N`, `material i
-// name`, `params name`, then `friction`, `rollres`, `collcoeff`,
-// `skid_SMcolor`, `skid_SFX`) or the compiled one (a count, a record size,
+// name`, `params name`, then `friction`, `rollres`, `collcoeff`, `skid_PS`,
+// `skid_SM`, `skid_SMcolor`, `skid_SFX`) or the compiled one (a count, a record size,
 // then per material a texture id and a 32-byte name). Empty for anything
 // else.
 std::vector<GroundMaterialEntry> parse_ground_materials(const std::vector<uint8_t>& bytes);
 
 // Values for a material the SCM leaves unset, from its material name or its
-// texture's file name: grass, sand, gravel or dirt (with a mark colour);
-// anything else is road.
+// texture's file name: grass, sand, gravel or dirt (each with a stock cloud
+// and the stock grass mark, #454); anything else is road.
 GroundSurface ground_surface_for_name(std::string_view name);
 
 // Each material's surface: the SCM's values where it sets them (`rollres`

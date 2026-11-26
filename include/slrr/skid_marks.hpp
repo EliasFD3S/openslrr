@@ -2,6 +2,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace slrr {
@@ -9,6 +11,27 @@ namespace slrr {
 // Tyre skid marks (SLRR_rev 4ca11c2 src/render/tire-effects.ts, marks only):
 // a ring of ground quads in script world space, fed once per host frame from
 // the published wheel state, never per solver step. Owned by the host thread.
+
+// A ground material's `skid_SM` (#454): an RPK `skidmark <cfg>` entry and
+// its texture. The cfg (`particles/scripts/skids/sliding/*.cfg`,
+// `MW_Mod/scripts/Skid_Grass.cfg`) gives `maxcount`, `width min max`,
+// `height` (metres of track per texture tile), `uv_end` and `uv_normal`
+// (u0 v0 u1 v1: the cap that starts and ends a mark, and the repeated
+// piece) and `fade` (metres of alpha ramp at each end).
+struct SkidMarkStyle {
+  std::string texture;  // absolute path; empty draws the plain road mark
+  int maxcount = 100;
+  float width_min = .15f, width_max = .205f;  // SLRR_rev's untextured strip
+  float height = .28f;
+  std::array<float, 4> uv_end{0, 0, 1, 1}, uv_normal{0, 0, 1, 1};
+  float fade = .45f;
+};
+SkidMarkStyle parse_skid_mark_config(std::string_view text);
+// Styles by RPK id; index 0 is the untextured default.
+uint16_t skid_mark_style_register(uint32_t key, SkidMarkStyle style);
+uint16_t skid_mark_style_find(uint32_t key);  // 0xffff when unknown
+const std::vector<SkidMarkStyle> &skid_mark_styles();
+
 struct SkidWheelSample {
   bool contact = false;
   double force = 0;                  // N, tyre load
@@ -18,15 +41,19 @@ struct SkidWheelSample {
   std::array<double, 3> point{};     // contact patch
   std::array<double, 3> normal{0, 1, 0};
   std::array<double, 3> forward{0, 0, 1};
-  uint32_t mark_color = 0;           // the ground's mark (ARGB), 0 the road's (#452)
+  uint32_t mark_color = 0;           // the ground's skid_SMcolor (ARGB), 0 none (#452)
+  uint16_t style = 0;                // skid_mark_styles() index (#454)
 };
 
 struct SkidMarkVertex {
   float x, y, z;
-  float alpha;  // 0 no mark, 1 full mark colour
-  uint32_t color = 0;  // ARGB of the ground's mark, 0 for the road mark (#452)
+  float alpha;  // 0 no mark, 1 full mark
+  uint32_t color = 0;  // the ground's skid_SMcolor (ARGB), 0 none (#452)
+  float u = 0, v = 0;  // texture coordinates (#454)
+  uint16_t style = 0;
 };
 
+// Stock maxcount 100 times 14: SLRR_rev's ring of 1400 quads.
 constexpr size_t kSkidMarkQuads = 1400;
 
 // 0..1 scrub strength; 0 below the visual threshold (SLRR_rev tireScrub).

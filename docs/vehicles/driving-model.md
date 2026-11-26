@@ -82,11 +82,14 @@ after the original law, nicolas-found42/sl-remastered, 00454500):
   (`kRollresCoefficient`), not the original's speed-proportional drag. A
   body contact takes min(0.6, ground friction), and `collcoeff` (the
   original's shape bounce) scales its restitution, capped at 0.5. The
-  material's `skid_SMcolor` colours the tyre marks and its `skid_SFX`
-  replaces the slide loop. A material without values takes a class from
-  its name or SCY texture (`ground_surface_for_name`): grass 0.65 / 0.08,
-  sand 0.6 / 0.15, gravel 0.7 / 0.03, dirt 0.7 / 0.04, each with a mark
-  colour; a paved name stays road. Objects, garage shells and props are
+  material's `skid_SMcolor` tints the tyre marks and its `skid_SFX`
+  replaces the slide loop; its `skid_PS` (the particle cloud) and
+  `skid_SM` (the textured mark) drive the tyre effects (#454, below). A
+  material without values takes a class from its name or SCY texture
+  (`ground_surface_for_name`): grass 0.65 / 0.08, sand 0.6 / 0.15, gravel
+  0.7 / 0.03, dirt 0.7 / 0.04, each with its stock particles.rpk cloud
+  (grass clippings, sand dust, pebbles) and the stock grass mark; a paved
+  name stays road. Objects, garage shells and props are
   road, as in the original.
 
 Wheel alignment enters as camber (above); the load itself is no longer
@@ -428,3 +431,46 @@ repair preserves it even on the same slot. Detached inventory damage must remain
 intact. Queue affected link visuals once per repaired part and flush them on the
 next existing part update, after the complete scripted walk; do not relink every
 ancestor/descendant subtree during each native call.
+
+## Tyre smoke, ground dust and skid marks (#454)
+
+A wheel's ground material names its effects: `skid_PS`, an RPK entry
+`particle <cfg>` plus `texture`, and `skid_SM`, an entry `skidmark <cfg>` plus
+`texture`. When the SCM leaves them out, the original's defaults apply:
+particles:2 (asphalt smoke) and particles:0xA (the asphalt mark).
+`surface_effects.cpp` reads each entry once and registers the cloud
+(`particle_cloud.hpp`) or the mark style (`skid_marks.hpp`).
+
+- **Clouds.** `parse_particle_cloud` reads the stock Particle System API
+  format: `[STATE]` domains for size, colour, alpha, angle and lifetime, plus
+  `type` and `velscale`; `[ACTION]` lines for `source` (rate and domains),
+  `gravity`, `damping` and `bounce`. `ParticleSystem` has the shape of the
+  stock natives: `init`, `set_freq`, `set_source`, `emit_direct`, the counter,
+  `mode_permanent` and `stop`. All particles share one pool of 3000.
+  `particles_update` runs once per host frame: gravity, PAPI damping toward
+  the wind (not toward rest), slow eddies, and the emission's ground plane.
+- **Emission.** One emitter per wheel (`emit_tyre_dust`, `part_runtime.cpp`),
+  fed with the wheel state the frame published.
+  - Asphalt smokes once the combined scrub (longitudinal and sideways) passes
+    4 m/s, at full strength from 12 m/s, under a load over 500 N. Burnouts
+    and drifts both smoke.
+  - Soft ground (any rolling drag) gives way from 1.5 m/s of scrub, and is
+    thrown up at up to 0.45 strength by a fast wheel even while it grips.
+  - Asphalt smoke emits 2.5× its cfg's rate. Other clouds are scaled to
+    smoke's screen coverage: size² × lifetime. Debris keeps its own rate.
+- **Rendering.** `draw_particles` runs after the marks in the world view.
+  Particles are sorted back to front, and each one is a camera-facing
+  impostor of a sphere of smoke (`fs_particle.sc`).
+  - Its density is the sphere's thickness eroded by 3D fbm noise.
+  - Light reaches it through an optical depth toward the sun, with
+    Henyey-Greenstein forward scattering at the thin rims and sky ambient.
+  - It is soft against the AO prepass depth when AO runs, and always against
+    its own ground plane. Output is premultiplied alpha.
+  - `type 1` clouds (grass, pebbles) are small lit sprites of their texture.
+- **Marks.** A textured style splits its quads at the texture tiles
+  (`height` metres). The first tile is the `uv_end` cap, the rest repeat
+  `uv_normal`, and a finished track closes with the cap mirrored. The width
+  follows the scrub from the cfg's minimum to its maximum, capped at 0.8 m.
+  Marks multiply the ground (DST_COLOR, INV_SRC_ALPHA) with the texture
+  tinted by `skid_SMcolor`. An unset colour gives half opacity, the
+  original's default 0x80000000.

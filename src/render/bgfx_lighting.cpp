@@ -5,6 +5,7 @@
 #include "shadow_cascades.hpp"
 
 #include "slrr/part_runtime.hpp"
+#include "slrr/particle_cloud.hpp"
 #include "slrr/skid_marks.hpp"
 #include "slrr/dds_image.hpp"
 #include "slrr/host_cursor.hpp"
@@ -17,6 +18,7 @@
 #include <bx/math.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -327,66 +329,251 @@ void LibBgfxBackend::draw_nitro_flares(const float* view, const float* projectio
   }
 }
 
-// Tyre skid marks (skid_marks.hpp): one transient batch of world quads that
-// darken the road by multiplication, so a mark needs no lighting and never
-// lightens a shadowed surface. Colour and opacity are SLRR_rev's road mark
-// (0x17191a at 0.62); a ground material's skid_SMcolor (#452) replaces the
-// colour, its alpha scaling the opacity.
+// Tyre skid marks (skid_marks.hpp): transient world quads, one draw per mark
+// style. A mark multiplies the ground under it by its colour over its
+// alpha (blend DST_COLOR, INV_SRC_ALPHA on a premultiplied source), so it
+// needs no lighting and never lightens a shadowed surface. A textured style
+// (#454: the ground's skid_SM texture and cfg) draws its texture tinted by
+// the material's skid_SMcolor, at half opacity when unset (the original's
+// default 0x80000000); the untextured strip keeps SLRR_rev's road
+// mark (0x17191a at 0.62), a skid_SMcolor (#452) replacing the colour.
 void LibBgfxBackend::draw_skid_marks(uint16_t view_id) {
   const auto& marks = skid_mark_vertices();
   const uint32_t quads = static_cast<uint32_t>(marks.size() / 4);
-  if (!quads) return;
-  const uint32_t vertex_count = quads * 4, index_count = quads * 6;
-  if (bgfx::getAvailTransientVertexBuffer(vertex_count, layout_) < vertex_count ||
-      bgfx::getAvailTransientIndexBuffer(index_count) < index_count) return;
-  bgfx::TransientVertexBuffer vb;
-  bgfx::TransientIndexBuffer ib;
-  bgfx::allocTransientVertexBuffer(&vb, vertex_count, layout_);
-  bgfx::allocTransientIndexBuffer(&ib, index_count);
-  auto* out = reinterpret_cast<MeshVertex*>(vb.data);
-  constexpr float kOpacity = .62f;
-  constexpr uint32_t kRoadMark = 0xff17191au;
-  for (uint32_t i = 0; i < vertex_count; ++i) {
-    const auto& m = marks[i];
-    const uint32_t mark = m.color ? m.color : kRoadMark;
-    const float strength = std::clamp(m.alpha, 0.f, 1.f) * kOpacity * float(mark >> 24) / 255.f;
-    // Multiplied into the ground: 1 leaves it, the mark colour at full strength.
-    const auto channel = [&](int shift) {
-      const float dark = 1.f - float((mark >> shift) & 0xffu) / 255.f;
-      return static_cast<uint32_t>(std::lround((1.f - strength * dark) * 255.f));
-    };
-    const uint32_t c = channel(0) << 16 | channel(8) << 8 | channel(16);
-    MeshVertex v{};
-    v.x = m.x;
-    v.y = m.y;
-    v.z = -m.z;  // script space to render space, as part_car_lights
-    v.ny = 1.f;
-    v.rgba = c | 0xff000000u;
-    out[i] = v;
-  }
-  auto* index = reinterpret_cast<uint16_t*>(ib.data);
-  for (uint32_t q = 0; q < quads; ++q) {
-    const uint16_t v = static_cast<uint16_t>(q * 4);
-    const uint16_t tri[6] = {v, uint16_t(v + 1), uint16_t(v + 2), uint16_t(v + 1), uint16_t(v + 3),
-                             uint16_t(v + 2)};
-    std::copy(std::begin(tri), std::end(tri), index + q * 6);
-  }
-  BindingScope binding(*this, view_id);
+  if (!quads || !bgfx::isValid(particle_program_)) return;
+  const auto& styles = skid_mark_styles();
+  std::vector<uint32_t> count(styles.size() + 1, 0);
+  for (uint32_t q = 0; q < quads; ++q) ++count[std::min<size_t>(marks[q * 4].style, styles.size())];
   float identity[16];
   bx::mtxIdentity(identity);
-  // y 2: emission path over a white mask (no sun, shadow or fog);
-  // w -3: the diffuse is multiplied by the vertex colour.
-  const float settings[4] = {0.f, 2.f, 0.f, -3.f};
-  const float white[4] = {1.f, 1.f, 1.f, 1.f};
-  bind_baked_light(nullptr, nullptr, BGFX_INVALID_HANDLE, false, nullptr, nullptr);
-  enc()->setUniform(u_color_, white);
-  enc()->setUniform(u_alpha_test_, settings);
-  enc()->setTransform(identity);
-  enc()->setVertexBuffer(0, &vb);
-  enc()->setIndexBuffer(&ib);
-  set_texture(0, s_tex_, white_tex_);
-  enc()->setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_GREATER | BGFX_STATE_BLEND_MULTIPLY);
-  submit_bound(view_id, program_, index_count);
+  for (size_t style = 0; style < styles.size(); ++style) {
+    const uint32_t n = count[style];
+    if (!n) continue;
+    const uint32_t vertex_count = n * 4, index_count = n * 6;
+    if (bgfx::getAvailTransientVertexBuffer(vertex_count, layout_) < vertex_count ||
+        bgfx::getAvailTransientIndexBuffer(index_count) < index_count) return;
+    bgfx::TransientVertexBuffer vb;
+    bgfx::TransientIndexBuffer ib;
+    bgfx::allocTransientVertexBuffer(&vb, vertex_count, layout_);
+    bgfx::allocTransientIndexBuffer(&ib, index_count);
+    auto* out = reinterpret_cast<MeshVertex*>(vb.data);
+    auto* index = reinterpret_cast<uint16_t*>(ib.data);
+    const bool textured = !styles[style].texture.empty();
+    const auto texture = textured ? tex_for_osd_icon(styles[style].texture) : white_tex_;
+    uint32_t written = 0;
+    for (uint32_t q = 0; q < quads; ++q) {
+      if (marks[q * 4].style != style) continue;
+      for (uint32_t k = 0; k < 4; ++k) {
+        const auto& m = marks[q * 4 + k];
+        // An unset skid_SMcolor is the original's default 0x80000000: half
+        // opacity. Its black would hide the texture's own colour (the
+        // churned earth of the grass marks), so the texture keeps its rgb.
+        uint32_t colour = m.color ? m.color : textured ? 0x80ffffffu : 0xff17191au;
+        const float opacity = textured ? 1.f : .62f;
+        const float alpha = std::clamp(m.alpha, 0.f, 1.f) * opacity * float(colour >> 24) / 255.f;
+        MeshVertex v{};
+        v.x = m.x;
+        v.y = m.y;
+        v.z = -m.z;  // script space to render space, as part_car_lights
+        v.ny = 1.f;
+        v.u = m.u;
+        v.v = m.v;
+        v.v3 = 2.f;  // fs_particle: the mark mode
+        const uint32_t a = static_cast<uint32_t>(std::lround(alpha * 255.f));
+        v.rgba = ((colour >> 16) & 0xffu) | (colour & 0xff00u) | ((colour & 0xffu) << 16) | a << 24;
+        out[written * 4 + k] = v;
+      }
+      const uint16_t base = static_cast<uint16_t>(written * 4);
+      const uint16_t tri[6] = {base, uint16_t(base + 1), uint16_t(base + 2),
+                               uint16_t(base + 1), uint16_t(base + 3), uint16_t(base + 2)};
+      std::copy(std::begin(tri), std::end(tri), index + written * 6);
+      ++written;
+    }
+    BindingScope binding(*this, view_id);
+    enc()->setTransform(identity);
+    enc()->setVertexBuffer(0, &vb);
+    enc()->setIndexBuffer(&ib);
+    set_texture(0, s_tex_, texture, BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+    set_texture(1, s_particle_depth_, white_tex_);
+    enc()->setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_GREATER |
+                    BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_DST_COLOR,
+                                          BGFX_STATE_BLEND_INV_SRC_ALPHA));
+    submit_bound(view_id, particle_program_, index_count);
+  }
+}
+
+// The light, camera and soft-depth inputs of fs_particle.sc (#454).
+void LibBgfxBackend::bind_particle_uniforms(const float* view, uint16_t view_id) {
+  SceneSun sun = scene_sun();
+  const auto lit = std::find_if(instances_.begin(), instances_.end(), [](const SceneInstance& i) {
+    return i.lighting.set && !i.sky;
+  });
+  if (lit != instances_.end()) sun = lit->lighting;
+  float toward[4] = {0.f, 1.f, 0.f, 0.f};
+  if (sun.has_direction) {
+    // Game direction is where the light travels; toward it, Z into render space.
+    toward[0] = -sun.direction[0];
+    toward[1] = -sun.direction[1];
+    toward[2] = sun.direction[2];
+    toward[3] = 1.f;
+  }
+  const float diffuse[4] = {sun.diffuse[0], sun.diffuse[1], sun.diffuse[2], 0.f};
+  const float ambient[4] = {sun.ambient[0], sun.ambient[1], sun.ambient[2], 0.f};
+  set_uniform(u_particle_sun_, toward);
+  set_uniform(u_particle_sun_color_, diffuse);
+  set_uniform(u_particle_ambient_, ambient);
+  // The view matrix's rows are the camera axes; its eye is -R^T t.
+  float cam[16] = {view[0], view[4], view[8], 0.f, view[1], view[5], view[9], 0.f,
+                   view[2], view[6], view[10], 0.f};
+  cam[12] = -(view[0] * view[12] + view[1] * view[13] + view[2] * view[14]);
+  cam[13] = -(view[4] * view[12] + view[5] * view[13] + view[6] * view[14]);
+  cam[14] = -(view[8] * view[12] + view[9] * view[13] + view[10] * view[14]);
+  cam[15] = 1.f;
+  enc()->setUniform(u_particle_cam_, cam, 4);
+  static const auto start = std::chrono::steady_clock::now();
+  const float time = static_cast<float>(std::fmod(
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(), 600.0));
+  // The AO prepass is the only readable scene depth; without it the smoke
+  // still fades into its ground plane (fs_particle.sc).
+  const bool soft = ao_active_ && ao_world_view_ == view_id && bgfx::isValid(ao_depth_tex_) &&
+                    ao_screen_width_ && ao_screen_height_;
+  const float params[4] = {time, soft ? 1.f : 0.f,
+                           soft ? 1.f / ao_screen_width_ : 0.f,
+                           soft ? 1.f / ao_screen_height_ : 0.f};
+  set_uniform(u_particle_params_, params);
+  const float depth[4] = {ao_projection_[0], ao_projection_[1], ao_projection_[2], 0.f};
+  set_uniform(u_particle_depth_, depth);
+  set_texture(1, s_particle_depth_, soft ? ao_depth_tex_ : white_tex_,
+              BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_POINT);
+  const float fog_color[4] = {fog_color_[0], fog_color_[1], fog_color_[2],
+                              fog_enabled_ && render_debug().fog && host_enhanced_graphics().fog ? 1.f : 0.f};
+  const float fog_range[4] = {fog_near_, fog_far_, 0.f, 0.f};
+  const float fog_eye[4] = {fog_eye_[0], fog_eye_[1], fog_eye_[2], 0.f};
+  set_uniform(u_fog_color_, fog_color);
+  set_uniform(u_fog_range_, fog_range);
+  set_uniform(u_fog_eye_, fog_eye);
+}
+
+// Tyre smoke and ground dust (particle_cloud.hpp, #454): every live particle
+// as a camera-facing impostor, sorted back to front, premultiplied alpha,
+// one draw per run of the same cloud texture.
+void LibBgfxBackend::draw_particles(const float* view, const float* projection,
+                                    uint16_t view_id) {
+  (void)projection;
+  const auto& list = particles();
+  const auto& clouds = particle_clouds();
+  if (list.empty() || !bgfx::isValid(particle_program_)) return;
+  const float right[3] = {view[0], view[4], view[8]};
+  const float up[3] = {view[1], view[5], view[9]};
+  struct Item {
+    float depth;
+    uint32_t index;
+  };
+  std::vector<Item> order;
+  order.reserve(list.size());
+  for (uint32_t i = 0; i < list.size(); ++i) {
+    const auto& p = list[i];
+    if (p.cloud >= clouds.size()) continue;
+    const float t = std::clamp(p.age / p.life, 0.f, 1.f);
+    const float radius = (p.size0 + (p.size1 - p.size0) * t) * .5f;
+    const float x = p.position[0], y = p.position[1], z = -p.position[2];
+    const float depth = view[2] * x + view[6] * y + view[10] * z + view[14];
+    if (depth < .05f - radius || !(radius > 0.f)) continue;
+    order.push_back({depth, i});
+  }
+  if (order.empty()) return;
+  std::sort(order.begin(), order.end(), [](const Item& a, const Item& b) { return a.depth > b.depth; });
+  constexpr size_t kBatch = 16000;  // 16-bit indices: 4 vertices per particle
+  float identity[16];
+  bx::mtxIdentity(identity);
+  size_t begin = 0;
+  while (begin < order.size()) {
+    const uint16_t cloud = list[order[begin].index].cloud;
+    const std::string& texture_path = clouds[cloud].texture;
+    size_t end = begin + 1;
+    while (end < order.size() && end - begin < kBatch &&
+           clouds[list[order[end].index].cloud].texture == texture_path)
+      ++end;
+    const uint32_t n = static_cast<uint32_t>(end - begin);
+    const uint32_t vertex_count = n * 4, index_count = n * 6;
+    if (bgfx::getAvailTransientVertexBuffer(vertex_count, layout_) < vertex_count ||
+        bgfx::getAvailTransientIndexBuffer(index_count) < index_count) return;
+    bgfx::TransientVertexBuffer vb;
+    bgfx::TransientIndexBuffer ib;
+    bgfx::allocTransientVertexBuffer(&vb, vertex_count, layout_);
+    bgfx::allocTransientIndexBuffer(&ib, index_count);
+    auto* out = reinterpret_cast<MeshVertex*>(vb.data);
+    auto* index = reinterpret_cast<uint16_t*>(ib.data);
+    for (uint32_t j = 0; j < n; ++j) {
+      const auto& p = list[order[begin + j].index];
+      const auto& config = clouds[p.cloud];
+      const float t = std::clamp(p.age / p.life, 0.f, 1.f);
+      const float radius = (p.size0 + (p.size1 - p.size0) * t) * .5f;
+      // The cfg's alpha ramp, eased (t^1.5) so a cloud holds its body before
+      // it thins out, faded in over its first 0.15 s so a puff swells
+      // instead of popping.
+      const float alpha = std::clamp((p.alpha0 + (p.alpha1 - p.alpha0) * std::pow(t, 1.5f)) *
+                                         std::clamp(p.age / .15f, 0.f, 1.f), 0.f, 1.f);
+      const auto channel = [&](size_t k) {
+        const float c = p.color0[k] + (p.color1[k] - p.color0[k]) * t;
+        return static_cast<uint32_t>(std::lround(std::clamp(c, 0.f, 1.f) * 255.f));
+      };
+      const uint32_t rgba = channel(0) | channel(1) << 8 | channel(2) << 16 |
+                            static_cast<uint32_t>(std::lround(alpha * 255.f)) << 24;
+      const bool debris = config.type == 1;
+      const float cx = p.position[0], cy = p.position[1], cz = -p.position[2];
+      const auto& n_ground = p.ground_normal;
+      const float height = (p.position[0] - p.ground[0]) * n_ground[0] +
+                           (p.position[1] - p.ground[1]) * n_ground[1] +
+                           (p.position[2] - p.ground[2]) * n_ground[2];
+      // Debris spins with the cfg's angle; a smoke impostor stays upright
+      // (its noise is three-dimensional, so it needs no rotation).
+      float ax[3] = {right[0], right[1], right[2]}, ay[3] = {up[0], up[1], up[2]};
+      if (debris) {
+        const float angle = p.angle0 + (p.angle1 - p.angle0) * t + p.seed * 6.2831853f +
+                            p.age * 6.f * (p.seed - .5f);
+        const float c = std::cos(angle), s = std::sin(angle);
+        for (int k = 0; k < 3; ++k) {
+          ax[k] = right[k] * c + up[k] * s;
+          ay[k] = up[k] * c - right[k] * s;
+        }
+      }
+      static constexpr float kCorner[4][2] = {{-1.f, -1.f}, {1.f, -1.f}, {-1.f, 1.f}, {1.f, 1.f}};
+      for (int k = 0; k < 4; ++k) {
+        MeshVertex v{};
+        const float u = kCorner[k][0], w = kCorner[k][1];
+        v.x = cx + (ax[0] * u + ay[0] * w) * radius;
+        v.y = cy + (ax[1] * u + ay[1] * w) * radius;
+        v.z = cz + (ax[2] * u + ay[2] * w) * radius;
+        v.nx = cx;
+        v.ny = cy;
+        v.nz = cz;
+        v.u = u;
+        v.v = w;
+        v.u2 = radius;
+        v.v2 = p.seed;
+        v.u3 = height;
+        v.v3 = debris ? 1.f : 0.f;
+        v.rgba = rgba;
+        out[j * 4 + k] = v;
+      }
+      const uint16_t base = static_cast<uint16_t>(j * 4);
+      const uint16_t tri[6] = {base, uint16_t(base + 1), uint16_t(base + 2),
+                               uint16_t(base + 1), uint16_t(base + 3), uint16_t(base + 2)};
+      std::copy(std::begin(tri), std::end(tri), index + j * 6);
+    }
+    const auto texture = texture_path.empty() ? white_tex_ : tex_for_osd_icon(texture_path);
+    BindingScope binding(*this, view_id);
+    bind_particle_uniforms(view, view_id);
+    enc()->setTransform(identity);
+    enc()->setVertexBuffer(0, &vb);
+    enc()->setIndexBuffer(&ib);
+    set_texture(0, s_tex_, texture, BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+    enc()->setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_GREATER |
+                    BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA));
+    submit_bound(view_id, particle_program_, index_count);
+    begin = end;
+  }
 }
 
 // Fills the per-frame light data texture (#254, layout in scene_shadow.sh).

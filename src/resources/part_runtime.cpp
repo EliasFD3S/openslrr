@@ -23,7 +23,9 @@
 #include "slrr/scx_mesh.hpp"
 #include "slrr/skeleton.hpp"
 #include "slrr/brake_balance.hpp"
+#include "slrr/particle_cloud.hpp"
 #include "slrr/skid_marks.hpp"
+#include "slrr/surface_effects.hpp"
 #include "slrr/steering_feedback.hpp"
 #include "slrr/suspension_geometry.hpp"
 #include "slrr/vehicle_dynamics.hpp"
@@ -194,6 +196,10 @@ struct Record {
   int32_t slide_voice = 0;
   std::string slide_path;  // the clip slide_voice plays (#452)
   bool sharp_skid = false;
+  // Tyre smoke and ground dust (#454): one emitter per wheel, re-initialised
+  // when the wheel's ground names another cloud.
+  std::array<ParticleSystem, 4> tyre_dust{};
+  std::array<uint16_t, 4> tyre_cloud{0xffff, 0xffff, 0xffff, 0xffff};
   std::chrono::steady_clock::time_point last_impact_sound{};
   // MWM keeps a native aggregate, initially empty; `reload` fills it.
   // Canister.actual is script save data, not the engine's consumption owner.
@@ -3616,6 +3622,69 @@ void update_slide_audio(Record &rec, bool active) {
   rec.sharp_skid = sharp || (rec.sharp_skid && speed > 9 && sideways > 1.6);
 }
 
+// How hard a wheel smokes or throws its ground, 0..1 (#454). Asphalt smokes
+// from a burnout or a drift: SLRR_rev's tireSmoke load gate (500 N), with
+// the strength ramping over 4-12 m/s of the whole scrub, longitudinal and
+// sideways, so a drift smokes as in CSP and not only a burnout. Soft ground (any rolling drag: grass, sand,
+// gravel) gives way at a lighter scrub and is thrown up by a fast wheel even
+// when it grips.
+double tyre_dust_strength(const SkidWheelSample &sample, const GroundSurface &ground,
+                          double speed) {
+  if (!sample.contact) return 0;
+  const double scrub = std::hypot(sample.slip_speed, sample.lateral_speed);
+  if (ground.rolling > 0) {
+    if (sample.force < 200) return 0;
+    const double slide = std::clamp((scrub - 1.5) / 5, 0.0, 1.0);
+    const double roll = .45 * std::clamp((std::abs(speed) - 6) / 20, 0.0, 1.0);
+    return std::max(slide, roll);
+  }
+  if (sample.force < 500) return 0;
+  return std::clamp((scrub - 4) / 8, 0.0, 1.0);
+}
+
+// Feeds a wheel's emitter: the ground's skid_PS cloud at the contact patch,
+// thrown back by the spinning tread and dragged a little by the car's wake.
+void emit_tyre_dust(Record &rec, size_t i, const SkidWheelSample &sample,
+                    const GroundSurface &ground, double dt) {
+  const uint16_t cloud = surface_particle_cloud(*index, ground.skid_particles);
+  if (cloud == 0xffff) return;
+  auto &emitter = rec.tyre_dust[i];
+  if (rec.tyre_cloud[i] != cloud) {
+    emitter = ParticleSystem{};
+    emitter.init(cloud);
+    rec.tyre_cloud[i] = cloud;
+  }
+  const auto &body = rec.dynamics.body;
+  const double strength = tyre_dust_strength(sample, ground, body.velocity.length());
+  if (!(strength > 0)) return;
+  const auto &n = sample.normal;
+  const auto &f = sample.forward;
+  const double throw_back = std::clamp(sample.slip_speed, -12.0, 12.0) * .2;
+  std::array<float, 3> velocity{};
+  std::array<float, 3> position{}, normal{};
+  const double car[3] = {body.velocity.x, body.velocity.y, body.velocity.z};
+  for (size_t k = 0; k < 3; ++k) {
+    const double wake = car[k] * .3;
+    velocity[k] = static_cast<float>(wake - f[k] * throw_back);
+    position[k] = static_cast<float>(sample.point[k] + n[k] * .06);
+    normal[k] = static_cast<float>(n[k]);
+  }
+  emitter.set_source(position, velocity, normal);
+  // The soft volumetric puffs need more of them than the original's sprites
+  // to build a thick cloud: asphalt smoke emits two and a half times its
+  // cfg's rate. Other clouds keep the screen the same amount of smoke, by
+  // their size squared times their lifetime against asphalt's (sand.cfg's
+  // 3-6 m puffs living 4-6 s would bury the car). Debris keeps its rate.
+  const auto &config = particle_clouds()[cloud];
+  const double coverage = particle_cloud_coverage(config);
+  const double boost =
+      config.type == 1
+          ? 1.0
+          : std::clamp(2.5 * particle_cloud_coverage_reference() / std::max(coverage, .01), .4, 2.5);
+  emitter.set_freq(static_cast<float>(boost * std::pow(strength, 1.2)));
+  emitter.advance(dt);
+}
+
 // Skid marks from the wheel state this frame published (not per solver
 // step, so the free-running 1000 Hz clock adds no work). Cars past 120 m of
 // the camera skip it.
@@ -3639,7 +3708,9 @@ void update_skid_marks(Record &rec, double dt) {
     sample.normal = {s.normal.x, s.normal.y, s.normal.z};
     sample.forward = {forward.x, forward.y, forward.z};
     sample.mark_color = s.surface.mark_color;
+    if (index) sample.style = surface_skid_style(*index, s.surface.skid_mark);
     skid_marks_update(key, i, sample, dt, speed);
+    if (i < rec.tyre_dust.size() && index) emit_tyre_dust(rec, i, sample, s.surface, dt);
   }
 }
 
@@ -7852,6 +7923,8 @@ void finish_physics_frame(double frame_seconds, double alpha, bool committed) {
   pose_cockpit_needles();
   pose_driver();
   {perf::Scope scope(perf::Zone::Pedestrians);tick_pedestrians(frame_seconds);}
+  // Every frame, so smoke drifts on while the physics waits (#454).
+  particles_update(frame_seconds);
 }
 
 // Free-running frame (#380): pause the clock, commit what it ran since the
@@ -8065,6 +8138,7 @@ void part_drop_actors() {
   for (auto& entry : crowds) clear_ped_agents(entry.second);
   crowds.clear();
   skid_marks_clear();
+  particles_clear();
 }
 void part_set_hud_preview(const std::string &path) {
   std::ifstream input(path, std::ios::binary);

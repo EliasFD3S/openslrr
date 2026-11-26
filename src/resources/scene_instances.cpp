@@ -3053,13 +3053,27 @@ static void attach_ground_surfaces(const RpkIndex &rpk, int32_t pack, const std:
       surface.slide_sound = (surface.slide_sound >> 16) == 0xffff
                                 ? 0
                                 : rpk.resolve_embedded_id(pack, surface.slide_sound);
+  // skid_PS and skid_SM (#454) too, except the name fallbacks' local ids of
+  // particles.rpk. 0 stays 0: the effects use the stock defaults.
+  const RpkPack *particles = rpk.pack_by_name("particles.rpk");
+  const auto resolve_effect = [&](uint32_t id) -> uint32_t {
+    if (!id) return 0;
+    if ((id & 0xffff0000u) == kParticlesLocal)
+      return particles ? RpkIndex::make_full_id(particles->pack_id, id) : 0;
+    return rpk.resolve_embedded_id(pack, id);
+  };
+  for (auto &surface : collision.surfaces) {
+    surface.skid_particles = resolve_effect(surface.skid_particles);
+    surface.skid_mark = resolve_effect(surface.skid_mark);
+  }
   // The materials off the road, with their texture: what to check in game.
   std::string soft;
   size_t count = 0;
   for (size_t i = 0; i < collision.surfaces.size(); ++i) {
     const auto &surface = collision.surfaces[i];
     if (surface.friction == 1.f && surface.rolling == 0.f && surface.bounce == .2f &&
-        !surface.mark_color && !surface.slide_sound)
+        !surface.mark_color && !surface.slide_sound && !surface.skid_particles &&
+        !surface.skid_mark)
       continue;
     if (++count > 16) continue;
     char line[160];
@@ -3070,6 +3084,11 @@ static void attach_ground_surfaces(const RpkIndex &rpk, int32_t pack, const std:
     if (surface.bounce != .2f || surface.mark_color || surface.slide_sound) {
       std::snprintf(line, sizeof line, "[bounce %.2f mark %08x sfx %08x]", surface.bounce,
                     surface.mark_color, surface.slide_sound);
+      soft += line;
+    }
+    if (surface.skid_particles || surface.skid_mark) {
+      std::snprintf(line, sizeof line, "[ps %08x sm %08x]", surface.skid_particles,
+                    surface.skid_mark);
       soft += line;
     }
   }
