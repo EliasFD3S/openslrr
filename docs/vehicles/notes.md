@@ -1030,3 +1030,46 @@ been judged in game yet.
 
 Limitations: an exhaust or sump hanging lower than the body now passes
 through kerbs and the ground instead of scraping.
+
+## Weight distribution and centre of gravity (#430)
+
+Cause: the assembly's mass properties sum each installed part's CFG `body`
+lines (`src/resources/part_runtime.cpp:subtree_mass_properties`). The stock
+data, not the host model, puts the centre of gravity too far back and too
+high: summing the same bodies as point masses (the stock game's method) gives
+the same result within 1-2 cm and 1-2.5 points of front share. On every
+racer the chassis CFG holds 450-1,300 kg in one `_phys_chassis_frame` body
+whose centre lies behind mid-wheelbase, so the chassis alone has 31-43 % of
+its weight on the front axle. 101 part CFGs had no `body` at all (springs,
+dampers, struts, trailing arms, brakes, anti-roll bars, batteries, NOS
+bottles, exhausts, mufflers, radiators, intercoolers, aftermarket seats,
+steering wheels, wings, two camshafts) and the 29 tyres weighed 0.06-0.13 kg.
+Measured parked (each hub at its loaded spring length): front shares
+43.8-54.7 % on front-engined cars (Duhen SunStrip 51.4 %, real del Sol about
+61 %) and heights of 0.53-0.59 m on the compacts; the MC (0.47 m) was the
+only low car, hence its better stability. Static rollover threshold
+track / 2h: Duhen 1.17 g, Focer 1.18 g, MC 1.55 g.
+
+Fix (patch data only, no engine change): every massless part gets one
+`body ... sphere 0.1` + `nocollision` at its origin, the tyres get a mass from
+their size, and the 24 chassis CFGs are rebalanced at constant total car mass
+(the chassis gives up what its parts now carry, then frame mass moves to a
+`nocollision` box ahead, and cockpit/roof/trunk mass to a `nocollision` floor
+box). Values and per-car results: [patch README](../../patch/README.md#weight-distribution-and-centre-of-gravity-430).
+The ballast boxes go just before `# total mass`, after the chassis bodies'
+`noclick` lines, which apply to the body line above them.
+
+Validation: `slrr_host` Release with a temporary report in `dynamics_configure`
+(host and point-mass centre, parked ground from `part_parked_spring_length`
+and `wheel_pose`), all 24 racers spawned with `--spawn-car <pack>.rpk:<id>`
+on a copy of the game with the new CFGs; total masses unchanged, front
+shares on target, heights within 0.01 m except the Nonus Street GT
+(0.517 m: the solver keeps 40 % of the high bodies). Bench drives of the
+Duhen, Enula and SuperDuty: no NaN or suspended body. Not yet driven in game.
+
+Limitations: the real-car targets are typical published figures, not
+measurements, and the Prime has no real counterpart (52 %, 0.47 m chosen).
+Part masses sit at the part origin, so a part whose origin is far from its
+own centre (an exhaust pipe) is slightly misplaced. Unsprung mass is still
+not simulated apart from the body: tyres and hubs only add to the rigid body.
+The stock game exe still treats these parts as massless.

@@ -278,7 +278,10 @@ default uses a box with dimensions 0.75 times the bounds, so its moments are
 loose bodies and native traffic, not just the player car. The collision
 bounds themselves are not shrunk. Angular momentum is damped by
 `exp(-0.015 × dt)` each substep. Parts
-without bodies (stock running gear, rims and tyres) add no mass. Crush zones
+without bodies add no mass; in stock data that is the running gear, exhausts,
+batteries and several accessories, and tyres weigh about 0.1 kg. The patch
+gives them `nocollision` bodies and rebalances the stock chassis CFGs
+([notes](notes.md#weight-distribution-and-centre-of-gravity-430)). Crush zones
 are not those meshes: a deformation cage is generated over the part's visible
 render shell, as SLRR_rev (77b0fb6, `vehicle-3d.ts`) does, and its cage mass is
 the part's own CFG mass (the chassis shell's own, not the assembly's). The phys

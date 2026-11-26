@@ -1,6 +1,6 @@
 # OpenSLRR Enhanced
 
-Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes, the re-specced stock engine parts (#411), `SuperCharger` and `Pulley` (#415) and the four fuel classes: `AirFuelDeliverySystem`, `FuelInjectorSystem`, `DynoData` and the SL Tuners methanol fuel rail, and the 48 stock anti-roll bars (#419)), 24 racer classes and 17 racer chassis CFGs (`_main_*.cfg`). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. The fuel classes add fuel heat, ethanol blends and knock; install them together. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
+Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes, the re-specced stock engine parts (#411), `SuperCharger` and `Pulley` (#415) and the four fuel classes: `AirFuelDeliverySystem`, `FuelInjectorSystem`, `DynoData` and the SL Tuners methanol fuel rail, and the 48 stock anti-roll bars (#419)), 24 racer classes, the 24 racer chassis CFGs (`_main_*.cfg`) and the part CFGs that now carry a mass (tyres, running gear, accessories, exhausts, mufflers, seats, steering wheels, wings). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. The fuel classes add fuel heat, ethanol blends and knock; install them together. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
 
 **Options** (main menu and in-game menu) opens a full-screen screen built on `java.render.osdx` ([docs/ui/osd-v2.md](../docs/ui/osd-v2.md)): Video, Graphics, Sound, Controls (live axis meters, gamma, dead zones, steering speed sensitivity, force feedback), Devices (connected controllers, battery, rumble test, axis calibration) and Game tabs, an info panel that explains the setting under the pointer, and a notification when a preset is applied. Key redefinition, axes and the control files open the classic pages. The classic pages below are still in `OptionsDialog`. The **Video Options** menu applies the resolution and the Enhanced settings in game. A **Preset** choice (Low, Medium, High, Ultra) sets them all at once; changing one setting afterwards shows Custom. **Advanced** opens a second page: VSync, prop detail, fog, car lights, headlight shadows, street lamps, view distance (500–3,000 m, 3 km by default) and the number of street lamps that cast shadows. **Advanced Game Options** has the pedestrian density slider again (0.5–1.5; an old saved value below 0.5 returns to 1.5). The scenery shadow map and the vehicle shadow map each use a resolution of 2048 × 2048. **Ctrl+F12 → Renderer** also sets how many reflection faces are computed per frame.
 
@@ -87,6 +87,48 @@ grip: under-inflated it is also softer, rolls with more resistance and takes
 longer to build its cornering force; over-inflated it is a little stiffer
 and rolls more freely. At the optimal pressure nothing changes. Details in
 [docs/vehicles/notes.md](../docs/vehicles/notes.md#tyre-pressure-424).
+
+## Weight distribution and centre of gravity (#430)
+
+Copy `cars` and `parts`. Stock racers had their weight almost evenly split
+front to rear (Duhen SunStrip 51/49 instead of about 61/39), and most sat
+5–9 cm too high, so they lifted two wheels easily and became unstable under
+hard braking. The stock data is the cause: the chassis CFGs put most of their
+mass in one rear-biased `_phys_chassis_frame` body, and 101 parts weighed
+nothing (springs, dampers, struts, arms, brakes, anti-roll bars, batteries,
+exhausts, mufflers, radiators, seats, steering wheels, wings), with tyres at
+0.06–0.13 kg.
+
+- **Parts**: each gets one `body` sphere with `nocollision` at its origin
+  (brake 8 kg, strut 12, trailing arm 10, damper 2.5, spring 2, bar 4,
+  battery 14, exhaust 6–9, muffler 5–7, radiator 7, bucket seat 10, steering
+  wheel 1.5, wing 5). Tyres get a mass from their size (tread 15 kg/m²,
+  sidewalls 6 kg/m²): 7.4 kg (195/50 R16) to 16.8 kg (405/40 R15).
+- **Chassis** (all 24 `_main_*.cfg`): each car keeps its stock total mass. The
+  chassis gives up the mass now carried by its parts, then mass moves from the
+  frame body to a front box (front structure, drivetrain, fluids: 0.30 m above
+  the ground, 0.20 m behind the front axle) and, where the car sat too high, from
+  the cockpit, roof and trunk bodies to a floor box (0.25 m above the ground).
+  Both boxes have `nocollision`; collisions and crush zones are unchanged.
+
+Targets come from the real cars (front share, parked height of the centre of
+gravity); heights are only lowered:
+
+| Car | Front share | COG height (m) |
+| --- | --- | --- |
+| Baiern CoupeSport / DevilSport / GT III | 47.6–49.0 → 51.0–51.9 % | 0.526 / 0.511 / 0.434 → 0.500 / 0.500 / 0.435 |
+| Duhen SunStrip 1.5 / 1.8 / 2.2 / Racing | 50.2–52.0 → 61.0 % | 0.583 / 0.582 / 0.574 / 0.480 → 0.508 / 0.507 / 0.500 / 0.469 |
+| Einvagen 110 GT / GTK / 140 GTA | 54.0–54.7 → 62.0 % | 0.547 / 0.540 / 0.529 → 0.532 / 0.526 / 0.517 |
+| Ishima Enula WRY / WRZ / WRS | 43.8–45.3 → 58.0 % | 0.553 / 0.545 / 0.540 → 0.520 / 0.524 / 0.521 |
+| Focer RC 200 / RC 300 / WRC | 46.8–48.0 → 59.0 % | 0.578 / 0.573 / 0.574 → 0.520 |
+| MC GT / GTB / GTLE | 47.2–47.6 → 56.0 % | 0.472–0.473 → 0.470 |
+| Nonus Street GT / GT II | 48.2 / 49.4 → 55.0 % | 0.589 / 0.496 → 0.517 / 0.491 |
+| Prime DLH 500 | 46.5 → 52.0 % | 0.492 → 0.470 |
+| SuperDuty 500 / Extra 750 | 47.9 / 47.7 → 57.0 % | 0.610 / 0.614 → 0.609 / 0.612 (unchanged) |
+
+Cars already bought keep their chassis object but read the new CFG masses when
+they load. Details in
+[docs/vehicles/notes.md](../docs/vehicles/notes.md#weight-distribution-and-centre-of-gravity-430).
 
 ## Java natives
 
