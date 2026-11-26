@@ -1834,6 +1834,11 @@ fast"):
   - puffs born 0.6 m wide that swell to 4-7.5 m and live 4-9 s;
   - lighter greys, gravity 0.6, damping 0.15, 30 per second.
 
+Eighth pass (Elias: "top", but a slide under 80 km/h filled the track):
+smoke gives the cfg's rate per 20 kW (from 8), a tenth of it cold, all of it
+from 200 °C (ramp from 80 °C): about a third of the smoke for the same
+slide.
+
 Limitations:
 
 - The tyre's longitudinal scale in σ (wheel+0x218) is taken as 1; its
