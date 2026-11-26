@@ -38,12 +38,12 @@ public class WRY_FL_McPherson_strut extends Suspension
 			{
 				// OpenSLRR (#450): front geometry of the Subaru Impreza GC8, laid out at the static ride height
 				wheel.setArm( 0.2960,
-				              0.2185, 0.1411, 0.0000,
+				              0.3167, 0.1553, 0.0000,
 				              0.0000, 0.0000, 1.0000);
 				wheel.setHub( 0.0000,
 				              -0.0770, -0.0430, -0.0040,
 				              0.0710, 0.4070, 0.0000,
-				              0.0257, 0.7250, 0.0000);
+				              0.1237, 0.7218, 0.0000);
 
 				the_car.setSlotPos(101+wheelID, new Vector3(-0.124,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(-0.113,0,0), null );

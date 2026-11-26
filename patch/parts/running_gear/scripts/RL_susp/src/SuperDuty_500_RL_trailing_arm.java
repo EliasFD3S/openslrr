@@ -36,9 +36,9 @@ public class SuperDuty_500_RL_trailing_arm extends Suspension
 			WheelRef wheel = the_car.getWheel(wheelID);
 			if (wheel)
 			{
-				// OpenSLRR (#450): live rear axle (no arm) of the Dodge Ram 1500, laid out at the static ride height
-				wheel.setArm( 0.0000,
-				              0.0000, 0.0000, 0.0000,
+				// OpenSLRR (#450): live rear axle (25 m arm, no camber gain) of the Dodge Ram 1500, laid out at the static ride height
+				wheel.setArm( 25.0000,
+				              24.9720, 0.1732, 0.0000,
 				              0.0000, 0.0000, 1.0000);
 				wheel.setHub( -1.0000,
 				              0.1210, 0.0000, 0.0000,

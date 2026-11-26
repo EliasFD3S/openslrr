@@ -38,7 +38,7 @@ public class Einvagen_GTA_RL_trailing_arm extends Suspension
 			{
 				// OpenSLRR (#450): rear swing arm of the VW Golf III VR6, laid out at the static ride height
 				wheel.setArm( 7.1620,
-				              7.1620, 0.1680, 0.0000,
+				              7.1340, 0.1680, 0.0000,
 				              0.0000, 0.0000, 1.0000);
 				wheel.setHub( -1.0000,
 				              0.1210, 0.0000, 0.0000,

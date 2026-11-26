@@ -227,8 +227,12 @@ weights) after the real car:
   and multilink fronts use the same fit with their steeper camber gain.
 - Independent rears are a front-view swing arm (arm length = 1 / camber
   gain) with the factory camber and toe in `setYpr`.
-- Live rear axles (MC, SuperDuty) have no arm: the wheels stay square to the
-  axle, so camber follows the body in roll.
+- Live rear axles (MC, SuperDuty) have a 25 m arm (0.06 deg per 25 mm): the
+  wheels stay square to the axle, so camber follows the body in roll.
+- Every wheel keeps the stock geometry's position at rest (#456): fronts 9 to
+  11 cm inboard of the CFG wheel centre, rears 2.8 cm outboard, so the track
+  widths and the fitment are unchanged. Front wheels sit 0.4 to 1.6 cm higher
+  in the arch than with the stock arm.
 
 | Cars | Real car | Front camber, gain /25 mm | Rear camber, toe-in, gain /25 mm |
 | --- | --- | --- | --- |

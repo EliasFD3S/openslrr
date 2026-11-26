@@ -39,7 +39,7 @@ public class Baiern_GT_RL_trailing_arm extends Suspension
 			{
 				// OpenSLRR (#450): rear swing arm of the E36 race car, laid out at the static ride height
 				wheel.setArm( 1.5915,
-				              1.5915, 0.1981, 0.0000,
+				              1.5635, 0.1981, 0.0000,
 				              0.0000, 0.0000, 1.0000);
 				wheel.setHub( -1.0000,
 				              0.1210, 0.0000, 0.0000,

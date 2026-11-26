@@ -38,12 +38,12 @@ public class Baiern_GT_FR_McPherson_strut extends Suspension
 			{
 				// OpenSLRR (#450): front geometry of the E36 race car, laid out at the static ride height
 				wheel.setArm( 0.2960,
-				              -0.2156, 0.1630, 0.0000,
+				              -0.3247, 0.1740, 0.0000,
 				              0.0000, 0.0000, 1.0000);
 				wheel.setHub( 0.0000,
 				              0.0770, -0.0430, -0.0040,
 				              -0.0710, 0.4070, 0.0000,
-				              -0.0524, 0.7520, 0.0000);
+				              -0.1604, 0.7437, 0.0000);
 
 				the_car.setSlotPos(101+wheelID, new Vector3(0.124,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(0.113,0,0), null );

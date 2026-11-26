@@ -38,7 +38,7 @@ public class Nonus_GT2_RR_trailing_arm extends Suspension
 			{
 				// OpenSLRR (#450): rear swing arm of the R34 JGTC, laid out at the static ride height
 				wheel.setArm( 2.0463,
-				              -2.0463, 0.2091, 0.0000,
+				              -2.0183, 0.2091, 0.0000,
 				              0.0000, 0.0000, 1.0000);
 				wheel.setHub( -1.0000,
 				              -0.1210, 0.0000, 0.0000,

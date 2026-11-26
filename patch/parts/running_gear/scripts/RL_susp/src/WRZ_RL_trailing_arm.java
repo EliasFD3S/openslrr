@@ -38,7 +38,7 @@ public class WRZ_RL_trailing_arm extends Suspension
 			{
 				// OpenSLRR (#450): rear swing arm of the Impreza GC8 WRX, laid out at the static ride height
 				wheel.setArm( 3.5810,
-				              3.5810, 0.1925, 0.0000,
+				              3.5530, 0.1925, 0.0000,
 				              0.0000, 0.0000, 1.0000);
 				wheel.setHub( -1.0000,
 				              0.1210, 0.0000, 0.0000,
