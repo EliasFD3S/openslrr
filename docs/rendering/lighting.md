@@ -638,10 +638,11 @@ city at night.
   followed car's (`set_headlight_focus`, the same car as the lamp shadow
   focus) go first, then the others in the array's nearest-first order, up to
   `kHeadlightShadows` = 6 (debug budget "Headlight shadow tiles").
-- Smoke shadow (#454): view 139, after the car depth map, with its view and
-  projection. It is an RGBA16F transmittance map (RGB multiplied, alpha the
-  MIN light depth of the smoke's front), sampled by `fs_mesh.sc` at stage
-  14 through `u_carDepthMtx` when `u_carDepthParams.w` is set. See
+- Smoke shadow (#454): view 139, after the car depth map. It is a 1024 px
+  RGBA16F transmittance map (RGB multiplied, alpha the MIN light depth of
+  the smoke's front), fitted every frame to the smoke from the held sun
+  direction (`u_smokeShadowMtx`). `bind_scene_shadow` binds it at stage 14
+  for `fs_mesh.sc` and `fs_vehicle.sc` (`smokeShadowTransmit`). See
   [vehicles/driving-model.md](../vehicles/driving-model.md#tyre-smoke-ground-dust-and-skid-marks-454).
 - One perspective frustum per headlight part: from the lamp along its beam,
   2 × the outer half-angle + 4° wide, near 0.15 m, far = the beam range

@@ -1719,10 +1719,26 @@ Validation (third pass):
   source and the idle distance (no stock caller), a traffic slide loop,
   indoor smoke.
 
+Fourth pass (the smoke shadow's reach):
+
+- The map no longer rides on the car depth map. `update_smoke_shadow(video)`
+  runs every frame after it, with its own orthographic box from the held sun
+  direction, fitted to every cloud particle (light-space bounds plus 1 m,
+  sides clamped to 2-200 m, depth the smoke's span plus 2 m). It is 1024 px,
+  has its own matrix (`u_smokeShadowMtx`) and a half-metre depth tolerance
+  (`u_smokeShadowParams.y`). It needs the shadows on and the sun above the
+  horizon.
+- `smokeShadowTransmit` in `scene_shadow.sh`, bound by `bind_scene_shadow`
+  at stage 14, is read by `fs_mesh.sc` (as before) and by `fs_vehicle.sc`,
+  where it scales the sun's diffuse and specular.
+- Validation: in game, ValoCity at 13:00, forced smoke hidden and a debug
+  tint since removed (red in `fs_mesh`, blue in `fs_vehicle`). The
+  footprint reached the start burnout more than 30 m behind the car and
+  tinted a pedestrian standing in it. The car's rear, inside its own smoke,
+  turned blue.
+
 Limitations:
 
-- The smoke shadow covers only the car depth map's 28 m square, and only
-  `fs_mesh` receivers: cars (`fs_vehicle`) do not darken under smoke.
 - The idle distance (200 m) is the host's reading of the exe's idle flag.
   Its real trigger, beyond "no child active", is not traced.
 - The thresholds, the 2.5× rate, the colour lift, the lamp gain and caps and

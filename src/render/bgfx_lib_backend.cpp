@@ -274,6 +274,8 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
     u_car_depth_mtx_ = bgfx::createUniform("u_carDepthMtx", bgfx::UniformType::Mat4);
     u_car_depth_params_ = bgfx::createUniform("u_carDepthParams", bgfx::UniformType::Vec4);
     s_smoke_shadow_ = bgfx::createUniform("s_smokeShadow", bgfx::UniformType::Sampler);
+    u_smoke_shadow_mtx_ = bgfx::createUniform("u_smokeShadowMtx", bgfx::UniformType::Mat4);
+    u_smoke_shadow_params_ = bgfx::createUniform("u_smokeShadowParams", bgfx::UniformType::Vec4);
     u_cloud_wind_ = bgfx::createUniform("u_cloudWind", bgfx::UniformType::Vec4);
     u_cloud_sky_ = bgfx::createUniform("u_cloudSky", bgfx::UniformType::Vec4);
     u_fog_color_ = bgfx::createUniform("u_fogColor", bgfx::UniformType::Vec4);
@@ -461,8 +463,10 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
     if (bgfx::isValid(smoke_shadow_fb_)) bgfx::destroy(smoke_shadow_fb_);
     smoke_shadow_fb_ = BGFX_INVALID_HANDLE;
     smoke_shadow_tex_ = BGFX_INVALID_HANDLE;
-    if (bgfx::isValid(s_smoke_shadow_)) bgfx::destroy(s_smoke_shadow_);
-    s_smoke_shadow_ = BGFX_INVALID_HANDLE;
+    for (auto* handle : {&s_smoke_shadow_, &u_smoke_shadow_mtx_, &u_smoke_shadow_params_}) {
+      if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
+      *handle = BGFX_INVALID_HANDLE;
+    }
     particle_program_ = BGFX_INVALID_HANDLE;
     for (auto* handle : {&u_particle_sun_, &u_particle_sun_color_, &u_particle_ambient_,
                          &u_particle_cam_, &u_particle_params_, &u_particle_depth_,
@@ -879,6 +883,7 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       }
       else destroy_ao_targets();
       update_car_depth(garage_ ? nullptr : position, video);
+      update_smoke_shadow(video);
       // Every world camera reflects its scene. The car dealers have a map and a
       // script camera but neither the garage flag nor a followed car, so their
       // cars used to lose the cubemap and render matte.

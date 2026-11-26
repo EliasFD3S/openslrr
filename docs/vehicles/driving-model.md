@@ -483,10 +483,12 @@ particles:2 (asphalt smoke) and particles:0xA (the asphalt mark).
     by HG g = 0.55 toward the camera (capped at 3×), so a beam seen through
     smoke glows.
   - The smoke casts a soft shadow (`update_smoke_shadow`, view 139): an
-    RGBA16F map over the car depth map's square, seen from the sun. Its RGB
-    multiplies the puffs' transmittance, and its alpha keeps by MIN the light
-    depth of their fronts. `fs_mesh.sc` darkens only the receivers below that
-    front.
+    RGBA16F map seen from the sun, 1024 px, fitted every frame to all the
+    smoke (up to 200 m a side). Its RGB multiplies the puffs'
+    transmittance, and its alpha keeps by MIN the light depth of their
+    fronts. `smokeShadowTransmit` (`scene_shadow.sh`) darkens only the
+    receivers below that front: the world (`fs_mesh.sc`) and the car bodies
+    (`fs_vehicle.sc`).
   - It is soft against the AO depth prepass, which also runs while AO is off
     for as long as particles live (`soft_particles` debug toggle), and always
     against its own ground plane. Output is premultiplied alpha.

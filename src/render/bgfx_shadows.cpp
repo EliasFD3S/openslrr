@@ -1636,7 +1636,6 @@ void LibBgfxBackend::update_car_depth(const float* position, const VideoOptions&
   perf::Scope perf_scope(perf::Zone::Shadows);
   perf::Scope detail_scope(perf::Zone::CarDepth);
   car_depth_active_ = false;
-  smoke_shadow_active_ = false;
   if (!position || video.shadows == 0 || !debug_overlay_.render_options().shadows ||
       !bgfx::isValid(static_shadow_program_)) return;
 
@@ -1704,24 +1703,72 @@ void LibBgfxBackend::update_car_depth(const float* position, const VideoOptions&
     }
   }
   car_depth_active_ = true;
-  const float sun_travel[3] = {travel.x, travel.y, travel.z};
-  const float square[3] = {centre.x, centre.y, centre.z};
-  update_smoke_shadow(view, proj, sun_travel, square);
 }
 
-// Smoke shadows (#454): what the tyre smoke lets through of the sun, seen
-// from the sun over the car depth map's 28 m square (same view and matrix).
-// RGB multiplies to the transmittance of every puff in a texel's column;
-// alpha keeps, by MIN, the light depth of the puffs' fronts nearest the
-// sun, so only receivers below the smoke darken (fs_mesh.sc). Debris casts
-// nothing. No sorting: both blends are order-independent.
-void LibBgfxBackend::update_smoke_shadow(const float* view, const float* proj,
-                                         const float* travel, const float* centre) {
+// Smoke shadows (#454): what the tyre smoke lets through of the sun, in an
+// orthographic map seen from the sun and fitted every frame to all the
+// smoke (at most 200 m a side). RGB multiplies to the transmittance of
+// every puff in a texel's column; alpha keeps, by MIN, the light depth of
+// the puffs' fronts nearest the sun, so only receivers below the smoke
+// darken (scene_shadow.sh smokeShadowTransmit, in fs_mesh and fs_vehicle).
+// Debris casts nothing. No sorting: both blends are order-independent.
+void LibBgfxBackend::update_smoke_shadow(const VideoOptions& video) {
   smoke_shadow_active_ = false;
   const auto& list = particles();
   const auto& clouds = particle_clouds();
-  if (list.empty() || !bgfx::isValid(particle_program_)) return;
-  constexpr uint16_t kSize = 512;
+  if (list.empty() || !bgfx::isValid(particle_program_) || video.shadows == 0 ||
+      !debug_overlay_.render_options().shadows)
+    return;
+  const auto sun = scene_instances_light();
+  if (!sun.has_direction) return;
+  // The cascades' held direction (#371), into render space.
+  const auto held = shadow_sun_direction(sun);
+  const bx::Vec3 t = bx::normalize(bx::Vec3{held[0], held[1], -held[2]});
+  if (t.y >= -.02f) return;  // the sun below the horizon casts nothing
+  const bx::Vec3 up_hint = std::abs(t.y) > .98f ? bx::Vec3{0, 0, 1} : bx::Vec3{0, 1, 0};
+  const bx::Vec3 right = bx::normalize(bx::cross(up_hint, t));
+  const bx::Vec3 up = bx::cross(t, right);
+  // The light-space box of every cloud particle.
+  std::vector<uint32_t> chosen;
+  chosen.reserve(list.size());
+  float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
+  for (uint32_t i = 0; i < list.size() && chosen.size() < 16000; ++i) {
+    const auto& p = list[i];
+    if (p.cloud >= clouds.size() || clouds[p.cloud].type == 1) continue;
+    const float life = std::clamp(p.age / p.life, 0.f, 1.f);
+    const float radius = (p.size0 + (p.size1 - p.size0) * life) * .5f;
+    const bx::Vec3 c{p.position[0], p.position[1], -p.position[2]};
+    const float axis[3] = {bx::dot(c, right), bx::dot(c, up), bx::dot(c, t)};
+    for (int k = 0; k < 3; ++k) {
+      lo[k] = std::min(lo[k], axis[k] - radius);
+      hi[k] = std::max(hi[k], axis[k] + radius);
+    }
+    chosen.push_back(i);
+  }
+  if (chosen.empty()) return;
+  constexpr float kMaxSide = 200.f;
+  float half[2];
+  float mid[2];
+  for (int k = 0; k < 2; ++k) {
+    mid[k] = (lo[k] + hi[k]) * .5f;
+    half[k] = std::clamp((hi[k] - lo[k]) * .5f + 1.f, 2.f, kMaxSide * .5f);
+  }
+  const float depth = std::max(hi[2] - lo[2] + 2.f, 4.f);
+  const bx::Vec3 eye = bx::add(bx::add(bx::mul(right, mid[0]), bx::mul(up, mid[1])),
+                               bx::mul(t, lo[2] - 1.f));
+  const auto* caps = bgfx::getCaps();
+  float view[16], proj[16], clip[16];
+  bx::mtxLookAt(view, eye, bx::add(eye, t), up);
+  bx::mtxOrtho(proj, -half[0], half[0], -half[1], half[1], 0.f, depth, 0.f, caps->homogeneousDepth);
+  bx::mtxMul(clip, view, proj);
+  const float crop[16] = {
+      .5f, 0.f, 0.f, 0.f, 0.f, caps->originBottomLeft ? .5f : -.5f, 0.f, 0.f,
+      0.f, 0.f, caps->homogeneousDepth ? .5f : 1.f, 0.f, .5f, .5f,
+      caps->homogeneousDepth ? .5f : 0.f, 1.f};
+  bx::mtxMul(smoke_shadow_matrix_.data(), clip, crop);
+  smoke_shadow_depth_scale_ = 1.f / depth;
+
+  constexpr uint16_t kSize = 1024;
   if (!bgfx::isValid(smoke_shadow_fb_)) {
     smoke_shadow_tex_ = bgfx::createTexture2D(kSize, kSize, false, 1, bgfx::TextureFormat::RGBA16F,
         BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
@@ -1733,22 +1780,6 @@ void LibBgfxBackend::update_smoke_shadow(const float* view, const float* proj,
       return;
     }
   }
-  // Billboards face the sun.
-  const bx::Vec3 t{travel[0], travel[1], travel[2]};
-  const bx::Vec3 up_hint = std::abs(t.y) > .98f ? bx::Vec3{0, 0, 1} : bx::Vec3{0, 1, 0};
-  const bx::Vec3 right = bx::normalize(bx::cross(up_hint, t));
-  const bx::Vec3 up = bx::cross(t, right);
-  std::vector<uint32_t> chosen;
-  chosen.reserve(list.size());
-  for (uint32_t i = 0; i < list.size() && chosen.size() < 16000; ++i) {
-    const auto& p = list[i];
-    if (p.cloud >= clouds.size() || clouds[p.cloud].type == 1) continue;
-    // Inside the map's square (14 m half width, plus the puff).
-    const float dx = p.position[0] - centre[0], dz = -p.position[2] - centre[2];
-    if (std::abs(dx) > 20.f || std::abs(dz) > 20.f) continue;
-    chosen.push_back(i);
-  }
-  if (chosen.empty()) return;
   const uint32_t n = static_cast<uint32_t>(chosen.size());
   if (bgfx::getAvailTransientVertexBuffer(n * 4, layout_) < n * 4 ||
       bgfx::getAvailTransientIndexBuffer(n * 6) < n * 6) return;
@@ -1795,8 +1826,8 @@ void LibBgfxBackend::update_smoke_shadow(const float* view, const float* proj,
   static const auto start = std::chrono::steady_clock::now();
   const float time = static_cast<float>(std::fmod(
       std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(), 600.0));
-  // y: light depth per metre of the car map's 48 m orthographic range.
-  const float params[4] = {time, 1.f / 48.f, 0.f, 0.f};
+  // y: light depth per metre of the fitted box.
+  const float params[4] = {time, smoke_shadow_depth_scale_, 0.f, 0.f};
   enc()->setUniform(u_particle_params_, params);
   enc()->setTransform(identity);
   enc()->setVertexBuffer(0, &vb);

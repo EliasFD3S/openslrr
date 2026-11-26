@@ -757,6 +757,15 @@ void LibBgfxBackend::bind_interior_sun(bool enabled, uint8_t stage) {
     set_texture(13, s_static_shadow_prev_,
                 fading ? static_shadow_prev_tex_ : bgfx::isValid(depth_white_) ? depth_white_ : white_tex_,
                 shadow_sampler);
+    // Tyre smoke's shadow (#454): every sun receiver, world and cars, reads
+    // it at stage 14 (scene_shadow.sh smokeShadowTransmit). y: half a metre
+    // of light depth, the tolerance around the smoke's front.
+    const bool smoke = enabled && smoke_shadow_active_ && bgfx::isValid(smoke_shadow_tex_);
+    const float smoke_params[4] = {smoke ? 1.f : 0.f, .5f * smoke_shadow_depth_scale_, 0.f, 0.f};
+    set_uniform(u_smoke_shadow_params_, smoke_params);
+    if (smoke) set_uniform(u_smoke_shadow_mtx_, smoke_shadow_matrix_.data(), 16);
+    set_texture(14, s_smoke_shadow_, smoke ? smoke_shadow_tex_ : white_tex_,
+                BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
 }
 
 bool LibBgfxBackend::bind_point_light(bool enabled) {
@@ -826,16 +835,11 @@ bool LibBgfxBackend::bind_point_light(bool enabled) {
     set_texture(2, s_mesh_mix_, bgfx::isValid(mix) ? mix : white_tex_, receive_static_shadow ? world_sampler() : BGFX_SAMPLER_NONE);
     bind_scene_shadow(receive_static_shadow, 3);
     const bool receive_car = receive_static_shadow && car_depth_active_;
-    // w: the smoke shadow map rides on the car map's matrix (#454).
-    const bool receive_smoke = receive_car && smoke_shadow_active_ && bgfx::isValid(smoke_shadow_tex_);
-    const float car_params[4] = {receive_car ? 1.f : 0.f, 1.f / car_depth_size_, .0006f,
-                                 receive_smoke ? 1.f : 0.f};
+    const float car_params[4] = {receive_car ? 1.f : 0.f, 1.f / car_depth_size_, .0006f, 0.f};
     set_uniform(u_car_depth_params_, car_params);
     if (receive_car) set_uniform(u_car_depth_mtx_, car_depth_matrix_.data(), 16);
     set_texture(4, s_car_depth_, receive_car ? car_depth_tex_ : depth_white_,
         BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_COMPARE_LEQUAL);
-    set_texture(14, s_smoke_shadow_, receive_smoke ? smoke_shadow_tex_ : white_tex_,
-                BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
     if (bind_point_light(receive_static_shadow && !sky)) {
       const float mode[4] = {0, 0, 0, -1};
       const auto &ambient = point_light_->ambient;
