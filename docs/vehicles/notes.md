@@ -1409,3 +1409,102 @@ droop), anti-dive/anti-squat or bump steer; a live axle's camber follows the
 body instead of the road; front toe is 0 (strut mode drops `setYpr`); the
 static lengths are computed, not measured per car; the tyre coefficients are
 typical values, not a measured tyre; stock tyre sizes are unchanged.
+
+## Ground surface friction and rolling resistance (#452)
+
+Cause: every ground surface gripped and rolled like asphalt. The map SCM
+named by the ground native was never read, and the host skipped the first
+word of each PHYS collision face.
+
+Findings:
+
+- The ground native's `params` line is `render id, six numbers, SCM path,
+  TRC path` (`params 0x00000010,0,0,0,0,0,0,maps\city\meshes\city.scm,
+  maps\city\ai\city.trc`).
+- A PHYS face is 28 bytes: the SCM material index, three vertex indices and
+  the face normal. Dead_Island's faces use indices 2-4 of its 5 materials.
+- SCM material i is the SCY material i (the modders' own note in
+  Dead_Island's SCM), so the SCY texture names the material too.
+- Text SCMs (city, city2, the Track Wizard addons) list `material i name`
+  and optional keys; compiled ones (MP1, Physic_Lab, Caynon) are a count, a
+  record size (0x24) and per material a texture id and a 32-byte name, no
+  values.
+- In the exe the keyword table at 0x610DC0 sends each key to a handler that
+  writes every selected material's 0xAC-byte physics shape record:
+  `friction` × `Config.ground_friction` at +0x50 (handler 0x462B00),
+  `rollres` at +0x54, `collcoeff` at +0x58 (0x462BF0), the shape's bounce
+  (default 0.2), then `skid_PS`, `skid_SM`, `skid_SMcolor`, `skid_SFX`.
+  sl-remastered (`ground_config.cpp`, `physics_contact_geometry.cpp`,
+  `wheel.cpp`): an unset material has friction `ground_friction` (1 when
+  not positive) and rollres 0.001; `params name` selects every material of
+  that name; a body contact takes the lower friction of its two shapes (a
+  body's is 0.6) and their mean bounce; the tyre multiplies its D by the
+  surface friction and subtracts `load × v × (surface + tyre rollres) ×
+  0.01` from the longitudinal force.
+- Only Dead_Island (Rock 0.8; Sand2 0.6, rollres 3, collcoeff 15, a grey
+  mark) and Top_Gear_Track (grass 0.8 / 2, a grey mark) set values. In the
+  stock city the lawns use `maps\textures\area.dds` (materials `Area`,
+  `autopalyaszele`). No stock map sets `skid_SFX`, and no stock object CFG
+  sets `friction`.
+
+Fix:
+
+- `ground_surface.cpp` reads both SCM forms into `GroundSurface`: friction
+  factor, rolling coefficient, bounce, mark colour and slide sound.
+  `friction` × `Config.ground_friction` (read by the ground native through
+  `scene_instances_set_ground_friction`); `rollres` becomes a coefficient ×
+  0.05 on the host's physical rolling law (chosen over the original's
+  speed-proportional drag, which would brake 0.9 g on Dead_Island's sand at
+  108 km/h). Unset keys fall back to a class from the material name, then
+  the SCY texture (stock maps set no values): grass, sand, gravel, dirt,
+  each with a mark colour. A paved name (road, asfalt, beton, sidwalk,
+  kerb...) stays road; `area` and `fu` count only as the whole file name.
+  `skid_SFX` ids resolve against the ground pack's dependency slots.
+- `append_ground_collision` keeps each face's material index
+  (`ScxGeometry::triangle_surfaces`), `attach_ground_surfaces` resolves it.
+  `StaticMesh` keeps the table and, since its floor cells store vertex
+  triples, a parallel list of surface ids per cell; `floor_test` returns the
+  winning triangle's surface in `SceneFloorHit`, the car's floor patch keeps
+  it per triangle; `GroundHit` carries it to the solver.
+- `solve_linked` averages friction and rolling over the 13 tread samples
+  (centre line and tread edges, not the sidewall), so a tyre half on the
+  grass loses part of its grip; the rest comes from the centre sample. The
+  single-point contact of unlinked wheels takes its one sample.
+- `step_drive` multiplies the tyre friction (force law, sticking limits,
+  metal and parked contacts) and adds the rolling coefficient to the
+  wheel's rolling torque. A body contact uses min(0.6, ground friction) and
+  scales its restitution by the mean of 0.2 and `collcoeff` over 0.2,
+  capped at 0.5 (Dead_Island's 15 would throw a car).
+- Tyre marks take the material's colour (`SkidMarkVertex::color`, alpha
+  scaling the 0.62 opacity); the slide loop plays the material's `skid_SFX`
+  at its scale over the default 0.6 and restarts when the ground changes.
+
+Validation:
+
+- Compilation: `slrr_host` and `physics_lab` Release; standalone test
+  `tests/test_ground_surface.cpp` (6 tests: text and compiled SCM, `params`,
+  name classes, values against fallback, effect keys and ground_friction)
+  passes.
+- Load logs (`build/Release/perf-roots/saved`): Dead_Island 2:Rock 0.80/0,
+  3:Sand2 0.60/0.150 bounce 15 mark ff737373, 4:Sand 0.60/0.150 (fallback);
+  Top_Gear_Track 2:Material #38 (Top_Gear_Grass.dds) 0.80/0.100 mark
+  ff737373; city 3 lawns and city2 2 lawns at 0.65/0.080; garage and car
+  lot shells all road.
+- Bench drive on Top_Gear_Track's asphalt, 1/2/3 s at full throttle:
+  14.7/38.3/62.1 km/h before and after. With the surface forced by a
+  temporary hook: friction 0.6 10.6/24.6/39.0; rolling 0.15 9.4/23.8/43.4;
+  both 7.5/17.1/28.4.
+- Dead_Island bench start (temporary wheel log): the car rests on two
+  diagonal wheels (4460 N and 3612 N against about 1600 N); the rear-left
+  wheel lifts to full droop and spins at 241 rad/s through the open
+  differential while the sand's drag holds the car. Without surfaces it
+  already slowed there.
+- Not seen: a coloured mark or a `skid_SFX` loop in game (the benches lay
+  no mark on grass or sand, and no stock map sets `skid_SFX`).
+
+Limitations: `skid_PS` (dust and smoke) needs a particle system, and
+`skid_SM` (the mark's texture and skid config) textured marks, neither of
+which the host has; objects stay road, as in the original (their faces have
+no SCM; the object CFG `friction` key, used by no stock object, is not
+read); the fallback values and mark colours are typical figures, not
+measured; the race AI and traffic do not adapt to grass or sand.

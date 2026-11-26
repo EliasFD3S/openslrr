@@ -98,6 +98,7 @@ add_executable(slrr_host
   src/resources/gameref.cpp
   src/resources/script_lights.cpp
   src/resources/light_resource.cpp
+  src/resources/ground_surface.cpp
   src/resources/scene_instances.cpp
   src/resources/scene_ambience.cpp
   src/resources/scene_triggers.cpp
@@ -432,6 +433,11 @@ if(BUILD_TESTING)
   target_include_directories(float_literal_mode PRIVATE include)
   target_compile_options(float_literal_mode PRIVATE /W3 /utf-8)
   add_test(NAME float_literal_mode COMMAND float_literal_mode)
+  add_executable(ground_surface tests/test_ground_surface.cpp src/resources/ground_surface.cpp)
+  target_include_directories(ground_surface PRIVATE include)
+  target_compile_features(ground_surface PRIVATE cxx_std_20)
+  target_compile_options(ground_surface PRIVATE /W3 /utf-8)
+  add_test(NAME ground_surface COMMAND ground_surface)
 endif()
 
 install(TARGETS slrr_host RUNTIME DESTINATION bin)

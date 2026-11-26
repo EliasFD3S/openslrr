@@ -330,7 +330,8 @@ void LibBgfxBackend::draw_nitro_flares(const float* view, const float* projectio
 // Tyre skid marks (skid_marks.hpp): one transient batch of world quads that
 // darken the road by multiplication, so a mark needs no lighting and never
 // lightens a shadowed surface. Colour and opacity are SLRR_rev's road mark
-// (0x17191a at 0.62).
+// (0x17191a at 0.62); a ground material's skid_SMcolor (#452) replaces the
+// colour, its alpha scaling the opacity.
 void LibBgfxBackend::draw_skid_marks(uint16_t view_id) {
   const auto& marks = skid_mark_vertices();
   const uint32_t quads = static_cast<uint32_t>(marks.size() / 4);
@@ -343,17 +344,24 @@ void LibBgfxBackend::draw_skid_marks(uint16_t view_id) {
   bgfx::allocTransientVertexBuffer(&vb, vertex_count, layout_);
   bgfx::allocTransientIndexBuffer(&ib, index_count);
   auto* out = reinterpret_cast<MeshVertex*>(vb.data);
-  constexpr float kOpacity = .62f, kDark = 1.f - float(0x17) / 255.f;
+  constexpr float kOpacity = .62f;
+  constexpr uint32_t kRoadMark = 0xff17191au;
   for (uint32_t i = 0; i < vertex_count; ++i) {
     const auto& m = marks[i];
-    const float shade = 1.f - std::clamp(m.alpha, 0.f, 1.f) * kOpacity * kDark;
-    const uint32_t c = static_cast<uint32_t>(std::lround(shade * 255.f));
+    const uint32_t mark = m.color ? m.color : kRoadMark;
+    const float strength = std::clamp(m.alpha, 0.f, 1.f) * kOpacity * float(mark >> 24) / 255.f;
+    // Multiplied into the ground: 1 leaves it, the mark colour at full strength.
+    const auto channel = [&](int shift) {
+      const float dark = 1.f - float((mark >> shift) & 0xffu) / 255.f;
+      return static_cast<uint32_t>(std::lround((1.f - strength * dark) * 255.f));
+    };
+    const uint32_t c = channel(0) << 16 | channel(8) << 8 | channel(16);
     MeshVertex v{};
     v.x = m.x;
     v.y = m.y;
     v.z = -m.z;  // script space to render space, as part_car_lights
     v.ny = 1.f;
-    v.rgba = c | c << 8 | c << 16 | 0xff000000u;
+    v.rgba = c | 0xff000000u;
     out[i] = v;
   }
   auto* index = reinterpret_cast<uint16_t*>(ib.data);

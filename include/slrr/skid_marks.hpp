@@ -18,11 +18,13 @@ struct SkidWheelSample {
   std::array<double, 3> point{};     // contact patch
   std::array<double, 3> normal{0, 1, 0};
   std::array<double, 3> forward{0, 0, 1};
+  uint32_t mark_color = 0;           // the ground's mark (ARGB), 0 the road's (#452)
 };
 
 struct SkidMarkVertex {
   float x, y, z;
   float alpha;  // 0 no mark, 1 full mark colour
+  uint32_t color = 0;  // ARGB of the ground's mark, 0 for the road mark (#452)
 };
 
 constexpr size_t kSkidMarkQuads = 1400;

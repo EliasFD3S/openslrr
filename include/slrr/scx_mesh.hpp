@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "slrr/ground_surface.hpp"
+
 namespace slrr {
 
 // INVO SCX — layout from nonamesex/io_invo_scx (imhex/scx.hexpat)
@@ -131,6 +133,10 @@ struct ScxGeometry {
   std::vector<ScxGroup> groups;
   // RPK `texture` property order (or .tex). Index == ScxGroup::texture_index.
   std::vector<std::string> textures;
+  // Ground collision (#452): each triangle's index into `surfaces`, parallel
+  // to indices / 3. Empty, or an index past the table, is plain road.
+  std::vector<uint16_t> triangle_surfaces;
+  std::vector<GroundSurface> surfaces;
   // SCX positions are centimetres. POLY / script positions are already metres.
   float position_scale = 0.01f;
   // Bumped when skinned positions change so the GPU buffer can be replaced
