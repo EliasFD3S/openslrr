@@ -992,22 +992,36 @@ void VehicleDynamics::update_gear(double rpm, double shaft,
     gear = 1;
   if (!drive.automatic_shift)
     return;
-  if (braking_clutch_ > .5 && gear > 1 && gear != 7) {
-    // Declutched for a hard stop (#448): the engine no longer follows the
-    // wheels, which may also be locked, so pick the gear from the road
-    // speed. The box is then in the gear for that speed when the brake is
-    // released, and in first at rest instead of the gear it braked in.
-    if (std::abs(road_shaft * drive.ratios[gear]) * rpm_per_rad <
-            drive.limit * .65 &&
-        drive.ratios[gear - 1] > 0) {
+  if (gear <= 0 || gear == 7)
+    return;
+  const double ratio = drive.ratios[gear];
+  if (drive.throttle <= .05) {
+    // Accelerator released (#448): the box shifts for the engine braking,
+    // not for power. It used to downshift at 2940 rpm, as under power, back
+    // up to 4000-4650 rpm, so the engine braking grew as the car slowed
+    // (0.06 g in third, then 0.16 g in first at 43 km/h) with a jolt at
+    // every downshift. It now keeps its gear, so the engine braking fades
+    // with the speed, and downshifts near idle, when the lower gear stays
+    // below 42 % of the limiter; it only upshifts to protect the engine, as
+    // under power. The road speed picks the gear: under braking the wheels
+    // may be locked and the clutch open, and the box still stops in first.
+    const auto road_rpm = [&](int g) {
+      return std::abs(road_shaft * drive.ratios[g]) * rpm_per_rad;
+    };
+    if (gear > 1 && drive.ratios[gear - 1] > 0 &&
+        road_rpm(gear) < drive.idle * 1.6 &&
+        road_rpm(gear - 1) < drive.limit * .42) {
       --gear;
       shift_time_ = .22;
+    } else if (gear < drive.gears && drive.ratios[gear + 1] > 0 &&
+               rpm > drive.limit * .88 && road_rpm(gear) > drive.limit * .7) {
+      ++gear;
+      shift_time_ = .12;
     }
     return;
   }
-  if (gear <= 0 || gear == 7 || shaft <= 2)
+  if (shaft <= 2)
     return;
-  const double ratio = drive.ratios[gear];
   const double coupled_rpm = std::abs(road_shaft * ratio) * rpm_per_rad;
   if (gear < drive.gears && rpm > drive.limit * .88 &&
       coupled_rpm > drive.limit * .7 && drive.ratios[gear + 1] > 0) {
@@ -1179,6 +1193,16 @@ void VehicleDynamics::step_drive() {
         std::max(drive.idle, std::abs(road_shaft * ratio) * rpm_per_rad);
     engine_omega = std::lerp(engine_omega, target / rpm_per_rad,
                              -std::expm1(-dt_ / .07));
+  }
+  if (braking_clutch_ > 0 && engine_running && ratio != 0 && !automatic_shift) {
+    // While declutched for a hard stop the engine follows the road speed in
+    // the gear (#448), as the shift blip does: the clutch takes up again
+    // without a jolt when the brake is released at speed, and the engine
+    // idles at rest instead of keeping the rpm of the last downshift.
+    const double target = std::clamp(std::abs(road_shaft * ratio) * rpm_per_rad,
+                                     drive.idle, drive.limit * .9);
+    engine_omega = std::lerp(engine_omega, target / rpm_per_rad,
+                             -std::expm1(-dt_ / .07) * braking_clutch_);
   }
 
   // Différentiel autobloquant (LSD 1.5-way avec précharge minimale)

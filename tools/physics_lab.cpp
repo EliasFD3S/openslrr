@@ -3,7 +3,7 @@
 // inputs at any solver rate and prints one summary line per scenario, so the
 // same scenario can be compared across rates and across physics changes.
 //
-//   physics_lab [--hz 120,250,500,1000] [--scenario all|launch|brake|skidpad|
+//   physics_lab [--hz 120,250,500,1000] [--scenario all|launch|brake|coast|skidpad|
 //                step_steer|burnout] [--csv DIR]
 //
 // The car is the 1300 kg rear-drive saloon of tests/test_vehicle_dynamics.cpp
@@ -294,6 +294,34 @@ std::string brake(const std::string& csv) {
   return out;
 }
 
+// Lifts off at 100 km/h and coasts: the engine braking and the gears the
+// automatic box picks for it (#448).
+std::string coast(const std::string& csv) {
+  Run run("coast");
+  reach(run, 100);
+  const size_t first = run.samples.size();
+  const double t0 = run.t;
+  while (run.speed() * kKph > 10 && run.t < t0 + 90) run.step({0, 0, 0});
+  run.write_csv(csv, VehicleDynamics::frequency);
+  std::string out;
+  for (double kph : {90.0, 60.0, 40.0, 20.0}) {
+    double g = 0, rpm = 0;
+    int n = 0, gear = 0;
+    for (size_t k = first; k < run.samples.size(); ++k) {
+      const auto& s = run.samples[k];
+      if (std::abs(s.speed * kKph - kph) > 2) continue;
+      g += s.longitudinal_g, rpm += s.rpm, gear = s.gear, ++n;
+    }
+    char part[80];
+    std::snprintf(part, sizeof part, "%s%.0f: %.3f g G%d %.0f rpm", out.empty() ? "" : " | ", kph,
+                  n ? -g / n : 0., gear, n ? rpm / n : 0.);
+    out += part;
+  }
+  char tail[60];
+  std::snprintf(tail, sizeof tail, " | to 10 km/h %.1f s", run.t - t0);
+  return out + tail;
+}
+
 std::string skidpad(const std::string& csv) {
   Run run("skidpad");
   reach(run, 60);
@@ -535,7 +563,7 @@ int main(int argc, char** argv) {
     }
   }
   struct Scenario { const char* name; std::function<std::string(const std::string&)> run; };
-  const Scenario scenarios[] = {{"launch", launch}, {"brake", brake}, {"skidpad", skidpad},
+  const Scenario scenarios[] = {{"launch", launch}, {"brake", brake}, {"coast", coast}, {"skidpad", skidpad},
                                 {"step_steer", step_steer}, {"burnout", burnout},
                                 {"curb", curb}, {"curb_fast", curb_fast},
                                 {"curb_angle", curb_angle}, {"curb_side", curb_side},

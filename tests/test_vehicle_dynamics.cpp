@@ -1161,9 +1161,55 @@ SLRR_TEST(hard_braking_declutches_so_the_engine_never_pushes_the_rear_wheels) {
   SLRR_REQUIRE(car.dynamics.gear == 1);  // stopped in first, ready to launch
 }
 
+SLRR_TEST(coasting_engine_braking_fades_with_the_speed) {
+  // #448: lifting off at 100 km/h. The automatic box downshifted at 2940 rpm
+  // back up to 4000-4650 rpm, so the engine braking grew as the car slowed
+  // (0.06 g in third, 0.16 g in first at 43 km/h). It now holds its gear and
+  // downshifts near idle.
+  Car car;
+  while (car.speed() * 3.6 < 100) car.run(1. / 60, 1, 0, 0);
+  const int lifted_gear = car.dynamics.gear;
+  double decel_90 = 0, decel_40 = 0, worst_rpm = 0;
+  while (car.speed() * 3.6 > 15) {
+    const double before = car.speed();
+    car.run(1. / 60, 0, 0, 0);
+    const double decel = (before - car.speed()) * 60 / 9.81;
+    const double kph = car.speed() * 3.6;
+    if (std::abs(kph - 90) < 1) decel_90 = decel;
+    if (std::abs(kph - 40) < 1) decel_40 = decel;
+    if (car.dynamics.gear < lifted_gear)
+      worst_rpm = std::max(worst_rpm, car.dynamics.engine_omega * 9.549);
+  }
+  std::printf("COAST %.3f g at 90 km/h, %.3f g at 40 km/h, %.0f rpm after downshifts\n",
+              decel_90, decel_40, worst_rpm);
+  SLRR_REQUIRE(decel_90 > 0 && decel_40 > 0);
+  SLRR_REQUIRE(decel_40 < decel_90);
+  SLRR_REQUIRE(worst_rpm < 7000 * .42);
+}
+
+SLRR_TEST(releasing_a_hard_brake_at_speed_takes_up_without_a_jolt) {
+  // #448: the auto clutch opens for a hard stop. Released at 50 km/h, it
+  // takes up again with the engine already at the road speed's rpm.
+  Car car;
+  for (int i = 2; i < 4; ++i) car.dynamics.drive.wheels[i].brake = 700;
+  while (car.speed() * 3.6 < 100) car.run(1. / 60, 1, 0, 0);
+  while (car.speed() * 3.6 > 50) car.run(1. / 60, 0, 1, 0);
+  double worst = 0;
+  for (int i = 0; i < 60; ++i) {
+    const double before = car.speed();
+    car.run(1. / 60, 0, 0, 0);
+    if (i >= 18) worst = std::max(worst, (before - car.speed()) * 60 / 9.81);
+  }
+  std::printf("TAKE-UP worst deceleration %.3f g, gear %d, %.0f rpm\n", worst,
+              car.dynamics.gear, car.dynamics.engine_omega * 9.549);
+  SLRR_REQUIRE(worst < .08);
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
       hard_braking_declutches_so_the_engine_never_pushes_the_rear_wheels,
+      coasting_engine_braking_fades_with_the_speed,
+      releasing_a_hard_brake_at_speed_takes_up_without_a_jolt,
       stock_brake_balance_puts_seventy_percent_on_the_front,
       the_brake_adjuster_moves_the_front_share,
       steering_feedback_pulls_back_and_goes_light_past_the_peak,
