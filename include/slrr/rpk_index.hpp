@@ -93,6 +93,11 @@ class RpkIndex {
   // First `sourcefile` / `texture` property from text RSD payload.
   std::string payload_prop(uint32_t full_id, const char* key) const;
 
+  // A native type's cfg text and kind ("object", "trlight", "building"...).
+  // Stock packs embed it (ICFG); packers such as Track Wizard write
+  // `native <kind> <path.cfg>` and leave the cfg on disk. Empty on miss.
+  std::string native_config(uint32_t full_id, std::string* kind = nullptr) const;
+
   // Absolute disk path for an OSD/texture resource (follows sourcefile / texture).
   // Accepts local id (lo16) or packed full id. Empty on miss.
   std::string texture_path_for_id(uint32_t id) const;

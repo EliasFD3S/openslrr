@@ -118,15 +118,6 @@ size_t random_index(size_t count) {
   return static_cast<size_t>((static_cast<int64_t>(rand15()) * static_cast<int64_t>(count)) >> 15);
 }
 
-std::string config_text(const RpkIndex& rpk, uint32_t type) {
-  const auto bytes = rpk.read_payload(type);
-  if (bytes.size() < 10 || std::memcmp(bytes.data(), "ICFG", 4) != 0) return {};
-  const auto separator = std::find(bytes.begin() + 8, bytes.end(), 0);
-  if (separator == bytes.end()) return {};
-  const auto offset = static_cast<size_t>(separator - bytes.begin()) + 1;
-  return std::string(reinterpret_cast<const char*>(bytes.data() + offset), bytes.size() - offset);
-}
-
 float positive_prop(const RpkIndex& rpk, uint32_t id, const char* key, float fallback) {
   const auto text = rpk.payload_prop(id, key);
   if (text.empty()) return fallback;
@@ -312,7 +303,7 @@ void scene_ambience_attach(void* shell, const RpkIndex& rpk, const GroundMapData
   size_t loops = 0, randoms = 0;
   for (const auto& placement : map.placements) {
     auto [found, added] = configs.try_emplace(placement.type);
-    if (added) found->second = scene_ambience_parse(config_text(rpk, placement.type));
+    if (added) found->second = scene_ambience_parse(rpk.native_config(placement.type));
     const AmbienceConfig& config = found->second;
     if (config.empty()) continue;
     const int32_t owner = RpkIndex::pack_from_full(placement.type);

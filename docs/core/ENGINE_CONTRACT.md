@@ -480,6 +480,9 @@ map chains and their placed objects.
 descriptions and placements. It does not necessarily mean a new Java native
 to register. Inspect the data and the instantiation path first.
 
+A native type's cfg is either embedded (ICFG) or, in packs built by tools
+such as Track Wizard, a `native <kind> <path.cfg>` line naming a file on
+disk; `src/resources/rpk_index.cpp:RpkIndex::native_config` reads both.
 Native ICFG loading retains both renders and collision bodies. CFG `box`
 half extents, `sphere` radii and SCX collision meshes are cached per type,
 then instanced with `placement pose × body pose`. `nocollision` suppresses

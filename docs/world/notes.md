@@ -136,3 +136,24 @@ The original issues and #179 were closed for consolidation, not gameplay accepta
 records the baseline's missing chassis pairs/player-only movable contacts, the
 shared-contact implementation and remaining physical/kinematic, seating/audio
 limits. Contact integration is not acceptance of the complete #197 checklist.
+
+## Addon track render-only meshes (Tsukuba Circuit)
+
+Track Wizard 2.0 addons split a track into a ground (POLY + PHYS, the
+driveable surface) and a render-only SCX (buildings, stands, trees, pylons)
+named by a native `object` type whose RSD is `native object
+<path>\TrackRenders.cfg`; that cfg holds `render 0x101`. The ground places it
+with an RSD of `gametype 0x00000006` alone, without a `params` line. Two
+gaps hid it: `append_ground_placement` dropped placements without `params`,
+and `ground_prop_config` only read embedded ICFG configs. A placement without
+`params` now sits at the map origin, and
+`src/resources/rpk_index.cpp:RpkIndex::native_config` reads either form; the
+prop loader, scenery ambience and race traffic-light scan all use it.
+
+`./scripts/run_save_io_tests.ps1 -Suite map_props` checks Tsukuba when
+`game/maps/Addon_Maps/Tsukuba_Circuit.rpk` exists (SKIP otherwise): before,
+112 placements and Render/Tsukuba.SCX not resident (FAIL); after, 113
+placements and the 623,853-vertex render resident; TestTrack and ROC still
+pass. In game (bench drive on a copy of `game/` with the addon): the pit
+building, control tower, stands, trees and power pylons now render.
+Collision is unchanged (the render-only SCX carries none, as intended).
