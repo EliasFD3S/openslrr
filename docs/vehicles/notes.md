@@ -1270,7 +1270,69 @@ temperature does not change the pressure, wear or the tyre's stiffness, and
 there is no tyre smoke. Pads do not wear faster when hot. The ABS pulse is
 a vibration, not a pedal kick (no device has one). The race AI has no ASR.
 The emergency lamp (`led_ER`, `osd_emergency`) is not lit; what lit it in
-build 606 is not traced. Unchanged and outside this issue: braking hard with
-the automatic gearbox, it shifts down to first at about 44 km/h with the
-auto clutch closed, and the engine's reflected inertia then pushes the rear
-wheels (the rear force fell from 1.8 to 0.5 kN in the Lab).
+build 606 is not traced. Braking hard with the automatic gearbox shifted
+down to first at about 44 km/h with the auto clutch closed, and the engine's
+reflected inertia pushed the rear wheels: fixed by #448 (next section).
+
+## Hard braking in first: the engine pushed the rear wheels (#448)
+
+Cause: with the automatic box and the auto clutch, a hard stop downshifted to
+first (about 44 km/h on the Physics Lab car) with the clutch closed. A closed
+clutch adds the engine's inertia times the ratio squared to the driven
+wheels: 0.38 × 12.9² ≈ 63 kg·m² in first, against 1.6 kg·m² per wheel. The
+rear brakes then mostly slowed the engine, which pushed the rear wheels: with
+the real ABS of #446 (`physics_lab --scenario brake --respec --abs 1`) the
+rear tyre force fell from about 4.7 to 2.7–3.4 kN (both wheels) below 37 km/h.
+The `stall_risk` opening in `step_drive` only acts below 12 km/h with the
+accelerator released, and `SLRR_rev:src/engine/driving-helping.ts:brakingClutchHelp` only near stall speed.
+
+The same downshift rule made the engine braking odd when the accelerator was
+released (Lab `coast`, lift-off at 100 km/h): the box downshifted at 2940 rpm,
+as under power, back up to 4000–4650 rpm. The engine braking faded in third
+(0.084 g at 90 km/h, 0.059 g at 62 km/h), then grew at every downshift, up to
+0.16 g in first at 43 km/h, with a jolt each time.
+
+Fix (`VehicleDynamics::step_drive`, `update_gear`):
+- The auto clutch opens with the brake pedal while the accelerator is
+  released (`braking_clutch_`: 0 at a brake of 0.5, fully open at 0.8), in
+  every gear and at any rpm, since the reflected inertia loads the wheels in
+  any gear. It opens in 40 ms and takes up again over 250 ms on release. A
+  manual clutch (`auto_clutch` false) is unchanged.
+- While it is open, the engine follows the road speed in the gear (between
+  idle and 90 % of the limiter), as the shift blip does. The clutch takes up
+  without a jolt when the brake is released at speed, and the engine idles at
+  rest.
+- Accelerator released (throttle ≤ 0.05), the automatic box keeps its gear,
+  so the engine braking fades with the speed, and downshifts when the road
+  speed's rpm falls below 1.6 × idle and the lower gear stays below 42 % of
+  the limiter. It upshifts only to protect the engine, as under power. The
+  road speed picks the gear, so a stop with locked wheels or the clutch open
+  still ends in first. Under power the rules are unchanged.
+
+Validation:
+- `vehicle_dynamics` suite: 49 passed. Three new tests fail before the fix and
+  pass after it:
+  `hard_braking_declutches_so_the_engine_never_pushes_the_rear_wheels`
+  (rear brakes too weak to lock stand in for the ABS; rear force 3.8 → 1.4 kN
+  before, 4.3 / 4.2 kN after), `coasting_engine_braking_fades_with_the_speed`
+  (0.085 g at 90 km/h and 0.130 g at 40 km/h, 4668 rpm after the downshifts
+  before; 0.085 / 0.037 g and 2024 rpm after) and
+  `releasing_a_hard_brake_at_speed_takes_up_without_a_jolt` (after 0.3 s,
+  0.151 g in first before, 0.061 g in third after).
+- Physics Lab at 1000 Hz on the #446 branch (`e35ff7b`) with
+  `--respec --abs 1`: the rear force holds about 5 kN down to 10 km/h, and the
+  100-0 goes from 40.76 m / 3.113 s to 39.79 m / 2.938 s. Launch unchanged.
+- Physics Lab on main (no real ABS, the rear wheels lock): the 100-0 goes from
+  40.43 m to 41.15 m, because the closed clutch had kept the locked rear
+  wheels turning. The new `coast` scenario gives 0.084 g at 90 km/h (third,
+  4274 rpm), 0.057 g at 60, 0.039 g at 40 (third, 1907 rpm) and 0.039 g at
+  20 km/h (first). The other scenarios are unchanged.
+
+Limitations: hard braking has no engine braking; it is small next to the
+brakes. The rev match while declutched is a controller, not combustion
+torque. Coasting at low speed still steps up a little at each downshift
+(0.029 → 0.044 g at 25 km/h, 0.036 → 0.057 g at 17 km/h). The engine braking
+itself (`pumping`, `engine_friction_torque`) is unchanged and not compared with
+measured cars. The `race_vehicle` and `race_brain` suites need the game
+folder and were not run; the race AI also coasts with these rules. Not
+validated in game.

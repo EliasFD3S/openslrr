@@ -293,6 +293,8 @@ private:
   ReferenceSpeed reference_;
   AbsModulator abs_;
   TractionControl asr_;
+  // How far the auto clutch is opened for a hard stop, 0..1 (#448).
+  double braking_clutch_ = 0;
   int previous_shift_ = 0;
   bool accelerator_down_ = false, forced_reverse_ = false;
   void step(const Terrain &terrain);

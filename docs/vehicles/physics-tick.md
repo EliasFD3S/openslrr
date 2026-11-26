@@ -149,13 +149,14 @@ which the fixed-step benchmark, `--physics-batch` and the tests still use.
   plots of speed, rpm, yaw rate, rear slip angle and rear wheelspin.
 - **Physics Lab.** `build/Release/physics_lab.exe` ([tools/physics_lab.cpp](../../tools/physics_lab.cpp))
   drives `VehicleDynamics` on a flat plane with scripted inputs (launch,
-  brake, skidpad, step steer, burnout) at several rates and prints one line
+  brake, coast, skidpad, step steer, burnout) at several rates and prints one line
   per scenario and rate (`--hz 120,1000`, `--scenario NAME`, `--csv DIR`,
   `--asr` and `--abs` for the driving aids (#446: traction control replaced
   the launch control), `--respec` for the re-specced CoupeSport brakes with
   rotor heat, `fade` and `split_mu` scenarios; `curb`, `curb_fast`, `curb_angle` and
   `curb_side` drive into a 15 cm kerb square at 8 and 30 km/h and at 20 and 8
-  degrees at 20 km/h).
+  degrees at 20 km/h; `coast` lifts off at 100 km/h and reports the engine
+  braking, gear and rpm at 90, 60, 40 and 20 km/h, #448).
   It is bit-reproducible. On the test saloon the solver alone gives the same
   results from 250 to 1000 Hz (0-100 km/h 7.32 s, 100-0 km/h 30.5-30.7 m,
   skidpad 1.115 g, yaw peak 0.33 rad/s at 0.6 s); 120 Hz differs
