@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react"
+import { useRef, useState } from "react"
 import Gauge from "./components/Gauge.jsx"
-import { useCountUp, useInView, useScrolled } from "./hooks.js"
+import { useCountUp, useInView } from "./hooks.js"
+import { Footer, Header, REPO, useInitialFragment } from "./SiteLayout.jsx"
 
-const REPO = "https://github.com/EliasFD3S/openslrr"
 // No prebuilt release yet: Download leads to the build guide. When the first
 // release is out, point DOWNLOAD at `${REPO}/releases/latest`.
 const DOWNLOAD = "./docs/#/build"
@@ -73,42 +73,6 @@ function Reveal({ as: Tag = "div", className = "", index = 0, children, ...rest 
   )
 }
 
-function Header() {
-  const [open, setOpen] = useState(false)
-  const scrolled = useScrolled(40)
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e) => e.key === "Escape" && setOpen(false)
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [open])
-  const close = () => setOpen(false)
-  return (
-    <header className={`topbar ${scrolled || open ? "is-solid" : ""}`}>
-      <div className="topbar-inner">
-        <a className="brand" href="#top" onClick={close} aria-label="OpenSLRR, back to top">
-          <img src="./img/logo.png" alt="" width="96" height="46" />
-        </a>
-        <button
-          className="menu-toggle"
-          aria-expanded={open}
-          aria-controls="site-nav"
-          onClick={() => setOpen(!open)}
-        >
-          {open ? "Close" : "Menu"}
-        </button>
-        <nav id="site-nav" className={open ? "nav is-open" : "nav"} aria-label="Main">
-          <a href="#features" onClick={close}>Features</a>
-          <a href="#screens" onClick={close}>Screenshots</a>
-          <a href="#download" onClick={close}>Download</a>
-          <a href={DOCS}>Documentation</a>
-          <a href={REPO} target="_blank" rel="noreferrer">GitHub</a>
-        </nav>
-      </div>
-    </header>
-  )
-}
-
 function Hero() {
   return (
     <section className="hero" id="top" aria-labelledby="hero-title">
@@ -126,6 +90,7 @@ function Hero() {
           <a className="pill pill-primary" href={DOWNLOAD}>
             Download
           </a>
+          <a className="pill" href="./launcher/">Launcher</a>
           <a className="pill" href={DOCS}>Read the docs</a>
           <a className="pill pill-ghost" href={REPO} target="_blank" rel="noreferrer">Source on GitHub</a>
         </div>
@@ -331,26 +296,8 @@ function Download() {
   )
 }
 
-function Footer() {
-  return (
-    <footer className="bottombar">
-      <div className="wrap footer-inner">
-        <nav className="footer-nav" aria-label="Footer">
-          <a href={DOCS}>Documentation</a>
-          <a href={`${DOCS}#/changelog`}>Changelog</a>
-          <a href={REPO} target="_blank" rel="noreferrer">GitHub</a>
-          <a href={`${REPO}/issues`} target="_blank" rel="noreferrer">Report an issue</a>
-        </nav>
-        <p>
-          OpenSLRR is a fan project released under the MIT licence. It is not affiliated with or endorsed by the
-          publishers or developers of Street Legal Racing: Redline, and it needs your own copy of the game.
-        </p>
-      </div>
-    </footer>
-  )
-}
-
 export default function App() {
+  useInitialFragment()
   return (
     <>
       <a className="skip-link" href="#main">Skip to content</a>
