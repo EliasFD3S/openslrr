@@ -1100,3 +1100,22 @@ Limitations: the real-car figures are typical values, not measurements of
 these engines. SLRR torque curves are below the real cars' (Baiern peak 178
 N·m against about 245 N·m for its counterpart), so the cars stay slower than
 their counterparts. Wheel inertia (1.6 kg·m² per wheel) is unchanged.
+
+## A wheel had a dead zone near the centre at speed (#434)
+
+Cause: `host_input_update_controller` reclassified steering every tick, and a
+binding only counts as active past 1 % of its travel
+(`input_mapping::steering_kind`, `steering_is_analog`). Below that the steering
+was flagged digital, so `steering_filter` gave a wheel within 4.5 degrees of
+centre (1 % of 900 degrees) the keyboard treatment: the speed window, the
+steering help's curvature limit and the 2 rad/s return. At speed this scaled
+the small angles down, a dead zone with the STEERING DEAD ZONE slider at 0,
+then the full analog response came back at once past 1 %: a notch. Parked,
+nothing narrows the input, so it only showed while driving.
+
+Fix: when no binding is active, the analog flag and the steering class keep
+the class that steered last; a wheel, stick or key now keeps its own filter
+through the centre.
+
+Limitations: a wheel touched first after a key is still treated as a key until
+it passes 1 % of its travel. Not validated in game with a wheel yet.
