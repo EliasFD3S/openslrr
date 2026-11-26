@@ -13,7 +13,8 @@ $input v_texcoord0, v_texcoord1, v_texcoord2, v_color0, v_worldPos, v_viewPos, v
 //
 // Modes (v_texcoord2.y): 0 smoke/dust, 1 debris (grass blades, pebbles:
 // small lit sprites of the cloud texture), 2 skid mark (texture times the
-// vertex colour, for a multiply-over-alpha blend).
+// vertex colour, for a multiply-over-alpha blend), 3 smoke shadow map,
+// 4 spark (emissive streak, additive).
 #include <bgfx_shader.sh>
 
 SAMPLER2D(s_texColor, 0);
@@ -76,6 +77,16 @@ vec3 applyFog(vec3 colour, vec3 worldPos) {
 
 void main() {
 	float mode = v_texcoord2.y;
+	if (mode > 3.5) {
+		// A spark: a glowing streak, its core white-hot, added to the scene.
+		vec2 cp = v_texcoord0;
+		float rp = dot(cp, cp);
+		if (rp >= 1.0) discard;
+		float glow = (1.0 - rp) * (1.0 - rp);
+		vec3 hot = mix(v_color0.rgb, vec3(1.0, 0.95, 0.8), glow * glow * 0.6);
+		gl_FragColor = vec4(hot * glow * v_color0.a * 2.5, 0.0);
+		return;
+	}
 	if (mode > 2.5) {
 		// Smoke shadow map (update_smoke_shadow): a sun-facing disc with
 		// the puff's noise. rgb: transmittance (multiplied), a: the light

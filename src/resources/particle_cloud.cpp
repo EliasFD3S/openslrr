@@ -281,7 +281,9 @@ void ParticleSystem::emit(const ParticleSpawn &spawn) {
   p.color0 = c.source_color.sample(rng);
   p.color1 = c.dest_color.sample(rng);
   for (auto *colour : {&p.color0, &p.color1})
-    for (auto &channel : *colour) channel = std::clamp(channel, 0.f, 1.f);
+    for (size_t k = 0; k < 3; ++k)
+      (*colour)[k] = std::clamp((*colour)[k] + (spawn.tint[k] - (*colour)[k]) * spawn.tint_weight,
+                                0.f, 1.f);
   p.size0 = std::max(spawn.min_size, c.source_size.sample(rng)[0]);
   p.size1 = std::max(p.size0, c.dest_size.sample(rng)[0]);
   p.alpha0 = std::clamp(c.source_alpha.sample(rng)[0], 0.f, 1.f);

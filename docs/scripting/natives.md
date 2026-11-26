@@ -19,9 +19,9 @@ implementations and following selected calls to their consumers.
 
 | Status | Stock signatures |
 | --- | ---: |
-| Registered with a body | 367 |
+| Registered with a body | 370 |
 | Registered with the explicit `native_noop` handler | 3 |
-| Absent from the registry | 6 |
+| Absent from the registry | 3 |
 | **Total** | **376** |
 
 The first category includes constant responses, inline empty bodies and
@@ -106,11 +106,11 @@ being replaced by success-returning mocks.
 
 ## Missing signatures by system (active priorities)
 
-| System | Count | Methods |
-| --- | ---: | --- |
-| `GroundRef` | 3 | `setWater` (2 overloads), `addWaterLimit` |
+None: every active stock signature has a binding.
 
-There are 3 missing active signatures and 3 missing leftovers, for 6 total.
+The `GroundRef` water natives are bound since #454 too (`water.hpp`): the
+surface plane and its limits feed the wheels' water spray; no buoyancy or
+drag reads them yet. Only the three Welder leftovers remain missing.
 The nine `ParticleSystem` natives are bound since #454
 (`src/natives/natives_particles.cpp`, `src/resources/script_particles.cpp`):
 `init` resolves the RenderRef type to a stock `particle <cfg>` cloud, the

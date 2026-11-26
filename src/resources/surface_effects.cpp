@@ -7,6 +7,7 @@
 #include "slrr/skid_marks.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -51,12 +52,29 @@ uint16_t surface_particle_cloud(const RpkIndex &rpk, uint32_t full_id) {
   ParticleCloudConfig config;
   if (!cfg.empty()) config = parse_particle_cloud(read_game_file(rpk, cfg));
   if (config.ok) config.texture = entry_texture(rpk, id);
+  {
+    std::string name = cfg;
+    for (char &c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    config.emissive = name.find("spark") != std::string::npos;
+  }
   jobs_printf("[effects] cloud %08x %s: %s rate %.0f type %d texture %s\n", id, cfg.c_str(),
               config.ok ? "ok" : "missing", config.rate, config.type,
               config.texture.empty() ? "-" : std::filesystem::path(config.texture).filename().string().c_str());
   const bool ok = config.ok;
   const uint16_t index = particle_cloud_register(id, std::move(config));
   return ok ? index : 0xffff;
+}
+
+uint16_t surface_spark_cloud(const RpkIndex &rpk) {
+  const RpkPack *pack = rpk.pack_by_name("particles.rpk");
+  return pack ? surface_particle_cloud(rpk, RpkIndex::make_full_id(pack->pack_id, kCloudSparks))
+              : uint16_t(0xffff);
+}
+
+uint16_t surface_water_cloud(const RpkIndex &rpk) {
+  const RpkPack *pack = rpk.pack_by_name("particles.rpk");
+  return pack ? surface_particle_cloud(rpk, RpkIndex::make_full_id(pack->pack_id, kCloudWater))
+              : uint16_t(0xffff);
 }
 
 uint16_t surface_skid_style(const RpkIndex &rpk, uint32_t full_id) {

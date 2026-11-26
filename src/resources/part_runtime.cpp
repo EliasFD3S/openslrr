@@ -27,6 +27,7 @@
 #include "slrr/skid_marks.hpp"
 #include "slrr/script_particles.hpp"
 #include "slrr/surface_effects.hpp"
+#include "slrr/water.hpp"
 #include "slrr/steering_feedback.hpp"
 #include "slrr/suspension_geometry.hpp"
 #include "slrr/vehicle_dynamics.hpp"
@@ -202,6 +203,8 @@ struct Record {
   // when the wheel's ground names another cloud.
   std::array<ParticleSystem, 4> tyre_dust{};
   std::array<uint16_t, 4> tyre_cloud{0xffff, 0xffff, 0xffff, 0xffff};
+  // Sparks from a rim on the road or a hit, and water spray (#454).
+  ParticleSystem sparks{}, splash{};
   std::chrono::steady_clock::time_point last_impact_sound{};
   // MWM keeps a native aggregate, initially empty; `reload` fills it.
   // Canister.actual is script save data, not the engine's consumption owner.
@@ -3657,7 +3660,10 @@ void emit_tyre_dust(Record &rec, size_t i, const SkidWheelSample &sample,
   const bool soft = ground.rolling > 0 || config.type == 1;
   double rate = 0;
   if (soft) {
-    rate = power / 30000.0;
+    // Loose ground gives way to a light slide and is thrown up by a fast
+    // wheel even when it grips.
+    const double roll = std::clamp((std::abs(s.spin * wheel.radius) - 3) / 17, 0.0, 1.0);
+    rate = power / 8000.0 + (config.type == 1 ? .3 : .8) * roll;
   } else {
     const double hot = std::clamp((s.tyre_temperature.surface - 80.0) / 120.0, 0.0, 1.0);
     rate = power / 20000.0 * (.1 + .9 * hot * hot * (3 - 2 * hot));
@@ -3703,6 +3709,14 @@ void emit_tyre_dust(Record &rec, size_t i, const SkidWheelSample &sample,
     spawn.ground_normal = {float(s.normal.x), float(s.normal.y), float(s.normal.z)};
     // Smoke and dust hang in the air; only debris keeps the cfg's gravity.
     spawn.buoyancy = config.type == 1 ? 1.f : .15f;
+    if (soft && ground.dust_color) {
+      // The ground's own colour: Dead_Island's orange sand, a brown lawn.
+      spawn.tint = {float((ground.dust_color >> 16) & 255) / 255.f,
+                    float((ground.dust_color >> 8) & 255) / 255.f,
+                    float(ground.dust_color & 255) / 255.f};
+      spawn.tint_weight = config.type == 1 ? .5f : .8f;
+      spawn.min_size = config.type == 1 ? 0.f : static_cast<float>(radius * 1.2);
+    }
     if (!soft) {
       // Turning with the tyre, about the axle through the hub.
       spawn.swirl_center = {float(s.center.x), float(s.center.y), float(s.center.z)};
@@ -3713,6 +3727,85 @@ void emit_tyre_dust(Record &rec, size_t i, const SkidWheelSample &sample,
       spawn.min_size = static_cast<float>(radius * 1.6);
     }
     emitter.emit(spawn);
+  }
+}
+
+// Sparks (#454): the stock spark.cfg (particles:0x106) from a hit, along the
+// contact normal and the slide, as many as the hit is hard.
+void emit_impact_sparks(Record &rec, const physics::VehicleDynamics::Impact &hit) {
+  if (!index || hit.speed < 4) return;
+  const uint16_t cloud = surface_spark_cloud(*index);
+  if (cloud == 0xffff) return;
+  if (!rec.sparks.ready()) rec.sparks.init(cloud);
+  static std::mt19937 rng(0x5a4u);
+  std::uniform_real_distribution<double> unit(-1.0, 1.0);
+  const auto &body = rec.dynamics.body;
+  const int count = static_cast<int>(std::clamp((hit.speed - 4) * 5, 0.0, 60.0));
+  for (int n = 0; n < count; ++n) {
+    const physics::Vec3 scatter{unit(rng), unit(rng), unit(rng)};
+    const physics::Vec3 v = body.velocity * .7 + hit.normal * (1 + hit.speed * .25) +
+                            scatter * (hit.speed * .3);
+    ParticleSpawn spawn;
+    spawn.position = {float(hit.point.x), float(hit.point.y), float(hit.point.z)};
+    spawn.velocity = {float(v.x), float(v.y), float(v.z)};
+    spawn.ground = spawn.position;
+    spawn.ground[1] -= 2.f;  // land on the road below, not the hit point
+    spawn.ground_normal = {0, 1, 0};
+    rec.sparks.emit(spawn);
+  }
+}
+
+// A wheel without its tyre grinding the road sprays sparks, more with speed;
+// a wheel in water throws spray (water.cfg, particles:0x105).
+void emit_wheel_sparks_and_spray(Record &rec, size_t i, double dt) {
+  if (!index || i >= rec.dynamics.state.size()) return;
+  const auto &s = rec.dynamics.state[i];
+  const auto &wheel = rec.dynamics.wheels[i];
+  const auto &body = rec.dynamics.body;
+  static std::mt19937 rng(0x5b4u);
+  std::uniform_real_distribution<double> unit(0.0, 1.0);
+  const double speed = body.velocity.length();
+  if (wheel.metal_contact && s.contact && speed > 2) {
+    const uint16_t cloud = surface_spark_cloud(*index);
+    if (cloud != 0xffff) {
+      if (!rec.sparks.ready()) rec.sparks.init(cloud);
+      rec.sparks.set_freq(static_cast<float>(std::clamp(speed / 15, 0.0, 2.0) * .3));
+      const int count = rec.sparks.due(dt);
+      for (int n = 0; n < count; ++n) {
+        const physics::Vec3 v = body.velocity * .85 + s.normal * (1 + unit(rng) * 2.5);
+        ParticleSpawn spawn;
+        spawn.position = {float(s.patch.x), float(s.patch.y + .02), float(s.patch.z)};
+        spawn.velocity = {float(v.x), float(v.y), float(v.z)};
+        spawn.ground = {float(s.patch.x), float(s.patch.y), float(s.patch.z)};
+        spawn.ground_normal = {float(s.normal.x), float(s.normal.y), float(s.normal.z)};
+        rec.sparks.emit(spawn);
+      }
+    }
+  }
+  // The water goes with the map ground that set it.
+  if (water_owner() && !gameref_get(const_cast<void *>(water_owner()))) water_clear();
+  if (!water_present()) return;
+  const double radius = std::max(.15, wheel.radius);
+  const double depth = water_depth({s.center.x, s.center.y - radius, s.center.z});
+  if (!(depth > 0) || speed < 1) return;
+  const uint16_t cloud = surface_water_cloud(*index);
+  if (cloud == 0xffff) return;
+  if (!rec.splash.ready()) rec.splash.init(cloud);
+  rec.splash.set_freq(static_cast<float>(std::clamp(speed / 8, 0.0, 3.0) *
+                                         std::clamp(depth / radius, .3, 1.0)));
+  const int count = rec.splash.due(dt);
+  const double above = std::min(depth, 2 * radius);  // the water's surface over the tyre bottom
+  for (int n = 0; n < count; ++n) {
+    const physics::Vec3 at = s.center + physics::Vec3{0, above - radius, 0};
+    const physics::Vec3 v = body.velocity * .4 + physics::Vec3{0, 1 + unit(rng) * 2, 0};
+    ParticleSpawn spawn;
+    spawn.position = {float(at.x), float(at.y), float(at.z)};
+    spawn.velocity = {float(v.x), float(v.y), float(v.z)};
+    spawn.ground = spawn.position;
+    spawn.ground_normal = {0, 1, 0};
+    spawn.buoyancy = .15f;
+    spawn.min_size = static_cast<float>(radius);
+    rec.splash.emit(spawn);
   }
 }
 
@@ -3747,6 +3840,7 @@ void update_skid_marks(Record &rec, double dt, float range = 120.f) {
     if (index) sample.style = surface_skid_style(*index, s.surface.skid_mark);
     skid_marks_update(key, i, sample, dt, speed);
     if (i < rec.tyre_dust.size() && index) emit_tyre_dust(rec, i, sample, s.surface, dt);
+    emit_wheel_sparks_and_spray(rec, i, dt);
   }
 }
 
@@ -6390,7 +6484,10 @@ void commit_batch(SimBatch& batch) {
     if (!hit || impact.hit.speed > hit->speed) hit = &impact.hit;
   }
   for (const auto& [car_index, hit] : loudest)
-    if (current(batch.cars[car_index])) play_impact_audio(*batch.cars[car_index].rec, *hit);
+    if (current(batch.cars[car_index])) {
+      play_impact_audio(*batch.cars[car_index].rec, *hit);
+      emit_impact_sparks(*batch.cars[car_index].rec, *hit);
+    }
   // Crush cages advance by the substeps the batch ran: other parts' cages as
   // the records loop advanced them, each car's by its own solver steps.
   const unsigned substeps = batch.solver_steps;
@@ -8189,6 +8286,7 @@ void part_drop_actors() {
   skid_marks_clear();
   particles_clear();
   script_particles_clear();
+  water_clear();
 }
 void part_set_hud_preview(const std::string &path) {
   std::ifstream input(path, std::ios::binary);

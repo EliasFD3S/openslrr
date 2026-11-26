@@ -485,6 +485,13 @@ particles:2 (asphalt smoke) and particles:0xA (the asphalt mark).
   sources; a positive `setFreq` or a new source wakes it.
 - **Traffic audio.** At most two native traffic cars within 40 m play the
   slide loop.
+- **Dust colour, sparks and spray.**
+  - Loose ground's dust takes its texture's average colour
+    (`GroundSurface::dust_color`).
+  - A rim on the road and a hit faster than 4 m/s throw the stock sparks:
+    emissive streaks, added over the scene.
+  - A wheel in the map's water (`water.hpp`, from `GroundRef.setWater`)
+    throws water.cfg spray.
 - **Rendering.** `draw_particles` runs after the marks in the world view.
   Particles are sorted back to front, and each one is a camera-facing
   impostor of a sphere of smoke (`fs_particle.sc`).

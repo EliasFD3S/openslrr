@@ -5,6 +5,7 @@
 #include "slrr/light_resource.hpp"
 
 #include "slrr/paint_texture.hpp"
+#include "slrr/ptx_image.hpp"
 #include "slrr/scene_collision.hpp"
 #include <limits>
 #include "slrr/gameref.hpp"
@@ -3016,6 +3017,30 @@ void scene_instances_override_collision(uint32_t id,
 // Config.ground_friction when the ground native ran (natives_resref).
 static std::atomic<float> g_ground_friction{1.f};
 
+// The average colour (ARGB) of a ground texture, decoded once on the CPU, or 0
+// when it cannot be read: the dust a tyre raises from that ground (#454).
+static uint32_t ground_texture_color(const std::string &absolute) {
+  static std::unordered_map<std::string, uint32_t> cache;
+  if (const auto it = cache.find(absolute); it != cache.end()) return it->second;
+  uint32_t colour = 0;
+  PaintImage image;
+  if (paint_image_from_texture(load_texture_file(absolute), &image) && image.valid()) {
+    double sum[3] = {};
+    double count = 0;
+    const size_t pixels = size_t(image.width) * image.height;
+    const size_t step = std::max<size_t>(1, pixels / 4096);
+    for (size_t i = 0; i < pixels; i += step) {
+      for (int k = 0; k < 3; ++k) sum[k] += image.rgba[i * 4 + k];
+      ++count;
+    }
+    if (count > 0)
+      colour = 0xff000000u | uint32_t(std::lround(sum[0] / count)) << 16 |
+               uint32_t(std::lround(sum[1] / count)) << 8 | uint32_t(std::lround(sum[2] / count));
+  }
+  cache.emplace(absolute, colour);
+  return colour;
+}
+
 static void attach_ground_surfaces(const RpkIndex &rpk, int32_t pack, const std::string &params,
                             const std::vector<GroundMat> &mats,
                             const RpkIndex::ModelRef &model, ScxGeometry &collision) {
@@ -3047,6 +3072,14 @@ static void attach_ground_surfaces(const RpkIndex &rpk, int32_t pack, const std:
   // Without an SCM the SCY material count still lets the texture names speak.
   if (entries.empty()) entries.resize(mats.size());
   collision.surfaces = ground_surfaces(entries, textures, g_ground_friction.load());
+  // Loose ground: its texture's colour for the dust.
+  for (size_t i = 0; i < collision.surfaces.size() && i < textures.size(); ++i)
+    if (collision.surfaces[i].rolling > 0 && !textures[i].empty()) {
+      std::string relative = textures[i];
+      std::replace(relative.begin(), relative.end(), '\\', '/');
+      collision.surfaces[i].dust_color =
+          ground_texture_color((std::filesystem::path(rpk.game_root()) / relative).string());
+    }
   // skid_SFX names a sound in the ground pack's dependency slots.
   for (auto &surface : collision.surfaces)
     if (surface.slide_sound)
@@ -3087,8 +3120,8 @@ static void attach_ground_surfaces(const RpkIndex &rpk, int32_t pack, const std:
       soft += line;
     }
     if (surface.skid_particles || surface.skid_mark) {
-      std::snprintf(line, sizeof line, "[ps %08x sm %08x]", surface.skid_particles,
-                    surface.skid_mark);
+      std::snprintf(line, sizeof line, "[ps %08x sm %08x dust %08x]", surface.skid_particles,
+                    surface.skid_mark, surface.dust_color);
       soft += line;
     }
   }

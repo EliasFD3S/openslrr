@@ -473,6 +473,7 @@ void LibBgfxBackend::draw_particles(const float* view, const float* projection,
     uint32_t index;
   };
   std::vector<Item> order;
+  std::vector<uint32_t> sparks;  // emissive, added after the smoke
   order.reserve(list.size());
   for (uint32_t i = 0; i < list.size(); ++i) {
     const auto& p = list[i];
@@ -485,9 +486,13 @@ void LibBgfxBackend::draw_particles(const float* view, const float* projection,
     // puff to nothing before 0.35 m: one that close covers the screen at
     // zero alpha, so it is not drawn at all.
     if (depth < .35f || !(radius > 0.f)) continue;
+    if (clouds[p.cloud].emissive) {
+      sparks.push_back(i);
+      continue;
+    }
     order.push_back({depth, i});
   }
-  if (order.empty()) return;
+  if (order.empty() && sparks.empty()) return;
   std::sort(order.begin(), order.end(), [](const Item& a, const Item& b) { return a.depth > b.depth; });
   constexpr size_t kBatch = 16000;  // 16-bit indices: 4 vertices per particle
   float identity[16];
@@ -581,6 +586,76 @@ void LibBgfxBackend::draw_particles(const float* view, const float* projection,
     submit_bound(view_id, particle_program_, index_count);
     begin = end;
   }
+  // Sparks: glowing streaks along their motion, added to the scene (no
+  // light, no shadow, no sorting), fs_particle.sc mode 4.
+  if (sparks.empty()) return;
+  const uint32_t n = static_cast<uint32_t>(std::min<size_t>(sparks.size(), kBatch));
+  if (bgfx::getAvailTransientVertexBuffer(n * 4, layout_) < n * 4 ||
+      bgfx::getAvailTransientIndexBuffer(n * 6) < n * 6) return;
+  bgfx::TransientVertexBuffer vb;
+  bgfx::TransientIndexBuffer ib;
+  bgfx::allocTransientVertexBuffer(&vb, n * 4, layout_);
+  bgfx::allocTransientIndexBuffer(&ib, n * 6);
+  auto* out = reinterpret_cast<MeshVertex*>(vb.data);
+  auto* index = reinterpret_cast<uint16_t*>(ib.data);
+  for (uint32_t j = 0; j < n; ++j) {
+    const auto& p = list[sparks[j]];
+    const float t = std::clamp(p.age / p.life, 0.f, 1.f);
+    // At least 2 cm wide so a spark reads; a streak of 25 ms of its motion.
+    const float width = std::max(particle_width(p) * .5f, .02f);
+    const float vx = p.velocity[0], vy = p.velocity[1], vz = -p.velocity[2];
+    float dx = right[0] * vx + right[1] * vy + right[2] * vz;
+    float dy = up[0] * vx + up[1] * vy + up[2] * vz;
+    const float screen = std::sqrt(dx * dx + dy * dy);
+    if (screen > 1e-4f) {
+      dx /= screen;
+      dy /= screen;
+    } else {
+      dx = 1.f;
+      dy = 0.f;
+    }
+    const float speed = std::sqrt(vx * vx + vy * vy + vz * vz);
+    const float length = width + speed * .025f;
+    float ax[3], ay[3];
+    for (int k = 0; k < 3; ++k) {
+      ax[k] = (right[k] * dx + up[k] * dy) * length;
+      ay[k] = (up[k] * dx - right[k] * dy) * width;
+    }
+    const auto channel = [&](size_t k) {
+      const float c = p.color0[k] + (p.color1[k] - p.color0[k]) * t;
+      return static_cast<uint32_t>(std::lround(std::clamp(c, 0.f, 1.f) * 255.f));
+    };
+    const float alpha = std::clamp(p.alpha0 + (p.alpha1 - p.alpha0) * t, 0.f, 1.f);
+    const uint32_t rgba = channel(0) | channel(1) << 8 | channel(2) << 16 |
+                          static_cast<uint32_t>(std::lround(alpha * 255.f)) << 24;
+    static constexpr float kCorner[4][2] = {{-1.f, -1.f}, {1.f, -1.f}, {-1.f, 1.f}, {1.f, 1.f}};
+    for (int k = 0; k < 4; ++k) {
+      MeshVertex v{};
+      const float u = kCorner[k][0], w = kCorner[k][1];
+      v.x = p.position[0] + ax[0] * u + ay[0] * w;
+      v.y = p.position[1] + ax[1] * u + ay[1] * w;
+      v.z = -p.position[2] + ax[2] * u + ay[2] * w;
+      v.u = u;
+      v.v = w;
+      v.u2 = width;
+      v.v3 = 4.f;  // fs_particle: the spark mode
+      v.rgba = rgba;
+      out[j * 4 + k] = v;
+    }
+    const uint16_t base = static_cast<uint16_t>(j * 4);
+    const uint16_t tri[6] = {base, uint16_t(base + 1), uint16_t(base + 2),
+                             uint16_t(base + 1), uint16_t(base + 3), uint16_t(base + 2)};
+    std::copy(std::begin(tri), std::end(tri), index + j * 6);
+  }
+  BindingScope binding(*this, view_id);
+  bind_particle_uniforms(view, view_id);
+  enc()->setTransform(identity);
+  enc()->setVertexBuffer(0, &vb);
+  enc()->setIndexBuffer(&ib);
+  set_texture(0, s_tex_, white_tex_);
+  enc()->setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_GREATER |
+                  BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_ONE));
+  submit_bound(view_id, particle_program_, n * 6);
 }
 
 // Fills the per-frame light data texture (#254, layout in scene_shadow.sh).

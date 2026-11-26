@@ -2,6 +2,7 @@
 
 #include "slrr/particle_cloud.hpp"
 #include "slrr/skid_marks.hpp"
+#include "slrr/water.hpp"
 
 #include <cmath>
 #include <random>
@@ -274,6 +275,37 @@ SLRR_TEST(placed_emission_swirls) {
   particles_clear();
 }
 
+// Map water (#454): Valocity's sea below y -8, taken away where z >= -500;
+// a new setWater forgets the old limits.
+SLRR_TEST(water_plane_and_limits) {
+  water_clear();
+  SLRR_REQUIRE(water_depth({0, -20, -800}) < 0);
+  water_set({0, -8, -1500}, {0, 1, 0}, 300, 50);
+  water_add_limit({0, 0, -500}, {0, 0, 1});
+  SLRR_REQUIRE(near(static_cast<float>(water_depth({0, -10, -800})), 2.f));
+  SLRR_REQUIRE(water_depth({0, -6, -800}) < 0);   // above the surface
+  SLRR_REQUIRE(water_depth({0, -10, -100}) < 0);  // past the limit
+  SLRR_REQUIRE(near(static_cast<float>(water_density()), 300.f));
+  water_set({0, 0, 0}, {0, 1, 0}, 1, 1);
+  SLRR_REQUIRE(water_depth({0, -1, -100}) > 0);   // the limit went with the old water
+  water_clear();
+  SLRR_REQUIRE(!water_present());
+}
+
+// A tinted spawn mixes the ground's colour into the cloud's.
+SLRR_TEST(tinted_dust) {
+  particles_clear();
+  const uint16_t cloud = particle_cloud_register(0x7fff0504u, parse_particle_cloud(kAsphalt));
+  ParticleSystem system;
+  system.init(cloud);
+  ParticleSpawn spawn;
+  spawn.tint = {1, .5f, 0};
+  spawn.tint_weight = 1;
+  system.emit(spawn);
+  SLRR_REQUIRE(near(particles()[0].color0[0], 1.f) && near(particles()[0].color0[2], 0.f));
+  particles_clear();
+}
+
 }  // namespace
 
 int main() {
@@ -281,6 +313,6 @@ int main() {
       parses_stock_asphalt_cloud, parses_debris_and_samples_domains, emits_rises_and_dies,
       debris_lands_on_its_ground, parses_skid_configs, textured_mark_tiles,
       style_rings_follow_maxcount, script_domains_without_floor, original_effect_law,
-      placed_emission_swirls};
+      placed_emission_swirls, water_plane_and_limits, tinted_dust};
   return slrr::standalone::run("tyre_effects", tests);
 }

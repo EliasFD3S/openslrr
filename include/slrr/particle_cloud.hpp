@@ -51,6 +51,9 @@ struct ParticleCloudConfig {
   // `bounce b0 friction resilience cutoff plane ...` (commented out in every
   // stock cfg). The host floor stands in for the plane.
   bool bounce = false;
+  // Sparks (#454): drawn glowing and added to the scene, stretched along
+  // their motion, never lit or shaded. Set for a cfg named spark*.
+  bool emissive = false;
   float bounce_friction = 0.f, bounce_resilience = .35f;
   std::string texture;  // resolved by the caller (RPK `texture`)
 };
@@ -94,6 +97,9 @@ struct ParticleSpawn {
   float swirl = 0;
   float min_size = 0;  // the birth width at least this (a tyre's)
   float buoyancy = 1;
+  // Mixed into the cloud's colours by tint_weight (dust takes its ground's).
+  std::array<float, 3> tint{};
+  float tint_weight = 0;
 };
 
 // The emitter, shaped like the stock ParticleSystem natives (init, setFreq,

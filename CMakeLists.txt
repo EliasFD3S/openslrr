@@ -93,6 +93,7 @@ add_executable(slrr_host
   src/resources/particle_cloud.cpp
   src/resources/surface_effects.cpp
   src/resources/script_particles.cpp
+  src/resources/water.cpp
   src/resources/pedestrian_lines.cpp
   src/formats/walk.cpp
   src/formats/rest.cpp
@@ -443,7 +444,7 @@ if(BUILD_TESTING)
   target_compile_options(ground_surface PRIVATE /W3 /utf-8)
   add_test(NAME ground_surface COMMAND ground_surface)
   add_executable(tyre_effects tests/test_tyre_effects.cpp src/resources/particle_cloud.cpp
-    src/resources/skid_marks.cpp)
+    src/resources/skid_marks.cpp src/resources/water.cpp)
   target_include_directories(tyre_effects PRIVATE include)
   target_compile_features(tyre_effects PRIVATE cxx_std_20)
   target_compile_options(tyre_effects PRIVATE /W3 /utf-8)

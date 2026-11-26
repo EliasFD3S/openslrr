@@ -1839,8 +1839,52 @@ smoke gives the cfg's rate per 20 kW (from 8), a tenth of it cold, all of it
 from 200 °C (ramp from 80 °C): about a third of the smoke for the same
 slide.
 
+Ninth pass (Elias: no sparks or water, sand raised almost nothing, "an
+orange smoke"):
+
+- Sand and loose ground:
+  - Dust gives the cfg's rate per 8 kW of sliding power (from 30), plus up
+    to 0.8 × that rate from a wheel rolling faster than 3 m/s (0.3 for
+    debris).
+  - `attach_ground_surfaces` decodes each loose ground's SCY texture on the
+    CPU (`ground_texture_color`, `paint_image_from_texture`, cached by path)
+    into `GroundSurface::dust_color`. The dust takes 80 % of it (debris
+    50 %) and is born 1.2 tyre radii wide.
+  - Dead_Island's bench raised an orange column.
+- Sparks:
+  - The stock spark.cfg (particles:0x106) has a new `emissive` flag (set for
+    a cfg named spark*).
+  - `draw_particles` adds sparks after the smoke as streaks along their
+    screen motion (25 ms of travel, at least 2 cm wide), fs_particle.sc mode
+    4, blended ONE + ONE.
+  - A rim on the road sprays them at 0.3 × min(speed / 15, 2) of the cfg's
+    rate, with 0.85 × the car's speed and up to 3.5 m/s up the normal.
+  - A hit faster than 4 m/s (`emit_impact_sparks`, beside
+    `play_impact_audio`) bursts (speed − 4) × 5, at most 60, along the
+    contact normal.
+- Water:
+  - The three missing GroundRef natives are bound (`natives_particles.cpp`
+    to `water.cpp`). `setWater(level, ...)` and `setWater(point, normal,
+    ...)` set the surface plane (and forget the last limits);
+    `addWaterLimit` removes water on the side its normal points to.
+  - The water belongs to the GroundRef that set it and goes when that
+    object does.
+  - A wheel whose bottom is under the water throws water.cfg spray
+    (particles:0x105) at the surface, more with speed and depth.
+  - Native coverage: 370 bodies, 3 explicit no-ops, 3 missing (the welder
+    leftovers).
+- Validation:
+  - `tyre_effects` 12/12 (new: `water_plane_and_limits`, `tinted_dust`).
+  - In game, with temporary hooks since removed: sparks forced on the rear
+    rims showed yellow streaks under the car at night; the Dead_Island bench
+    raised orange dust.
+  - Not seen in game: water spray (Valocity's sea needs a car off the
+    quay), and impact sparks (the test crash rolled on grass, under 4 m/s
+    on a hard surface).
+
 Limitations:
 
+- Water has no physics: no buoyancy or drag from its density and viscosity.
 - The tyre's longitudinal scale in σ (wheel+0x218) is taken as 1; its
   source field is not traced. The nominal load of the mark alpha
   (wheel+0x214) is taken as half the tyre's maximum load.

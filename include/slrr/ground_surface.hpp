@@ -33,12 +33,15 @@ struct GroundSurface {
   // id of particles.rpk (the name fallbacks use it).
   uint32_t skid_particles = 0;
   uint32_t skid_mark = 0;
+  // The ground texture's average colour (ARGB, 0 unknown), for loose ground
+  // only: the dust a tyre raises takes it (#454: Dead_Island's orange sand).
+  uint32_t dust_color = 0;
 };
 
 // particles.rpk entries of the stock clouds and marks (`0xffff0000 | id`).
 constexpr uint32_t kParticlesLocal = 0xffff0000u;
 constexpr uint32_t kCloudAsphalt = 0x2, kCloudGrass = 0x102, kCloudPebbles = 0x103,
-                   kCloudSand = 0x104;
+                   kCloudSand = 0x104, kCloudWater = 0x105, kCloudSparks = 0x106;
 constexpr uint32_t kSkidAsphalt = 0xA, kSkidGrass = 0x202;
 
 // One map SCM material: its name and the values its block sets.

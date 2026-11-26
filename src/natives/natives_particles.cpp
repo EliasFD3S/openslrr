@@ -1,11 +1,13 @@
 // java.util.resource.ParticleSystem (#454): the stock emitter natives on the
-// host's particle pool (script_particles.hpp).
+// host's particle pool (script_particles.hpp), and the GroundRef water
+// natives (water.hpp) whose spray they feed.
 #include "natives_internal.hpp"
 
 #include "slrr/gameref.hpp"
 #include "slrr/script_particles.hpp"
 #include "slrr/skeleton.hpp"
 #include "slrr/surface_effects.hpp"
+#include "slrr/water.hpp"
 
 #include <string>
 
@@ -109,6 +111,29 @@ void register_particle_natives(Jvm &jvm, RpkIndex &rpk) {
   natives.register_method(kParticleSystem, "delAction", "(Ljava.lang.String;)V",
                           [](Object *self, const std::vector<Value> &args) {
                             script_particles_delete(self, arg_string(args, 0));
+                            return Value::make_void();
+                          });
+  // GroundRef water: the surface plane and the half-spaces that take it away.
+  constexpr const char *kGroundRef = "java.util.resource.GroundRef";
+  const auto vec = [](const Vec3f &v) { return WaterVec{v[0], v[1], v[2]}; };
+  natives.register_method(kGroundRef, "setWater", "(FFF)V",
+                          [](Object *self, const std::vector<Value> &args) {
+                            // A level: the horizontal plane y = level.
+                            water_set({0, native_arg_number(args, 0), 0}, {0, 1, 0},
+                                      native_arg_number(args, 1), native_arg_number(args, 2), self);
+                            return Value::make_void();
+                          });
+  natives.register_method(kGroundRef, "setWater",
+                          "(Ljava.lang.Vector3;Ljava.lang.Vector3;FF)V",
+                          [vec](Object *self, const std::vector<Value> &args) {
+                            water_set(vec(arg_vector(args, 0)), vec(arg_vector(args, 1)),
+                                      native_arg_number(args, 2), native_arg_number(args, 3), self);
+                            return Value::make_void();
+                          });
+  natives.register_method(kGroundRef, "addWaterLimit",
+                          "(Ljava.lang.Vector3;Ljava.lang.Vector3;)V",
+                          [vec](Object *, const std::vector<Value> &args) {
+                            water_add_limit(vec(arg_vector(args, 0)), vec(arg_vector(args, 1)));
                             return Value::make_void();
                           });
   natives.register_method(kParticleSystem, "modePermanent", "(I)V",
