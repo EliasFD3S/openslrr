@@ -345,3 +345,29 @@ DDSB8C head and 16 MC/Prime/SuperDuty engine classes; A for `DynoData`,
 (racer scripts, new osdx and render classes, the rest) are unchanged.
 They were not regenerated: rebuild one with `--float-mode B` to reproduce
 the shipped bytes, or with auto when it should match stock.
+
+## Math constants, trigonometry and helpers (#463)
+
+Cause: the stock `Math` class only has `random`, `sqrt`, `randomize` and
+`setrandseed` (`pow` since #450). Scripts write pi by hand at five
+precisions (`3.14`, `3.142`, `3.1416`, `3.14159265`, 32 digits in
+`Tyre.java`), `Suspension` defines its own `DEG2RAD`, `clampTo` exists only
+in `Part` (114 calls; 73 more hand-written bounds elsewhere) and
+`TestTrack` wraps an angle by hand (`6.28 - diff`, wrong sign, harmless
+because only its magnitude is tested). No stock script needs a trigonometric
+function, `exp` or `log`; they are for new script physics.
+
+Fix: constants, host natives and script helpers in the patched
+`Math.java` (list in [natives.md](natives.md#math-functions-463)). The game
+scripts are not changed yet.
+
+Validation:
+
+- Compilation: `slrr_host` Release; `Math.java` compiled with
+  `compile_game_sources` (float mode auto chose B: none of the new
+  literals are in the stock class).
+- `tests/test_script_safety.cpp` (suite `script_safety`): each native,
+  its clamps and its 0 fallbacks; a probe compiled against the shipped
+  `Math.class` reads `Math.PI` and `Math.DEG2RAD` and calls `clamp`,
+  `lerp`, `abs`, `min`, `max`, `sign`, `sin` and `randomInt`.
+- Not validated in game.
