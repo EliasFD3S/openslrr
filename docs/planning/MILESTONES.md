@@ -25,7 +25,7 @@ named scenario.
 | M2 | World collision and repair | #16, #17 (closed); `GameRef.setState` for generic objects | M0 |
 | M3 | City performance | #18 | M0; before M4 adds traffic |
 | M4 | Navigation, traffic and pedestrians | #19 (closed); water natives, pedestrian graph | M2, M3 |
-| M5 | Garage and career loop | `Painter` ×3 (bound, #64), `ParticleSystem` ×9, save/load | M1, M2 |
+| M5 | Garage and career loop | `Painter` ×3 (bound, #64), `ParticleSystem` ×9 (bound, #454), save/load | M1, M2 |
 | M6 | Robustness and platform | Open review risks, display modes, controllers | Parallel |
 | M7 | Multicore frame | #56 follow-up: the frame loop runs on the host thread | M3; PR #48 (merged) |
 
@@ -140,8 +140,9 @@ Goal: a career can buy, tune, paint, repair, race, save and reload a car.
 - `Painter` natives (`doPaint`, `paintPart`, `xPaint`) and decal
   persistence through saves: bound with an SDAT texture blob (#64); a
   painted car still needs an end-to-end career save/reload validation.
-- `ParticleSystem` natives (nine signatures), flares, `GroundRef.setFog`
-  read by the renderer, and part loop sounds (`Part.setSfxLoopParams`).
+- `ParticleSystem` natives (nine signatures: bound in #454), flares,
+  `GroundRef.setFog` read by the renderer, and part loop sounds
+  (`Part.setSfxLoopParams`).
 - End-to-end validation: purchase, installed parts, paint and condition
   survive a career save and reload; the preview car never becomes the
   career car.

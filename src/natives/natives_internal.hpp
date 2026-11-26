@@ -178,5 +178,6 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections);
 void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections);
 // java.render.LightSource family (#235); also clears the light registry.
 void register_light_natives(Jvm& jvm);
+void register_particle_natives(Jvm& jvm, RpkIndex& rpk);
 
 }  // namespace slrr

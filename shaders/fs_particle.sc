@@ -1,12 +1,15 @@
-$input v_texcoord0, v_texcoord1, v_texcoord2, v_color0, v_worldPos, v_viewPos, v_normal
+$input v_texcoord0, v_texcoord1, v_texcoord2, v_color0, v_worldPos, v_viewPos, v_normal, v_tint
 
 // Volumetric tyre smoke and ground dust (#454), drawn as camera-facing
 // impostors of a sphere of smoke: per pixel the puff's thickness along the
 // view ray, eroded by 3D fbm noise that boils with the particle's age, lit
 // by the sun through itself (an optical depth toward the light) with
 // Henyey-Greenstein forward scattering at the thin edges, plus the sky.
-// Soft against the scene's depth (the AO prepass, when it runs) and against
-// the ground plane of its emission. Output is premultiplied alpha.
+// The sun's light is shadowed per vertex (vs_particle.sc, v_tint.x); the
+// lamps and headlights arrive summed per particle by the CPU (v_normal),
+// already weighted by their forward scattering toward the camera. Soft
+// against the scene's depth (the AO depth prepass) and against the ground
+// plane of its emission. Output is premultiplied alpha.
 //
 // Modes (v_texcoord2.y): 0 smoke/dust, 1 debris (grass blades, pebbles:
 // small lit sprites of the cloud texture), 2 skid mark (texture times the
@@ -43,16 +46,18 @@ float noise3(vec3 x) {
 	return mix(mix(a, b, f.y), mix(c, d, f.y), f.z);
 }
 
-// Four octaves, 0..~0.94.
-float fbm(vec3 p) {
-	float sum = 0.0;
-	float amplitude = 0.5;
-	for (int i = 0; i < 4; ++i) {
-		sum += amplitude * noise3(p);
-		p = p * 2.03 + vec3(1.7, 9.2, 3.1);
-		amplitude *= 0.5;
-	}
-	return sum;
+// Three octaves for the body, two for the detail: a camera inside a cloud
+// shades every pixel through dozens of puffs, so octaves are the cost.
+// Each is normalised to 0..1.
+float fbm3(vec3 p) {
+	float sum = 0.571 * noise3(p);
+	p = p * 2.03 + vec3(1.7, 9.2, 3.1);
+	sum += 0.286 * noise3(p);
+	p = p * 2.03 + vec3(1.7, 9.2, 3.1);
+	return sum + 0.143 * noise3(p);
+}
+float fbm2(vec3 p) {
+	return 0.667 * noise3(p) + 0.333 * noise3(p * 2.03 + vec3(1.7, 9.2, 3.1));
 }
 
 float linearDepth(float d) {
@@ -90,6 +95,8 @@ void main() {
 	vec3 n = normalize(right * c.x + up * c.y - forward * z);
 	vec3 sun = normalize(u_particleSun.xyz + vec3(0.0, 1e-4, 0.0));
 	vec3 sunLight = u_particleSunColor.rgb * u_particleSun.w;
+	float sunVisible = v_tint.x;
+	vec3 lamps = v_normal;
 	vec3 sky = u_particleAmbient.rgb;
 	// Height of this pixel's front above the ground the particle came from.
 	float groundHeight = v_texcoord2.x + n.y * radius;
@@ -99,15 +106,15 @@ void main() {
 		vec4 tex = texture2D(s_texColor, c * 0.5 + 0.5);
 		alpha = tex.a * v_color0.a;
 		vec3 albedo = tex.rgb * v_color0.rgb;
-		colour = albedo * (sky + sunLight * (0.35 + 0.65 * saturate(dot(n, sun))));
+		colour = albedo * (sky + sunLight * sunVisible * (0.35 + 0.65 * saturate(dot(n, sun))) + lamps);
 	} else {
 		float time = u_particleParams.x;
 		vec3 seedOffset = vec3(seed * 37.0, seed * 11.0, seed * 23.0);
 		// Noise in the particle's own frame, so a growing puff keeps its
 		// shape while its folds roll upward over its life.
 		vec3 q = n * 1.35 + vec3(c * 0.6, 0.0) + seedOffset + vec3(0.0, -time * 0.22, time * 0.07);
-		float body = fbm(q * 1.1);
-		float detail = fbm(q * 3.3 + vec3(5.2, 1.3, 7.7));
+		float body = fbm3(q * 1.1) * 0.94;
+		float detail = fbm2(q * 3.3 + vec3(5.2, 1.3, 7.7)) * 0.94;
 		float shape = z * 1.5 - (1.0 - body) * 0.85 - (1.0 - detail) * 0.18;
 		// Soft rims: neighbouring puffs merge into one cloud instead of
 		// reading as separate balls.
@@ -132,15 +139,16 @@ void main() {
 		float g = 0.6;
 		float hg = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * cosTheta, 1e-3), 1.5);
 		float rim = hg * 0.12 * (1.0 - density) * (1.0 - z * 0.5);
-		vec3 direct = sunLight * (shadow * (0.4 + 0.6 * saturate(ndl * 0.5 + 0.5)) + rim);
+		vec3 direct = sunLight * sunVisible * (shadow * (0.4 + 0.6 * saturate(ndl * 0.5 + 0.5)) + rim);
 		// Sky from above, darker underneath; a little light scattered many
 		// times inside the cloud keeps its core from going black.
-		vec3 ambient = sky * (0.7 + 0.3 * saturate(n.y * 0.5 + 0.5)) + sunLight * 0.1;
+		vec3 ambient = sky * (0.7 + 0.3 * saturate(n.y * 0.5 + 0.5)) + sunLight * mix(0.04, 0.1, sunVisible);
 		// No brighter than a white surface facing the sun: a desert sun must
 		// not burn the cloud to white.
 		vec3 light = direct + ambient;
 		vec3 limit = (sunLight + sky) * 0.95;
-		colour = albedo * min(light, limit);
+		// Lamps scatter through the whole puff, thin edges as much as the core.
+		colour = albedo * (min(light, limit) + lamps * (0.55 + 0.45 * z));
 		alpha = density * v_color0.a * 0.85;
 		// No hard line where the puff meets the road.
 		alpha *= saturate(groundHeight / (radius * 0.45 + 0.05));
@@ -155,8 +163,10 @@ void main() {
 			alpha *= saturate((scene - front) / (radius * 0.6 + 0.05));
 		}
 	}
-	// A camera inside the cloud does not see a wall of smoke.
-	alpha *= saturate((v_viewPos.z - 0.35) / 1.2);
+	// A camera inside the cloud does not see a wall of smoke: a big puff
+	// thins out over more distance (draw_particles skips the ones nearer
+	// than 0.35 m, where this reaches zero).
+	alpha *= saturate((v_viewPos.z - 0.35) / (1.2 + radius * 0.35));
 	colour = applyFog(colour, v_worldPos);
 	gl_FragColor = vec4(colour * alpha, alpha);
 }

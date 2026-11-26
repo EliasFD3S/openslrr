@@ -53,8 +53,13 @@ struct SkidMarkVertex {
   uint16_t style = 0;
 };
 
-// Stock maxcount 100 times 14: SLRR_rev's ring of 1400 quads.
-constexpr size_t kSkidMarkQuads = 1400;
+// Each style keeps its own ring of maxcount x 14 quads: the stock 100 gives
+// SLRR_rev's 1400. A style draws in one batch of 16-bit indices, hence the
+// per-style ceiling; all styles together stay under kSkidMarkMaxQuads.
+constexpr size_t kSkidQuadsPerMaxcount = 14;
+constexpr size_t kSkidMarkStyleQuads = 16000;
+constexpr size_t kSkidMarkMaxQuads = 24000;
+size_t skid_mark_capacity(const SkidMarkStyle &style);
 
 // 0..1 scrub strength; 0 below the visual threshold (SLRR_rev tireScrub).
 double skid_scrub(const SkidWheelSample &wheel);
@@ -68,8 +73,8 @@ void skid_marks_update(uintptr_t car, size_t wheel, const SkidWheelSample &sampl
 void skid_marks_forget(uintptr_t car);
 void skid_marks_clear();
 
-// Four vertices per quad (two triangles 0-1-2, 1-3-2), oldest first after the
-// ring wraps. revision changes whenever a vertex does.
+// Four vertices per quad (two triangles 0-1-2, 1-3-2), in no particular
+// order once a ring wraps. revision changes whenever a vertex does.
 const std::vector<SkidMarkVertex> &skid_mark_vertices();
 uint64_t skid_marks_revision();
 

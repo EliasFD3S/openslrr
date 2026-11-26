@@ -419,6 +419,8 @@ void LibBgfxBackend::bind_particle_uniforms(const float* view, uint16_t view_id)
   }
   const float diffuse[4] = {sun.diffuse[0], sun.diffuse[1], sun.diffuse[2], 0.f};
   const float ambient[4] = {sun.ambient[0], sun.ambient[1], sun.ambient[2], 0.f};
+  // The sun cascades for vs_particle.sc's per-vertex shadow tap (stage 3).
+  bind_scene_shadow(true, 3);
   set_uniform(u_particle_sun_, toward);
   set_uniform(u_particle_sun_color_, diffuse);
   set_uniform(u_particle_ambient_, ambient);
@@ -433,9 +435,10 @@ void LibBgfxBackend::bind_particle_uniforms(const float* view, uint16_t view_id)
   static const auto start = std::chrono::steady_clock::now();
   const float time = static_cast<float>(std::fmod(
       std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(), 600.0));
-  // The AO prepass is the only readable scene depth; without it the smoke
-  // still fades into its ground plane (fs_particle.sc).
-  const bool soft = ao_active_ && ao_world_view_ == view_id && bgfx::isValid(ao_depth_tex_) &&
+  // The AO depth prepass (run for the particles too when AO is off) is the
+  // readable scene depth; without it the smoke still fades into its ground
+  // plane (fs_particle.sc).
+  const bool soft = scene_depth_active_ && ao_world_view_ == view_id && bgfx::isValid(ao_depth_tex_) &&
                     ao_screen_width_ && ao_screen_height_;
   const float params[4] = {time, soft ? 1.f : 0.f,
                            soft ? 1.f / ao_screen_width_ : 0.f,
@@ -478,11 +481,67 @@ void LibBgfxBackend::draw_particles(const float* view, const float* projection,
     const float radius = (p.size0 + (p.size1 - p.size0) * t) * .5f;
     const float x = p.position[0], y = p.position[1], z = -p.position[2];
     const float depth = view[2] * x + view[6] * y + view[10] * z + view[14];
-    if (depth < .05f - radius || !(radius > 0.f)) continue;
+    // The billboard lies at its centre's depth, and fs_particle.sc fades a
+    // puff to nothing before 0.35 m: one that close covers the screen at
+    // zero alpha, so it is not drawn at all.
+    if (depth < .35f || !(radius > 0.f)) continue;
     order.push_back({depth, i});
   }
   if (order.empty()) return;
   std::sort(order.begin(), order.end(), [](const Item& a, const Item& b) { return a.depth > b.depth; });
+  // The scenery lamps and car lights (headlights included) at a particle,
+  // summed on the CPU once per particle rather than per pixel of every
+  // overlapping puff: the lamp law of scene_shadow.sh (window, attenuation,
+  // spot cone and low-beam cut) without its facing term, since smoke
+  // scatters in every direction, weighted by Henyey-Greenstein (g 0.55)
+  // toward the camera so a beam seen through smoke glows. No lamp shadows.
+  const float eye[3] = {-(view[0] * view[12] + view[1] * view[13] + view[2] * view[14]),
+                        -(view[4] * view[12] + view[5] * view[13] + view[6] * view[14]),
+                        -(view[8] * view[12] + view[9] * view[13] + view[10] * view[14])};
+  const size_t lamp_count = std::min(scenery_lamps_.size(), kSceneryLamps);
+  const auto lamp_light = [&](float x, float y, float z) {
+    std::array<float, 3> sum{};
+    if (!lamp_count) return sum;
+    float sx = eye[0] - x, sy = eye[1] - y, sz = eye[2] - z;
+    const float sl = std::sqrt(sx * sx + sy * sy + sz * sz);
+    if (sl > 1e-4f) sx /= sl, sy /= sl, sz /= sl;
+    for (size_t i = 0; i < lamp_count; ++i) {
+      const auto& lamp = scenery_lamps_[i];
+      const float dx = lamp.position[0] - x, dy = lamp.position[1] - y, dz = lamp.position[2] - z;
+      const float r2 = lamp.range * lamp.range;
+      float d2 = dx * dx + dy * dy + dz * dz;
+      if (!(d2 < r2)) continue;
+      // A puff is no point on a bulb: it spreads over a metre or more.
+      d2 = std::max(d2, 1.f);
+      const float inv = 1.f / std::sqrt(d2);
+      const float tx = dx * inv, ty = dy * inv, tz = dz * inv;  // toward the lamp
+      float cone = 1.f;
+      if (lamp.cos_outer >= -1.5f) {
+        const float along = -(tx * lamp.direction[0] + ty * lamp.direction[1] + tz * lamp.direction[2]);
+        const float span = std::max(lamp.cos_inner - lamp.cos_outer, 1e-4f);
+        const float c = std::clamp((along - lamp.cos_outer) / span, 0.f, 1.f);
+        cone = c * c * (3 - 2 * c);
+        const float above = std::clamp((-ty - lamp.direction[1] - .02f) / .04f, 0.f, 1.f);
+        cone *= 1.f - lamp.above_axis_cut * above * above * (3 - 2 * above);
+      }
+      if (!(cone > 0.f)) continue;
+      const float q = d2 / r2;
+      const float window = std::clamp(1.f - q * q, 0.f, 1.f);
+      const auto& a = lamp.attenuation;
+      const float falloff = std::max(a[0] + a[1] * d2 * inv + a[2] * d2, .25f);
+      // The light travels away from the lamp (-t); the camera is along s.
+      const float cosine = -(tx * sx + ty * sy + tz * sz);
+      constexpr float g = .55f;
+      const float hg = (1 - g * g) / std::pow(std::max(1 + g * g - 2 * g * cosine, 1e-3f), 1.5f);
+      // Half the light scatters evenly, half by the phase (capped at 3x, so
+      // a beam toward the camera glows without blinding).
+      const float weight = window * window * cone / falloff * (.5f + .5f * std::min(hg, 3.f)) * .6f;
+      for (int k = 0; k < 3; ++k) sum[k] += lamp.color[k] * lamp.intensity * weight;
+    }
+    // No brighter than the noon sun on a white surface.
+    for (auto &channel : sum) channel = std::min(channel, 1.2f);
+    return sum;
+  };
   constexpr size_t kBatch = 16000;  // 16-bit indices: 4 vertices per particle
   float identity[16];
   bx::mtxIdentity(identity);
@@ -523,9 +582,12 @@ void LibBgfxBackend::draw_particles(const float* view, const float* projection,
       const bool debris = config.type == 1;
       const float cx = p.position[0], cy = p.position[1], cz = -p.position[2];
       const auto& n_ground = p.ground_normal;
-      const float height = (p.position[0] - p.ground[0]) * n_ground[0] +
-                           (p.position[1] - p.ground[1]) * n_ground[1] +
-                           (p.position[2] - p.ground[2]) * n_ground[2];
+      // A scripted effect has no ground plane (zero normal): nothing to fade into.
+      const bool grounded = n_ground[0] != 0.f || n_ground[1] != 0.f || n_ground[2] != 0.f;
+      const float height = !grounded ? 1000.f
+                                     : (p.position[0] - p.ground[0]) * n_ground[0] +
+                                           (p.position[1] - p.ground[1]) * n_ground[1] +
+                                           (p.position[2] - p.ground[2]) * n_ground[2];
       // Debris spins with the cfg's angle; a smoke impostor stays upright
       // (its noise is three-dimensional, so it needs no rotation).
       float ax[3] = {right[0], right[1], right[2]}, ay[3] = {up[0], up[1], up[2]};
@@ -538,6 +600,7 @@ void LibBgfxBackend::draw_particles(const float* view, const float* projection,
           ay[k] = up[k] * c - right[k] * s;
         }
       }
+      const auto lamps = lamp_light(cx, cy, cz);
       static constexpr float kCorner[4][2] = {{-1.f, -1.f}, {1.f, -1.f}, {-1.f, 1.f}, {1.f, 1.f}};
       for (int k = 0; k < 4; ++k) {
         MeshVertex v{};
@@ -545,9 +608,9 @@ void LibBgfxBackend::draw_particles(const float* view, const float* projection,
         v.x = cx + (ax[0] * u + ay[0] * w) * radius;
         v.y = cy + (ax[1] * u + ay[1] * w) * radius;
         v.z = cz + (ax[2] * u + ay[2] * w) * radius;
-        v.nx = cx;
-        v.ny = cy;
-        v.nz = cz;
+        v.nx = lamps[0];
+        v.ny = lamps[1];
+        v.nz = lamps[2];
         v.u = u;
         v.v = w;
         v.u2 = radius;

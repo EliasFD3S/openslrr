@@ -645,6 +645,8 @@ class LibBgfxBackend final : public IRenderBackend {
             ao_world_view_ == kWorldView);
   }
   bool ao_active_=false;
+  // The AO depth prepass ran this frame, with or without AO (#454).
+  bool scene_depth_active_=false;
 
   static constexpr size_t kFixtureLights=12;
   std::vector<SpotLight> fixture_lights_;

@@ -18,6 +18,8 @@ namespace slrr {
 struct RenderDebugOverrides {
   // Pass toggles. false removes the pass (its view stays empty).
   bool ambient_occlusion = true;
+  // The depth prepass for soft tyre smoke while AO is off (#454).
+  bool soft_particles = true;
   std::array<bool, 4> sun_cascades{true, true, true, true};
   bool shadow_caching = true;      // false redraws cached shadow maps every frame
   // While the camera moves, sun cascades 2 and 3 redraw on alternate frames
@@ -116,6 +118,7 @@ inline std::string render_debug_overrides_text(const RenderDebugOverrides &o) {
     out += line;
   };
   flag("ambient occlusion", o.ambient_occlusion, d.ambient_occlusion);
+  flag("soft particles", o.soft_particles, d.soft_particles);
   for (size_t i = 0; i < o.sun_cascades.size(); ++i) {
     char name[32];
     std::snprintf(name, sizeof(name), "sun cascade %zu", i);

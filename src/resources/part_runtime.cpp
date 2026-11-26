@@ -25,6 +25,7 @@
 #include "slrr/brake_balance.hpp"
 #include "slrr/particle_cloud.hpp"
 #include "slrr/skid_marks.hpp"
+#include "slrr/script_particles.hpp"
 #include "slrr/surface_effects.hpp"
 #include "slrr/steering_feedback.hpp"
 #include "slrr/suspension_geometry.hpp"
@@ -3686,11 +3687,11 @@ void emit_tyre_dust(Record &rec, size_t i, const SkidWheelSample &sample,
 }
 
 // Skid marks from the wheel state this frame published (not per solver
-// step, so the free-running 1000 Hz clock adds no work). Cars past 120 m of
-// the camera skip it.
-void update_skid_marks(Record &rec, double dt) {
+// step, so the free-running 1000 Hz clock adds no work). Cars past `range`
+// metres of the camera skip it.
+void update_skid_marks(Record &rec, double dt, float range = 120.f) {
   const auto &body = rec.dynamics.body;
-  if (!(distance_gain(body.position, 1.f, 120.f) > 0)) return;
+  if (!(distance_gain(body.position, 1.f, range) > 0)) return;
   const physics::Vec3 forward = body.orientation.rotate({0, 0, -1});
   const double speed = body.velocity.length();
   const auto key = reinterpret_cast<uintptr_t>(rec.state.object);
@@ -7905,11 +7906,14 @@ void finish_physics_frame(double frame_seconds, double alpha, bool committed) {
     for (auto &[key, rec] : records) {
       if (rec.config->native_kind == "car") {
         update_engine_audio(rec, rec.engine_running);
-        // Native traffic is excluded from tyre sounds and marks: with ~100
-        // cars it would cost the frame, and it rarely slides.
+        // Native traffic is excluded from tyre sounds: with ~100 cars the
+        // mixer's loops would go to it. Its marks and smoke (#454) run within
+        // 60 m of the camera, a dozen cars at most; it rarely slides.
         const bool tyres = !rec.native_vehicle && rec.physics_released && !rec.state.parent;
         update_slide_audio(rec, tyres);
         if (tyres) update_skid_marks(rec, frame_seconds);
+        else if (rec.native_vehicle && rec.physics_released && !rec.state.parent)
+          update_skid_marks(rec, frame_seconds, 60.f);
       }
     }
     update_traffic_engine_audio();
@@ -7924,6 +7928,7 @@ void finish_physics_frame(double frame_seconds, double alpha, bool committed) {
   pose_driver();
   {perf::Scope scope(perf::Zone::Pedestrians);tick_pedestrians(frame_seconds);}
   // Every frame, so smoke drifts on while the physics waits (#454).
+  script_particles_update(frame_seconds);
   particles_update(frame_seconds);
 }
 
@@ -8139,6 +8144,7 @@ void part_drop_actors() {
   crowds.clear();
   skid_marks_clear();
   particles_clear();
+  script_particles_clear();
 }
 void part_set_hud_preview(const std::string &path) {
   std::ifstream input(path, std::ios::binary);

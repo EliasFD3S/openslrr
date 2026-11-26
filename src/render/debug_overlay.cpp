@@ -397,6 +397,7 @@ void draw_render_passes(DebugOverlay::RenderOptions& options) {
   auto& o = render_debug();
   ImGui::TextDisabled("Debug overrides: not saved, reset on restart.");
   ImGui::Checkbox("Ambient occlusion pass", &o.ambient_occlusion);
+  ImGui::Checkbox("Soft particles depth", &o.soft_particles);
   for (int i = 0; i < 4; ++i) {
     char label[48];
     std::snprintf(label, sizeof(label), "Sun cascade %d", i);

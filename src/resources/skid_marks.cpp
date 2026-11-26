@@ -40,7 +40,9 @@ struct Track {
 
 std::vector<SkidMarkVertex> vertices;
 std::vector<uint32_t> versions;
-size_t cursor = 0;
+// Each style's quads, oldest first: a style past its cap reuses its own
+// oldest quad, so a grass track never erases the road's marks.
+std::unordered_map<uint16_t, std::deque<size_t>> rings;
 uint64_t revision = 0;
 std::unordered_map<uintptr_t, std::array<Track, 4>> tracks;
 std::vector<SkidMarkStyle> styles;
@@ -90,11 +92,20 @@ bool push_quad(V3 a, V3 b, V3 normal, V3 forward, double width, double alpha0, d
   const V3 lift = scale(normal, .01);
   const V3 corners[4] = {add(sub(a, across), lift), add(add(a, across), lift),
                          add(sub(b, across), lift), add(add(b, across), lift)};
-  if (vertices.size() < kSkidMarkQuads * 4) {
+  auto &ring = rings[style];
+  size_t slot;
+  if (ring.size() < skid_mark_capacity(style_of(style)) && vertices.size() < kSkidMarkMaxQuads * 4) {
+    slot = vertices.size() / 4;
     vertices.resize(vertices.size() + 4);
     versions.push_back(0);
+  } else if (!ring.empty()) {
+    slot = ring.front();
+    ring.pop_front();
+  } else {
+    return false;  // every quad belongs to other styles
   }
-  auto *v = &vertices[cursor * 4];
+  ring.push_back(slot);
+  auto *v = &vertices[slot * 4];
   for (int i = 0; i < 4; ++i) {
     v[i] = {static_cast<float>(corners[i][0]), static_cast<float>(corners[i][1]),
             static_cast<float>(corners[i][2]), 0.f, color};
@@ -102,10 +113,9 @@ bool push_quad(V3 a, V3 b, V3 normal, V3 forward, double width, double alpha0, d
     v[i].v = i < 2 ? v0 : v1;
     v[i].style = style;
   }
-  out.index = cursor;
-  out.version = ++versions[cursor];
-  set_alpha(cursor, alpha0, alpha1);
-  cursor = (cursor + 1) % kSkidMarkQuads;
+  out.index = slot;
+  out.version = ++versions[slot];
+  set_alpha(slot, alpha0, alpha1);
   return true;
 }
 
@@ -305,6 +315,11 @@ uint16_t skid_mark_style_find(uint32_t key) {
   return it == style_keys.end() ? 0xffff : it->second;
 }
 
+size_t skid_mark_capacity(const SkidMarkStyle &style) {
+  return std::min<size_t>(size_t(std::max(1, style.maxcount)) * kSkidQuadsPerMaxcount,
+                          kSkidMarkStyleQuads);
+}
+
 const std::vector<SkidMarkStyle> &skid_mark_styles() {
   if (styles.empty()) styles.emplace_back();
   return styles;
@@ -314,7 +329,7 @@ void skid_marks_clear() {
   tracks.clear();
   vertices.clear();
   versions.clear();
-  cursor = 0;
+  rings.clear();
   ++revision;
 }
 

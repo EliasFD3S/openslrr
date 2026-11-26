@@ -1604,15 +1604,71 @@ Validation:
   pebbles and red-pebbles clouds, and a map that sets `skid_PS` to another
   pack.
 
+Second pass (the first pass's limits):
+
+- Lamps and headlights. `draw_particles` sums the scenery lamps and car
+  lights (`scenery_lamps_`, up to 64, headlights included) at each particle
+  on the CPU and passes the sum in the vertex normal. It uses
+  `scene_shadow.sh`'s lamp law (window, attenuation, spot cone, low-beam cut)
+  without the facing term, distance floored at 1 m, weighted by
+  Henyey-Greenstein g = 0.55 toward the camera (capped at 3×) × 0.6, the sum
+  capped at 1.2. A per-pixel `lampLighting` under dozens of overlapping
+  puffs was the cost to avoid. The first night run, before the caps, filled
+  the screen with lamp-lit beige smoke.
+- Sun shadow. `vs_particle.sc` takes four taps of the sun cascades per
+  vertex (`shadow2D` is a level-zero compare, valid in a vertex shader),
+  10 cm bias, interpolated across the puff; `bind_scene_shadow(true, 3)`
+  binds them. Direct sun and its rims are scaled by it, and the ambient's
+  share of the sun drops from 0.1 to 0.04 in shadow.
+- Depth without AO. `update_ambient_occlusion` runs the depth prepass
+  (view 140) while particles live even with AO off (`scene_depth_active_`)
+  and skips the AO passes; `RenderDebugOverrides::soft_particles` turns it
+  off.
+- `maxcount`. Each skid style keeps its own ring of `maxcount` × 14 quads
+  (`skid_mark_capacity`, at most 16000 per style and 24000 in all): a style
+  past its cap reuses its own oldest quad.
+- Natives. `ParticleSystem.init` gives the script object its `id` but no
+  render type, so the entry's SMOKE.SCX mesh is not drawn as an object.
+  `setSource` and `setDirectSource` map pos/rmin/rmax and vel/vmin/vmax to
+  two spheres (the cfg's `velscale` still applies). `setFreq` multiplies the
+  rates, `stop` stops the sources, `delAction` removes one action, and
+  `setCounter`/`getCounter` count the cloud's particles in a sphere.
+  `ResourceRef.destroy` drops the system; its particles finish their lives.
+  Script particles have no ground plane (zero normal).
+- Traffic. `update_skid_marks(rec, dt, 60)` runs for native traffic: marks
+  and smoke within 60 m.
+- Cost. The noise drops to 3 + 2 octaves (from 4 + 4). Puffs whose centre is
+  nearer than 0.35 m are not drawn: their billboard is at zero alpha. The
+  near fade lengthens with the puff's radius.
+
+Validation (second pass):
+
+- Compilation: `slrr_host` Release builds. `tests/test_tyre_effects.cpp`
+  passes 8/8 (new: per-style rings, script domains without a floor).
+  `tests/test_ground_surface.cpp` passes 7/7.
+  `scripts/render_native_coverage.py --check` reports 367 bodies, 3 no-ops,
+  6 missing.
+- In game (temporary forced-smoke hook, since removed), all on
+  `build/needle-game` unless stated:
+  - ValoCity at 22:00: the smoke takes the street lamps' warm light and some
+    red near the tail lights, no longer saturated.
+  - `perf-roots/noao` (AO off): `gpu_ao_prepass_ms` is 0 without particles
+    and about 0.2 ms with smoke, which stays soft.
+  - Worst second with the camera inside the cloud, 2560×1440:
+    `gpu_world_ms` 10.6 ms before the octave cut, 4.8–5.6 ms after. Other
+    builds were running on the machine, so the figures are noisy.
+- Not seen in game: a script-driven `ParticleSystem` (no stock caller
+  outside commented-out `Osd` code), traffic sliding near the camera, and
+  smoke under a building's sun shadow.
+
 Limitations:
 
-- The smoke takes neither lamp or headlight light nor shadows, and casts no
+- No lamp or headlight shadows on smoke, and smoke casts no shadow.
+- Interiors with a fitted (non-cascaded) sun field give the smoke no sun
   shadow.
-- Soft intersections need AO; without it only the emission's ground plane
-  softens the base.
-- The stock `ParticleSystem` natives (`init`, `setFreq`...) are still not
-  bound to these emitters, so scripted effects (sparks, waterfalls) stay
-  absent.
-- `maxcount` is read but unused (one 1400-quad ring); `move` is not read; the
-  thresholds, the 2.5× rate, the colour lift and the 0.8 m width cap are
-  OpenSLRR choices. Traffic raises no smoke.
+- The `bone` argument of the source natives is ignored, and
+  `modePermanent` is stored only.
+- `move` is not read.
+- The thresholds, the 2.5× rate, the colour lift, the lamp caps and the
+  0.8 m width cap are OpenSLRR choices.
+- Traffic plays no slide loop.

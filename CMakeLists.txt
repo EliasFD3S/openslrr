@@ -78,6 +78,7 @@ add_executable(slrr_host
   src/natives/natives_script.cpp
   src/natives/natives_painter.cpp
   src/natives/natives_lights.cpp
+  src/natives/natives_particles.cpp
   src/ui/osd_registry.cpp
   src/ui/osd_script.cpp
   src/ui/ui_time.cpp
@@ -91,6 +92,7 @@ add_executable(slrr_host
   src/resources/skid_marks.cpp
   src/resources/particle_cloud.cpp
   src/resources/surface_effects.cpp
+  src/resources/script_particles.cpp
   src/resources/pedestrian_lines.cpp
   src/formats/walk.cpp
   src/formats/rest.cpp

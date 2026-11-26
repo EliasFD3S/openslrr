@@ -161,11 +161,74 @@ SLRR_TEST(textured_mark_tiles) {
   skid_marks_clear();
 }
 
+// maxcount (#454): each style keeps its own ring of maxcount x 14 quads, so
+// one ground's marks never erase another's.
+SLRR_TEST(style_rings_follow_maxcount) {
+  skid_marks_clear();
+  auto small = parse_skid_mark_config("maxcount 1\nheight 0.3\nfade 0\n");
+  small.texture = "small.png";
+  const uint16_t a = skid_mark_style_register(0x7fff0301u, small);
+  const uint16_t b = skid_mark_style_register(0x7fff0302u, parse_skid_mark_config("maxcount 100\n"));
+  SLRR_REQUIRE(skid_mark_capacity(skid_mark_styles()[a]) == 14);
+  SkidWheelSample s;
+  s.contact = true;
+  s.force = 3000;
+  s.slip_speed = 8;
+  s.slip_ratio = 1;
+  s.style = b;
+  for (int i = 0; i <= 10; ++i) {
+    s.point = {5, 0, i * .1};
+    skid_marks_update(3, 0, s, .016, 5);
+  }
+  s.style = a;
+  for (int i = 0; i <= 100; ++i) {
+    s.point = {0, 0, i * .1};
+    skid_marks_update(3, 1, s, .016, 5);
+  }
+  size_t count_a = 0, count_b = 0;
+  const auto &v = skid_mark_vertices();
+  for (size_t q = 0; q < v.size() / 4; ++q) (v[q * 4].style == a ? count_a : count_b) += 1;
+  SLRR_REQUIRE(count_a == 14 && count_b >= 4);
+  skid_marks_clear();
+}
+
+// The script natives' domains replace the cfg's source; a zero ground normal
+// (a scripted effect) has no floor.
+SLRR_TEST(script_domains_without_floor) {
+  particles_clear();
+  particles_set_wind(0, 0);
+  const uint16_t cloud = particle_cloud_register(0x7fff0024u, parse_particle_cloud(kGrass));
+  ParticleSystem system;
+  system.init(cloud);
+  system.mode_permanent(true);
+  ParticleDomain point_domain, velocity;
+  point_domain.kind = ParticleDomain::Kind::Sphere;
+  point_domain.v = {0, 0, 0, 0, 0};
+  point_domain.count = 5;
+  velocity = point_domain;
+  velocity.v = {0, 4, 0, 0, 0};
+  system.set_domains(point_domain, velocity, 10.f);
+  system.set_source({0, 10, 0}, {0, 0, 0}, {0, 0, 0});
+  system.set_freq(1);
+  system.advance(1.0);
+  SLRR_REQUIRE(particles().size() == 10);
+  for (const auto &p : particles()) SLRR_REQUIRE(near(p.velocity[1], 8.f) && near(p.position[1], 10.f));  // velscale 2
+  // Permanent: it keeps its frequency.
+  system.advance(1.0);
+  SLRR_REQUIRE(particles().size() == 20);
+  for (int i = 0; i < 20; ++i) particles_update(.1);
+  bool below = false;
+  for (const auto &p : particles()) below = below || p.position[1] < 9.f;
+  SLRR_REQUIRE(below);
+  particles_clear();
+}
+
 }  // namespace
 
 int main() {
   const slrr::standalone::Test tests[] = {
       parses_stock_asphalt_cloud, parses_debris_and_samples_domains, emits_rises_and_dies,
-      debris_lands_on_its_ground, parses_skid_configs, textured_mark_tiles};
+      debris_lands_on_its_ground, parses_skid_configs, textured_mark_tiles,
+      style_rings_follow_maxcount, script_domains_without_floor};
   return slrr::standalone::run("tyre_effects", tests);
 }

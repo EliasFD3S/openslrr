@@ -88,9 +88,17 @@ class ParticleSystem {
   float freq() const { return frequency_; }
   // setSource: where the source domain is centred and the velocity the
   // particles inherit (the tyre's throw plus the drag of the car's wake),
-  // with the ground plane they must not sink through.
+  // with the ground plane they must not sink through (a zero normal: none).
   void set_source(const std::array<float, 3> &position, const std::array<float, 3> &velocity,
                   const std::array<float, 3> &ground_normal);
+  // The script natives' setSource / setDirectSource: their position and
+  // velocity spheres and rate replace the cfg's source.
+  void set_domains(const ParticleDomain &position, const ParticleDomain &velocity, float rate) {
+    custom_ = true;
+    position_domain_ = position;
+    velocity_domain_ = velocity;
+    rate_ = rate;
+  }
   // setDirectSource: emit `count` particles now, whatever the frequency.
   void emit_direct(int count);
   void set_counter(uint32_t counter) { counter_ = counter; }
@@ -116,6 +124,9 @@ class ParticleSystem {
   std::array<float, 3> position_{}, velocity_{}, normal_{0, 1, 0};
   std::array<float, 3> last_position_{};
   bool has_last_ = false;
+  bool custom_ = false;
+  ParticleDomain position_domain_, velocity_domain_;
+  float rate_ = 0;
 };
 
 // Clouds by RPK id: the caller fills the config (cfg text and texture) once.

@@ -216,8 +216,8 @@ void ParticleSystem::spawn() {
   Particle p;
   // Spread a frame's particles along the path the source took.
   const float along = uniform(rng);
-  const V3 offset = c.position.sample(rng);
-  V3 velocity = c.velocity.sample(rng);
+  const V3 offset = (custom_ ? position_domain_ : c.position).sample(rng);
+  V3 velocity = (custom_ ? velocity_domain_ : c.velocity).sample(rng);
   if (c.velscale > 0) for (auto &v : velocity) v *= c.velscale;
   for (size_t k = 0; k < 3; ++k) {
     p.position[k] = last_position_[k] + (position_[k] - last_position_[k]) * along + offset[k];
@@ -253,7 +253,8 @@ void ParticleSystem::emit_direct(int count) {
 
 void ParticleSystem::advance(double dt) {
   if (!ready_ || cloud_ >= g_clouds.size() || !(dt > 0)) return;
-  carry_ += static_cast<double>(g_clouds[cloud_].rate) * std::max(0.f, frequency_) * dt;
+  carry_ += static_cast<double>(custom_ ? rate_ : g_clouds[cloud_].rate) *
+            std::max(0.f, frequency_) * dt;
   // A dropped frame must not flush a burst of hundreds of particles.
   carry_ = std::min(carry_, 64.0);
   while (carry_ >= 1) {
@@ -319,6 +320,7 @@ void particles_update(double dt) {
     const float radius = (p.size0 + (p.size1 - p.size0) * t) * .5f;
     const float floor = cloud ? radius * .3f : .01f;
     const auto &n = p.ground_normal;
+    if (n[0] == 0.f && n[1] == 0.f && n[2] == 0.f) continue;  // no floor
     const float height = (p.position[0] - p.ground[0]) * n[0] +
                          (p.position[1] - p.ground[1]) * n[1] +
                          (p.position[2] - p.ground[2]) * n[2];

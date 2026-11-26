@@ -19,9 +19,9 @@ implementations and following selected calls to their consumers.
 
 | Status | Stock signatures |
 | --- | ---: |
-| Registered with a body | 358 |
+| Registered with a body | 367 |
 | Registered with the explicit `native_noop` handler | 3 |
-| Absent from the registry | 15 |
+| Absent from the registry | 6 |
 | **Total** | **376** |
 
 The first category includes constant responses, inline empty bodies and
@@ -109,12 +109,16 @@ being replaced by success-returning mocks.
 | System | Count | Methods |
 | --- | ---: | --- |
 | `GroundRef` | 3 | `setWater` (2 overloads), `addWaterLimit` |
-| `ParticleSystem` | 9 | `init`, `stop`, `setFreq`, `setDirectSource`, `setSource`, `setCounter`, `getCounter`, `delAction`, `modePermanent` |
 
-There are 12 missing active signatures and 3 missing leftovers, for 15 total.
-The host's tyre effects (#454) have an emitter of the same shape
-(`slrr::ParticleSystem`, `include/slrr/particle_cloud.hpp`) that runs the stock
-`particle_clouds/*.cfg`. Binding these natives to it is the remaining step.
+There are 3 missing active signatures and 3 missing leftovers, for 6 total.
+The nine `ParticleSystem` natives are bound since #454
+(`src/natives/natives_particles.cpp`, `src/resources/script_particles.cpp`):
+`init` resolves the RenderRef type to a stock `particle <cfg>` cloud, the
+source actions emit into the tyre effects' particle pool in the parent's
+frame, `getCounter` counts the cloud's particles in the counter's sphere, and
+`modePermanent` is stored only (its meaning is not recovered). A parent
+outside the active world (the commented-out `Osd` cursor effects, the only
+stock callers) emits nothing.
 No PhysicsRef signature remains absent from the stock table.
 
 ## Roadmap

@@ -458,19 +458,33 @@ particles:2 (asphalt smoke) and particles:0xA (the asphalt mark).
     thrown up at up to 0.45 strength by a fast wheel even while it grips.
   - Asphalt smoke emits 2.5× its cfg's rate. Other clouds are scaled to
     smoke's screen coverage: size² × lifetime. Debris keeps its own rate.
+  - Native traffic within 60 m of the camera smokes and lays marks too (the
+    driven and scripted cars within 120 m); it still plays no slide loop.
+- **Script natives.** The nine `ParticleSystem` natives
+  (`natives_particles.cpp`, `script_particles.cpp`) run the same pool:
+  `init` resolves the RenderRef type to a cloud, each source action emits in
+  its parent's frame at the parent's current pose, with no ground plane.
 - **Rendering.** `draw_particles` runs after the marks in the world view.
   Particles are sorted back to front, and each one is a camera-facing
   impostor of a sphere of smoke (`fs_particle.sc`).
   - Its density is the sphere's thickness eroded by 3D fbm noise.
   - Light reaches it through an optical depth toward the sun, with
     Henyey-Greenstein forward scattering at the thin rims and sky ambient.
-  - It is soft against the AO prepass depth when AO runs, and always against
-    its own ground plane. Output is premultiplied alpha.
+  - The sun is shadowed per vertex: one 4-tap lookup in the sun cascades at
+    each corner (`vs_particle.sc`), interpolated across the puff.
+  - Scenery lamps and car lights, headlights included, are summed per
+    particle on the CPU (the lamp law without its facing term, HG g = 0.55
+    toward the camera, capped at 3×), so a beam seen through smoke glows.
+  - It is soft against the AO depth prepass, which also runs while AO is off
+    for as long as particles live (`soft_particles` debug toggle), and always
+    against its own ground plane. Output is premultiplied alpha.
   - `type 1` clouds (grass, pebbles) are small lit sprites of their texture.
 - **Marks.** A textured style splits its quads at the texture tiles
   (`height` metres). The first tile is the `uv_end` cap, the rest repeat
   `uv_normal`, and a finished track closes with the cap mirrored. The width
   follows the scrub from the cfg's minimum to its maximum, capped at 0.8 m.
+  Each style keeps its own ring of `maxcount` × 14 quads (1400 for the stock
+  100), so one ground's marks never erase another's.
   Marks multiply the ground (DST_COLOR, INV_SRC_ALPHA) with the texture
   tinted by `skid_SMcolor`. An unset colour gives half opacity, the
   original's default 0x80000000.

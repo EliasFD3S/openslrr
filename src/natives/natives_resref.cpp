@@ -3,6 +3,7 @@
 
 #include "slrr/gameref.hpp"
 #include "slrr/job_system.hpp"
+#include "slrr/script_particles.hpp"
 #include "slrr/scene_ambience.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/part_runtime.hpp"
@@ -395,6 +396,9 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
       });
   jvm.natives().register_method(kResRef, "destroy", "()V",
                                 [](Object* self, const std::vector<Value>&) {
+                                  // A ParticleSystem's emitters go with it (#454);
+                                  // its particles finish their lives.
+                                  script_particles_destroy(self);
                                   // changeTexture destroys the old picture before the
                                   // replacement exists. Drop that quad first: a part
                                   // record returns before the hide below.
