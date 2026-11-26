@@ -66,6 +66,12 @@ public class Tyre extends ReciprocatingRGearPart
 	// OpenSLRR (#450): the compound's longitudinal/lateral friction ratio.
 	float	compound_frictn_x = 1.0;
 	int	compound = 0;
+	// OpenSLRR (#461): the flat spot a locked wheel ground into the tread,
+	// its depth in metres and the wheel rotation where it touches the ground.
+	// The host keeps them up to date; they are saved with the tyre and a
+	// repair clears them.
+	float	flat_spot = 0.0;
+	float	flat_spot_angle = 0.0;
 
 	// debug vars, remove them after use //
 	float	slide_cm;
@@ -406,19 +412,37 @@ public class Tyre extends ReciprocatingRGearPart
 		{
 			inflation = saveGame.readFloat();
 		}
+		if (save_ver >= 2)
+		{
+			flat_spot = saveGame.readFloat();
+			flat_spot_angle = saveGame.readFloat();
+		}
 	}
 
 	public void save( File saveGame )
 	{
 		super.save( saveGame );
 
-		int	save_ver = 1;
+		int	save_ver = 2;	// OpenSLRR (#461): 2 adds the flat spot
 
 		saveGame.write( save_ver );
 		if (save_ver >= 1)
 		{
 			saveGame.write( inflation );
 		}
+		if (save_ver >= 2)
+		{
+			saveGame.write( flat_spot );
+			saveGame.write( flat_spot_angle );
+		}
+	}
+
+	// OpenSLRR (#461): a repair in the garage trues the tread again.
+	public void repair()
+	{
+		super.repair();
+		flat_spot = 0.0;
+		flat_spot_angle = 0.0;
 	}
 
 	//---------tuning

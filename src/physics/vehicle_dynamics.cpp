@@ -402,6 +402,9 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
                   const Terrain &terrain, double ceiling, double dt, double steer) {
   const Vec3 local_down = w.down.normalized();
   const Vec3 down = body.orientation.rotate(local_down);
+  // The tyre's vertical rate (#461): its pressure and a puncture's
+  // deflation (step_drive sets it), or the stock 250 kN/m.
+  const double tyre_rate = s.tyre_rate > 0 ? s.tyre_rate : kTyreRate;
   const Vec3 hard = body_point(body, w.center - local_down * w.anchor_length());
   const bool fresh = !s.seeded;
   if (!s.seeded) {
@@ -547,7 +550,8 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
     for (size_t k = 0; k < footprint.size(); ++k) {
       const auto &f = footprint[k];
       if (!f.valid) continue;
-      const double e = f.normal.dot(f.ground - world) + f.reach;
+      // A flat spot under the patch takes its depth off the tyre (#461).
+      const double e = f.normal.dot(f.ground - world) + f.reach - s.flat_drop;
       if (e > error + 1e-9) {
         error = e;
         deepest = static_cast<int>(k);
@@ -619,8 +623,8 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
       double lhs = m / dt + spring * dt + damping;
       double rhs = m * v0 / dt + spring * (w.rest - l0) + m * gravity;
       if (tyre) {
-        lhs += g * (kTyreRate * g * dt + kTyreDamping * g);
-        rhs -= g * (kTyreRate * (p0 + body_rate * dt) + kTyreDamping * body_rate);
+        lhs += g * (tyre_rate * g * dt + kTyreDamping * g);
+        rhs -= g * (tyre_rate * (p0 + body_rate * dt) + kTyreDamping * body_rate);
       }
       return rhs / lhs;
     };
@@ -649,9 +653,15 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
     const double p1 = p0 + body_rate * dt + g * (l1 - l0);
     const double p_rate = body_rate + g * v1;
     const double tyre_force =
-        p1 > 0 ? std::clamp(kTyreRate * std::min(p1, kTyreDeflection) + kTyreDamping * p_rate,
+        p1 > 0 ? std::clamp(tyre_rate * std::min(p1, kTyreDeflection) + kTyreDamping * p_rate,
                             0.0, body.mass * 9.81 * 3)
                : 0.0;
+    // Squashed to the rim while closing fast: a rim strike, which pinches
+    // the tyre (#461); the host decides the puncture.
+    const bool rim = p1 >= kTyreDeflection;
+    if (rim && !s.on_rim && p_rate > kPinchSpeed * std::sqrt(tyre_rate / kTyreRate))
+      ++s.rim_strikes;
+    s.on_rim = rim;
     double suspension = suspension_force(l1, v1, w.rest, w.maximum, w.spring, w.bump_damping,
                                          w.rebound_damping);
     const bool contact = tyre_force > 0;
@@ -774,7 +784,11 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
         std::clamp(tyre_error(project(w.minimum), deepest_at_stop), 0.0, kTyreDeflection);
     if (squash > 0) {
       const double closing = -body.point_velocity(hard).dot(normal);
-      const double tyre = std::max(0.0, kTyreRate * squash + kTyreDamping * closing);
+      const double tyre = std::max(0.0, tyre_rate * squash + kTyreDamping * closing);
+      const bool rim = squash >= kTyreDeflection - 1e-6;
+      if (rim && !s.on_rim && closing > kPinchSpeed * std::sqrt(tyre_rate / kTyreRate))
+        ++s.rim_strikes;
+      s.on_rim = rim;
       force = std::max(force, tyre);
     }
   }
@@ -966,6 +980,99 @@ void solve_anti_roll(RigidBody& body, const std::array<WheelConfig, 4>& wheels,
 constexpr double rpm_per_rad = 9.54929658551372;
 constexpr double wheel_inertia = 1.6;
 
+// The tyre as it is now (#446, #452, #461): its grip at the tread
+// temperature, on the ground's material and at its wear; its stiffness,
+// relaxation and nominal load at its hot pressure.
+TireParameters effective_tyre(const DriveWheel &cfg, const WheelState &s, double radius,
+                              TyrePressureEffect *pressure_out = nullptr) {
+  TireParameters tyre = cfg.tyre;
+  const auto pressure = tyre_pressure_effect(cfg.tyre_heat, cfg.inflation, s.tyre_temperature);
+  tyre.friction *= tyre_grip_factor(cfg.tyre_heat, s.tyre_temperature.surface) *
+                   s.surface.friction * tyre_wear_grip(cfg.tread_wear);
+  tyre.stiffness *= pressure.stiffness * tyre_wear_stiffness(cfg.tread_wear);
+  tyre.relaxation_length *= pressure.relaxation;
+  if (pressure.nominal_load != 1)
+    tyre.maximum_load = (tyre.maximum_load > 0 ? tyre.maximum_load : 8000) * pressure.nominal_load;
+  // Flat (#461): the sidewall folds; the tyre grips and steers poorly and
+  // lags far behind its slip.
+  const double flat = std::clamp(s.deflation, 0.0, 1.0);
+  tyre.friction *= 1 - .55 * flat;
+  tyre.stiffness *= 1 - .75 * flat;
+  tyre.relaxation_length *= 1 + 2 * flat;
+  tyre.radius = radius;
+  if (pressure_out) *pressure_out = pressure;
+  return tyre;
+}
+
+// The tyre's vertical rate (#461): the stock 250 kN/m at its working
+// pressure, 70 % of it carried by the air and 30 % by the carcass, and a
+// quarter of it once flat (the folded sidewall; past 6 cm the rim stop).
+double tyre_vertical_rate(const DriveWheel &cfg, const WheelState &s) {
+  const auto pressure = tyre_pressure_effect(cfg.tyre_heat, cfg.inflation, s.tyre_temperature);
+  return kTyreRate * (.3 + .7 * pressure.ratio) * (1 - .75 * std::clamp(s.deflation, 0.0, 1.0));
+}
+
+// Flat spots (#461). A wheel locked while the car slides on (under a tenth
+// of the road speed, above 2 m/s) grinds the place of its tread on the
+// ground; a lock at the same place (within 0.2 rad) deepens the old spot,
+// another one grinds a new spot that replaces it once deeper. Rolling, the
+// spot passes under the patch once a turn: it takes its depth off the
+// tyre's support over the arc of its chord and the patch (0.12 rad), which
+// the suspension and the steering feel as a thump per turn.
+void update_flat_spot(WheelState &s, const WheelConfig &wheel, const DriveWheel &cfg,
+                      double road, double radius, double worn) {
+  constexpr double kTwoPi = 6.283185307179586;
+  const std::uintptr_t tyre = cfg.tyre_id;
+  // Another tyre, a loaded game or a repair: the spot the Tyre carries.
+  if (tyre != s.flat_tyre || cfg.flat_serial != s.flat_serial) {
+    s.flat_spot = std::clamp(cfg.flat_spot, 0.0, .01);
+    s.flat_spot_angle = cfg.flat_spot_angle;
+    s.lock_spot = s.flat_drop = 0;
+    s.locked = false;
+    s.flat_tyre = tyre;
+    s.flat_serial = cfg.flat_serial;
+  }
+  if (!tyre || wheel.metal_contact) {
+    s.flat_drop = 0;
+    return;
+  }
+  const bool locked = s.contact && s.force > 0 && std::abs(road) > 2 &&
+                      std::abs(s.spin * radius) < .1 * std::abs(road);
+  if (locked) {
+    if (!s.locked) {
+      const bool same = s.flat_spot > 0 &&
+                        std::abs(std::remainder(s.rotation - s.flat_spot_angle, kTwoPi)) < .2;
+      s.lock_angle = same ? s.flat_spot_angle : s.rotation;
+      s.lock_spot = same ? s.flat_spot : 0;
+    }
+    s.lock_spot = std::min(s.lock_spot + worn / kFlatSpotEnergy, .01);
+    if (s.lock_spot > s.flat_spot) {
+      s.flat_spot = s.lock_spot;
+      s.flat_spot_angle = s.lock_angle;
+    }
+  }
+  s.locked = locked;
+  s.flat_drop = 0;
+  if (s.flat_spot > 0 && s.contact && wheel.radius > 0) {
+    const double chord = std::acos(std::clamp(1 - s.flat_spot / wheel.radius, -1.0, 1.0));
+    const double half = chord + .12;
+    const double phase = std::remainder(s.rotation - s.flat_spot_angle, kTwoPi);
+    if (std::abs(phase) < half) {
+      const double c = std::cos(1.5707963267948966 * phase / half);
+      s.flat_drop = s.flat_spot * c * c;
+    }
+  }
+}
+
+// The effective rolling radius (#461): the loaded tyre rolls on about its
+// free radius less a third of its deflection, and on a flat spot's chord
+// while it passes under the patch.
+double rolling_radius(const WheelConfig &w, const WheelState &s) {
+  if (w.metal_contact || !s.contact || !(s.force > 0)) return w.radius;
+  const double rate = s.tyre_rate > 0 ? s.tyre_rate : kTyreRate;
+  return w.radius - std::min(s.force / rate, kTyreDeflection) / 3 - s.flat_drop;
+}
+
 Vec3 wheel_forward(const RigidBody &body, double steer, Quaternion hub = {}) {
   return body.orientation.rotate(
       (hub * wheel_steering(steer)).rotate({0, 0, -1}));
@@ -1086,7 +1193,7 @@ void VehicleDynamics::step_drive() {
       const Vec3 tangent =
           (forward - s.normal * forward.dot(s.normal)).normalized();
       const double road_speed = body.point_velocity(s.patch).dot(tangent);
-      road_shaft += w * road_speed / wheels[i].radius;
+      road_shaft += w * road_speed / rolling_radius(wheels[i], s);
     }
   }
   if (weights > 0) {
@@ -1138,7 +1245,7 @@ void VehicleDynamics::step_drive() {
     contact[i] = enabled[i] && state[i].contact;
     driven[i] = enabled[i] && drive.wheels[i].weight > 0;
     undriven[i] = enabled[i] && !driven[i];
-    wheel_speed[i] = state[i].spin * wheels[i].radius * direction;
+    wheel_speed[i] = state[i].spin * rolling_radius(wheels[i], state[i]) * direction;
   }
   if (!sensors_seeded_ || direction != travel_direction_) {
     wheel_speed_previous_ = wheel_speed;
@@ -1348,12 +1455,17 @@ void VehicleDynamics::step_drive() {
                     pad_friction_factor(cfg.hardware, s.brake_temperature) *
                     fluid_pressure_factor(cfg.hardware, s.fluid_temperature),
                 true);
-    // The tyre's grip at its tread temperature (#446), on the ground's
-    // material (#452).
-    TireParameters tyre = cfg.tyre;
-    tyre.friction *= tyre_grip_factor(cfg.tyre_heat, s.tyre_temperature.surface) *
-                     s.surface.friction;
-    tyre.radius = wheel.radius;
+    // A puncture lets the air out: a blowout in a fraction of a second, a
+    // pinch over a few; a sound tyre (new, or repaired) is full (#461).
+    if (!cfg.puncture) s.deflation = 0;
+    else
+      s.deflation += (1 - s.deflation) * (1 - std::exp(-dt_ / (cfg.puncture == 2 ? .15 : 6.0)));
+    TyrePressureEffect hot;
+    const double radius = rolling_radius(wheel, s);
+    const TireParameters tyre = effective_tyre(cfg, s, radius, &hot);
+    s.tyre_pressure = hot.pressure * (1 - s.deflation);
+    const double rolling_resistance =
+        cfg.rolling_resistance * hot.rolling + .06 * std::clamp(s.deflation, 0.0, 1.0);
     double sliding_power = 0, rolling_power = 0;
     apply_brake(torque_step * drive.handbrake * cfg.handbrake * drive.handbrake_scale, true);
 
@@ -1361,14 +1473,14 @@ void VehicleDynamics::step_drive() {
       s.spin *= 1 - .25 * dt_ / wheel_inertia;
       s.slip_angle = 0;
     } else {
-      s.slip_speed = s.spin * wheel.radius - road;
+      s.slip_speed = s.spin * radius - road;
       s.lateral_speed = lateral;
       // Relaxation length, integrated implicitly: the deflection follows
       // lateral / speed with a lag of relaxation / speed (12 ms at 90 km/h
       // for the 0.3 m of a tyre at its optimal pressure). The patched Tyre
       // script lengthens it as the pressure falls.
       const double reference = std::max(1.5, std::abs(road));
-      const double relaxation = std::clamp(cfg.tyre.relaxation_length, .05, 2.0);
+      const double relaxation = std::clamp(tyre.relaxation_length, .05, 2.0);
       s.slip_angle = (relaxation * s.slip_angle + lateral * dt_) /
                      (relaxation + reference * dt_);
       const double relaxed_lateral = s.slip_angle * reference;
@@ -1383,7 +1495,7 @@ void VehicleDynamics::step_drive() {
         const double factor = slip > 1e-9 ? .4 * s.surface.friction * s.force / slip : 0;
         force = {s.slip_speed * factor, -lateral * factor};
       } else {
-        force = tire_forces(s.force, 1, s.spin * wheel.radius, road, relaxed_lateral,
+        force = tire_forces(s.force, 1, s.spin * radius, road, relaxed_lateral,
                             tyre, camber, lateral);
       }
 
@@ -1392,7 +1504,7 @@ void VehicleDynamics::step_drive() {
           1 / body.mass +
           forward.dot(
               body.inverse_world_inertia(arm.cross(forward)).cross(arm));
-      const double inverse_spin = wheel.radius * wheel.radius / wheel_inertia;
+      const double inverse_spin = radius * radius / wheel_inertia;
       const double limit =
           std::abs(s.slip_speed) / (dt_ * (inverse_mass + inverse_spin));
       const double unclamped = force.longitudinal;
@@ -1403,7 +1515,7 @@ void VehicleDynamics::step_drive() {
       // hysteresis as it rolls (not the soft ground's drag, which works the
       // ground).
       sliding_power = std::abs(force.longitudinal * s.slip_speed) + std::abs(force.lateral * lateral);
-      rolling_power = s.force * (cfg.rolling_resistance > 0 ? cfg.rolling_resistance : .01) *
+      rolling_power = s.force * (rolling_resistance > 0 ? rolling_resistance : .01) *
                       std::abs(road);
       body.add_force(forward * force.longitudinal + side * force.lateral,
                      s.patch);
@@ -1413,11 +1525,11 @@ void VehicleDynamics::step_drive() {
       const double rolling_torque =
           s.spin == 0 ? 0
                       : std::copysign(
-                            s.force * wheel.radius *
-                                (cfg.rolling_resistance + s.surface.rolling),
+                            s.force * radius *
+                                (rolling_resistance + s.surface.rolling),
                             s.spin);
       s.spin -=
-          (force.longitudinal * wheel.radius + rolling_torque + s.spin * .15) *
+          (force.longitudinal * radius + rolling_torque + s.spin * .15) *
           dt_ / wheel_inertia;
     }
     const double before_hold = s.spin;
@@ -1429,10 +1541,14 @@ void VehicleDynamics::step_drive() {
         step_rotor_temperature(cfg.hardware, s.brake_temperature, heat, road, dt_);
     s.fluid_temperature =
         step_fluid_temperature(cfg.hardware, s.fluid_temperature, s.brake_temperature, dt_);
+    // The tread wears with the sliding work, faster when hot (#461).
+    const double worn = sliding_power * tyre_wear_weight(s.tyre_temperature.surface) * dt_;
+    s.wear_work += worn;
+    update_flat_spot(s, wheel, cfg, road, radius, worn);
     s.tyre_temperature = step_tyre_temperature(cfg.tyre_heat, s.tyre_temperature, sliding_power,
                                                rolling_power, s.brake_temperature, road, dt_);
     const double unspent = std::max(0.0, remaining_brake - std::abs(before_hold - s.spin));
-    s.holding_impulse = unspent * wheel_inertia / std::max(.01, wheel.radius);
+    s.holding_impulse = unspent * wheel_inertia / std::max(.01, radius);
     s.rotation =
         std::remainder(s.rotation + s.spin * dt_, 6.283185307179586);
   }
@@ -1496,6 +1612,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
       continue;
     }
     if (w.linked()) {
+      s.tyre_rate = tyre_vertical_rate(drive.wheels[i], s);
       solve_linked(body, w, s, terrain, ceiling, dt_, drive.wheels[i].steer);
       continue;
     }
@@ -1565,8 +1682,8 @@ void VehicleDynamics::step(const Terrain &terrain) {
       if (force.length() > limit)
         force = force.normalized() * limit;
       body.add_force(force, s.patch);
-      s.rotation += speed / wheels[i].radius * dt_;
-      s.spin = speed / wheels[i].radius;
+      s.rotation += speed / rolling_radius(wheels[i], s) * dt_;
+      s.spin = speed / rolling_radius(wheels[i], s);
     }
   }
   // Bars also work without an engine/drive, and never feed back into the tyre
@@ -1582,7 +1699,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
                         (drive.native_traffic && drive.brake > .5);
     const Vec3 v = body.point_velocity(s.patch);
     const double speed = (v - s.normal * v.dot(s.normal)).length();
-    if (!parked && !(braked && speed < .05 && std::abs(s.spin * wheels[i].radius) < .05))
+    if (!parked && !(braked && speed < .05 && std::abs(s.spin * rolling_radius(wheels[i], s)) < .05))
       continue;
     const double mu = (wheels[i].metal_contact ? .4 : .8) * s.surface.friction;
     TireForces caps{mu * s.force, mu * s.force};
@@ -1590,9 +1707,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
       const double tilt =
           body.orientation.rotate(steered_hub(s, cfg.steer).rotate({0, -1, 0})).dot(s.normal);
       const double camber = std::acos(std::clamp(std::abs(tilt), 0.0, 1.0));
-      TireParameters tyre = cfg.tyre;
-      tyre.friction *= tyre_grip_factor(cfg.tyre_heat, s.tyre_temperature.surface) *
-                       s.surface.friction;
+      const TireParameters tyre = effective_tyre(cfg, s, rolling_radius(wheels[i], s));
       const auto peaks = tire_friction_limits(s.force, 1, tyre, camber);
       caps.longitudinal = std::min(caps.longitudinal, peaks.longitudinal);
       caps.lateral = std::min(caps.lateral, peaks.lateral);

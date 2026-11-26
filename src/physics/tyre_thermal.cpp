@@ -88,6 +88,55 @@ TyreTemperature step_tyre_temperature(const TyreThermalSpec& tyre, TyreTemperatu
   return next;
 }
 
+namespace {
+constexpr double kAtmosphere = 1.013;  // bar
+constexpr double kKelvin = 273.15;
+// Working temperatures: where each compound's grip window starts (carcass)
+// and its middle (tread).
+constexpr double kWorkingCarcass[] = {40, 50, 80, 60};
+constexpr double kWorkingTread[] = {65, 75, 97, 85};
+}  // namespace
+
+double tyre_working_carcass(const TyreThermalSpec& tyre) {
+  return kWorkingCarcass[static_cast<int>(tyre.compound)];
+}
+double tyre_working_tread(const TyreThermalSpec& tyre) {
+  return kWorkingTread[static_cast<int>(tyre.compound)];
+}
+
+double tyre_hot_pressure(double cold, double carcass) {
+  return (cold + kAtmosphere) * (carcass + kKelvin) / (kAmbientTemperature + kKelvin) - kAtmosphere;
+}
+
+TyrePressureEffect tyre_pressure_effect(const TyreThermalSpec& tyre, double inflation,
+                                        TyreTemperature t) {
+  TyrePressureEffect e;
+  if (!tyre.specified || !(inflation > 0)) return e;
+  e.pressure = std::max(0.0, tyre_hot_pressure(inflation, t.carcass));
+  const double working = tyre_hot_pressure(inflation, tyre_working_carcass(tyre));
+  e.ratio = std::clamp(e.pressure / working, .5, 1.5);
+  e.relaxation = 1 / std::sqrt(e.ratio);
+  e.rolling = 1 / std::sqrt(e.ratio);
+  e.nominal_load = std::pow(e.ratio, .25);
+  const double rubber =
+      std::clamp(1 - .002 * (t.surface - tyre_working_tread(tyre)), .85, 1.05);
+  e.stiffness = std::pow(e.ratio, .3) * rubber;
+  return e;
+}
+
+double tyre_wear_weight(double surface) {
+  return std::exp(std::max(0.0, surface - 100) / 59);
+}
+
+double tyre_wear_grip(double wear) {
+  wear = std::clamp(wear, 0.0, 1.0);
+  return wear >= .15 ? 1 : .6 + .4 * wear / .15;
+}
+
+double tyre_wear_stiffness(double wear) {
+  return 1 + .15 * (1 - std::clamp(wear, 0.0, 1.0));
+}
+
 double tyre_grip_factor(const TyreThermalSpec& tyre, double surface) {
   if (!tyre.specified) return 1;
   switch (tyre.compound) {

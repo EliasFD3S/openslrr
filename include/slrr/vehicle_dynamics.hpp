@@ -173,8 +173,38 @@ struct WheelState {
   // Brake fluid in the caliper (deg C) and the tyre's tread and carcass.
   double fluid_temperature = kAmbientTemperature;
   TyreTemperature tyre_temperature;
+  // Hot gauge pressure (bar, 0 when not known) and the tread's wear work so
+  // far: the sliding joules, each weighted by tyre_wear_weight (#461). The
+  // host turns its growth into the tyre part's wear.
+  double tyre_pressure = 0, wear_work = 0;
+  // A puncture's deflation, 0 inflated to 1 flat; the tyre's vertical rate
+  // (N/m, from the pressure and the deflation; 0 is the stock 250 kN/m);
+  // rim strikes so far (the tyre squashed to the rim while closing fast,
+  // which pinches it) and whether it is on the rim now (#461).
+  double deflation = 0, tyre_rate = 0;
+  int rim_strikes = 0;
+  bool on_rim = false;
+  // Flat spot (#461): a locked wheel sliding on one place of its tread
+  // grinds it flat there. Its depth (m) and the wheel rotation at which it
+  // touches the ground; while locked, the spot being ground (it replaces
+  // the old one once deeper); the support it takes away now (m), as the
+  // spot rolls under the patch; and the tyre it belongs to.
+  double flat_spot = 0, flat_spot_angle = 0;
+  double lock_spot = 0, lock_angle = 0, flat_drop = 0;
+  bool locked = false;
+  std::uintptr_t flat_tyre = 0;
+  int flat_serial = 0;
   TireForces tire_force{};
 };
+// Sliding joules (weighted by tyre_wear_weight) that grind one millimetre
+// of flat spot: a locked stop from 100 km/h (about 170 kJ on a front tyre)
+// leaves about 1 mm (#461).
+inline constexpr double kFlatSpotEnergy = 1.7e8;  // J per metre of depth
+// Depth at which a flat spot reaches the cords and the tyre blows out.
+inline constexpr double kFlatSpotCords = .006;
+// Closing speed (m/s) at which a tyre squashed to its rim pinches, at its
+// working pressure; a soft tyre pinches sooner (#461).
+inline constexpr double kPinchSpeed = 2.5;
 // Optional host anti-roll approximation, in N/m and N s/m. Invalid or
 // negative coefficients act as zero; no installed bar means both stay zero.
 struct AntiRollConfig {
@@ -190,6 +220,18 @@ struct DriveWheel {
   // Compound and size from WheelRef.setTyreSpec (#446); unspecified tyres
   // stay at ambient with their scripted grip.
   TyreThermalSpec tyre_heat;
+  // The Tyre script's cold gauge pressure (bar, its `inflation`; 0 when not
+  // known) and the tyre part's condition (1 new, 0 worn out), #461.
+  double inflation = 0, tread_wear = 1;
+  // A punctured tyre (#461): 0 sound, 1 a slow leak (a pinch), 2 a blowout.
+  int puncture = 0;
+  // Which tyre is fitted (any value that changes with the tyre part; 0
+  // none) and the flat spot it carries (#461): depth (m) and angle, as the
+  // Tyre saved them. The solver takes them when the tyre or flat_serial
+  // changes (a tyre fitted, a game loaded, a repair).
+  std::uintptr_t tyre_id = 0;
+  double flat_spot = 0, flat_spot_angle = 0;
+  int flat_serial = 0;
 };
 struct DriveInput {
   bool native_traffic = false; // SLRR_rev TrafficVehicle tyre-force driver.

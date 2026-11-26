@@ -2089,3 +2089,147 @@ the jacking torque reaches the force feedback, not the steering angle of a
 keyboard or pad player; the swing was not looked at in game at full lock
 (the bench drives straight), where the wheel moves several cm along the
 arch.
+
+## Tyre temperature: pressure, stiffness, wear, punctures and flat spots (#461)
+
+Cause: the tyre temperature (#446) changed only the grip, through each
+compound's curve, and tyres never wore: `Part.setMaxWear` was stored, but
+nothing consumed it. Neither sl-remastered nor SLRR_rev recovers how the exe
+spent it. These are OpenSLRR mechanics, beyond the original.
+
+Findings:
+
+- `Tyre.SetInflation` gives a tyre `(0.15 + 0.85 × rubber_rigidity^4) ×
+  50000000000.0 × misinflation`. The original compiler kept that literal as
+  2755359744 (5e10 mod 2^32): the stock MWM `Tyre.class` has the same float
+  in its constant pool. The game sees 1.95e9 for a sport tyre at its
+  optimal pressure.
+- Body parts give `kmToMaxWear(km) = km × 1000`, so the exe's unit for those
+  is a metre; a street tyre's 2.76e9 would be 2.8 million km, so the tyre's
+  unit is not a distance.
+- The host never had the pressure: the Tyre script derives every value from
+  `inflation` / `optimal_inflation` (bar, gauge, 2.0 on the stock tyres).
+
+Fix:
+
+- `tyre_pressure_effect` (`tyre_thermal.cpp`): the cold `inflation`, read
+  from the corner's Tyre object (`corner_tyre`, cached while its parent is
+  the corner's rim), set at ambient, follows the carcass temperature (ideal
+  gas, constant volume): 2.0 bar is 2.57 at 80 °C. Against the pressure at
+  the compound's working carcass temperature (street 40, sport 50, soft
+  racing 80, drag radial 60 °C), where the scripted values hold, it scales
+  the relaxation length and the rolling resistance by pressure^-0.5 and the
+  nominal load by pressure^0.25 (the patched script's own laws), and the
+  cornering stiffness by pressure^0.3 × the rubber's
+  1 - 0.002 (tread - working tread) (0.85-1.05; working tread 65 / 75 / 97
+  / 85 °C). A cold sport tyre is at 0.88 of its working pressure: longer
+  relaxation, more drag, about the scripted stiffness (cold rubber is
+  stiffer).
+- `effective_tyre` (`vehicle_dynamics.cpp`) builds the tyre of each step,
+  in the force law and the sticking limits alike: temperature grip, ground,
+  wear grip, and the pressure effects. `WheelState::tyre_pressure` keeps the
+  hot pressure.
+- Wear: `step_drive` adds the sliding power × `tyre_wear_weight(tread)` ×
+  dt to `WheelState::wear_work` (1 up to 100 °C, e^((T-100)/59): 30 at
+  300 °C). After each committed batch `update_tyre_wear` charges its growth
+  to the tyre part's wear against `max_wear × kWearJoulesPerUnit` (0.077:
+  street 210 MJ, sport 150, soft racing 88, drag radial 48); parts that
+  never call `setMaxWear` keep 1 and do not wear, and charges under 1e-5
+  wait (the wear is a float). Tyres cannot be repaired
+  (`repair_max_wear = 0`), so a worn tyre is replaced. Under 15 % the cords
+  show and the grip falls to 0.6 at 0; the stiffness rises by up to 15 % as
+  the tread thins.
+- Vertical rate and rolling radius: the tyre's vertical rate
+  (`tyre_vertical_rate`, the stock 250 kN/m at the working pressure) is 30 %
+  carcass and 70 % air, so it follows the pressure ratio; `solve_linked`
+  uses it. The wheel rolls on `rolling_radius`, the free radius less a third
+  of its static deflection (load / rate, at most the 6 cm rim stop): 0.5 cm
+  on a 3500 N corner. Slip, drive and brake torques, the ABS wheel speeds,
+  the gearbox's road speed and the parked wheels use it, so the gearing is
+  about 1.5 % shorter than on the free radius.
+- Punctures (`update_punctures`): a tyre squashed to its rim stop while
+  closing faster than 2.5 m/s × sqrt(rate / 250 kN/m) counts a rim strike
+  (`WheelState::rim_strikes`) and pinches (a slow leak); one worn to 0 or
+  with its carcass past 160 °C blows out. The puncture sets the tyre part's
+  tear to 0.05; a tear at or under 0.1 is flat (a crash that tears the tyre
+  that far flattens it too), and a garage repair that raises the tear
+  inflates it again. `DriveWheel::puncture` (1 leak, 2 blowout) drives
+  `WheelState::deflation` to 1 with a 6 s or 0.15 s time constant. Flat:
+  friction × 0.45, stiffness × 0.25, relaxation × 3, rolling resistance
+  +0.06, vertical rate × 0.25, so the corner drops onto the folded sidewall
+  and, on bumps, the rim stop.
+- Flat spots (`update_flat_spot`): a wheel locked while the car slides on
+  (under a tenth of the road speed, above 2 m/s) grinds the place of its
+  tread on the ground: the weighted sliding work over `kFlatSpotEnergy`
+  (1.7e8 J per metre of depth). A lock at the same place (within 0.2 rad of
+  rotation) deepens the spot, a lock elsewhere grinds a new spot that
+  replaces the old one once deeper. Rolling, the spot passes under the patch
+  once a turn: `WheelState::flat_drop` takes up to its depth off the tyre's
+  support (`tyre_error` in `solve_linked`) over its chord's arc plus the
+  patch's 0.12 rad, so the suspension, and through it the steering's road
+  feel, get a thump per turn; the rolling radius loses the same drop then,
+  so the wheel speed and the drive and brake forces pulse with it. A spot
+  ground to the cords (6 mm) blows the tyre out.
+- The flat spot belongs to the tyre: the patched `Tyre.java` has
+  `flat_spot` (m) and `flat_spot_angle`, saved with save version 2 (the
+  JSON save names them `flatSpot` and `flatSpotAngle`; version 1 saves still
+  load) and cleared by its `repair()` override. `store_flat_spots` writes
+  the solver's spot into those fields after each committed batch;
+  `configure_drive` passes them on (`DriveWheel::flat_spot`,
+  `flat_spot_angle`) and bumps `flat_serial` when they change behind the
+  solver (another tyre, a loaded game, a garage repair), and the solver
+  then takes them.
+- Debeading: a flat tyre (deflation over 0.9) pushed sideways by more than
+  half its load, or run flat for 3 km, comes off its rim: it is released
+  through `settled_wheel_releases` and breaks off as a loose part with the
+  next collision pass (`detach_panel`, which also reruns the rim's script,
+  so the wheel takes the rim's radius). The corner then runs as metal
+  contact until a tyre is fitted to it again.
+
+Validation:
+
+- Compilation: `slrr_host` and `physics_lab` Release; standalone
+  `vehicle_dynamics` 65/65 with two new tests (hot pressure, the effect at
+  the working, cold and hot temperatures, an overheated tread, no effect
+  without the patched Tyre; wear weights, a hot ten-second burnout taking a
+  tenth of a sport tyre, wear grip and stiffness, the solver's wear work and
+  a worn-out tyre's lower cornering force), `missing_support` 17/17,
+  `physics_tick_rate` 9/9.
+- Bench drive (Baiern CoupeSport, TestTrack, `game\` with the patch, a
+  temporary log): every corner reads `inflation` 2.00; the hot pressure
+  stays 2.00 with the carcass at 25 °C; 9 s of launch wheelspin wore the
+  rear tyres by 2e-3 with the first constant (4.2e-3; about 1e-4 with the
+  final 0.077).
+- Bench drive with a temporary hook (front left punctured at the start,
+  debeading after 20 m): the tyre blew out, came off its rim and broke off;
+  the car drove on (30 / 50 / 64 km/h at 3 / 5 / 7 s) with no script
+  message, and the HUD damage outline shows the corner red. Without the
+  hook, no puncture in a normal drive.
+- `vehicle_dynamics` 67/67 with a puncture test (a pinch at about 0.15
+  after 1 s, a blowout flat within 1 s, the corner 5 mm lower and still
+  carrying, full again once repaired) and a flat spot test (a locked stop
+  from 100 km/h without ABS: 0.75 mm front, 0.49 mm rear; rolling at
+  60 km/h the support dips once a turn and the spot does not grow; a new
+  tyre has none; a tyre's saved spot is taken, and dropped after a repair);
+  `save_json` 7/7 with a version 2 Tyre (`flatSpot`, `flatSpotAngle`) and a
+  version 1 one, `save_io` 25/25.
+- `Tyre.class` recompiled in `build/brake-compile-root` (the 2755359744
+  literal unchanged). Bench drive in `build/needle-game` with it and a
+  temporary hook setting a 3 mm spot on the front left Tyre: the solver
+  took it (the support dipped by up to 2.9 mm, once a turn while rolling)
+  and wrote it back to the field the Tyre saves.
+- `physics_lab --hz 1000` (rolling radius only; its tyres have no spec):
+  0-100 km/h 7.313 to 7.299 s, coasting rpm about 1.4 % higher at the same
+  speed, the rest unchanged.
+- Not checked in game: a warm-up long enough to raise the pressure (the
+  bench reaches the track's end wall in 10 s), a burnout, a worn tyre's
+  feel.
+
+Limitations: the pressure, wear and puncture laws are typical figures, not
+a measured tyre; the wear is the sliding work only (SLRR defines no ground
+abrasiveness); a flat spot does not change the tyre's look; a save and
+reload and a garage repair were not run in game (the save tests and the
+bench hook cover them); flat spots and the debeading were not felt in game
+(the bench neither brakes nor turns); a debeaded tyre is not seen breaking off in a bench
+shot (the shots are taken at the start); the HUD temperature view does not
+show the pressure or the wear (the garage shows the tyre's condition).
