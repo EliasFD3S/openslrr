@@ -151,7 +151,9 @@ which the fixed-step benchmark, `--physics-batch` and the tests still use.
   drives `VehicleDynamics` on a flat plane with scripted inputs (launch,
   brake, skidpad, step steer, burnout) at several rates and prints one line
   per scenario and rate (`--hz 120,1000`, `--scenario NAME`, `--csv DIR`,
-  `--asr` for launch control; `curb`, `curb_fast`, `curb_angle` and
+  `--asr` and `--abs` for the driving aids (#446: traction control replaced
+  the launch control), `--respec` for the re-specced CoupeSport brakes with
+  rotor heat, `fade` and `split_mu` scenarios; `curb`, `curb_fast`, `curb_angle` and
   `curb_side` drive into a 15 cm kerb square at 8 and 30 km/h and at 20 and 8
   degrees at 20 km/h).
   It is bit-reproducible. On the test saloon the solver alone gives the same

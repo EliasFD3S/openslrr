@@ -1,4 +1,5 @@
 #pragma once
+#include "slrr/brake_system.hpp"
 #include "slrr/tire_model.hpp"
 #include <array>
 #include <cstddef>
@@ -156,6 +157,9 @@ struct WheelState {
   double slip_angle = 0;
   // Unspent brake/bearing budget at the patch (N s), not free tyre grip.
   double holding_impulse = 0;
+  // Rotor temperature (deg C) and the service brake pressure reaching the
+  // caliper after ABS/ASR, as a fraction of full pedal (#446).
+  double brake_temperature = kAmbientTemperature, brake_pressure = 0;
   TireForces tire_force{};
 };
 // Optional host anti-roll approximation, in N/m and N s/m. Invalid or
@@ -167,6 +171,9 @@ struct DriveWheel {
   double weight = 0, steer = 0, brake = 0, handbrake = 0, bearing = 0;
   double rolling_resistance = 0;
   TireParameters tyre;
+  // Pad, rotor and diameter from WheelRef.setBrakeSpec (#446); unspecified
+  // brakes stay cold and never fade.
+  BrakeHardware hardware;
 };
 struct DriveInput {
   bool native_traffic = false; // SLRR_rev TrafficVehicle tyre-force driver.
@@ -177,8 +184,14 @@ struct DriveInput {
   bool automatic_first = false;
   double throttle = 0, brake = 0, handbrake = 0;
   double brake_scale = 0, handbrake_scale = 0, bearing_scale = 0;
+  // Driving aids (Options ABS / ASR sliders, #446): 0 off, 1 the tightest
+  // slip targets.
   double abs_strength = 0;
-  double launch_help = 0;
+  double asr_strength = 0;
+  // Rear proportioning valve (#446): above `knee` (a fraction of full
+  // pedal) the rear pressure rises by `slope` only. Knee 0 disables it; an
+  // active ABS replaces it with its electronic distribution.
+  double rear_valve_knee = 0, rear_valve_slope = 1;
   double differential_lock = 0;
   double inertia = 0, idle = 0, limit = 0, starter = 0;
   double clutch = 1;
@@ -254,16 +267,27 @@ public:
   double engine_limit_fraction() const;
   uint64_t backlog() const;
   void sync_wheels();
+  // Driving aids at the last step (#446), for the HUD and the debug view.
+  bool abs_active() const { return abs_.active(); }
+  bool asr_active() const { return asr_.active(); }
+  double reference_speed() const { return reference_.speed(); }
 
 private:
   double accumulator_ = 0;
   double dt_ = timestep;  // length of the step being run
   double previous_rpm_ = 0, shift_time_ = 0;
   double starter_remaining_ = 0, service_brake_ = 0;
-  double launch_factor_ = 1;
+  // What the ABS/ASR controller measures (#446): the forward speed of the
+  // previous step (for the accelerometer), the wheel circumferential speeds
+  // and their filtered rates.
+  double forward_speed_previous_ = 0, travel_direction_ = 1;
+  bool sensors_seeded_ = false;
+  std::array<double, 4> wheel_speed_previous_{}, wheel_acceleration_{};
+  ReferenceSpeed reference_;
+  AbsModulator abs_;
+  TractionControl asr_;
   int previous_shift_ = 0;
   bool accelerator_down_ = false, forced_reverse_ = false;
-  bool launch_active_ = false;
   void step(const Terrain &terrain);
   void apply_aero();
   void step_drive();

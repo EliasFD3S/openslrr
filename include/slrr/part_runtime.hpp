@@ -174,6 +174,11 @@ struct PartPhysicsState {
   int gear = 0;
   // Drive inputs the solver applies (#380 telemetry).
   double throttle = 0, brake = 0, clutch = 0;
+  // Brakes and driving aids (#446): rotor temperature (deg C), caliper
+  // pressure (fraction of full pedal), the controller's reference speed.
+  std::array<double, 4> brake_temperature{}, brake_pressure{};
+  bool abs_active = false, asr_active = false;
+  double reference_speed = 0;
 };
 // Solver statistics over the last second (#380): rate, steps actually run
 // per second and the physics thread's busy fraction (free-running mode).

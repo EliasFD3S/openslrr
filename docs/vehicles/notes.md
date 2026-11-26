@@ -1119,3 +1119,110 @@ through the centre.
 
 Limitations: a wheel touched first after a key is still treated as a key until
 it passes 1 % of its travel. Not validated in game with a wheel yet.
+
+## Brakes as hardware, ABS and ASR (#446)
+
+Cause:
+
+- ABS capped the service brake each substep so a wheel never turned slower
+  than 85 % of the true road speed at its patch: no modulator, no pressure
+  cycles, and a ground speed no controller can measure (SLRR_rev's
+  `absBrakeStep` is the same law).
+- ASR was a launch control only: a throttle cut in first or reverse below
+  30 km/h, armed by a full-throttle start from rest.
+- Stock brake torques: `DiscBrake` used a pad "friction" of 1.0-1.1 (real
+  pads 0.35-0.5) with `BRAKE_FORCE_FINE_TUNE = 2`, then the host divided it
+  by the engine CFG's `brake_inertia` (28-75, unrelated to brakes): the Focer
+  RC braked 2.4 times harder than the SuperDuty, the heaviest car. Front
+  discs gave 51-59 % of the torque (the MC 41-44 %), which #400 hid by
+  redistributing to 70/30. Pads and rotors changed the torque by 5-15 % and
+  nothing heated.
+
+Fix:
+
+- Patched `Brake`/`DiscBrake` ([patch](../../patch/README.md#brakes-as-hardware-446)):
+  torque = 2 pad faces x pad friction (street 0.40, fast road 0.45, race
+  0.50) x 100 bar x piston area (pistons per side x piston diameter) x
+  caliper stiffness (1, 1.05, 1.10) x (rotor radius - 25 mm), times the stock
+  wear factor. The balance acts like a valve (0.5 leaves both axles their
+  torque). The 48 stock brakes are re-sized from the real cars of the
+  [#419 table](../../patch/README.md#per-car-bar-rates-419). A new native
+  `WheelRef.setBrakeSpec(pad, rotor, diameter)` sends the hardware; a wheel
+  with a spec switches the host to physical brakes: no `brake_inertia` gain,
+  no `distribute_brakes`, handbrake gain 2.
+- `src/physics/brake_system.cpp`: rotor temperature per wheel (heat = the
+  friction brakes' work, `0.5 I (w0^2 - w1^2)` of each application; cooling
+  `h = 12 + 18 v^0.8` W/m^2K over the faces, plus 1.8 faces of vanes, plus
+  radiation; capacity from the ring's equivalent thickness, iron or
+  carbon-ceramic), pad friction curves against temperature (street works
+  from cold and fades past about 400 deg C, race is weak cold and holds to
+  650, carbon rotors move the fade up).
+- Without ABS, a rear proportioning valve (full pressure to 30 % pedal, then
+  0.3 of the rise), so the fronts lock first.
+- ABS (`AbsModulator`): per-wheel follow/dump/hold/rebuild against a
+  reference speed (`ReferenceSpeed`: the accelerometer, saturated at 1.5 g,
+  integrated between the wheels; braking pulls it to the fastest wheel, a
+  0.4 s stall without any wheel spinning up resets it), dump at 16 % slip
+  (26 % at the lowest slider setting) or on a hard wheel deceleration, rear
+  channels at 0.7 of that (electronic distribution, which replaces the
+  valve), select-low rear axle, a front yaw-moment build-up delay of 0.8 s,
+  off below 2 m/s.
+- ASR (`TractionControl`): engine torque cut on the driven axles' mean slip
+  past 8 % or 0.8 m/s (20 % or 2 m/s at the lowest setting), PI with a fast
+  cut and a 0.12 s recovery, in any gear and at any speed, plus brake
+  pressure on a single spinning driven wheel below 80 km/h. It replaces the
+  launch control.
+- Debug overlay (Vehicle tab): ABS/ASR state, reference speed, rotor
+  temperature and caliper pressure per wheel. Physics Lab: `--abs`, `--asr`,
+  `--respec` (the re-specced CoupeSport brakes) and the `fade` and
+  `split_mu` scenarios.
+
+Validation:
+
+- Compilation: `slrr_host` and `physics_lab` Release. The stock `Brake`,
+  `DiscBrake`, `DrumBrake`, `Wheel` and 48 brake classes recompile from
+  `sources/` byte for byte (header bytes 9-11 aside), and the #424
+  `WheelRef.java` rebuilds its class; then the patched sources compile in
+  `build/brake-compile-root` (compile `parts/scripts` twice: `DiscBrake`
+  needs the new `Brake` fields).
+- `vehicle_dynamics` 54/54, eight of them new (ABS shorter than locked, cycles,
+  select-low and yaw delay, off at walking pace, reference speed, ASR in
+  second gear, ASR brake on one wheel, pad curves, a stop heating the
+  rotors); `abs_releases_a_locked_wheel_while_the_road_moves` now locks the
+  wheels after the car was seen rolling (an ABS cannot know a speed it never
+  measured).
+- Physics Lab, 1300 kg saloon, 1000 Hz (at 250 Hz the ABS stops are 3-4 %
+  shorter, the rest within 2 %):
+
+| | 2000 Nm, no spec | Re-specced CoupeSport |
+| --- | --- | --- |
+| 100-0, no ABS | 40.4 m, wheels locked | 49.1 m, wheels locked |
+| 100-0, ABS 100 | 39.1 m | 39.9 m (rotors 62 / 74 deg C) |
+| Ten stops 150-30, ABS | 81.0 m each | 81.9 to 82.5 m, front rotors 443 deg C |
+| Split friction 100-0, ABS, driver steering | 84.4 m, 6.4 deg | 84.1 m, 6.2 deg (without ABS: 37 deg) |
+| Power oversteer, rear slip angle | 28.8 deg; ASR 100: 7.3 deg | |
+| 0-100 km/h | 7.31 s; ASR 100: 7.46 s | |
+
+- In game (stock MWM copy with the whole patch, Baiern CoupeSport bench in
+  Valo City, temporary env-gated hooks since removed): the wheels receive
+  2409 / 1252 Nm with their specs (street pads, vented front, solid rear);
+  car mass 1524 kg. Full brake from 43 km/h: without ABS the rear pressure
+  stays at the valve's 0.51; with ABS the channels cycle between 0.03 and 1
+  and the reference speed follows the car within 1 km/h, back to the pedal
+  below 7 km/h. ASR did not intervene in the stock launch (no wheelspin).
+  Not driven by hand, not tried on the other 23 cars.
+
+Limitations: the pad curves, cooling and capacities are typical published
+shapes, not measured parts; the reference cars and some calipers are
+assumptions (no published data for the race cars and the Prime). The
+sizing assumed real-car masses; the game's CoupeSport weighs 1524 kg, not
+1400. There is no tyre heat, no pad wear from heat, no brake fluid boiling
+and no HUD lamp or pedal pulse for ABS/ASR; the Options sliders still read
+"percent". The race AI uses the patched brakes without ABS. A brake class
+that is not a `DiscBrake` (the unused `DrumBrake`, a mod's own) keeps the
+stock torque law, which a car with physical brakes takes at face value
+(about twice too strong). Unchanged and
+outside this issue: braking hard with the automatic gearbox, it shifts down
+to first at about 44 km/h with the auto clutch closed, and the engine's
+reflected inertia then pushes the rear wheels (the rear force fell from
+1.8 to 0.5 kN in the Lab).

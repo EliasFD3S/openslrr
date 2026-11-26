@@ -947,11 +947,15 @@ vibration, 29 damper; 30 is a minimum force (0-20 %) for a wheel's dead band
 and 31 a low-pass on the force (0-50 ms). `Config.FFB_strength_emulated`
 and `Controller.user_SetAxisForce`'s force coefficient are not implemented.
 
-Service brakes (#400): the host gain is 25 / `brake_inertia` (the handbrake
-50), and the chassis `brake_balance` is read as a front share
-(`include/slrr/brake_balance.hpp`): 0.5 puts 70 % of the braking on the front
-axle, an adjuster moves it from 100 % to 40 %. The total and each wheel's share
-of its axle come from the brake scripts.
+Service brakes (#400): with the stock brake scripts the host gain is 25 /
+`brake_inertia` (the handbrake 50), and the chassis `brake_balance` is read as
+a front share (`include/slrr/brake_balance.hpp`): 0.5 puts 70 % of the braking
+on the front axle, an adjuster moves it from 100 % to 40 %. The total and each
+wheel's share of its axle come from the brake scripts. With the patched
+`DiscBrake` (#446) a wheel that received `WheelRef.setBrakeSpec` makes the
+chassis use its scripted torques as real torques at full pedal, with no gain
+and no redistribution; rotor heat, pad fade, the rear valve, ABS and ASR are
+described in [driving-model.md](../vehicles/driving-model.md#brakes-abs-and-asr-446).
 
 Car instruments can come from the stock layout or from the CFG. `HudSlot`
 covers, among other things, gauges, needles, odometer, damage, nitro, and

@@ -41,6 +41,7 @@ target_compile_options(compile_game_sources PRIVATE /utf-8)
 # Physics Lab (#380): offline vehicle-solver bench, any solver rate.
 add_executable(physics_lab tools/physics_lab.cpp
   src/physics/vehicle_dynamics.cpp src/physics/tire_model.cpp src/physics/steering_feedback.cpp
+  src/physics/brake_system.cpp
   src/physics/suspension_geometry.cpp src/physics/dyno_model.cpp)
 target_include_directories(physics_lab PRIVATE include)
 target_compile_options(physics_lab PRIVATE /utf-8)
@@ -126,6 +127,7 @@ add_executable(slrr_host
   src/physics/steering_feedback.cpp
   src/physics/dyno_model.cpp
   src/physics/vehicle_dynamics.cpp
+  src/physics/brake_system.cpp
   src/physics/vehicle_contacts.cpp
   src/physics/scene_collision.cpp
   src/physics/deformation_cage.cpp

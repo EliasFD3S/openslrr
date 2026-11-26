@@ -51,4 +51,9 @@ public class WheelRef extends Native
 	// OpenSLRR: lateral relaxation length of the tyre in metres (Tyre.SetInflation).
 	public native void setRelaxation( float val );
 
+	// OpenSLRR (#446): brake hardware for the rotor temperature and pad fade:
+	// pad compound (0 street, 1 fast road, 2 race), rotor type (0 solid,
+	// 1 grooved, 2 vented, 3 carbon) and rotor diameter in metres.
+	public native void setBrakeSpec( float pad, float rotor, float diameter );
+
 }

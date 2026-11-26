@@ -1,6 +1,6 @@
 # OpenSLRR Enhanced
 
-Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes, the re-specced stock engine parts (#411), `SuperCharger` and `Pulley` (#415) and the four fuel classes: `AirFuelDeliverySystem`, `FuelInjectorSystem`, `DynoData` and the SL Tuners methanol fuel rail, and the 48 stock anti-roll bars (#419)), 24 racer classes, the 24 racer chassis CFGs (`_main_*.cfg`) and the part CFGs that now carry a mass (tyres, running gear, accessories, exhausts, mufflers, seats, steering wheels, wings). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. The fuel classes add fuel heat, ethanol blends and knock; install them together. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
+Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes, the re-specced stock engine parts (#411), `SuperCharger` and `Pulley` (#415) and the four fuel classes: `AirFuelDeliverySystem`, `FuelInjectorSystem`, `DynoData` and the SL Tuners methanol fuel rail, the 48 stock anti-roll bars (#419), and `Brake`, `DiscBrake` and the 48 stock brakes (#446)), 24 racer classes, the 24 racer chassis CFGs (`_main_*.cfg`) and the part CFGs that now carry a mass (tyres, running gear, accessories, exhausts, mufflers, seats, steering wheels, wings). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. The fuel classes add fuel heat, ethanol blends and knock; install them together. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
 
 **Options** (main menu and in-game menu) opens a full-screen screen built on `java.render.osdx` ([docs/ui/osd-v2.md](../docs/ui/osd-v2.md)): Video, Graphics, Sound, Controls (live axis meters, gamma, dead zones, steering speed sensitivity, force feedback), Devices (connected controllers, battery, rumble test, axis calibration) and Game tabs, an info panel that explains the setting under the pointer, and a notification when a preset is applied. Key redefinition, axes and the control files open the classic pages. The classic pages below are still in `OptionsDialog`. The **Video Options** menu applies the resolution and the Enhanced settings in game. A **Preset** choice (Low, Medium, High, Ultra) sets them all at once; changing one setting afterwards shows Custom. **Advanced** opens a second page: VSync, prop detail, fog, car lights, headlight shadows, street lamps, view distance (500–3,000 m, 3 km by default) and the number of street lamps that cast shadows. **Advanced Game Options** has the pedestrian density slider again (0.5–1.5; an old saved value below 0.5 returns to 1.5). The scenery shadow map and the vehicle shadow map each use a resolution of 2048 × 2048. **Ctrl+F12 → Renderer** also sets how many reflection faces are computed per frame.
 
@@ -130,11 +130,71 @@ Cars already bought keep their chassis object but read the new CFG masses when
 they load. Details in
 [docs/vehicles/notes.md](../docs/vehicles/notes.md#weight-distribution-and-centre-of-gravity-430).
 
+## Brakes as hardware (#446)
+
+Copy `parts`: the patched `Brake.class`, `DiscBrake.class`,
+`WheelRef.class` and the 48 brakes in `parts/running_gear/scripts/brakes`
+(sources in `src/`). Install them together: `DiscBrake` uses the new `Brake`
+fields and `Brake` calls the new `WheelRef.setBrakeSpec`.
+
+A disc brake's torque now comes from its hardware: 2 pad faces x the pad
+friction (street "conventional" 0.40, "SL Tuners Green" 0.45, "SL Tuners
+Black" 0.50) x 100 bar at full pedal x the piston area of one side of the
+caliper x the caliper's stiffness (street 1, SL Tuners Street 1.05, Race
+1.10) x the radius of the pad's centre (25 mm inside the rotor's edge), times
+the stock wear factor. A new `piston_mm` field gives the piston size (0 keeps
+54, 40 or 34 mm for 1, 2 or 3 pistons per side, which mod brakes such as
+MW-Tunners get). The brake balance acts like a valve: 0.5 leaves both axles
+their torque, an adjuster moved away cuts one of them. The host then heats
+each rotor and fades its pads: street pads work from cold and fade past
+about 400 deg C, race pads are weak cold and hold to about 650, vented and
+carbon rotors store and shed more heat, and carbon moves the fade up.
+
+The stock brakes are re-sized from the real cars of the [anti-roll bar
+table](#per-car-bar-rates-419), so the fronts lock first, at about 60-75 % of
+the pedal on street cars and 45-55 % on race cars with warm pads (about a
+tenth more pedal with cold ones). Race pads are kept for the
+race versions only. The part names now carry the new disc size, and the
+descriptions the piston size and torque.
+
+| Brakes | Real car | Front: disc, pistons per side, pads | Nm | Rear | Nm | Stock script Nm F / R |
+| --- | --- | --- | --- | --- | --- | --- |
+| Baiern CS | E36 325i | 286 vented, 1x57 mm, street | 2409 | 276 solid, 1x42 mm, street | 1252 | 3718 / 2928 |
+| Baiern DS | E36 M3 | 315 vented, 1x54 mm, fast road | 2731 | 312 vented, 1x38 mm, fast road | 1337 | 5221 / 3978 |
+| Baiern GT | E36 M3 GT race | 355 carbon, 3x34 mm, race | 4361 | 330 carbon, 1x36 mm, race | 1496 | 4822 / 4276 |
+| SunStrip 15 | del Sol S | 242 vented, 1x54 mm, street | 1759 | 239 solid, 1x30 mm, street | 534 | 3356 / 2945 |
+| SunStrip 18 | del Sol Si | 262 vented, 1x54 mm, fast road | 2185 | 239 solid, 1x28 mm, fast road | 524 | 3493 / 3219 |
+| SunStrip 22 | del Sol VTi | 262 vented, 1x54 mm, fast road | 2185 | 260 solid, 1x28 mm, fast road | 582 | 3659 / 3493 |
+| SunStrip 20 | race del Sol | 282 carbon, 2x42 mm, race | 3214 | 239 carbon, 1x26 mm, race | 502 | 4125 / 3525 |
+| Einvagen GT | Golf III 1.8 | 256 vented, 1x54 mm, street | 1887 | 226 solid, 1x30 mm, street | 498 | 3168 / 2919 |
+| Einvagen GTK | Golf III GTI 16V | 280 vented, 1x54 mm, fast road | 2370 | 232 solid, 1x30 mm, fast road | 579 | 3493 / 3219 |
+| Einvagen GTA | Golf III VR6 | 288 vented, 1x57 mm, fast road | 2870 | 232 solid, 1x32 mm, fast road | 692 | 4403 / 3178 |
+| Ishima WRY | Impreza GC8 2.0 | 260 vented, 1x57 mm, street | 2143 | 266 solid, 1x34 mm, street | 784 | 3416 / 3168 |
+| Ishima WRZ | Impreza WRX | 277 vented, 1x57 mm, fast road | 2607 | 266 vented, 1x34 mm, fast road | 882 | 3946 / 3659 |
+| Ishima WRS | Impreza STi | 294 carbon, 2x42 mm, fast road | 3195 | 290 carbon, 1x32 mm, fast road | 912 | 4822 / 4276 |
+| Focer 200 | Evo VI RS | 294 vented, 1x54 mm, fast road | 2515 | 284 solid, 1x30 mm, fast road | 744 | 3895 / 3485 |
+| Focer 300 | Evo VI GSR | 320 vented, 2x42 mm, fast road | 3367 | 300 vented, 1x30 mm, fast road | 795 | 5111 / 4355 |
+| Focer WRC | Evo WRC tarmac | 355 vented, 3x36 mm, race | 4890 | 300 vented, 1x28 mm, race | 808 | 5503 / 4735 |
+| MC GT | Camaro Z28 | 302 vented, 1x54 mm, fast road | 2727 | 305 vented, 1x36 mm, fast road | 1226 | 4070 / 5233 |
+| MC GTB | Camaro Z28 SS | 330 vented, 2x40 mm, fast road | 3325 | 305 vented, 1x38 mm, fast road | 1366 | 4237 / 5566 |
+| MC GTLE | Camaro SS | 345 vented, 3x34 mm, fast road | 3797 | 330 vented, 1x38 mm, fast road | 1500 | 4569 / 6541 |
+| Nonus SGT | R34 GT-R | 324 vented, 2x42 mm, fast road | 3417 | 300 vented, 1x40 mm, fast road | 1414 | 4483 / 3718 |
+| Nonus GT2 | R34 race | 355 carbon, 3x36 mm, race | 5122 | 330 carbon, 1x34 mm, race | 1398 | 4725 / 4275 |
+| Prime | none (V8 coupe) | 330 vented, 2x40 mm, fast road | 3325 | 310 vented, 1x46 mm, street | 1815 | 5233 / 3700 |
+| SuperDuty 500 | Ram 1500 | 330 vented, 1x68 mm, street | 4067 | 330 solid, 1x44 mm, street | 1703 | 5734 / 5298 |
+| SuperDuty 750 | Ram 2500 | 345 vented, 1x72 mm, fast road | 5405 | 350 vented, 1x48 mm, fast road | 2443 | 6545 / 4714 |
+
+Cars already bought keep their brake objects, which take the new values
+when they load. Without these classes the host keeps the stock torques (#400)
+and no heat. Details in
+[docs/vehicles/notes.md](../docs/vehicles/notes.md#brakes-as-hardware-abs-and-asr-446).
+
 ## Java natives
 
 | Class and signature | Behavior |
 | --- | --- |
 | `java.game.parts.WheelRef.setRelaxation(F)V` | Sets the tyre's lateral relaxation length in metres (clamped to 0.05–2; 0.3 by default). |
+| `java.game.parts.WheelRef.setBrakeSpec(FFF)V` | Brake hardware: pad compound (0 street, 1 fast road, 2 race), rotor type (0 solid, 1 grooved, 2 vented, 3 carbon) and rotor diameter in metres (clamped to 0.15–0.5). A positive diameter makes the car's brakes physical (#446). |
 | `java.game.OptionsDialog.getRendererOption(I)I` | Reads the active value for the requested identifier. An unknown identifier returns 0. |
 | `java.game.OptionsDialog.setRendererOption(II)V` | Applies the value to the session. Unknown identifiers are ignored. |
 
