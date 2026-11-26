@@ -639,17 +639,14 @@ void LibBgfxBackend::draw_vehicle_hud(const VehicleHudState& hud) {
                           std::span(hud.parts.data(), std::min(hud.part_count, hud.parts.size())),
                           outline, stock_fenders);
         const float scale_x = sy * pixel_aspect;
-        // The outline stands for the whole car; keep it neutral.
+        // The outline is the chassis: green when intact, like every blip.
         draw(*mesh, size_t('A') * 4, 4, quad, 6, x, y, scale_x, sy, 0, p[0], p[1],
-             0xffc8c8c8u);
+             hud_damage_color(hud.chassis_condition));
         for (size_t b = 0; b < blip_count; ++b) {
           const Blip &blip = blips[b];
           if (!blip.present) continue;
-          const float condition = std::clamp(blip.condition, 0.f, 1.f);
-          const auto red = static_cast<uint32_t>(255.f * std::min(1.f, 2.f * (1.f - condition)));
-          const auto green = static_cast<uint32_t>(255.f * std::min(1.f, 2.f * condition));
           draw(*mesh, size_t(blip.glyph) * 4, 4, quad, 6, x, y, scale_x, sy, 0, p[0], p[1],
-               0xff000000u | (red << 16) | (green << 8), false, false,
+               hud_damage_color(blip.condition), false, false,
                stock_fenders && blip.glyph == 'q' ? left_fender_uv.data() : nullptr);
         }
       } else {

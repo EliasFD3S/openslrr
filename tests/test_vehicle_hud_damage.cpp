@@ -38,6 +38,13 @@ ScxGeometry stock_uv_mesh() {
   return mesh;
 }
 
+SLRR_TEST(damage_color_is_green_when_intact_and_red_when_destroyed) {
+  SLRR_REQUIRE(hud_damage_color(1.f) == 0xff00ff00u);
+  SLRR_REQUIRE(hud_damage_color(0.f) == 0xffff0000u);
+  SLRR_REQUIRE(hud_damage_color(.5f) == 0xffffff00u);
+  SLRR_REQUIRE(hud_damage_color(std::nanf("")) == 0xff00ff00u);
+}
+
 SLRR_TEST(fender_uses_its_own_condition_not_nearby_accessory) {
   auto b = blips();
   const auto fender = panel(-.7f, -.6f, .8f);
@@ -160,6 +167,7 @@ SLRR_TEST(only_font_render_flags_spell_a_readout) {
 
 int main(int argc, char** argv) {
   const slrr::standalone::Test tests[] = {
+      damage_color_is_green_when_intact_and_red_when_destroyed,
       fender_uses_its_own_condition_not_nearby_accessory,
       absent_fender_is_not_resurrected_by_accessories,
       four_quarterpanels_have_independent_regions,

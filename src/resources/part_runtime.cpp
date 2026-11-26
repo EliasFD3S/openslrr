@@ -8068,6 +8068,7 @@ PartMatrix hud_installed_frame(const Record& parent, int slot_id, Object* part) 
 // Wheels keep their corner from the chassis slot (type 101 + corner).
 void hud_damage_parts(const Record &rec, VehicleHudState &state) {
   state.part_count = 0;
+  state.chassis_condition = std::clamp(rec.state.wear * rec.state.tear, 0.f, 1.f);
   struct Placed {
     VehicleHudPart part;
     float x, z;

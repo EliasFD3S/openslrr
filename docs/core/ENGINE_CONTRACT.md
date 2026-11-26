@@ -967,8 +967,9 @@ about its own posed Z axis by `value * factor + offset` limited to
 (`src/resources/part_runtime.cpp:pose_cockpit_needles`).
 
 The damage gauge is a map of the car, not one colour. The stock font holds
-a neutral car outline and one blip per region in one coordinate system,
-front up. Each blip shows the worst condition (stock `wear × tear`) of the
+a car outline and one blip per region in one coordinate system,
+front up. The outline stands for the chassis and takes the chassis's own
+`wear × tear` colour, so an intact car shows it green. Each blip shows the worst condition (stock `wear × tear`) of the
 installed parts it covers and is not drawn when no such part is installed:
 engine parts (category 1) light the drivetrain blips, body panels
 (category 2) the body blips, and parts on a corner's wheel slot (type 101 +
