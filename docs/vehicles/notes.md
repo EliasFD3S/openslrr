@@ -1892,8 +1892,10 @@ little drops instead of an irregular shape):
     puff (0.32/m body, 1.15/m detail), drifting slowly up. Neighbouring puffs
     share the field and read as one irregular volume.
   - The same field eats each puff's outline (no round rim).
-  - The density is squared, so thin wisps stay thin.
-  - Grey is lifted 40 % toward white.
+  - Elias kept the first world-noise shape and asked for it less
+    opaque. The squared density of a second try left almost no smoke in
+    his 250 °C burnout. Each puff's alpha is × 0.4 (from 0.7), and grey is
+    lifted 60 % toward white.
 - Smoke shadow: each puff keeps 20 % of the sun (from 40 %), and a texel
   lets at least 60 % through; the first try left near-black patches on the
   road.

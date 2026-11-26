@@ -149,11 +149,9 @@ void main() {
 		float body = fbm3(q) * 0.94;
 		float detail = fbm2(inside * 1.15 + drift * 2.0 + vec3(5.2, 1.3, 7.7)) * 0.94;
 		// The puff's outline is eaten by the same field: no round rim.
-		float edge = 1.0 - smoothstep(0.25, 1.0, r2 + (0.55 - body) * 1.1 + (0.5 - detail) * 0.35);
-		float shape = z * 1.1 - (1.0 - body) * 1.5 - (1.0 - detail) * 0.45 + 0.2;
-		// Squared: thin wisps stay thin, cores fill in.
-		float density = saturate(shape);
-		density = density * density * edge;
+		float edge = 1.0 - smoothstep(0.35, 1.0, r2 + (0.55 - body) * 0.9 + (0.5 - detail) * 0.25);
+		float shape = z * 1.2 - (1.0 - body) * 1.1 - (1.0 - detail) * 0.3 + 0.35;
+		float density = saturate(shape) * edge;
 		// The authored puff (the cfg's texture) still shapes the cloud.
 		vec4 tex = texture2D(s_texColor, c * 0.5 + 0.5);
 		density *= mix(1.0, tex.a, 0.3);
@@ -163,7 +161,7 @@ void main() {
 		vec3 tinted = v_color0.rgb * mix(vec3(1.0, 1.0, 1.0), tex.rgb, 0.25);
 		float hi = max(tinted.r, max(tinted.g, tinted.b));
 		float saturation = (hi - min(tinted.r, min(tinted.g, tinted.b))) / max(hi, 1e-3);
-		vec3 albedo = mix(tinted, vec3(0.9, 0.9, 0.9), 0.4 * (1.0 - saturate(saturation * 4.0)));
+		vec3 albedo = mix(tinted, vec3(0.93, 0.93, 0.93), 0.6 * (1.0 - saturate(saturation * 4.0)));
 
 		// Light reaching this pixel crosses the puff from the sun side: an
 		// optical depth growing from the lit face to the far face.
@@ -190,7 +188,8 @@ void main() {
 		vec3 limit = (sunLight + sky) * 0.95;
 		// Lamps scatter through the whole puff, thin edges as much as the core.
 		colour = albedo * (min(light, limit) + lamps * (0.55 + 0.45 * z));
-		alpha = density * v_color0.a * 0.7;
+		// Light per puff: dozens overlap in a cloud.
+		alpha = density * v_color0.a * 0.4;
 		// No hard line where the puff meets the road.
 		alpha *= saturate(groundHeight / (radius * 0.45 + 0.05));
 	}
