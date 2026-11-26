@@ -376,6 +376,56 @@ Limitations: the classic Options screen still shows only slots 0-9 and
 (they still work). The stock game reads the file but drops the pad and wheel
 slots. Gamma and dead zone stay shared by every class.
 
+## Live input, analog handbrake, transmission and clutch, framerate option
+
+Requests: make the handbrake an axis; show the transmission and the clutch
+as two choices; remove FRAMERATE (useless since the 1000 Hz physics); a
+player saw no LIVE INPUT meters with his device until he rebound a key, while
+a pad worked and driving was fine.
+
+LIVE INPUT cause: the meters read `Input.getInput`, the player's controller.
+`Dialog.show` resets that controller to the menu group alone
+(`ControlSet.MENUSET`), and the car controls are group 1 (`DRIVERSET`),
+activated only by the garage and the track. So in Options no keyboard or
+wheel car binding existed on the controller; only the pad's built-in
+fallback (`input_mapping::pad_fallback`: steer, throttle, brake, handbrake)
+moved the meters. A rebind calls `setcontrol(cs)`, which adds every group,
+hence "fixed after a remap". Fix: `OsdxOptions.buildControls` calls
+`setcontrol` with the loaded set, as a rebind does; `OptionsDialog`'s
+`Dialog.hide` restores the previous groups.
+
+Handbrake: `HostInput::drive_handbrake` is a 0..1 float (was `axis > .5`);
+`drive.handbrake` is `0.3 x pull` (a key still gives the old 0.3), the slide
+correction stops past 5 % pull, the HUD lamp lights past 5 %. A lever bound
+through CAR CONTROLS already maps as an analog half axis
+(`InputDevices.applyCapture`). LIVE INPUT shows it; RESPONSE has a HANDBRAKE
+DEAD ZONE (no gamma: the handbrake has no smoothing entry, and the stock
+`vasp` order is fixed). The dead zone handler wrote only the keyboard slots
+(`c`, `c + 15`), so since #405 pad and wheel bindings ignored every dead zone
+slider; it now writes all six slots of the control (`ControlSet.carSlot`),
+and the steering one both halves.
+
+Transmission: still one `Config.player_transmission` (0 manual, 1 auto,
+2 manual + clutch pedal, 5 semi-auto; `read_options` accepts only these), so
+the GAME page shows TRANSMISSION (AUTO, SEMI-AUTO, MANUAL) and CLUTCH (AUTO,
+MANUAL) and `OsdxOptions.setTransmission` combines them. A manual clutch
+exists only with the manual gearbox: choosing it moves the gearbox to MANUAL,
+another gearbox shows the clutch as AUTO and remembers the choice for the
+session.
+
+Framerate: removed from both Options screens; the host always blends car
+poses (see [physics-tick.md §2](../vehicles/physics-tick.md)).
+
+Validation: Release build; `options_retry`, `pad_fallback`, `menu_debounce`
+pass. `OptionsDialog` and `OsdxOptions` compiled with `compile_game_sources`
+in a copy of the game root (HEAD's sources first rebuilt both shipped classes
+byte for byte). Not run in game; the LIVE INPUT fix is not checked with a
+wheel or keyboard yet.
+
+Limitations: while Options are open every group is on the controller, as
+after any rebind (look keys included). The classic OptionsDialog screen keeps
+its combined TRANSMISSION list. No handbrake gamma.
+
 ## Pointer gestures and race cameras: review notes on PR #308 (#295-#299)
 
 Verified on the PR branch (f422ebb), by reading the code; not run in game.

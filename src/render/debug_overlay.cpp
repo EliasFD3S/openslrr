@@ -783,8 +783,8 @@ void draw_input() {
               kinds[static_cast<int>(input.drive_steer_kind) + 1]);
   ImGui::Text("Throttle %.3f | Brake %.3f | Clutch %.3f",
               input.drive_throttle, input.drive_brake, input.drive_clutch);
-  ImGui::Text("Handbrake %s | Reverse %s | Shift %+.2f",
-              input.drive_handbrake ? "on" : "off",
+  ImGui::Text("Handbrake %.3f | Reverse %s | Shift %+.2f",
+              input.drive_handbrake,
               input.drive_reverse ? "on" : "off", input.drive_shift);
 }
 }  // namespace

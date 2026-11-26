@@ -58,12 +58,6 @@ bool host_save_graphics_options();
 // clamps to the option's range, applies it and saves when it changed.
 bool host_option_get(int id, int& value);
 bool host_option_set(int id, int value);
-// Options -> Advanced Game Options -> Framerate Adaptive Behaviour.
-// Classic draws cars at their last 60 Hz physics tick, as before. Adaptive
-// draws them between ticks. Saved in save/game/openslrr_options.
-enum class FramerateMode { Classic = 0, Adaptive = 1 };
-FramerateMode host_framerate_mode();
-void host_set_framerate_mode(FramerateMode mode);
 struct VideoMode {
   int width = 800, height = 600, depth = 32;
   bool windowed = true;

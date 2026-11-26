@@ -145,7 +145,7 @@ they load. Details in
 | 2 | Volumetric clouds | 0 off, any non-zero value on |
 | 3 | Scenery sunlight | 0 off, any non-zero value on |
 | 4 | Local lights | 0 off, any non-zero value on |
-| 5 | Framerate adaptive behaviour | 0 Classic (60 Hz), any non-zero value Adaptive |
+| 5 | Removed (was Framerate adaptive behaviour) | Unknown id: reads 0, writes are ignored |
 | 6 | Anisotropic filtering | 0 off, non-zero on |
 | 7 | Ambient occlusion | 0 off (default), 1 HBAO, 2 GTAO |
 | 8 | AO quality | 0 low, 1 medium (default), 2 high |
@@ -171,14 +171,17 @@ resolution; high takes more samples per pixel. AO is off by default to preserve 
 Higher shadow quality increases depth resolution and memory; smoothing changes
 comparison filtering independently. Start with medium quality and soft edges.
 
-## Framerate adaptive behaviour
+## Framerate
 
-**Advanced Game Options → Framerate Adaptive Behaviour** selects how cars are drawn between the game's fixed 60 Hz physics steps:
+Cars are always drawn between their last two 60 Hz host steps, so they move smoothly at any frame rate; the drawn car is up to one step (16.7 ms) behind the simulation. The **Framerate Adaptive Behaviour** option and its Classic (60 Hz) mode are gone. An old `framerate_mode` key in `save/game/openslrr_options.json` is ignored.
 
-- **Classic (60 Hz)** draws each car at its last physics step, as before. When the frame rate is not exactly 60 FPS, car motion and turns appear stepped.
-- **Adaptive**, the default, draws each car between its last two physics steps, so it moves smoothly at any frame rate. The drawn car is up to one physics step (16.7 ms) behind the simulation.
+## Transmission and clutch
 
-The physics is the same in both modes. The choice is saved in `save/game/openslrr_options.json`.
+**Options → Game** shows the gearbox and the clutch as two choices: **Transmission** (Auto, Semi-auto, Manual) and **Clutch** (Auto, Manual). They are saved together in the stock `Config.player_transmission`, which has no automatic gearbox with a pedal clutch: choosing a manual clutch moves the gearbox to Manual, and another gearbox shows the clutch as Auto until Manual comes back.
+
+## Handbrake
+
+The handbrake is analog: bound to an axis (a handbrake lever, a pedal), it brakes in proportion to its travel, up to the force a key gives. **Options → Controls** shows it in **Live input** and has a **Handbrake dead zone**. The dead zone sliders now apply to the keyboard, pad and wheel bindings of their control (#405 added the pad and wheel slots, which they missed), and the steering one to both steering halves.
 
 ## Pedestrians
 

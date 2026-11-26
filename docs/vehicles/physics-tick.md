@@ -186,7 +186,7 @@ Not done in this phase:
 | --- | --- | --- |
 | Clock decoupling | Fixed 60 Hz host ticks and 120 Hz shared-world substeps now run on a physics thread, in one batch per frame, while the host draws the frame; the host prepares and publishes each batch. Catch-up is bounded, not independent of wall-clock stalls. | The batch overlaps only the frame's drawing, not scripts. A 1000 Hz constant alone loses 4% of simulation time in the current caller. |
 | CPU cost | Compare 120 and 960 Hz in the same Valo City drive below; the new `interpolation_ms` subzone measures actual pose publication. | Pose-reader/scene-cache overhead is not isolated. |
-| Adaptive setting | Only selects render interpolation; it never selects a physics clock. References listed below. | Removing Classic is a separate UI/compatibility decision. |
+| Adaptive setting | Only selected render interpolation; it never selected a physics clock. Classic and the option were removed (§2). | None. |
 | Throttle | A spike-only digital/analog shaping, plate/airflow, hysteresis and latched-BOV prototype runs inside the actual solver's high-frequency test loop, retaining the existing crank/idle/clutch. | It is not enabled in production controls; stock TUFA lacks the named telemetry declarations, and boost fraction is not absolute manifold pressure. |
 | Torque/power | Corrected cycle work to SI net crank torque, derived sampled watts from torque × ω, selected net torque peaks and removed the runtime ×2 gain/duplicate WOT loss. | Stock outputs change with owner authorization. Thermochemistry, friction and stock-car calibration remain empirical. |
 | Port flow | Replaced squared lift-volume normalization with capped valve-curtain area × reference exchange speed × 1 ms / swept volume, shared by Inline and both Vee banks. Compiled script patch is included. | This is a declared nominal-flow normalization, not a full compressible valve solver or measured stock calibration. |
@@ -342,10 +342,10 @@ falls; GPU/load noise and rate-dependent trajectories prevent interpreting this
 as a controlled isolated interpolation or terrain-query measurement. These data
 do not justify raising the shipped default.
 
-## 2. `FRAMERATE ADAPTIVE BEHAVIOUR`
+## 2. `FRAMERATE ADAPTIVE BEHAVIOUR` (removed)
 
-The setting is in the OpenSLRR patch, not either reference MWM/vanilla
-OptionsDialog source. References:
+The setting was in the OpenSLRR patch, not either reference MWM/vanilla
+OptionsDialog source. References, as they were before the removal:
 
 | Source | Role |
 | --- | --- |
@@ -359,11 +359,15 @@ OptionsDialog source. References:
 | [test_vehicle_contacts_runtime.cpp](../../tests/test_vehicle_contacts_runtime.cpp) | Adaptive setup/restore and passive-car wake interpolation |
 | [Engine contract](../core/ENGINE_CONTRACT.md), [knowledge base](../core/KNOWLEDGE_BASE.md) | Physics/options documentation |
 
-Both modes use identical physics. Even with 960 Hz substeps, Classic draws at
-60 Hz host-pose cadence. Removal would require recompiling/distributing the
-OptionsDialog patch, always blending, ignoring the old persisted key, and updating
-tests/docs. Preserve option 5 returning Adaptive (1) for older patched callers;
-dropping its getter case would report Classic (0). No removal is made here.
+Both modes used identical physics. Even with 960 Hz substeps, Classic drew at
+60 Hz host-pose cadence.
+
+**Removed.** The option is gone from both Options screens (the patched
+OptionsDialog and OsdxOptions classes are recompiled in the patch),
+`publish_render_poses` always blends, `FramerateMode` and its accessors are
+deleted, and an old persisted `framerate_mode` key is ignored. Renderer option
+5 is now an unknown id: `getRendererOption(5)` reads 0. No shipped caller reads
+it any more; the patch and the host ship together.
 
 ## 3. Throttle integration boundary
 
