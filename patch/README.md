@@ -1,6 +1,6 @@
 # OpenSLRR Enhanced
 
-Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes, the re-specced stock engine parts (#411), `SuperCharger` and `Pulley` (#415) and the four fuel classes: `AirFuelDeliverySystem`, `FuelInjectorSystem`, `DynoData` and the SL Tuners methanol fuel rail, the 48 stock anti-roll bars (#419), and `Brake`, `DiscBrake` and the 48 stock brakes (#446)), 24 racer classes, the 24 racer chassis CFGs (`_main_*.cfg`) and the part CFGs that now carry a mass (tyres, running gear, accessories, exhausts, mufflers, seats, steering wheels, wings). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. The fuel classes add fuel heat, ethanol blends and knock; install them together. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
+Copy the `sl`, `system`, `parts` and `cars` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, the `parts` classes (the base `Swaybar.class`, the three port-flow classes, the re-specced stock engine parts (#411), `SuperCharger` and `Pulley` (#415) and the four fuel classes: `AirFuelDeliverySystem`, `FuelInjectorSystem`, `DynoData` and the SL Tuners methanol fuel rail, the 48 stock anti-roll bars (#419), and `Brake`, `DiscBrake` and the 48 stock brakes (#446), the 96 stock suspension corners (#450)), `system/Scripts/lang/Math.class` (#450), 24 racer classes, the 24 racer chassis CFGs (`_main_*.cfg`) and the part CFGs that now carry a mass (tyres, running gear, accessories, exhausts, mufflers, seats, steering wheels, wings). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. The fuel classes add fuel heat, ethanol blends and knock; install them together. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
 
 **Options** (main menu and in-game menu) opens a full-screen screen built on `java.render.osdx` ([docs/ui/osd-v2.md](../docs/ui/osd-v2.md)): Video, Graphics, Sound, Controls (live axis meters, gamma, dead zones, steering speed sensitivity, force feedback), Devices (connected controllers, battery, rumble test, axis calibration) and Game tabs, an info panel that explains the setting under the pointer, and a notification when a preset is applied. Key redefinition, axes and the control files open the classic pages. The classic pages below are still in `OptionsDialog`. The **Video Options** menu applies the resolution and the Enhanced settings in game. A **Preset** choice (Low, Medium, High, Ultra) sets them all at once; changing one setting afterwards shows Custom. **Advanced** opens a second page: VSync, prop detail, fog, car lights, headlight shadows, street lamps, view distance (500–3,000 m, 3 km by default) and the number of street lamps that cast shadows. **Advanced Game Options** has the pedestrian density slider again (0.5–1.5; an old saved value below 0.5 returns to 1.5). The scenery shadow map and the vehicle shadow map each use a resolution of 2048 × 2048. **Ctrl+F12 → Renderer** also sets how many reflection faces are computed per frame.
 
@@ -196,10 +196,74 @@ warmed. **Options → Game → TEMPERATURES** (on by default, `OptionsDialog` an
 The HUD lights its stock ABS and ASR lamps while they work. Details in
 [docs/vehicles/notes.md](../docs/vehicles/notes.md#brakes-as-hardware-abs-and-asr-446).
 
+## Tyres and suspension geometry (#450)
+
+Copy `parts` and `system`: the 96 stock suspension classes in
+`parts/running_gear/scripts/{FL,FR,RL,RR}_susp`, the patched `Tyre.class`
+and `system/Scripts/lang/Math.class` (sources in `src/`). Install them
+together: `Tyre` calls the new `Math.pow`, which the host provides
+(as in SLRR 2.3.1).
+
+**Suspension.** Every stock car had the Baiern's geometry: a strut whose
+lower arm sat past horizontal at the ride height (the wheel gained positive
+camber in bump), a semi-trailing arm swept 50 degrees at the rear (-2.9 deg
+of camber per 25 mm, static camber from +2.1 to -6.0 deg depending on the
+ride height) and 1 to 2.5 deg of toe-in per rear wheel. Each corner is now
+laid out at the car's static ride height (from its spring and the #430
+weights) after the real car:
+
+- Fronts keep the strut fit: the lower arm is near horizontal at rest, the
+  strut top sits 0.58 m up the kingpin axis, and the hub is tilted to the
+  static camber (the host ignores `setYpr` in strut mode). Double-wishbone
+  and multilink fronts use the same fit with their steeper camber gain.
+- Independent rears are a front-view swing arm (arm length = 1 / camber
+  gain) with the factory camber and toe in `setYpr`.
+- Live rear axles (MC, SuperDuty) have no arm: the wheels stay square to the
+  axle, so camber follows the body in roll.
+
+| Cars | Real car | Front camber, gain /25 mm | Rear camber, toe-in, gain /25 mm |
+| --- | --- | --- | --- |
+| Baiern CS / DS / GT III | E36 325i / M3 / race | -0.5 / -0.9 / -3.0, -0.4 | -1.8 / -1.6 / -2.0, 0.15 / 0.15 / 0.10, -0.9 |
+| SunStrip 1.5 / 1.8 / 2.2 / Racing | del Sol / race | 0 (race -2.5), -0.6 | -0.7 (race -1.5), 0.10, -0.7 |
+| Einvagen 110 GT / GTK / 140 GTA | Golf III (torsion beam) | -0.5, -0.4 | -1.5, 0.17, -0.2 |
+| Enula WRY / WRZ / WRS | Impreza GC8 | -0.3 / -0.3 / -0.5, -0.4 | -1.0 / -1.0 / -1.2, 0.10, -0.4 |
+| Focer RC 200 / 300 / WRC | Lancer Evo VI / WRC | -0.3 (WRC -2.0), -0.4 | -1.3 (WRC -1.5), 0.10, -0.7 |
+| MC GT / GTB / GTLE | Camaro Z28 / SS | 0, -0.6 | live axle: 0, 0 |
+| Nonus Street GT / GT II | R34 GT-R / JGTC | -1.1 / -3.0, -0.6 | -1.5 / -2.0, 0.10, -0.7 |
+| Prime DLH 500 | none | -1.0, -0.6 | -1.5, 0.10, -0.7 |
+| SuperDuty 500 / 750 | Ram 1500 / 2500 | +0.3, -0.5 | live axle: 0, 0 |
+
+**Tyres.** The friction was the compound times 0.5 + 0.5 x width / 275, so
+width alone added 32 % between a 195 and a 345; low-profile tyres sat at the
+stiffness clamp of 40; rolling resistance was 0.004. Now:
+
+- peak friction per compound, warm, at the nominal load: street 1.00, sport
+  1.10, soft racing 1.30, drag radial 1.05 sideways and 1.42 lengthwise;
+- nominal load 4000 N x width / 205 mm (x pressure^0.25): a wider tyre loses
+  less grip to load sensitivity instead of having more friction;
+- cornering stiffness 17.68 x (0.45 / aspect ratio)^0.25 x carcass (street
+  0.95, sport 1, soft 1.15, drag radial 0.75) x rim fit;
+- rolling resistance 0.010 / 0.011 / 0.013 / 0.015 / sqrt(pressure ratio);
+- relaxation length 0.3 m x sqrt(sidewall / 113 mm / pressure ratio).
+
+| Tyre | Friction | Nominal load (N) | Stiffness | Relaxation |
+| --- | --- | --- | --- | --- |
+| 195/50 R16 sport | 1.13 -> 1.10 | 3146 -> 3805 | 21.1 -> 16.8 | 0.28 m |
+| 205/55 R17 sport | 1.15 -> 1.10 | 3496 -> 4000 | 17.7 -> 16.7 | 0.30 m |
+| 245/45 R17 sport | 1.25 -> 1.10 | 4600 -> 4780 | 25.3 -> 17.4 | 0.30 m |
+| 255/25 R19 soft | 1.37 -> 1.30 | 5218 -> 4976 | 40 -> 23.6 | 0.23 m |
+| 295/20 R19 soft | 1.48 -> 1.30 | 6206 -> 5756 | 40 -> 24.9 | 0.22 m |
+| 405/40 R15 drag radial | 2.05 -> 1.05 (x1.35 lengthwise) | 23728 -> 7902 | 27.2 -> 12.8 | 0.36 m |
+
+Stock tyre sizes are unchanged. Cars already bought keep their parts, which
+take the new values when they load. Details in
+[docs/vehicles/notes.md](../docs/vehicles/notes.md#tyres-and-suspension-geometry-450).
+
 ## Java natives
 
 | Class and signature | Behavior |
 | --- | --- |
+| `java.lang.Math.pow(FF)F` | a to the power b, declared by the patched `Math` class (SLRR 2.3.1 has it); 0 when the result is undefined or infinite (#450). |
 | `java.game.parts.WheelRef.setRelaxation(F)V` | Sets the tyre's lateral relaxation length in metres (clamped to 0.05–2; 0.3 by default). |
 | `java.game.parts.WheelRef.setTyreSpec(F)V` | Tyre compound for its temperature and grip: `Tyre.tcSTREET` 0, `tcSPORT` 1, `tcSUPERSPORT` 2, `tcDRAGRADIAL` 3 (#446). |
 | `java.game.parts.WheelRef.setBrakeSpec(FFF)V` | Brake hardware: pad compound (0 street, 1 fast road, 2 race), rotor type (0 solid, 1 grooved, 2 vented, 3 carbon) and rotor diameter in metres (clamped to 0.15–0.5). A positive diameter makes the car's brakes physical (#446). |

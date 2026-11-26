@@ -1336,3 +1336,76 @@ itself (`pumping`, `engine_friction_torque`) is unchanged and not compared with
 measured cars. The `race_vehicle` and `race_brain` suites need the game
 folder and were not run; the race AI also coasts with these rules. Not
 validated in game.
+
+build 606 is not traced. Unchanged and outside this issue: braking hard with
+the automatic gearbox, it shifts down to first at about 44 km/h with the
+auto clutch closed, and the engine's reflected inertia then pushes the rear
+wheels (the rear force fell from 1.8 to 0.5 kN in the Lab).
+
+## Tyres and suspension geometry (#450)
+
+Cause, suspension: the 96 stock `*_McPherson_strut` / `*_trailing_arm`
+classes carry one geometry copied from the Baiern (strut lower arm 0.296 m
+pivoted 3 cm above the CFG wheel centre; rear arm 0.42 m about an axis swept
+50 degrees, pivot 0.182 m up). The host evaluates it at the spring's static
+length, 16-23 cm above the CFG wheel centre (anchor 0.39 m, static length
+about the springs' authored `restlength`), where:
+
+- the front lower arm points 30-40 degrees up: +0.5 to +1.4 deg of camber
+  per 25 mm of bump;
+- the rear arm rotation is the absolute angle from horizontal times 0.77
+  (the axis' longitudinal share): -2.9 deg per 25 mm, static camber +2.1 deg
+  (MC GT) to -6.0 deg (Racing SunStrip); unloaded (0.265 m, a parked
+  CoupeSport) it reached +5.3 deg;
+- `setYpr` toe of -1 to -2.5 deg is toe-in (negative toe turns the left
+  wheel's forward axis to +x, inboard), 1-2.5 deg per rear wheel;
+- in strut mode (`setHub` mode 0) `solve_corner_geometry` replaces the hub
+  rotation with the strut fit, so `setYpr` camber and toe never reach a
+  strut wheel.
+
+Fix: patched sources in `patch/parts/running_gear/scripts/*_susp/src`,
+generated per car at the static length (spring free length minus the #430
+corner weight / rate). Fronts: strut fit with the stock ball joint, kingpin
+axis and arm length, the strut top 0.58 m up the axis, the hub tilted to the
+static camber, the lower-arm slope solved for the camber gain. Independent
+rears: arm with a longitudinal axis, pivot level with the wheel centre at
+rest, length 0.025 m / gain (1.59 m for -0.9 deg/25 mm, 7.2 m for the Golf's
+-0.2), factory camber and toe in `setYpr`. Live axles (MC, SuperDuty): arm
+length 0, so `part_runtime` keeps no arm and the hub follows the body. Table
+in [patch/README.md](../../patch/README.md#tyres-and-suspension-geometry-450).
+`VICx/VICy/LICy/LICz` are unchanged (the solver does not read them).
+
+Cause, tyres: `Tyre.SetInflation` multiplied the compound friction by
+0.5 + 0.5 x width / 275 (mu 1.13 for a 195 sport, 2.05 for the 405 drag
+radial), set every profile at or below about 45 to the stiffness clamp of
+40, rolling resistance 0.0036 (sport) and a nominal load unrelated to the
+size (23.7 kN for the 405). `setFrictn_x` and `setLoadSmooth` were sent as
+1.0 and 0.4 whatever the compound. Fix in the patched `Tyre.java`: friction
+per compound, nominal load from the width, stiffness from the aspect ratio
+and carcass, real rolling resistance, relaxation length from the sidewall,
+and the drag radial's longitudinal ratio through `setFrictn_x`. Values in
+the patch README. `Math.pow(FF)F` is a new host native (`natives_lang.cpp`)
+declared by the patched `system/Scripts/lang/Math.java`.
+
+Validation:
+
+- Compilation: `slrr_host` Release. The 96 stock suspension classes and
+  `Math.class` first recompiled from `sources/` byte for byte (header bytes
+  9-11 aside, float mode D auto), then the patched sources compiled in
+  `build/brake-compile-root`.
+- Geometry: the generated arguments, fed to the host's `wheel_pose` in a
+  standalone probe at each car's static length, give the target camber, toe
+  and gain on all 96 corners (left and right mirror).
+- In game (bench drive in Valo City, patch copied into `build/needle-game`,
+  temporary log): CoupeSport front -0.4 to -0.6 deg, rear -1.8 to -2.5 deg
+  with 0.15 deg toe-in; MC GT front -0.1 to +0.2 deg while driving, rear
+  0 (no arm); no script error, `Math.pow` resolves.
+- Not validated: the handling itself, Physics Lab (its cars do not use the
+  scripts), the other 22 cars in game.
+
+Limitations: one hinge per corner cannot model an SLA's progressive gain
+(the strut fit flattens past 2 cm of bump and reaches +3.8 deg at full
+droop), anti-dive/anti-squat or bump steer; a live axle's camber follows the
+body instead of the road; front toe is 0 (strut mode drops `setYpr`); the
+static lengths are computed, not measured per car; the tyre coefficients are
+typical values, not a measured tyre; stock tyre sizes are unchanged.

@@ -336,6 +336,21 @@ void register_lang_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         if (a < 0.f) a = 0.f;
         return Value::make_float(std::sqrt(a));
       });
+  // OpenSLRR (#450): Math.pow, declared by the patched Math class (SLRR 2.3.1
+  // has it). A negative base with a fractional exponent, or an overflow,
+  // returns 0 rather than a NaN or infinity that would poison script physics.
+  jvm.natives().register_method(
+      "java.lang.Math", "pow", "(FF)F",
+      [](Object*, const std::vector<Value>& args) {
+        float a[2] = {0.f, 0.f};
+        for (size_t i = 0; i < 2 && i < args.size(); ++i) {
+          if (args[i].tag == ValueTag::Float) a[i] = args[i].v.f;
+          else if (args[i].tag == ValueTag::Int)
+            a[i] = static_cast<float>(args[i].v.i);
+        }
+        const float r = std::pow(a[0], a[1]);
+        return Value::make_float(std::isfinite(r) ? r : 0.f);
+      });
   jvm.natives().register_method(
       "java.lang.Math", "random", "()F",
       [](Object*, const std::vector<Value>&) {
