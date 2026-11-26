@@ -470,7 +470,9 @@ float smokeShadowTransmit(vec3 world)
     vec3 p=mul(u_smokeShadowMtx,vec4(world,1.0)).xyz;
     if(p.x<=0.0 || p.y<=0.0 || p.x>=1.0 || p.y>=1.0) return 1.0;
     vec4 smoke=texture2DLod(s_smokeShadow,p.xy,0.0);
-    return mix(1.0,smoke.r,smoothstep(smoke.a-u_smokeShadowParams.y,smoke.a+u_smokeShadowParams.y,p.z));
+    // Even a thick cloud lets 60 % of the sun through: it scatters as much
+    // light down as it stops.
+    return mix(1.0,max(smoke.r,0.6),smoothstep(smoke.a-u_smokeShadowParams.y,smoke.a+u_smokeShadowParams.y,p.z));
 }
 float sceneShadowVisibility(vec3 p,vec3 world)
 {

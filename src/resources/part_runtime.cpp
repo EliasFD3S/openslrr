@@ -3663,7 +3663,7 @@ void emit_tyre_dust(Record &rec, size_t i, const SkidWheelSample &sample,
     // Loose ground gives way to a light slide and is thrown up by a fast
     // wheel even when it grips.
     const double roll = std::clamp((std::abs(s.spin * wheel.radius) - 3) / 17, 0.0, 1.0);
-    rate = power / 8000.0 + (config.type == 1 ? .3 : .8) * roll;
+    rate = power / 16000.0 + (config.type == 1 ? .15 : .4) * roll;
   } else {
     const double hot = std::clamp((s.tyre_temperature.surface - 80.0) / 120.0, 0.0, 1.0);
     rate = power / 20000.0 * (.1 + .9 * hot * hot * (3 - 2 * hot));

@@ -1882,6 +1882,24 @@ orange smoke"):
     quay), and impact sparks (the test crash rolled on grass, under 4 m/s
     on a hard surface).
 
+Tenth pass (Elias: twice too much dust on sand; the smoke still looks like
+little drops instead of an irregular shape):
+
+- Dust: the cfg's rate per 16 kW and up to 0.4 × it from a fast rolling
+  wheel (0.15 for debris), half the ninth pass.
+- Shape:
+  - `fs_particle.sc` reads its noise in world space, at a point inside the
+    puff (0.32/m body, 1.15/m detail), drifting slowly up. Neighbouring puffs
+    share the field and read as one irregular volume.
+  - The same field eats each puff's outline (no round rim).
+  - The density is squared, so thin wisps stay thin.
+  - Grey is lifted 40 % toward white.
+- Smoke shadow: each puff keeps 20 % of the sun (from 40 %), and a texel
+  lets at least 60 % through; the first try left near-black patches on the
+  road.
+- In game (forced smoke, temporary hook since removed): irregular
+  translucent wisps over the road, light ground shading.
+
 Limitations:
 
 - Water has no physics: no buoyancy or drag from its density and viscosity.

@@ -101,7 +101,7 @@ void main() {
 		float bodyS = fbm2(qs * 1.6);
 		float densityS = saturate(zs * 1.5 - (1.0 - bodyS) * 0.9) * (1.0 - smoothstep(0.35, 1.0, rs));
 		float aS = densityS * v_color0.a;
-		gl_FragColor = vec4(vec3(1.0 - aS * 0.4, 1.0 - aS * 0.4, 1.0 - aS * 0.4),
+		gl_FragColor = vec4(vec3(1.0 - aS * 0.2, 1.0 - aS * 0.2, 1.0 - aS * 0.2),
 		                    gl_FragCoord.z - v_texcoord1.x * zs * u_particleParams.y);
 		return;
 	}
@@ -138,16 +138,22 @@ void main() {
 		colour = albedo * (sky + sunLight * sunVisible * (0.35 + 0.65 * saturate(dot(n, sun))) + lamps);
 	} else {
 		float time = u_particleParams.x;
-		vec3 seedOffset = vec3(seed * 37.0, seed * 11.0, seed * 23.0);
-		// Noise in the particle's own frame, so a growing puff keeps its
-		// shape while its folds roll upward over its life.
-		vec3 q = n * 1.35 + vec3(c * 0.6, 0.0) + seedOffset + vec3(0.0, -time * 0.22, time * 0.07);
-		float body = fbm3(q * 1.1) * 0.94;
-		float detail = fbm2(q * 3.3 + vec3(5.2, 1.3, 7.7)) * 0.94;
-		float shape = z * 1.5 - (1.0 - body) * 0.85 - (1.0 - detail) * 0.18;
-		// Soft rims from the centre out: neighbouring puffs merge into one
-		// cloud instead of reading as separate balls.
-		float density = saturate(shape) * (1.0 - smoothstep(0.1, 1.0, r2));
+		// Noise in world space, at a point inside the puff: neighbouring puffs
+		// read the same field, so a cloud of them is one irregular volume, not
+		// a heap of balls. It drifts up and with a slow swirl over time; the
+		// seed only nudges it so each puff still evolves a little.
+		vec3 centre = v_worldPos - (right * c.x + up * c.y) * radius;
+		vec3 inside = centre + n * (radius * 0.6);
+		vec3 drift = vec3(time * 0.05, -time * 0.18, time * 0.04) + vec3(seed * 1.7, seed * 0.9, seed * 1.3);
+		vec3 q = inside * 0.32 + drift;
+		float body = fbm3(q) * 0.94;
+		float detail = fbm2(inside * 1.15 + drift * 2.0 + vec3(5.2, 1.3, 7.7)) * 0.94;
+		// The puff's outline is eaten by the same field: no round rim.
+		float edge = 1.0 - smoothstep(0.25, 1.0, r2 + (0.55 - body) * 1.1 + (0.5 - detail) * 0.35);
+		float shape = z * 1.1 - (1.0 - body) * 1.5 - (1.0 - detail) * 0.45 + 0.2;
+		// Squared: thin wisps stay thin, cores fill in.
+		float density = saturate(shape);
+		density = density * density * edge;
 		// The authored puff (the cfg's texture) still shapes the cloud.
 		vec4 tex = texture2D(s_texColor, c * 0.5 + 0.5);
 		density *= mix(1.0, tex.a, 0.3);
@@ -157,7 +163,7 @@ void main() {
 		vec3 tinted = v_color0.rgb * mix(vec3(1.0, 1.0, 1.0), tex.rgb, 0.25);
 		float hi = max(tinted.r, max(tinted.g, tinted.b));
 		float saturation = (hi - min(tinted.r, min(tinted.g, tinted.b))) / max(hi, 1e-3);
-		vec3 albedo = mix(tinted, vec3(0.93, 0.93, 0.93), 0.6 * (1.0 - saturate(saturation * 4.0)));
+		vec3 albedo = mix(tinted, vec3(0.9, 0.9, 0.9), 0.4 * (1.0 - saturate(saturation * 4.0)));
 
 		// Light reaching this pixel crosses the puff from the sun side: an
 		// optical depth growing from the lit face to the far face.
