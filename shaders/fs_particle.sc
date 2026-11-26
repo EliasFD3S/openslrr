@@ -76,6 +76,24 @@ vec3 applyFog(vec3 colour, vec3 worldPos) {
 
 void main() {
 	float mode = v_texcoord2.y;
+	if (mode > 2.5) {
+		// Smoke shadow map (update_smoke_shadow): a sun-facing disc with
+		// the puff's noise. rgb: transmittance (multiplied), a: the light
+		// depth of its front (MIN), u_particleParams.y depth per metre.
+		vec2 cs = v_texcoord0;
+		float rs = dot(cs, cs);
+		if (rs >= 1.0) discard;
+		float zs = sqrt(1.0 - rs);
+		float seedS = v_texcoord1.y;
+		vec3 qs = vec3(cs * 1.2, zs) + vec3(seedS * 37.0, seedS * 11.0, seedS * 23.0) +
+		          vec3(0.0, -u_particleParams.x * 0.22, 0.0);
+		float bodyS = fbm2(qs * 1.6);
+		float densityS = saturate(zs * 1.5 - (1.0 - bodyS) * 0.9) * (1.0 - smoothstep(0.35, 1.0, rs));
+		float aS = densityS * v_color0.a;
+		gl_FragColor = vec4(vec3(1.0 - aS * 0.75, 1.0 - aS * 0.75, 1.0 - aS * 0.75),
+		                    gl_FragCoord.z - v_texcoord1.x * zs * u_particleParams.y);
+		return;
+	}
 	if (mode > 1.5) {
 		vec4 mark = texture2D(s_texColor, v_texcoord0);
 		float a = mark.a * v_color0.a;

@@ -273,6 +273,7 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
     s_car_depth_ = bgfx::createUniform("s_carDepth", bgfx::UniformType::Sampler);
     u_car_depth_mtx_ = bgfx::createUniform("u_carDepthMtx", bgfx::UniformType::Mat4);
     u_car_depth_params_ = bgfx::createUniform("u_carDepthParams", bgfx::UniformType::Vec4);
+    s_smoke_shadow_ = bgfx::createUniform("s_smokeShadow", bgfx::UniformType::Sampler);
     u_cloud_wind_ = bgfx::createUniform("u_cloudWind", bgfx::UniformType::Vec4);
     u_cloud_sky_ = bgfx::createUniform("u_cloudSky", bgfx::UniformType::Vec4);
     u_fog_color_ = bgfx::createUniform("u_fogColor", bgfx::UniformType::Vec4);
@@ -457,6 +458,11 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
     }
     if (bgfx::isValid(vehicle_program_)) bgfx::destroy(vehicle_program_);
     if (bgfx::isValid(particle_program_)) bgfx::destroy(particle_program_);
+    if (bgfx::isValid(smoke_shadow_fb_)) bgfx::destroy(smoke_shadow_fb_);
+    smoke_shadow_fb_ = BGFX_INVALID_HANDLE;
+    smoke_shadow_tex_ = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(s_smoke_shadow_)) bgfx::destroy(s_smoke_shadow_);
+    s_smoke_shadow_ = BGFX_INVALID_HANDLE;
     particle_program_ = BGFX_INVALID_HANDLE;
     for (auto* handle : {&u_particle_sun_, &u_particle_sun_color_, &u_particle_ambient_,
                          &u_particle_cam_, &u_particle_params_, &u_particle_depth_,

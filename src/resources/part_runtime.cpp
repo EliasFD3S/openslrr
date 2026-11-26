@@ -7903,14 +7903,23 @@ void finish_physics_frame(double frame_seconds, double alpha, bool committed) {
   if (committed) {
     if (perf::enabled()) perf::add(perf::Zone::Vehicles, physics_batch.thread_ticks);
     commit_batch(physics_batch);
+    // Traffic slide loops (#454): at most two, within 40 m, so the mixer's
+    // loop budget stays with the engines. A voice already playing keeps its
+    // place until its slide ends.
+    int traffic_slides = 0;
+    for (const auto &[key, rec] : records)
+      if (rec.native_vehicle && rec.slide_voice) ++traffic_slides;
     for (auto &[key, rec] : records) {
       if (rec.config->native_kind == "car") {
         update_engine_audio(rec, rec.engine_running);
-        // Native traffic is excluded from tyre sounds: with ~100 cars the
-        // mixer's loops would go to it. Its marks and smoke (#454) run within
-        // 60 m of the camera, a dozen cars at most; it rarely slides.
+        // Native traffic: marks and smoke (#454) within 60 m of the camera, a
+        // dozen cars at most (it rarely slides), and a slide loop as above.
         const bool tyres = !rec.native_vehicle && rec.physics_released && !rec.state.parent;
-        update_slide_audio(rec, tyres);
+        const bool traffic = rec.native_vehicle && rec.physics_released && !rec.state.parent &&
+                             distance_gain(rec.dynamics.body.position, 2.f, 40.f) > 0;
+        const bool had_voice = rec.slide_voice != 0;
+        update_slide_audio(rec, tyres || (traffic && (had_voice || traffic_slides < 2)));
+        if (rec.native_vehicle) traffic_slides += (rec.slide_voice != 0) - had_voice;
         if (tyres) update_skid_marks(rec, frame_seconds);
         else if (rec.native_vehicle && rec.physics_released && !rec.state.parent)
           update_skid_marks(rec, frame_seconds, 60.f);

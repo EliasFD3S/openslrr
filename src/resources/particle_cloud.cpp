@@ -174,6 +174,9 @@ ParticleCloudConfig parse_particle_cloud(std::string_view text) {
         out.damping = v;
         out.has_damping = true;
       }
+    } else if (key == "move" && t.size() > 3 && number(t[2], value)) {
+      out.move_velocity = value != 0;
+      out.move_rotation = !number(t[3], value) || value != 0;
     } else if (key == "bounce" && t.size() > 4) {
       out.bounce = true;
       number(t[2], out.bounce_friction);
@@ -313,7 +316,8 @@ void particles_update(double dt) {
       p.velocity[1] += std::sin(q[2] * 1.1f + time * .7f + s * 1.7f) * .25f * h;
       p.velocity[2] += std::cos(q[0] * 1.2f + time * 1.1f + s * .6f) * .55f * h;
     }
-    for (size_t k = 0; k < 3; ++k) p.position[k] += p.velocity[k] * h;
+    if (c.move_velocity || !cloud)
+      for (size_t k = 0; k < 3; ++k) p.position[k] += p.velocity[k] * h;
     // The ground plane at the emission point: a puff spreads along it, a
     // pebble lands and slides to rest.
     const float t = std::clamp(p.age / p.life, 0.f, 1.f);

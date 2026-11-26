@@ -1661,14 +1661,69 @@ Validation (second pass):
   outside commented-out `Osd` code), traffic sliding near the camera, and
   smoke under a building's sun shadow.
 
+Third pass (the second pass's limits):
+
+- Lamp shadows. The lamp sum moves from the CPU to `vs_particle.sc`. It
+  reads the light data texture and, per shadowed lamp, its scenery and
+  car-only tiles in `s_fixtureShadow`, or a headlight's tile in
+  `s_headlightShadow`: four taps each, a 10 cm offset toward the lamp, no
+  receiver gradient. The gain drops to 0.4, and the per-vertex sum is
+  capped at 0.8: from inside a lamp-lit cloud at night, the first try still
+  gave a bright beige wall.
+- Indoor sun. With no cascades, `sunVisibility` uses the fitted field
+  (`u_staticShadowMtx`) and its distance fade.
+- Smoke shadows. `update_smoke_shadow` (`bgfx_shadows.cpp`) runs right after
+  the car depth map, with its view and projection: sun-facing discs of every
+  cloud particle within 20 m.
+  - Output: RGB 1 − 0.75 × alpha × density, blended by DST_COLOR, ZERO;
+    alpha the light depth of the puff's front, `gl_FragCoord.z` − radius ×
+    z / 48, blended by MIN.
+  - `bind_baked_light` binds the map at stage 14 and sets
+    `u_carDepthParams.w`.
+  - `fs_mesh.sc` takes `mix(1, rgb, smoothstep(front ± 0.01, depth))`. It
+    scales the dynamic sun, or the baked light through `mix(0.55, 1, ·)`
+    like the car shadow.
+- `move`. PAPI `pMove(velocity, rotation)`: `move m0 0 0` in grass.cfg is
+  read as "the engine moves this type 1 debris itself". A cloud with
+  velocity 0 stays put; debris always integrates.
+- `bone`. `character_bone_world` (`character.cpp`) returns a bone's pose
+  (centimetres to metres). The source natives resolve the name with
+  `character_find_bone` on the parent's render, and the action follows that
+  bone (`script_particles.cpp`).
+- `modePermanent`. Its handler 0x47F150 sets or clears bit 0x20000000 of
+  the node flags at +0x6C. The node updates (0x520D60 and its two siblings)
+  clear 0x80000000, let the children set it, then set the idle bit
+  0x40000000 unless 0x80000000 or 0x20000000 is set; 0x451525 and 0x451876
+  clear the idle bit again. Read as "permanent nodes never go idle": the
+  host keeps permanent systems emitting at any distance, and lets the
+  others idle past 200 m of the camera.
+- Traffic slide loop. `update_slide_audio` runs for native traffic within
+  40 m, with at most two traffic voices at once.
+
+Validation (third pass):
+
+- Compilation: `slrr_host` Release builds; `tyre_effects` 8/8 (now also
+  checking the move flags), `ground_surface` 7/7. Native coverage and
+  knowledge refs check clean.
+- In game, ValoCity at 13:00 with forced smoke and temporary hooks (since
+  removed):
+  - With the smoke itself hidden, a debug tint in `fs_mesh` showed the
+    smoke shadow's footprint confined to the ground behind the car.
+  - Without the tint, that footprint measured 92 against 125-127 (±1
+    between runs) with the shadow map off.
+  - An earlier whole-frame darkening between runs was run-to-run sky
+    variance, not the shadow.
+- ValoCity at 22:00: lamp-lit smoke from outside; from inside the cloud, a
+  dim fog with the scene visible through it.
+- Not seen in game: lamp shadow tiles cutting the light in smoke, a bone
+  source and the idle distance (no stock caller), a traffic slide loop,
+  indoor smoke.
+
 Limitations:
 
-- No lamp or headlight shadows on smoke, and smoke casts no shadow.
-- Interiors with a fitted (non-cascaded) sun field give the smoke no sun
-  shadow.
-- The `bone` argument of the source natives is ignored, and
-  `modePermanent` is stored only.
-- `move` is not read.
-- The thresholds, the 2.5× rate, the colour lift, the lamp caps and the
-  0.8 m width cap are OpenSLRR choices.
-- Traffic plays no slide loop.
+- The smoke shadow covers only the car depth map's 28 m square, and only
+  `fs_mesh` receivers: cars (`fs_vehicle`) do not darken under smoke.
+- The idle distance (200 m) is the host's reading of the exe's idle flag.
+  Its real trigger, beyond "no child active", is not traced.
+- The thresholds, the 2.5× rate, the colour lift, the lamp gain and caps and
+  the 0.8 m width cap are OpenSLRR choices.

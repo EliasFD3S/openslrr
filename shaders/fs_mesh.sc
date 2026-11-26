@@ -9,6 +9,9 @@ SAMPLER2DSHADOW(s_staticShadow, 3);
 SAMPLER2DSHADOW(s_carDepth, 4);
 uniform mat4 u_carDepthMtx;
 uniform vec4 u_carDepthParams;
+// Smoke shadow transmittance (#454) over the car map: rgb what the tyre
+// smoke lets through, a the light depth of its front nearest the sun.
+SAMPLER2D(s_smokeShadow, 14);
 SAMPLER2DSHADOW(s_interiorSun, 5);
 SAMPLER2DSHADOW(s_fixtureShadow, 7);
 SAMPLER2D(s_sunAperture, 8);
@@ -242,9 +245,15 @@ void main()
 	bake = mix(vec3(1.0, 1.0, 1.0), bake, use);
 	float visibility = use < 0.5 ? sceneShadowVisibility(v_staticShadow, v_worldPos) : 1.0;
 	float carVisibility = 1.0;
+	float smokeTransmit = 1.0;
 	if (u_carDepthParams.x > 0.5) {
 		vec3 p = mul(u_carDepthMtx, vec4(v_worldPos, 1.0)).xyz;
 		float edge = min(min(p.x, 1.0 - p.x), min(p.y, 1.0 - p.y));
+		if (u_carDepthParams.w > 0.5 && edge > 0.0) {
+			// Only below the smoke's front (48 m of light depth: 0.01 is half a metre).
+			vec4 smoke = texture2D(s_smokeShadow, p.xy);
+			smokeTransmit = mix(1.0, smoke.r, smoothstep(smoke.a - 0.01, smoke.a + 0.01, p.z));
+		}
 		if (edge > u_carDepthParams.y && p.z > 0.0 && p.z < 1.0) {
 			vec2 offset = vec2(u_carDepthParams.y, 0.0);
 			float depth = p.z - u_carDepthParams.z;
@@ -257,7 +266,8 @@ void main()
 	}
 	float sunVisibility = u_staticShadowParams.w > 0.5 ? 1.0 : visibility;
 	float localVisibility = u_staticShadowParams.w > 0.5 ? visibility : 1.0;
-	vec3 illumination = vec3(light, light, light) * sunVisibility * mix(0.55, 1.0, carVisibility);
+	vec3 illumination = vec3(light, light, light) * sunVisibility * mix(0.55, 1.0, carVisibility) *
+	                    mix(0.55, 1.0, smokeTransmit);
 	if (u_sunDir.w < -0.5) illumination = u_sunAmb.rgb*ambientVisibility(gl_FragCoord.xy);
 	else if (u_sunDir.w > 0.5 && use < 0.5) {
 		vec3 sun = normalize(u_sunDir.xyz);
@@ -273,7 +283,7 @@ void main()
 			if (across * dot(sun, f) < 0.0) sunNormal = n - 2.0 * across * f;
 		}
 		float direct = max(dot(sunNormal, sun), 0.0);
-		illumination = u_sunAmb.rgb*ambientVisibility(gl_FragCoord.xy) + u_sunDiff.rgb * direct * min(sunVisibility, carVisibility);
+		illumination = u_sunAmb.rgb*ambientVisibility(gl_FragCoord.xy) + u_sunDiff.rgb * direct * min(sunVisibility, carVisibility) * smokeTransmit;
 	}
 	if (u_localLight.w > 0.0) {
 		vec3 delta = u_localLight.xyz - v_worldPos;

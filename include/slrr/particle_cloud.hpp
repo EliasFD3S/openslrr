@@ -43,8 +43,11 @@ struct ParticleCloudConfig {
   // (v -= (1 - damping) v dt).
   std::array<float, 3> damping{1.f, 1.f, 1.f};
   bool has_damping = false;
-  // `move m0 a b` is not read: grass.cfg writes `move m0 0 0` for blades
-  // that still fly under gravity, so its meaning is unknown.
+  // PAPI pMove(move_velocity, move_rotational_velocity): `move m0 1 1` in
+  // the smoke cfgs. grass.cfg writes `move m0 0 0` for blades that fly: a
+  // `type 1` particle is physical debris the engine moves itself (its own
+  // integration, gravity and ground), so the flags only hold back clouds.
+  bool move_velocity = true, move_rotation = true;
   // `bounce b0 friction resilience cutoff plane ...` (commented out in every
   // stock cfg). The host floor stands in for the plane.
   bool bounce = false;

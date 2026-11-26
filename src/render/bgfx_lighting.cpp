@@ -489,59 +489,6 @@ void LibBgfxBackend::draw_particles(const float* view, const float* projection,
   }
   if (order.empty()) return;
   std::sort(order.begin(), order.end(), [](const Item& a, const Item& b) { return a.depth > b.depth; });
-  // The scenery lamps and car lights (headlights included) at a particle,
-  // summed on the CPU once per particle rather than per pixel of every
-  // overlapping puff: the lamp law of scene_shadow.sh (window, attenuation,
-  // spot cone and low-beam cut) without its facing term, since smoke
-  // scatters in every direction, weighted by Henyey-Greenstein (g 0.55)
-  // toward the camera so a beam seen through smoke glows. No lamp shadows.
-  const float eye[3] = {-(view[0] * view[12] + view[1] * view[13] + view[2] * view[14]),
-                        -(view[4] * view[12] + view[5] * view[13] + view[6] * view[14]),
-                        -(view[8] * view[12] + view[9] * view[13] + view[10] * view[14])};
-  const size_t lamp_count = std::min(scenery_lamps_.size(), kSceneryLamps);
-  const auto lamp_light = [&](float x, float y, float z) {
-    std::array<float, 3> sum{};
-    if (!lamp_count) return sum;
-    float sx = eye[0] - x, sy = eye[1] - y, sz = eye[2] - z;
-    const float sl = std::sqrt(sx * sx + sy * sy + sz * sz);
-    if (sl > 1e-4f) sx /= sl, sy /= sl, sz /= sl;
-    for (size_t i = 0; i < lamp_count; ++i) {
-      const auto& lamp = scenery_lamps_[i];
-      const float dx = lamp.position[0] - x, dy = lamp.position[1] - y, dz = lamp.position[2] - z;
-      const float r2 = lamp.range * lamp.range;
-      float d2 = dx * dx + dy * dy + dz * dz;
-      if (!(d2 < r2)) continue;
-      // A puff is no point on a bulb: it spreads over a metre or more.
-      d2 = std::max(d2, 1.f);
-      const float inv = 1.f / std::sqrt(d2);
-      const float tx = dx * inv, ty = dy * inv, tz = dz * inv;  // toward the lamp
-      float cone = 1.f;
-      if (lamp.cos_outer >= -1.5f) {
-        const float along = -(tx * lamp.direction[0] + ty * lamp.direction[1] + tz * lamp.direction[2]);
-        const float span = std::max(lamp.cos_inner - lamp.cos_outer, 1e-4f);
-        const float c = std::clamp((along - lamp.cos_outer) / span, 0.f, 1.f);
-        cone = c * c * (3 - 2 * c);
-        const float above = std::clamp((-ty - lamp.direction[1] - .02f) / .04f, 0.f, 1.f);
-        cone *= 1.f - lamp.above_axis_cut * above * above * (3 - 2 * above);
-      }
-      if (!(cone > 0.f)) continue;
-      const float q = d2 / r2;
-      const float window = std::clamp(1.f - q * q, 0.f, 1.f);
-      const auto& a = lamp.attenuation;
-      const float falloff = std::max(a[0] + a[1] * d2 * inv + a[2] * d2, .25f);
-      // The light travels away from the lamp (-t); the camera is along s.
-      const float cosine = -(tx * sx + ty * sy + tz * sz);
-      constexpr float g = .55f;
-      const float hg = (1 - g * g) / std::pow(std::max(1 + g * g - 2 * g * cosine, 1e-3f), 1.5f);
-      // Half the light scatters evenly, half by the phase (capped at 3x, so
-      // a beam toward the camera glows without blinding).
-      const float weight = window * window * cone / falloff * (.5f + .5f * std::min(hg, 3.f)) * .6f;
-      for (int k = 0; k < 3; ++k) sum[k] += lamp.color[k] * lamp.intensity * weight;
-    }
-    // No brighter than the noon sun on a white surface.
-    for (auto &channel : sum) channel = std::min(channel, 1.2f);
-    return sum;
-  };
   constexpr size_t kBatch = 16000;  // 16-bit indices: 4 vertices per particle
   float identity[16];
   bx::mtxIdentity(identity);
@@ -600,7 +547,6 @@ void LibBgfxBackend::draw_particles(const float* view, const float* projection,
           ay[k] = up[k] * c - right[k] * s;
         }
       }
-      const auto lamps = lamp_light(cx, cy, cz);
       static constexpr float kCorner[4][2] = {{-1.f, -1.f}, {1.f, -1.f}, {-1.f, 1.f}, {1.f, 1.f}};
       for (int k = 0; k < 4; ++k) {
         MeshVertex v{};
@@ -608,9 +554,7 @@ void LibBgfxBackend::draw_particles(const float* view, const float* projection,
         v.x = cx + (ax[0] * u + ay[0] * w) * radius;
         v.y = cy + (ax[1] * u + ay[1] * w) * radius;
         v.z = cz + (ax[2] * u + ay[2] * w) * radius;
-        v.nx = lamps[0];
-        v.ny = lamps[1];
-        v.nz = lamps[2];
+        // vs_particle.sc writes the lamp light into the normal slot.
         v.u = u;
         v.v = w;
         v.u2 = radius;
@@ -882,11 +826,16 @@ bool LibBgfxBackend::bind_point_light(bool enabled) {
     set_texture(2, s_mesh_mix_, bgfx::isValid(mix) ? mix : white_tex_, receive_static_shadow ? world_sampler() : BGFX_SAMPLER_NONE);
     bind_scene_shadow(receive_static_shadow, 3);
     const bool receive_car = receive_static_shadow && car_depth_active_;
-    const float car_params[4] = {receive_car ? 1.f : 0.f, 1.f / car_depth_size_, .0006f, 0.f};
+    // w: the smoke shadow map rides on the car map's matrix (#454).
+    const bool receive_smoke = receive_car && smoke_shadow_active_ && bgfx::isValid(smoke_shadow_tex_);
+    const float car_params[4] = {receive_car ? 1.f : 0.f, 1.f / car_depth_size_, .0006f,
+                                 receive_smoke ? 1.f : 0.f};
     set_uniform(u_car_depth_params_, car_params);
     if (receive_car) set_uniform(u_car_depth_mtx_, car_depth_matrix_.data(), 16);
     set_texture(4, s_car_depth_, receive_car ? car_depth_tex_ : depth_white_,
         BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_COMPARE_LEQUAL);
+    set_texture(14, s_smoke_shadow_, receive_smoke ? smoke_shadow_tex_ : white_tex_,
+                BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
     if (bind_point_light(receive_static_shadow && !sky)) {
       const float mode[4] = {0, 0, 0, -1};
       const auto &ambient = point_light_->ambient;

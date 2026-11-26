@@ -1,7 +1,9 @@
 #include "slrr/script_particles.hpp"
 
 #include "slrr/particle_cloud.hpp"
+#include "slrr/gameref.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/skeleton.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -13,6 +15,7 @@ namespace {
 
 struct Action {
   bool counter = false;
+  int bone = -1;
   bool direct_pending = false;
   float direct_count = 0;
   Vec3f pos{}, vel{};
@@ -25,13 +28,29 @@ struct System {
   uint16_t cloud = 0xffff;
   float frequency = 1.f;
   bool stopped = false;
-  bool permanent = false;  // stored: its meaning in the original is not recovered
+  // modePermanent: the exe's handler (0x47F150) sets bit 0x20000000 of the
+  // node's flags (+0x6C). Its update (0x520D60) clears the active bit
+  // 0x80000000, lets the children set it again, and marks the node idle
+  // (0x40000000) when neither active nor permanent. Here a system that is not
+  // permanent idles (stops emitting) when its parent is farther than
+  // kIdleMetres from the camera; a permanent one always emits.
+  bool permanent = false;
   std::map<std::string, Action> actions;
   float matrix[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
   bool placed = false;  // matrix holds the parent's pose this frame
 };
 
 std::unordered_map<const void *, System> g_systems;
+const RpkIndex *g_packs = nullptr;
+
+void multiply(const float *a, const float *b, float *out) {
+  for (int c = 0; c < 4; ++c)
+    for (int r = 0; r < 4; ++r) {
+      float v = 0;
+      for (int k = 0; k < 4; ++k) v += a[k * 4 + r] * b[c * 4 + k];
+      out[c * 4 + r] = v;
+    }
+}
 
 ParticleDomain sphere(const Vec3f &centre, float r0, float r1) {
   ParticleDomain d;
@@ -59,8 +78,19 @@ void place(System &system, Action &action) {
     action.emitter.init(system.cloud);
     action.emitter.mode_permanent(true);
   }
-  const Vec3f centre = transform(system.matrix, action.pos);
-  const Vec3f velocity = rotate(system.matrix, action.vel);
+  const float *frame = system.matrix;
+  float bone_frame[16];
+  if (action.bone >= 0 && g_packs) {
+    const GameRefState *parent = gameref_get(const_cast<void *>(system.parent));
+    float local[16];
+    if (parent && character_bone_world(const_cast<void *>(system.parent), parent->type_id,
+                                       *g_packs, action.bone, local)) {
+      multiply(system.matrix, local, bone_frame);
+      frame = bone_frame;
+    }
+  }
+  const Vec3f centre = transform(frame, action.pos);
+  const Vec3f velocity = rotate(frame, action.vel);
   // Uniform scale is ignored: the velocity sphere is not rotated, only its
   // centre (the radii are rotation invariant).
   action.emitter.set_domains(sphere({0, 0, 0}, action.rmin, action.rmax),
@@ -154,14 +184,36 @@ void script_particles_permanent(const void *self, bool permanent) {
 
 void script_particles_destroy(const void *self) { g_systems.erase(self); }
 
+void script_particles_set_bone(const void *self, const std::string &alias, int bone) {
+  const auto it = g_systems.find(self);
+  if (it == g_systems.end()) return;
+  const auto found = it->second.actions.find(alias);
+  if (found != it->second.actions.end()) found->second.bone = bone;
+}
+
+const void *script_particles_parent(const void *self) {
+  const auto it = g_systems.find(self);
+  return it == g_systems.end() ? nullptr : it->second.parent;
+}
+
+void script_particles_set_resources(const RpkIndex *packs) { g_packs = packs; }
+
 bool script_particles_exists(const void *self) { return g_systems.count(self) != 0; }
 
 void script_particles_update(double dt) {
   if (!(dt > 0)) return;
+  constexpr float kIdleMetres = 200.f;
+  float eye[3]{}, at[3]{}, up[3] = {0.f, 1.f, 0.f};
+  const bool camera = gameref_world_camera(eye, at, nullptr, nullptr, nullptr, up);
   for (auto &[self, system] : g_systems) {
     system.placed = system.parent &&
                     scene_instances_script_matrix(const_cast<void *>(system.parent), system.matrix);
     if (!system.placed || system.cloud == 0xffff) continue;
+    if (!system.permanent && camera) {
+      const float dx = system.matrix[12] - eye[0], dy = system.matrix[13] - eye[1],
+                  dz = system.matrix[14] - eye[2];
+      if (dx * dx + dy * dy + dz * dz > kIdleMetres * kIdleMetres) continue;
+    }
     for (auto &[alias, action] : system.actions) {
       if (action.counter) continue;
       place(system, action);

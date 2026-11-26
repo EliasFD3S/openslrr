@@ -192,6 +192,7 @@ inline const char *render_debug_view_name(uint16_t view) {
   if (view >= 8 && view < 64) return "Script viewport preview";
   if (view >= 72 && view < 84) return "Reflection face";
   if (view >= 128 && view < 136) return "Fixture / lamp shadow tile";
+  if (view == 139) return "Smoke shadow";
   if (view >= 145 && view < 151) return "Headlight shadow tile";
   return "Other";
 }
@@ -201,7 +202,7 @@ inline perf::GpuPass render_gpu_pass(uint16_t view) {
   using perf::GpuPass;
   if (view <= 4 && view != 1) return GpuPass::MapShadows;
   if (view == 64) return GpuPass::MapShadows;
-  if (view == 1) return GpuPass::CarDepth;
+  if (view == 1 || view == 139) return GpuPass::CarDepth;
   if (view == 65 || view == 66) return GpuPass::InteriorSun;
   if (view == 5 || (view >= 151 && view <= 154)) return GpuPass::World;
   if (view == 140) return GpuPass::AoPrepass;

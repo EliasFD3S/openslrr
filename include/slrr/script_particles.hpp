@@ -31,6 +31,12 @@ void script_particles_stop(const void *self);  // every source stops emitting
 void script_particles_freq(const void *self, float frequency);  // setFreq: a multiplier
 void script_particles_permanent(const void *self, bool permanent);  // modePermanent
 void script_particles_destroy(const void *self);
+// The source natives' `bone`: the action follows that bone of the parent's
+// skeleton (character_bone_world). -1: the parent itself.
+void script_particles_set_bone(const void *self, const std::string &alias, int bone);
+const void *script_particles_parent(const void *self);
+// The packs the bone lookups read (set once by the natives).
+void script_particles_set_resources(const class RpkIndex *packs);
 bool script_particles_exists(const void *self);
 
 // Once per host frame, before particles_update: emit from every source at

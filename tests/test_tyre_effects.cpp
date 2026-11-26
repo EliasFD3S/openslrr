@@ -50,6 +50,8 @@ SLRR_TEST(parses_stock_asphalt_cloud) {
 SLRR_TEST(parses_debris_and_samples_domains) {
   const auto c = parse_particle_cloud(kGrass);
   SLRR_REQUIRE(c.ok && c.type == 1 && near(c.velscale, 2.f) && near(c.rate, 300.f));
+  // move m0 0 0: physical debris moves itself (debris_lands_on_its_ground).
+  SLRR_REQUIRE(!c.move_velocity && !c.move_rotation && parse_particle_cloud(kAsphalt).move_velocity);
   SLRR_REQUIRE(c.position.kind == ParticleDomain::Kind::Line && c.velocity.count == 5);
   std::mt19937 rng(1);
   for (int i = 0; i < 200; ++i) {

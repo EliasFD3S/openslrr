@@ -4,6 +4,7 @@
 
 #include "slrr/gameref.hpp"
 #include "slrr/script_particles.hpp"
+#include "slrr/skeleton.hpp"
 #include "slrr/surface_effects.hpp"
 
 #include <string>
@@ -71,13 +72,22 @@ void register_particle_natives(Jvm &jvm, RpkIndex &rpk) {
                             script_particles_freq(self, native_arg_number(args, 0, 1.f));
                             return Value::make_void();
                           });
-  const auto source = [](bool direct) {
-    return [direct](Object *self, const std::vector<Value> &args) {
+  script_particles_set_resources(&rpk);
+  const auto source = [&rpk](bool direct) {
+    return [direct, &rpk](Object *self, const std::vector<Value> &args) {
       // (alias, pos, rmin, rmax, vel, vmin, vmax, freq or num, bone)
       script_particles_source(self, arg_string(args, 0), arg_vector(args, 1),
                               native_arg_number(args, 2), native_arg_number(args, 3),
                               arg_vector(args, 4), native_arg_number(args, 5),
                               native_arg_number(args, 6), native_arg_number(args, 7), direct);
+      // The bone of the parent's skeleton the source follows (null: none).
+      const std::string bone = arg_string(args, 8);
+      const void *parent = script_particles_parent(self);
+      const GameRefState *state = parent ? gameref_get(const_cast<void *>(parent)) : nullptr;
+      script_particles_set_bone(
+          self, arg_string(args, 0),
+          bone.empty() || !state ? -1
+                                 : character_find_bone(const_cast<void *>(parent), state->type_id, rpk, bone));
       return Value::make_void();
     };
   };

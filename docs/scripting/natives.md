@@ -116,9 +116,13 @@ The nine `ParticleSystem` natives are bound since #454
 `init` resolves the RenderRef type to a stock `particle <cfg>` cloud, the
 source actions emit into the tyre effects' particle pool in the parent's
 frame, `getCounter` counts the cloud's particles in the counter's sphere, and
-`modePermanent` is stored only (its meaning is not recovered). A parent
-outside the active world (the commented-out `Osd` cursor effects, the only
-stock callers) emits nothing.
+a source's `bone` follows that bone of the parent's skeleton.
+`modePermanent` keeps a system emitting at any distance, while others idle
+past 200 m of the camera. This is the host's reading of the exe's flag
+0x20000000, which keeps a node from its idle bit; see
+[vehicles/notes.md](../vehicles/notes.md#tyre-smoke-ground-dust-and-textured-skid-marks-454).
+A parent outside the active world (the commented-out `Osd` cursor effects,
+the only stock callers) emits nothing.
 No PhysicsRef signature remains absent from the stock table.
 
 ## Roadmap

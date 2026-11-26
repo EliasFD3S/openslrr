@@ -793,6 +793,14 @@ class LibBgfxBackend final : public IRenderBackend {
   // tile + 1 in its colour's w.
   static constexpr size_t kHeadlightShadows=6;
   static constexpr uint16_t kHeadlightShadowView=145;
+  // Smoke shadow transmittance (#454), drawn after the car depth map.
+  static constexpr uint16_t kSmokeShadowView=139;
+  bgfx::FrameBufferHandle smoke_shadow_fb_=BGFX_INVALID_HANDLE;
+  bgfx::TextureHandle smoke_shadow_tex_=BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle s_smoke_shadow_=BGFX_INVALID_HANDLE;
+  bool smoke_shadow_active_=false;
+  void update_smoke_shadow(const float* view, const float* proj, const float* travel,
+                           const float* centre);
   static constexpr float kHeadlightShadowNear=.15f, kHeadlightShadowMargin=2.f;  // degrees
   void update_headlight_shadows(const VideoOptions& video);
   void set_headlight_focus(const void* car) { headlight_focus_car_=car; }

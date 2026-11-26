@@ -442,7 +442,8 @@ particles:2 (asphalt smoke) and particles:0xA (the asphalt mark).
 (`particle_cloud.hpp`) or the mark style (`skid_marks.hpp`).
 
 - **Clouds.** `parse_particle_cloud` reads the stock Particle System API
-  format: `[STATE]` domains for size, colour, alpha, angle and lifetime, plus
+  format (`move m0 a b` holds a cloud's position when a is 0; `type 1`
+  debris always moves itself): `[STATE]` domains for size, colour, alpha, angle and lifetime, plus
   `type` and `velscale`; `[ACTION]` lines for `source` (rate and domains),
   `gravity`, `damping` and `bounce`. `ParticleSystem` has the shape of the
   stock natives: `init`, `set_freq`, `set_source`, `emit_direct`, the counter,
@@ -463,18 +464,29 @@ particles:2 (asphalt smoke) and particles:0xA (the asphalt mark).
 - **Script natives.** The nine `ParticleSystem` natives
   (`natives_particles.cpp`, `script_particles.cpp`) run the same pool:
   `init` resolves the RenderRef type to a cloud, each source action emits in
-  its parent's frame at the parent's current pose, with no ground plane.
+  its parent's frame at the parent's current pose, with no ground plane. A
+  source names a bone of the parent's skeleton to follow it.
+  `modePermanent` keeps a system emitting at any distance; without it a
+  system idles past 200 m of the camera (the exe's idle flag, see notes).
+- **Traffic audio.** At most two native traffic cars within 40 m play the
+  slide loop.
 - **Rendering.** `draw_particles` runs after the marks in the world view.
   Particles are sorted back to front, and each one is a camera-facing
   impostor of a sphere of smoke (`fs_particle.sc`).
   - Its density is the sphere's thickness eroded by 3D fbm noise.
   - Light reaches it through an optical depth toward the sun, with
     Henyey-Greenstein forward scattering at the thin rims and sky ambient.
-  - The sun is shadowed per vertex: one 4-tap lookup in the sun cascades at
-    each corner (`vs_particle.sc`), interpolated across the puff.
-  - Scenery lamps and car lights, headlights included, are summed per
-    particle on the CPU (the lamp law without its facing term, HG g = 0.55
-    toward the camera, capped at 3×), so a beam seen through smoke glows.
+  - Lighting is per vertex (`vs_particle.sc`), interpolated across the puff.
+    The sun takes a 4-tap lookup in the sun cascades, or in the single fitted
+    field indoors. Scenery lamps and car lights, headlights included, take
+    the lamp law without its facing term, with their shadow tiles, weighted
+    by HG g = 0.55 toward the camera (capped at 3×), so a beam seen through
+    smoke glows.
+  - The smoke casts a soft shadow (`update_smoke_shadow`, view 139): an
+    RGBA16F map over the car depth map's square, seen from the sun. Its RGB
+    multiplies the puffs' transmittance, and its alpha keeps by MIN the light
+    depth of their fronts. `fs_mesh.sc` darkens only the receivers below that
+    front.
   - It is soft against the AO depth prepass, which also runs while AO is off
     for as long as particles live (`soft_particles` debug toggle), and always
     against its own ground plane. Output is premultiplied alpha.
