@@ -424,3 +424,24 @@ renderer checks both (`host_enhanced_graphics()` and `render_debug()`). The
 video page's Preset choice is script-side: `OptionsDialog.applyPreset` calls the
 setters and moves the controls with `MultiChoice.setValue` / `Slider.setValue`,
 which do not send their command.
+
+### Math functions (#463)
+
+The patched `system/Scripts/lang/Math.java` declares, besides the stock
+`random`, `sqrt`, `randomize`, `setrandseed` and the #450 `pow`:
+
+- Constants `PI`, `HALF_PI`, `TWO_PI`, `DEG2RAD`, `RAD2DEG` and `E`
+  (32-bit floats).
+- Host natives in radians (`src/natives/natives_lang.cpp`): `sin`, `cos`,
+  `tan`, `asin`, `acos`, `atan`, `atan2(y, x)`, `exp`, `log` and
+  `wrapAngle` (the same angle in [-PI, PI], through `std::remainder`).
+  Like `pow`, a NaN or infinite result returns 0; `asin` and `acos` clamp
+  their input to [-1, 1] and `log` returns 0 for a <= 0. They exist only in
+  OpenSLRR: a script calling them does not run in the original game.
+- Script helpers compiled into the class: `abs`, `sign`, `min`, `max`,
+  `clamp(v, lo, hi)`, `lerp(a, b, t)`, `randomRange(lo, hi)` and
+  `randomInt(n)` (an index in [0, n), 0 when n <= 0). Floats only, no
+  overloads. `Part.clampTo` stays for the existing part scripts and mods.
+
+`tests/test_script_safety.cpp` calls the natives and runs a script compiled
+against the shipped `Math.class` that reads `Math.PI` and calls the helpers.

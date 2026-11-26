@@ -3,6 +3,7 @@
 #include "slrr/host_game_options.hpp"
 #include "slrr/gameref.hpp"
 #include "slrr/ui_time.hpp"
+#include <cmath>
 #include <limits>
 using namespace slrr;
 int main() {
@@ -61,6 +62,19 @@ int main() {
   SLRR_REQUIRE(time.v.o->str==format_game_time(0,0));
   call("java.lang.System","exit","(Ljava.lang.String;)V",{I(1)});
   SLRR_REQUIRE(f.vm.get_static("java.lang.System","_hostQuit").v.i==1);
+  // Math natives: radians, no NaN or infinity reaches the script.
+  auto math=[&](const char* method,std::vector<Value> args){
+    return call("java.lang.Math",method,std::string(method)=="atan2"?"(FF)F":"(F)F",args).v.f;
+  };
+  auto close_to=[](float a,float b){return std::fabs(a-b)<1e-5f;};
+  SLRR_REQUIRE(close_to(math("sin",{F(1.5707964f)}),1.f) && close_to(math("cos",{I(0)}),1.f));
+  SLRR_REQUIRE(close_to(math("tan",{F(0.7853982f)}),1.f) && close_to(math("atan",{I(1)}),0.7853982f));
+  SLRR_REQUIRE(close_to(math("asin",{F(2.f)}),1.5707964f) && close_to(math("acos",{F(-5.f)}),3.1415927f));
+  SLRR_REQUIRE(close_to(math("atan2",{I(1),I(-1)}),2.3561945f) && math("atan2",{})==0.f);
+  SLRR_REQUIRE(close_to(math("exp",{I(1)}),2.7182817f) && math("exp",{F(1000.f)})==0.f);
+  SLRR_REQUIRE(close_to(math("log",{F(2.7182817f)}),1.f) && math("log",{I(0)})==0.f && math("log",{F(-1.f)})==0.f);
+  SLRR_REQUIRE(close_to(math("wrapAngle",{F(4.f)}),4.f-6.2831853f) && close_to(math("wrapAngle",{F(-7.f)}),-7.f+6.2831853f));
+  SLRR_REQUIRE(std::isfinite(math("wrapAngle",{F(1e30f)})) && math("sin",{nan})==0.f);
   fs::create_directories(f.root/"probe/src");
   std::ofstream(f.root/"probe/src/Safety.java") << R"JAVA(package probe;
 public class Safety {
@@ -81,6 +95,37 @@ public class Safety {
     store("store",index,99);store("compound",index,99);
     SLRR_REQUIRE(array.slots.size()==4 && array.fields["length"].v.i==4 && array.slots[3].v.i==11);
   }
+  // The patched Math class: its constants and script helpers, read from a
+  // caller compiled against it.
+  const fs::path math_class=fs::path("patch/system/Scripts/lang/Math.class");
+  fs::create_directories(f.root/"system/Scripts/lang");
+  fs::copy_file(math_class,f.root/"system/Scripts/lang/Math.class");
+  SLRR_REQUIRE(f.vm.load_class_file((f.root/"system/Scripts/lang/Math.class").string()));
+  fs::create_directories(f.root/"probe2/src");
+  std::ofstream(f.root/"probe2/src/MathUse.java") << R"JAVA(package probe2;
+public class MathUse {
+ public static float pi(){return Math.PI;}
+ public static float rad(float d){return d*Math.DEG2RAD;}
+ public static float clamp(float v){return Math.clamp(v,-1.0,2.0);}
+ public static float mix(float t){return Math.lerp(10.0,20.0,t);}
+ public static float absmin(float a,float b){return Math.min(Math.abs(a),Math.abs(b));}
+ public static float wave(float a){return Math.sin(a)+Math.max(Math.sign(a),0.0);}
+ public static int pick(int n){return Math.randomInt(n);}
+}
+)JAVA";
+  report=script_compile_all(f.root.string(),"probe2");
+  SLRR_REQUIRE(report.failed==0 && report.succeeded>0);
+  SLRR_REQUIRE(f.vm.load_class_file((f.root/"probe2/MathUse.class").string()));
+  auto use=[&](const char* method,const char* sig,std::vector<Value> args){return f.vm.invoke("probe2.MathUse",method,sig,args,true);};
+  auto as_float=[](Value v){return v.tag==ValueTag::Int?float(v.v.i):v.v.f;};
+  SLRR_REQUIRE(close_to(as_float(use("pi","()F",{})),3.1415927f));
+  SLRR_REQUIRE(close_to(as_float(use("rad","(F)F",{F(180.f)})),3.1415927f));
+  SLRR_REQUIRE(as_float(use("clamp","(F)F",{F(5.f)}))==2.f && as_float(use("clamp","(F)F",{F(-5.f)}))==-1.f && as_float(use("clamp","(F)F",{F(.5f)}))==.5f);
+  SLRR_REQUIRE(close_to(as_float(use("mix","(F)F",{F(.25f)})),12.5f));
+  SLRR_REQUIRE(as_float(use("absmin","(FF)F",{F(-3.f),F(2.f)}))==2.f);
+  SLRR_REQUIRE(close_to(as_float(use("wave","(F)F",{F(1.5707964f)})),2.f) && close_to(as_float(use("wave","(F)F",{F(-1.5707964f)})),-1.f));
+  for(int i=0;i<50;++i){const int r=use("pick","(I)I",{I(3)}).v.i;SLRR_REQUIRE(r>=0 && r<3);}
+  SLRR_REQUIRE(use("pick","(I)I",{I(0)}).v.i==0);
   store("store",(1<<20)-1,7);
   SLRR_REQUIRE(array.slots.size()==(1<<20) && array.slots.back().v.i==7);
   std::puts("PASS native short/mistagged/boxed arguments; bounded direct and compound array stores");
