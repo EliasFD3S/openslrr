@@ -3304,7 +3304,12 @@ DriveRefresh configure_drive(Object *chassis, Record &rec, bool controlled) {
   drive.clutch = autonomous ? (ai.start ? 1.f : 0.f) : controls ? 1.f - std::clamp(in.drive_clutch, 0.f, 1.f) : 0.f;
   drive.idle = std::max(400.f, comp(chassis, "engine_rpm_idle"));
   drive.limit = std::max(drive.idle + 100.0, double(comp(chassis, "RPM_limit")));
-  drive.inertia = .28 + .01 * std::max(0.f, comp(chassis, "engine_inertia"));
+  // Crank + flywheel + clutch, kg m^2. Chassis.engine_inertia sums the parts
+  // (0.09 per kg, 5.6-7.6 on stock engines). 0.02 x that gives 0.11-0.15,
+  // the range of a road-car engine. The old 0.28 floor made every engine
+  // about 2-3x heavier than a real one, and hid flywheel changes. The 0.10
+  // floor is the lowest inertia the stability fixtures cover.
+  drive.inertia = std::max(.10, .02 * std::max(0.f, comp(chassis, "engine_inertia")));
   if (engine) {
     // Immutable curve copies: the physics thread samples them while scripts
     // may recalculate or release the dyno session.

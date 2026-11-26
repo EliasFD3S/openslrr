@@ -184,7 +184,7 @@ SLRR_TEST(shared_world_clock_coverage) {
 
 SLRR_TEST(idle_and_limiter_stay_bounded_for_every_flywheel) {
   // Neutral: idle for three seconds, full throttle against the limiter for
-  // three, then lift. Inertias below the host's 0.28 kg m2 floor included.
+  // three, then lift. 0.10 is the host floor; stock engines get 0.11-0.15.
   for (double inertia : {.10, .22, .28, .38, .60}) {
     Car car(inertia);
     car.dynamics.drive.engaged = false;
