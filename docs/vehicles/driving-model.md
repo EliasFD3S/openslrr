@@ -28,7 +28,8 @@ after the original law, nicolas-found42/sl-remastered, 00454500):
 - D = Fz × mu, mu = 1.15 (`kPeakFriction`) × `setFriction` / 1.76863
   (clamped 0.2–2.5) × (1 - 0.12 dfz × `setLoadSmooth` / 0.4 × load
   sensitivity, floor 0.5) × camber grip. `frictn_x` scales the longitudinal D.
-  Width, compound, profile and inflation enter through these script inputs;
+  Width, compound, profile and inflation enter through these script inputs
+  (the patched `Tyre` sets them from physical values since #450);
   the patched `Tyre` ([notes](notes.md#tyre-pressure-424)) also scales the
   friction with the pressure and allows over-inflation.
 - C from `setSliction`, the slide/grip ratio its script documents: the curve
@@ -76,7 +77,10 @@ after the original law, nicolas-found42/sl-remastered, 00454500):
   original.
 
 Wheel alignment enters as camber (above); the load itself is no longer
-scaled. The copied `setCPatch` tolerance (`patch_angle`) is not read by the
+scaled. In strut mode (`setHub` mode 0) the strut fit replaces the hub
+rotation, so `setYpr` camber and toe do not reach a strut wheel: the patched
+stock struts tilt the fit itself to their static camber (#450,
+[notes](notes.md#tyres-and-suspension-geometry-450)). The copied `setCPatch` tolerance (`patch_angle`) is not read by the
 solver. Likewise, `setInstantCenter` values and the
 `WheelState::jacking` field are retained but have no active load effect:
 there is no instant-centre anti-dive/anti-squat force or jacking feedback.

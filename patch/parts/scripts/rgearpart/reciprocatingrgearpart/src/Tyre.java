@@ -63,6 +63,9 @@ public class Tyre extends ReciprocatingRGearPart
 	// OpenSLRR (#446): the compound for the host's tyre temperature
 	// (tcSTREET 0 ... tcDRAGRADIAL 3), sent with WheelRef.setTyreSpec.
 	float	rubber_type = 0.0;
+	// OpenSLRR (#450): the compound's longitudinal/lateral friction ratio.
+	float	compound_frictn_x = 1.0;
+	int	compound = 0;
 
 	// debug vars, remove them after use //
 	float	slide_cm;
@@ -119,18 +122,53 @@ public class Tyre extends ReciprocatingRGearPart
 
 //			System.log("misinflation = "+misinflation);
 
-			insider_friction = friction * (0.5+0.5*(tyre_width/275.0)) * fric_mul * grip_factor;
+			// OpenSLRR (#450): physical tyre spec. The peak friction is the
+			// compound's (warm, at the nominal load); the host reads setFriction
+			// against 1.76863 for mu 1.15, hence the 1.537939 scale. The width no
+			// longer multiplies the friction (it added 32 % between a 195 and a
+			// 345): a wider tyre carries more load (loadcap), so it loses less
+			// grip to load sensitivity.
+			float mu = 1.00;
+			float crr = 0.010;
+			float carcass = 0.95;
+			compound_frictn_x = 1.0;
+			if (compound == tcSPORT)
+			{
+				mu = 1.10; crr = 0.011; carcass = 1.00;
+			} else
+			if (compound == tcSUPERSPORT)
+			{
+				mu = 1.30; crr = 0.013; carcass = 1.15;
+			} else
+			if (compound == tcDRAGRADIAL)
+			{
+				// soft sidewall and a wrinkle-wall carcass: weak sideways,
+				// strong in a straight line
+				mu = 1.05; crr = 0.015; carcass = 0.75; compound_frictn_x = 1.35;
+			}
+			insider_friction = mu * 1.537939 * grip_factor;
+//			insider_friction = friction * (0.5+0.5*(tyre_width/275.0)) * fric_mul * grip_factor;
 
 			float t = profile_ratio*optimal_inflation/inflation;
 
-			loadcap = 4000.0+(0.75+profile_ratio/0.4*0.25)*(0.9+0.1*t)*(tyre_width-165.0)*9.81*load_mul*1.350/friction/fric_mul; // tyre: max load capacity (Ns = kgs*gravity)
-			loadcap /= rubber_rigidity;
+			// OpenSLRR (#450): the host's nominal load is loadcap/2, 4000 N for a
+			// 205 mm tyre, growing with the width and a little with the pressure.
+			loadcap = 8000.0*(tyre_width/205.0)*Math.pow(pressure,0.25);
+//			loadcap = 4000.0+(0.75+profile_ratio/0.4*0.25)*(0.9+0.1*t)*(tyre_width-165.0)*9.81*load_mul*1.350/friction/fric_mul; // tyre: max load capacity (Ns = kgs*gravity)
+//			loadcap /= rubber_rigidity;
 			CPatchMaximumAngle = 3.1415926535897932384626433832795/180.0 * (CPatchMinA+(0.6+(405.0-tyre_width)/405.0*0.4) /* *misinflation */ *profile_ratio*(CPatchMaxA-CPatchMinA));
 //			System.log(name+"->CPatchMaximumAngle = "+CPatchMaximumAngle);
-			stiffness = -18.0+(1.0-slide_interval)*(1.0-profile_ratio)*stiffness_factor*80.0;
-			stiffness = clampTo(stiffness,8.0,40.0);
+			// OpenSLRR (#450): cornering stiffness per unit load from the sidewall
+			// (aspect ratio to the 1/4 power, 17.68 for a 45-series sport tyre),
+			// the carcass and the rim fit. The stock formula put every low-profile
+			// tyre at its clamp of 40.
+			stiffness = 17.68*Math.pow(0.45/profile_ratio,0.25)*carcass*(1.0-slide_interval)*stiffness_factor;
+//			stiffness = -18.0+(1.0-slide_interval)*(1.0-profile_ratio)*stiffness_factor*80.0;
+			stiffness = clampTo(stiffness,6.0,40.0);
 			radius = max_radius; // min_radius+(max_radius-min_radius)/misinflation;
-			rollres = min_rollres/Math.sqrt(pressure);	// OpenSLRR: was misinflation*min_rollres, lower when under-inflated
+			// OpenSLRR (#450): real rolling resistance coefficients (0.004 before),
+			// lower when over-inflated, higher when under-inflated.
+			rollres = crr/Math.sqrt(pressure);
 //			rollres = misinflation*min_rollres;//*(1.0-(tyre_width-215.0)/1000.0);		// tyre: rolling resistance - hungarian note: az inflation fuggvenye
 
 			setMaxWear((0.15+(rubber_rigidity*rubber_rigidity*rubber_rigidity*rubber_rigidity)*0.85)*50000000000.0*misinflation);
@@ -157,15 +195,16 @@ public class Tyre extends ReciprocatingRGearPart
 			w.setPacejka( 12, 1.0 );//0.2 );
 //			w.setPacejka( 15, load_progress ); // nevleges load a 'stiffness'-hez
 //			w.setPacejka( 16, load_progress ); // +load ; 15+16 -nal lesz fel 'stiffness' ertek
-			w.setFrictn_x( 1.0 );
+			w.setFrictn_x( compound_frictn_x );	// OpenSLRR (#450): was 1.0 for every compound
 			w.setLoadSmooth( 0.4 );
 
 			w.setRadius( radius );
 			w.setWidth( tyre_width/1000.0 );
 			w.setRollRes( rollres );
-			// OpenSLRR: the lateral relaxation length grows as the pressure falls.
+			// OpenSLRR: the lateral relaxation length grows as the pressure falls,
+			// and with the sidewall (#450): 0.3 m for a 113 mm sidewall (205/55).
 			if (optimal_inflation > 0.0)
-				w.setRelaxation( 0.3/Math.sqrt(inflation/optimal_inflation) );
+				w.setRelaxation( 0.3*Math.sqrt(profile_height/(113.0*inflation/optimal_inflation)) );
 			w.setTyreSpec( rubber_type );
 			w.setBearing( 20.0 );
 
@@ -201,6 +240,7 @@ public class Tyre extends ReciprocatingRGearPart
 	{
 		String compound_label;
 		rubber_type = RT;
+		compound = RT;
 
 		if (RT == tcSPORT) // sport tyre //
 		{
