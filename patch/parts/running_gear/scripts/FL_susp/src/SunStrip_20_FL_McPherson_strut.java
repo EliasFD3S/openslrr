@@ -38,12 +38,12 @@ public class SunStrip_20_FL_McPherson_strut extends Suspension
 			{
 				// OpenSLRR (#450): front geometry of the race del Sol, laid out at the static ride height
 				wheel.setArm( 0.2960,
-				              0.2171, 0.1816, 0.0000,
+				              0.3252, 0.2128, 0.0000,
 				              0.0000, 0.0000, 1.0000);
 				wheel.setHub( 0.0000,
 				              -0.0770, -0.0430, -0.0040,
 				              0.0710, 0.4070, 0.0000,
-				              0.0475, 0.7502, 0.0000);
+				              0.1565, 0.7513, 0.0000);
 
 				the_car.setSlotPos(101+wheelID, new Vector3(-0.124,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(-0.113,0,0), null );

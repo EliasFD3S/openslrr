@@ -1410,6 +1410,34 @@ body instead of the road; front toe is 0 (strut mode drops `setYpr`); the
 static lengths are computed, not measured per car; the tyre coefficients are
 typical values, not a measured tyre; stock tyre sizes are unchanged.
 
+### Track width regression (#456)
+
+Cause: the #450 generator put every hub on the CFG wheel centre at rest
+(front ball joint straight above it, rear pivot level with it). The stock
+arms do not: at the static length the stock strut arm leaves the front hub
+9.3-10.9 cm inboard of the CFG centre, and the stock rear arm leaves the rear
+hub 2.7-2.9 cm outboard (host `wheel_pose`, 96 corners). The stock wheels
+and bodies are laid out for those positions, so after #450 the front track
+was about 20 cm wider and the rear about 6 cm narrower: the front wheels
+stood out of the arches and the balance changed.
+
+Fix: the generator takes each corner's stock position at rest (the stock
+`setArm`/`setHub` through `wheel_pose`) as its target. Fronts: the ball
+joint moves inboard with the hub, and the lower-arm slope is solved again
+for the gain. Rears: the pivot moves by the same offset, so the arm reaches
+the stock position. Live axles get a 25 m arm (0.06 deg per 25 mm) instead
+of no arm, which would put the hub on the CFG centre.
+
+Validation: compilation of the 96 classes in `build/brake-compile-root`
+(24 per corner, no failure). Host `wheel_pose` probe: lateral position
+equal to stock on all 96 corners (within 1 mm), camber, toe and gain still
+on target. Bench drive (CoupeSport, Valo City, `build/needle-game`) loads
+and drives with no new script message. Handling not judged.
+
+Limitation: with a near-flat lower arm the front hub stays at the spring
+point's height, 0.4-1.6 cm above the stock arm's hub. Matching it as well
+would need a steep arm, so a different camber gain.
+
 ## Ground surface friction and rolling resistance (#452)
 
 Cause: every ground surface gripped and rolled like asphalt. The map SCM

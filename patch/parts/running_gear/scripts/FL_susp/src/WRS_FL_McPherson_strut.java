@@ -38,12 +38,12 @@ public class WRS_FL_McPherson_strut extends Suspension
 			{
 				// OpenSLRR (#450): front geometry of the Impreza GC8 STi, laid out at the static ride height
 				wheel.setArm( 0.2960,
-				              0.2183, 0.1584, 0.0000,
+				              0.3226, 0.1735, 0.0000,
 				              0.0000, 0.0000, 1.0000);
 				wheel.setHub( 0.0000,
 				              -0.0770, -0.0430, -0.0040,
 				              0.0710, 0.4070, 0.0000,
-				              0.0277, 0.7427, 0.0000);
+				              0.1317, 0.7393, 0.0000);
 
 				the_car.setSlotPos(101+wheelID, new Vector3(-0.124,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(-0.113,0,0), null );

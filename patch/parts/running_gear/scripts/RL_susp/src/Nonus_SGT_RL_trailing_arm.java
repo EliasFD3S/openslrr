@@ -38,7 +38,7 @@ public class Nonus_SGT_RL_trailing_arm extends Suspension
 			{
 				// OpenSLRR (#450): rear swing arm of the Nissan Skyline R34 GT-R, laid out at the static ride height
 				wheel.setArm( 2.0463,
-				              2.0463, 0.1794, 0.0000,
+				              2.0173, 0.1794, 0.0000,
 				              0.0000, 0.0000, 1.0000);
 				wheel.setHub( -1.0000,
 				              0.1210, 0.0000, 0.0000,

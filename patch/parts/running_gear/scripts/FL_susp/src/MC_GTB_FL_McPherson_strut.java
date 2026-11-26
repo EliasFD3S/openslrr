@@ -38,12 +38,12 @@ public class MC_GTB_FL_McPherson_strut extends Suspension
 			{
 				// OpenSLRR (#450): front geometry of the Camaro Z28, laid out at the static ride height
 				wheel.setArm( 0.2960,
-				              0.2189, 0.1519, 0.0000,
+				              0.3130, 0.1829, 0.0000,
 				              0.0000, 0.0000, 1.0000);
 				wheel.setHub( 0.0000,
 				              -0.0770, -0.0430, -0.0040,
 				              0.0710, 0.4070, 0.0000,
-				              0.0227, 0.7154, 0.0000);
+				              0.1187, 0.7197, 0.0000);
 
 				the_car.setSlotPos(101+wheelID, new Vector3(-0.124,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(-0.113,0,0), null );
