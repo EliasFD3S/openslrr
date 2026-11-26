@@ -280,7 +280,7 @@ void stock_nitrous_lifecycle() {
   drive.throttle = host_input().drive_throttle;
   drive.idle = std::max(400.f, number(f.car, "engine_rpm_idle"));
   drive.limit = std::max(drive.idle + 100., double(number(f.car, "RPM_limit")));
-  drive.inertia = .28 + .01 * std::max(0.f, number(f.car, "engine_inertia"));
+  drive.inertia = std::max(.10, .02 * std::max(0.f, number(f.car, "engine_inertia")));
   drive.torque = [&](double rpm) { return dyno_sample(f.dyno(), float(rpm), 0, false); };
   drive.nitro_torque = [&](double rpm) { return dyno_sample(f.dyno(), float(rpm), 1, false); };
   drive.nitro = .25;

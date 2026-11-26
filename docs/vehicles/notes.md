@@ -1073,3 +1073,30 @@ Part masses sit at the part origin, so a part whose origin is far from its
 own centre (an exhaust pipe) is slightly misplaced. Unsprung mass is still
 not simulated apart from the body: tyres and hubs only add to the rigid body.
 The stock game exe still treats these parts as massless.
+
+## Engine inertia was 2-3x a real engine's (#432)
+
+Cause: `configure_drive` set the crank inertia to `0.28 + 0.01 ×
+engine_inertia`. Stock `Chassis.engine_inertia` (the parts' sum, 0.09 per kg)
+is 5.6–7.6, so every engine got 0.34–0.36 kg·m², mostly from the fixed 0.28.
+That is a truck engine: road-car crank + flywheel + clutch is roughly
+0.10–0.22 kg·m². In first gear (17:1 overall on the Baiern CoupeSport) it
+added about 1,080 kg of equivalent mass to a 1,490 kg car, the engine rose
+from idle to redline in about 1.3 s in neutral, and a flywheel swap changed
+almost nothing. SLRR_rev uses the same formula.
+
+The original game is lighter still. From SLRR_rev's original-game telemetry
+(`data/telemetry/original-game/2026-11-05`, neutral full-throttle rise against
+each capture's torque curve, 10 Hz samples): Baiern 7.63 → ~0.07 kg·m², Duhen
+SunStrip 5.61 → ~0.052, Einvagen 110 GTK 5.97 → ~0.05–0.057, i.e. about
+0.009 × `engine_inertia`, like a race engine with a light flywheel.
+
+Fix: `max(0.10, 0.02 × engine_inertia)`, a road-car range of 0.11–0.15
+kg·m² on stock engines (owner's choice: a realistic feel, not the original's).
+The installed parts now set the inertia; 0.10 is the smallest inertia the
+stability fixture (`idle_and_limiter_stay_bounded_for_every_flywheel`) covers.
+
+Limitations: the real-car figures are typical values, not measurements of
+these engines. SLRR torque curves are below the real cars' (Baiern peak 178
+N·m against about 245 N·m for its counterpart), so the cars stay slower than
+their counterparts. Wheel inertia (1.6 kg·m² per wheel) is unchanged.

@@ -373,7 +373,7 @@ The current chain is:
    smoothing once per frame. This is not exactly the prototype's constant digital
    slew, and does not inherently bypass filtering for analog pedals.
 2. [`configure_drive`](../../src/resources/part_runtime.cpp) supplies pedal, idle,
-   limit, inertia `0.28 + 0.01 × max(0, engine_inertia)`, starter and the dyno torque
+   limit, inertia `max(0.10, 0.02 × max(0, engine_inertia))`, starter and the dyno torque
    sampler (nitro 0) once per host tick.
 3. [`step_drive`](../../src/physics/vehicle_dynamics.cpp) now recovers indicated
    torque as `net_table_torque + F`, applies pedal/idle/combustion/limiter gates,
@@ -627,8 +627,8 @@ The [standalone fixture](../../tests/test_physics_tick_rate.cpp) uses a syntheti
 235 N·m peak table curve, 800 rpm idle, 7000 rpm limit, neutral idle for 3 s,
 full throttle for 3 s, then lift for 7 s. It samples every kernel step at five
 flywheel inertias (0.10, 0.22, 0.28, 0.38 and 0.60 kg·m²), plus one automatic
-rear-drive launch on flat analytic ground. The host's 0.28 floor means the two
-smallest inertias are intentionally below normal game configurations.
+rear-drive launch on flat analytic ground. The host's 0.10 floor is the smallest
+inertia here; stock engines get 0.11–0.15 kg·m² (see the driving notes).
 
 MSVC `/O2`, corrected net-torque integration, nine checks passing at each
 of the five compiled rates:
