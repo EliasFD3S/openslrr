@@ -25,6 +25,9 @@ struct EnhancedGraphics {
   bool headlight_shadows = true;
   bool street_lamps = true;      // street lamps light the scene at night
   int shadowed_lamps = 6;        // street lamps with a shadow tile, 0-6
+  // Tyre smoke and dust (#454), percent: scales how much smoke the tyres'
+  // sliding power makes (emit_tyre_dust).
+  int tyre_smoke_density = 100;
   bool operator==(const EnhancedGraphics&) const = default;
 };
 EnhancedGraphics& host_enhanced_graphics();

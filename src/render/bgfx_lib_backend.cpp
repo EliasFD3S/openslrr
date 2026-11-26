@@ -82,6 +82,10 @@
 #include "dxbc/fs_ao.sc.bin.h"
 #include "glsl/fs_ao.sc.bin.h"
 #include "glsl/fs_static_shadow.sc.bin.h"
+#include "dxbc/vs_particle.sc.bin.h"
+#include "glsl/vs_particle.sc.bin.h"
+#include "dxbc/fs_particle.sc.bin.h"
+#include "glsl/fs_particle.sc.bin.h"
 
 #include "bgfx_lib_backend.hpp"
 #include "reflection_capture.hpp"
@@ -104,6 +108,9 @@ static const bgfx::EmbeddedShader k_skin[] = {
 static const bgfx::EmbeddedShader k_fs[] = {
     BGFX_EMBEDDED_SHADER(fs_mesh),
     BGFX_EMBEDDED_SHADER(fs_static_shadow),
+    BGFX_EMBEDDED_SHADER_END()};
+static const bgfx::EmbeddedShader k_particle[] = {
+    BGFX_EMBEDDED_SHADER(vs_particle), BGFX_EMBEDDED_SHADER(fs_particle),
     BGFX_EMBEDDED_SHADER_END()};
 static const bgfx::EmbeddedShader k_ao[] = {
     BGFX_EMBEDDED_SHADER(vs_ao), BGFX_EMBEDDED_SHADER(fs_ao), BGFX_EMBEDDED_SHADER_END()};
@@ -234,6 +241,16 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
     vehicle_program_ = create_owned_program(
         bgfx::createEmbeddedShader(k_vehicle, rt, "vs_vehicle"),
         bgfx::createEmbeddedShader(k_vehicle, rt, "fs_vehicle"));
+    particle_program_ = create_owned_program(
+        bgfx::createEmbeddedShader(k_particle, rt, "vs_particle"),
+        bgfx::createEmbeddedShader(k_particle, rt, "fs_particle"));
+    u_particle_sun_ = bgfx::createUniform("u_particleSun", bgfx::UniformType::Vec4);
+    u_particle_sun_color_ = bgfx::createUniform("u_particleSunColor", bgfx::UniformType::Vec4);
+    u_particle_ambient_ = bgfx::createUniform("u_particleAmbient", bgfx::UniformType::Vec4);
+    u_particle_cam_ = bgfx::createUniform("u_particleCam", bgfx::UniformType::Vec4, 4);
+    u_particle_params_ = bgfx::createUniform("u_particleParams", bgfx::UniformType::Vec4);
+    u_particle_depth_ = bgfx::createUniform("u_particleDepth", bgfx::UniformType::Vec4);
+    s_particle_depth_ = bgfx::createUniform("s_particleDepth", bgfx::UniformType::Sampler);
     s_mix_ = bgfx::createUniform("s_vehicleMix", bgfx::UniformType::Sampler);
     s_env_ = bgfx::createUniform("s_vehicleEnv", bgfx::UniformType::Sampler);
     s_bake_ = bgfx::createUniform("s_vehicleBake", bgfx::UniformType::Sampler);
@@ -256,6 +273,9 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
     s_car_depth_ = bgfx::createUniform("s_carDepth", bgfx::UniformType::Sampler);
     u_car_depth_mtx_ = bgfx::createUniform("u_carDepthMtx", bgfx::UniformType::Mat4);
     u_car_depth_params_ = bgfx::createUniform("u_carDepthParams", bgfx::UniformType::Vec4);
+    s_smoke_shadow_ = bgfx::createUniform("s_smokeShadow", bgfx::UniformType::Sampler);
+    u_smoke_shadow_mtx_ = bgfx::createUniform("u_smokeShadowMtx", bgfx::UniformType::Mat4);
+    u_smoke_shadow_params_ = bgfx::createUniform("u_smokeShadowParams", bgfx::UniformType::Vec4);
     u_cloud_wind_ = bgfx::createUniform("u_cloudWind", bgfx::UniformType::Vec4);
     u_cloud_sky_ = bgfx::createUniform("u_cloudSky", bgfx::UniformType::Vec4);
     u_fog_color_ = bgfx::createUniform("u_fogColor", bgfx::UniformType::Vec4);
@@ -297,7 +317,8 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
         {"mesh", program_}, {"osd_text", text_program_}, {"skin", skin_program_},
         {"ao",ao_program_},{"ao_skin_depth",ao_skin_depth_program_},
         {"static_shadow", static_shadow_program_}, {"inst", inst_program_},
-        {"inst_shadow", inst_shadow_program_}, {"vehicle", vehicle_program_}};
+        {"inst_shadow", inst_shadow_program_}, {"vehicle", vehicle_program_},
+        {"particle", particle_program_}};
     for (const auto& [name, handle] : programs)
       if (!bgfx::isValid(handle))
         std::fprintf(stderr, "[bgfx] program %s failed to link\n", name);
@@ -438,6 +459,21 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
       u_skin_bones_ = BGFX_INVALID_HANDLE;
     }
     if (bgfx::isValid(vehicle_program_)) bgfx::destroy(vehicle_program_);
+    if (bgfx::isValid(particle_program_)) bgfx::destroy(particle_program_);
+    if (bgfx::isValid(smoke_shadow_fb_)) bgfx::destroy(smoke_shadow_fb_);
+    smoke_shadow_fb_ = BGFX_INVALID_HANDLE;
+    smoke_shadow_tex_ = BGFX_INVALID_HANDLE;
+    for (auto* handle : {&s_smoke_shadow_, &u_smoke_shadow_mtx_, &u_smoke_shadow_params_}) {
+      if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
+      *handle = BGFX_INVALID_HANDLE;
+    }
+    particle_program_ = BGFX_INVALID_HANDLE;
+    for (auto* handle : {&u_particle_sun_, &u_particle_sun_color_, &u_particle_ambient_,
+                         &u_particle_cam_, &u_particle_params_, &u_particle_depth_,
+                         &s_particle_depth_}) {
+      if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
+      *handle = BGFX_INVALID_HANDLE;
+    }
     vehicle_program_ = BGFX_INVALID_HANDLE;
     destroy_reflections();
     if (bgfx::isValid(car_depth_fb_)) bgfx::destroy(car_depth_fb_);
@@ -847,6 +883,7 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       }
       else destroy_ao_targets();
       update_car_depth(garage_ ? nullptr : position, video);
+      update_smoke_shadow(video);
       // Every world camera reflects its scene. The car dealers have a map and a
       // script camera but neither the garage flag nor a followed car, so their
       // cars used to lose the cubemap and render matte.
@@ -910,7 +947,11 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       // optical glow to previews/reflection/shadow passes or the light arrays.
       if (video.flares) draw_nitro_flares(view, render_proj, world_view);
       // Tyre marks after the world's opaque and blended draws.
-      if (world_cam) draw_skid_marks(world_view);
+      if (world_cam) {
+        draw_skid_marks(world_view);
+        // Smoke last: it blends over the world, the cars and the marks.
+        draw_particles(view, render_proj, world_view);
+      }
     }
     // Previews start at view 8. OSD plates under the cars are view 7; the
     // rest of the interface is view 70.

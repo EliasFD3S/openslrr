@@ -612,6 +612,7 @@ void register_boot_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   register_race_natives(jvm,rpk,sections);
   register_painter_natives(jvm);
   register_light_natives(jvm);
+  register_particle_natives(jvm, rpk);
   install_osd_script_hover(jvm);
 
   // Statics

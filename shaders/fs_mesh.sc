@@ -242,6 +242,7 @@ void main()
 	bake = mix(vec3(1.0, 1.0, 1.0), bake, use);
 	float visibility = use < 0.5 ? sceneShadowVisibility(v_staticShadow, v_worldPos) : 1.0;
 	float carVisibility = 1.0;
+	float smokeTransmit = smokeShadowTransmit(v_worldPos);
 	if (u_carDepthParams.x > 0.5) {
 		vec3 p = mul(u_carDepthMtx, vec4(v_worldPos, 1.0)).xyz;
 		float edge = min(min(p.x, 1.0 - p.x), min(p.y, 1.0 - p.y));
@@ -257,7 +258,8 @@ void main()
 	}
 	float sunVisibility = u_staticShadowParams.w > 0.5 ? 1.0 : visibility;
 	float localVisibility = u_staticShadowParams.w > 0.5 ? visibility : 1.0;
-	vec3 illumination = vec3(light, light, light) * sunVisibility * mix(0.55, 1.0, carVisibility);
+	vec3 illumination = vec3(light, light, light) * sunVisibility * mix(0.55, 1.0, carVisibility) *
+	                    mix(0.55, 1.0, smokeTransmit);
 	if (u_sunDir.w < -0.5) illumination = u_sunAmb.rgb*ambientVisibility(gl_FragCoord.xy);
 	else if (u_sunDir.w > 0.5 && use < 0.5) {
 		vec3 sun = normalize(u_sunDir.xyz);
@@ -273,7 +275,7 @@ void main()
 			if (across * dot(sun, f) < 0.0) sunNormal = n - 2.0 * across * f;
 		}
 		float direct = max(dot(sunNormal, sun), 0.0);
-		illumination = u_sunAmb.rgb*ambientVisibility(gl_FragCoord.xy) + u_sunDiff.rgb * direct * min(sunVisibility, carVisibility);
+		illumination = u_sunAmb.rgb*ambientVisibility(gl_FragCoord.xy) + u_sunDiff.rgb * direct * min(sunVisibility, carVisibility) * smokeTransmit;
 	}
 	if (u_localLight.w > 0.0) {
 		vec3 delta = u_localLight.xyz - v_worldPos;

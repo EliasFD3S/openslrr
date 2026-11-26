@@ -111,11 +111,27 @@ SLRR_TEST(effects_and_ground_friction) {
   SLRR_REQUIRE(s[0].mark_color == 0xFF737373u && s[0].slide_sound == 0x00050012u);
   SLRR_REQUIRE(near(s[1].friction, 1.5f) && near(s[1].bounce, .2f) && !s[1].mark_color);
   SLRR_REQUIRE(near(s[1].slide_volume, 1.f));
-  // The grass fallback brings its own mark; the default sound scale stays.
-  SLRR_REQUIRE(near(s[2].friction, .65f * 1.5f) && s[2].mark_color != 0);
+  // The grass fallback brings the stock grass cloud and mark (#454), no
+  // colour; the default sound scale stays.
+  SLRR_REQUIRE(near(s[2].friction, .65f * 1.5f) && !s[2].mark_color);
+  SLRR_REQUIRE(s[2].skid_particles == (slrr::kParticlesLocal | slrr::kCloudGrass));
+  SLRR_REQUIRE(s[2].skid_mark == (slrr::kParticlesLocal | slrr::kSkidGrass));
   SLRR_REQUIRE(!s[2].slide_sound && near(s[2].slide_volume, .6f));
   // A ground_friction at or below zero is 1, as in the original.
   SLRR_REQUIRE(near(ground_surfaces(m, {}, 0.f)[1].friction, 1.f));
+}
+
+// skid_PS and skid_SM (#454): ids as written, kept over the fallback; an
+// unset road keeps 0 (the original's particles:2 and particles:0xA).
+SLRR_TEST(skid_effect_ids) {
+  const auto m = parse_ground_materials(bytes(
+      "materials 3\nmaterial 0 Sand\nskid_PS 0x00030104 //Particles.rpk\\ Sand smoke\n"
+      "skid_SM 0x00020047\nmaterial 1 Road\nmaterial 2 kavics\n"));
+  SLRR_REQUIRE(m[0].skid_particles == 0x00030104u && m[0].skid_mark == 0x00020047u);
+  const auto s = ground_surfaces(m, {}, 1.f);
+  SLRR_REQUIRE(s[0].skid_particles == 0x00030104u && s[0].skid_mark == 0x00020047u);
+  SLRR_REQUIRE(!s[1].skid_particles && !s[1].skid_mark);
+  SLRR_REQUIRE(s[2].skid_particles == (slrr::kParticlesLocal | slrr::kCloudPebbles));
 }
 
 }  // namespace
@@ -123,6 +139,7 @@ SLRR_TEST(effects_and_ground_friction) {
 int main() {
   const slrr::standalone::Test tests[] = {
       text_scm_sets_the_selected_material, params_selects_by_name, binary_scm_gives_names,
-      name_fallback_classes, surfaces_combine_values_and_fallback, effects_and_ground_friction};
+      name_fallback_classes, surfaces_combine_values_and_fallback, effects_and_ground_friction,
+      skid_effect_ids};
   return slrr::standalone::run("ground_surface", tests);
 }

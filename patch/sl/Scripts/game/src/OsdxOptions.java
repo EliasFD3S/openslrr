@@ -93,7 +93,7 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 	MultiChoice		res;
 	MultiChoice		windowed;
 	Slider			viewDist;
-	Slider			lampShadows;
+	Slider			lampShadows, tyreSmoke;
 	Slider			aoStrength;
 	Slider			aoRadius;
 	int				resFirst = 3;
@@ -337,6 +337,8 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		viewDist.printValue( "%.0f" );
 		lampShadows = m.addItem( "LAMP SHADOWS", OptionsDialog.CMD_SHADOWED_LAMPS, option(20), 0.0, 6.0, 7, "Street lamps near the car that cast shadows." );
 		lampShadows.printValue( "%.0f" );
+		tyreSmoke = m.addItem( "TYRE SMOKE", OptionsDialog.CMD_TYRE_SMOKE, option(33), 0.0, 400.0, 9, "How much smoke and dust the tyres make, in percent of the default." );
+		tyreSmoke.printValue( "%.0f" );
 	}
 
 	void buildSound()
@@ -1327,6 +1329,7 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		lamps.setValue( option(19) );
 		viewDist.setValue( option(14) );
 		lampShadows.setValue( option(20) );
+		tyreSmoke.setValue( option(33) );
 		int shadowOn = 0;
 		if( Config.shadows > 0 )
 			shadowOn = 1;

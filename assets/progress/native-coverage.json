@@ -1,13 +1,13 @@
 {
-  "updated": "2026-11-18",
+  "updated": "2026-11-26",
   "total": 376,
   "scope": "Stock native table (assets/progress/stock-natives.json), matched against the class/method/full descriptors (including returns, with omitted-void alias) registered under src/ by scripts/render_native_coverage.py. Explicit native_noop bindings are counted separately. Bodies can be partial implementations or return constants; these are binding counts, not gameplay-completion or validation scores.",
   "categories": [
     {
       "name": "World",
-      "body": 42,
+      "body": 54,
       "noop": 0,
-      "missing": 12
+      "missing": 0
     },
     {
       "name": "Language",

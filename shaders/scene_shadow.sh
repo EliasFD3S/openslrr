@@ -458,6 +458,22 @@ uniform vec4 u_shadowBlend;
 #undef SHADOW_TAP_FIELD
 #undef SHADOW_CASCADE_VISIBILITY
 #undef SHADOW_COVERAGE
+// Tyre smoke's shadow (#454): an orthographic map from the sun fitted to the
+// smoke, rgb what the smoke lets through, a the light depth of its front.
+// Only receivers below that front darken. Level 0: no gradient needed.
+SAMPLER2D(s_smokeShadow, 14);
+uniform mat4 u_smokeShadowMtx;
+uniform vec4 u_smokeShadowParams; // enabled, depth tolerance
+float smokeShadowTransmit(vec3 world)
+{
+    if(u_smokeShadowParams.x<0.5) return 1.0;
+    vec3 p=mul(u_smokeShadowMtx,vec4(world,1.0)).xyz;
+    if(p.x<=0.0 || p.y<=0.0 || p.x>=1.0 || p.y>=1.0) return 1.0;
+    vec4 smoke=texture2DLod(s_smokeShadow,p.xy,0.0);
+    // Even a thick cloud lets 60 % of the sun through: it scatters as much
+    // light down as it stops.
+    return mix(1.0,max(smoke.r,0.6),smoothstep(smoke.a-u_smokeShadowParams.y,smoke.a+u_smokeShadowParams.y,p.z));
+}
 float sceneShadowVisibility(vec3 p,vec3 world)
 {
     if(u_staticShadowParams.x<=0.0) return 1.0;

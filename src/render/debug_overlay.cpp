@@ -397,6 +397,7 @@ void draw_render_passes(DebugOverlay::RenderOptions& options) {
   auto& o = render_debug();
   ImGui::TextDisabled("Debug overrides: not saved, reset on restart.");
   ImGui::Checkbox("Ambient occlusion pass", &o.ambient_occlusion);
+  ImGui::Checkbox("Soft particles depth", &o.soft_particles);
   for (int i = 0; i < 4; ++i) {
     char label[48];
     std::snprintf(label, sizeof(label), "Sun cascade %d", i);
@@ -506,6 +507,7 @@ void draw_render_options(DebugOverlay::RenderOptions& options, const char* refle
   ImGui::Combo("Ambient occlusion",&enhanced.ao_method,"Off\0HBAO\0GTAO\0");
   ImGui::Combo("AO quality",&enhanced.ao_quality,"Low\0Medium\0High\0");
   ImGui::SliderInt("AO strength (%)",&enhanced.ao_strength,0,200);
+  ImGui::SliderInt("Tyre smoke density (%)",&enhanced.tyre_smoke_density,0,400);
   ImGui::SliderInt("AO radius (cm)",&enhanced.ao_radius,25,300);
   ImGui::Combo("Shadow quality",&enhanced.shadow_quality,"Low\0Medium\0High\0");
   ImGui::Combo("Shadow smoothing",&enhanced.shadow_smoothing,"Sharp\0Soft\0Very soft\0");

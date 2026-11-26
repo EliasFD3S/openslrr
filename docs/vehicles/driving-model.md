@@ -82,11 +82,14 @@ after the original law, nicolas-found42/sl-remastered, 00454500):
   (`kRollresCoefficient`), not the original's speed-proportional drag. A
   body contact takes min(0.6, ground friction), and `collcoeff` (the
   original's shape bounce) scales its restitution, capped at 0.5. The
-  material's `skid_SMcolor` colours the tyre marks and its `skid_SFX`
-  replaces the slide loop. A material without values takes a class from
-  its name or SCY texture (`ground_surface_for_name`): grass 0.65 / 0.08,
-  sand 0.6 / 0.15, gravel 0.7 / 0.03, dirt 0.7 / 0.04, each with a mark
-  colour; a paved name stays road. Objects, garage shells and props are
+  material's `skid_SMcolor` tints the tyre marks and its `skid_SFX`
+  replaces the slide loop; its `skid_PS` (the particle cloud) and
+  `skid_SM` (the textured mark) drive the tyre effects (#454, below). A
+  material without values takes a class from its name or SCY texture
+  (`ground_surface_for_name`): grass 0.65 / 0.08, sand 0.6 / 0.15, gravel
+  0.7 / 0.03, dirt 0.7 / 0.04, each with its stock particles.rpk cloud
+  (grass clippings, sand dust, pebbles) and the stock grass mark; a paved
+  name stays road. Objects, garage shells and props are
   road, as in the original.
 
 Wheel alignment enters as camber (above); the load itself is no longer
@@ -428,3 +431,99 @@ repair preserves it even on the same slot. Detached inventory damage must remain
 intact. Queue affected link visuals once per repaired part and flush them on the
 next existing part update, after the complete scripted walk; do not relink every
 ancestor/descendant subtree during each native call.
+
+## Tyre smoke, ground dust and skid marks (#454)
+
+A wheel's ground material names its effects: `skid_PS`, an RPK entry
+`particle <cfg>` plus `texture`, and `skid_SM`, an entry `skidmark <cfg>` plus
+`texture`. When the SCM leaves them out, the original's defaults apply:
+particles:2 (asphalt smoke) and particles:0xA (the asphalt mark).
+`surface_effects.cpp` reads each entry once and registers the cloud
+(`particle_cloud.hpp`) or the mark style (`skid_marks.hpp`).
+
+- **Clouds.** `parse_particle_cloud` reads the stock Particle System API
+  format (`move m0 a b` holds a cloud's position when a is 0; `type 1`
+  debris always moves itself): `[STATE]` domains for size, colour, alpha, angle and lifetime, plus
+  `type` and `velscale`; `[ACTION]` lines for `source` (rate and domains),
+  `gravity`, `damping` and `bounce`. `ParticleSystem` has the shape of the
+  stock natives: `init`, `set_freq`, `set_source`, `emit_direct`, the counter,
+  `mode_permanent` and `stop`. All particles share one pool of 3000.
+  `particles_update` runs once per host frame: gravity, PAPI damping toward
+  the wind (not toward rest), slow eddies, and the emission's ground plane.
+- **Emission.** One emitter per wheel (`emit_tyre_dust`, `part_runtime.cpp`),
+  fed with the wheel state the frame published.
+  - Amount, from the tyre: the friction power at the patch, |Fx slip| +
+    |Fy lateral| (what the tyre thermal model heats with). It gives the
+    cfg's rate per 20 kW for rubber smoke, scaled by the tread surface's
+    temperature (10 % cold, full from 200 °C, ramp from 80 °C). Smoke and
+    dust feel 15 % of their cfg's gravity, and a puff swells with the square
+    root of its age. The patch retunes asphalt.cfg (4-7.5 m, 4-9 s). Loose
+    ground (rolling drag) and debris give the rate per 30 kW, with no
+    temperature.
+  - Place: round the tyre, from the patch up the side the tread runs to (the
+    back of a spinning wheel, the front of a locked one), across the tread
+    width.
+  - Motion and size: the particles leave with 0.6 × the car's speed, the
+    tread's surface speed and an outward push from the arch. They turn about
+    the axle while young (`Particle::swirl`, fading in 0.35 s), and smoke is
+    born at least 1.6 tyre radii wide.
+  - Option 33, `tyre_smoke_density` (percent, default 100), scales the
+    amount. **Options → Graphics → TYRE SMOKE** and Advanced Video Options
+    set it (0-400 %). The part above 100 % shrinks for big long-lived clouds by size²
+    × lifetime against asphalt.cfg's.
+  - Marks keep the exe's law (0x453680, `tyre_combined_slip`). The combined
+    slip σ = √(sin² a + (cos a × k)²) uses 0x43BBD0's stock constants, and a
+    mark exists above σ 0.4.
+  - Native traffic within 60 m of the camera smokes and lays marks too (the
+    driven and scripted cars within 120 m); it still plays no slide loop.
+- **Script natives.** The nine `ParticleSystem` natives
+  (`natives_particles.cpp`, `script_particles.cpp`) run the same pool:
+  `init` resolves the RenderRef type to a cloud, each source action emits in
+  its parent's frame at the parent's current pose, with no ground plane. A
+  source names a bone of the parent's skeleton to follow it.
+  `modePermanent` follows the exe's node flags: an update in which no
+  source emits sends a system that is not permanent idle, which drops its
+  sources; a positive `setFreq` or a new source wakes it.
+- **Traffic audio.** At most two native traffic cars within 40 m play the
+  slide loop.
+- **Dust colour, sparks and spray.**
+  - Loose ground's dust takes its texture's average colour
+    (`GroundSurface::dust_color`).
+  - A rim on the road and a hit faster than 4 m/s throw the stock sparks:
+    emissive streaks, added over the scene.
+  - A wheel in the map's water (`water.hpp`, from `GroundRef.setWater`)
+    throws water.cfg spray.
+- **Rendering.** `draw_particles` runs after the marks in the world view.
+  Particles are sorted back to front, and each one is a camera-facing
+  impostor of a sphere of smoke (`fs_particle.sc`).
+  - Its density is the sphere's thickness eroded by 3D fbm noise.
+  - Light reaches it through an optical depth toward the sun, with
+    Henyey-Greenstein forward scattering at the thin rims and sky ambient.
+  - Lighting is per vertex (`vs_particle.sc`), interpolated across the puff.
+    The sun takes a 4-tap lookup in the sun cascades, or in the single fitted
+    field indoors. Scenery lamps and car lights, headlights included, take
+    the lamp law without its facing term, with their shadow tiles, weighted
+    by HG g = 0.55 toward the camera (capped at 3×), so a beam seen through
+    smoke glows.
+  - The smoke casts a soft shadow (`update_smoke_shadow`, view 139): an
+    RGBA16F map seen from the sun, 1024 px, fitted every frame to all the
+    smoke (up to 200 m a side). Its RGB multiplies the puffs'
+    transmittance, and its alpha keeps by MIN the light depth of their
+    fronts. `smokeShadowTransmit` (`scene_shadow.sh`) darkens only the
+    receivers below that front: the world (`fs_mesh.sc`) and the car bodies
+    (`fs_vehicle.sc`).
+  - It is soft against the AO depth prepass, which also runs while AO is off
+    for as long as particles live (`soft_particles` debug toggle), and always
+    against its own ground plane. Output is premultiplied alpha.
+  - `type 1` clouds (grass, pebbles) are small lit sprites of their texture.
+- **Marks.** A textured style splits its quads at the texture tiles
+  (`height` metres). The first tile is the `uv_end` cap, the rest repeat
+  `uv_normal`, and a finished track closes with the cap mirrored. The width
+  follows the exe's intensity min(σ − 0.4, 1) from the cfg's minimum to its
+  maximum, capped at 0.8 m. Its alpha is the exe's: the colour's alpha × the
+  load over the nominal load (at most 1).
+  Each style keeps its own ring of `maxcount` × 14 quads (1400 for the stock
+  100), so one ground's marks never erase another's.
+  Marks multiply the ground (DST_COLOR, INV_SRC_ALPHA) with the texture
+  tinted by `skid_SMcolor`. An unset colour gives half opacity, the
+  original's default 0x80000000.

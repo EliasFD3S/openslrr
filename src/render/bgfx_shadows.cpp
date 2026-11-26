@@ -4,6 +4,7 @@
 #include "shadow_quality.hpp"
 #include "shadow_cascades.hpp"
 #include "slrr/frame_profiler.hpp"
+#include "slrr/particle_cloud.hpp"
 
 #include <bx/math.h>
 #include <algorithm>
@@ -1702,6 +1703,144 @@ void LibBgfxBackend::update_car_depth(const float* position, const VideoOptions&
     }
   }
   car_depth_active_ = true;
+}
+
+// Smoke shadows (#454): what the tyre smoke lets through of the sun, in an
+// orthographic map seen from the sun and fitted every frame to all the
+// smoke (at most 200 m a side). RGB multiplies to the transmittance of
+// every puff in a texel's column; alpha keeps, by MIN, the light depth of
+// the puffs' fronts nearest the sun, so only receivers below the smoke
+// darken (scene_shadow.sh smokeShadowTransmit, in fs_mesh and fs_vehicle).
+// Debris casts nothing. No sorting: both blends are order-independent.
+void LibBgfxBackend::update_smoke_shadow(const VideoOptions& video) {
+  smoke_shadow_active_ = false;
+  const auto& list = particles();
+  const auto& clouds = particle_clouds();
+  if (list.empty() || !bgfx::isValid(particle_program_) || video.shadows == 0 ||
+      !debug_overlay_.render_options().shadows)
+    return;
+  const auto sun = scene_instances_light();
+  if (!sun.has_direction) return;
+  // The cascades' held direction (#371), into render space.
+  const auto held = shadow_sun_direction(sun);
+  const bx::Vec3 t = bx::normalize(bx::Vec3{held[0], held[1], -held[2]});
+  if (t.y >= -.02f) return;  // the sun below the horizon casts nothing
+  const bx::Vec3 up_hint = std::abs(t.y) > .98f ? bx::Vec3{0, 0, 1} : bx::Vec3{0, 1, 0};
+  const bx::Vec3 right = bx::normalize(bx::cross(up_hint, t));
+  const bx::Vec3 up = bx::cross(t, right);
+  // The light-space box of every cloud particle.
+  std::vector<uint32_t> chosen;
+  chosen.reserve(list.size());
+  float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
+  for (uint32_t i = 0; i < list.size() && chosen.size() < 16000; ++i) {
+    const auto& p = list[i];
+    if (p.cloud >= clouds.size() || clouds[p.cloud].type == 1) continue;
+    const float life = std::clamp(p.age / p.life, 0.f, 1.f);
+    const float radius = particle_width(p) * .5f;
+    const bx::Vec3 c{p.position[0], p.position[1], -p.position[2]};
+    const float axis[3] = {bx::dot(c, right), bx::dot(c, up), bx::dot(c, t)};
+    for (int k = 0; k < 3; ++k) {
+      lo[k] = std::min(lo[k], axis[k] - radius);
+      hi[k] = std::max(hi[k], axis[k] + radius);
+    }
+    chosen.push_back(i);
+  }
+  if (chosen.empty()) return;
+  constexpr float kMaxSide = 200.f;
+  float half[2];
+  float mid[2];
+  for (int k = 0; k < 2; ++k) {
+    mid[k] = (lo[k] + hi[k]) * .5f;
+    half[k] = std::clamp((hi[k] - lo[k]) * .5f + 1.f, 2.f, kMaxSide * .5f);
+  }
+  const float depth = std::max(hi[2] - lo[2] + 2.f, 4.f);
+  const bx::Vec3 eye = bx::add(bx::add(bx::mul(right, mid[0]), bx::mul(up, mid[1])),
+                               bx::mul(t, lo[2] - 1.f));
+  const auto* caps = bgfx::getCaps();
+  float view[16], proj[16], clip[16];
+  bx::mtxLookAt(view, eye, bx::add(eye, t), up);
+  bx::mtxOrtho(proj, -half[0], half[0], -half[1], half[1], 0.f, depth, 0.f, caps->homogeneousDepth);
+  bx::mtxMul(clip, view, proj);
+  const float crop[16] = {
+      .5f, 0.f, 0.f, 0.f, 0.f, caps->originBottomLeft ? .5f : -.5f, 0.f, 0.f,
+      0.f, 0.f, caps->homogeneousDepth ? .5f : 1.f, 0.f, .5f, .5f,
+      caps->homogeneousDepth ? .5f : 0.f, 1.f};
+  bx::mtxMul(smoke_shadow_matrix_.data(), clip, crop);
+  smoke_shadow_depth_scale_ = 1.f / depth;
+
+  constexpr uint16_t kSize = 1024;
+  if (!bgfx::isValid(smoke_shadow_fb_)) {
+    smoke_shadow_tex_ = bgfx::createTexture2D(kSize, kSize, false, 1, bgfx::TextureFormat::RGBA16F,
+        BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+    if (!bgfx::isValid(smoke_shadow_tex_)) return;
+    smoke_shadow_fb_ = bgfx::createFrameBuffer(1, &smoke_shadow_tex_, true);
+    if (!bgfx::isValid(smoke_shadow_fb_)) {
+      bgfx::destroy(smoke_shadow_tex_);
+      smoke_shadow_tex_ = BGFX_INVALID_HANDLE;
+      return;
+    }
+  }
+  const uint32_t n = static_cast<uint32_t>(chosen.size());
+  if (bgfx::getAvailTransientVertexBuffer(n * 4, layout_) < n * 4 ||
+      bgfx::getAvailTransientIndexBuffer(n * 6) < n * 6) return;
+  bgfx::TransientVertexBuffer vb;
+  bgfx::TransientIndexBuffer ib;
+  bgfx::allocTransientVertexBuffer(&vb, n * 4, layout_);
+  bgfx::allocTransientIndexBuffer(&ib, n * 6);
+  auto* out = reinterpret_cast<MeshVertex*>(vb.data);
+  auto* index = reinterpret_cast<uint16_t*>(ib.data);
+  static constexpr float kCorner[4][2] = {{-1.f, -1.f}, {1.f, -1.f}, {-1.f, 1.f}, {1.f, 1.f}};
+  for (uint32_t j = 0; j < n; ++j) {
+    const auto& p = list[chosen[j]];
+    const float life = std::clamp(p.age / p.life, 0.f, 1.f);
+    const float radius = particle_width(p) * .5f;
+    // The same alpha as draw_particles.
+    const float alpha = std::clamp((p.alpha0 + (p.alpha1 - p.alpha0) * std::pow(life, 1.5f)) *
+                                       std::clamp(p.age / .15f, 0.f, 1.f), 0.f, 1.f);
+    const uint32_t rgba = 0x00ffffffu | static_cast<uint32_t>(std::lround(alpha * 255.f)) << 24;
+    for (int k = 0; k < 4; ++k) {
+      MeshVertex v{};
+      const float u = kCorner[k][0], w = kCorner[k][1];
+      v.x = p.position[0] + (right.x * u + up.x * w) * radius;
+      v.y = p.position[1] + (right.y * u + up.y * w) * radius;
+      v.z = -p.position[2] + (right.z * u + up.z * w) * radius;
+      v.u = u;
+      v.v = w;
+      v.u2 = radius;
+      v.v2 = p.seed;
+      v.v3 = 3.f;  // fs_particle: the smoke shadow mode
+      v.rgba = rgba;
+      out[j * 4 + k] = v;
+    }
+    const uint16_t base = static_cast<uint16_t>(j * 4);
+    const uint16_t tri[6] = {base, uint16_t(base + 1), uint16_t(base + 2),
+                             uint16_t(base + 1), uint16_t(base + 3), uint16_t(base + 2)};
+    std::copy(std::begin(tri), std::end(tri), index + j * 6);
+  }
+  bgfx::setViewFrameBuffer(kSmokeShadowView, smoke_shadow_fb_);
+  bgfx::setViewRect(kSmokeShadowView, 0, 0, kSize, kSize);
+  bgfx::setViewClear(kSmokeShadowView, BGFX_CLEAR_COLOR, 0xffffffffu);
+  bgfx::setViewTransform(kSmokeShadowView, view, proj);
+  float identity[16];
+  bx::mtxIdentity(identity);
+  static const auto start = std::chrono::steady_clock::now();
+  const float time = static_cast<float>(std::fmod(
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(), 600.0));
+  // y: light depth per metre of the fitted box.
+  const float params[4] = {time, smoke_shadow_depth_scale_, 0.f, 0.f};
+  enc()->setUniform(u_particle_params_, params);
+  enc()->setTransform(identity);
+  enc()->setVertexBuffer(0, &vb);
+  enc()->setIndexBuffer(&ib);
+  enc()->setTexture(0, s_tex_, white_tex_);
+  enc()->setTexture(1, s_particle_depth_, white_tex_);
+  enc()->setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                  BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_DST_COLOR, BGFX_STATE_BLEND_ZERO,
+                                                 BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_ONE) |
+                  BGFX_STATE_BLEND_EQUATION_SEPARATE(BGFX_STATE_BLEND_EQUATION_ADD,
+                                                     BGFX_STATE_BLEND_EQUATION_MIN));
+  submit_counted(kSmokeShadowView, particle_program_);
+  smoke_shadow_active_ = true;
 }
 
 }  // namespace slrr

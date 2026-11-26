@@ -407,6 +407,8 @@ class LibBgfxBackend final : public IRenderBackend {
   void draw_sun_flare(const float* view, const float* projection, uint16_t view_id);
   void draw_nitro_flares(const float* view, const float* projection, uint16_t view_id);
   void draw_skid_marks(uint16_t view_id);
+  // Tyre smoke and ground dust (#454): volumetric impostors, after the marks.
+  void draw_particles(const float* view, const float* projection, uint16_t view_id);
 
   void draw_previews();
 
@@ -566,6 +568,14 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::UniformHandle u_alpha_test_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_color_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle vehicle_program_ = BGFX_INVALID_HANDLE;
+  // Particles and textured skid marks (#454, vs/fs_particle.sc).
+  bgfx::ProgramHandle particle_program_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_particle_sun_ = BGFX_INVALID_HANDLE, u_particle_sun_color_ = BGFX_INVALID_HANDLE,
+      u_particle_ambient_ = BGFX_INVALID_HANDLE, u_particle_cam_ = BGFX_INVALID_HANDLE,
+      u_particle_params_ = BGFX_INVALID_HANDLE, u_particle_depth_ = BGFX_INVALID_HANDLE,
+      s_particle_depth_ = BGFX_INVALID_HANDLE;
+  // Binds the particle program's light, camera and soft-depth uniforms.
+  void bind_particle_uniforms(const float* view, uint16_t view_id);
   bgfx::UniformHandle s_mix_=BGFX_INVALID_HANDLE,s_env_=BGFX_INVALID_HANDLE,s_bake_=BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_layers_=BGFX_INVALID_HANDLE,u_channels_=BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_base_uv_=BGFX_INVALID_HANDLE,u_mix_uv_=BGFX_INVALID_HANDLE,u_env_uv_=BGFX_INVALID_HANDLE,u_diffuse_=BGFX_INVALID_HANDLE,u_spec_=BGFX_INVALID_HANDLE,u_sun_diff_=BGFX_INVALID_HANDLE,u_sun_amb_=BGFX_INVALID_HANDLE,u_sun_spec_=BGFX_INVALID_HANDLE,u_sun_dir_=BGFX_INVALID_HANDLE;
@@ -635,6 +645,8 @@ class LibBgfxBackend final : public IRenderBackend {
             ao_world_view_ == kWorldView);
   }
   bool ao_active_=false;
+  // The AO depth prepass ran this frame, with or without AO (#454).
+  bool scene_depth_active_=false;
 
   static constexpr size_t kFixtureLights=12;
   std::vector<SpotLight> fixture_lights_;
@@ -781,6 +793,17 @@ class LibBgfxBackend final : public IRenderBackend {
   // tile + 1 in its colour's w.
   static constexpr size_t kHeadlightShadows=6;
   static constexpr uint16_t kHeadlightShadowView=145;
+  // Smoke shadow transmittance (#454), fitted to the smoke every frame.
+  static constexpr uint16_t kSmokeShadowView=139;
+  bgfx::FrameBufferHandle smoke_shadow_fb_=BGFX_INVALID_HANDLE;
+  bgfx::TextureHandle smoke_shadow_tex_=BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle s_smoke_shadow_=BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_smoke_shadow_mtx_=BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_smoke_shadow_params_=BGFX_INVALID_HANDLE;
+  std::array<float,16> smoke_shadow_matrix_{};
+  float smoke_shadow_depth_scale_=1.f;  // light depth per metre
+  bool smoke_shadow_active_=false;
+  void update_smoke_shadow(const VideoOptions& video);
   static constexpr float kHeadlightShadowNear=.15f, kHeadlightShadowMargin=2.f;  // degrees
   void update_headlight_shadows(const VideoOptions& video);
   void set_headlight_focus(const void* car) { headlight_focus_car_=car; }

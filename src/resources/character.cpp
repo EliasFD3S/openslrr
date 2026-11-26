@@ -600,6 +600,19 @@ int character_skin_palette(void* key, int32_t type_id, const RpkIndex& packs,
                                          capacity);
 }
 
+bool character_bone_world(void* key, int32_t type_id, const RpkIndex& packs, int bone,
+                          float* out) {
+  if (!out || bone < 0) return false;
+  Character* character = ensure_character(key, type_id, &packs);
+  if (!character || !character->bind || static_cast<size_t>(bone) >= character->bind->bones.size())
+    return false;
+  rebuild(*character, g_character_sim_time);
+  if (character->worlds.size() < (static_cast<size_t>(bone) + 1) * 16) return false;
+  std::memcpy(out, character->worlds.data() + static_cast<size_t>(bone) * 16, 16 * sizeof(float));
+  for (int i = 12; i < 15; ++i) out[i] *= .01f;
+  return true;
+}
+
 int character_find_bone(void* key, int32_t type_id, const RpkIndex& packs,
                         const std::string& name) {
   const Character* character = ensure_character(key, type_id, &packs);

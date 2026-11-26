@@ -978,16 +978,13 @@ Process:
 ## 8. Native coverage at a glance
 
 From [scripting/natives.md](../scripting/natives.md) and
-`assets/progress/native-coverage.json` (18 November 2026, checked on
-24 November): of 376 stock signatures, 358 have a body, 3 are explicit
-no-ops and 15 are missing.
+`assets/progress/native-coverage.json` (26 November 2026): of 376 stock
+signatures, 370 have a body, 3 are explicit no-ops and 3 are missing.
 `scripts/render_native_coverage.py` recomputes these counts from `src/`;
 `--list missing` prints the missing signatures.
 
 | Missing family | Count | Blocks |
 | --- | ---: | --- |
-| `GroundRef` water (`setWater` ×2, `addWaterLimit`) | 3 | Water surfaces |
-| `ParticleSystem` | 9 | Smoke, sparks and other effects |
 | Leftovers (`RenderRef.addPoints`, `weld`, `progress`: the welder) | 3 | No stock caller found |
 
 The `GroundRef` route and traffic natives that this table listed are bound

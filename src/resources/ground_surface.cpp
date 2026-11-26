@@ -108,6 +108,11 @@ std::vector<GroundMaterialEntry> parse_text(std::string_view text) {
           out[i].has_bounce = true;
         }
       }
+    } else if (key == "skid_ps" || key == "skid_sm") {
+      uint32_t id = 0;
+      if (!read_hex(args, id)) continue;
+      for (size_t i = 0; i < out.size(); ++i)
+        if (selected[i]) (key == "skid_ps" ? out[i].skid_particles : out[i].skid_mark) = id;
     } else if (key == "skid_smcolor" || key == "skid_sfx") {
       // Hex ids, as the original's %x; skid_SFX adds a volume scale (1).
       uint32_t id = 0;
@@ -185,26 +190,28 @@ GroundSurface ground_surface_for_name(std::string_view name) {
   const std::string text = file_name(name);
   if (paved(text)) return {};  // `desert_road`, `grass_kerb`
   // Typical tyre-on-surface figures against dry asphalt, the extra
-  // rolling resistance of the soft ground, and a mark the colour of the
-  // ground churned up (OpenSLRR choices; the marks darken by multiplying).
-  const auto surface = [](float friction, float rolling, uint32_t mark) {
+  // rolling resistance of the soft ground (OpenSLRR choices), and the stock
+  // particles.rpk cloud and mark of that ground (#454): the churned-earth
+  // grass mark, sand dust, pebbles or grass clippings.
+  const auto surface = [](float friction, float rolling, uint32_t cloud) {
     GroundSurface out;
     out.friction = friction;
     out.rolling = rolling;
-    out.mark_color = mark;
+    out.skid_particles = kParticlesLocal | cloud;
+    out.skid_mark = kParticlesLocal | kSkidGrass;
     return out;
   };
-  if (has_any(text, {"sand", "homok", "piasek", "desert"})) return surface(.6f, .15f, 0xFF9A8C74);
+  if (has_any(text, {"sand", "homok", "piasek", "desert"})) return surface(.6f, .15f, kCloudSand);
   if (has_any(text, {"gravel", "grvl", "kavics", "murva", "zwir", "schotter"}))
-    return surface(.7f, .03f, 0xFF7C7870);
+    return surface(.7f, .03f, kCloudPebbles);
   // Stems that are grass only as a whole name: the stock city's lawns
   // (maps/textures/area.dds) and SLRR_rev's `fu.dds` (Hungarian grass).
   const std::string stem = text.substr(0, text.rfind('.'));
   if (has_any(text, {"grass", "gras", "trawa", "trafa", "trava", "gyep", "lawn", "turf"}) ||
       stem == "area" || stem == "fu")
-    return surface(.65f, .08f, 0xFF6E6A52);
+    return surface(.65f, .08f, kCloudGrass);
   if (has_any(text, {"dirt", "soil", "mud", "ziemia", "earth", "offroad"}))
-    return surface(.7f, .04f, 0xFF6A5C4A);
+    return surface(.7f, .04f, kCloudSand);
   return {};
 }
 
@@ -223,6 +230,8 @@ std::vector<GroundSurface> ground_surfaces(const std::vector<GroundMaterialEntry
     out[i].rolling = m.has_rolling ? m.rollres * kRollresCoefficient : guess.rolling;
     out[i].bounce = m.has_bounce ? m.collcoeff : guess.bounce;
     out[i].mark_color = m.has_mark_color ? m.mark_color : guess.mark_color;
+    out[i].skid_particles = m.skid_particles ? m.skid_particles : guess.skid_particles;
+    out[i].skid_mark = m.skid_mark ? m.skid_mark : guess.skid_mark;
     if (m.slide_sound) {
       out[i].slide_sound = m.slide_sound;
       out[i].slide_volume = m.slide_volume;

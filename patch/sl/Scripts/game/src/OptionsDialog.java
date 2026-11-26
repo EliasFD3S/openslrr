@@ -67,6 +67,8 @@ public class OptionsDialog extends Dialog
 	final static int CMD_FFB_SMOOTHING = 535;
 	// The brake and tyre temperature panel (#446): host option 32.
 	final static int CMD_HUD_TEMPERATURES = 536;
+	// Tyre smoke and dust density (#454): host option 33, percent of the default.
+	final static int CMD_TYRE_SMOKE = 537;
 	public static native int getRendererOption(int option);
 
 	// The car control (ControlSet slot 0..9) of dead zone slider i:
@@ -174,7 +176,7 @@ public class OptionsDialog extends Dialog
 	// Video controls a preset updates (#377).
 	MultiChoice		presetMulti, optAA, optRefl, optClouds, optAniso, optAO, optAOQ, optShadows, optSQ, optSmooth;
 	MultiChoice		advVsync, advFog, advDetail, advCarLights, advHeadShadows, advLamps;
-	Slider			advView, advLampShadows;
+	Slider			advView, advLampShadows, advTyreSmoke;
 	int				redefineSuspGroup, redefineGroup, redefine2Group, redefine3Group, axisCheckGroup;
 
 	int				actGroup;
@@ -526,6 +528,10 @@ public class OptionsDialog extends Dialog
 		m.setSliderStyle( sld2, sldk );
 		advLampShadows = m.addItem( "LAMP SHADOWS", CMD_SHADOWED_LAMPS, getRendererOption(20), 0, 6, 7, "Street lamps that cast shadows" );
 		advLampShadows.printValue("%.0f");
+		m = osd.createMenu( Menu_Left_Small, -0.50, 0.38, 0 );
+		m.setSliderStyle( sld2, sldk );
+		advTyreSmoke = m.addItem( "TYRE SMOKE", CMD_TYRE_SMOKE, getRendererOption(33), 0, 400, 9, "Tyre smoke and dust density (% of the default)" );
+		advTyreSmoke.printValue("%.0f");
 
 		m = osd.createMenu( butt2, 0.98, 0.85, 0 );
 		m.addItem( "BACK", CMD_ADV_VIDEO_DONE );
@@ -1140,6 +1146,8 @@ public class OptionsDialog extends Dialog
 		if (command == CMD_STREET_LAMPS) { setRendererOption(19, osd.multiValue); customPreset(); }
 		else
 		if (command == CMD_SHADOWED_LAMPS) { setRendererOption(20, osd.sliderValue); customPreset(); }
+		else
+		if (command == CMD_TYRE_SMOKE) setRendererOption(33, osd.sliderValue);
 		else
 		if (command == CMD_ENHANCED_SHADOWS)
 		{

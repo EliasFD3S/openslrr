@@ -23,7 +23,11 @@
 #include "slrr/scx_mesh.hpp"
 #include "slrr/skeleton.hpp"
 #include "slrr/brake_balance.hpp"
+#include "slrr/particle_cloud.hpp"
 #include "slrr/skid_marks.hpp"
+#include "slrr/script_particles.hpp"
+#include "slrr/surface_effects.hpp"
+#include "slrr/water.hpp"
 #include "slrr/steering_feedback.hpp"
 #include "slrr/suspension_geometry.hpp"
 #include "slrr/vehicle_dynamics.hpp"
@@ -41,6 +45,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <memory>
+#include <random>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
@@ -194,6 +199,12 @@ struct Record {
   int32_t slide_voice = 0;
   std::string slide_path;  // the clip slide_voice plays (#452)
   bool sharp_skid = false;
+  // Tyre smoke and ground dust (#454): one emitter per wheel, re-initialised
+  // when the wheel's ground names another cloud.
+  std::array<ParticleSystem, 4> tyre_dust{};
+  std::array<uint16_t, 4> tyre_cloud{0xffff, 0xffff, 0xffff, 0xffff};
+  // Sparks from a rim on the road or a hit, and water spray (#454).
+  ParticleSystem sparks{}, splash{};
   std::chrono::steady_clock::time_point last_impact_sound{};
   // MWM keeps a native aggregate, initially empty; `reload` fills it.
   // Canister.actual is script save data, not the engine's consumption owner.
@@ -3616,12 +3627,194 @@ void update_slide_audio(Record &rec, bool active) {
   rec.sharp_skid = sharp || (rec.sharp_skid && speed > 9 && sideways > 1.6);
 }
 
-// Skid marks from the wheel state this frame published (not per solver
-// step, so the free-running 1000 Hz clock adds no work). Cars past 120 m of
-// the camera skip it.
-void update_skid_marks(Record &rec, double dt) {
+// Feeds a wheel's emitter (#454) with the ground's skid_PS cloud, from the
+// tyre's own state rather than a slip threshold:
+// - How much: the friction power at the patch, |Fx slip| + |Fy lateral|
+//   (the heat the tyre thermal model takes from sliding), the cfg's rate per
+//   20 kW (30 kW of dust for loose ground). Rubber smoke
+//   also needs a hot tread: a tenth of it cold, full from 200 deg C of
+//   the tread surface (ramp from 80 deg C). Dust, gravel and grass (a ground with rolling
+//   drag) rise from the power alone.
+// - Where: round the tyre, from the patch up the side the tread runs to
+//   (the back of a spinning wheel, the front of a locked one), across the
+//   tread width. The particles leave with the tread's surface speed, turn
+//   about the axle while young (Particle::swirl) and drift out of the arch
+//   to the car's outside, carried at first by the car's own speed.
+void emit_tyre_dust(Record &rec, size_t i, const SkidWheelSample &sample,
+                    const GroundSurface &ground, double dt) {
+  const uint16_t cloud = surface_particle_cloud(*index, ground.skid_particles);
+  if (cloud == 0xffff) return;
+  auto &emitter = rec.tyre_dust[i];
+  if (rec.tyre_cloud[i] != cloud) {
+    emitter = ParticleSystem{};
+    emitter.init(cloud);
+    rec.tyre_cloud[i] = cloud;
+  }
+  if (!sample.contact || !(sample.force > 0) || i >= rec.dynamics.state.size()) return;
+  const auto &s = rec.dynamics.state[i];
+  const auto &wheel = rec.dynamics.wheels[i];
   const auto &body = rec.dynamics.body;
-  if (!(distance_gain(body.position, 1.f, 120.f) > 0)) return;
+  const auto &config = particle_clouds()[cloud];
+  const double power = std::abs(s.tire_force.longitudinal * s.slip_speed) +
+                       std::abs(s.tire_force.lateral * s.lateral_speed);
+  const bool soft = ground.rolling > 0 || config.type == 1;
+  double rate = 0;
+  if (soft) {
+    // Loose ground gives way to a light slide and is thrown up by a fast
+    // wheel even when it grips.
+    const double roll = std::clamp((std::abs(s.spin * wheel.radius) - 3) / 17, 0.0, 1.0);
+    rate = power / 16000.0 + (config.type == 1 ? .15 : .4) * roll;
+  } else {
+    const double hot = std::clamp((s.tyre_temperature.surface - 80.0) / 120.0, 0.0, 1.0);
+    rate = power / 20000.0 * (.1 + .9 * hot * hot * (3 - 2 * hot));
+  }
+  // Tyre smoke density (option 33, percent): the part above 100 % shrinks
+  // for big long-lived clouds by their size squared times their lifetime
+  // against asphalt.cfg's (sand.cfg's 3-6 m puffs would bury the car).
+  const double density = std::clamp(host_enhanced_graphics().tyre_smoke_density, 0, 400) * .01;
+  const double share = std::min(
+      1.0, particle_cloud_coverage_reference() / std::max(particle_cloud_coverage(config), .01));
+  rate *= config.type == 1 ? 1.0 : std::max(0.0, 1 + (density - 1) * share);
+  emitter.set_freq(static_cast<float>(std::min(rate, 12.0)));
+  const int count = emitter.due(dt);
+  if (count <= 0) return;
+  static std::mt19937 rng(0x454u);
+  std::uniform_real_distribution<double> unit(0.0, 1.0);
+  const physics::Vec3 axle = body.orientation.rotate({1, 0, 0});
+  const physics::Vec3 forward = body.orientation.rotate({0, 0, -1});
+  const physics::Vec3 down = s.normal * -1.0;
+  // The tread leaves the patch backwards when it spins faster than the road
+  // (and forwards when it is held back): the side the smoke wraps round.
+  const double tread = s.spin * wheel.radius;  // tread speed at the hub's frame
+  const physics::Vec3 run = forward * (sample.slip_speed >= 0 ? -1.0 : 1.0);
+  // Outside of the car: the arch's open side.
+  const double side = (s.center - body.position).dot(axle) >= 0 ? 1.0 : -1.0;
+  const double half_width = wheel.half_width > 0 ? wheel.half_width : .1;
+  const double radius = std::max(.15, wheel.radius);
+  for (int n = 0; n < count; ++n) {
+    // Mostly at the patch, some up the back of the tyre to the arch.
+    const double angle = 1.7 * std::pow(unit(rng), 1.6);
+    const double across = (unit(rng) * 2 - 1) * half_width;
+    const physics::Vec3 at = s.center + down * (radius * std::cos(angle)) +
+                             run * (radius * 1.05 * std::sin(angle)) + axle * across;
+    // The tread surface's direction at that angle, and its speed (capped).
+    const physics::Vec3 along = run * std::cos(angle) - down * std::sin(angle);
+    const double surface = std::min(std::abs(sample.slip_speed), 18.0) * .3;
+    const physics::Vec3 v = body.velocity * .6 + along * surface +
+                            axle * (side * (.4 + unit(rng) * 1.4)) + s.normal * (.3 + unit(rng) * .5);
+    ParticleSpawn spawn;
+    spawn.position = {float(at.x), float(at.y), float(at.z)};
+    spawn.velocity = {float(v.x), float(v.y), float(v.z)};
+    spawn.ground = {float(s.patch.x), float(s.patch.y), float(s.patch.z)};
+    spawn.ground_normal = {float(s.normal.x), float(s.normal.y), float(s.normal.z)};
+    // Smoke and dust hang in the air; only debris keeps the cfg's gravity.
+    spawn.buoyancy = config.type == 1 ? 1.f : .15f;
+    if (soft && ground.dust_color) {
+      // The ground's own colour: Dead_Island's orange sand, a brown lawn.
+      spawn.tint = {float((ground.dust_color >> 16) & 255) / 255.f,
+                    float((ground.dust_color >> 8) & 255) / 255.f,
+                    float(ground.dust_color & 255) / 255.f};
+      spawn.tint_weight = config.type == 1 ? .5f : .8f;
+      spawn.min_size = config.type == 1 ? 0.f : static_cast<float>(radius * 1.2);
+    }
+    if (!soft) {
+      // Turning with the tyre, about the axle through the hub.
+      spawn.swirl_center = {float(s.center.x), float(s.center.y), float(s.center.z)};
+      spawn.swirl_axis = {float(axle.x), float(axle.y), float(axle.z)};
+      spawn.swirl = static_cast<float>(std::clamp(-tread / radius * .12, -10.0, 10.0));
+      // Born as big as the tyre that makes it: thick at the wheel, not a
+      // spray of small balls.
+      spawn.min_size = static_cast<float>(radius * 1.6);
+    }
+    emitter.emit(spawn);
+  }
+}
+
+// Sparks (#454): the stock spark.cfg (particles:0x106) from a hit, along the
+// contact normal and the slide, as many as the hit is hard.
+void emit_impact_sparks(Record &rec, const physics::VehicleDynamics::Impact &hit) {
+  if (!index || hit.speed < 4) return;
+  const uint16_t cloud = surface_spark_cloud(*index);
+  if (cloud == 0xffff) return;
+  if (!rec.sparks.ready()) rec.sparks.init(cloud);
+  static std::mt19937 rng(0x5a4u);
+  std::uniform_real_distribution<double> unit(-1.0, 1.0);
+  const auto &body = rec.dynamics.body;
+  const int count = static_cast<int>(std::clamp((hit.speed - 4) * 5, 0.0, 60.0));
+  for (int n = 0; n < count; ++n) {
+    const physics::Vec3 scatter{unit(rng), unit(rng), unit(rng)};
+    const physics::Vec3 v = body.velocity * .7 + hit.normal * (1 + hit.speed * .25) +
+                            scatter * (hit.speed * .3);
+    ParticleSpawn spawn;
+    spawn.position = {float(hit.point.x), float(hit.point.y), float(hit.point.z)};
+    spawn.velocity = {float(v.x), float(v.y), float(v.z)};
+    spawn.ground = spawn.position;
+    spawn.ground[1] -= 2.f;  // land on the road below, not the hit point
+    spawn.ground_normal = {0, 1, 0};
+    rec.sparks.emit(spawn);
+  }
+}
+
+// A wheel without its tyre grinding the road sprays sparks, more with speed;
+// a wheel in water throws spray (water.cfg, particles:0x105).
+void emit_wheel_sparks_and_spray(Record &rec, size_t i, double dt) {
+  if (!index || i >= rec.dynamics.state.size()) return;
+  const auto &s = rec.dynamics.state[i];
+  const auto &wheel = rec.dynamics.wheels[i];
+  const auto &body = rec.dynamics.body;
+  static std::mt19937 rng(0x5b4u);
+  std::uniform_real_distribution<double> unit(0.0, 1.0);
+  const double speed = body.velocity.length();
+  if (wheel.metal_contact && s.contact && speed > 2) {
+    const uint16_t cloud = surface_spark_cloud(*index);
+    if (cloud != 0xffff) {
+      if (!rec.sparks.ready()) rec.sparks.init(cloud);
+      rec.sparks.set_freq(static_cast<float>(std::clamp(speed / 15, 0.0, 2.0) * .3));
+      const int count = rec.sparks.due(dt);
+      for (int n = 0; n < count; ++n) {
+        const physics::Vec3 v = body.velocity * .85 + s.normal * (1 + unit(rng) * 2.5);
+        ParticleSpawn spawn;
+        spawn.position = {float(s.patch.x), float(s.patch.y + .02), float(s.patch.z)};
+        spawn.velocity = {float(v.x), float(v.y), float(v.z)};
+        spawn.ground = {float(s.patch.x), float(s.patch.y), float(s.patch.z)};
+        spawn.ground_normal = {float(s.normal.x), float(s.normal.y), float(s.normal.z)};
+        rec.sparks.emit(spawn);
+      }
+    }
+  }
+  // The water goes with the map ground that set it.
+  if (water_owner() && !gameref_get(const_cast<void *>(water_owner()))) water_clear();
+  if (!water_present()) return;
+  const double radius = std::max(.15, wheel.radius);
+  const double depth = water_depth({s.center.x, s.center.y - radius, s.center.z});
+  if (!(depth > 0) || speed < 1) return;
+  const uint16_t cloud = surface_water_cloud(*index);
+  if (cloud == 0xffff) return;
+  if (!rec.splash.ready()) rec.splash.init(cloud);
+  rec.splash.set_freq(static_cast<float>(std::clamp(speed / 8, 0.0, 3.0) *
+                                         std::clamp(depth / radius, .3, 1.0)));
+  const int count = rec.splash.due(dt);
+  const double above = std::min(depth, 2 * radius);  // the water's surface over the tyre bottom
+  for (int n = 0; n < count; ++n) {
+    const physics::Vec3 at = s.center + physics::Vec3{0, above - radius, 0};
+    const physics::Vec3 v = body.velocity * .4 + physics::Vec3{0, 1 + unit(rng) * 2, 0};
+    ParticleSpawn spawn;
+    spawn.position = {float(at.x), float(at.y), float(at.z)};
+    spawn.velocity = {float(v.x), float(v.y), float(v.z)};
+    spawn.ground = spawn.position;
+    spawn.ground_normal = {0, 1, 0};
+    spawn.buoyancy = .15f;
+    spawn.min_size = static_cast<float>(radius);
+    rec.splash.emit(spawn);
+  }
+}
+
+// Skid marks from the wheel state this frame published (not per solver
+// step, so the free-running 1000 Hz clock adds no work). Cars past `range`
+// metres of the camera skip it.
+void update_skid_marks(Record &rec, double dt, float range = 120.f) {
+  const auto &body = rec.dynamics.body;
+  if (!(distance_gain(body.position, 1.f, range) > 0)) return;
   const physics::Vec3 forward = body.orientation.rotate({0, 0, -1});
   const double speed = body.velocity.length();
   const auto key = reinterpret_cast<uintptr_t>(rec.state.object);
@@ -3639,7 +3832,15 @@ void update_skid_marks(Record &rec, double dt) {
     sample.normal = {s.normal.x, s.normal.y, s.normal.z};
     sample.forward = {forward.x, forward.y, forward.z};
     sample.mark_color = s.surface.mark_color;
+    // The exe's combined slip and the load fraction of its mark alpha (the
+    // nominal load: half the tyre's maximum, 4000 N when unset).
+    sample.sigma = tyre_combined_slip(s.slip_speed, s.lateral_speed, road);
+    const double max_load = rec.dynamics.drive.wheels[i].tyre.maximum_load;
+    sample.load_fraction = std::min(1.0, s.force / (max_load > 0 ? max_load * .5 : 4000.0));
+    if (index) sample.style = surface_skid_style(*index, s.surface.skid_mark);
     skid_marks_update(key, i, sample, dt, speed);
+    if (i < rec.tyre_dust.size() && index) emit_tyre_dust(rec, i, sample, s.surface, dt);
+    emit_wheel_sparks_and_spray(rec, i, dt);
   }
 }
 
@@ -6283,7 +6484,10 @@ void commit_batch(SimBatch& batch) {
     if (!hit || impact.hit.speed > hit->speed) hit = &impact.hit;
   }
   for (const auto& [car_index, hit] : loudest)
-    if (current(batch.cars[car_index])) play_impact_audio(*batch.cars[car_index].rec, *hit);
+    if (current(batch.cars[car_index])) {
+      play_impact_audio(*batch.cars[car_index].rec, *hit);
+      emit_impact_sparks(*batch.cars[car_index].rec, *hit);
+    }
   // Crush cages advance by the substeps the batch ran: other parts' cages as
   // the records loop advanced them, each car's by its own solver steps.
   const unsigned substeps = batch.solver_steps;
@@ -7831,14 +8035,26 @@ void finish_physics_frame(double frame_seconds, double alpha, bool committed) {
   if (committed) {
     if (perf::enabled()) perf::add(perf::Zone::Vehicles, physics_batch.thread_ticks);
     commit_batch(physics_batch);
+    // Traffic slide loops (#454): at most two, within 40 m, so the mixer's
+    // loop budget stays with the engines. A voice already playing keeps its
+    // place until its slide ends.
+    int traffic_slides = 0;
+    for (const auto &[key, rec] : records)
+      if (rec.native_vehicle && rec.slide_voice) ++traffic_slides;
     for (auto &[key, rec] : records) {
       if (rec.config->native_kind == "car") {
         update_engine_audio(rec, rec.engine_running);
-        // Native traffic is excluded from tyre sounds and marks: with ~100
-        // cars it would cost the frame, and it rarely slides.
+        // Native traffic: marks and smoke (#454) within 60 m of the camera, a
+        // dozen cars at most (it rarely slides), and a slide loop as above.
         const bool tyres = !rec.native_vehicle && rec.physics_released && !rec.state.parent;
-        update_slide_audio(rec, tyres);
+        const bool traffic = rec.native_vehicle && rec.physics_released && !rec.state.parent &&
+                             distance_gain(rec.dynamics.body.position, 2.f, 40.f) > 0;
+        const bool had_voice = rec.slide_voice != 0;
+        update_slide_audio(rec, tyres || (traffic && (had_voice || traffic_slides < 2)));
+        if (rec.native_vehicle) traffic_slides += (rec.slide_voice != 0) - had_voice;
         if (tyres) update_skid_marks(rec, frame_seconds);
+        else if (rec.native_vehicle && rec.physics_released && !rec.state.parent)
+          update_skid_marks(rec, frame_seconds, 60.f);
       }
     }
     update_traffic_engine_audio();
@@ -7852,6 +8068,9 @@ void finish_physics_frame(double frame_seconds, double alpha, bool committed) {
   pose_cockpit_needles();
   pose_driver();
   {perf::Scope scope(perf::Zone::Pedestrians);tick_pedestrians(frame_seconds);}
+  // Every frame, so smoke drifts on while the physics waits (#454).
+  script_particles_update(frame_seconds);
+  particles_update(frame_seconds);
 }
 
 // Free-running frame (#380): pause the clock, commit what it ran since the
@@ -8065,6 +8284,9 @@ void part_drop_actors() {
   for (auto& entry : crowds) clear_ped_agents(entry.second);
   crowds.clear();
   skid_marks_clear();
+  particles_clear();
+  script_particles_clear();
+  water_clear();
 }
 void part_set_hud_preview(const std::string &path) {
   std::ifstream input(path, std::ios::binary);

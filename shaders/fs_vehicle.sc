@@ -49,7 +49,9 @@ void main()
     float ndl = u_sunDir.w < -0.5 ? 0.0 : max(dot(n, lightDir), 0.0);
     float shade = 0.45+0.55*ndl;
     float visibility = sceneShadowVisibility(v_staticShadow, v_worldPos);
-    float sunVisibility = u_staticShadowParams.w > 0.5 ? 1.0 : visibility;
+    // Tyre smoke's shadow (#454) dims the sun on the body too.
+    float sunVisibility = (u_staticShadowParams.w > 0.5 ? 1.0 : visibility) *
+                          smokeShadowTransmit(v_worldPos);
     float localVisibility = u_staticShadowParams.w > 0.5 ? visibility : 1.0;
     vec3 illum = u_sunDir.w < -0.5 ? u_sunAmb.rgb*ambientVisibility(gl_FragCoord.xy) : u_sunDiff.a > 0.5
         ? (u_sunAmb.rgb*ambientVisibility(gl_FragCoord.xy) + u_sunDiff.rgb*ndl*sunVisibility)

@@ -19,9 +19,9 @@ implementations and following selected calls to their consumers.
 
 | Status | Stock signatures |
 | --- | ---: |
-| Registered with a body | 358 |
+| Registered with a body | 370 |
 | Registered with the explicit `native_noop` handler | 3 |
-| Absent from the registry | 15 |
+| Absent from the registry | 3 |
 | **Total** | **376** |
 
 The first category includes constant responses, inline empty bodies and
@@ -106,12 +106,23 @@ being replaced by success-returning mocks.
 
 ## Missing signatures by system (active priorities)
 
-| System | Count | Methods |
-| --- | ---: | --- |
-| `GroundRef` | 3 | `setWater` (2 overloads), `addWaterLimit` |
-| `ParticleSystem` | 9 | `init`, `stop`, `setFreq`, `setDirectSource`, `setSource`, `setCounter`, `getCounter`, `delAction`, `modePermanent` |
+None: every active stock signature has a binding.
 
-There are 12 missing active signatures and 3 missing leftovers, for 15 total.
+The `GroundRef` water natives are bound since #454 too (`water.hpp`): the
+surface plane and its limits feed the wheels' water spray; no buoyancy or
+drag reads them yet. Only the three Welder leftovers remain missing.
+The nine `ParticleSystem` natives are bound since #454
+(`src/natives/natives_particles.cpp`, `src/resources/script_particles.cpp`):
+`init` resolves the RenderRef type to a stock `particle <cfg>` cloud, the
+source actions emit into the tyre effects' particle pool in the parent's
+frame, `getCounter` counts the cloud's particles in the counter's sphere, and
+a source's `bone` follows that bone of the parent's skeleton.
+`modePermanent` follows the exe's flag 0x20000000: a system that is not
+permanent goes idle after an update with no source emitting, drops its
+sources, and wakes on a positive `setFreq`; see
+[vehicles/notes.md](../vehicles/notes.md#tyre-smoke-ground-dust-and-textured-skid-marks-454).
+A parent outside the active world (the commented-out `Osd` cursor effects,
+the only stock callers) emits nothing.
 No PhysicsRef signature remains absent from the stock table.
 
 ## Roadmap
