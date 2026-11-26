@@ -96,7 +96,9 @@ struct PartRender {
 };
 enum class HudSlot : size_t {
   Gauge, RpmPin, SpeedPin, Rpm, Speed, Gear, Mileage, Handbrake,
-  Damage, Nitro, Turbo, Count
+  Damage, Nitro, Turbo,
+  // The ABS and ASR lamps (#446): build 606's `osd_abs` / `osd_asr`.
+  Abs, Asr, Count
 };
 struct HudElement {
   bool defined = false;

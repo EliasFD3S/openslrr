@@ -65,6 +65,8 @@ public class OptionsDialog extends Dialog
 	final static int CMD_FFB_DAMPER = 533;
 	final static int CMD_FFB_MIN_FORCE = 534;
 	final static int CMD_FFB_SMOOTHING = 535;
+	// The brake and tyre temperature panel (#446): host option 32.
+	final static int CMD_HUD_TEMPERATURES = 536;
 	public static native int getRendererOption(int option);
 
 	// The car control (ControlSet slot 0..9) of dead zone slider i:
@@ -1105,6 +1107,7 @@ public class OptionsDialog extends Dialog
 		else if (command == CMD_FFB_DAMPER) setRendererOption(29, osd.sliderValue);
 		else if (command == CMD_FFB_MIN_FORCE) setRendererOption(30, osd.sliderValue);
 		else if (command == CMD_FFB_SMOOTHING) setRendererOption(31, osd.sliderValue);
+		else if (command == CMD_HUD_TEMPERATURES) setRendererOption(32, osd.multiValue);
 		else if (command == CMD_AO_RADIUS) setRendererOption(12, osd.sliderValue);
 		else
 		if (command == CMD_ANISOTROPIC)

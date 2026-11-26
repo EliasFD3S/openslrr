@@ -1119,3 +1119,158 @@ through the centre.
 
 Limitations: a wheel touched first after a key is still treated as a key until
 it passes 1 % of its travel. Not validated in game with a wheel yet.
+
+## Brakes as hardware, ABS and ASR (#446)
+
+Cause:
+
+- ABS capped the service brake each substep so a wheel never turned slower
+  than 85 % of the true road speed at its patch: no modulator, no pressure
+  cycles, and a ground speed no controller can measure (SLRR_rev's
+  `absBrakeStep` is the same law).
+- ASR was a launch control only: a throttle cut in first or reverse below
+  30 km/h, armed by a full-throttle start from rest.
+- Stock brake torques: `DiscBrake` used a pad "friction" of 1.0-1.1 (real
+  pads 0.35-0.5) with `BRAKE_FORCE_FINE_TUNE = 2`, then the host divided it
+  by the engine CFG's `brake_inertia` (28-75, unrelated to brakes): the Focer
+  RC braked 2.4 times harder than the SuperDuty, the heaviest car. Front
+  discs gave 51-59 % of the torque (the MC 41-44 %), which #400 hid by
+  redistributing to 70/30. Pads and rotors changed the torque by 5-15 % and
+  nothing heated.
+
+Fix:
+
+- Patched `Brake`/`DiscBrake` ([patch](../../patch/README.md#brakes-as-hardware-446)):
+  torque = 2 pad faces x pad friction (street 0.40, fast road 0.45, race
+  0.50) x 100 bar x piston area (pistons per side x piston diameter) x
+  caliper stiffness (1, 1.05, 1.10) x (rotor radius - 25 mm), times the stock
+  wear factor. The balance acts like a valve (0.5 leaves both axles their
+  torque). The 48 stock brakes are re-sized from the real cars of the
+  [#419 table](../../patch/README.md#per-car-bar-rates-419). A new native
+  `WheelRef.setBrakeSpec(pad, rotor, diameter)` sends the hardware; a wheel
+  with a spec switches the host to physical brakes: no `brake_inertia` gain,
+  no `distribute_brakes`, handbrake gain 2.
+- `src/physics/brake_system.cpp`: rotor temperature per wheel (heat = the
+  friction brakes' work, `0.5 I (w0^2 - w1^2)` of each application; cooling
+  `h = 12 + 18 v^0.8` W/m^2K over the faces, plus 1.8 faces of vanes, plus
+  radiation; capacity from the ring's equivalent thickness, iron or
+  carbon-ceramic), pad friction curves against temperature (street works
+  from cold and fades past about 400 deg C, race is weak cold and holds to
+  650, carbon rotors move the fade up).
+- Without ABS, a rear proportioning valve (full pressure to 30 % pedal, then
+  0.3 of the rise), so the fronts lock first.
+- ABS (`AbsModulator`): per-wheel follow/dump/hold/rebuild against a
+  reference speed (`ReferenceSpeed`: the accelerometer, saturated at 1.5 g,
+  integrated between the wheels; braking pulls it to the fastest wheel, a
+  0.4 s stall without any wheel spinning up resets it), dump at 16 % slip
+  (26 % at the lowest slider setting) or on a hard wheel deceleration, rear
+  channels at 0.7 of that (electronic distribution, which replaces the
+  valve), select-low rear axle, a front yaw-moment build-up delay of 0.8 s,
+  off below 2 m/s.
+- ASR (`TractionControl`): engine torque cut on the driven axles' mean slip
+  past 8 % or 0.8 m/s (20 % or 2 m/s at the lowest setting), PI with a fast
+  cut and a 0.12 s recovery, in any gear and at any speed, plus brake
+  pressure on a single spinning driven wheel below 80 km/h. It replaces the
+  launch control.
+- Debug overlay (Vehicle tab): ABS/ASR state, reference speed, rotor
+  temperature and caliper pressure per wheel. Physics Lab: `--abs`, `--asr`,
+  `--respec` (the re-specced CoupeSport brakes) and the `fade` and
+  `split_mu` scenarios.
+
+Validation:
+
+- Compilation: `slrr_host` and `physics_lab` Release. The stock `Brake`,
+  `DiscBrake`, `DrumBrake`, `Wheel` and 48 brake classes recompile from
+  `sources/` byte for byte (header bytes 9-11 aside), and the #424
+  `WheelRef.java` rebuilds its class; then the patched sources compile in
+  `build/brake-compile-root` (compile `parts/scripts` twice: `DiscBrake`
+  needs the new `Brake` fields).
+- `vehicle_dynamics` 54/54, eight of them new (ABS shorter than locked, cycles,
+  select-low and yaw delay, off at walking pace, reference speed, ASR in
+  second gear, ASR brake on one wheel, pad curves, a stop heating the
+  rotors); `abs_releases_a_locked_wheel_while_the_road_moves` now locks the
+  wheels after the car was seen rolling (an ABS cannot know a speed it never
+  measured).
+- Physics Lab, 1300 kg saloon, 1000 Hz (at 250 Hz the ABS stops are 3-4 %
+  shorter, the rest within 2 %):
+
+| | 2000 Nm, no spec | Re-specced CoupeSport |
+| --- | --- | --- |
+| 100-0, no ABS | 40.4 m, wheels locked | 49.1 m, wheels locked |
+| 100-0, ABS 100 | 39.1 m | 39.9 m (rotors 62 / 74 deg C) |
+| Ten stops 150-30, ABS | 81.0 m each | 81.9 to 82.5 m, front rotors 443 deg C |
+| Split friction 100-0, ABS, driver steering | 84.4 m, 6.4 deg | 84.1 m, 6.2 deg (without ABS: 37 deg) |
+| Power oversteer, rear slip angle | 28.8 deg; ASR 100: 7.3 deg | |
+| 0-100 km/h | 7.31 s; ASR 100: 7.46 s | |
+
+- In game (stock MWM copy with the whole patch, Baiern CoupeSport bench in
+  Valo City, temporary env-gated hooks since removed): the wheels receive
+  2409 / 1252 Nm with their specs (street pads, vented front, solid rear);
+  car mass 1524 kg. Full brake from 43 km/h: without ABS the rear pressure
+  stays at the valve's 0.51; with ABS the channels cycle between 0.03 and 1
+  and the reference speed follows the car within 1 km/h, back to the pedal
+  below 7 km/h. ASR did not intervene in the stock launch (no wheelspin).
+  Not driven by hand, not tried on the other 23 cars.
+
+### HUD lamps, temperatures and the first limitations (#446)
+
+- HUD lamps: build 606 reads `osd_abs` / `osd_asr` (handlers 0x445520 /
+  0x4455B0) and lights `led_ABS` (cars 0x61) and `led_ASR` (0x62) while the
+  aid intervenes: car flags 0x1000000 / 0x2000000, set where the ABS / ASR
+  factor drops (0x44E0E1, 0x44E290) and read at 0x452746 / 0x452779. The
+  four lamps (`led_HB` 0x63 and `led_ER` 0x64 too) take the gauge plate's
+  anchor (newosd 0x55, 3.24, -2.4, -3.59 at 0x446261; the lamps 3.24, -2.4,
+  -3.58), each mesh placing its lamp on the plate. The host table had the
+  handbrake lamp at -0.227, 0.925, by eye, so it never showed on the plate;
+  all three now share the plate's anchor. `HudSlot::Abs` / `Asr` parse the
+  CFG lines like the other slots.
+- Tyre temperature (`src/physics/tyre_thermal.cpp`): a tread lump (8 % of
+  the tyre's mass, the #430 tread and sidewall densities) heated by half the
+  sliding work at the patch, a carcass lump heated by the rolling resistance
+  and by the rotor through the rim (1.5 W/K), 25 W/K between them; convection
+  growing with speed, and the road under the tread. The patched `Tyre` sends
+  its compound (`WheelRef.setTyreSpec`); the grip follows the tread
+  temperature on a curve per compound (street full from 40 to 90 deg C, the
+  soft racing compound from 80 to 115, all weaker cold and overheated).
+- Brake fluid: follows 45 % of the rotor's rise with a 40 s lag; past
+  230 deg C (DOT 4) the pressure at the pads falls, to 0.4 at 290 deg C.
+- OSD panel (host option 32, Options > Game > TEMPERATURES, on by default):
+  a top view above the damage gauge, each corner a tyre bar and two
+  readouts in the stock LCD font, the tread above and the rotor below a
+  brake mark; blue cold, green in the window, yellow to red past it, a red
+  mark while the fluid boils.
+- ABS feedback: a 14 Hz force feedback vibration on a wheel, and a light
+  rumble on the controller the brake is bound to.
+- The race AI gets ABS on cars with physical brakes. A wheel without a
+  spec on such a car keeps the stock law's gain.
+- The ABS and ASR sliders describe what they do instead of "percent".
+
+Validation:
+
+- `vehicle_dynamics` 56/56 (two more: tyre heat and grip, fluid boiling);
+  `options_retry` passes with option 32 in its every-id round trip (33 is
+  now the unknown id). `Tyre`, `WheelRef`, `OptionsDialog` and `OsdxOptions`
+  compiled in the compile root; HEAD's `OptionsDialog` rebuilt byte for
+  byte, HEAD's `OsdxOptions` came out 24 bytes larger than the shipped
+  class with the same strings (constant-pool order of a two-pass build).
+- Physics Lab (`--respec` adds a sport tyre's heat): ten minutes at
+  100 km/h, treads 34-35 deg C, carcasses 45-48; the skidpad ramp leaves
+  the outer front at 88 deg C and the outer rear at 71; a burnout heats the
+  rear tread by 17 deg C in 4 s.
+- In game (Baiern bench, ABS forced on by a temporary hook): with every lamp
+  forced on, ABS, ASR and the handbrake light on their plate spots; in a real
+  ABS stop only the ABS lamp lights. The panel shows the four corners, clear
+  of the damage gauge.
+
+Limitations: the pad, tyre and cooling curves are typical published shapes,
+not measured parts; the reference cars and some calipers are assumptions
+(no published data for the race cars and the Prime). The sizing assumed
+real-car masses; the game's CoupeSport weighs 1524 kg, not 1400. The tyre
+temperature does not change the pressure, wear or the tyre's stiffness, and
+there is no tyre smoke. Pads do not wear faster when hot. The ABS pulse is
+a vibration, not a pedal kick (no device has one). The race AI has no ASR.
+The emergency lamp (`led_ER`, `osd_emergency`) is not lit; what lit it in
+build 606 is not traced. Unchanged and outside this issue: braking hard with
+the automatic gearbox, it shifts down to first at about 44 km/h with the
+auto clutch closed, and the engine's reflected inertia then pushes the rear
+wheels (the rear force fell from 1.8 to 0.5 kN in the Lab).

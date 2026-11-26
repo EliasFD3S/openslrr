@@ -113,7 +113,7 @@ int main() {
  std::ofstream(legacy_file)<<"msaa=0\n";
  host_game_options_load(f.vm);SLRR_REQUIRE(g.msaa==2);  // the JSON wins
  // Every renderer option id reads back what was set, through the file.
- for(int key=0;key<=31;++key){
+ for(int key=0;key<=32;++key){
    if(key==5)continue;  // the removed framerate mode
    int before=0;SLRR_REQUIRE(host_option_get(key,before));
    int target=before==0?1:0;
@@ -123,7 +123,7 @@ int main() {
    // AO radius (12) and view distance (14) clamp 0/1 up to their minimum.
    SLRR_REQUIRE(after==target || ((key==12 || key==14) && after>1));
  }
- int unknown=0;SLRR_REQUIRE(!host_option_get(32,unknown));
+ int unknown=0;SLRR_REQUIRE(!host_option_get(33,unknown));
  std::puts("PASS options JSON: sections and types, defaults for missing keys, clamps, damaged file, legacy migration, every id");
  if(const char* root=std::getenv("SLRR_COMPILE_OPTIONS_ROOT")) {
    const auto report=script_compile_all(root,"options-build");

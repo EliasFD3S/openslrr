@@ -4,7 +4,8 @@
 // same scenario can be compared across rates and across physics changes.
 //
 //   physics_lab [--hz 120,250,500,1000] [--scenario all|launch|brake|skidpad|
-//                step_steer|burnout] [--csv DIR]
+//                step_steer|burnout|fade|split_mu|...] [--csv DIR] [--abs X] [--asr X]
+//                [--respec]
 //
 // The car is the 1300 kg rear-drive saloon of tests/test_vehicle_dynamics.cpp
 // (Baiern-like geometry, sport 205 tyres, 235 N m engine).
@@ -44,6 +45,14 @@ bool sport_suspension = false;
 bool gt3 = false, gt3_mixed = false;
 // --bars K,D: the same anti-roll bar (N/m, N s/m) on both axles.
 double bar_force = 0, bar_damping = 0;
+// --respec (#446): the re-specced Baiern CoupeSport brakes, real torques at
+// full pedal, 100 bar (front 286 mm vented, 57 mm piston; rear 276 mm solid,
+// 42 mm; street pads) with the rear proportioning valve,
+// with their rotor temperature and pad fade; otherwise 2000 N m per wheel
+// and no thermal model.
+bool respec_brakes = false;
+// --abs X / --asr X: the Options driving aids (Config.player_abs / _asr).
+double abs_strength = 0, asr_strength = 0;
 
 struct Car {
   VehicleDynamics dynamics;
@@ -97,6 +106,12 @@ struct Car {
       d.weight = i < 2 ? 0 : 1;
       d.brake = 2000;
       d.handbrake = i < 2 ? 0 : 2000;
+      if (respec_brakes) {
+        d.brake = i < 2 ? 2409 : 1252;
+        d.handbrake = i < 2 ? 0 : 1252;
+        d.hardware = brake_hardware(0, i < 2 ? 2 : 0, i < 2 ? .286 : .276);
+        d.tyre_heat = tyre_thermal_spec(1, w.radius, 2 * w.half_width);  // sport tyre
+      }
       d.tyre = sport_tyre(205);
       if (gt3) {
         const bool wide = gt3_mixed ? i % 2 == 0 : i >= 2;
@@ -124,6 +139,13 @@ struct Car {
     drive.limit = 7000;
     drive.inertia = .38;
     drive.brake_scale = drive.handbrake_scale = 1;
+    if (respec_brakes) {
+      drive.handbrake_scale = 2;
+      drive.rear_valve_knee = .3;
+      drive.rear_valve_slope = .3;
+    }
+    drive.abs_strength = abs_strength;
+    drive.asr_strength = asr_strength;
     drive.engaged = drive.automatic_shift = drive.auto_clutch = true;
     drive.torque = [](double rpm) { return std::clamp(150 + rpm * .02, 0., 235.); };
     if (gt3) drive.torque = [](double rpm) { return rpm < 1000 ? 200 : 375.; };
@@ -160,6 +182,9 @@ struct Sample {
   double t, speed, rpm, yaw, lateral_g, longitudinal_g, vertical_g;
   int gear;
   double slip[4], lat[4], fx[4], fy[4], load[4], spin[4];
+  double pressure[4], temperature[4];
+  double reference;
+  bool abs, asr;
 };
 
 class Run {
@@ -202,7 +227,12 @@ class Run {
       s.fy[i] = w.tire_force.lateral;
       s.load[i] = w.force;
       s.spin[i] = w.spin * d.wheels[i].radius;
+      s.pressure[i] = w.brake_pressure;
+      s.temperature[i] = w.brake_temperature;
     }
+    s.reference = d.reference_speed();
+    s.abs = d.abs_active();
+    s.asr = d.asr_active();
     samples.push_back(s);
   }
 
@@ -212,19 +242,20 @@ class Run {
     const std::string path = dir + "/" + name_ + "_" + std::to_string(hz) + ".csv";
     FILE* f = std::fopen(path.c_str(), "w");
     if (!f) return;
-    std::fprintf(f, "t,speed_kph,rpm,gear,yaw_rate,lat_g,long_g");
+    std::fprintf(f, "t,speed_kph,rpm,gear,yaw_rate,lat_g,long_g,reference_kph,abs,asr");
     for (int i = 0; i < 4; ++i)
-      std::fprintf(f, ",slip%d,lat%d,fx%d,fy%d,load%d,wheel_speed%d", i, i, i, i, i, i);
+      std::fprintf(f, ",slip%d,lat%d,fx%d,fy%d,load%d,wheel_speed%d,pressure%d,rotor%d", i, i, i, i,
+                   i, i, i, i);
     std::fprintf(f, "\n");
     // 1 kHz and below: write at most 200 rows per second.
     const size_t stride = std::max<size_t>(1, VehicleDynamics::frequency / 200);
     for (size_t k = 0; k < samples.size(); k += stride) {
       const auto& s = samples[k];
-      std::fprintf(f, "%.4f,%.3f,%.0f,%d,%.4f,%.4f,%.4f", s.t, s.speed * kKph, s.rpm, s.gear,
-                   s.yaw, s.lateral_g, s.longitudinal_g);
+      std::fprintf(f, "%.4f,%.3f,%.0f,%d,%.4f,%.4f,%.4f,%.3f,%d,%d", s.t, s.speed * kKph, s.rpm,
+                   s.gear, s.yaw, s.lateral_g, s.longitudinal_g, s.reference * kKph, s.abs, s.asr);
       for (int i = 0; i < 4; ++i)
-        std::fprintf(f, ",%.4f,%.4f,%.1f,%.1f,%.1f,%.3f", s.slip[i], s.lat[i], s.fx[i], s.fy[i],
-                     s.load[i], s.spin[i]);
+        std::fprintf(f, ",%.4f,%.4f,%.1f,%.1f,%.1f,%.3f,%.3f,%.1f", s.slip[i], s.lat[i], s.fx[i],
+                     s.fy[i], s.load[i], s.spin[i], s.pressure[i], s.temperature[i]);
       std::fprintf(f, "\n");
     }
     std::fclose(f);
@@ -251,7 +282,8 @@ struct SpeedHold {
 
 // Accelerates from rest to the target speed at full throttle.
 void reach(Run& run, double kph) {
-  while (run.speed() * kKph < kph && run.t < 40) run.step({1, 0, 0});
+  const double end = run.t + 40;
+  while (run.speed() * kKph < kph && run.t < end) run.step({1, 0, 0});
 }
 
 void hold(Run& run, double kph, double seconds) {
@@ -260,11 +292,8 @@ void hold(Run& run, double kph, double seconds) {
   while (run.t < end) run.step(control(run.speed(), 0));
 }
 
-double launch_help = 0;  // ASR/launch control, as Config.player_asr
-
 std::string launch(const std::string& csv) {
   Run run("launch");
-  run.car.dynamics.drive.launch_help = launch_help;
   double t60 = -1, t100 = -1, worst_slip = 0;
   while (run.t < 12) {
     run.step({1, 0, 0});
@@ -286,11 +315,91 @@ std::string brake(const std::string& csv) {
   reach(run, 100);
   const Vec3 start = run.car.dynamics.body.position;
   const double t0 = run.t;
-  while (run.speed() > .1 && run.t < t0 + 15) run.step({0, 1, 0});
+  double locked = 0, front_temperature = 0;
+  while (run.speed() > .1 && run.t < t0 + 15) {
+    run.step({0, 1, 0});
+    for (const auto& s : run.car.dynamics.state)
+      if (run.speed() > 2 && std::abs(s.spin) * .31 < .3 * run.speed()) locked += VehicleDynamics::timestep / 4;
+  }
+  front_temperature = run.car.dynamics.state[0].brake_temperature;
+  const double rear_temperature = run.car.dynamics.state[2].brake_temperature;
   run.write_csv(csv, VehicleDynamics::frequency);
   const Vec3 d = run.car.dynamics.body.position - start;
   char out[200];
-  std::snprintf(out, sizeof out, "100-0 %.2f m in %.3f s", std::hypot(d.x, d.z), run.t - t0);
+  std::snprintf(out, sizeof out, "100-0 %.2f m in %.3f s, %.2f wheel-s locked, rotors %.0f / %.0f C",
+                std::hypot(d.x, d.z), run.t - t0, locked, front_temperature, rear_temperature);
+  return out;
+}
+
+// Brake fade: ten stops from 150 to 30 km/h at full pedal, accelerating back
+// between them. Reports the first and last stop's distance and deceleration
+// and the hottest front rotor.
+std::string fade(const std::string& csv) {
+  Run run("fade");
+  double first = 0, last = 0, hottest = 0, first_g = 0, last_g = 0;
+  for (int stop = 0; stop < 10; ++stop) {
+    reach(run, 150);
+    const Vec3 start = run.car.dynamics.body.position;
+    const double t0 = run.t;
+    while (run.speed() * kKph > 30 && run.t < t0 + 15) run.step({0, 1, 0});
+    const Vec3 d = run.car.dynamics.body.position - start;
+    const double distance = std::hypot(d.x, d.z);
+    const double g = (150 - 30) / kKph / std::max(1e-3, run.t - t0) / 9.81;
+    if (stop == 0) first = distance, first_g = g;
+    last = distance, last_g = g;
+    hottest = std::max(hottest, run.car.dynamics.state[0].brake_temperature);
+  }
+  run.write_csv(csv, VehicleDynamics::frequency);
+  char out[200];
+  std::snprintf(out, sizeof out, "stop 1 %.1f m %.2f g, stop 10 %.1f m %.2f g, hottest front %.0f C",
+                first, first_g, last, last_g, hottest);
+  return out;
+}
+
+// Ten minutes at 100 km/h: the tyres' steady temperatures.
+std::string cruise(const std::string& csv) {
+  Run run("cruise");
+  reach(run, 100);
+  hold(run, 100, 600);
+  run.write_csv(csv, VehicleDynamics::frequency);
+  const auto& st = run.car.dynamics.state;
+  char out[200];
+  std::snprintf(out, sizeof out, "front tread %.0f C carcass %.0f C, rear tread %.0f C carcass %.0f C",
+                st[0].tyre_temperature.surface, st[0].tyre_temperature.carcass,
+                st[2].tyre_temperature.surface, st[2].tyre_temperature.carcass);
+  return out;
+}
+
+// Split friction: the left wheels on ice (friction x 0.25) during a full
+// stop from 100 km/h, the driver steering to hold the heading (at most
+// 0.15 rad, reacting after 0.3 s). Reports the stop, the largest yaw rate
+// and the heading change.
+std::string split_mu(const std::string& csv) {
+  Run run("split_mu");
+  reach(run, 100);
+  for (int i : {0, 2}) {
+    run.car.dynamics.drive.wheels[i].tyre.friction *= .25;
+  }
+  const Vec3 start = run.car.dynamics.body.position;
+  const double t0 = run.t;
+  double yaw = 0;
+  const auto heading = [&] {
+    const Vec3 f = run.car.dynamics.body.orientation.rotate({0, 0, -1});
+    return std::atan2(f.x, -f.z);
+  };
+  const double heading0 = heading();
+  while (run.speed() > .1 && run.t < t0 + 15) {
+    Inputs in{0, 1, 0};
+    if (run.t - t0 > .3)
+      in.steer = std::clamp(2 * (heading() - heading0) - .3 * run.samples.back().yaw, -.15, .15);
+    run.step(in);
+    yaw = std::max(yaw, std::abs(run.samples.back().yaw));
+  }
+  run.write_csv(csv, VehicleDynamics::frequency);
+  const Vec3 d = run.car.dynamics.body.position - start;
+  char out[200];
+  std::snprintf(out, sizeof out, "100-0 %.2f m, yaw max %.2f rad/s, heading change %.1f deg",
+                std::hypot(d.x, d.z), yaw, (heading() - heading0) * 57.29578);
   return out;
 }
 
@@ -308,9 +417,13 @@ std::string skidpad(const std::string& csv) {
     if (g > best) { best = g; best_steer = steer; }
   }
   run.write_csv(csv, VehicleDynamics::frequency);
-  char out[200];
-  std::snprintf(out, sizeof out, "max lateral %.3f g at steer %.3f rad, final speed %.1f km/h",
-                best, best_steer, run.speed() * kKph);
+  const auto& st = run.car.dynamics.state;
+  char out[240];
+  std::snprintf(out, sizeof out,
+                "max lateral %.3f g at steer %.3f rad, final speed %.1f km/h, treads %.0f/%.0f/%.0f/%.0f C",
+                best, best_steer, run.speed() * kKph, st[0].tyre_temperature.surface,
+                st[1].tyre_temperature.surface, st[2].tyre_temperature.surface,
+                st[3].tyre_temperature.surface);
   return out;
 }
 
@@ -496,8 +609,8 @@ std::string burnout(const std::string& csv) {
   moved = std::hypot(d.x, d.z);
   run.write_csv(csv, VehicleDynamics::frequency);
   char out[200];
-  std::snprintf(out, sizeof out, "rear wheel speed max %.2f m/s, car moved %.3f m",
-                spin, moved);
+  std::snprintf(out, sizeof out, "rear wheel speed max %.2f m/s, car moved %.3f m, rear tread %.0f C",
+                spin, moved, run.car.dynamics.state[2].tyre_temperature.surface);
   return out;
 }
 
@@ -518,7 +631,11 @@ int main(int argc, char** argv) {
     } else if (!std::strcmp(argv[i], "--scenario") && i + 1 < argc) {
       only = argv[++i];
     } else if (!std::strcmp(argv[i], "--asr") && i + 1 < argc) {
-      launch_help = std::atof(argv[++i]);
+      asr_strength = std::atof(argv[++i]);
+    } else if (!std::strcmp(argv[i], "--abs") && i + 1 < argc) {
+      abs_strength = std::atof(argv[++i]);
+    } else if (!std::strcmp(argv[i], "--respec")) {
+      respec_brakes = true;
     } else if (!std::strcmp(argv[i], "--gt3")) {
       gt3 = true;
     } else if (!std::strcmp(argv[i], "--bars") && i + 1 < argc) {
@@ -530,7 +647,7 @@ int main(int argc, char** argv) {
     } else if (!std::strcmp(argv[i], "--csv") && i + 1 < argc) {
       csv = argv[++i];
     } else {
-      std::fprintf(stderr, "usage: physics_lab [--hz 120,1000] [--scenario NAME] [--csv DIR] [--asr X] [--sport]\n");
+      std::fprintf(stderr, "usage: physics_lab [--hz 120,1000] [--scenario NAME] [--csv DIR] [--asr X] [--abs X] [--respec] [--sport]\n");
       return 2;
     }
   }
@@ -540,7 +657,8 @@ int main(int argc, char** argv) {
                                 {"curb", curb}, {"curb_fast", curb_fast},
                                 {"curb_angle", curb_angle}, {"curb_side", curb_side},
                                 {"tyre_curve", tyre_curve},
-                                {"power_oversteer", power_oversteer}};
+                                {"power_oversteer", power_oversteer}, {"fade", fade},
+                                {"split_mu", split_mu}, {"cruise", cruise}};
   for (const auto& s : scenarios) {
     if (only != "all" && only != s.name) continue;
     for (unsigned hz : rates) {

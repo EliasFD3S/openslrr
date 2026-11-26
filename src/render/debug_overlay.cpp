@@ -730,6 +730,14 @@ void draw_vehicle(const PartPhysicsState& state) {
   ImGui::Text("Throttle %.2f | Brake %.2f | Clutch %.2f", state.throttle, state.brake,
               state.clutch);
   ImGui::Text("%.1f km/h | %.0f rpm | Gear %d", state.speed_kph, state.rpm, state.gear);
+  // Brakes and driving aids (#446): rotor temperature and caliper pressure.
+  ImGui::Text("ABS %s | ASR %s | Reference %.1f km/h", state.abs_active ? "ACTIVE" : "-",
+              state.asr_active ? "ACTIVE" : "-", state.reference_speed * 3.6);
+  ImGui::Text("Brakes FL %.0f C %.0f%% | FR %.0f C %.0f%% | RL %.0f C %.0f%% | RR %.0f C %.0f%%",
+              state.brake_temperature[0], state.brake_pressure[0] * 100.,
+              state.brake_temperature[1], state.brake_pressure[1] * 100.,
+              state.brake_temperature[2], state.brake_pressure[2] * 100.,
+              state.brake_temperature[3], state.brake_pressure[3] * 100.);
   ImGui::Text("Physics %s | Mass %.0f kg | Yaw %.1f deg/s",
               state.active ? "active" : "inactive", state.mass, state.yaw_rate * kDegrees);
   ImGui::Text("Steering %.0f%% help | %+.1f deg requested | %+.1f deg applied | %+.1f deg assist",

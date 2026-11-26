@@ -115,8 +115,9 @@ The approved migration keeps that tyre law but corrects brake coupling.
 After the drivetrain impulse, one bearing/service/handbrake impulse budget
 is consumed before tyre force sees the spin. Its unused portion holds a
 locked wheel against the subsequent tyre reaction; it is not a second full
-brake application. ABS reduces the service budget and can release an
-already-locked wheel while the road moves. Only longitudinal force retains
+brake application. The service part of the budget is each caliper's
+pressure after ABS/ASR times the pad friction at the rotor's temperature
+([Brakes, ABS and ASR](#brakes-abs-and-asr-446)). Only longitudinal force retains
 the per-wheel no-slip-reversal bound; the earlier shared lateral impulse
 bound is absent. Automatic first/reverse launch take-up is still raised
 only while both service brake and handbrake are below 0.05, not while
@@ -163,6 +164,66 @@ brake torque. The remaining friction ellipse still permits slipping when
 support is insufficient; no general chassis sleep state or new wake-state
 machine is introduced. `RigidBody::integrate` keeps its existing behaviour;
 the vehicle owner uses its force/pose split to insert the constraints.
+
+## Brakes, ABS and ASR (#446)
+
+`src/physics/brake_system.cpp` holds the brake hardware model and the two
+driving aids; `VehicleDynamics::step_drive` runs them once per substep.
+Notes and measurements: [notes](notes.md#brakes-as-hardware-abs-and-asr-446).
+
+- **Torque.** With the patched `DiscBrake` each wheel's `setBrake` is its
+  torque at full pedal (100 bar) and `setBrakeSpec` its pad compound, rotor
+  type and diameter. A chassis with any specified wheel uses physical
+  brakes: `brake_scale` is `brakepower / 1000` (1 on every stock car), the
+  handbrake gain 2, and `distribute_brakes` (#400) is skipped because the
+  patched `Brake` applies the balance as a valve on real front/rear
+  hardware. Without the patch nothing changes: gain 25 / `brake_inertia`,
+  the 70 % front split, no heat.
+- **Pressure.** `service_brake_` (the pedal through an 80 ms lag) is the
+  driver's pressure. Each caliper gets the ABS channel's pressure, or the
+  ASR's when it brakes a spinning wheel. Without ABS a rear proportioning
+  valve passes the full pressure to 30 % pedal and 0.3 of the rise above.
+- **Heat.** Each friction application adds `0.5 I (w0^2 - w1^2)` to the
+  rotor (the hold of a locked wheel adds almost nothing: the tyre takes that
+  energy). The rotor cools by convection over its faces and vanes, growing
+  with the car's speed, and by radiation. The pad friction factor (cold,
+  working window, fade) multiplies the service torque; the handbrake does
+  not fade.
+- **Sensors.** ABS and ASR see the wheels' circumferential speeds along the
+  direction of travel, their rates (4 ms filter) and the body's longitudinal
+  acceleration, saturated at 1.5 g. `ReferenceSpeed` integrates it between
+  wheel corrections: the fastest wheel while braking, the slowest undriven
+  wheel while driving (with every wheel driven, the slowest one, slowly).
+  While braking, 0.4 s with every wheel below 70 % of the estimate and none
+  spinning up resets it to the fastest wheel.
+- **ABS** (`AbsModulator`, Options ABS slider): per channel follow, dump
+  (35 ms e-folding), hold, rebuild (80 % of the lock pressure at once, then
+  a ramp). It dumps past 16 % slip (26 % at the lowest setting) or when the
+  wheel decelerates 6 m/s^2 faster than the car with 60 % of that slip. The
+  rear channels use 0.7 of the threshold (electronic distribution, which
+  replaces the valve) and share the lower pressure (select-low). A front
+  wheel alone modulating limits the other front to its pressure plus a
+  margin growing over 0.8 s. Below 2 m/s the pressure follows the pedal.
+- **Fluid.** The caliper's fluid follows 45 % of the rotor's rise above
+  ambient with a 40 s lag; past 230 deg C (DOT 4) the pressure reaching the
+  pads falls, to 0.4 at 290 deg C.
+- **Tyres** (`src/physics/tyre_thermal.cpp`): with the patched `Tyre`
+  (`WheelRef.setTyreSpec`, the compound), each tyre has a tread and a
+  carcass temperature. Half the sliding work at the patch heats the tread,
+  the rolling resistance and the rotor (through the rim) heat the carcass;
+  both cool faster with speed. The tread temperature scales the tyre's
+  friction (`TireParameters::friction`) for the force law and the sticking
+  limits alike, through a curve per compound.
+- **Feedback.** While ABS works, a force feedback wheel buzzes at 14 Hz and
+  the pad the brake is bound to rumbles; the HUD lights the stock ABS / ASR
+  lamps. Driverless cars with physical brakes have ABS.
+- **ASR** (`TractionControl`, Options ASR slider): while the driver
+  accelerates (clutch engaged, no brake, no shift), the engine torque factor
+  follows the driven axles' mean slip past 8 % or 0.8 m/s (20 % or 2 m/s at
+  the lowest setting), a fast cut and a 0.12 s recovery, at any speed and in
+  any gear. Below 80 km/h a driven wheel spinning 0.6 m/s more than the
+  other one of its axle gets up to 40 % brake pressure. The auto clutch
+  still follows the driver's pedal, not the cut (#380).
 
 For the dyno, a new configuration must rebuild the matching curve banks,
 including nitro. Do not mix an old nitro bank with a new RPM step or a new
