@@ -351,6 +351,41 @@ void register_lang_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         const float r = std::pow(a[0], a[1]);
         return Value::make_float(std::isfinite(r) ? r : 0.f);
       });
+  // OpenSLRR (#463): trigonometry, exp, log and wrapAngle, declared by the patched
+  // Math class. Same contract as pow: a NaN or infinite result becomes 0,
+  // asin and acos clamp their input to [-1, 1] and log returns 0 for a <= 0.
+  auto register_unary = [&jvm](const char* name, double (*fn)(double)) {
+    jvm.natives().register_method(
+        "java.lang.Math", name, "(F)F",
+        [fn](Object*, const std::vector<Value>& args) {
+          const float r = static_cast<float>(
+              fn(static_cast<double>(native_arg_number(args, 0))));
+          return Value::make_float(std::isfinite(r) ? r : 0.f);
+        });
+  };
+  register_unary("sin", [](double a) { return std::sin(a); });
+  register_unary("cos", [](double a) { return std::cos(a); });
+  register_unary("tan", [](double a) { return std::tan(a); });
+  register_unary("asin", [](double a) {
+    return std::asin(std::clamp(a, -1.0, 1.0));
+  });
+  register_unary("acos", [](double a) {
+    return std::acos(std::clamp(a, -1.0, 1.0));
+  });
+  register_unary("atan", [](double a) { return std::atan(a); });
+  register_unary("exp", [](double a) { return std::exp(a); });
+  register_unary("log", [](double a) { return a > 0.0 ? std::log(a) : 0.0; });
+  register_unary("wrapAngle", [](double a) {
+    return std::remainder(a, 6.283185307179586);
+  });
+  jvm.natives().register_method(
+      "java.lang.Math", "atan2", "(FF)F",
+      [](Object*, const std::vector<Value>& args) {
+        const float r = static_cast<float>(
+            std::atan2(static_cast<double>(native_arg_number(args, 0)),
+                       static_cast<double>(native_arg_number(args, 1))));
+        return Value::make_float(std::isfinite(r) ? r : 0.f);
+      });
   jvm.natives().register_method(
       "java.lang.Math", "random", "()F",
       [](Object*, const std::vector<Value>&) {
