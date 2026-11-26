@@ -150,7 +150,8 @@ section[id], h2[id] { scroll-margin-top: calc(var(--header-h) + 16px); }
   transition: transform 0.3s var(--ease-out);
 }
 .nav a:hover { color: #fff; }
-.nav a:hover::after { transform: scaleX(1); }
+.nav a[aria-current="page"] { color: var(--amber-hi); }
+.nav a:hover::after, .nav a[aria-current="page"]::after { transform: scaleX(1); }
 
 .menu-toggle {
   display: none;
