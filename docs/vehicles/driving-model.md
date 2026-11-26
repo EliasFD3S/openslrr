@@ -91,6 +91,21 @@ after the original law, nicolas-found42/sl-remastered, 00454500):
   (`TireParameters::relaxation_length`, from the patched
   `WheelRef.setRelaxation`; 0.3 m at the optimal pressure and without the
   patch), integrated implicitly, a 12 ms lag at 90 km/h for 0.3 m.
+- Tyre pressure, wear, punctures and flat spots (#461, [notes](notes.md#tyre-temperature-pressure-stiffness-wear-punctures-and-flat-spots-461)):
+  the Tyre's cold `inflation` follows the carcass temperature; against its
+  compound's working temperature it scales the relaxation length, rolling
+  resistance, nominal load and cornering stiffness (with the tread rubber's
+  softening). The sliding work, weighted up as the tread overheats, wears
+  the tyre part against its `setMaxWear` life; under 15 % condition the grip
+  falls. `effective_tyre` combines them with the temperature and ground grip.
+  The vertical rate follows the pressure and the wheel rolls on its loaded
+  radius (free radius less a third of the deflection). A rim strike pinches
+  the tyre, wear to the cords or a cooked carcass blows it out; flat, it
+  grips and carries less, and pushed sideways or run 3 km flat it comes off
+  the rim, leaving the rim on metal. A wheel locked while sliding grinds a
+  flat spot that thumps once a turn and shortens the rolling radius as it
+  passes (about 0.75 mm after a locked stop from 100 km/h); the Tyre saves
+  it and a garage repair clears it.
 - Ground surface (#452, [notes](notes.md#ground-surface-friction-and-rolling-resistance-452)):
   each map collision face carries its SCM material (`GroundSurface`).
   Friction and rolling are averaged over the 13 tread samples. The

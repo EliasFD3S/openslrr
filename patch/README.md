@@ -4,6 +4,14 @@ Copy the `sl`, `system`, `parts`, `cars` and `particles` folders from this patch
 
 **Options** (main menu and in-game menu) opens a full-screen screen built on `java.render.osdx` ([docs/ui/osd-v2.md](../docs/ui/osd-v2.md)): Video, Graphics, Sound, Controls (live axis meters, gamma, dead zones, steering speed sensitivity, force feedback), Devices (connected controllers, battery, rumble test, axis calibration) and Game tabs, an info panel that explains the setting under the pointer, and a notification when a preset is applied. Key redefinition, axes and the control files open the classic pages. The classic pages below are still in `OptionsDialog`. The **Video Options** menu applies the resolution and the Enhanced settings in game. A **Preset** choice (Low, Medium, High, Ultra) sets them all at once; changing one setting afterwards shows Custom. **Advanced** opens a second page: VSync, prop detail, fog, car lights, headlight shadows, street lamps, view distance (500–3,000 m, 3 km by default), the number of street lamps that cast shadows and the tyre smoke density (0–400 % of the default, also in **Graphics → World**). **Advanced Game Options** has the pedestrian density slider again (0.5–1.5; an old saved value below 0.5 returns to 1.5). The scenery shadow map and the vehicle shadow map each use a resolution of 2048 × 2048. **Ctrl+F12 → Renderer** also sets how many reflection faces are computed per frame.
 
+## Tyre flat spots (#461)
+
+Copy `parts`: the patched `Tyre.class` (source in `src/`) keeps the flat spot
+a locked wheel grinds into its tread (`flat_spot`, `flat_spot_angle`, which
+the host updates), saves it (Tyre save version 2; older saves load without
+one) and clears it on a repair in the garage. Tyre pressure, wear,
+punctures and debeading are host-only and need no file.
+
 ## Tyre smoke (#454)
 
 Copy `particles` too. `particles/scripts/particle_clouds/asphalt.cfg` is the

@@ -1591,6 +1591,141 @@ SLRR_TEST(tyres_warm_up_rolling_and_sliding_and_set_the_grip) {
   SLRR_REQUIRE(rim.carcass > kAmbientTemperature + 2);
 }
 
+SLRR_TEST(hot_tyres_gain_pressure_and_soften) {
+  // #461: 2.0 bar set cold at ambient; the air follows the carcass.
+  SLRR_REQUIRE(std::abs(tyre_hot_pressure(2, kAmbientTemperature) - 2) < 1e-9);
+  SLRR_REQUIRE(tyre_hot_pressure(2, 80) > 2.5 && tyre_hot_pressure(2, 80) < 2.65);
+  const auto sport = tyre_thermal_spec(1, .31, .205), race = tyre_thermal_spec(2, .31, .205);
+  // At the working carcass temperature the scripted tyre is unchanged.
+  const auto working = tyre_pressure_effect(sport, 2, {tyre_working_tread(sport), tyre_working_carcass(sport)});
+  SLRR_REQUIRE(std::abs(working.ratio - 1) < 1e-9 && std::abs(working.stiffness - 1) < 1e-9);
+  SLRR_REQUIRE(working.relaxation == 1 && working.rolling == 1 && working.nominal_load == 1);
+  // Cold: under its working pressure, so a lazier, softer, draggier tyre.
+  const auto cold = tyre_pressure_effect(sport, 2, {});
+  SLRR_REQUIRE(cold.ratio < .95 && cold.ratio > .8);
+  SLRR_REQUIRE(cold.relaxation > 1 && cold.rolling > 1 && cold.nominal_load < 1);
+  // The low pressure softens the carcass; cold rubber is stiffer itself, so
+  // a cold tyre's stiffness stays about as scripted.
+  SLRR_REQUIRE(tyre_pressure_effect(sport, 2, {tyre_working_tread(sport), 25}).stiffness < .97);
+  SLRR_REQUIRE(std::abs(cold.stiffness - 1) < .05);
+  // A cold racing tyre is further from its window than a sport one.
+  SLRR_REQUIRE(tyre_pressure_effect(race, 2, {}).ratio < cold.ratio);
+  // Hot: over-pressured, quicker; an overheated tread loses stiffness.
+  const auto hot = tyre_pressure_effect(sport, 2, {tyre_working_tread(sport), 110});
+  SLRR_REQUIRE(hot.ratio > 1.05 && hot.relaxation < 1 && hot.stiffness > 1);
+  const auto cooked = tyre_pressure_effect(sport, 2, {200, 110});
+  SLRR_REQUIRE(cooked.stiffness < hot.stiffness * .9);
+  // Without the patched Tyre or a known pressure: nothing changes.
+  SLRR_REQUIRE(tyre_pressure_effect(TyreThermalSpec{}, 2, {100, 100}).stiffness == 1);
+  SLRR_REQUIRE(tyre_pressure_effect(sport, 0, {100, 100}).pressure == 0);
+}
+
+SLRR_TEST(the_tread_wears_with_hot_sliding) {
+  // #461: each sliding joule counts once up to 100 deg C, about 30 times at
+  // 300 (a burnout tears the tread off).
+  SLRR_REQUIRE(tyre_wear_weight(80) == 1);
+  SLRR_REQUIRE(tyre_wear_weight(300) > 25 && tyre_wear_weight(300) < 35);
+  // A ten-second burnout at 50 kW on a hot sport tyre takes about a tenth.
+  const double sport_life = .708 * 2755359744.0 * kWearJoulesPerUnit;  // the script's value
+  const double burnout = 10 * 50000 * tyre_wear_weight(300) / sport_life;
+  SLRR_REQUIRE(burnout > .07 && burnout < .14);
+  // Worn: stiffer; down to the cords, less grip.
+  SLRR_REQUIRE(tyre_wear_grip(1) == 1 && tyre_wear_grip(.2) == 1);
+  SLRR_REQUIRE(tyre_wear_grip(0) == .6 && tyre_wear_grip(.075) > .6);
+  SLRR_REQUIRE(tyre_wear_stiffness(0) > tyre_wear_stiffness(1));
+  // The solver counts the work: a spinning wheel's grows, a worn-out tyre
+  // corners less.
+  double lateral[2];
+  for (int worn = 0; worn < 2; ++worn) {
+    Car car;
+    car.run(1, 0, 0, 0);
+    for (auto& w : car.dynamics.drive.wheels) w.tread_wear = worn ? 0 : 1;
+    car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -20});
+    for (auto& wheel : car.dynamics.state) wheel.spin = 20 / .31;
+    car.dynamics.drive.engaged = false;
+    const double before = car.dynamics.state[0].wear_work;
+    car.run(2, 0, 0, .1);
+    SLRR_REQUIRE(car.dynamics.state[0].wear_work > before);
+    double force = 0;
+    for (const auto& wheel : car.dynamics.state) force += wheel.tire_force.lateral;
+    lateral[worn] = std::abs(force);
+  }
+  SLRR_REQUIRE(lateral[1] < lateral[0] * .8);
+}
+
+SLRR_TEST(a_punctured_tyre_deflates_and_the_corner_sinks) {
+  // #461: a blowout empties the tyre in a fraction of a second, a pinch over
+  // a few; flat, the corner drops on the folded sidewall.
+  Car car;
+  car.run(3, 0, 0, 0);
+  const double height = car.dynamics.body.position.y;
+  const auto& front = car.dynamics.state[0];
+  const double loaded = front.force;
+  car.dynamics.drive.wheels[0].puncture = 1;
+  car.run(1, 0, 0, 0);
+  SLRR_REQUIRE(front.deflation > .1 && front.deflation < .3);
+  car.dynamics.drive.wheels[0].puncture = 2;
+  car.run(1, 0, 0, 0);
+  SLRR_REQUIRE(front.deflation > .99);
+  SLRR_REQUIRE(front.tyre_rate < .3 * 250000);
+  SLRR_REQUIRE(car.dynamics.body.position.y < height - .005);
+  SLRR_REQUIRE(front.force > .5 * loaded);  // it still carries its corner
+  // Repaired (or a new tyre): full again at once.
+  car.dynamics.drive.wheels[0].puncture = 0;
+  car.run(.1, 0, 0, 0);
+  SLRR_REQUIRE(front.deflation == 0);
+}
+
+SLRR_TEST(a_locked_stop_grinds_a_flat_spot_that_thumps_once_a_turn) {
+  // #461: a locked stop from 100 km/h leaves about a millimetre where each
+  // front tyre slid; rolling again, the spot lifts the support once a turn.
+  Car car;
+  for (auto& w : car.dynamics.drive.wheels) w.tyre_id = 1;
+  car.run(1, 0, 0, 0);
+  car.dynamics.drive.engaged = false;
+  car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -27.8});
+  for (auto& wheel : car.dynamics.state) wheel.spin = 27.8 / .31;
+  car.run(6, 0, 1, 0);
+  const auto& front = car.dynamics.state[0];
+  SLRR_REQUIRE(car.speed() < .5);
+  SLRR_REQUIRE(front.flat_spot > .0003 && front.flat_spot < .004);
+  const double spot = front.flat_spot;
+  std::printf("FLAT SPOT after a locked stop from 100 km/h: %.2f mm front, %.2f mm rear\n",
+              spot * 1000, car.dynamics.state[2].flat_spot * 1000);
+  // Rolling at 60 km/h: the support dips once a turn, by up to the depth.
+  car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -16.7});
+  for (auto& wheel : car.dynamics.state) wheel.spin = 16.7 / .31;
+  double deepest = 0, shallowest = 1;
+  int dips = 0;
+  bool in_dip = false;
+  for (int i = 0; i < 60; ++i) {
+    car.run(1. / 60, 0, 0, 0);
+    deepest = std::max(deepest, front.flat_drop);
+    shallowest = std::min(shallowest, front.flat_drop);
+    const bool dip = front.flat_drop > .5 * spot;
+    dips += dip && !in_dip;
+    in_dip = dip;
+  }
+  SLRR_REQUIRE(deepest > .5 * spot && shallowest == 0);
+  SLRR_REQUIRE(front.flat_spot == spot);  // rolling does not grind it
+  // A new tyre has none.
+  auto& fitted = car.dynamics.drive.wheels[0];
+  fitted.tyre_id = 2;
+  car.run(1. / 60, 0, 0, 0);
+  SLRR_REQUIRE(front.flat_spot == 0);
+  // A tyre loaded from a save brings its spot; a repair (the Tyre clears it
+  // and the host bumps the serial) takes it away.
+  fitted.tyre_id = 3;
+  fitted.flat_spot = .002;
+  fitted.flat_spot_angle = 1;
+  car.run(1. / 60, 0, 0, 0);
+  SLRR_REQUIRE(front.flat_spot == .002 && front.flat_spot_angle == 1);
+  fitted.flat_spot = 0;
+  ++fitted.flat_serial;
+  car.run(1. / 60, 0, 0, 0);
+  SLRR_REQUIRE(front.flat_spot == 0);
+}
+
 SLRR_TEST(hot_brake_fluid_boils_and_the_pressure_falls) {
   const auto brake = brake_hardware(0, 2, .286);
   double fluid = kAmbientTemperature;
@@ -1605,6 +1740,9 @@ SLRR_TEST(hot_brake_fluid_boils_and_the_pressure_falls) {
 
 int main() {
   const slrr::standalone::Test tests[] = {
+      hot_tyres_gain_pressure_and_soften, the_tread_wears_with_hot_sliding,
+      a_punctured_tyre_deflates_and_the_corner_sinks,
+      a_locked_stop_grinds_a_flat_spot_that_thumps_once_a_turn,
       hard_braking_declutches_so_the_engine_never_pushes_the_rear_wheels,
       coasting_engine_braking_fades_with_the_speed,
       releasing_a_hard_brake_at_speed_takes_up_without_a_jolt,

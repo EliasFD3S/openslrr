@@ -233,6 +233,26 @@ struct Record {
   // Settled cage displacement of each corner's hardpoints when its wheel was
   // fitted; only crush beyond it counts against the mount.
   std::array<double, 4> wheel_shift_base{};
+  // Chassis only (#461): each corner's tyre part (looked up again when its
+  // rim or tyre changes) and how much of the corner's wear work
+  // (WheelState::wear_work) has been charged to a tyre.
+  std::array<Object *, 4> tyre_part{};
+  std::array<double, 4> wear_charged{};
+  // A corner's puncture this session (1 a pinch, 2 a blowout; a flat tyre
+  // loaded from a save leaks slowly) and the rim strikes already judged.
+  std::array<int, 4> puncture{};
+  std::array<int, 4> strikes_seen{};
+  // Distance run flat (m) and whether the corner's tyre came off its rim
+  // (#461): the rim then runs as metal until a tyre is fitted again.
+  std::array<double, 4> flat_distance{};
+  std::array<bool, 4> debeaded{};
+  std::array<Object *, 4> lost_tyre{};
+  // The flat spot last read from or written to each corner's Tyre and for
+  // which tyre; another value there (a loaded game, a repair) bumps the
+  // serial so the solver takes it (#461).
+  std::array<float, 4> flat_seen{-1.f, -1.f, -1.f, -1.f};
+  std::array<Object *, 4> flat_tyre{};
+  std::array<int, 4> flat_serial{};
   // Chassis only: the engine mount against impact energy
   // (damage_engine_mount). At zero the engine breaks off as a loose body,
   // thrown with `engine_release_velocity`. `engine_lost` keeps the chassis
@@ -1664,6 +1684,100 @@ void corner_wheel_parts(const Record &rec, size_t corner, std::vector<Object *> 
       if (const auto child = rec.children.find(slot.id); child != rec.children.end())
         out.push_back(child->second);
 }
+// A corner's tyre (#461): the Tyre in its first wheel slot's assembly. The
+// cached one stands while its parent is still that rim.
+Object *corner_tyre(Record &rec, size_t corner) {
+  if (corner >= rec.tyre_part.size()) return nullptr;
+  std::vector<Object *> rims;
+  corner_wheel_parts(rec, corner, rims);
+  Object *&cached = rec.tyre_part[corner];
+  if (rims.empty()) return cached = nullptr;
+  if (cached)
+    if (auto *p = record(cached); p && p->state.parent == rims.front()) return cached;
+  cached = nullptr;
+  if (runtime)
+    for (const auto &installed : part_installed_tree(rims.front()))
+      if (runtime->tree_instance_of(installed.object,
+                                    "java.game.parts.rgearpart.reciprocatingrgearpart.Tyre")) {
+        cached = installed.object;
+        break;
+      }
+  return cached;
+}
+// A tyre part this torn is punctured (#461): the puncture sets its tear to
+// 0.05, a crash that tears it this far flattens it too, and a repair that
+// brings the tear back inflates it.
+constexpr float kFlatTear = .1f;
+// Punctures (#461, OpenSLRR): a tyre squashed to its rim while closing fast
+// pinches and leaks; one worn to its cords, ground flat to them in one place
+// or with its carcass past 160 deg C blows out. A flat tyre comes off its rim when it is pushed sideways (more
+// than half its load) or after 3 km run flat: it breaks off as a loose part
+// with the next collision pass, and the rim runs on as metal.
+void update_punctures(Record &rec, double dt) {
+  for (size_t i = 0; i < rec.dynamics.state.size() && i < rec.tyre_part.size(); ++i) {
+    const auto &s = rec.dynamics.state[i];
+    int &seen = rec.strikes_seen[i];
+    const bool struck = s.rim_strikes > seen;
+    seen = s.rim_strikes;
+    auto *p = rec.tyre_part[i] ? record(rec.tyre_part[i]) : nullptr;
+    if (!p || !(p->max_wear > 1e6)) continue;
+    if (p->state.tear <= kFlatTear) {
+      const bool flat = s.deflation > .9 && s.contact && s.force > 0;
+      if (flat) rec.flat_distance[i] += std::abs(s.spin) * rec.dynamics.wheels[i].radius * dt;
+      const bool pushed = flat && std::abs(s.tire_force.lateral) > .5 * s.force;
+      if (!rec.debeaded[i] && (pushed || rec.flat_distance[i] > 3000)) {
+        rec.debeaded[i] = true;
+        rec.lost_tyre[i] = rec.tyre_part[i];
+        settled_wheel_releases.push_back(rec.tyre_part[i]);
+        std::fprintf(stderr, "[tyre] corner %zu came off its rim\n", i);
+      }
+      continue;
+    }
+    rec.flat_distance[i] = 0;
+    const bool blowout = p->state.wear <= 0 || s.tyre_temperature.carcass > 160 ||
+                         s.flat_spot >= physics::kFlatSpotCords;
+    if (!blowout && !struck) continue;
+    p->state.tear = .05f;
+    rec.puncture[i] = blowout ? 2 : 1;
+    std::fprintf(stderr, "[tyre] corner %zu %s\n", i,
+                 blowout ? "blew out" : "pinched on its rim and leaks");
+  }
+}
+// The flat spots the solver ground go into each Tyre's fields, which the
+// Tyre saves and its repair clears (#461).
+void store_flat_spots(Record &rec) {
+  for (size_t i = 0; i < rec.dynamics.state.size() && i < rec.tyre_part.size(); ++i) {
+    Object *tyre = rec.tyre_part[i];
+    const auto &s = rec.dynamics.state[i];
+    if (!tyre || tyre != rec.flat_tyre[i] || s.flat_tyre != reinterpret_cast<std::uintptr_t>(tyre))
+      continue;
+    const float spot = static_cast<float>(s.flat_spot);
+    if (spot == rec.flat_seen[i]) continue;
+    tyre->fields["flat_spot"] = Value::make_float(spot);
+    tyre->fields["flat_spot_angle"] = Value::make_float(static_cast<float>(s.flat_spot_angle));
+    rec.flat_seen[i] = spot;
+  }
+}
+// The sliding work since the last charge wears each corner's tyre (#461):
+// Tyre.SetInflation sets its life with setMaxWear (kWearJoulesPerUnit
+// joules per unit; parts that never call it keep 1 and do not wear). The
+// part's wear is a float: small charges wait until they show.
+void update_tyre_wear(Record &rec) {
+  for (size_t i = 0; i < rec.dynamics.state.size() && i < rec.tyre_part.size(); ++i) {
+    const double work = rec.dynamics.state[i].wear_work;
+    double &charged = rec.wear_charged[i];
+    if (work < charged) charged = work;  // the solver state was reset
+    auto *p = rec.tyre_part[i] ? record(rec.tyre_part[i]) : nullptr;
+    if (!p || !(p->max_wear > 1e6)) {
+      charged = work;
+      continue;
+    }
+    const double used = (work - charged) / (double(p->max_wear) * physics::kWearJoulesPerUnit);
+    if (used < 1e-5) continue;
+    p->state.wear = static_cast<float>(std::max(0.0, p->state.wear - used));
+    charged = work;
+  }
+}
 // The chassis's engine: the direct child carrying the DynoData, as
 // configure_drive finds it (stock Chassis.updatevariables takes the child that
 // is a Block). Everything installed on it goes with it.
@@ -2801,7 +2915,17 @@ void dynamics_wheels(Record &rec) {
          physics::Quaternion{std::sin(ypr[1] * .5), 0, 0, std::cos(ypr[1] * .5)} *
          physics::Quaternion{0, 0, std::sin(ypr[2] * .5), std::cos(ypr[2] * .5)}).normalized();
     cfg.radius = inline_wheel ? fallback.radius : !mount ? reach : live.radius > 0 ? live.radius : fallback.radius;
-    cfg.metal_contact = !inline_wheel && !has_any_rim;
+    // A rim whose tyre came off runs on its metal (#461) until a tyre is
+    // fitted to that corner again.
+    if (rec.debeaded[i]) {
+      Object *tyre = corner_tyre(rec, i);
+      if (!mount || (tyre && tyre != rec.lost_tyre[i])) {
+        rec.debeaded[i] = false;
+        rec.lost_tyre[i] = nullptr;
+        rec.flat_distance[i] = 0;
+      }
+    }
+    cfg.metal_contact = (!inline_wheel && !has_any_rim) || (rec.debeaded[i] && mount);
     // WheelRef.setWidth: the tyre width in metres (Tyre.java), stored halved.
     cfg.half_width = cfg.metal_contact ? 0. : std::clamp(double(live.width), 0., .25);
     cfg.rest = live.rest;
@@ -3432,6 +3556,34 @@ DriveRefresh configure_drive(Object *chassis, Record &rec, bool controlled) {
     out.tyre.relaxation_length = std::clamp(wheel.relaxation, .05f, 2.f);
     // setCPatch stores the sine of the scripted patch angle.
     out.tyre.patch_angle = std::asin(std::clamp(wheel.cpatch_ang, 0.f, 1.f));
+    // The Tyre's cold pressure and its part's wear (#461).
+    out.inflation = 0;
+    out.tread_wear = 1;
+    out.puncture = 0;
+    out.tyre_id = 0;
+    if (Object *tyre = corner_tyre(rec, i); tyre && !rec.debeaded[i]) {
+      out.tyre_id = reinterpret_cast<std::uintptr_t>(tyre);
+      out.inflation = std::max(0.f, comp(tyre, "inflation"));
+      // The Tyre's flat spot: a new tyre, a loaded game or a repair changes
+      // it behind the solver's back (#461).
+      const float spot = comp(tyre, "flat_spot");
+      if (tyre != rec.flat_tyre[i] || spot != rec.flat_seen[i]) {
+        rec.flat_tyre[i] = tyre;
+        rec.flat_seen[i] = spot;
+        ++rec.flat_serial[i];
+      }
+      out.flat_spot = spot;
+      out.flat_spot_angle = comp(tyre, "flat_spot_angle");
+      out.flat_serial = rec.flat_serial[i];
+      if (auto *part = record(tyre)) {
+        out.tread_wear = std::clamp(part->state.wear, 0.f, 1.f);
+        // Flat, or sound again once repaired or replaced.
+        if (part->max_wear > 1e6 && part->state.tear <= kFlatTear)
+          out.puncture = rec.puncture[i] ? rec.puncture[i] : 1;
+        else
+          rec.puncture[i] = 0;
+      }
+    }
     if (rec.dynamics.wheels[i].metal_contact) {
       // The missing rim's script no longer refreshes its tyre parameters.
       // Do not copy them into a contact on the remaining disc/caliper.
@@ -8058,7 +8210,12 @@ void finish_physics_frame(double frame_seconds, double alpha, bool committed) {
         const bool had_voice = rec.slide_voice != 0;
         update_slide_audio(rec, tyres || (traffic && (had_voice || traffic_slides < 2)));
         if (rec.native_vehicle) traffic_slides += (rec.slide_voice != 0) - had_voice;
-        if (tyres) update_skid_marks(rec, frame_seconds);
+        if (tyres) {
+          update_skid_marks(rec, frame_seconds);
+          update_tyre_wear(rec);
+          update_punctures(rec, frame_seconds);
+          store_flat_spots(rec);
+        }
         else if (rec.native_vehicle && rec.physics_released && !rec.state.parent)
           update_skid_marks(rec, frame_seconds, 60.f);
       }
