@@ -256,6 +256,8 @@ std::unordered_map<Object *, std::vector<SfxItem>> sfx_items;
 std::unordered_map<Object *, Record> records;
 // Pedal travel above which brake lamps light (#279).
 constexpr float kBrakeLampMin = .05f;
+// drive.handbrake at full pull: what a handbrake key has always given.
+constexpr double kHandbrakeFull = .3;
 // Weak, one-shot repair work consumed by the next part update. Stock Java may
 // repair descendants before their parents, so links must not be relinked early.
 std::unordered_set<Object *> repair_relink_pending;
@@ -3119,7 +3121,8 @@ struct SteeringInput {
 };
 SteeringInput steering_input(bool controls) {
   const auto &in = host_input();
-  return {in.drive_steer, in.drive_steer_analog, in.drive_handbrake, controls};
+  // A partly pulled lever counts: the slide correction would fight it.
+  return {in.drive_steer, in.drive_steer_analog, in.drive_handbrake > .05f, controls};
 }
 // One host tick of the steering filter on explicit state (update_steering).
 void steering_filter(const SteeringGeometry &geometry, const SteeringInput &in,
@@ -3297,7 +3300,11 @@ DriveRefresh configure_drive(Object *chassis, Record &rec, bool controlled) {
   const auto &in = host_input();
   drive.throttle = autonomous ? ai.throttle : controls ? in.drive_throttle : 0.f;
   drive.brake = autonomous ? ai.brake : controls ? in.drive_brake : 0.f;
-  drive.handbrake = !autonomous && controls && in.drive_handbrake ? .3 : 0;
+  // The handbrake is analog: a lever or axis pulls in proportion, up to the
+  // 0.3 a key always gave.
+  const double handbrake_pull =
+      std::isfinite(in.drive_handbrake) ? std::clamp(in.drive_handbrake, 0.f, 1.f) : 0.f;
+  drive.handbrake = !autonomous && controls ? kHandbrakeFull * handbrake_pull : 0;
   drive.abs_strength = rec.abs_strength;
   drive.launch_help = rec.launch_help;
   drive.differential_lock = std::clamp(comp(chassis, "diff_lock"), 0.f, 1.f);
@@ -6321,21 +6328,20 @@ void commit_batch(SimBatch& batch) {
           detach_panel(part, *panel, chassis, *vehicle);
 }
 
-// Physics runs at a fixed 60 Hz, but frames come at the display rate. Drawing
-// the last tick made turns and motion step whenever a frame ran zero or two
-// ticks. In the Adaptive framerate mode, draw each car between its last two
-// ticks instead, by the fraction of a tick that is still unsimulated. Classic
-// keeps drawing the last tick. Scripts and physics keep the ticked pose.
+// Host ticks run at a fixed 60 Hz, but frames come at the display rate.
+// Drawing the last tick made turns and motion step whenever a frame ran zero
+// or two ticks, so each car is drawn between its last two ticks, by the
+// fraction of a tick that is still unsimulated. (The Classic framerate mode
+// that drew the last tick is gone.) Scripts and physics keep the ticked pose.
 void publish_render_poses(double alpha) {
   perf::Scope timing(perf::Zone::Interpolation);
   alpha = std::clamp(alpha, 0., 1.);
-  const bool adaptive = host_framerate_mode() == FramerateMode::Adaptive;
   for (auto& [chassis, rec] : records) {
     if (rec.config->native_kind != "car") continue;
     auto* node = gameref_get(chassis);
     if (!node) continue;
     node->render_pose = false;
-    if (!adaptive || !rec.render_blend || !node->matrix_override) continue;
+    if (!rec.render_blend || !node->matrix_override) continue;
     const auto& body = rec.dynamics.body;
     auto from = rec.render_from_orientation;
     const auto& to = body.orientation;
@@ -8165,7 +8171,8 @@ bool part_vehicle_hud(VehicleHudState &state) {
                       static_cast<float>(rec->dynamics.drive.throttle);
   }
   state.gear = rec->physics_released ? rec->dynamics.gear : 0;
-  state.handbrake = rec->dynamics.drive.handbrake > 0;
+  // The lamp lights past 5 % of the travel, not on an axis resting near zero.
+  state.handbrake = rec->dynamics.drive.handbrake > kHandbrakeFull * .05;
   return true;
 }
 

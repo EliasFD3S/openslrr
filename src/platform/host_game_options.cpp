@@ -23,15 +23,15 @@ bool loaded = false, dirty = false, save_failed = false;
 Clock::time_point changed, next_sample;
 GameOptions current;
 uint64_t driving_revision = 0;
-FramerateMode framerate_mode = FramerateMode::Adaptive;
 std::string host_options_path;
 bool save_host_options();
 
 // Host-only settings (#405: one table, saved as JSON). Config has a fixed
 // binary layout, so a new field there would need a patched Config class.
 // Each entry is one OptionsDialog renderer option: its id, where it is saved,
-// its range, and how to read and write it. Booleans are 0..1; the framerate
-// mode is saved by name. A new option is one line here.
+// its range, and how to read and write it. Booleans are 0..1. A new option
+// is one line here. Id 5 was the framerate mode: cars are always drawn
+// between ticks now, and an old "framerate_mode" key is ignored.
 struct HostOption {
   int id;
   const char* section;
@@ -40,7 +40,7 @@ struct HostOption {
   bool boolean;
   int (*get)();
   void (*set)(int);
-  const char* names[2];  // a named option ("classic", "adaptive"), else null
+  const char* names[2];  // a named two-value option, saved by name; else null
 };
 
 #define SLRR_GRAPHICS_INT(id, key, low, high)                         \
@@ -61,10 +61,6 @@ struct HostOption {
              +[](int v) { host_input_tuning().key = v; }, {}}
 
 const HostOption kOptions[] = {
-    {5, "video", "framerate_mode", 0, 1, false,
-     +[] { return static_cast<int>(framerate_mode); },
-     +[](int v) { framerate_mode = v ? FramerateMode::Adaptive : FramerateMode::Classic; },
-     {"classic", "adaptive"}},
     SLRR_GRAPHICS_INT(0, msaa, 0, 3),
     SLRR_GRAPHICS_BOOL(6, anisotropic_filtering),
     SLRR_GRAPHICS_BOOL(1, dynamic_reflections),
@@ -173,7 +169,6 @@ void load_host_options(const std::string& root) {
   host_enhanced_graphics() = {};
   host_input_tuning() = {};
   host_sfx_spatial_options() = {};
-  framerate_mode = FramerateMode::Adaptive;
 
   bool loaded_json = false;
   if (std::ifstream in{host_options_path, std::ios::binary}) {
@@ -327,8 +322,6 @@ bool host_option_set(int id, int value) {
   return true;
 }
 const GameOptions& host_game_options() { return current; }
-FramerateMode host_framerate_mode() { return framerate_mode; }
-void host_set_framerate_mode(FramerateMode mode) { host_option_set(5, static_cast<int>(mode)); }
 uint64_t host_driving_options_revision() { return driving_revision; }
 
 void host_game_options_load(Jvm& jvm) {

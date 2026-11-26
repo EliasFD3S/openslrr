@@ -49,7 +49,9 @@ Now one table (`kOptions` in `host_game_options.cpp`) gives each option its
 id, JSON section and key, range and accessors; loading, saving and both
 natives use it. The file is `save/game/openslrr_options.json`
 (`src/platform/host_options_json.cpp`): `version`, then `video`, `audio` and
-`input` objects, booleans as `true`/`false`, the framerate mode by name. It is
+`input` objects, booleans as `true`/`false`. (The framerate mode, saved by
+name as `video.framerate_mode`, was removed; an old key is ignored and the
+next save drops it.) It is
 written to a `.tmp` file and renamed over the old one. On load a missing key
 keeps its default, a value out of range is clamped, a wrong type or unknown
 key is ignored; a file that does not parse is renamed to `.bad` and the

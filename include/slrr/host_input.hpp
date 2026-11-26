@@ -78,7 +78,10 @@ struct HostInput {
   float free_camera_x = 0.f, free_camera_y = 0.f, free_camera_z = 0.f;
   bool drive_horn = false;
   float drive_nitro = 0.f;
-  bool drive_reverse = false, drive_handbrake = false;
+  bool drive_reverse = false;
+  // Handbrake pull, 0..1: a key or button gives 0 or 1, an analog lever or
+  // axis anything between.
+  float drive_handbrake = 0.f;
   // --bench-drive: >= 0 replaces throttle, brake and steering.
   float bench_throttle = -1.f;
 };

@@ -411,7 +411,7 @@ void host_input_update_controller(Object* controller, float dt) {
   in.drive_throttle = axis(28);
   in.drive_brake = axis(29);
   in.drive_nitro = std::clamp(axis(31), 0.f, 1.f);
-  in.drive_handbrake = axis(48) > .5f;
+  in.drive_handbrake = std::clamp(axis(48), 0.f, 1.f);
   in.drive_clutch = axis(49);
   in.free_camera_x = -axis(4);
   in.free_camera_y = axis(5);
@@ -428,7 +428,7 @@ void host_input_update_controller(Object* controller, float dt) {
     in.drive_steer = 0.f;
     in.drive_steer_analog = false;
     in.drive_steer_kind = InputKind::None;
-    in.drive_handbrake = false;
+    in.drive_handbrake = 0.f;
     in.drive_reverse = false;
   }
 }

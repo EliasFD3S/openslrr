@@ -69,29 +69,30 @@ int main() {
  std::puts("PASS AO method/quality/strength/radius and shadow quality/filter clamps + disk roundtrip");
  for(int key=1;key<=4;++key)set_graphics(key,0);
  set_graphics(0,3);
- host_set_framerate_mode(FramerateMode::Classic);
  host_enhanced_graphics()={};
  host_game_options_load(f.vm);
  auto& g=host_enhanced_graphics();
  SLRR_REQUIRE(g.msaa==3 && !g.dynamic_reflections && !g.volumetric_clouds && !g.dynamic_lighting && !g.local_lights);
- SLRR_REQUIRE(host_framerate_mode()==FramerateMode::Classic);
  // Debug menu uses the same persistence entry point.
  g={};g.msaa=2;SLRR_REQUIRE(host_save_graphics_options());
  g={};host_game_options_load(f.vm);SLRR_REQUIRE(g.msaa==2 && g.dynamic_reflections);
- std::puts("PASS graphics disk round-trip: all MSAA modes, booleans, framerate coexistence, debug path");
- // JSON (#405): sections, booleans as true/false, the framerate by name.
+ std::puts("PASS graphics disk round-trip: all MSAA modes, booleans, debug path");
+ // JSON (#405): sections, booleans as true/false. The removed framerate mode
+ // is no longer written.
  {
    std::ifstream in(host_file);const std::string text{std::istreambuf_iterator<char>(in),{}};
    SLRR_REQUIRE(text.find("\"version\": 1")!=std::string::npos);
-   SLRR_REQUIRE(text.find("\"framerate_mode\": \"classic\"")!=std::string::npos);
+   SLRR_REQUIRE(text.find("framerate_mode")==std::string::npos);
    SLRR_REQUIRE(text.find("\"msaa\": 2")!=std::string::npos);
    SLRR_REQUIRE(text.find("\"dynamic_reflections\": true")!=std::string::npos);
    SLRR_REQUIRE(text.find("\"input\": {")!=std::string::npos);
  }
  // Missing keys keep their defaults; out-of-range values clamp; wrong types
  // and unknown keys are ignored.
+ // An old framerate_mode key is ignored; option 5 is gone.
  std::ofstream(host_file)<<R"({"version":1,"video":{"framerate_mode":"classic"}})";
- host_game_options_load(f.vm);SLRR_REQUIRE(g==EnhancedGraphics{} && host_framerate_mode()==FramerateMode::Classic);
+ host_game_options_load(f.vm);SLRR_REQUIRE(g==EnhancedGraphics{});
+ {int removed=0;SLRR_REQUIRE(!host_option_get(5,removed));}
  std::ofstream(host_file)<<R"({"version":1,"video":{"msaa":999,"local_lights":"x","volumetric_clouds":false,"fog":0,"anisotropic_filtering":[1]},"input":{"ffb_damper":150,"ffb_min_force":-4,"ffb_invert":true},"extra":{"a":{"b":1}}})";
  host_game_options_load(f.vm);
  SLRR_REQUIRE(g.msaa==3 && g.local_lights && !g.volumetric_clouds && !g.fog && g.anisotropic_filtering);
@@ -106,13 +107,14 @@ int main() {
  fs::remove(host_file);
  std::ofstream(legacy_file)<<"framerate_mode=classic\nmsaa=2\nlocal_lights=invalid\nvolumetric_clouds=0\nffb_detail=40\nffb_invert=1\n";
  host_game_options_load(f.vm);
- SLRR_REQUIRE(g.msaa==2 && g.local_lights && !g.volumetric_clouds && host_framerate_mode()==FramerateMode::Classic);
+ SLRR_REQUIRE(g.msaa==2 && g.local_lights && !g.volumetric_clouds);
  SLRR_REQUIRE(host_input_tuning().ffb_detail==40 && host_input_tuning().ffb_invert);
  SLRR_REQUIRE(fs::exists(host_file) && fs::exists(legacy_file));
  std::ofstream(legacy_file)<<"msaa=0\n";
  host_game_options_load(f.vm);SLRR_REQUIRE(g.msaa==2);  // the JSON wins
  // Every renderer option id reads back what was set, through the file.
  for(int key=0;key<=31;++key){
+   if(key==5)continue;  // the removed framerate mode
    int before=0;SLRR_REQUIRE(host_option_get(key,before));
    int target=before==0?1:0;
    set_graphics(key,target);

@@ -47,6 +47,10 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 	final static int	CMD_CLASS		= 1320;	// + ControlSet.CLASS_*
 	final static int	CMD_FFB_TEST	= 1330;
 	final static int	CMD_FFB_PRESET	= 1331;
+	// GAME: the gearbox and the clutch, two choices for one
+	// Config.player_transmission.
+	final static int	CMD_GEARBOX		= 1340;
+	final static int	CMD_CLUTCH_MODE	= 1341;
 
 	final static int	SUBS = 7;		// car keys, game keys, suspension keys, files, car pad, car wheel, FFB
 	final static int	SUB_CAR = 0;
@@ -100,6 +104,10 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 	int				activePage;
 	int				open;
 
+	MultiChoice		gearbox;	// AUTO, SEMI-AUTO, MANUAL
+	MultiChoice		clutchMode;	// AUTO, MANUAL
+	int				manualClutch;	// the clutch asked for, kept while the gearbox is not MANUAL
+
 	OsdAnimator		animator;
 	int				framePage;
 
@@ -108,9 +116,10 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 	LevelBar		meterBrake;
 	LevelBar		meterSteer;
 	LevelBar		meterClutch;
+	LevelBar		meterHandbrake;
 	int				controlsDirty;
 	Slider[]		gammaSlider = new Slider[4];
-	Slider[]		deadSlider = new Slider[4];
+	Slider[]		deadSlider = new Slider[5];
 
 	// CONTROLS sub-pages: key bindings and control files
 	int[]			sub = new int[SUBS];
@@ -354,19 +363,26 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		// The control set the response sliders edit; saved when the screen closes.
 		owner.controlSet = new ControlSet();
 		owner.controlSet.load( GameLogic.activeControlFile );
+		// LIVE INPUT reads the player's controller, but a Dialog leaves only
+		// its menu bindings there (ControlSet.MENUSET): keys and wheels showed
+		// nothing until a rebind loaded the whole set. Only the pad's built-in
+		// fallback moved the meters. Load the whole set now, as a rebind does;
+		// OptionsDialog's hide puts the previous bindings back.
+		GameLogic.player.controller.setcontrol( owner.controlSet );
 
 		header = new SectionHeader( osd, "LIVE INPUT", -0.84, TOP - 0.06, 0.72 );
 		meterThrottle = liveMeter( "THROTTLE", TOP + 0.04, 0 );
 		meterBrake = liveMeter( "BRAKE", TOP + 0.04 + 0.064, 0 );
 		meterSteer = liveMeter( "STEERING", TOP + 0.04 + 0.128, 1 );
 		meterClutch = liveMeter( "CLUTCH", TOP + 0.04 + 0.192, 0 );
+		meterHandbrake = liveMeter( "HANDBRAKE", TOP + 0.04 + 0.256, 0 );
 
-		Menu m = column( LEFT, TOP + 0.04 + 0.30 );
+		Menu m = column( LEFT, TOP + 0.04 + 0.36 );
 		Slider sl = m.addItem( "MOUSE", OptionsDialog.CMD_MOUSE_SENS, Config.mouseSensitivity, "Mouse pointer and mouse steering sensitivity (percent)." );
 		sl.printValue( "%.0f", 100.0 );
 
 		Style wide = new Style( 0.62, 0.064, Frontend.mediumFont, Text.ALIGN_CENTER, null );
-		m = osd.createMenu( wide, -0.48, TOP + 0.04 + 0.42, 0.0 );
+		m = osd.createMenu( wide, -0.48, TOP + 0.04 + 0.48, 0.0 );
 		m.addItem( "CAR CONTROLS", CMD_SUB + SUB_CAR, "Keys and axes for throttle, brake, steering, gears, handbrake, clutch, nitro and horn, for the keyboard, a pad and a wheel apart." );
 		m.addItem( "FORCE FEEDBACK", CMD_SUB + SUB_FFB, "Strength, road feel, impacts, vibration and the wheel's dead band." );
 		m.addItem( "GAME CONTROLS", CMD_SUB + 1, "Keys for the radio, cruise control, look back and the map." );
@@ -384,12 +400,11 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 			float pow = cs.vasp.elementAt(i).power;
 			gammaSlider[i] = m.addItem( axis[i] + " GAMMA", OptionsDialog.CMD_POWER + i, (pow - 1.0) / 4.0, "Response curve of the axis: left is linear, right is gentle near rest and steep at the end." );
 		}
-		for( int i=0; i<4; i++ )
+		String[] dead = new String[5];
+		dead[0] = axis[0]; dead[1] = axis[1]; dead[2] = axis[2]; dead[3] = axis[3]; dead[4] = "HANDBRAKE";
+		for( int i=0; i<5; i++ )
 		{
-			int dz = i;
-			if( i == 3 )
-				dz = 7;	// clutch
-			sl = m.addItem( axis[i] + " DEAD ZONE", OptionsDialog.CMD_DEAD_ZONE + i, cs.dead_zone[dz] / 0.2, "Travel ignored around rest (percent, up to 20)." );
+			sl = m.addItem( dead[i] + " DEAD ZONE", OptionsDialog.CMD_DEAD_ZONE + i, cs.dead_zone[OptionsDialog.deadZoneControl( i )] / 0.2, "Travel ignored around rest (percent, up to 20)." );
 			sl.printValue( "%.0f", 20.0 );
 			deadSlider[i] = sl;
 		}
@@ -491,13 +506,9 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 	{
 		ControlSet cs = owner.controlSet;
 		for( int i=0; i<4; i++ )
-		{
 			gammaSlider[i].setValue( (cs.vasp.elementAt(i).power - 1.0) / 4.0 );
-			int dz = i;
-			if( i == 3 )
-				dz = 7;
-			deadSlider[i].setValue( cs.dead_zone[dz] / 0.2 );
-		}
+		for( int i=0; i<5; i++ )
+			deadSlider[i].setValue( cs.dead_zone[OptionsDialog.deadZoneControl( i )] / 0.2 );
 	}
 
 	// ---------------------------------------------------------------- key pages
@@ -1135,6 +1146,7 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 			meterBrake.setValue( Input.getInput( Input.AXIS_BRAKE ) / 128.0 );
 			meterSteer.setValue( Input.getInput( Input.AXIS_TURN_LEFTRIGHT ) / -128.0 );
 			meterClutch.setValue( Input.getInput( Input.AXIS_CLUTCH ) / 128.0 );
+			meterHandbrake.setValue( Input.getInput( Input.AXIS_HANDBRAKE ) / 128.0 );
 		}
 		else
 		if( activePage == PAGE_DEVICES )
@@ -1202,15 +1214,50 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		refreshDevices();
 	}
 
+	// The gearbox or the clutch changed: one Config.player_transmission for
+	// both. A manual clutch only exists with the manual gearbox: asking for
+	// it moves the gearbox to MANUAL, and another gearbox shows the clutch as
+	// AUTO until MANUAL comes back.
+	void setTransmission( int cmd )
+	{
+		if( cmd == CMD_CLUTCH_MODE )
+		{
+			manualClutch = clutchMode.value;
+			if( manualClutch && gearbox.value != 2 )
+			{
+				gearbox.setValue( 2 );
+				toast.show( "A MANUAL CLUTCH NEEDS THE MANUAL TRANSMISSION", 2.5 );
+			}
+		}
+		int mode = gearbox.value;
+		if( mode == 2 && manualClutch )
+			mode = 3;
+		if( gearbox.value == 2 )
+			clutchMode.setValue( manualClutch );
+		else
+			clutchMode.setValue( 0 );
+		owner.osd.multiValue = mode;
+		owner.osdCommand( OptionsDialog.CMD_CLUTCH );
+	}
+
 	void buildGame()
 	{
 		header = new SectionHeader( osd, "DRIVING", -0.84, TOP - 0.06, 0.72 );
 		Menu m = column( LEFT, TOP + 0.04 );
-		Vector gears = list( "AUTO", "SEMI-AUTO", "MANUAL", "CLUTCH", null );
+		// OptionsDialog.clutchText: AUTO, SEMI-AUTO and MANUAL with the
+		// automatic clutch, then MANUAL with the clutch pedal.
 		int gear = owner.clutchTrf[Config.player_transmission];
 		if( gear < 0 )
 			gear = 0;
-		m.addItem( "TRANSMISSION", OptionsDialog.CMD_CLUTCH, gear, gears, "Gearbox and clutch handling of your car." );
+		int box = gear;
+		manualClutch = 0;
+		if( gear == 3 )
+		{
+			box = 2;
+			manualClutch = 1;
+		}
+		gearbox = m.addItem( "TRANSMISSION", CMD_GEARBOX, box, list( "AUTO", "SEMI-AUTO", "MANUAL", null, null ), "AUTO changes every gear for you. SEMI-AUTO takes first gear when you pull away; you change the others. MANUAL leaves every change to you." );
+		clutchMode = m.addItem( "CLUTCH", CMD_CLUTCH_MODE, manualClutch, list( "AUTO", "MANUAL", null, null, null ), "AUTO works the clutch for you. MANUAL is the clutch pedal or key; it needs the MANUAL transmission." );
 		Slider sl;
 		sl = m.addItem( "DIFFICULTY", OptionsDialog.CMD_DIFFICULTY, Config.deformation, 0.5, 1.5, 0, "Damage and deformation (percent of the original)." );
 		sl.printValue( "%.0f", 100.0 );
@@ -1220,7 +1267,6 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		sl.printValue( "%.0f", 100.0 );
 		sl = m.addItem( "ASR", OptionsDialog.CMD_ASR_SLIDER, Config.player_asr, "Traction control (percent)." );
 		sl.printValue( "%.0f", 100.0 );
-		m.addItem( "FRAMERATE", OptionsDialog.CMD_FRAMERATE_MODE, option(OptionsDialog.RENDERER_FRAMERATE_MODE), list( "CLASSIC", "ADAPTIVE", null, null, null ), "CLASSIC moves cars in 60 Hz steps; ADAPTIVE is smooth at any frame rate." );
 
 		header = new SectionHeader( osd, "WORLD AND DISPLAY", 0.08, TOP - 0.06, 0.82 );
 		m = column( RIGHT, TOP + 0.04 );
@@ -1391,6 +1437,12 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 			return;
 		}
 
+		if( cmd == CMD_GEARBOX || cmd == CMD_CLUTCH_MODE )
+		{
+			setTransmission( cmd );
+			return;
+		}
+
 		if( cmd == CMD_FFB_PRESET )
 		{
 			applyFfbPreset( ffbPreset.value );
@@ -1430,7 +1482,7 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		if( g instanceof MultiChoice )
 			owner.osd.multiValue = ((MultiChoice)g).value;
 		owner.osdCommand( cmd );
-		if( cmd >= OptionsDialog.CMD_DEAD_ZONE && cmd < OptionsDialog.CMD_DEAD_ZONE + 4 )
+		if( cmd >= OptionsDialog.CMD_DEAD_ZONE && cmd < OptionsDialog.CMD_DEAD_ZONE + 5 )
 			controlsDirty = 1;
 		if( cmd >= OptionsDialog.CMD_POWER && cmd < OptionsDialog.CMD_POWER + 4 )
 			controlsDirty = 1;

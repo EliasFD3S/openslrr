@@ -28,7 +28,8 @@ public class OptionsDialog extends Dialog
 	final static int OPENSLRR_LIVE_VIDEO = 1;
 	final static int CMD_RENDERER_FIRST = 500;
 	final static int CMD_ENHANCED_SHADOWS = 505;
-	final static int CMD_FRAMERATE_MODE = 506;
+	// 506 was FRAMERATE ADAPTIVE BEHAVIOUR (renderer option 5): cars are
+	// always drawn between physics ticks now.
 	final static int CMD_ANISOTROPIC = 507;
 	final static int CMD_AO_METHOD = 508;
 	final static int CMD_AO_QUALITY = 509;
@@ -64,8 +65,18 @@ public class OptionsDialog extends Dialog
 	final static int CMD_FFB_DAMPER = 533;
 	final static int CMD_FFB_MIN_FORCE = 534;
 	final static int CMD_FFB_SMOOTHING = 535;
-	final static int RENDERER_FRAMERATE_MODE = 5;
 	public static native int getRendererOption(int option);
+
+	// The car control (ControlSet slot 0..9) of dead zone slider i:
+	// throttle, brake, steering, clutch, handbrake.
+	public static int deadZoneControl( int i )
+	{
+		if( i == 3 )
+			return 7;
+		if( i == 4 )
+			return 4;
+		return i;
+	}
 	public static native void setRendererOption(int option, int value);
 
 	final static int	CMD_TEXTURE_DETAIL = 12;
@@ -133,7 +144,6 @@ public class OptionsDialog extends Dialog
 	static String[] detailTextOO;
 	static String[] metricSystemText;
 	static String[] gpsText = new String[4];
-	static String[] framerateText;
 	static int[]	ResX_list, ResY_list;
 	
 	final static float	aspectX, aspectY;
@@ -341,10 +351,6 @@ public class OptionsDialog extends Dialog
 		gpsText[1] = "FOLLOW CAR, CAR RELATIVE";
 		gpsText[2] = "FOLLOW CAMERA, MAP RELATIVE";
 		gpsText[3] = "FOLLOW CAMERA, CAMERA RELATIVE";
-
-		framerateText = new String[2];
-		framerateText[0] = "Classic (60 Hz)";
-		framerateText[1] = "Adaptive";
 	}
 
 	public void show()
@@ -830,8 +836,6 @@ public class OptionsDialog extends Dialog
 		m.addSeparator();
 		m.addItem( "TRAFFIC DENSITY", CMD_TRAFFICDENSITY, Config.trafficDensity, 0.0, 1.5, 0, null );
 		m.addItem( "PEDESTRIAN DENSITY", CMD_PEDESTRIANDENSITY, Config.pedestrianDensity, 0.5, 1.5, 0, "Below 0.5 the streets empty out" );
-		m.addSeparator();
-		m.addItem( "FRAMERATE ADAPTIVE BEHAVIOUR", CMD_FRAMERATE_MODE, getRendererOption(RENDERER_FRAMERATE_MODE), framerateText, "CLASSIC: CARS MOVE IN 60 HZ STEPS. ADAPTIVE: SMOOTH AT ANY FRAME RATE" );
 
 		m = osd.createMenu( butt2, 0.98, 0.85, 0 );
 		m.addItem( "BACK", CMD_GAME_OPTIONS_DONE );
@@ -1084,9 +1088,6 @@ public class OptionsDialog extends Dialog
 			setRendererOption(command - CMD_RENDERER_FIRST, osd.multiValue);
 			if (command <= CMD_RENDERER_FIRST+2) customPreset();
 		}
-		else
-		if (command == CMD_FRAMERATE_MODE)
-			setRendererOption(RENDERER_FRAMERATE_MODE, osd.multiValue);
 		else
 		if (command == CMD_AO_METHOD) { setRendererOption(7, osd.multiValue); customPreset(); }
 		else if (command == CMD_AO_QUALITY) { setRendererOption(8, osd.multiValue); customPreset(); }
@@ -1411,17 +1412,18 @@ public class OptionsDialog extends Dialog
 			}
 		}
 		else
-		if (command >= CMD_DEAD_ZONE && command < CMD_DEAD_ZONE + 4)
+		if (command >= CMD_DEAD_ZONE && command < CMD_DEAD_ZONE + 5)
 		{
-			int		dz;
-
-			dz = command - CMD_DEAD_ZONE;	// remap 0,1,2,3 -> 0,1,2,7
-			if (dz == 3)
-			{
-				dz = 7;
-			}
-			controlSet.dead_zone[dz] = osd.sliderValue * 0.2f;
-			controlSet.dead_zone[dz + 15] = osd.sliderValue * 0.2f;
+			// Every binding of the control: both columns of the keyboard,
+			// pad and wheel slots (#405), and both steering halves.
+			int c = deadZoneControl( command - CMD_DEAD_ZONE );
+			for( int k = 0; k < ControlSet.CLASSES; k++ )
+				for( int col = 0; col < 2; col++ )
+				{
+					controlSet.dead_zone[ControlSet.carSlot( k, col, c )] = osd.sliderValue * 0.2f;
+					if( c == 2 )
+						controlSet.dead_zone[ControlSet.carSlot( k, col, 3 )] = osd.sliderValue * 0.2f;
+				}
 			player.controller.setcontrol( controlSet );
 		}
 		else

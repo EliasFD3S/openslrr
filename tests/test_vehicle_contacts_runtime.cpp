@@ -338,12 +338,7 @@ void native_mechanical_high_speed_head_on_does_not_tunnel() {
 }
 
 void mechanical_baiern_rear_end_and_offset_side_wake_parked_cars() {
-  struct RestoreFramerate {
-    FramerateMode previous = host_framerate_mode();
-    ~RestoreFramerate() { host_set_framerate_mode(previous); }
-  } restore; // Declared first so the fixture cleans up before mode restoration.
   ContactFixture f;
-  host_set_framerate_mode(FramerateMode::Adaptive);
   const auto render_near_physics = [](Object *car, const Sample &physics) {
     PartMatrix drawn;
     SLRR_REQUIRE(scene_instances_render_matrix(car, drawn.data()));
