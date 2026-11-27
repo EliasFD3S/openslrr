@@ -138,6 +138,13 @@ public class ArcadeCamera extends CameraProvider
 
 	public void setView( int v )
 	{
+		// Track still delivers V while LOOK BACK is held: keep the view (and
+		// the saved index, which Track already advanced) until it is released.
+		if( back )
+		{
+			Cameras.setView( this, view );
+			return;
+		}
 		view = ArcadeMath.clampView( v );
 		if( ArcadeMath.mounted( view ) && !boxValid )
 			measureBox();
@@ -151,7 +158,7 @@ public class ArcadeCamera extends CameraProvider
 	// NEXT ARCADE VIEW: the same cycle as the change-view key.
 	public void nextView()
 	{
-		if( !cam )
+		if( !cam || back )
 			return;
 		int v = view + 1;
 		if( v >= ArcadeMath.VIEWS )

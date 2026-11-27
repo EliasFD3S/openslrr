@@ -60,6 +60,12 @@ A port of the engine arcade camera that #476 removed (commit 46f90d7,
 The values approximate NFSU2's views by eye: the game's own camera table was
 not available.
 
+V and NEXT ARCADE VIEW do nothing while LOOK BACK is held.
+
+For tuning, `"nfsu2camera.debug": 1` in the `mods` section of
+`save/game/openslrr_options.json` logs the camera state once a second
+(`[nfsu2camera]` lines).
+
 ## Limitations
 
 - No right-drag look and no mouse-wheel zoom on the ARCADE views: the mod API
@@ -77,7 +83,7 @@ not available.
 | `.../ArcadeCamera` | The `CameraProvider`: state, poses, placement. |
 | `.../ArcadeMath` | Pure math and tuning (no natives besides `Math`). |
 | `.../ArcadeDriver` | `animate()` callback and the key's `osdCommand`. |
-| `tests/nfsu2-camera-test` | VM test (41 checks), a separate mod; see below. |
+| `tests/nfsu2-camera-test` | VM test (43 checks), a separate mod; see below. |
 
 Sources are in `src/`. To rebuild against a private game copy that has this
 folder under `mods/`: `compile_game_sources.exe <game> mods/nfsu2-camera`.

@@ -183,6 +183,15 @@ public class ArcadeTest
 		c.step( 0.0 );
 		check( "look back hood", c.ez > 2.0 && c.az > c.ez );
 
+		// While LOOK BACK is held, a view change (V reaches the provider) is ignored.
+		c = car( 20.0 );
+		c.back = 1;
+		c.setView( ArcadeMath.BUMPER );
+		check( "view kept while looking back", c.view == ArcadeMath.FAR );
+		c.back = 0;
+		c.setView( ArcadeMath.BUMPER );
+		check( "view changes after release", c.view == ArcadeMath.BUMPER );
+
 		// Air time and bends.
 		check( "air keeps heading", abs( ArcadeMath.targetYaw( 0.0, 1.0, 10.0, -20.0, 1 ) ) < 0.000001 );
 		c = car( 30.0 );
