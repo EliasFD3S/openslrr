@@ -20,7 +20,7 @@ public class ModOptions
 	public static int find( String key )
 	{
 		for( int i=0; i<rows.size(); i++ )
-			if( ((ModOption)rows.elementAt( i )).key.equals( key ) )
+			if( ((ModOption)rows.elementAt( i )).key == key )
 				return i;
 		return -1;
 	}

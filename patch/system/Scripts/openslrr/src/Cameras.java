@@ -1,9 +1,7 @@
 package java.openslrr;
 
 // Registry of mod driving cameras (#487). The selection (-1 = the classic
-// cameras) and each provider's current view are kept here for the session;
-// the mod settings (#488) persist them by name ("camera.provider",
-// "camera.<name>.view").
+// cameras) and current view are restored by provider name, not load order.
 public class Cameras
 {
 	static CameraProvider[]	list;
@@ -32,7 +30,9 @@ public class Cameras
 			views = biggerViews;
 		}
 		list[n] = p;
-		views[n] = 0;
+		views[n] = ModSettings.getInt( "camera." + p.name() + ".view", 0 );
+		if( p.name() == ModSettings.getString( "camera.provider", "" ) )
+			selection = n + 1;
 		n++;
 	}
 
@@ -57,10 +57,14 @@ public class Cameras
 	// An index out of range selects the classic cameras.
 	public static void select( int i )
 	{
-		if( i < 0 || i >= n )
-			selection = 0;
-		else
+		String name = "";
+		selection = 0;
+		if( i >= 0 && i < n )
+		{
 			selection = i + 1;
+			name = list[i].name();
+		}
+		ModSettings.setString( "camera.provider", name );
 	}
 
 	// The provider's current view, within 0..views()-1.
@@ -79,7 +83,10 @@ public class Cameras
 	{
 		int i = indexOf( p );
 		if( i >= 0 )
+		{
 			views[i] = v;
+			ModSettings.setInt( "camera." + p.name() + ".view", v );
+		}
 	}
 
 	static int indexOf( CameraProvider p )

@@ -50,4 +50,12 @@ The default is a physical DirectInput key code; the return value is a
 the OSD receiver just as for a stock virtual hotkey. Players can rebind it
 under **Options → Controls → Game controls**. Sixteen ControlSet slots
 (118–133) are reserved for mod actions; existing stock and 118-slot control
-files remain usable. A mod default never replaces a binding loaded from disk.
+files remain usable. A small trailer records the IDs so that load-order
+changes do not swap bindings. Esc-clearing a binding persists as well.
+An empty ID or a seventeenth distinct key returns -1 without registering
+a row. Registered keys become active on the next controller reset.
+
+The Game page lists Classic plus each registered camera provider. The
+selection uses `camera.provider` (provider name; empty string for Classic);
+each provider's view uses `camera.<name>.view` (zero-based). Give providers
+distinct stable names.

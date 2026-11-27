@@ -1066,7 +1066,7 @@ abstract public class Track extends Scene implements GameState
 		}
 		camProvider = p;
 		cameraMode = CAMMODE_PROVIDER;
-		Cameras.setView( p, v );
+		// Activation restores the saved view; only a view change writes it.
 		p.world = map;
 		p.activate( cameraTarget, osd.getViewport(), v );
 	}

@@ -9,6 +9,7 @@
 #include "slrr/host_sfx.hpp"
 #include "slrr/host_music.hpp"
 #include "slrr/host_game_options.hpp"
+#include "slrr/mod_api.hpp"
 #include "slrr/osd_registry.hpp"
 #include "slrr/render_backend.hpp"
 #include "slrr/script_cfg.hpp"
@@ -34,6 +35,7 @@
 namespace slrr {
 namespace {
 void register_mod_settings(Jvm& jvm) {
+  static_assert(kModApiVersion >= 1, "ModSettings is part of mod API 1");
   constexpr const char* cls = "java.openslrr.ModSettings";
   auto& registry = jvm.natives();
   registry.register_method(cls, "getInt", "(Ljava.lang.String;I)I",

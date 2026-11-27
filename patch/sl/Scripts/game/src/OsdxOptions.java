@@ -721,7 +721,7 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 			int i = modKeyCur*MODKEY_ROWS + r;
 			if( i < n )
 			{
-				int c = ModKeys.control( i );
+				int c = owner.controlSet.modSlot( i );
 				modKeyLabel[r].changeText( ModKeys.label( i ) );
 				modKeyPlate[r].setColor( 0x50000000 );
 				modKeyButton[r].changeLabelText( bindingName( c ) );
@@ -1366,6 +1366,11 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		sl.printValue( "%.0f", 100.0 );
 		sl = m.addItem( "ASR", OptionsDialog.CMD_ASR_SLIDER, Config.player_asr, "Traction control: cuts the engine and brakes a spinning driven wheel. 0 is off; lower settings allow more wheelspin." );
 		sl.printValue( "%.0f", 100.0 );
+		Vector styles = new Vector();
+		styles.addElement( "CLASSIC" );
+		for( int i = 0; i < Cameras.count(); i++ )
+			styles.addElement( Cameras.get( i ).name() );
+		m.addItem( "CAMERA", CMD_CAMERA, Cameras.selected() + 1, styles, "Choose the classic driving camera or a camera supplied by a mod." );
 		m.addToggle( "TEMPERATURES", OptionsDialog.CMD_HUD_TEMPERATURES, option(32), "Shows each tyre's and brake's temperature above the gauges: blue cold, green working, yellow to red overheating. A red brake mark is boiling fluid." );
 
 		header = new SectionHeader( osd, "WORLD AND DISPLAY", 0.08, TOP - 0.06, 0.82 );
@@ -1613,6 +1618,12 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 			return;
 		}
 
+		if( cmd == CMD_CAMERA )
+		{
+			Cameras.select( ((MultiChoice)e.gadget).value - 1 );
+			return;
+		}
+
 		if( cmd == CMD_GEARBOX || cmd == CMD_CLUTCH_MODE )
 		{
 			setTransmission( cmd );
@@ -1663,7 +1674,7 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		{
 			int mk = modKeyCur*MODKEY_ROWS + cmd - CMD_MODKEY;
 			if( mk < ModKeys.count() )
-				startCapture( ModKeys.control( mk ) );
+				startCapture( owner.controlSet.modSlot( mk ) );
 			return;
 		}
 
