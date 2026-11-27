@@ -941,12 +941,14 @@ disconnect and are reused on reconnect. Reopen control options after adding a ne
 device. Without a serial, changing USB ports can change identity; indistinguishable
 same-model devices without a serial/path use discovery-order suffixes. A capture on a
 device plugged in after the set was made adds its name (`InputDevices.ensureDevice`)
-so the binding survives the save. The patched `ControlSet` (#405) has 118
-controls instead of 78: the car controls get a primary and a secondary slot
+so the binding survives the save. The patched `ControlSet` keeps the 118 controls introduced by #405: the car controls get a primary and a secondary slot
 per device class (`ControlSet.carSlot`: keyboard and mouse in the stock 0-9
 and 15-24, pad in 78-97, wheel in 98-117). The file format is unchanged; a
 stock reader skips the extra slots, so it loses only the pad and wheel
-bindings. Regression: `scripts/run_save_io_tests.ps1 -Suite sdl_input`
+bindings from #405. Another 16 slots (118–133, #488) hold mod actions; their
+virtual axes use the same OSD hotkey dispatch as stock controls. The options
+menu reads the registered actions rather than exposing 16 unnamed slots.
+Regression: `scripts/run_save_io_tests.ps1 -Suite sdl_input`
 uses virtual peripherals; real rig calibration remains a separate hardware check.
 
 Force feedback (#395) is SDL haptics on the host thread: a constant force
@@ -1012,7 +1014,10 @@ mapping. Correct the stock `q` tile's longitudinal flip by horizontally
 mirroring `p` only when its resource and exact stock UV layout match; never
 rewrite the shared atlas or mesh, or force that correction onto custom UVs.
 
-`host_game_options` centralizes driving, video, and gameplay options.
+`host_game_options` centralizes driving, video, and gameplay options. Script
+mods store their scalars under literal keys in the `mods` section of
+`save/game/openslrr_options.json`; use ModSettings rather than adding fields
+to Config or numeric entries to the fixed renderer-option table.
 The stock store is `save/game/options`. Applying a resolution live must
 synchronize Config, the host mode, framebuffer dimensions, the viewport, and
 size-dependent resources. Rereading an old value when a menu opens must not

@@ -454,3 +454,20 @@ against the shipped `Math.class` that reads `Math.PI` and calls the helpers.
 `boxMax`) and `CameraControl` (`setPose`, `setPoseRelative`,
 `setPoseLocal`, `clearPose`, `sweep`). Units, timing and failure values are in [mod-api.md](mod-api.md).
 The pure pose math is `src/resources/mod_camera.cpp` (ctest `mod_camera`).
+
+### Mod settings natives (#488)
+
+`ModSettings` has six static natives, bound in `natives_script.cpp` over
+`host_game_options.cpp`: `getInt(String key, int def)`,
+`getFloat(String key, float def)`, `getString(String key, String def)`,
+`setInt(String key, int v)`, `setFloat(String key, float v)` and
+`setString(String key, String v)`. Values live in the `mods` section of
+`save/game/openslrr_options.json`, one scalar per key; a getter returns the
+default for a missing key or another type. A set that changes a value marks
+the file dirty; `host_game_options_update` writes it 500 ms after the last
+change (a slider sends one per tick), at shutdown (forced), or before a
+reload. A failed write waits for the next change or the forced save.
+The patched `ControlSet` also declares `static native int bytesLeft(File f)`
+(`natives_io.cpp`), the bytes left to read in an open file, used to read the
+optional MKEY trailer without reading past the end. Usage:
+[mod-api-keys-settings.md](mod-api-keys-settings.md).

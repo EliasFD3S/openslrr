@@ -6,6 +6,7 @@ import java.util.*;
 import java.util.resource.*;
 import java.sound.*;
 import java.lang.*;
+import java.openslrr.*;
 
 public class ControlSet
 {
@@ -14,7 +15,18 @@ public class ControlSet
 	// OpenSLRR (#405): 118, was 78. The car controls get a primary and a
 	// secondary slot per device class (carSlot). A stock reader skips the
 	// slots past its own NCONTROLS, so a saved file still loads there.
-	final static int	NCONTROLS = 118;
+	// OpenSLRR (#488): 134; slots MOD_FIRST.. hold the keys script mods
+	// register (java.openslrr.ModKeys). A file with fewer slots keeps the
+	// defaults of the missing ones.
+	final static int	NCONTROLS = 134;
+	final static int	MOD_FIRST = 118;
+	final static int	MOD_SLOTS = 16;
+	// After the smoothing table the file records which mod key id owns each
+	// mod slot. Readers that stop after the smoothing table (stock, #405)
+	// ignore it.
+	final static int	MODKEYFILEID = 0x59454b4d;	// "MKEY"
+	// The player unbound this key: its default key is not put back.
+	final static int	MODKEY_CLEARED = 1;
 
 	// Car controls per device class (#405). Control c (0..9: ACCELERATE..
 	// HONK HORN) of the keyboard and mouse stays in c and c + 15, the stock
@@ -43,6 +55,11 @@ public class ControlSet
 	float[]				to_max = new float[NCONTROLS];
 
 	float[]				dead_zone = new float[NCONTROLS];
+
+	// OpenSLRR (#488): the ModKeys id owning each mod slot (null: never
+	// used) and its MODKEY_* flags.
+	String[]			modId = new String[MOD_SLOTS];
+	int[]				modFlags = new int[MOD_SLOTS];
 
 	Vector	vasp = new Vector();	//VirtualAxisSmoothProperties Vector
 	
@@ -182,6 +199,7 @@ public class ControlSet
 						vasp.addElement( new VirtualAxisSmoothProperties(ctrlFile) );
 					}
 
+					readModKeys( ctrlFile );
 				}
 			}
 			ctrlFile.close();
@@ -244,6 +262,7 @@ public class ControlSet
 			{
 				vasp.elementAt( i ).write(ctrlFile);
 			}
+			writeModKeys( ctrlFile );
 			ctrlFile.close();
 		}
 	}
@@ -303,7 +322,7 @@ public class ControlSet
 			return slot;
 		if( slot >= 15 && slot < 15 + CAR_CONTROLS )
 			return slot - 15;
-		if( slot >= 78 && slot < NCONTROLS )
+		if( slot >= 78 && slot < MOD_FIRST )
 			return (slot - 78) % CAR_CONTROLS;
 		return -1;
 	}
@@ -447,7 +466,7 @@ public class ControlSet
 		define (24, 1, Input.AXIS_HORN, -1, -1, 0.0, 1.0, 0.0, 1.0, 0.0 );
 
 		// OpenSLRR (#405): pad and wheel slots, empty like the secondaries.
-		for( int g = 78; g < NCONTROLS; g += CAR_CONTROLS )
+		for( int g = 78; g < MOD_FIRST; g += CAR_CONTROLS )
 		{
 			for( int c = 0; c < CAR_CONTROLS; c++ )
 			{
@@ -528,6 +547,186 @@ public class ControlSet
 		define (75, 1, Input.AXIS_HELP, KEYBOARD, Input.RCDIK_S, 0.0, 1.0, 0.0, 1.0, 0.0 ); // Cruise control
 		define (76, 1, Input.AXIS_LOOK_REAR, KEYBOARD, Input.RCDIK_B, 0.0, 1.0, 0.0, 1.0, 0.0 );
 		define (77, 1, Input.AXIS_MAP, KEYBOARD, Input.RCDIK_M, 0.0, 1.0, 0.0, 1.0, 0.0 );
+
+		// OpenSLRR (#488): mod key slots, empty until a mod registers a key.
+		for( int s = 0; s < MOD_SLOTS; s++ )
+		{
+			define( MOD_FIRST + s, DEFAULTSET, 0, -1, -1, 0.0, 1.0, 0.0, 1.0, 0.0 );
+			modId[s] = null;
+			modFlags[s] = 0;
+		}
+		resolveModKeys();
+	}
+
+	// ---- OpenSLRR (#488): mod key slots ----
+
+	public static int isModSlot( int slot )
+	{
+		if( slot >= MOD_FIRST && slot < NCONTROLS )
+			return 1;
+		return 0;
+	}
+
+	// The slot of registered mod key i (ModKeys order) in this set, -1 when
+	// there is no such key.
+	public int modSlot( int i )
+	{
+		String id = ModKeys.id( i );
+		if( id == null )
+			return -1;
+		for( int s = 0; s < MOD_SLOTS; s++ )
+		{
+			if( modId[s] != null )
+			{
+				if( modId[s] == id )
+					return MOD_FIRST + s;
+			}
+		}
+		return -1;
+	}
+
+	// Gives every registered mod key its slot: the one the controls file
+	// recorded for its id, else a slot no key used, else the slot of a key no
+	// mod registers now. A new slot, and an unbound one the player did not
+	// clear, gets the key's default. A slot whose key is not registered keeps
+	// its binding and id, for when the mod comes back, but drives no axis.
+	void resolveModKeys()
+	{
+		int s, k;
+		for( s = 0; s < MOD_SLOTS; s++ )
+		{
+			if( ModKeys.find( modId[s] ) < 0 )
+				vaxisID[MOD_FIRST + s] = 0;
+		}
+		for( k = 0; k < ModKeys.count(); k++ )
+		{
+			String id = ModKeys.id( k );
+			int slot = -1;
+			int fresh = 0;
+			for( s = 0; s < MOD_SLOTS && slot < 0; s++ )
+			{
+				if( modId[s] != null )
+				{
+					if( modId[s] == id )
+						slot = s;
+				}
+			}
+			if( slot < 0 )
+			{
+				for( s = 0; s < MOD_SLOTS && slot < 0; s++ )
+				{
+					if( modId[s] == null )
+						slot = s;
+				}
+				for( s = 0; s < MOD_SLOTS && slot < 0; s++ )
+				{
+					if( ModKeys.find( modId[s] ) < 0 )
+						slot = s;
+				}
+				fresh = 1;
+			}
+			if( slot >= 0 )
+			{
+				int c = MOD_FIRST + slot;
+				group[c] = DEFAULTSET;
+				vaxisID[c] = ModKeys.axis( k );
+				if( fresh )
+				{
+					modId[slot] = id;
+					modFlags[slot] = 0;
+				}
+				if( fresh || (slotEmpty( c ) && (modFlags[slot] & MODKEY_CLEARED) == 0) )
+				{
+					int key = ModKeys.defaultKey( k );
+					if( key > 0 )
+						define( c, DEFAULTSET, vaxisID[c], KEYBOARD, key, 0.0, 1.0, 0.0, 1.0, 0.0 );
+					else
+						define( c, DEFAULTSET, vaxisID[c], -1, -1, 0.0, 1.0, 0.0, 1.0, 0.0 );
+				}
+				ModKeys.setControl( k, c );
+			}
+		}
+	}
+
+	// Bytes left to read in an open file (OpenSLRR native).
+	static native int bytesLeft( File f );
+
+	// The trailer after the smoothing table: "MKEY", a count, then per key
+	// its slot, id and flags. A file without one (stock, #405, before #488,
+	// or a 134-slot file saved again by an older build, which drops it)
+	// leaves every mod key new, so their defaults apply. Nothing is read past
+	// the end of the file.
+	void readModKeys( File ctrlFile )
+	{
+		int s;
+		for( s = 0; s < MOD_SLOTS; s++ )
+		{
+			modId[s] = null;
+			modFlags[s] = 0;
+		}
+		if( bytesLeft( ctrlFile ) >= 8 && ctrlFile.readInt() == MODKEYFILEID )
+		{
+			int n = ctrlFile.readInt();
+			// Each record is at least 12 bytes: slot, string length, flags.
+			for( int i = 0; i < n && i < MOD_SLOTS && bytesLeft( ctrlFile ) >= 12; i++ )
+			{
+				int slot = ctrlFile.readInt();
+				String id = ctrlFile.readString();
+				if( bytesLeft( ctrlFile ) < 4 )
+					break;	// a cut record
+				int flags = ctrlFile.readInt();
+				if( id != null && slot >= MOD_FIRST && slot < NCONTROLS )
+				{
+					int taken = 0;
+					for( s = 0; s < MOD_SLOTS; s++ )
+					{
+						if( modId[s] != null )
+						{
+							if( modId[s] == id )
+								taken = 1;
+						}
+					}
+					if( !taken )
+					{
+						modId[slot - MOD_FIRST] = id;
+						modFlags[slot - MOD_FIRST] = flags;
+					}
+				}
+			}
+		}
+		resolveModKeys();
+	}
+
+	void writeModKeys( File ctrlFile )
+	{
+		int s, n = 0;
+		for( s = 0; s < MOD_SLOTS; s++ )
+		{
+			if( modId[s] != null )
+			{
+				int k = ModKeys.find( modId[s] );
+				if( k >= 0 )
+				{
+					// An unbound key that has a default was cleared by the player.
+					if( slotEmpty( MOD_FIRST + s ) && ModKeys.defaultKey( k ) > 0 )
+						modFlags[s] = MODKEY_CLEARED;
+					else
+						modFlags[s] = 0;
+				}
+				n++;
+			}
+		}
+		ctrlFile.write( MODKEYFILEID );
+		ctrlFile.write( n );
+		for( s = 0; s < MOD_SLOTS; s++ )
+		{
+			if( modId[s] != null )
+			{
+				ctrlFile.write( MOD_FIRST + s );
+				ctrlFile.write( modId[s] );
+				ctrlFile.write( modFlags[s] );
+			}
+		}
 	}
 
 	// ps2 controller on pc

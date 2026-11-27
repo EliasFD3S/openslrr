@@ -4,6 +4,68 @@
 #include <iterator>
 #include <thread>
 using namespace slrr;
+
+static void mod_settings_round_trip(Fixture& f, const fs::path& file) {
+  auto string = [&](const std::string& s) { return Value::make_obj(f.vm.new_string(s)); };
+  auto invoke = [&](const char* name, const char* desc, const std::string& key, Value arg) {
+    return f.registry.invoke("java.openslrr.ModSettings", name, desc, nullptr, {string(key), arg});
+  };
+  auto get_int = [&](const char* key) {
+    return invoke("getInt", "(Ljava.lang.String;I)I", key, Value::make_int(47)).v.i;
+  };
+  auto get_float = [&](const char* key) {
+    return invoke("getFloat", "(Ljava.lang.String;F)F", key, Value::make_float(.25f)).v.f;
+  };
+  auto get_string = [&](const char* key, Value def) {
+    return invoke("getString", "(Ljava.lang.String;Ljava.lang.String;)Ljava.lang.String;", key, def).v.o;
+  };
+  const Value def = string("CLASSIC");
+  // The old file contains only host settings. Reads use the caller's default
+  // (even null for a string), and a mod key cannot alias a stock setting.
+  SLRR_REQUIRE(get_int("video.msaa") == 47 && get_float("test.gain") == .25f);
+  SLRR_REQUIRE(get_string("camera.provider", def) == def.v.o);
+  SLRR_REQUIRE(get_string("camera.provider", Value::make_obj(nullptr)) == nullptr);
+  const std::string provider = "a.\"b\"\\c\n";
+  invoke("setInt", "(Ljava.lang.String;I)V", "video.msaa", Value::make_int(INT32_MAX));
+  invoke("setFloat", "(Ljava.lang.String;F)V", "test.gain", Value::make_float(-.125f));
+  invoke("setString", "(Ljava.lang.String;Ljava.lang.String;)V", "camera.provider", string(provider));
+  host_game_options_load(f.vm);
+  SLRR_REQUIRE(get_int("video.msaa") == INT32_MAX && get_float("test.gain") == -.125f);
+  SLRR_REQUIRE(get_string("camera.provider", def)->str == provider);
+  SLRR_REQUIRE(get_int("test.gain") == 47 && get_float("camera.provider") == .25f);
+  SLRR_REQUIRE(get_string("video.msaa", def) == def.v.o);
+  // Setting the same value doesn't rewrite the file; a later host-only save
+  // does rewrite it but keeps the whole mods section, even for inactive mods.
+  fs::last_write_time(file, fs::last_write_time(file) - std::chrono::hours(1));
+  const auto stamp = fs::last_write_time(file);
+  invoke("setInt", "(Ljava.lang.String;I)V", "video.msaa", Value::make_int(INT32_MAX));
+  SLRR_REQUIRE(fs::last_write_time(file) == stamp);
+  // A changed value is saved 500 ms after the last change (a slider sends one
+  // per tick), or at once when forced; a reload keeps a pending value.
+  invoke("setFloat", "(Ljava.lang.String;F)V", "test.gain", Value::make_float(.5f));
+  invoke("setFloat", "(Ljava.lang.String;F)V", "test.gain", Value::make_float(.75f));
+  host_game_options_update(f.vm);
+  SLRR_REQUIRE(fs::last_write_time(file) == stamp);
+  std::this_thread::sleep_for(std::chrono::milliseconds(550));
+  host_game_options_update(f.vm);
+  SLRR_REQUIRE(fs::last_write_time(file) != stamp);
+  fs::last_write_time(file, stamp);
+  invoke("setFloat", "(Ljava.lang.String;F)V", "test.gain", Value::make_float(.875f));
+  host_game_options_update(f.vm, true);
+  SLRR_REQUIRE(fs::last_write_time(file) != stamp);
+  invoke("setFloat", "(Ljava.lang.String;F)V", "test.gain", Value::make_float(-.125f));
+  host_game_options_load(f.vm);
+  SLRR_REQUIRE(get_float("test.gain") == -.125f);
+  SLRR_REQUIRE(host_option_set(0, 3));
+  host_game_options_load(f.vm);
+  SLRR_REQUIRE(host_enhanced_graphics().msaa == 3 && get_int("video.msaa") == INT32_MAX);
+  SLRR_REQUIRE(get_string("camera.provider", def)->str == provider);
+  std::ofstream(file) << R"({"video":{"msaa":1}})";
+  host_game_options_load(f.vm);
+  SLRR_REQUIRE(get_int("video.msaa") == 47 && get_string("camera.provider", def) == def.v.o);
+  std::puts("PASS ModSettings natives: typed defaults, disk round-trip and isolation from stock options");
+}
+
 int main() {
  Fixture f;
  fs::create_directories(f.root/"probe/src");
@@ -87,6 +149,7 @@ int main() {
    SLRR_REQUIRE(text.find("\"dynamic_reflections\": true")!=std::string::npos);
    SLRR_REQUIRE(text.find("\"input\": {")!=std::string::npos);
  }
+ mod_settings_round_trip(f,host_file);
  // Missing keys keep their defaults; out-of-range values clamp; wrong types
  // and unknown keys are ignored.
  // An old framerate_mode key is ignored; option 5 is gone.

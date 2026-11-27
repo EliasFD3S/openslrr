@@ -14,6 +14,7 @@ import java.render.osdx.MultiChoice;
 import java.render.osdx.Slider;
 import java.render.osdx.Rectangle;
 import java.sound.*;
+import java.openslrr.*;
 
 // Full-screen options built on the CRC 2005 OSD (java.render.osdx), the
 // OSD v2 demo (docs/ui/osd-v2.md). OptionsDialog CMD_OPTIONS opens it from
@@ -36,11 +37,22 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 	final static int	CMD_REFRESH		= 1230;
 	final static int	CMD_SUB			= 1300;	// + sub-page of CONTROLS
 	final static int	CMD_SUB_BACK	= 1310;
+	final static int	CMD_CAMERA		= 1315;	// camera style selector (GAME page)
 	final static int	CMD_KEY			= 1400;	// + ControlSet control index
-	final static int	CMD_FILE		= 1500;	// + file row
-	final static int	CMD_FILE_LOAD	= 1520;
-	final static int	CMD_FILE_SAVE	= 1521;
-	final static int	CMD_FILE_NEW	= 1522;
+	// Files and mod options sit above CMD_KEY + NCONTROLS (1400 + 134 with the
+	// mod key slots), so no key command can be mistaken for them.
+	final static int	CMD_FILE		= 1700;	// + file row
+	final static int	CMD_FILE_LOAD	= 1720;
+	final static int	CMD_FILE_SAVE	= 1721;
+	final static int	CMD_FILE_NEW	= 1722;
+	final static int	CMD_MODKEY		= 1760;	// + visible mod key row
+	final static int	CMD_MODKEY_PREV	= 1770;
+	final static int	CMD_MODKEY_NEXT	= 1771;
+	final static int	CMD_MODPAGE_PREV = 1790;
+	final static int	CMD_MODPAGE_NEXT = 1791;
+	final static int	CMD_MODOPT		= 1800;	// + ModOptions row (any number)
+	final static int	MODKEY_ROWS		= 6;	// mod key rows per page, under the 8 stock rows
+	final static int	MODOPT_ROWS		= 16;	// mod settings per page: 8 per column
 
 	// Car keys per device class (#405): the keyboard page is SUB_CAR, the pad
 	// and wheel pages follow the files; then the force feedback page.
@@ -60,7 +72,8 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 	final static int	SUB_FFB = 6;
 	final static int	FILE_ROWS = 8;
 
-	final static int	PAGES = 6;
+	final static int	PAGES = 7;
+	final static int	PAGE_MODS = 6;
 	final static int	PAGE_CONTROLS = 3;
 	final static int	PAGE_DEVICES = 4;
 	final static int	CARDS = 4;
@@ -72,6 +85,14 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 	InfoPanel		info;
 	Toast			toast;
 	int[]			page = new int[PAGES];
+	int[]			modPage;			// one group per page of mod settings
+	int				modCur;
+	Text			modPageText;
+	Gadget[]		modKeyButton = new Gadget[MODKEY_ROWS];
+	Text[]			modKeyLabel = new Text[MODKEY_ROWS];
+	Rectangle[]		modKeyPlate = new Rectangle[MODKEY_ROWS];
+	Text			modKeyPageText;
+	int				modKeyCur;
 
 	// Controls a preset changes; refreshVideo() re-reads them.
 	MultiChoice		preset;
@@ -185,8 +206,8 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		osd.createText( "OPTIONS", Frontend.largeFont, Text.ALIGN_CENTER, 0.0, -0.93 ).changeColor( 0xFFFFAE00 );
 
 		String[] names = new String[PAGES];
-		names[0] = "VIDEO"; names[1] = "GRAPHICS"; names[2] = "SOUND"; names[3] = "CONTROLS"; names[4] = "DEVICES"; names[5] = "GAME";
-		tabs = new TabBar( osd, 0.0, -0.72, 0.31, 0.08, names, CMD_TAB );
+		names[0] = "VIDEO"; names[1] = "GRAPHICS"; names[2] = "SOUND"; names[3] = "CONTROLS"; names[4] = "DEVICES"; names[5] = "GAME"; names[6] = "MODS";
+		tabs = new TabBar( osd, 0.0, -0.72, 0.27, 0.08, names, CMD_TAB );
 
 		info = new InfoPanel( osd, "INFO", "Point at a setting to read what it does.", 0.0, 0.62, 1.7, 0.2 );
 
@@ -212,6 +233,7 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		buildControls();	page[3] = osd.endGroup();
 		buildDevices();		page[4] = osd.endGroup();
 		buildGame();		page[5] = osd.endGroup();
+		buildMods();		page[PAGE_MODS] = osd.endGroup();
 		buildCarKeys( ControlSet.CLASS_KEYBOARD );	sub[SUB_CAR] = osd.endGroup();
 		buildKeys( 1 );		sub[1] = osd.endGroup();
 		buildKeys( 2 );		sub[2] = osd.endGroup();
@@ -640,6 +662,7 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 				keyLabel( n[i], y );
 				keyRow( id[i], -0.06, y );
 			}
+			buildModKeys( 8 );
 		}
 		else
 		{
@@ -654,6 +677,82 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 				keyRow( 65 + i, -0.06, y );
 			}
 		}
+	}
+
+	// Keys that mods registered with ModKeys, after the stock rows: a fixed
+	// block of MODKEY_ROWS rows that pages through every registered key
+	// (ModKeys.count() of them, 16 today). Needs ModKeys.count(), label(i)
+	// and control(i) (the ControlSet slot).
+	void buildModKeys( int first )
+	{
+		if( ModKeys.count() <= 0 )
+			return;
+		Style st = new Style( 0.72, 0.056, Frontend.mediumFont, Text.ALIGN_CENTER, null );
+		Style nav = new Style( 0.22, 0.056, Frontend.smallFont, Text.ALIGN_CENTER, null );
+		for( int r=0; r<MODKEY_ROWS; r++ )
+		{
+			float y = TOP + 0.10 + (first + r)*0.064;
+			modKeyLabel[r] = osd.createText( " ", Frontend.mediumFont, Text.ALIGN_RIGHT, -0.36, y - 0.5*Text.getHeight( Frontend.mediumFont, osd.getViewport() ) );
+			modKeyLabel[r].changeColor( 0xFFFFAE00 );
+			modKeyPlate[r] = osd.createRectangle( -0.06, y, 0.54, 0.056, 1, 0x50000000 );
+			modKeyButton[r] = osd.createButton( st, -0.06, y, "-", CMD_MODKEY + r );
+			modKeyButton[r].setToolTip( "Click, then press the key or move the axis or button to use. ESC clears it." );
+		}
+		if( ModKeys.count() > MODKEY_ROWS )
+		{
+			float y = TOP + 0.10 + (first + MODKEY_ROWS)*0.064;
+			osd.createButton( nav, -0.30, y, "< PREV", CMD_MODKEY_PREV ).setToolTip( "Previous mod keys." );
+			osd.createButton( nav, 0.18, y, "NEXT >", CMD_MODKEY_NEXT ).setToolTip( "More mod keys." );
+			modKeyPageText = osd.createText( " ", Frontend.smallFont, Text.ALIGN_CENTER, -0.06, y - 0.5*Text.getHeight( Frontend.smallFont, osd.getViewport() ) );
+			modKeyPageText.changeColor( 0xFFB0B0B0 );
+		}
+		refreshModKeys();
+	}
+
+	// Shows mod key page modKeyCur: label, binding, and the control each row
+	// captures.
+	void refreshModKeys()
+	{
+		int n = ModKeys.count();
+		// The rows exist only if a key was registered when the page was
+		// built; a key a mod registers later shows when Options reopens.
+		if( n <= 0 || !modKeyLabel[0] )
+			return;
+		for( int r=0; r<MODKEY_ROWS; r++ )
+		{
+			int i = modKeyCur*MODKEY_ROWS + r;
+			int c = -1;
+			if( i < n )
+				c = owner.controlSet.modSlot( i );
+			if( c >= 0 )
+			{
+				modKeyLabel[r].changeText( ModKeys.label( i ) );
+				modKeyPlate[r].setColor( 0x50000000 );
+				modKeyButton[r].changeLabelText( bindingName( c ) );
+				modKeyButton[r].enable();
+				controlName[c] = ModKeys.label( i );
+			}
+			else
+			{
+				modKeyLabel[r].changeText( " " );
+				modKeyPlate[r].setColor( 0x00000000 );
+				modKeyButton[r].changeLabelText( "" );
+				modKeyButton[r].disable();
+			}
+		}
+		if( modKeyPageText )
+			modKeyPageText.changeText( Integer.toString( modKeyCur + 1 ) + " / " + Integer.toString( (n + MODKEY_ROWS - 1)/MODKEY_ROWS ) );
+	}
+
+	void modKeyPage( int d )
+	{
+		int pages = (ModKeys.count() + MODKEY_ROWS - 1)/MODKEY_ROWS;
+		modKeyCur = modKeyCur + d;
+		if( modKeyCur < 0 )
+			modKeyCur = pages - 1;
+		if( modKeyCur >= pages )
+			modKeyCur = 0;
+		refreshModKeys();
 	}
 
 	void keyColumnTitles( String a, String b )
@@ -711,6 +810,7 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		for( int i=0; i<ControlSet.NCONTROLS; i++ )
 			if( keyButton[i] )
 				keyButton[i].changeLabelText( bindingName( i ) );
+		refreshModKeys();
 		refreshClassNote();
 	}
 
@@ -1270,6 +1370,11 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		sl.printValue( "%.0f", 100.0 );
 		sl = m.addItem( "ASR", OptionsDialog.CMD_ASR_SLIDER, Config.player_asr, "Traction control: cuts the engine and brakes a spinning driven wheel. 0 is off; lower settings allow more wheelspin." );
 		sl.printValue( "%.0f", 100.0 );
+		Vector styles = new Vector();
+		styles.addElement( "CLASSIC" );
+		for( int i = 0; i < Cameras.count(); i++ )
+			styles.addElement( Cameras.get( i ).name() );
+		m.addItem( "CAMERA", CMD_CAMERA, Cameras.selected() + 1, styles, "Choose the classic driving camera or a camera supplied by a mod." );
 		m.addToggle( "TEMPERATURES", OptionsDialog.CMD_HUD_TEMPERATURES, option(32), "Shows each tyre's and brake's temperature above the gauges: blue cold, green working, yellow to red overheating. A red brake mark is boiling fluid." );
 
 		header = new SectionHeader( osd, "WORLD AND DISPLAY", 0.08, TOP - 0.06, 0.82 );
@@ -1289,6 +1394,77 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		sw.printValue( "%.0f", 100.0 );
 	}
 
+	// OPTIONS > MODS: every row a mod put in ModOptions, MODOPT_ROWS to a
+	// page (two columns of 8), one group per page; PREV/NEXT switch pages.
+	// The value lives in ModSettings under the row's key, written as the
+	// gadget changes. The frame (header, PREV/NEXT) joins the MODS page group.
+	void buildMods()
+	{
+		int count = ModOptions.count();
+		int pages = (count + MODOPT_ROWS - 1)/MODOPT_ROWS;
+		if( pages < 1 )
+			pages = 1;
+		modPage = new int[pages];
+		for( int p=0; p<pages; p++ )
+		{
+			Menu m = column( LEFT, TOP + 0.04 );
+			for( int k=0; k<MODOPT_ROWS; k++ )
+			{
+				int i = p*MODOPT_ROWS + k;
+				if( i >= count )
+					break;
+				if( k == 8 )
+					m = column( RIGHT, TOP + 0.04 );
+				ModOption o = ModOptions.get( i );
+				if( o.kind == ModOptions.TOGGLE )
+					m.addToggle( o.label, CMD_MODOPT + i, ModOptions.getInt( i ), o.help );
+				else
+				if( o.kind == ModOptions.CHOICE )
+					m.addItem( o.label, CMD_MODOPT + i, ModOptions.getInt( i ), o.choices, o.help );
+				else
+				{
+					Slider s = m.addItem( o.label, CMD_MODOPT + i, ModOptions.getFloat( i ), o.min, o.max, 0, o.help );
+					if( o.max - o.min >= 10.0 )
+						s.printValue( "%.0f", 1.0 );
+					else
+						s.printValue( "%.2f", 1.0 );
+				}
+			}
+			modPage[p] = osd.endGroup();
+		}
+		header = new SectionHeader( osd, "MOD SETTINGS", -0.84, TOP - 0.06, 1.74 );
+		if( count <= 0 )
+			osd.createText( "No mod settings", Frontend.mediumFont, Text.ALIGN_CENTER, 0.0, 0.0 ).changeColor( 0xFFB0B0B0 );
+		if( pages > 1 )
+		{
+			Style nav = new Style( 0.22, 0.064, Frontend.mediumFont, Text.ALIGN_CENTER, null );
+			osd.createButton( nav, -0.30, 0.45, "< PREV", CMD_MODPAGE_PREV ).setToolTip( "Previous page of mod settings." );
+			osd.createButton( nav, 0.30, 0.45, "NEXT >", CMD_MODPAGE_NEXT ).setToolTip( "More mod settings." );
+			modPageText = osd.createText( " ", Frontend.mediumFont, Text.ALIGN_CENTER, 0.0, 0.45 - 0.5*Text.getHeight( Frontend.mediumFont, osd.getViewport() ) );
+			modPageText.changeColor( 0xFFB0B0B0 );
+		}
+	}
+
+	// Shows page p of the mod settings and hides the others; -1 hides all
+	// (another tab is open).
+	void showModPage( int p )
+	{
+		int pages = modPage.length;
+		if( p >= pages )
+			p = 0;
+		if( p < -1 )
+			p = pages - 1;
+		if( p >= 0 )
+			modCur = p;
+		for( int i=0; i<pages; i++ )
+			if( i == p )
+				osd.showGroup( modPage[i] );
+			else
+				osd.hideGroup( modPage[i] );
+		if( p >= 0 && modPageText )
+			modPageText.changeText( Integer.toString( p + 1 ) + " / " + Integer.toString( pages ) );
+	}
+
 	// ---------------------------------------------------------------- behaviour
 
 	void selectPage( int p )
@@ -1298,6 +1474,10 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 			if( i != p )
 				osd.hideGroup( page[i] );
 		osd.showGroup( page[p] );
+		if( p == PAGE_MODS )
+			showModPage( modCur );
+		else
+			showModPage( -1 );
 		// The page comes from the side of the tab that was clicked.
 		int from = OsdAnimator.FROM_RIGHT;
 		if( p < activePage )
@@ -1442,6 +1622,12 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 			return;
 		}
 
+		if( cmd == CMD_CAMERA )
+		{
+			Cameras.select( ((MultiChoice)e.gadget).value - 1 );
+			return;
+		}
+
 		if( cmd == CMD_GEARBOX || cmd == CMD_CLUTCH_MODE )
 		{
 			setTransmission( cmd );
@@ -1465,6 +1651,53 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		if( cmd == CMD_SUB_BACK )
 		{
 			hideSub( 1 );
+			return;
+		}
+
+		if( cmd == CMD_MODPAGE_PREV || cmd == CMD_MODPAGE_NEXT )
+		{
+			int np = modCur - 1;
+			if( cmd == CMD_MODPAGE_NEXT )
+				np = modCur + 1;
+			if( np < 0 )
+				np = modPage.length - 1;
+			showModPage( np );
+			return;
+		}
+
+		if( cmd == CMD_MODKEY_PREV || cmd == CMD_MODKEY_NEXT )
+		{
+			if( cmd == CMD_MODKEY_NEXT )
+				modKeyPage( 1 );
+			else
+				modKeyPage( -1 );
+			return;
+		}
+
+		if( cmd >= CMD_MODKEY && cmd < CMD_MODKEY + MODKEY_ROWS )
+		{
+			int mk = modKeyCur*MODKEY_ROWS + cmd - CMD_MODKEY;
+			if( mk < ModKeys.count() )
+			{
+				int slot = owner.controlSet.modSlot( mk );
+				if( slot >= 0 )	// -1: no slot for this key in the loaded set
+					startCapture( slot );
+			}
+			return;
+		}
+
+		if( cmd >= CMD_MODOPT && cmd < CMD_MODOPT + ModOptions.count() )
+		{
+			int row = cmd - CMD_MODOPT;
+			Gadget mg = e.gadget;
+			if( mg )
+			{
+				if( mg instanceof Slider )
+					ModOptions.setFloat( row, ((Slider)mg).value );
+				else
+				if( mg instanceof MultiChoice )
+					ModOptions.setInt( row, ((MultiChoice)mg).value );
+			}
 			return;
 		}
 

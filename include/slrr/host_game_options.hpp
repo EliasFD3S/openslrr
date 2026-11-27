@@ -1,5 +1,7 @@
 #pragma once
 #include <cstdint>
+#include <optional>
+#include <string>
 
 namespace slrr {
 class Jvm;
@@ -67,6 +69,12 @@ bool host_save_graphics_options();
 // clamps to the option's range, applies it and saves when it changed.
 bool host_option_get(int id, int& value);
 bool host_option_set(int id, int value);
+// Script mod keys live in their own JSON section; reading never creates a key.
+int host_mod_get_int(const std::string& key, int fallback);
+float host_mod_get_float(const std::string& key, float fallback);
+std::optional<std::string> host_mod_get_string(const std::string& key);
+void host_mod_set_number(const std::string& key, double value);
+void host_mod_set_string(const std::string& key, const std::string& value);
 struct VideoMode {
   int width = 800, height = 600, depth = 32;
   bool windowed = true;
