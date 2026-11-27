@@ -2557,7 +2557,7 @@ instead of staying where the arms were laid out; the hub turns about its
 centre, so the track does not change with the camber as a real upright's
 would.
 
-## Bump steer (#484)
+## Bump steer, static toe and compliance steer (#484)
 
 Cause: a wheel's toe stayed at its static value whatever the travel. The
 single hinge each patched corner has (#450) adds almost none (its axis runs
@@ -2589,6 +2589,26 @@ Fix (OpenSLRR, typical values):
   [patch README](../../patch/README.md#tyres-and-suspension-geometry-450).
 - Without it, `dynamics_wheels` gives linked fronts -0.05 and independent
   rear arms +0.10; live axles and corners without arms keep their geometry.
+- Static front toe: a strut fit replaced the whole alignment, so the
+  script's `toe` (setYpr's yaw) never reached a front wheel. `arm_frames`
+  now turns a strut fit's hub by that yaw about the body's vertical (its
+  camber stays the fit's). The patched fronts get their factory toe-in:
+  E36 0.10 deg per wheel, Golf 0.08, Camaro and Prime 0.05, Ram 0.06,
+  Impreza, Lancer, del Sol and R34 0, race cars 0.05 of toe-out (the stock
+  fronts all had 0 but the Golf GTA's -0.5, which the patch already reset).
+- Compliance steer: the bushings let the tyre's forces steer the wheel.
+  `VehicleDynamics::update_compliance_steer` turns each wheel by its
+  compliance times the last step's cornering force pushing the patch
+  inboard and its braking force (driving reverses that part), clamped to
+  2 deg and settling over 30 ms (`WheelState::compliance_steer`, added to
+  the driver's steering in `steered_hub`). Moddable through
+  `WheelRef.setComplianceSteer(lateral, braking)`, degrees of toe-in per kN;
+  86 patched corners call it: road fronts -0.10 / -0.03 (understeer, Ram
+  -0.15 / -0.05), race fronts -0.03 / -0.01; rears E36 0 / 0.05, del Sol and
+  Impreza 0.03 / 0.05, Golf 0.02 / 0.03, Lancer, R34 and Prime 0.05 / 0.08,
+  race cars 0.01 / 0.02. Without it: linked fronts -0.10 / -0.03,
+  independent rear arms 0.03 / 0.05; live axles and corners without arms
+  rigid.
 
 Validation:
 
@@ -2601,14 +2621,24 @@ Validation:
   the test saloon on swing arms in a steady left turn at 16 m/s: rears
   toeing in by 0.3 deg per 25 mm put the outer rear at +0.63 deg and yaw at
   0.445 rad/s, toeing out -0.81 deg and 0.563 rad/s. The #481 tests still
-  pass. `missing_support` 17/17, `physics_tick_rate` 9/9.
+  pass. Two more: a strut keeps a degree of script toe (camber
+  unchanged); and compliance steer: fronts toeing out by 0.15 deg per kN
+  put the outer front at -0.43 deg in the steady turn and yaw at 0.469
+  rad/s against 0.499 rigid, and rears toeing in by 0.1 deg per kN of
+  braking toe in by 0.24 deg alike under braking, the car running
+  straight. `vehicle_dynamics` 78/78, `missing_support` 17/17,
+  `physics_tick_rate` 9/9.
 - In `build/needle-game` with the new classes, Tsukuba bench (straight
   line): CoupeSport 8.74 / 34.86 / 71.98 km/h at 1 / 3 / 6 s with and
-  without bump steer (temporary switch); the rear reads the script's 0.10.
-- Not checked in game: cornering and its feel.
+  without bump steer, and 71.99 / 71.97 at 6 s with and without compliance
+  steer (temporary switches); the scripts' values reach the host. Elias
+  drove the bump steer in game (before the compliance steer and static toe
+  were added) and liked it.
+- Not checked in game: the compliance steer and static toe, their feel.
 
 Limitations: the values are typical figures, not the real cars' measured
-toe curves; toe changes with the spring's travel only, so a live axle's
-roll steer (its whole axle yawing as the body rolls) is not modelled; no
-compliance steer under braking or cornering force; the static front toe is
-still 0 on struts.
+toe curves or bushing rates; toe changes with the spring's travel only, so
+a live axle's roll steer (its whole axle yawing as the body rolls) is not
+modelled; compliance steer follows the last step's force with a fixed 30 ms
+lag and does not deflect the wheel's position, only its heading; the
+rendered wheel does not show it.

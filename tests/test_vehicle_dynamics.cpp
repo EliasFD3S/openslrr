@@ -2114,6 +2114,57 @@ SLRR_TEST(rear_toe_in_under_bump_steers_a_rolling_car_out_of_its_turn) {
   SLRR_REQUIRE(yaw[1] < yaw[0] * .97);
 }
 
+SLRR_TEST(a_strut_keeps_its_scripts_static_toe) {
+  // #484: the strut fit replaces the hub's alignment, but the script's toe
+  // (setYpr's yaw, here a degree of toe-in on the left) still turns it.
+  constexpr double degree = std::numbers::pi / 180;
+  auto w = caster_strut();
+  const double camber = geometry_camber(w, .175), toe = geometry_toe(w, .175);
+  SLRR_REQUIRE(std::abs(toe) < .2 * degree);
+  w.hub_alignment = wheel_steering(-1 * degree);
+  SLRR_REQUIRE(std::abs(geometry_toe(w, .175) - toe - 1 * degree) < .01 * degree);
+  SLRR_REQUIRE(std::abs(geometry_camber(w, .175) - camber) < .01 * degree);
+}
+
+SLRR_TEST(compliance_steer_toes_the_loaded_wheels_by_their_forces) {
+  // #484: the test saloon in a steady left turn, its fronts toeing out by
+  // 0.15 deg per kN of cornering force: the outer front steers out of the
+  // turn and the car yaws less than with rigid bushings. Braking straight
+  // with rears toeing in by 0.1 deg per kN of braking, both rears toe in
+  // alike and the car runs straight.
+  constexpr double degree = std::numbers::pi / 180, per_kn = degree / 1000;
+  double yaw[2], outer[2];
+  for (int soft = 0; soft < 2; ++soft) {
+    Car car;
+    for (size_t i = 0; i < 2; ++i) car.dynamics.wheels[i].compliance_lateral = soft ? -.15 * per_kn : 0;
+    car.run(2, 0, 0, 0);
+    car.dynamics.drive.engaged = false;
+    car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -16});
+    for (auto& s : car.dynamics.state) s.spin = 16 / .31;
+    car.run(2.5, 0, 0, .09);
+    yaw[soft] = car.dynamics.body.omega().y;
+    outer[soft] = car.dynamics.state[1].compliance_steer / degree;
+  }
+  Car braking;
+  for (size_t i = 2; i < 4; ++i) braking.dynamics.wheels[i].compliance_braking = .1 * per_kn;
+  braking.run(2, 0, 0, 0);
+  braking.dynamics.drive.engaged = false;
+  braking.dynamics.body.velocity = braking.dynamics.body.orientation.rotate({0, 0, -20});
+  for (auto& s : braking.dynamics.state) s.spin = 20 / .31;
+  braking.run(.5, 0, .6, 0);
+  const double rear_left = braking.dynamics.state[2].compliance_steer / degree,
+               rear_right = braking.dynamics.state[3].compliance_steer / degree;
+  std::printf("COMPLIANCE yaw %.3f -> %.3f rad/s, outer front %.2f deg; braking rears %.3f / %.3f deg%c",
+              yaw[0], yaw[1], outer[1], rear_left, rear_right, 10);
+  SLRR_REQUIRE(outer[0] == 0);
+  SLRR_REQUIRE(outer[1] < -.2);  // the outer (right) front turns right: out of the turn
+  SLRR_REQUIRE(yaw[1] < yaw[0] * .97);
+  // Toe-in: the left rear turns right, the right rear left, alike.
+  SLRR_REQUIRE(rear_left < -.05 && rear_right > .05);
+  SLRR_REQUIRE(std::abs(rear_left + rear_right) < .02);
+  SLRR_REQUIRE(std::abs(braking.dynamics.body.omega().y) < .02);
+}
+
 SLRR_TEST(hot_brake_fluid_boils_and_the_pressure_falls) {
   const auto brake = brake_hardware(0, 2, .286);
   double fluid = kAmbientTemperature;
@@ -2140,6 +2191,8 @@ int main() {
       camber_gain_keeps_the_outer_wheel_leaning_into_a_turn,
       bump_steer_follows_the_toe_curve_about_the_static_height,
       rear_toe_in_under_bump_steers_a_rolling_car_out_of_its_turn,
+      a_strut_keeps_its_scripts_static_toe,
+      compliance_steer_toes_the_loaded_wheels_by_their_forces,
       hard_braking_declutches_so_the_engine_never_pushes_the_rear_wheels,
       coasting_engine_braking_fades_with_the_speed,
       releasing_a_hard_brake_at_speed_takes_up_without_a_jolt,

@@ -1213,9 +1213,10 @@ Vec3 wheel_forward(const RigidBody &body, double steer, Quaternion hub = {}) {
       (hub * wheel_steering(steer)).rotate({0, 0, -1}));
 }
 // The steered hub (#458): turned about its kingpin, so caster leans the
-// outer wheel's top into the turn.
+// outer wheel's top into the turn. The bushings' compliance steer (#484)
+// adds to the driver's.
 Quaternion steered_hub(const WheelState &s, double steer) {
-  return (s.hub_rotation * wheel_steering(s.steer_axis, steer)).normalized();
+  return (s.hub_rotation * wheel_steering(s.steer_axis, steer + s.compliance_steer)).normalized();
 }
 Vec3 wheel_forward(const RigidBody &body, double steer, const WheelState &s) {
   return body.orientation.rotate(steered_hub(s, steer).rotate({0, 0, -1}));
@@ -1788,10 +1789,36 @@ void VehicleDynamics::update_static_references() {
   }
 }
 
+// Compliance steer (#484): the bushings let the tyre's forces steer the
+// wheel. A cornering force pushing the patch inboard and a braking force
+// each toe it in by their compliance (a road front's negative values toe
+// it out: understeer); driving reverses the braking part. From the last
+// step's forces, settling over 30 ms so the toe does not chase the slip it
+// changes.
+void VehicleDynamics::update_compliance_steer() {
+  const double settle = 1 - std::exp(-dt_ / .03);
+  for (size_t i = 0; i < wheels.size(); ++i) {
+    auto &s = state[i];
+    const auto &w = wheels[i];
+    double target = 0;
+    if (w.enabled && s.contact && (w.compliance_lateral != 0 || w.compliance_braking != 0)) {
+      const double left = w.center.x < 0 ? 1 : -1;
+      const double inboard = s.tire_force.lateral * left;
+      const double braking = -s.tire_force.longitudinal * (s.spin < 0 ? -1 : 1);
+      const double toe_in = std::clamp(w.compliance_lateral * inboard + w.compliance_braking * braking,
+                                       -.035, .035);
+      // Toe-in turns a left wheel to the right: a negative steering angle.
+      target = -toe_in * left;
+    }
+    s.compliance_steer += (target - s.compliance_steer) * settle;
+  }
+}
+
 void VehicleDynamics::step(const Terrain &terrain) {
   apply_aero();
   update_jacking();
   update_static_references();
+  update_compliance_steer();
   double ceiling = body.position.y;
   for (Vec3 p : body.corners())
     ceiling = std::max(ceiling, p.y);

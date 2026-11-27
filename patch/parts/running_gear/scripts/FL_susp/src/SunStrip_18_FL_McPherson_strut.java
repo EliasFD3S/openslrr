@@ -50,6 +50,8 @@ public class SunStrip_18_FL_McPherson_strut extends Suspension
 				wheel.setCamberGain( -0.90, -0.15 );
 				// OpenSLRR (#484): bump steer, degrees of toe-in per 25 mm of bump at the static height and its change per 25 mm, typical for the real car
 				wheel.setBumpSteer( -0.05, 0.00 );
+				// OpenSLRR (#484): compliance steer, degrees of toe-in per kN of cornering force pushing the tyre inboard and per kN of braking, typical for the real car
+				wheel.setComplianceSteer( -0.10, -0.03 );
 
 				the_car.setSlotPos(101+wheelID, new Vector3(-0.124,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(-0.113,0,0), null );

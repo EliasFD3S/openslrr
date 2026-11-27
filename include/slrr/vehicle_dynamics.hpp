@@ -163,6 +163,10 @@ struct WheelConfig {
   // Off: the geometry's toe alone.
   bool toe_curve = false;
   double bump_steer = 0, bump_steer_progression = 0;
+  // Compliance steer (#484): the toe-in (rad) the bushings give per newton
+  // of the tyre's cornering force pushing the patch inboard and per newton
+  // of braking force (driving force reverses it). Zero: rigid.
+  double compliance_lateral = 0, compliance_braking = 0;
   // Set by update_static_reference (suspension_geometry.hpp) from the car's
   // weight: the static spring length (0 unknown) and, there, the
   // geometry's camber and toe (rad) and the camber gain the curve uses
@@ -183,6 +187,9 @@ struct WheelState {
   Quaternion hub_rotation;
   // The steering axis in the hub's frame (CornerFrames::steer_axis, #458).
   Vec3 steer_axis{0, 1, 0};
+  // Compliance steer (#484): the road steering angle (rad, positive to the
+  // left) the bushings add, from the last steps' tyre forces.
+  double compliance_steer = 0;
   double spin = 0, rotation = 0;
   double slip_speed = 0, lateral_speed = 0;
   // Relaxed tan(slip angle): the tyre's lateral deflection builds over its
@@ -386,6 +393,7 @@ private:
   void step(const Terrain &terrain);
   void update_jacking();
   void update_static_references();
+  void update_compliance_steer();
   void apply_aero();
   void step_drive();
   void update_gear(double rpm, double shaft, double road_shaft);

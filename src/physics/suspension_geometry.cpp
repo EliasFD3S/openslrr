@@ -211,7 +211,20 @@ bool arm_frames(const WheelConfig& wheel, double length, CornerFrames& frames) {
   if (!wheel.has_hub) geometry.hub[0] = -1;
   // The fitted hub is driven by the vertical CFG travel, with alignment
   // applied by the hub fit. Tilting the input ray applies it twice.
-  return solve_corner_geometry(geometry, wheel.center + Vec3{0, -travel, 0}, frames);
+  if (!solve_corner_geometry(geometry, wheel.center + Vec3{0, -travel, 0}, frames)) return false;
+  // A strut fit replaces the alignment (camber and toe) with its own hub
+  // rotation; its static camber is the fit's tilt, but its static toe (the
+  // script's `toe`, through setYpr) is OpenSLRR's, turned about the body's
+  // vertical (#484).
+  if (geometry.hub[0] == 0) {
+    const Vec3 forward = wheel.hub_alignment.rotate({0, 0, -1});
+    const double toe = std::atan2(-forward.x, -forward.z);
+    if (std::isfinite(toe) && toe != 0) {
+      const Quaternion yaw{0, std::sin(toe * .5), 0, std::cos(toe * .5)};
+      frames.hub_rotation = (yaw * frames.hub_rotation).normalized();
+    }
+  }
+  return true;
 }
 
 // +1 for a left wheel (-x), whose top leans inboard towards +x.

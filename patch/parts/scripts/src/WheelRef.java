@@ -79,4 +79,10 @@ public class WheelRef extends Native
 	// suspension type.
 	public native void setBumpSteer( float toe, float progression );
 
+	// OpenSLRR (#484): compliance steer, the bushings' toe-in in degrees per
+	// kN of cornering force pushing the tyre inboard and per kN of braking
+	// force (negative: toe-out; driving reverses the braking part). Without
+	// it the host uses typical values for the suspension type.
+	public native void setComplianceSteer( float lateral, float braking );
+
 }

@@ -450,7 +450,13 @@ values for the suspension type ([notes](../vehicles/notes.md#camber-gain-481)).
 the static ride height (-1 to +1, negative toes out) and its change per
 25 mm of bump (-0.5 to +0.5). 86 of the 96 patched stock corners call it
 (not the live rear axles); without it the host uses typical values for the
-suspension type ([notes](../vehicles/notes.md#bump-steer-484)).
+suspension type ([notes](../vehicles/notes.md#bump-steer-static-toe-and-compliance-steer-484)).
+
+`WheelRef.setComplianceSteer(lateral, braking)` (#484, same file): the
+bushings' toe-in in degrees per kN of cornering force pushing the tyre
+inboard and per kN of braking force (-0.5 to +0.5 each; negative toes out,
+driving reverses the braking part). 86 patched corners call it; without it
+the host uses typical values for the suspension type.
 
 ### Math functions (#463)
 

@@ -98,6 +98,10 @@ struct WheelPhys {
   // of bump at the static height and its change per 25 mm.
   bool has_bump_steer = false;
   float bump_steer = 0, bump_steer_progression = 0;
+  // setComplianceSteer (patched suspensions, #484): degrees of toe-in per
+  // kN of inboard cornering force and per kN of braking force.
+  bool has_compliance = false;
+  float compliance_lateral = 0, compliance_braking = 0;
   int opp = -1;
   float arm[7]{}, hub[10]{};
   bool authored_position = false;
@@ -3001,6 +3005,21 @@ void dynamics_wheels(Record &rec) {
         cfg.bump_steer_progression = 0;
       }
       if (!cfg.camber_curve && !cfg.toe_curve) cfg.static_length = 0;
+      // Compliance steer (#484): WheelRef.setComplianceSteer, or typical
+      // rubber bushings: linked fronts toe out by 0.10 deg per kN of
+      // cornering force and 0.03 per kN of braking (understeer, and a pull
+      // against a split), independent rear arms toe in by 0.03 and 0.05.
+      // Live axles and corners without arms stay rigid.
+      constexpr double per_kn = std::numbers::pi / 180 / 1000;
+      if (live.has_compliance) {
+        cfg.compliance_lateral = live.compliance_lateral * per_kn;
+        cfg.compliance_braking = live.compliance_braking * per_kn;
+      } else if (cfg.arm_length > 0 && cfg.arm_length < 20) {
+        cfg.compliance_lateral = (front ? -.10 : .03) * per_kn;
+        cfg.compliance_braking = (front ? -.03 : .05) * per_kn;
+      } else {
+        cfg.compliance_lateral = cfg.compliance_braking = 0;
+      }
     }
     // WheelRef.setWidth: the tyre width in metres (Tyre.java), stored halved.
     cfg.half_width = cfg.metal_contact ? 0. : std::clamp(double(live.width), 0., .25);
@@ -10242,6 +10261,19 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
       w.has_bump_steer = true;
       w.bump_steer = std::clamp(toe, -1.f, 1.f);
       w.bump_steer_progression = std::clamp(progression, -.5f, .5f);
+    });
+  });
+  // OpenSLRR native declared by the patched WheelRef (#484): compliance
+  // steer, degrees of toe-in per kN of cornering force pushing the tyre
+  // inboard and per kN of braking force (-0.5 to +0.5 each, negative toes
+  // out).
+  wheel("setComplianceSteer", "(FF)V", [put](Object *s, const std::vector<Value> &a) {
+    return put(s, [&](WheelPhys &w) {
+      const float lateral = scalar(a, 0, 0), braking = scalar(a, 1, 0);
+      if (!std::isfinite(lateral) || !std::isfinite(braking)) return;
+      w.has_compliance = true;
+      w.compliance_lateral = std::clamp(lateral, -.5f, .5f);
+      w.compliance_braking = std::clamp(braking, -.5f, .5f);
     });
   });
   wheel("setOppWheel", "(I)V", [put](Object *s, const std::vector<Value> &a) {
