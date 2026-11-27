@@ -32,6 +32,22 @@ struct Brain {
   // swap the exit in the middle of a junction (#324).
   std::vector<size_t> plan;
   bool enter_requested = false;
+  // SLRR_rev bot.ts cruise: a speed drawn from the road's speed band after
+  // each junction, approached at .8 m/s2 up and 1.2 m/s2 down.
+  float cruise = 0, cruise_command = -1;
+  size_t cruise_edge = SIZE_MAX;
+  // Lane change in progress (road-traffic.ts tryChangeLane): the route
+  // blends from the source lane onto the target over `length` metres.
+  float lane_check = 0;
+  size_t lane_source = SIZE_MAX, lane_target = SIZE_MAX;
+  float lane_start = 0, lane_length = 0;
+  // A queued car holds its brake and reacts .5-1.5 s after the way clears.
+  bool holding = false;
+  float start_delay = -1;
+  // Impact: brake until settled for 1 s, then rejoin the lane. Ram: stuck
+  // below 3 km/h for 60 s without a halt, push on at 30 km/h for 10 s.
+  bool impact = false;
+  float settled_for = 0, idle_for = 0, ram_for = 0;
   int32_t target = 0;
   RoadPoint offset{};
   bool night = false, runout = false;
@@ -287,6 +303,39 @@ float edge_distance(const RoadRoutes::Edge &e, const RoadPoint &p,
   }
   return best;
 }
+// The nearest point of a traffic curve and its arc length.
+RoadPoint edge_point(const RoadRoutes::Edge &e, const RoadPoint &p, float &at) {
+  float best = INFINITY;
+  RoadPoint result = e.points.front();
+  at = 0;
+  for (size_t i = 1; i < e.points.size(); ++i) {
+    const auto &a = e.points[i - 1], &q = e.points[i];
+    const float dx = q[0] - a[0], dz = q[2] - a[2], square = dx * dx + dz * dz;
+    if (square < 1e-8f)
+      continue;
+    const float t =
+        std::clamp(((p[0] - a[0]) * dx + (p[2] - a[2]) * dz) / square, 0.f, 1.f);
+    const float d = std::hypot(p[0] - a[0] - t * dx, p[2] - a[2] - t * dz);
+    if (d < best) {
+      best = d;
+      for (int axis = 0; axis < 3; ++axis)
+        result[axis] = a[axis] + t * (q[axis] - a[axis]);
+      at = e.distances[i - 1] + t * (e.distances[i] - e.distances[i - 1]);
+    }
+  }
+  return result;
+}
+RoadPoint edge_at(const RoadRoutes::Edge &e, float at, RoadPoint *direction) {
+  RoadRoute line;
+  line.points = e.points;
+  const auto p = road_at(line, std::clamp(at, 0.f, e.length));
+  if (direction) {
+    const auto q = road_at(line, std::clamp(at + .5f, 0.f, e.length)),
+               o = road_at(line, std::clamp(at - .5f, 0.f, e.length));
+    *direction = road_normalize({q[0] - o[0], 0, q[2] - o[2]});
+  }
+  return p;
+}
 // Upstream bot.ts chooses a destination branch, then one of its lanes, so a
 // wide street is not likelier merely for having more lanes. Closed (race)
 // roads are avoided while another exit is open.
@@ -327,7 +376,20 @@ void traffic_route(Brain &b, const RoadPoint &position) {
   // Stay on the committed curves while the car is still on one of them.
   size_t keep = SIZE_MAX;
   float at = 0;
-  for (size_t i = 0; i < b.plan.size() && i < 3; ++i) {
+  // During a lane change the car is still beside its new lane.
+  const bool changing = !b.plan.empty() && b.plan.front() == b.lane_target &&
+                        b.lane_target < edges.size();
+  if (changing) {
+    float along = 0;
+    if (edge_distance(edges[b.lane_target], position, heading, along) < 6 &&
+        along < b.lane_start + b.lane_length) {
+      keep = 0;
+      at = along;
+    }
+  }
+  if (keep == SIZE_MAX)
+    b.lane_source = b.lane_target = SIZE_MAX;
+  for (size_t i = 0; keep == SIZE_MAX && i < b.plan.size() && i < 3; ++i) {
     float along = 0;
     if (edge_distance(edges[b.plan[i]], position, heading, along) < 3) {
       keep = i;
@@ -362,31 +424,176 @@ void traffic_route(Brain &b, const RoadPoint &position) {
   for (size_t i = 0; i < b.plan.size(); ++i) {
     const auto &e = edges[b.plan[i]];
     for (size_t k = 0; k < e.points.size(); ++k)
-      if (i || e.distances[k] > at + .05f)
-        b.route.points.push_back(e.points[k]);
+      if (i || e.distances[k] > at + .05f) {
+        auto point = e.points[k];
+        // Blend from the old lane with a smoothstep over the change length.
+        if (!i && b.lane_target == b.plan[0] && b.lane_source < edges.size()) {
+          const float t = std::clamp((e.distances[k] - b.lane_start) /
+                                         std::max(1.f, b.lane_length), 0.f, 1.f);
+          const float weight = t * t * (3 - 2 * t);
+          float ignored = 0;
+          const auto source = edge_point(edges[b.lane_source], point, ignored);
+          for (int axis = 0; axis < 3; ++axis)
+            point[axis] = source[axis] + (point[axis] - source[axis]) * weight;
+        }
+        b.route.points.push_back(point);
+      }
   }
   for (size_t i = 1; i < b.route.points.size(); ++i)
     b.route.length += road_distance(b.route.points[i - 1], b.route.points[i]);
   b.progress = 0;
 }
+// SLRR_rev road-traffic.ts tryChangeLane: only an adjacent, parallel lane of
+// the same road branch, 2-5 m to the side, that stays parallel for the change
+// length and is clear of cars beside, ahead and behind.
+bool try_change_lane(Brain &b, const RoadPoint &position, float speed,
+                     float length) {
+  if (b.plan.empty() || b.lane_target != SIZE_MAX)
+    return false;
+  auto graph = race_ground_roads(*b.resources, car_ground(*b.resources, b.car));
+  if (!graph)
+    return false;
+  const auto &edges = graph->traffic_edges();
+  const size_t current = b.plan.front();
+  if (current >= edges.size() || edges[current].crossing)
+    return false;
+  const auto &lane = edges[current];
+  float at = 0;
+  edge_point(lane, position, at);
+  if (at < 15 || lane.length - at < length + 20)
+    return false;
+  RoadPoint direction{};
+  const auto here = edge_at(lane, at, &direction);
+  RoadPoint source_direction{};
+  const auto source_ahead = edge_at(lane, at + length, &source_direction);
+  float own_length = 4.6f, own_width = 1.9f;
+  for (const auto &peer : peers)
+    if (peer.car == b.car) {
+      own_length = 2 * peer.half_length;
+      own_width = 2 * peer.half_width;
+    }
+  struct Choice {
+    size_t edge;
+    float at, gap;
+  };
+  std::vector<Choice> sides[2];
+  for (size_t i = 0; i < edges.size(); ++i) {
+    const auto &other = edges[i];
+    if (i == current || other.crossing || other.branch != lane.branch ||
+        other.next.empty())
+      continue;
+    float other_at = 0;
+    const auto point = edge_point(other, here, other_at);
+    RoadPoint other_direction{};
+    edge_at(other, other_at, &other_direction);
+    const float dx = point[0] - here[0], dz = point[2] - here[2];
+    const float lateral = dx * direction[2] - dz * direction[0];
+    const float gap = std::fabs(lateral);
+    if (gap < 2 || gap > 5 || std::fabs(point[1] - here[1]) > 1 ||
+        std::fabs(dx * direction[0] + dz * direction[2]) > 2 ||
+        other_direction[0] * direction[0] + other_direction[2] * direction[2] < .97f ||
+        other_at < 15 || other.length - other_at < length + 20)
+      continue;
+    // Merging, diverging or crossing curves can share a local tangent.
+    RoadPoint ahead_direction{};
+    const auto ahead = edge_at(other, other_at + length, &ahead_direction);
+    if (road_distance(ahead, source_ahead) > 6 ||
+        ahead_direction[0] * source_direction[0] +
+                ahead_direction[2] * source_direction[2] < .97f)
+      continue;
+    bool clear = true;
+    for (const auto &peer : peers) {
+      if (peer.car == b.car)
+        continue;
+      const float px = peer.position[0] - point[0], pz = peer.position[2] - point[2];
+      const float along = px * other_direction[0] + pz * other_direction[2];
+      const float side = std::fabs(px * other_direction[2] - pz * other_direction[0]);
+      const float rear_speed = std::max(0.f, peer.velocity[0] * other_direction[0] +
+                                                 peer.velocity[2] * other_direction[2]);
+      const float size = std::max(peer.half_length, peer.half_width) * 2;
+      const float lengths = (2 * peer.half_length + own_length) * .5f;
+      if (!(std::fabs(peer.position[1] - point[1]) > 2.5f ||
+            side > (size + own_width) * .5f + .5f ||
+            along > std::max(12.f, speed * 2) + lengths ||
+            along < -std::max(12.f, rear_speed * 2) - lengths)) {
+        clear = false;
+        break;
+      }
+    }
+    if (clear)
+      sides[lateral > 0].push_back({i, other_at, gap});
+  }
+  std::vector<Choice> choices;
+  for (auto &side : sides)
+    if (!side.empty())
+      choices.push_back(*std::min_element(side.begin(), side.end(),
+          [](const Choice &x, const Choice &y) { return x.gap < y.gap; }));
+  if (choices.empty())
+    return false;
+  const auto &chosen = choices[std::min<size_t>(
+      size_t(random_unit() * choices.size()), choices.size() - 1)];
+  b.lane_source = current;
+  b.lane_target = chosen.edge;
+  b.lane_start = chosen.at;
+  b.lane_length = length;
+  b.plan = {chosen.edge};
+  traffic_route(b, position);
+  return true;
+}
 // A pursuer drives straight at its target when the road network cannot take
 // it there: the target (or the pursuer) is off the road, the road detour is
 // far longer than the gap, or the two are close.
-RoadRoute pursuit_route(const RpkIndex &rpk, Object *car,
-                        const RoadPoint &position, const RoadPoint &finish) {
+// Distance a scene ray at bumper-to-roof height travels from a point before
+// it enters a mesh (a building, wall or car), or INFINITY. The ray starts
+// 3 m ahead so the pursuer's own body is not in its way.
+float clear_distance(const RoadPoint &from, const RoadPoint &direction) {
+  const float origin[3] = {from[0] + direction[0] * 3, from[1] + 1,
+                           from[2] + direction[2] * 3};
+  const float ray[3] = {direction[0], 0, direction[2]};
+  float hit[3];
+  if (!scene_instances_pick(origin, ray, hit))
+    return INFINITY;
+  return 3 + std::hypot(hit[0] - origin[0], hit[2] - origin[2]);
+}
+// Straight at the target, or round the first obstacle in the way: the
+// nearest heading within 75 degrees whose first 25 m are clear.
+RoadRoute direct_route(const RoadPoint &position, const RoadPoint &finish) {
   RoadRoute direct;
   direct.points = {position, finish};
   direct.length = road_distance(position, finish);
+  const auto heading = road_normalize({finish[0] - position[0], 0, finish[2] - position[2]});
+  const float gap = std::hypot(finish[0] - position[0], finish[2] - position[2]);
+  if (gap < 6 || clear_distance(position, heading) > gap - 3)
+    return direct;
+  for (float degrees : {25.f, -25.f, 50.f, -50.f, 75.f, -75.f}) {
+    const float a = degrees * 3.1415927f / 180, c = std::cos(a), s = std::sin(a);
+    const RoadPoint turn{heading[0] * c - heading[2] * s, 0,
+                         heading[0] * s + heading[2] * c};
+    const float reach = std::min(25.f, gap);
+    if (clear_distance(position, turn) < reach + 2)
+      continue;
+    const RoadPoint detour{position[0] + turn[0] * reach, position[1],
+                           position[2] + turn[2] * reach};
+    RoadRoute around;
+    around.points = {position, detour, finish};
+    around.length = reach + road_distance(detour, finish);
+    return around;
+  }
+  return direct;
+}
+RoadRoute pursuit_route(const RpkIndex &rpk, Object *car,
+                        const RoadPoint &position, const RoadPoint &finish) {
+  const RoadRoute direct = direct_route(position, finish);
   auto graph = race_ground_roads(rpk, car_ground(rpk, car));
-  if (!graph || direct.length < 40)
+  if (!graph || road_distance(position, finish) < 40)
     return direct;
   const auto to = graph->project(finish), from = graph->project(position);
   const bool off_road = !to || !from || to->distance > 12 || from->distance > 12;
-  if (off_road && direct.length < 250)
+  if (off_road && road_distance(position, finish) < 250)
     return direct;
   auto route = graph->query(position, finish);
   if (!route || route->points.size() < 2 ||
-      route->length > 3 * direct.length + 60)
+      route->length > 3 * road_distance(position, finish) + 60)
     return direct;
   // A target away from the road is reached across country from the road
   // point nearest to it.
@@ -407,6 +614,21 @@ void race_brains_reset() {
   peers.clear();
 }
 void race_set_peers(std::vector<RacePeer> list) { peers = std::move(list); }
+void race_note_impact(Object *car) {
+  auto *n = gameref_get(car);
+  if (!n)
+    return;
+  for (auto &entry : brains)
+    if (entry.second.car == n->key && entry.second.car_incarnation == n->incarnation &&
+        entry.second.mode == "AI_GoToTraffic") {
+      entry.second.impact = true;
+      entry.second.settled_for = 0;
+      entry.second.ram_for = 0;
+    }
+}
+void *race_car_ground(const RpkIndex &rpk, Object *car) {
+  return car_ground(rpk, car);
+}
 bool race_brain_drives(Object *car) {
   auto *n = gameref_get(car);
   if (!n)
@@ -561,6 +783,28 @@ bool race_drive_input(Object *car, const RoadPoint &position, float yaw,
       race_traffic_halted(car_ground(*b->resources, car), position, car, &stop);
   if (halted)
     b->blocked_for = 0;
+  // After a collision a traffic driver brakes until the car has settled for a
+  // second, then rejoins its lane from where it ended up (bot.ts impact).
+  if (traffic && b->impact) {
+    b->settled_for = std::fabs(speed) < .6f ? b->settled_for + dt : 0;
+    if (b->settled_for < 1) {
+      out.brake = .8f;
+      out.throttle = 0;
+      out.steer = b->steering;
+      out.start = true;
+      b->brake = out.brake;
+      b->throttle = 0;
+      b->blocked_for = b->reverse_for = 0;
+      return true;
+    }
+    b->impact = false;
+    b->settled_for = 0;
+    b->plan.clear();
+    b->lane_source = b->lane_target = SIZE_MAX;
+    b->holding = false;
+    traffic_route(*b, position);
+    b->replan = 2;
+  }
   if (driving && !halted && b->reverse_for > 0) {
     b->reverse_for = std::max(0.f, b->reverse_for - dt);
     PartMatrix frame;
@@ -757,8 +1001,31 @@ bool race_drive_input(Object *car, const RoadPoint &position, float yaw,
     desired = std::min(desired, 3.f);
   if (arrived)
     desired = std::min(desired, target_speed);
-  if (traffic)
-    desired = std::min(desired, 8.f);
+  // Cruise from the road's speed band, redrawn after each junction.
+  int speed_group = -1;
+  if (traffic) {
+    auto graph = race_ground_roads(*b->resources, car_ground(*b->resources, car));
+    const size_t edge = b->plan.empty() ? SIZE_MAX : b->plan.front();
+    if (graph && edge < graph->traffic_edges().size()) {
+      const auto &e = graph->traffic_edges()[edge];
+      speed_group = e.speed_group;
+      if (!e.crossing && edge != b->cruise_edge && edge != b->lane_target) {
+        const auto band = road_speed_band(e.speed_group);
+        b->cruise = (band[0] + random_unit() * (band[1] - band[0])) / 3.6f;
+        b->cruise_command = std::max(0.f, speed);
+        b->cruise_edge = edge;
+      }
+    }
+    if (b->cruise_command < 0) {
+      b->cruise = 8;
+      b->cruise_command = std::max(0.f, speed);
+    }
+    const float delta = b->cruise - b->cruise_command;
+    b->cruise_command += std::copysign(
+        std::min(std::fabs(delta), (delta > 0 ? .8f : 1.2f) * dt), delta);
+    desired = std::min(desired, std::max(b->cruise_command, 2.f));
+  }
+  const float free_desired = desired;
   // Ease down to the stop line at about 2.5 m/s2 (v221 bot.ts).
   if (halted)
     desired = std::min(desired, stop < .25f ? 0.f : std::sqrt(5 * stop));
@@ -782,7 +1049,53 @@ bool race_drive_input(Object *car, const RoadPoint &position, float yaw,
       b->queued_for = 0;
       b->ignore_peers_for = 3;
     }
+    // Rural roads and a slow leader make a lane change likelier (bot.ts).
+    if (traffic) {
+      b->lane_check += dt;
+      const bool rural = speed_group == 0;
+      const float period = rural ? 10.f : 20.f;
+      const float chance =
+          std::max(rural ? .25f : .1f, limited < desired - 1e-3f ? .2f : 0.f);
+      if (b->lane_check >= period) {
+        b->lane_check = 0;
+        if (!halted && speed > .5f && random_unit() < chance)
+          try_change_lane(*b, position, speed, std::max(25.f, speed * 3.5f));
+      }
+    }
     desired = limited;
+  }
+  if (traffic) {
+    // A queued car holds its brake, then reacts .5-1.5 s after the way ahead
+    // clears instead of creeping on every gap (bot.ts startDelay).
+    if (desired > .8f && b->holding) {
+      if (b->start_delay < 0)
+        b->start_delay = .5f + random_unit();
+      b->start_delay -= dt;
+      if (b->start_delay <= 0) {
+        b->holding = false;
+        b->start_delay = -1;
+      }
+    } else if (desired <= .8f) {
+      b->start_delay = -1;
+      if (desired < .5f && std::fabs(speed) < .3f)
+        b->holding = true;
+    }
+    if (b->holding)
+      desired = 0;
+    // Stuck below 3 km/h for a minute without a signal or halt: push on at
+    // 30 km/h for ten seconds, ignoring the cars ahead (bot.ts ram).
+    b->idle_for = !halted && std::fabs(speed) < 3 / 3.6f ? b->idle_for + dt : 0;
+    if (b->idle_for > 60) {
+      b->idle_for = 0;
+      b->ram_for = 10;
+    }
+    if (halted)
+      b->ram_for = 0;
+    if (b->ram_for > 0) {
+      b->ram_for -= dt;
+      b->holding = false;
+      desired = std::min(free_desired, 30 / 3.6f);
+    }
   }
   out.brake = std::clamp((speed - desired) * .35f, 0.f, 1.f);
   out.throttle =

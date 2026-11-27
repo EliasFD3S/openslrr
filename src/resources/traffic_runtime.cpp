@@ -36,6 +36,9 @@ struct Registration {
        unplaced = true, kinematic = false;
   int mode = 0;
   double distant_next = 0, stop_since = -1;
+  // Cached building-occlusion result for the recycle/reshow view test.
+  double seen_checked = -1;
+  bool occluded = false;
   uint32_t cleared_crossing = 0;
   size_t edge = 0;
   float along = 0, speed = 0, cruise = 0;
@@ -212,6 +215,17 @@ bool in_view(const RoadPoint &p, bool occlusion = false) {
                                    (hit[1] - view.eye[1]) * (hit[1] - view.eye[1]) +
                                    (hit[2] - view.eye[2]) * (hit[2] - view.eye[2]));
   return distance > length - 6;
+}
+// The camera sees the car's position: inside the view cone and, rechecked
+// at most every 1.5 s within the per-tick ray budget, not behind a building.
+bool seen(Registration &r, const RoadPoint &p) {
+  if (!in_view(p))
+    return false;
+  if (clock_seconds - r.seen_checked >= 1.5 && occlusion_budget > 0) {
+    r.seen_checked = clock_seconds;
+    r.occluded = !in_view(p, true);
+  }
+  return !r.occluded;
 }
 bool belongs(void *key, void *world) {
   for (int i = 0; key && i < 64; ++i) {
@@ -765,7 +779,7 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
     ++signal_revision;
   auto *world = scene_instances_world();
   update_view();
-  occlusion_budget = 6;
+  occlusion_budget = 12;
   // Bots that drove back onto a lane rejoin traffic (Bot.reJoinTraffic).
   std::vector<std::pair<Object *, int32_t>> entered;
   for (const auto &request : std::exchange(enter_requests, {})) {
@@ -866,7 +880,7 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
       // A distant car stays while the player can still see it.
       const auto where = position(r.car);
       const bool far = road_distance(where, focus) > (r.owned ? 220 : 380) &&
-                       !(unseen && in_view(where));
+                       !(unseen && seen(r, where));
       if (r.visible &&
           (visible >= cap || (!r.owned && rivals >= rival_cap) || far ||
            blocked(*p, graph->traffic_edges()[r.edge]))) {
@@ -929,7 +943,7 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
         if (r.unplaced && !place(r, *graph, *p, focus, true, unseen))
           continue;
         if (road_distance(position(r.car), focus) > 300 ||
-            (unseen && in_view(position(r.car))))
+            (unseen && seen(r, position(r.car))))
           continue;
         r.visible = true;
         n->streamed_hidden = false;
@@ -986,6 +1000,11 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
           r.along -= e.length;
           r.cleared_crossing = 0;
           r.edge = choose_transition(choices, *graph);
+          // Each road draws a cruise from its speed band (rural/urban).
+          if (!graph->traffic_edges()[r.edge].crossing) {
+            const auto band = road_speed_band(graph->traffic_edges()[r.edge].speed_group);
+            r.cruise = (band[0] + random() * (band[1] - band[0])) / 3.6f;
+          }
         }
       }
       const float previous_yaw = n->ypr[0];

@@ -213,8 +213,12 @@ void traffic_follows_peer_and_bot_takes_over() {
   SLRR_REQUIRE(race_drive_input(car, start, yaw, 0, .02f, input) &&
                input.throttle == 0 && input.brake > .5f && !input.reverse);
   race_set_peers({});
-  SLRR_REQUIRE(race_drive_input(car, start, yaw, 0, .02f, input) &&
-               input.throttle > 0);
+  // The queued driver reacts .5-1.5 s after the way clears (bot.ts).
+  int waited = 0;
+  while (race_drive_input(car, start, yaw, 0, .02f, input) &&
+         input.throttle == 0 && waited < 100)
+    ++waited;
+  SLRR_REQUIRE(input.throttle > 0 && waited >= 24 && waited < 80);
   // A Bot adopting the streamed car (City's woken police scout) replaces
   // the host traffic driver.
   Object brain;
@@ -230,8 +234,31 @@ void traffic_follows_peer_and_bot_takes_over() {
   std::puts("PASS traffic waits behind a stopped car; a Bot's controllable "
             "replaces the traffic driver");
 }
+void road_speed_zones() {
+  RaceFixture f;
+  auto graph = race_ground_roads(f.packs, &f.ground);
+  SLRR_REQUIRE(graph);
+  int groups[2] = {0, 0};
+  for (const auto &e : graph->traffic_edges()) {
+    if (e.crossing || e.speed_group < 0 || e.next.empty())
+      continue;
+    ++groups[e.speed_group];
+    RoadRoute line;
+    line.points = e.points;
+    const auto middle = road_at(line, e.length * .5f);
+    const float limit = graph->speed_limit(middle);
+    // The nearest curve may be a neighbouring lane of the other group.
+    SLRR_REQUIRE(std::fabs(limit - 100 / 3.6f) < 1e-3f ||
+                 std::fabs(limit - 35 / 3.6f) < 1e-3f);
+  }
+  SLRR_REQUIRE(groups[0] + groups[1] > 0);
+  auto start = graph->traffic_edges().front().points.front();
+  SLRR_REQUIRE(graph->speed_limit({start[0], start[1] + 500, start[2]}) == -1);
+  std::printf("PASS road speed zones: %d rural and %d urban lanes; off-road -1\n",
+              groups[0], groups[1]);
+}
 int main() {
-  const standalone::Test tests[] = {
+  const standalone::Test tests[] = {road_speed_zones,
       traffic_blocked_recovery, spline_wait_and_arbitration,
       city_route_drives_and_halts, preview_bend_brakes, night_finish_runout,
       traffic_follows_peer_and_bot_takes_over};

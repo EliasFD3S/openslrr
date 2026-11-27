@@ -943,8 +943,8 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
     // and Garage read it (#324).
     for (const auto& [car, other] : part_take_collisions()) {
       for (const auto& [source, hit] : {std::pair{car, other}, std::pair{other, car}}) {
-        if (!script_event_listening(jvm, source, 1)) continue;
-        auto* text = jvm.new_string(std::to_string(gameref_make_live(hit)));
+        if (!source || !script_event_listening(jvm, source, 1)) continue;
+        auto* text = jvm.new_string(std::to_string(hit ? gameref_make_live(hit) : 0));
         script_event_emit(jvm, source, nullptr, 1, Value::make_obj(text));
       }
     }

@@ -6733,7 +6733,19 @@ void commit_batch(SimBatch& batch) {
     }
     auto& hit = loudest[impact.car];
     if (!hit || impact.hit.speed > hit->speed) hit = &impact.hit;
-    if (impact.other < batch.cars.size() && current(batch.cars[impact.other])) {
+    const bool pair_hit = impact.other < batch.cars.size() && current(batch.cars[impact.other]);
+    // Traffic drivers brake and settle after a crash (bot.ts impact mode).
+    if (!car.controlled && (pair_hit || impact.hit.speed > 4))
+      race_note_impact(car.chassis);
+    // A hard hit on the world (walls, props, kerbs) is a collision with no
+    // other car: scripts receive id 0.
+    if (!pair_hit && impact.other == SIZE_MAX && impact.hit.speed > 4) {
+      const std::pair<Object*, Object*> wall{car.chassis, nullptr};
+      if (std::find(pending_collisions.begin(), pending_collisions.end(), wall) ==
+          pending_collisions.end())
+        pending_collisions.push_back(wall);
+    }
+    if (pair_hit) {
       const std::pair<Object*, Object*> pair{car.chassis, batch.cars[impact.other].chassis};
       const std::pair<Object*, Object*> reverse{pair.second, pair.first};
       if (std::find(pending_collisions.begin(), pending_collisions.end(), pair) ==
@@ -8889,7 +8901,7 @@ bool part_physics_state(Object *key, PartPhysicsState &state) {
 std::vector<std::pair<Object*, Object*>> part_take_collisions() {
   auto out = std::exchange(pending_collisions, {});
   std::erase_if(out, [](const auto& pair) {
-    return !record(pair.first) || !record(pair.second);
+    return !record(pair.first) || (pair.second && !record(pair.second));
   });
   return out;
 }
@@ -9078,16 +9090,25 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
     });
   jvm.natives().register_method("java.game.Vehicle", "hasCrime", "()F",
     [](Object* self, const std::vector<Value>&) {
-      // PE 0x440BF0 returns the active zone speed limit in m/s, or -1.
-      // Zone-event producers are not implemented yet; never invent a limit.
+      // PE 0x440BF0 returns the active zone speed limit in m/s, or -1. The
+      // original zone producers are not recovered; like SLRR_rev
+      // vehicle-crime-native.ts, the host zone is the speed band of the road
+      // the car is on (RoadRoutes::speed_limit). City adds its 10% tolerance.
+      // An explicit crime_speed field still takes precedence.
       Object* chassis = as_part(self);
       const auto* node = gameref_get(chassis);
       if (!node || node->empty) return Value::make_float(-1.f);
       const auto found = chassis->fields.find("crime_speed");
-      if (found == chassis->fields.end()) return Value::make_float(-1.f);
-      const float limit = found->second.tag == ValueTag::Float ? found->second.v.f :
-          found->second.tag == ValueTag::Int ? float(found->second.v.i) : -1.f;
-      return Value::make_float(std::isfinite(limit) && limit >= 0.f ? limit : -1.f);
+      if (found != chassis->fields.end()) {
+        const float limit = found->second.tag == ValueTag::Float ? found->second.v.f :
+            found->second.tag == ValueTag::Int ? float(found->second.v.i) : -1.f;
+        return Value::make_float(std::isfinite(limit) && limit >= 0.f ? limit : -1.f);
+      }
+      PartMatrix frame;
+      if (!index || !scene_instances_script_matrix(chassis, frame.data()))
+        return Value::make_float(-1.f);
+      const auto graph = race_ground_roads(*index, race_car_ground(*index, chassis));
+      return Value::make_float(graph ? graph->speed_limit({frame[12], frame[13], frame[14]}) : -1.f);
     });
   const std::string owner = "java.game.parts.Part";
   auto bind = [&](const char *name, const char *signature, NativeFn fn) {
@@ -9098,7 +9119,12 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
     auto *p = record(self);
     const int query = number(args, 0);
     if (query == 56) return Value::make_int(race_traffic_pointer(self));
-    if (query == 7 && race_traffic_pointer(self)) return Value::make_int(5);
+    // GIR_CAT_VEHICLE for traffic and for a car an AI brain drives (a police
+    // scout that left traffic), so City's collision handler counts a crash
+    // with either. Picked parts keep GIR_CAT_PART.
+    if (query == 7 && (race_traffic_pointer(self) ||
+                       race_brain_drives(self)))
+      return Value::make_int(5);
     if (query == 25 && state && state->alias == "controller") {
       const float axis = host_input_controller_axis(
           static_cast<Object*>(state->key), number(args, 1));

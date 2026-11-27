@@ -32,6 +32,12 @@ void race_brains_reset();
 void race_set_traffic_mode(const RpkIndex &, Object *);
 // True when a brain currently drives the car.
 bool race_brain_drives(Object *car);
+// The map a car drives on: its traffic registration's, else the first parent
+// with a road graph.
+void *race_car_ground(const RpkIndex &, Object *car);
+// A car-to-car (or hard wall) impact committed to this car: a traffic driver
+// brakes, settles and rejoins its lane (SLRR_rev bot.ts impact mode).
+void race_note_impact(Object *car);
 void register_traffic_natives(Jvm &, RpkIndex &, SectionMachine &);
 // Motion is bounded independently of the pause/warp-aware signal clock.
 // Omit clock_seconds for callers already supplying simulation steps.

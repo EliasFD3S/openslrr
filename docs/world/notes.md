@@ -163,6 +163,18 @@ Validation: Release build; race_brain (6), traffic_runtime (10, re-entry
 added), road_routes (6) and vehicle_contacts_runtime (12) pass. race_vehicle
 fails both tests on the merged base before these changes as well. Not run in
 game.
+A second round closed the remaining PR limitations: SLRR_rev speed groups
+(`src/resources/road_routes.cpp:speed_limit`) give traffic rural/urban cruise
+bands and Vehicle.hasCrime a host speed zone, so City's speeding fine is no
+longer zero; traffic changes lanes
+(`src/resources/race_brain.cpp:try_change_lane`), reacts after queues, settles
+after impacts (`race_note_impact`) and rams after a minute stuck; pursuers
+steer round obstacles on direct legs
+(`src/resources/race_brain.cpp:direct_route`); recycled and reshown cars get
+the occlusion ray (`src/resources/traffic_runtime.cpp:seen`); world hits reach
+scripts as EVENT_COLLISION with id 0 and brain-driven cars report
+GIR_CAT_VEHICLE. race_brain gains a speed-zone test (7 pass); traffic_runtime
+allows rural cruise speeds in its per-tick step bound (10 pass).
 The original issues and #179 were closed for consolidation, not gameplay acceptance;
 #197 retains the remaining work. The [current audit](traffic-races.md)
 records the baseline's missing chassis pairs/player-only movable contacts, the

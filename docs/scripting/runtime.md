@@ -377,7 +377,9 @@ hidden rivals inside the view distance and a cone wide enough for a 2:1 window
 it remains in that cone. Up to six spawn candidates per traffic tick inside the
 cone are also tested with a scene ray from the camera to roof height; one that a
 building hides may spawn. Candidates past that budget, and the recycle test,
-still use the cone alone. A frame stops searching after eight unseen-road misses.
+get the same ray. A hidden car being recycled or reshown is rechecked at most
+every 1.5 s within the shared budget of twelve rays a tick. A frame stops
+searching after eight unseen-road misses.
 
 Four-wheel native cars and native-only racer doubles now use the existing rigid
 body, floor collision and suspension solver while visible. The inline CFG wheels
@@ -420,7 +422,11 @@ is open. The physical brain keeps the sequence of curves it committed to
 is within 3 m of one, so overlapping junction curves can no longer swap its exit
 mid-junction, and the plan is extended to about 160 m whenever less than 40 m
 remains, so the driver never reaches the end of its lookahead and coasts to a
-stop on an open road (#324). Native traffic uses an urban cruise target.
+stop on an open road (#324). Traffic cruises at a speed drawn from its road's
+speed band after each junction (SLRR_rev road-traffic.ts: a road with a rural,
+group-0 TRC node at either end, or a rural junction, 60-100 km/h; otherwise
+15-35 km/h), approached at .8 m/s² up and 1.2 m/s² down; the kinematic fallback
+draws its cruise the same way.
 Physical traffic and pursuers keep a time gap to the car ahead with v221 bot.ts
 followingSpeed over a corridor as wide as both cars that follows the planned
 path (`src/resources/race_brain.cpp:along_path`), not the straight line ahead,
@@ -433,8 +439,17 @@ ignores them. A car over the stop line, or one that could only stop inside the
 junction braking at 6 m/s², clears a red or yellow instead of stopping in the
 crossing. Traffic pedals move at a bounded rate (brake 4/s, release 2/s,
 throttle 1.5/s) except for an emergency stop or a car at rest; a stopped car
-holds .6 brake. Rural speed groups, lane changes, reaction delays and the rest
-of the upstream traffic controller are not ported.
+holds .6 brake. Further bot.ts behaviour ported in #324: every 20 s (10 s on a
+rural road) a traffic car may change to an adjacent parallel lane of the same
+branch (chance .1, rural .25, .2 behind a slower leader) when that lane stays
+parallel for the change length and is clear beside, ahead and behind, blending
+over max(25 m, 3.5 s of travel)
+(`src/resources/race_brain.cpp:try_change_lane`); a queued car holds its brake
+and reacts .5-1.5 s after the way clears; after a car-to-car impact (or a world
+hit above 4 m/s, `race_note_impact`) it brakes until settled for 1 s and then
+rejoins its lane; and a car below 3 km/h for 60 s without a signal or halt
+pushes on at 30 km/h for 10 s, ignoring the cars ahead. Upstream's oriented-hull
+following and junction-clearance reverse are not ported.
 
 GameRef.create_native on a native car builds its CFG-backed native assembly
 and aliases the Java handle to it, without running a chassis-specific constructor.
@@ -453,16 +468,22 @@ again. A pursuer (AI_follow) drives straight at its target when the target or
 the pursuer is more than 12 m from a street within 250 m, when they are under
 40 m apart, or when the road route is over three times the direct distance, and
 otherwise crosses country from the road point nearest an off-road target
-(`src/resources/race_brain.cpp:pursuit_route`). Its queries no longer replace
+(`src/resources/race_brain.cpp:pursuit_route`). A direct leg checks a scene ray
+at 1 m height; a building, wall or car in the way sends the pursuer along the
+nearest heading within 75° whose first 25 m are clear
+(`src/resources/race_brain.cpp:direct_route`). Its queries no longer replace
 the route Java last queried, which the navigator plots.
 
 Car-to-car impacts that the physics batch commits are forwarded to scripts as
 GameRef.EVENT_COLLISION (1), once per pair and batch, in both directions, with
 the other car's id as the parameter (`part_take_collisions`, delivered by the
-main loop before the traffic tick). City's handler alerts the police when the
-other car reports GIR_CAT_VEHICLE, which registered traffic does; Garage's jack
-check reads the same parameter. Wall, ground and loose-part hits are not
-forwarded. Explicit insertion positions are projected onto
+main loop before the traffic tick); a hit on the world above 4 m/s is forwarded
+with id 0. City's handler alerts the police when the other car reports
+GIR_CAT_VEHICLE, which registered traffic and brain-driven cars (a chasing
+scout) do; Garage's jack check reads the same parameter. Vehicle.hasCrime
+returns the host speed zone (the band maximum of the nearest lane within 30 m,
+SLRR_rev road-speed-zones.ts), so City's speeding fine is no longer always
+zero. Explicit insertion positions are projected onto
 actual lanes and published on the road before becoming visible. There are no
 Valocity-specific VM exceptions.
 

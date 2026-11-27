@@ -207,9 +207,10 @@ struct PartVehiclePosition {
   float position[3] = {0.f, 0.f, 0.f};
 };
 std::vector<PartVehiclePosition> part_vehicle_positions();
-// Car-to-car impacts committed since the last call, one per pair and batch:
-// (chassis, the other chassis), both still alive. The main loop forwards
-// them to scripts as EVENT_COLLISION (City alerts the police, #324).
+// Impacts committed since the last call, one per pair and batch: (chassis,
+// the other chassis), both still alive, or (chassis, null) for a hit on the
+// world above 4 m/s. The main loop forwards them to scripts as
+// EVENT_COLLISION (City alerts the police, #324).
 std::vector<std::pair<Object*, Object*>> part_take_collisions();
 // Chassis mesh of a Vehicle. Follows a bound alias, then the chassis field.
 Object* part_chassis(Object* object);

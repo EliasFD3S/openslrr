@@ -392,7 +392,9 @@ void actual_city_turns_and_wheels() {
     total_turn =
         std::max(total_turn,
                  std::fabs(std::remainder(n->ypr[0] - start_yaw, 6.2831853f)));
-    SLRR_REQUIRE(step < .3f && turn < .3f);
+    // Rural roads cruise up to 100 km/h (bot.ts speed bands), .46 m a tick;
+    // a jump or teleport is still far larger.
+    SLRR_REQUIRE(step < .5f && turn < .3f);
     for (const auto &[key, base] : initial)
       if (auto *w = gameref_get(key)) {
         auto *m = w->local_matrix;
