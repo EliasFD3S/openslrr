@@ -112,6 +112,9 @@ struct WheelPhys {
   // setRollCenterHeight (patched suspensions, #490): metres above the
   // ground; -1 when not set.
   float roll_center_height = -1;
+  // setUnsprungMass, setAxleMass and setAxleWrap (patched suspensions,
+  // #494): kg; kg; kN per mm and damping ratio. -1 when not set.
+  float unsprung_mass = -1, axle_mass = -1, axle_wrap_rate = -1, axle_wrap_damping = -1;
   int opp = -1;
   float arm[7]{}, hub[10]{};
   bool authored_position = false;
@@ -3076,7 +3079,34 @@ void dynamics_wheels(Record &rec) {
     cfg.spring = live.force;
     cfg.bump_damping = live.damp_bound;
     cfg.rebound_damping = live.damp_rebound;
+    // Unsprung mass (#494): WheelRef.setUnsprungMass, or the parts on the
+    // corner: the wheels (rim and tyre) and the brake whole, the arms and
+    // upright (the suspension part) six tenths (a live axle's half all of
+    // it), the damper, spring and lower arm half. The CFG's `type` mass (10
+    // kg on every stock car) only when the corner has none of them; zero
+    // stays the massless ray.
     cfg.unsprung = fallback.mass;
+    if (cfg.unsprung > 0) {
+      double parts = 0;
+      std::vector<Object *> rims;
+      corner_wheel_parts(rec, i, rims);
+      for (Object *rim : rims) parts += subtree_mass_properties(rim).mass;
+      const int corner = static_cast<int>(i);
+      const auto part_mass = [&](int id) {
+        const auto child = rec.children.find(id + corner);
+        return child != rec.children.end() ? subtree_mass_properties(child->second).mass : 0.0;
+      };
+      parts += part_mass(111) + (cfg.live_axle ? 1.0 : .6) * (part_mass(121) + part_mass(131)) +
+               .5 * (part_mass(301) + part_mass(311) + part_mass(351));
+      if (live.unsprung_mass > 0) cfg.unsprung = live.unsprung_mass;
+      else if (parts > 1) cfg.unsprung = parts;
+    }
+    // A live axle's beam (#494): WheelRef.setAxleMass, or a typical 50 kg
+    // housing and differential; its wrap on the springs or links,
+    // WheelRef.setAxleWrap, or a typical 0.4 kN per mm at 15 % damping.
+    cfg.axle_mass = cfg.live_axle ? (live.axle_mass >= 0 ? live.axle_mass : 50.0) : 0.0;
+    cfg.axle_wrap_rate = cfg.live_axle ? (live.axle_wrap_rate >= 0 ? live.axle_wrap_rate : .4) * 1e6 : 0.0;
+    cfg.axle_wrap_damping = live.axle_wrap_damping >= 0 ? live.axle_wrap_damping : .15;
     if (inline_wheel) {
       // Match TrafficVehicle's .25m nominal spring, .1m static sag, .65
       // damping.
@@ -3330,9 +3360,12 @@ void park_chassis(Object *chassis, bool shift) {
     state.seeded = true;
     state.contact = false;
     state.force = 0;
-    // Parked, no tyre force loads the bushings (#484).
+    // Parked, no tyre force loads the bushings (#484) or winds up an axle
+    // (#494).
     state.compliance_steer = 0;
     state.compliance_offset = {};
+    state.wrap = state.wrap_rate = 0;
+    state.wrap_offset = state.wrap_velocity = {};
     contact += physics::wheel_pose(cfg, state.length).hub_origin -
                physics::Vec3{0, cfg.radius, 0};
     ++used;
@@ -3400,7 +3433,7 @@ bool script_pos(void *key, float *x, float *y, float *z) {
       length = static_cast<float>(cfg.rest);
     // A running wheel's hub where its bushings hold it (#484).
     contact += physics::wheel_pose(cfg, length).hub_origin +
-               (state.seeded ? state.compliance_offset : physics::Vec3{}) -
+               (state.seeded ? state.compliance_offset + state.wrap_offset : physics::Vec3{}) -
                physics::Vec3{0, cfg.radius, 0};
     ++used;
   }
@@ -10357,6 +10390,31 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
     return put(s, [&](WheelPhys &w) {
       const float height = scalar(a, 0, 0);
       if (std::isfinite(height)) w.roll_center_height = std::clamp(height, 0.f, .6f);
+    });
+  });
+  // OpenSLRR natives declared by the patched WheelRef (#494): the corner's
+  // unsprung mass in kg (2 to 200, in place of its parts'), a live axle's
+  // beam mass in kg (0 to 300, the housing and differential, shared by its
+  // two wheels), and its wrap: kN per mm of fore-and-aft wind-up at this
+  // wheel (0 to 10, 0 none) and damping ratio (0.02 to 1).
+  wheel("setUnsprungMass", "(F)V", [put](Object *s, const std::vector<Value> &a) {
+    return put(s, [&](WheelPhys &w) {
+      const float mass = scalar(a, 0, 0);
+      if (std::isfinite(mass)) w.unsprung_mass = std::clamp(mass, 2.f, 200.f);
+    });
+  });
+  wheel("setAxleMass", "(F)V", [put](Object *s, const std::vector<Value> &a) {
+    return put(s, [&](WheelPhys &w) {
+      const float mass = scalar(a, 0, 0);
+      if (std::isfinite(mass)) w.axle_mass = std::clamp(mass, 0.f, 300.f);
+    });
+  });
+  wheel("setAxleWrap", "(FF)V", [put](Object *s, const std::vector<Value> &a) {
+    return put(s, [&](WheelPhys &w) {
+      const float rate = scalar(a, 0, 0), damping = scalar(a, 1, 0);
+      if (!std::isfinite(rate) || !std::isfinite(damping)) return;
+      w.axle_wrap_rate = std::clamp(rate, 0.f, 10.f);
+      w.axle_wrap_damping = std::clamp(damping, .02f, 1.f);
     });
   });
   wheel("setOppWheel", "(I)V", [put](Object *s, const std::vector<Value> &a) {

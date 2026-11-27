@@ -743,7 +743,10 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
     } else {
       p0 = -1;
     }
-    const double m = w.unsprung;
+    // A live axle's beam (#494): each end carries a third of it alone and
+    // feels a sixth through the other end's acceleration (a uniform beam:
+    // half each in heave, a sixth each in roll).
+    const double m = w.unsprung + (w.live_axle ? w.axle_mass / 3 : 0);
     // No gravity on the wheel: the body's mass already includes the wheels,
     // and their weight reaches the tyres through it. Counting it again added
     // 7 % of grip in the Lab.
@@ -754,7 +757,7 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
     const auto solve = [&](bool tyre, double damping) {
       double lhs = m / dt + spring * dt + damping;
       // The arms' push (#469) acts with the spring between body and wheel.
-      double rhs = m * v0 / dt + spring * (w.rest - l0) + m * gravity + s.jacking;
+      double rhs = m * v0 / dt + spring * (w.rest - l0) + m * gravity + s.jacking + s.axle_coupling;
       if (tyre) {
         lhs += g * (tyre_rate * g * dt + kTyreDamping * g);
         rhs -= g * (tyre_rate * (p0 + body_rate * dt) + kTyreDamping * body_rate);
@@ -810,6 +813,7 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
     }
     const auto pose = state_pose(w, s, l1, steer);
     s.length = l1;
+    s.travel_acceleration = (v1 - v0) / dt;
     s.speed = v1;
     s.contact = contact;
     s.force = tyre_force;
@@ -1557,7 +1561,8 @@ void VehicleDynamics::step_drive() {
     const Vec3 forward =
         (heading - s.normal * heading.dot(s.normal)).normalized();
     const Vec3 side = forward.cross(s.normal);
-    const Vec3 speed = body.point_velocity(s.patch);
+    // An axle winding up (#494) carries the patch with it.
+    const Vec3 speed = body.point_velocity(s.patch) + body.orientation.rotate(s.wrap_velocity);
     const double road = speed.dot(forward), lateral = speed.dot(side);
 
     // Consume one brake-impulse budget, before traction sees the driven spin.
@@ -1806,9 +1811,9 @@ void VehicleDynamics::update_static_references() {
                        ? std::clamp((across - body.center.x) / (across - w.center.x), 0.0, 1.0)
                        : .5;
     }
-    // The body's mass includes the wheels, which the spring does not carry.
-    const double load = body.mass * 9.81 * (is_front ? front_share : 1 - front_share) * side_share -
-                        w.unsprung * 9.81;
+    // The springs carry the whole car: the wheels have no weight of their
+    // own here (the body's mass includes them, see solve_linked).
+    const double load = body.mass * 9.81 * (is_front ? front_share : 1 - front_share) * side_share;
     update_static_reference(w, std::max(0.0, load));
   }
 }
@@ -1846,6 +1851,30 @@ void VehicleDynamics::update_compliance_steer() {
     }
     s.compliance_steer += (target - s.compliance_steer) * settle;
     s.compliance_offset += (offset - s.compliance_offset) * settle;
+    // Axle wrap (#494): a live axle winds up fore and aft on its leaf springs
+    // or links under the tyre's longitudinal force, a lightly damped mode of
+    // the beam's end (half its parts, a quarter of the beam) on the wrap
+    // rate, integrated implicitly. Its velocity moves the patch, so it feeds
+    // back into the slip: a launch at the grip's peak can hop.
+    if (w.enabled && w.live_axle && w.axle_wrap_rate > 0) {
+      const double steer = i < drive.wheels.size() ? drive.wheels[i].steer : 0;
+      const Vec3 heading = steered_hub(s, steer).rotate({0, 0, -1});
+      const Vec3 ahead = Vec3{heading.x, 0, heading.z}.normalized();
+      const double mass = std::max(5.0, .5 * w.unsprung + w.axle_mass / 4);
+      const double k = w.axle_wrap_rate;
+      const double c = 2 * std::clamp(w.axle_wrap_damping, .02, 1.0) * std::sqrt(k * mass);
+      const double force = s.contact ? s.tire_force.longitudinal : 0;
+      double x = s.wrap, v = s.wrap_rate;
+      v = (v + dt_ * (force - k * x) / mass) / (1 + dt_ * c / mass + dt_ * dt_ * k / mass);
+      x = std::clamp(x + dt_ * v, -.04, .04);
+      s.wrap = x;
+      s.wrap_rate = v;
+      s.wrap_offset = ahead * x;
+      s.wrap_velocity = ahead * v;
+    } else {
+      s.wrap = s.wrap_rate = 0;
+      s.wrap_offset = s.wrap_velocity = {};
+    }
   }
 }
 
@@ -1860,7 +1889,7 @@ void VehicleDynamics::update_compliance_steer() {
 void VehicleDynamics::update_live_axles() {
   for (size_t i = 0; i < wheels.size(); ++i) {
     auto &s = state[i];
-    s.axle_camber = s.axle_steer = 0;
+    s.axle_camber = s.axle_steer = s.axle_coupling = 0;
     const auto &w = wheels[i];
     if (!w.enabled || !w.live_axle) continue;
     const bool is_front = w.center.z < body.center.z;
@@ -1877,6 +1906,8 @@ void VehicleDynamics::update_live_axles() {
       const double tilt = std::atan2(left_length - right_length, track);
       s.axle_camber = left ? tilt : -tilt;
       s.axle_steer = std::clamp(w.roll_steer, -1.0, 1.0) * tilt * (is_front ? -1 : 1);
+      // The beam's shared mass (#494), from the other end's last motion.
+      s.axle_coupling = -w.axle_mass / 6 * state[j].travel_acceleration;
       break;
     }
   }

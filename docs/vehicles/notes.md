@@ -2742,3 +2742,68 @@ not the axle's locating links' geometry (the Panhard rod's lateral shift
 with travel); the roll centres stay at their static height (no migration
 with travel or roll); the roll steer coefficients and roll centre heights
 are typical figures.
+
+## Unsprung masses and live axle beam (#494)
+
+Cause: every wheel's unsprung mass was the CFG spring's `type 10 sphere`
+value, 10 kg on every stock car, about a third of a real corner. The parts on
+a corner carry their own masses (in game: rim and tyre 16-19 kg, brake 8 kg,
+the suspension part, arms and upright, 10-12 kg, damper 2.5 kg, spring
+2 kg), and a live axle also has its housing and differential, shared by its
+two wheels, and winds up on its leaf springs or links under drive (axle
+wrap, the cause of wheel hop).
+
+Fix (OpenSLRR, typical values):
+
+- `dynamics_wheels` sums the corner's parts: its wheel slots' subtrees and
+  the brake (slot 111 + corner) whole, the suspension part (121 / 131) six
+  tenths (all of it for a live axle's half), the damper, spring and lower
+  arm (301, 311, 351) half. The CFG mass stands in only for a corner with
+  none of them, and zero still selects the massless ray.
+  `WheelRef.setUnsprungMass(kg)` overrides the sum. In game: CoupeSport
+  34.5 kg front and 33.3 rear, MC 33.8 / 39.6, SuperDuty 40.5 / 53.3.
+- Live axle beam: `WheelConfig::axle_mass`, `WheelRef.setAxleMass(kg)`,
+  50 kg without it (patched: Camaro 55, Ram 1500 80, 2500 95). A uniform
+  beam carries half its mass at each end in heave but a sixth in roll: in
+  the quarter-car solve each end has a third of it alone and feels a sixth
+  through the other end's last acceleration (`WheelState::axle_coupling`,
+  `travel_acceleration`).
+- Axle wrap: `WheelConfig::axle_wrap_rate` / `axle_wrap_damping`,
+  `WheelRef.setAxleWrap(kN per mm, damping ratio)`, 0.4 and 0.15 without it
+  (patched: Camaro 0.8 / 0.25 on its torque arm, Ram 0.3 / 0.10 on leaf
+  springs). `update_compliance_steer` integrates each end's fore-and-aft
+  wind-up under the tyre's longitudinal force implicitly (the end's mass:
+  half its parts and a quarter of the beam), at most 4 cm
+  (`WheelState::wrap`, `wrap_offset`). Its velocity adds to the patch's in
+  the tyre's slip, so the wind-up feeds back into the grip. The pose, the
+  contact and the rendered wheel carry the offset; parking clears it.
+- The static ride height of the camber and toe curves (#481) no longer
+  takes the wheels' weight off the springs: in this solver the springs carry
+  the whole car (the wheels have no weight of their own), which the 10 kg
+  hid.
+
+Validation:
+
+- Compilation: `slrr_host` Release; `WheelRef` and the rear suspension
+  classes in `build/brake-compile-root` (the 10 live-axle classes changed),
+  the generator's output identical to the edited sources.
+- `vehicle_dynamics` 81/81 with a new test: a 4 cm bump under the left rear
+  alone shakes the right rear at 9.1 m/s^2 with independent ends and 19.4
+  through a 60 kg beam; a full-throttle launch winds a 0.3 kN per mm, 5 %
+  damped axle up 19 mm, then it swings between 10 and 15 mm. The earlier
+  tests unchanged. `missing_support` 17/17, `physics_tick_rate` 9/9.
+- In `build/needle-game` with the new classes, Tsukuba bench with ASR
+  forced (temporary switch): CoupeSport 71.99 km/h at 6 s unchanged, MC
+  83.14 (83.20 before), SuperDuty 90.23 (90.27); the masses above read
+  from the parts; no script error.
+- Not checked in game: the ride and kerbs with the heavier wheels, wheel
+  hop on a launch without traction control, their feel.
+
+Limitations: the wheel's spin inertia stays the fixed 1.6 kg m^2 (not from
+the rim and tyre); the parts' shares (six tenths, half) are typical, not
+each layout's; the beam's coupling uses the other end's last acceleration
+(explicit); the wrap is a fore-and-aft mode of the beam's end, not the
+housing's rotation with the pinion, and does not change the load on the
+springs; slot ids 111 / 121 / 131 / 301 / 311 / 351 follow the stock
+chassis, so a mod laid out otherwise gets only its wheel parts or the CFG
+mass.

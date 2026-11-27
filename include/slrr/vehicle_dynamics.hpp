@@ -177,6 +177,12 @@ struct WheelConfig {
   // radian of its roll against the body (positive: roll understeer).
   bool live_axle = false;
   double roll_steer = 0;
+  // The beam's own mass (kg, #494): the housing and differential, shared by
+  // the axle's two wheels on top of each end's `unsprung` parts.
+  double axle_mass = 0;
+  // Axle wrap (#494): the beam end's fore-and-aft wind-up rate (N/m) on its
+  // leaf springs or links, and its damping ratio. Zero rate: none.
+  double axle_wrap_rate = 0, axle_wrap_damping = .15;
   // Roll centre (#490): its height above the ground at this corner (m).
   // The arms take the cornering force into the body there, so part of the
   // roll moment skips the springs. Zero: at the ground.
@@ -211,6 +217,14 @@ struct WheelState {
   // the body (rad, negative with the top inboard) and the road steering
   // angle of the beam's yaw (rad, positive to the left).
   double axle_camber = 0, axle_steer = 0;
+  // The suspension travel's acceleration (m/s^2, extending) in the last
+  // step, and the force (N, extending) the beam's shared mass passes to
+  // this end from the other one's (#494).
+  double travel_acceleration = 0, axle_coupling = 0;
+  // Axle wrap (#494): the beam end's wind-up along the wheel's heading (m,
+  // forward) and its rate, and both in the body's frame.
+  double wrap = 0, wrap_rate = 0;
+  Vec3 wrap_offset, wrap_velocity;
   double spin = 0, rotation = 0;
   double slip_speed = 0, lateral_speed = 0;
   // Relaxed tan(slip angle): the tyre's lateral deflection builds over its

@@ -165,7 +165,10 @@ joining their hubs, which also steers with its roll (#490,
 `VehicleDynamics::update_live_axles`). Each corner's arms take its
 cornering force into the body at its roll centre's height
 (`WheelRef.setRollCenterHeight`, as a push in `WheelState::jacking`), so
-part of the roll moment skips the springs.
+part of the roll moment skips the springs. Each wheel's unsprung mass comes
+from the parts on its corner, and a live axle's beam shares its mass between
+its wheels and winds up under drive (#494,
+[notes](notes.md#unsprung-masses-and-live-axle-beam-494)).
 Wheel YPR and the existing arm/hub kinematics still affect contact geometry.
 Anti-roll bars are an optional host approximation, deliberately enabling a
 stock feature whose Java commands and catalog branch were dormant. The patched

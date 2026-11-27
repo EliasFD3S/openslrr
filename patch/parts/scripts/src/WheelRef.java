@@ -103,4 +103,18 @@ public class WheelRef extends Native
 	// uses a typical height for the suspension type.
 	public native void setRollCenterHeight( float height );
 
+	// OpenSLRR (#494): the corner's unsprung mass in kg, in place of the sum
+	// the host takes from the parts on it (the wheel and brake whole, the arms
+	// in part, half the spring and damper).
+	public native void setUnsprungMass( float kg );
+
+	// OpenSLRR (#494): a live axle's beam mass in kg (the housing and
+	// differential), shared by its two wheels. Without it, 50 kg.
+	public native void setAxleMass( float kg );
+
+	// OpenSLRR (#494): a live axle's wrap at this wheel: the fore-and-aft
+	// wind-up rate of its leaf springs or links in kN per mm (0: none) and
+	// its damping ratio. Without it, 0.4 kN per mm at 0.15.
+	public native void setAxleWrap( float rate, float damping );
+
 }

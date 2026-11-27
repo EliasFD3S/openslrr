@@ -479,6 +479,21 @@ corners call it; without it the host uses 7 cm for linked fronts, 10 cm
 for independent rears and 38 cm for live axles
 ([notes](../vehicles/notes.md#live-axle-camber-roll-steer-and-roll-centres-490)).
 
+### Unsprung masses and axle beams (#494)
+
+Declared by the patched `parts/scripts/src/WheelRef.java`:
+
+- `WheelRef.setUnsprungMass(kg)`: the corner's unsprung mass (2 to 200 kg),
+  in place of the sum the host takes from its parts. No stock corner calls it.
+- `WheelRef.setAxleMass(kg)`: a live axle's beam (housing and differential,
+  0 to 300 kg), shared by its two wheels; 50 kg without it.
+- `WheelRef.setAxleWrap(rate, damping)`: the axle's fore-and-aft wind-up at
+  this wheel, kN per mm (0 to 10, 0 none) and damping ratio (0.02 to 1);
+  0.4 and 0.15 without it.
+
+The patched MC and SuperDuty rears call the last two
+([notes](../vehicles/notes.md#unsprung-masses-and-live-axle-beam-494)).
+
 ### Math functions (#463)
 
 The patched `system/Scripts/lang/Math.java` declares, besides the stock
