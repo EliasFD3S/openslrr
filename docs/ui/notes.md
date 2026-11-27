@@ -100,7 +100,7 @@ previews. Evidence is in assets/validation/map-views/{before,after}.txt.
 
 ### Cockpit camera as the scene camera (#318)
 
-- Stock `Track.changeCamInternal` (F1) hides the follow camera on the OSD
+- Stock `Track.changeCamInternal` (formerly F1) hides the follow camera on the OSD
   viewport, then calls `car.command("render <viewport> <controller> <cam>")`.
   The host answers with a `_hostCockpitCamera` per chassis
   (`src/resources/part_runtime.cpp:part_command`, verb `render`) that has
@@ -454,3 +454,78 @@ Verified on the PR branch (f422ebb), by reading the code; not run in game.
 - `host_input_cancel_pointer_gestures` turns a held world button into a
   `world_release`, which `dispatch_world_pointer` emits as cursor event 2
   in the frame after the boundary, without a matching press in that scene.
+
+## Change-view key (#470)
+
+- From follow, V selects chase only if `cameraTarget2` has a nonzero ID and
+  `isEmpty()` is false. Removing a car also removes its alias state: `id()`
+  can return the stored ID, but `isEmpty()` sees that the target is gone.
+  Without a live target, V goes straight to the first cockpit camera. The
+  cycle skips mirror and look-back cameras and returns to follow after the
+  last cockpit camera (or if there are none). Holding LOOK BACK pauses the
+  cycle in every mode so release restores the view it started from.
+- `changeCamChase` sets `CAMMODE_CHASE` only when it really shows the chase
+  view; stock set it even after falling back to follow, so B did nothing and
+  V named the wrong view. Consequence: once a chase target is lost the mode is
+  FOLLOW, so a later `changeCamTarget2` does not switch back to chase by
+  itself, and the demo timer settles on follow. `changeCamInvChase` still
+  checks only `id()`, but no key reaches it since F5 was removed.
+- Both Game controls pages expose CHANGE VIEW (slot 35). The classic page
+  is still reachable: applying a display mode in OsdxOptions selects the
+  owner’s classic options group, which becomes visible when OsdxOptions closes.
+  On load, only the stock keyboard F1/F2 pair in slots 35/36 migrates to V. If slot 35
+  was rebound or cleared, it stays that way, but stock F2 in the hidden slot
+  36 is still cleared: both slots drive the same virtual axis. A later F1
+  binding with slot 36 empty is preserved. The hidden stock F5 look-back
+  binding in slot 37 is also cleared; the visible LOOK BACK defaults to B.
+
+Earlier validation (`eca4b2f`, Windows Release, before chase required a live
+target): in Valo City with the Baiern and a legacy profile edited to V/F2, F2
+left the camera in follow and V selected chase then cockpit. Holding B, pressing V and releasing B restored the steering-wheel
+view; the next V displayed “Camera: cockpit 2”. The Game controls page showed
+CHANGE VIEW bound to V; interactive rebinding and save/reload were not tested.
+
+**In-game check (`a225f15`, Windows Release).** In Valo City with the Baiern,
+the first V selected cockpit directly. Subsequent presses selected cockpit
+2–5, follow, then cockpit again. In follow and cockpits 1–4, the test sent
+B down → V → B up → V via `keybd_event`. The held press did not advance
+the cycle: release restored the starting view, and the next V advanced by
+one. A later hold test repeated the sequence through cockpit 5 and returned
+to follow. Chase with a live target and career autosave persistence were not
+exercised.
+
+**B release with V press (`c3d8c0f`, Windows Release, same car and map).** LOOK BACK is
+registered before V so its release restores the old view before V advances.
+From follow and cockpit 1, V did nothing while B was held. Sending B up and
+V down back-to-back selected cockpit 1 and cockpit 2 respectively; another
+V selected cockpit 3. The views matched the messages and no foreign windows
+appeared. The test did not instrument host frame boundaries.
+
+**Stock binary check.** The reference was the installed MWM 2.2.1 Track
+(76,042 bytes, SHA-256 `adf4219fddbe495efe4dcab1ab15614f0b0013920a385c6b254f64210750fca7`),
+not a rebuild of the supplied MWM source (76,217 bytes). Decoding the stock
+TUFA with `src/jvm/tufa.cpp` shows `enter` calling `GameLogic.autoSaveQuiet`
+on non-RaceSetup entry, immediately after the thread priority is set. The
+unreconciled source build instead contains these extra TREE instructions
+(excerpts; `−` = installed only, `+` = unreconciled build only):
+
+```diff
+ enter
+-  op1a ref java.game.GameLogic.autoSaveQuiet ()V
++  op12 utf8 "Refresher_Start"
++  op0e res MW_Mod.rpk:0x00000079
++  op09 utf8 "egbolt-dawn_02"
+ exit
++  op12 utf8 "Refresher_Stop"
+```
+
+Neither Refresher method exists on the installed Chassis. The stock Track
+declares `Test_Render` but never creates the extra sky render. It also uses a
+typed `MotionBlur.changeCam(GameRef)` call at nine sites; the declaration
+must be available at compile time even though no MotionBlur class is shipped.
+With only #470 backed out of the reconciled source, all 1,207 pool entries,
+138 members (32 methods) and 81 TREEs match the installed bytes, including
+line numbers. Only the three compiler-stamp bytes differ. See the
+[rebuild recipe](../../patch/README.md#trackclass-stock-baseline).
+
+The NFSU2 camera moves to a mod (#486, #487, #488).

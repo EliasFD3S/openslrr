@@ -387,7 +387,7 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		m = osd.createMenu( wide, -0.48, TOP + 0.04 + 0.48, 0.0 );
 		m.addItem( "CAR CONTROLS", CMD_SUB + SUB_CAR, "Keys and axes for throttle, brake, steering, gears, handbrake, clutch, nitro and horn, for the keyboard, a pad and a wheel apart." );
 		m.addItem( "FORCE FEEDBACK", CMD_SUB + SUB_FFB, "Strength, road feel, impacts, vibration and the wheel's dead band." );
-		m.addItem( "GAME CONTROLS", CMD_SUB + 1, "Keys for the radio, cruise control, look back and the map." );
+		m.addItem( "GAME CONTROLS", CMD_SUB + 1, "Keys for the radio, cruise control, look back, change view and the map." );
 		m.addItem( "SUSPENSION CONTROLS", CMD_SUB + 2, "Keys for adjustable suspension: each corner, axle and side." );
 		m.addItem( "CONTROL FILES", CMD_SUB + 3, "Load or save a whole control set." );
 		m.addItem( "RESET TO DEFAULTS", OptionsDialog.CMD_RESET_CONTROLS, "Restore the default key and axis bindings." );
@@ -628,12 +628,13 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		if( kind == 1 )
 		{
 			keyColumnTitles( "KEY", null );
-			int[] id = new int[7];
-			id[0] = 11; id[1] = 12; id[2] = 13; id[3] = 14; id[4] = 75; id[5] = 76; id[6] = 77;
-			String[] n = new String[7];
+			// CHANGE VIEW (#470): slot 35, V by default; cycles the camera views.
+			int[] id = new int[8];
+			id[0] = 11; id[1] = 12; id[2] = 13; id[3] = 14; id[4] = 75; id[5] = 76; id[6] = 77; id[7] = 35;
+			String[] n = new String[8];
 			n[0] = "NEXT RADIO STATION"; n[1] = "PREV RADIO STATION"; n[2] = "VOLUME UP"; n[3] = "VOLUME DOWN";
-			n[4] = "CRUISE CONTROL"; n[5] = "LOOK BACK"; n[6] = "VIEW MAP";
-			for( int i=0; i<7; i++ )
+			n[4] = "CRUISE CONTROL"; n[5] = "LOOK BACK"; n[6] = "VIEW MAP"; n[7] = "CHANGE VIEW";
+			for( int i=0; i<8; i++ )
 			{
 				float y = TOP + 0.10 + i*0.064;
 				keyLabel( n[i], y );

@@ -1,6 +1,6 @@
 # OpenSLRR Enhanced
 
-Copy the `sl`, `system`, `parts`, `cars`, `particles` and `MW_Mod` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Garage.class`, `Catalog.class`, `TestTrack.class`, `City.class`, `CarLot.class`, `ROCTrack.class`, `MainMenu.class`, `MW_Mod/Scripts/DealerTrack.class` (#465), the `parts` classes (the base `Swaybar.class`, the three port-flow classes, the re-specced stock engine parts (#411), `SuperCharger` and `Pulley` (#415) and the four fuel classes: `AirFuelDeliverySystem`, `FuelInjectorSystem`, `DynoData` and the SL Tuners methanol fuel rail, the 48 stock anti-roll bars (#419), and `Brake`, `DiscBrake` and the 48 stock brakes (#446), the 96 stock suspension corners (#450)), `system/Scripts/lang/Math.class` (#450, #463), 24 racer classes, the 24 racer chassis CFGs (`_main_*.cfg`) and the part CFGs that now carry a mass (tyres, running gear, accessories, exhausts, mufflers, seats, steering wheels, wings). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. The fuel classes add fuel heat, ethanol blends and knock; install them together. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
+Copy the `sl`, `system`, `parts`, `cars`, `particles` and `MW_Mod` folders from this patch into the game root and accept the replacement of `OptionsDialog.class`, `Track.class` (#470), `Garage.class`, `Catalog.class`, `TestTrack.class`, `City.class`, `CarLot.class`, `ROCTrack.class`, `MainMenu.class`, `MW_Mod/Scripts/DealerTrack.class` (#465), the `parts` classes (the base `Swaybar.class`, the three port-flow classes, the re-specced stock engine parts (#411), `SuperCharger` and `Pulley` (#415) and the four fuel classes: `AirFuelDeliverySystem`, `FuelInjectorSystem`, `DynoData` and the SL Tuners methanol fuel rail, the 48 stock anti-roll bars (#419), and `Brake`, `DiscBrake` and the 48 stock brakes (#446), the 96 stock suspension corners (#450)), `system/Scripts/lang/Math.class` (#450, #463), 24 racer classes, the 24 racer chassis CFGs (`_main_*.cfg`) and the part CFGs that now carry a mass (tyres, running gear, accessories, exhausts, mufflers, seats, steering wheels, wings). `system` adds four new classes in `system/Scripts/render` (`LightSource`, `PointLight`, `SpotLight`, `RectLight`) and the `system/Scripts/render/osdx` package (the CRC 2005 OSD ported to SLRR, with its `dialog` folder); they replace nothing. `sl/Scripts/game` also adds `OsdxOptions.class`, and `system/Scripts/io` adds `InputDevices.class` (the SDL3 controller list for the Devices tab). Install the three `parts` port-flow classes together: the block classes call the updated CylinderHead helper. The fuel classes add fuel heat, ethanol blends and knock; install them together. The Java sources are shipped next to their compiled classes, under `src/`. Use the Enhanced v3 Release.
 
 **Options** (main menu and in-game menu) opens a full-screen screen built on `java.render.osdx` ([docs/ui/osd-v2.md](../docs/ui/osd-v2.md)): Video, Graphics, Sound, Controls (live axis meters, gamma, dead zones, steering speed sensitivity, force feedback), Devices (connected controllers, battery, rumble test, axis calibration) and Game tabs, an info panel that explains the setting under the pointer, and a notification when a preset is applied. Key redefinition, axes and the control files open the classic pages. The classic pages below are still in `OptionsDialog`. The **Video Options** menu applies the resolution and the Enhanced settings in game. A **Preset** choice (Low, Medium, High, Ultra) sets them all at once; changing one setting afterwards shows Custom. **Advanced** opens a second page: VSync, prop detail, fog, car lights, headlight shadows, street lamps, view distance (500–3,000 m, 3 km by default), the number of street lamps that cast shadows and the tyre smoke density (0–400 % of the default, also in **Graphics → World**). **Advanced Game Options** has the pedestrian density slider again (0.5–1.5; an old saved value below 0.5 returns to 1.5). The scenery shadow map and the vehicle shadow map each use a resolution of 2048 × 2048. **Ctrl+F12 → Renderer** also sets how many reflection faces are computed per frame.
 
@@ -459,6 +459,52 @@ comparison filtering independently. Start with medium quality and soft edges.
 ## Framerate
 
 Cars are always drawn between their last two 60 Hz host steps, so they move smoothly at any frame rate; the drawn car is up to one step (16.7 ms) behind the simulation. The **Framerate Adaptive Behaviour** option and its Classic (60 Hz) mode are gone. An old `framerate_mode` key in `save/game/openslrr_options.json` is ignored.
+
+## Change-view key (#470)
+
+Press **V** to cycle follow → chase → each cockpit camera → follow. Without a second target, V skips chase and goes straight to the cockpit. The cycle skips mirror and look-back cameras; holding LOOK BACK pauses the cycle until release. A short message names each view. Rebind V under **Options → Controls → Game controls → CHANGE VIEW**. The former F1–F5/F9 view hotkeys are gone. TV, reverse chase and free view no longer have a key; race scripts can still select their own cameras.
+
+On load, a stock F1/F2 pair in slots 35/36 migrates to V. Stock F2 is cleared from the hidden slot 36 even if slot 35 was already rebound or cleared. A later F1 binding stays on F1. The hidden F5 look-back binding (slot 37) is also cleared; LOOK BACK defaults to B.
+
+This requires the patched `Track.class`, `OptionsDialog.class`, `OsdxOptions.class` and `system/Scripts/io/ControlSet.class`. A mod that replaces the MWM `Track.class` also replaces this cycle.
+
+### Track.class stock baseline
+
+`Track.java` keeps what the installed MWM 2.2.1 `Track.class` does
+(76,042 bytes, SHA-256 `ADF4219FDDBE…`), not what `sources/sl/Scripts/game/src/Track.java`
+does. Decoding the stock class and the unmodified source build with the repo's
+TUFA reader (`src/jvm/tufa.cpp`) shows the same 138 members, including 32 methods.
+With MotionBlur declarations available, only `enter` and `exit` differ in
+instructions: 1,444 vs 1,457 nodes and 413 vs 421 nodes, respectively.
+
+| In the installed class | In the MWM source |
+| --- | --- |
+| `enter` calls `GameLogic.autoSaveQuiet()` after `t.setPriority` | the call is commented out |
+| no `Refresher_Start` / `Refresher_Stop` strings | `enter` / `exit` call `player.car.chassis.Refresher_Start/Stop()`; the installed `Chassis.class` (35 methods) has neither method |
+| no `MW_Mod:0x0079r` or `"egbolt-dawn_02"` | `enter` creates `Test_Render` every time it runs and never destroys it |
+
+The patched source now follows the binary: the save is restored and the
+Refresher and Test_Render calls are removed. Blank lines are adjusted so the
+source line numbers recorded in the trees match. Remove the #470 additions
+(`CMD_NEXTCAM`, the V hotkey after LOOK BACK, `hasLiveChaseTarget`,
+`nextCamera` and its `CMD_NEXTCAM` dispatch). Restore the six F-key hotkeys
+before the cheat keys and the original `changeCamChase` from the MWM source. That source then compiles to the installed
+class byte for byte, apart from the compiler build stamp in header bytes 9-11
+(`cmp -l a b | awk '$1>11'` prints nothing). With the #470 additions, the only
+member changes are the added field `CMD_NEXTCAM` and the added methods `nextCamera` and
+`hasLiveChaseTarget`.
+
+To rebuild, copy the stock game into a private root, never the installed game. Put `Track.java` in
+`sl/Scripts/game/src`, then copy `sources/sl/Scripts/game/src/MotionBlur.java`
+into a source folder outside the compiled directory, for example
+`sl/Scripts/mb/src`. Then run
+`compile_game_sources.exe <root> sl/Scripts/game`. The game ships no
+`MotionBlur.class`. The compiler reads that source only for its declarations
+and does not compile it. Without it, the nine `MB_Animator.changeCam(renderer)`
+calls compile to a by-name call instead of the stock method reference
+`MotionBlur.changeCam(GameRef)`. The result is one unit, float mode A (auto),
+and only the existing `W_UNVERIFIED` (final method) and `W_PACK`
+(`cars.traffic.chevy_van`) warnings.
 
 ## Transmission and clutch
 
