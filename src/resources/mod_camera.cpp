@@ -109,6 +109,10 @@ void mod_look_ypr(const float eye[3], const float at[3], float& yaw, float& pitc
   pitch = std::atan2(d[1], std::hypot(d[0], d[2]));
 }
 
+bool mod_sweep_args_valid(const float* from, const float* to, float radius) {
+  return finite3(from) && finite3(to) && std::isfinite(radius) && radius >= 0.f;
+}
+
 float mod_look_roll(const float eye[3], const float at[3], const float up[3]) {
   float forward[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
   if (!normalize(forward) || !finite3(up)) return 0.f;
