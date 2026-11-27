@@ -91,10 +91,10 @@ after the original law, nicolas-found42/sl-remastered, 00454500):
   (`TireParameters::relaxation_length`, from the patched
   `WheelRef.setRelaxation`; 0.3 m at the optimal pressure and without the
   patch), integrated implicitly, a 12 ms lag at 90 km/h for 0.3 m. The
-  slip ratio is relaxed the same way over half that length
-  (`WheelState::slip_ratio`, #498,
-  [notes](notes.md#longitudinal-tyre-relaxation-498)), faded out below
-  5 m/s.
+  slip ratio is relaxed the same way over half that length or the
+  scripted `WheelRef.setLongitudinalRelaxation` (`WheelState::slip_ratio`,
+  #498, [notes](notes.md#longitudinal-tyre-relaxation-498)), faded out below
+  5 m/s; both lengths follow the load as the cornering stiffness does.
 - Tyre pressure, wear, punctures and flat spots (#461, [notes](notes.md#tyre-temperature-pressure-stiffness-wear-punctures-and-flat-spots-461)):
   the Tyre's cold `inflation` follows the carcass temperature; against its
   compound's working temperature it scales the relaxation length, rolling

@@ -127,4 +127,10 @@ public class WheelRef extends Native
 	// rod's arc as the body moves over it. Without it, none.
 	public native void setPanhardRod( float length, float side );
 
+	// OpenSLRR (#498): the tyre's longitudinal relaxation length in metres: the
+	// rolling distance over which its braking and driving force builds. It grows
+	// with the load and as the pressure falls, as the lateral one does. Without
+	// it, half the lateral relaxation length.
+	public native void setLongitudinalRelaxation( float length );
+
 }

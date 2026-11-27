@@ -159,6 +159,14 @@ Curves curves(double load, double camber, const TireParameters& tire) {
 }
 } // namespace
 
+double relaxation_load_factor(double load, const TireParameters& tire) {
+  const double fz0 = nominal_load(tire);
+  if (!(fz0 > 0) || !(load > 0)) return .3;
+  return std::clamp(std::sin(2 * std::atan(load / (kStiffnessLoad * fz0))) /
+                        std::sin(2 * std::atan(1 / kStiffnessLoad)),
+                    .3, 1.5);
+}
+
 TireTuning &tire_tuning() {
   static TireTuning tuning;
   return tuning;
@@ -177,7 +185,7 @@ TireForces tire_friction_limits(double load, double alignment,
 TireForces tire_forces(double load, double alignment, double wheel_speed,
                        double road_speed, double lateral_speed,
                        const TireParameters &tire, double camber,
-                       double sliding_speed) {
+                       double sliding_speed, double slipping_speed) {
   const double aligned_load = std::max(0.0, load * alignment);
   if (aligned_load <= 0.0)
     return {0.0, 0.0};
@@ -246,7 +254,8 @@ TireForces tire_forces(double load, double alignment, double wheel_speed,
   const double uncapped = lateral;
   lateral = std::copysign(std::min(std::abs(lateral), lateral_cap), lateral);
   if (lateral * sliding > 0) lateral *= rolling;
-  const double longitudinal_cap = std::abs(slip_speed) * aligned_load * 0.85 * cap_gain;
+  const double slipping = std::isnan(slipping_speed) ? slip_speed : slipping_speed;
+  const double longitudinal_cap = std::abs(slipping) * aligned_load * 0.85 * cap_gain;
   longitudinal = std::copysign(std::min(std::abs(longitudinal), longitudinal_cap), longitudinal);
   // The low-speed caps scale the moment with the force.
   const double kept = std::abs(uncapped) > 1e-12 ? lateral / uncapped : 1;

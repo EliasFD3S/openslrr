@@ -2891,18 +2891,36 @@ speed with a lag of length / speed, the length being
 `kLongitudinalRelaxation` (0.5, a tyre's usual ratio) times the lateral
 relaxation length, so it follows the same pressure and temperature scaling
 and the scripts' `WheelRef.setRelaxation`. The tyre curve gets the relaxed
-slip; the step's force limit, the heat and the wear keep the real slip.
-The relaxation fades out from 5 m/s down to 1 m/s, so a stopping or
-parked car is not pushed back and forth by a lagged force (#426).
+slip; the step's force limit, the heat, the wear and the low-speed
+longitudinal cap (`tire_forces`' new `slipping_speed`, the #426 lesson)
+keep the real slip. The relaxation fades out from 5 m/s down to 1 m/s, so a
+stopping or parked car is not pushed back and forth by a lagged force.
+
+- Scripted length: `TireParameters::longitudinal_relaxation`, set by
+  `WheelRef.setLongitudinalRelaxation(m)` (a new native declared by the
+  patched `WheelRef.java`; no stock tyre calls it), scaled by the pressure,
+  temperature and puncture like the lateral one; zero keeps half the
+  lateral length.
+- Load: both lengths now scale with the load as the tyre's cornering
+  stiffness does (the carcass' stiffness stays):
+  `relaxation_load_factor`, 1 at the nominal load, about 0.7 at half of it
+  and 1.15 at 1.5 times, 0.3 to 1.5.
+- The aligning torque already follows the relaxation: `tire_forces` takes
+  its pneumatic trail and its offset x Fx part from the relaxed slip angle
+  and slip ratio it is given.
 
 Validation:
 
-- Compilation: `slrr_host` Release.
+- Compilation: `slrr_host` Release; `WheelRef` in
+  `build/brake-compile-root`.
 - `vehicle_dynamics` 85/85 with a new test: braking hard from 25 m/s, a
   0.05 m and a 0.4 m longitudinal length give 782 / 489 N of front braking
   force after the first frame, 3820 / 3848 N once built, stops of 33.7 /
-  33.8 m; at walking pace the relaxed slip equals the real one. The other
-  tests unchanged (dive 2.43 deg against 2.42). `missing_support` 17/17,
+  33.8 m, and a scripted 0.4 m with the short lateral length the same as
+  the long one (491 N); at walking pace the relaxed slip equals the real
+  one; the load factor is 1 at the nominal load, below 0.8 at half, above
+  1.05 at 1.5 times. The other tests unchanged (dive 2.43 deg against
+  2.42). `missing_support` 17/17,
   `physics_tick_rate` 9/9.
 - Tsukuba bench with ASR forced (temporary switch): CoupeSport 75.32, MC
   86.13, SuperDuty 90.35 km/h at 6 s (75.32 / 86.18 / 90.33 before); the
@@ -2910,6 +2928,7 @@ Validation:
 - Not checked: ABS and ASR cycling and launches in game, their feel; the
   #383 wheelspin runaway at 120 Hz.
 
-Limitations: the longitudinal length is a fixed share of the lateral one,
-not its own scripted value; it does not change with the load; the
-relaxation does not reach the aligning torque's longitudinal part.
+Limitations: the stock tyres keep half their lateral length (none sets its
+own); the load factor follows the model's cornering stiffness, not a
+measured carcass; the patch offset of the aligning torque (#458) still uses
+the unscaled lateral length.

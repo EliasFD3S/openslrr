@@ -72,6 +72,7 @@ struct WheelPhys {
   float friction = 1.49f, frictn_x = 1, sliction = 1.4f, stiffness = 15.2f;
   float roll_res = 0.001f, bearing = 20, max_load = 8000, load_smooth = .4f;
   float relaxation = .3f;  // setRelaxation (patched Tyre), metres
+  float relaxation_longitudinal = 0;  // setLongitudinalRelaxation (#498); 0 half the lateral
   float pacejka[17] = {1.4f, 0, 1.49f,  0,   15.2f,  0,    0, 0, -1.f,
                        0,    0, 8000.f, 1.f, 0.015f, 0.4f, 0, 0};
   float force = 0, damp_bound = 0, damp_rebound = 0;
@@ -3829,6 +3830,8 @@ DriveRefresh configure_drive(Object *chassis, Record &rec, bool controlled) {
     out.tyre.load_smoothing = wheel.load_smooth;
     out.tyre.longitudinal_grip = wheel.frictn_x;
     out.tyre.relaxation_length = std::clamp(wheel.relaxation, .05f, 2.f);
+    out.tyre.longitudinal_relaxation =
+        wheel.relaxation_longitudinal > 0 ? std::clamp(wheel.relaxation_longitudinal, .02f, 1.f) : 0.f;
     // setCPatch stores the sine of the scripted patch angle.
     out.tyre.patch_angle = std::asin(std::clamp(wheel.cpatch_ang, 0.f, 1.f));
     // The Tyre's cold pressure and its part's wear (#461).
@@ -10476,6 +10479,14 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
       if (!std::isfinite(length) || !std::isfinite(side)) return;
       w.panhard_length = length > 0 ? std::clamp(length, .3f, 2.f) : 0.f;
       w.panhard_side = side < 0 ? -1.f : 1.f;
+    });
+  });
+  // OpenSLRR native declared by the patched WheelRef (#498): the tyre's
+  // longitudinal relaxation length in metres (0.02 to 1; 0 half the lateral).
+  wheel("setLongitudinalRelaxation", "(F)V", [put](Object *s, const std::vector<Value> &a) {
+    return put(s, [&](WheelPhys &w) {
+      const float length = scalar(a, 0, 0);
+      if (std::isfinite(length)) w.relaxation_longitudinal = std::max(0.f, length);
     });
   });
   wheel("setOppWheel", "(I)V", [put](Object *s, const std::vector<Value> &a) {
