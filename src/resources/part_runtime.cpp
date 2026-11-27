@@ -1,4 +1,5 @@
 #include "slrr/race_runtime.hpp"
+#include "slrr/utf8_path.hpp"
 #include "slrr/frame_profiler.hpp"
 #include "slrr/gc_roots.hpp"
 #include "slrr/part_runtime.hpp"
@@ -2008,7 +2009,7 @@ Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
     std::string lookup = script;
     if (fqn) {
       if (!jvm.load_class(lookup)) return nullptr;
-    } else if (!jvm.load_class_file((std::filesystem::path(resources.game_root()) / script).string(), &lookup)) {
+    } else if (!jvm.load_class_file(path_to_utf8(std::filesystem::path(resources.game_root()) / script), &lookup)) {
       return nullptr;
     }
     auto* cls = jvm.find_class(lookup);

@@ -69,4 +69,8 @@ int boot_probe(Jvm& jvm, const BootOptions& opt);
 // Returns 0 on success. Full section machine lands incrementally.
 int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt);
 
+// Runs stock Init; initializes mods only if it completed (no abort, no unbound
+// native). Returns whether mods were initialized.
+bool boot_stock_init_and_mods(Jvm& jvm);
+
 }  // namespace slrr

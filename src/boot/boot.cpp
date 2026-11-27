@@ -40,7 +40,7 @@
 
 namespace slrr {
 
-void start_init(Jvm& jvm);
+bool start_init(Jvm& jvm);
 
 namespace {
 
@@ -144,25 +144,27 @@ int run_tree_smokes(Jvm& jvm, SectionMachine& sections) {
 
 // Stock entry: Init(int) → Sound, Frontend, controllers, GameLogic.
 // The first native with no host binding aborts this chain.
-void start_init(Jvm& jvm) {
+bool start_init(Jvm& jvm) {
   if (!jvm.load_class("java.game.Init")) {
     std::fprintf(stderr, "[boot] Init class missing\n");
-    return;
+    return false;
   }
   Object* init = jvm.new_object("java.game.Init");
   jvm.clear_unbound();
   jvm.set_halt_on_unbound(true);
+  bool aborted = false;
   try {
     jvm.invoke("java.game.Init", "<init>", "(I)V",
                {Value::make_obj(init), Value::make_int(0)}, false);
   } catch (const std::exception& e) {
+    aborted = true;
     std::fprintf(stderr, "[boot] Init aborted: %s\n", e.what());
   }
   jvm.set_halt_on_unbound(false);
   if (!jvm.unbound_native().empty())
     std::printf("[boot] Init stopped: unbound %s\n",
                 jvm.unbound_native().c_str());
-  else
+  else if (!aborted)
     std::printf("[boot] Init.<init> returned\n");
   {
     Value av = jvm.get_static("java.game.GameLogic", "actualState");
@@ -171,6 +173,17 @@ void start_init(Jvm& jvm) {
     std::printf("[boot] Init actualState=%s\n", name);
   }
   std::fflush(stdout);
+  return !aborted && jvm.unbound_native().empty();
+}
+
+bool boot_stock_init_and_mods(Jvm& jvm) {
+  if (!start_init(jvm)) {
+    std::printf("[mods] modInit skipped: stock startup did not complete\n");
+    std::fflush(stdout);
+    return false;
+  }
+  jvm.initialize_mods();
+  return true;
 }
 
 int boot_probe(Jvm& jvm, const BootOptions& opt) {
@@ -345,8 +358,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     sections.seed_player(pname);
     jvm.set_static("java.game.GameLogic", "_autoNewPlayerName",
                    Value::make_obj(jvm.new_string(pname)));
-    start_init(jvm);
-    jvm.initialize_mods();
+    boot_stock_init_and_mods(jvm);
     Value gv = jvm.get_static("java.game.GameLogic", "garage");
     if (gv.tag == ValueTag::Obj && gv.v.o) {
       sections.set_garage(gv.v.o);

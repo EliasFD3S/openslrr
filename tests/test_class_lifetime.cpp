@@ -1,6 +1,9 @@
 #include "save_io_fixture.hpp"
 #include "slrr/script_compiler.hpp"
 #include "slrr/gameref.hpp"
+
+#include <initializer_list>
+
 using namespace slrr;
 fs::path compile(Fixture& f,const char* filename,const char* source) {
  fs::create_directories(f.root/"probe/src");
@@ -8,6 +11,73 @@ fs::path compile(Fixture& f,const char* filename,const char* source) {
  const auto result=script_compile_all(f.root.string(),"probe");
  SLRR_REQUIRE(result.failed==0 && result.succeeded>0);
  return f.root/"probe"/fs::path(filename).replace_extension(".class");
+}
+void write_container(const fs::path& target, std::initializer_list<fs::path> sources) {
+  std::ofstream out(target, std::ios::binary);
+  for (const auto& path : sources) {
+    std::ifstream in(path, std::ios::binary);
+    SLRR_REQUIRE(in);
+    out << in.rdbuf();
+    SLRR_REQUIRE(out);
+  }
+}
+void primary_class() {
+  Fixture f;
+  const auto helper = compile(f, "Helper.java", "package probe; public class Helper {}");
+  const auto main = compile(f, "Main.java", "package probe; public class Main {}");
+  // Keep the inputs under probe/ so the requested container determines which
+  // class comes first and the case of the file stem.
+  const auto folded = f.root / "mAiN.class";
+  const auto exact = f.root / "exact" / "Main.class";
+  const auto fallback = f.root / "Unrelated.class";
+  write_container(folded, {helper, main});
+  fs::create_directory(exact.parent_path());
+  write_container(exact, {helper, main});
+  write_container(fallback, {helper, main});
+
+  std::string primary;
+  SLRR_REQUIRE(f.vm.load_class_file(folded.string(), &primary));
+  SLRR_REQUIRE(primary == "probe.Main");
+  SLRR_REQUIRE(f.vm.load_class_file(exact.string(), &primary));
+  SLRR_REQUIRE(primary == "probe.Main");
+  SLRR_REQUIRE(f.vm.load_class_file(fallback.string(), &primary));
+  SLRR_REQUIRE(primary == "probe.Helper");
+  std::puts("PASS resource path primary class: exact and mixed-case match, then first TUFA blob");
+}
+void reentrant_load() {
+  Fixture f;
+  const auto initializer = compile(f, "Initializer.java", R"JAVA(package probe;
+public class Initializer {
+  static Initializer instance = new Initializer();
+  public static native void reload();
+  public Initializer() { reload(); }
+}
+)JAVA");
+  const auto main = compile(f, "Primary.java", "package probe; public class Primary {}");
+  const auto container = f.root / "Primary.class";
+  write_container(container, {initializer, main});
+  std::string nested_primary;
+  const TufaClass* nested_class = nullptr;
+  bool nested_ok = false;
+  int callbacks = 0;
+  f.registry.register_method("probe.Initializer", "reload", "()V",
+      [&](Object*, const std::vector<Value>&) {
+        if (++callbacks == 1) {
+          nested_ok = f.vm.load_class_file(container.string(), &nested_primary);
+          nested_class = f.vm.find_class(nested_primary);
+        }
+        return Value::make_void();
+      });
+
+  std::string primary;
+  SLRR_REQUIRE(f.vm.load_class_file(container.string(), &primary));
+  SLRR_REQUIRE(callbacks == 1);
+  SLRR_REQUIRE(nested_ok);
+  SLRR_REQUIRE(nested_primary == "probe.Primary" && primary == nested_primary);
+  SLRR_REQUIRE(nested_class && nested_class == f.vm.find_class(primary));
+  SLRR_REQUIRE(f.vm.load_class_file(container.string(), &primary));
+  SLRR_REQUIRE(primary == nested_primary && callbacks == 1);
+  std::puts("PASS static initializer re-entry returns the registered primary without reinitializing");
 }
 void class_lifetime() {
  Fixture f;
@@ -46,7 +116,7 @@ void class_lifetime() {
  SLRR_REQUIRE(!f.vm.load_class_file(retry.string()));
  fs::copy_file(novel,retry,fs::copy_options::overwrite_existing);
  SLRR_REQUIRE(f.vm.load_class_file(retry.string()));
- std::puts("PASS immutable classes/statics, canonical path reuse, reentrant load, concatenated containers and failed-load retry");
+ std::puts("PASS immutable classes/statics, canonical path reuse, reload during method execution, concatenated containers and failed-load retry");
 }
 void constructors() {
  Fixture f;
@@ -108,4 +178,4 @@ void stock_dummy() {
  gameref_clear();rpk_set_active(nullptr);
  std::puts("PASS actual game Dummy.class: all four constructors create native roots and preserve parent/flags");
 }
-int main(){const standalone::Test tests[]={class_lifetime,constructors,stock_dummy};return standalone::run("class_lifetime",tests);}
+int main(){const standalone::Test tests[]={primary_class,reentrant_load,class_lifetime,constructors,stock_dummy};return standalone::run("class_lifetime",tests);}

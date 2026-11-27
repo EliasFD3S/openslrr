@@ -379,7 +379,8 @@ std::string_view simple_name(std::string_view name) {
 
 InstallProvider::InstallProvider(Install& tree, bool strict_mode) : install(tree), strict(strict_mode) {}
 
-void InstallProvider::load() {
+void InstallProvider::load(const std::function<int(const std::string&)>& priority) {
+    auto rank = [&](const std::string& rel) { return priority ? priority(rel) : 0; };
     Install& inst = install;
     std::map<std::string, bool> rejected;       // class files that define less than they should
     std::string data;
@@ -412,7 +413,9 @@ void InstallProvider::load() {
             if (old != origin.end()) {
                 const std::string_view simple = simple_name(info.name);
                 const std::string_view old_name = class_file_name(old->second);
-                if (!(file_name == simple && old->second != rel && old_name != simple)) {
+                const int current_rank = rank(rel), old_rank = rank(old->second);
+                if (current_rank > old_rank || (current_rank == old_rank &&
+                    !(file_name == simple && old->second != rel && old_name != simple))) {
                     continue;
                 }
             }
@@ -439,9 +442,13 @@ void InstallProvider::load() {
             unreadable_sources.push_back(Unreadable{sf.rel, why});
         }
         for (const std::string& full : sf.declared) {
-            if (known.find(full) == known.end() && pending.find(full) == pending.end()) {
-                pending[full] = k;
+            if (auto compiled = origin.find(full); compiled != origin.end()) {
+                if (rank(sf.rel) >= rank(compiled->second)) continue;
+                known.erase(full);
+                origin.erase(compiled);
             }
+            auto [candidate, fresh] = pending.emplace(full, k);
+            if (!fresh && rank(sf.rel) < rank(inst.sources[candidate->second].rel)) candidate->second = k;
         }
     }
 }

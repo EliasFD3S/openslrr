@@ -1,5 +1,6 @@
 #include "slrr/script_compiler.hpp"
 #include "slrr/tufa.hpp"
+#include "slrr/utf8_path.hpp"
 #include "mod_overlay.hpp"
 #include <map>
 #include "install.hpp"
@@ -17,9 +18,6 @@
 
 namespace slrr {
 namespace {
-std::filesystem::path utf8_path(const std::string& value) {
-  return std::filesystem::path(std::u8string(value.begin(), value.end()));
-}
 // Translate the compiler's physical inventory into visible logical units.
 // Index class declarations and sources from the winning layer only; retain
 // physical paths for writes so rebuilding a mod never replaces a base class.
@@ -47,12 +45,9 @@ struct CompileLayers {
     };
     for (const auto& rel : tree.class_files) record(rel);
     for (const auto& source : tree.sources) record(source.output_rel());
-    auto hidden = [&](const auto& rel) {
-      auto [logical, rank] = unit(rel);
-      return rank < 0 || rank != winners.at(logical);
-    };
-    std::erase_if(tree.class_files, hidden);
-    std::erase_if(tree.sources, [&](const auto& source) { return hidden(source.output_rel()); });
+    // Even a same-path shadow can contain an unrelated visible sibling.
+    std::erase_if(tree.class_files, [&](const auto& rel) { return unit(rel).second < 0; });
+    std::erase_if(tree.sources, [&](const auto& source) { return unit(source.rel).second < 0; });
     std::erase_if(tree.pack_files, [](const auto& rel) { return slrrc::install::lower(rel).starts_with("mods\\"); });
   }
 };
@@ -164,7 +159,7 @@ ScriptCompileReport script_compile_all(const std::string& root,
       throw std::runtime_error("compiler floating-point self-test failed");
     slrrc::install::Install tree(root);
     const auto requested = slrrc::install::join_path(tree.root, directory.empty() ? "." : directory);
-    CompileLayers layers(utf8_path(tree.root));
+    CompileLayers layers(path_from_utf8(tree.root));
     bool exists = slrrc::install::is_dir(requested);
     for (const auto& [folder, rank] : layers.ranks)
       exists |= slrrc::install::is_dir(tree.path("mods/" + folder + "/" + directory));
@@ -173,17 +168,33 @@ ScriptCompileReport script_compile_all(const std::string& root,
     tree.scan();
     layers.filter(tree);
     slrrc::install::InstallProvider provider(tree);
-    provider.load();
+    provider.load([&](const auto& rel) { return layers.unit(rel).second; });
     slrrc::install::InstallPacks packs(tree);
     for (const auto& source : tree.sources) {
       if (!slrrc::install::is_inside(source.path, requested) &&
           !slrrc::install::is_inside(tree.path(layers.unit(source.rel).first), requested)) continue;
-      ++report.attempted;
+      bool counted = false;
       try {
         std::string text, why;
         if (!slrrc::install::read_source(source, text, why)) throw std::runtime_error(why);
         text = source_text(tree, source, layers, std::move(text));
-        const auto path = utf8_path(tree.path(source.output_rel()));
+        if (!layers.ranks.empty()) {
+          const auto [logical, rank] = layers.unit(source.output_rel());
+          const auto names = slrrc::declared_names(text);
+          if (names.empty() && layers.winners.at(logical) < rank) continue;
+          auto shadowed = [&](const std::string& name) {
+            if (auto it = provider.origin.find(name); it != provider.origin.end())
+              return layers.unit(it->second).second < rank;
+            if (auto it = provider.pending.find(name); it != provider.pending.end())
+              return layers.unit(tree.sources[it->second].rel).second < rank;
+            // A source with an inferred package may not be indexed by FQN.
+            return layers.winners.at(logical) < rank;
+          };
+          if (!names.empty() && std::all_of(names.begin(), names.end(), shadowed)) continue;
+        }
+        ++report.attempted;
+        counted = true;
+        const auto path = path_from_utf8(tree.path(source.output_rel()));
         slrrc::Options options;
         if (compile_options.float_mode == FloatLiteralMode::Auto) {
           const auto choice = choose_float_mode(text, path);
@@ -208,6 +219,7 @@ ScriptCompileReport script_compile_all(const std::string& root,
         ++report.succeeded;
         report.classes += static_cast<int>(parsed.size());
       } catch (const std::exception& error) {
+        if (!counted) ++report.attempted;
         ++report.failed;
         std::fprintf(stderr, "[compiler] %s: %s\n", source.rel.c_str(), error.what());
       }
