@@ -15,6 +15,7 @@ struct Parser {
   std::map<std::string, Scalar>* out = nullptr;
   std::string error;
   int depth = 0;
+  bool flat_scalars_only = false;
 
   bool fail(const char* what) {
     if (error.empty()) error = std::string(what) + " at offset " + std::to_string(i);
@@ -52,7 +53,20 @@ struct Parser {
               std::from_chars(s.data() + i, s.data() + i + 4, code, 16).ptr != s.data() + i + 4)
             return fail("bad \\u escape");
           i += 4;
-          // Keys and values are ASCII; keep other code points as UTF-8.
+          if (code >= 0xD800 && code <= 0xDBFF) {
+            unsigned low = 0;
+            if (!literal("\\u") || i + 4 > s.size() ||
+                std::from_chars(s.data() + i, s.data() + i + 4, low, 16).ptr != s.data() + i + 4 ||
+                low < 0xDC00 || low > 0xDFFF) return fail("bad surrogate pair");
+            i += 4;
+            code = 0x10000 + ((code - 0xD800) << 10) + low - 0xDC00;
+            text.push_back(static_cast<char>(0xF0 | code >> 18));
+            text.push_back(static_cast<char>(0x80 | (code >> 12 & 0x3F)));
+            text.push_back(static_cast<char>(0x80 | (code >> 6 & 0x3F)));
+            text.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+            break;
+          }
+          if (code >= 0xDC00 && code <= 0xDFFF) return fail("bad surrogate pair");
           if (code < 0x80) {
             text.push_back(static_cast<char>(code));
           } else if (code < 0x800) {
@@ -75,9 +89,17 @@ struct Parser {
   bool number(double& value) {
     const size_t start = i;
     if (i < s.size() && s[i] == '-') ++i;
-    while (i < s.size() && (std::isdigit(static_cast<unsigned char>(s[i])) || s[i] == '.' ||
-                            s[i] == 'e' || s[i] == 'E' || s[i] == '+' || s[i] == '-'))
-      ++i;
+    const auto digits = [&]() {
+      const size_t first = i;
+      while (i < s.size() && s[i] >= '0' && s[i] <= '9') ++i;
+      return i != first;
+    };
+    if (!literal("0") && !digits()) return fail("bad number");
+    if (literal(".") && !digits()) return fail("bad fraction");
+    if (literal("e") || literal("E")) {
+      if (!literal("+")) literal("-");
+      if (!digits()) return fail("bad exponent");
+    }
     const auto result = std::from_chars(s.data() + start, s.data() + i, value);
     if (result.ec != std::errc{} || result.ptr != s.data() + i || !std::isfinite(value))
       return fail("bad number");
@@ -89,6 +111,8 @@ struct Parser {
     if (i >= s.size()) return fail("expected a value");
     Scalar scalar;
     const char c = s[i];
+    if (flat_scalars_only && (c == '{' || c == '[' || c == 'n'))
+      return fail("expected a string, number or boolean");
     if (c == '{') return object(path);
     if (c == '[') return array();
     if (c == '"') {
@@ -102,7 +126,9 @@ struct Parser {
     } else if (literal("null")) {
       return true;
     } else if (c == '-' || std::isdigit(static_cast<unsigned char>(c))) {
+      const auto start = i;
       if (!number(scalar.number)) return false;
+      if (flat_scalars_only) scalar.text = s.substr(start, i - start);
     } else {
       return fail("unexpected character");
     }
@@ -122,6 +148,7 @@ struct Parser {
       space();
       std::string key;
       if (!string(key)) return false;
+      if (flat_scalars_only && (key.empty() || out->contains(key))) return fail("empty or duplicate key");
       space();
       if (i >= s.size() || s[i] != ':') return fail("expected ':'");
       ++i;
@@ -200,9 +227,10 @@ void scalar(std::string& out, const Scalar& value) {
 
 }  // namespace
 
-bool parse(std::string_view text, std::map<std::string, Scalar>& out, std::string* error) {
+bool parse(std::string_view text, std::map<std::string, Scalar>& out, std::string* error, bool flat_scalars_only) {
   out.clear();
   Parser p{text, 0, &out};
+  p.flat_scalars_only = flat_scalars_only;
   p.space();
   // The root object's keys are paths themselves (depth 1).
   bool ok = p.i < text.size() && text[p.i] == '{' ? p.object("") : p.fail("expected an object");

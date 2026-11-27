@@ -5,6 +5,26 @@ lookup and GameRef handles, moved from the knowledge base. Garbage
 collection is in [vm-gc.md](vm-gc.md); native coverage in
 [natives.md](natives.md).
 
+## #486: mod overlay folders
+
+**Cause.** The first overlay indexed game-relative filenames. It missed the same TUFA class declared in different roots or as a secondary blob. Scanning used Windows ANSI paths; ordering compared folder names byte-for-byte. A recursive resource load could return success with no primary class, and a filename differing only in case could select the wrong blob. Stock startup failure did not gate mod entries.
+
+**Change.** The VM indexes declared class identities in mod priority order, including secondary blobs. Direct resource loads keep the requested container's identities but use the winning definitions. They prefer an exact simple-name/stem match, then a case-insensitive match, then the first blob. Definitions and the primary name are registered before initializers can re-enter the loader. Discovery uses native paths and UTF-8 names, and compares order entries case-insensitively. The compiler ranks declarations by mod priority and writes output beside the winning source. Entries run only after a successful stock startup. See [the mod guide](mods.md) and [compiler guide](compiler.md#compiling-with-script-mods).
+
+**Validation.** Release host and compiler built. CTest passed `mod_overlay` and `float_literal_mode`; the host-linked `class_lifetime`, `vm_lookup`, `options_retry`, `gameref_alias`, `splash_boot` and `rpk_validation` suites passed. The fixtures cover non-ANSI mod and class filenames, case-insensitive order and unknown entries, a secondary class in a differently named higher-priority TUFA, recursive primary lookup during initialization, an unbound native during stock startup, and the top-level RPK exclusion.
+
+**Review regressions.** An unpaired UTF-16 surrogate in an NTFS filename could abort the overlay walk, and a corrupt mod container used to claim its path before parsing. The overlay now skips unencodable components (including subtrees) and publishes only nonempty, successfully parsed containers. The compiler shares its within-layer sort and named-file preference with the VM; fixtures check the consumer's compiled method descriptor against the runtime winner. A missing RPK script may reuse a unique loaded stem, but an existing container, including a mod-only one, still determines its own primary. Entry lookup checks the declared FQN before registration; duplicate entry FQNs run only at the highest-priority declaration. Fixtures verify the ordering and that a wrong-package class is never loaded.
+
+**Third review.** The previous base scan recorded siblings only at paths also occupied by a mod. A replacement in a different root therefore hid stock helpers by name; conversely, looking up a package by filename could register a mod class from the wrong package. The VM and compiler now use the same FQN provider selection for base and enabled mod containers, including with no mods. The shared directory walk follows junctions and directory symlinks, skips cycles, and reports an unencodable component once without entering its subtree. The VM no longer walks the directories a second time to synthesize package paths. A successful resource lookup records its primary under the request path before subsequent calls touch the filesystem; a guess for a missing path is never cached.
+
+**MWM resource-path audit.** On the private MWM install, a read-only walk of the 80 RPAK v0x200 packs outside `mods/` checked all 11,367 TOC entries. For each text RSD, we read its `script` property, treating dotted class names without a path or `.class` extension as FQNs rather than filenames. All 1,276 distinct file references resolved under the game root; another 97 references were FQNs. This copy did not need an ambiguous suffix fallback. That finding is specific to this install, not a guarantee for other packs.
+
+**Boot cost with the complete index.** Four consecutive Release `--probe` boots of the same private MWM copy took 290.9, 285.0, 198.8 and 107.6 ms in `ModOverlay::scan` with five mod containers and 1,561 base containers. With the mod folder moved outside the root, that copy took 178.2, 153.0, 167.2 and 182.7 ms. The comparison measures only the scan, not total boot time; the OS cache and machine load were not controlled. The old no-mod fast path (0.1–0.3 ms) did not index base declarations. All eight boots reached the splash state, as did a separate private no-mod copy (1,569 containers, 200.6 ms).
+
+**Third-round validation.** Release host and compiler built, all seven CTest targets passed, and the eight host-linked suites passed: `class_lifetime`, `vm_lookup`, `options_retry`, `gameref_alias`, `splash_boot`, `rpk_validation`, `tufa_validation` and `live_lookup`. The reviewer’s cross-root sibling and same-path/different-package cases are now permanent fixtures, including both load orders and a no-mod case. The linked-directory fixture exercised a junction with a cycle; the directory-symlink variant was skipped because this Windows account cannot create one. Gameplay observations below predate this review; this round used only headless boots.
+
+**In game.** In a private patched MWM install, the original host silently loaded stock `sl/Scripts/game/ClubInfo.class` and reported a missing entry method. With the same fixture, the fixed host logged `java.game.ClubInfo: mods/cross-root (overrides base)` and the entry in `mods/cross-root/system/Scripts/game/ClubInfo.class` printed its own marker. After `Init actualState=java.game.SplashScreen`, both original test mods called the winning `Stamp`: entry a / winner b, then entry b / winner b. Missing-class and missing-method entries each logged once. The Baiern spawned with 79 parts in ValoCity.
+
 ## Issues #72 / #126: exact TREE integers and integer balances
 
 `src/jvm/tree_eval.cpp:arithmetic` now handles integer operands without
@@ -108,6 +128,7 @@ pack setup logs unrelated frontend RID misses. Evidence:
 `assets/validation/class-lifetime/after.txt`.
 
 Release build, vm_lookup, tree_numbers, save_io and TUFA corpus checks pass.
+
 The corpus is unchanged: 1,501 files, 1,546 accepted classes and the existing
 Dialog.class CONS-kind-2 rejection. vm_lookup now checks immutable definitions
 in the running VM and refreshed metadata in a fresh VM. No native signatures

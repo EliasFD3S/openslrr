@@ -251,15 +251,21 @@ int32_t RpkIndex::open_all() {
       ec.clear();
       continue;
     }
+    // Script overlays are not pack roots (including disabled mods).
+    if (it.depth() == 0 && _wcsicmp(it->path().filename().c_str(), L"mods") == 0) {
+      it.disable_recursion_pending();
+      continue;
+    }
     if (!it->is_regular_file(ec)) continue;
-    std::string ext = it->path().extension().string();
-    for (char& c : ext)
-      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (ext != ".rpk") continue;
+    if (_wcsicmp(it->path().extension().c_str(), L".rpk") != 0) continue;
     std::error_code rel_ec;
     fs::path rel = fs::relative(it->path(), fs::path(root_), rel_ec);
-    paths.push_back(rel_ec ? it->path().string() : rel.string());
-    ++n;
+    try {
+      paths.push_back((rel_ec ? it->path() : rel).string());
+      ++n;
+    } catch (const std::system_error&) {
+      std::fprintf(stderr, "[rpk] skipped a pack with an unrepresentable path\n");
+    }
   }
   // Read pack metadata on the job pool, then number the results in directory
   // order as open_lib would. Payloads stay on disk until first use.

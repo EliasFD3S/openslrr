@@ -1,4 +1,5 @@
 #include "slrr/race_runtime.hpp"
+#include "slrr/utf8_path.hpp"
 #include "slrr/frame_profiler.hpp"
 #include "slrr/gc_roots.hpp"
 #include "slrr/part_runtime.hpp"
@@ -2031,15 +2032,12 @@ Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
                      script.find('.') != std::string::npos &&
                      (script.size() < 6 ||
                       script.compare(script.size() - 6, 6, ".class") != 0);
-    const std::string lookup =
-        fqn ? script : std::filesystem::path(script).stem().string();
-    if (!jvm.find_class(lookup) &&
-        !jvm.load_class(
-            fqn ? script
-                : (std::filesystem::path(resources.game_root()) / script)
-                      .string()))
-      return nullptr;
-    auto *cls = jvm.find_class(lookup);
+    const TufaClass* cls = nullptr;
+    if (fqn) {
+      if (jvm.load_class(script)) cls = jvm.find_class(script);
+    } else {
+      cls = jvm.load_resource_class(path_to_utf8(std::filesystem::path(resources.game_root()) / script));
+    }
     if (!cls)
       return nullptr;
     class_name = cls->name();

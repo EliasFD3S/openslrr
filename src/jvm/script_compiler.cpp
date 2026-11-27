@@ -1,5 +1,8 @@
 #include "slrr/script_compiler.hpp"
 #include "slrr/tufa.hpp"
+#include "slrr/utf8_path.hpp"
+#include "mod_overlay.hpp"
+#include <map>
 #include "install.hpp"
 #include "scanner.hpp"
 #include "slrrc.hpp"
@@ -15,11 +18,41 @@
 
 namespace slrr {
 namespace {
-std::filesystem::path utf8_path(const std::string& value) {
-  return std::filesystem::path(std::u8string(value.begin(), value.end()));
-}
+// Translate the compiler's physical inventory into visible logical units.
+// Index class declarations and sources from the winning layer only; retain
+// physical paths for writes so rebuilding a mod never replaces a base class.
+struct CompileLayers {
+  std::map<std::string, int> ranks;
+  std::map<std::string, int> winners;
+  explicit CompileLayers(const std::filesystem::path& root) {
+    for (const auto& mod : discover_mods(root, nullptr))
+      ranks.emplace(slrrc::install::lower(mod.folder), static_cast<int>(ranks.size()));
+  }
+  std::pair<std::string, int> unit(const std::string& rel) const {
+    auto path = slrrc::install::lower(rel);
+    if (!path.starts_with("mods/")) return {path, static_cast<int>(ranks.size())};
+    auto end = path.find('/', 5);
+    auto match = ranks.find(path.substr(5, end - 5));
+    if (end == path.npos || match == ranks.end()) return {{}, -1};
+    return {path.substr(end + 1), match->second};
+  }
+  void filter(slrrc::install::Install& tree) {
+    auto record = [&](const auto& rel) {
+      auto [logical, rank] = unit(rel);
+      if (rank < 0) return;
+      auto [pos, added] = winners.emplace(logical, rank);
+      if (!added) pos->second = std::min(pos->second, rank);
+    };
+    for (const auto& rel : tree.class_files) record(rel);
+    for (const auto& source : tree.sources) record(source.output_rel());
+    // Even a same-path shadow can contain an unrelated visible sibling.
+    std::erase_if(tree.class_files, [&](const auto& rel) { return unit(rel).second < 0; });
+    std::erase_if(tree.sources, [&](const auto& source) { return unit(source.rel).second < 0; });
+    std::erase_if(tree.pack_files, [](const auto& rel) { return slrrc::install::lower(rel).starts_with("mods\\"); });
+  }
+};
 std::string source_text(const slrrc::install::Install& tree,
-                        const slrrc::install::SourceFile& source, std::string text) {
+                        const slrrc::install::SourceFile& source, const CompileLayers& layers, std::string text) {
   const auto names = slrrc::declared_names(text);
   if (names.empty() || names.front().find('.') != std::string::npos) return text;
   // System scripts often omit `package`; their class identity comes from
@@ -32,7 +65,7 @@ std::string source_text(const slrrc::install::Install& tree,
     if (dot != std::string::npos) package = name.substr(0, dot);
   }
   if (package.empty()) {
-    const auto path = slrrc::install::lower(source.class_dir);
+    const auto path = layers.unit(source.class_dir).first;
     for (const auto& prefix : {std::string("system/scripts/"), std::string("sl/scripts/"),
                               std::string("parts/scripts")}) {
       if (path.compare(0, prefix.size(), prefix) != 0) continue;
@@ -126,21 +159,58 @@ ScriptCompileReport script_compile_all(const std::string& root,
       throw std::runtime_error("compiler floating-point self-test failed");
     slrrc::install::Install tree(root);
     const auto requested = slrrc::install::join_path(tree.root, directory.empty() ? "." : directory);
-    if (!slrrc::install::is_inside(requested, tree.root) ||
-        !slrrc::install::is_dir(requested))
-      throw std::runtime_error("compile directory is missing or outside the game root");
+    CompileLayers layers(path_from_utf8(tree.root));
+    bool exists = slrrc::install::is_dir(requested);
+    for (const auto& [folder, rank] : layers.ranks)
+      exists |= slrrc::install::is_dir(tree.path("mods/" + folder + "/" + directory));
+    // Lexical, as the shared walk spells paths: a folder of a private copy
+    // may be a junction or link to content stored elsewhere.
+    auto lexical = [](const std::string& path) {
+      auto text = slrrc::install::lower(path_to_utf8(path_from_utf8(path).lexically_normal()));
+      while (text.size() > 1 && text.back() == '/' && !(text.size() == 3 && text[1] == ':')) text.pop_back();
+      return text;
+    };
+    const auto root_key = lexical(tree.root);
+    auto requested_rel = lexical(requested);
+    const auto root_prefix = root_key.ends_with('/') ? root_key : root_key + "/";
+    if (requested_rel == root_key) requested_rel.clear();
+    else if (requested_rel.starts_with(root_prefix)) requested_rel.erase(0, root_prefix.size());
+    else exists = false;
+    if (!exists) throw std::runtime_error("compile directory is missing or outside the game root");
+    auto requested_inside = [&](const std::string& rel) {
+      const auto low = slrrc::install::lower(rel);
+      return requested_rel.empty() || low == requested_rel ||
+             (low.size() > requested_rel.size() && low.starts_with(requested_rel) && low[requested_rel.size()] == '/');
+    };
     tree.scan();
+    layers.filter(tree);
     slrrc::install::InstallProvider provider(tree);
-    provider.load();
+    provider.load([&](const auto& rel) { return layers.unit(rel).second; });
     slrrc::install::InstallPacks packs(tree);
     for (const auto& source : tree.sources) {
-      if (!slrrc::install::is_inside(source.path, requested)) continue;
-      ++report.attempted;
+      if (!requested_inside(source.rel) && !requested_inside(layers.unit(source.rel).first)) continue;
+      bool counted = false;
       try {
         std::string text, why;
         if (!slrrc::install::read_source(source, text, why)) throw std::runtime_error(why);
-        text = source_text(tree, source, std::move(text));
-        const auto path = utf8_path(tree.path(source.output_rel()));
+        text = source_text(tree, source, layers, std::move(text));
+        if (!layers.ranks.empty()) {
+          const auto [logical, rank] = layers.unit(source.output_rel());
+          const auto names = slrrc::declared_names(text);
+          if (names.empty() && layers.winners.at(logical) < rank) continue;
+          auto shadowed = [&](const std::string& name) {
+            if (auto it = provider.origin.find(name); it != provider.origin.end())
+              return layers.unit(it->second).second < rank;
+            if (auto it = provider.pending.find(name); it != provider.pending.end())
+              return layers.unit(tree.sources[it->second].rel).second < rank;
+            // A source with an inferred package may not be indexed by FQN.
+            return layers.winners.at(logical) < rank;
+          };
+          if (!names.empty() && std::all_of(names.begin(), names.end(), shadowed)) continue;
+        }
+        ++report.attempted;
+        counted = true;
+        const auto path = path_from_utf8(tree.path(source.output_rel()));
         slrrc::Options options;
         if (compile_options.float_mode == FloatLiteralMode::Auto) {
           const auto choice = choose_float_mode(text, path);
@@ -165,6 +235,7 @@ ScriptCompileReport script_compile_all(const std::string& root,
         ++report.succeeded;
         report.classes += static_cast<int>(parsed.size());
       } catch (const std::exception& error) {
+        if (!counted) ++report.attempted;
         ++report.failed;
         std::fprintf(stderr, "[compiler] %s: %s\n", source.rel.c_str(), error.what());
       }

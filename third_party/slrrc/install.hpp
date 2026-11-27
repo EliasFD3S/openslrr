@@ -31,7 +31,9 @@
 // LAYOUT OF A TREE.  A class file is X/Name.class; its source, when there is
 // one, is X/src/Name.java (the directory is spelled src, Src or SRC).  Packs are
 // *.rpk files anywhere.  A .java file that does not sit in such a directory has
-// no place for its class file and is ignored (Install::stray_sources).
+// no place for its class file and is ignored (Install::stray_sources).  The
+// tree is walked as the engine walks it (tree_walk.hpp): links to directories
+// and junctions are followed, a link back to an enclosing directory is not.
 //
 // WHICH CLASS ANSWERS FOR A NAME.  The compiler asks for a class by its full
 // name (java.game.parts.Part); where the game's own compiler finds such a class
@@ -45,14 +47,14 @@
 //   - a name that several class files define keeps the first file in index
 //     order (directory, then file name, without regard to case), except that a
 //     file named like the class wins over a class that sits inside a file of
-//     another name;
+//     another name (provider_index.hpp, the index the engine builds too);
 //   - a class that only a source declares is declared from that source on first
 //     use, without compiling a body; of several sources the first in index
 //     order.  While that goes on the name answers with an empty class, so that
 //     two sources that name each other cannot recurse (rule 3 of the contract
 //     of classes::ClassProvider);
 //   - a class file the reader does not accept (damaged, empty, not a class
-//     file) defines nothing: the source beside it is treated as a source
+//     file, or one blob of it) defines nothing: the source beside it is treated as a source
 //     without a class file, so its classes are still known.  The file is
 //     reported (InstallProvider::unreadable) and left alone.
 //
@@ -67,6 +69,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
 #include <string_view>
@@ -206,7 +209,9 @@ public:
     std::vector<FailedSource> failed;           // sources that did not declare
     uint32_t class_count = 0;                   // classes read from class files, duplicates included
 
-    void load();
+    // Smaller layer priorities win per declared name, before the same-layer
+    // file/source and container-name tie breakers described above.
+    void load(const std::function<int(const std::string&)>& priority = {});
 
     // The contract of classes::ClassProvider: the class of exactly this name;
     // while a source is being declared, a stub for every name it declares

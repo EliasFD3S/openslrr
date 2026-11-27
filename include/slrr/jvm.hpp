@@ -7,6 +7,7 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/types.hpp"
 
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -28,6 +29,8 @@ void set_script_frame_hooks(ScriptFrameEnter enter, ScriptFrameLeave leave);
 bool script_frame_enter(const std::string& owner, const std::string& method, Object* self,
                         const std::vector<Value>& args);
 void script_frame_leave();
+
+class ModOverlay;
 
 class Jvm : public TreeHost {
  public:
@@ -51,8 +54,11 @@ class Jvm : public TreeHost {
   const NativeRegistry& natives() const { return *natives_; }
 
   bool bootstrap_classpath();
+  void initialize_mods();
   bool load_class(const std::string& fqn_or_path);
-  bool load_class_file(const std::string& path);
+  bool load_class_file(const std::string& path, std::string* primary_name = nullptr);
+  // A missing RPK script file may refer to a class already loaded by name.
+  const TufaClass* load_resource_class(const std::string& path);
   const TufaClass* find_class(const std::string& fqn) const;
 
   Object* new_object(const std::string& class_fqn);
@@ -131,7 +137,13 @@ class Jvm : public TreeHost {
   std::vector<GcRootProvider> gc_roots_;
   uint64_t gc_frame_id_=0;
   std::unordered_map<uint64_t,GcRootProvider> gc_frames_;
-  std::string resolve_class_path(const std::string& fqn) const;
+  std::string class_identity(const std::string& name) const;
+  const TufaClass* unique_loaded_short(const std::string& simple) const;
+  bool load_indexed_class(const std::string& name);
+  bool load_container(const std::filesystem::path& path, std::string* primary_name,
+                      const std::string& expected_name = {});
+  bool load_class_file_impl(const std::string& path, std::string* primary_name,
+                            bool resource_path);
   void seed_static_fields(const TufaClass& cls);
   void enrich_static_fields(const TufaClass& cls);
   void apply_field_defaults(Object* obj);
@@ -163,12 +175,13 @@ class Jvm : public TreeHost {
   NativeRegistry* natives_ = nullptr;
   std::string game_root_;
   bool classpath_ready_ = false;
-  std::vector<std::pair<std::string, std::string>> classpath_;
+  std::unique_ptr<ModOverlay> overlay_;
+  std::vector<std::string> native_packages_;
   std::unordered_map<std::string, TufaClass> by_name_;
   // Class files currently inside load_class_file. A field path during static
   // init must not enrich the same file again.
   std::unordered_set<std::string> loading_paths_;
-  std::unordered_set<std::string> loaded_paths_;
+  std::unordered_map<std::string, std::string> loaded_paths_;  // file -> primary FQN
   std::vector<std::unique_ptr<Object>> heap_;
   std::unordered_map<std::string, std::unordered_map<std::string, Value>>
       statics_;
