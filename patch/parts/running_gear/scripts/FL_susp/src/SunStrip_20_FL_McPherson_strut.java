@@ -21,7 +21,7 @@ public class SunStrip_20_FL_McPherson_strut extends Suspension
 		LICz =  0.550;
 
 		camber = 0.00;
-		toe    = 0.00;
+		toe    = 0.05;
 
 		side   = SD_LEFT;
 	}
@@ -48,6 +48,12 @@ public class SunStrip_20_FL_McPherson_strut extends Suspension
 				wheel.setAnti( 0.20, 0.20 );
 				// OpenSLRR (#481): camber gain per 25 mm of bump at the static height and its change per 25 mm, typical for the real car
 				wheel.setCamberGain( -1.00, -0.15 );
+				// OpenSLRR (#484): bump steer, degrees of toe-in per 25 mm of bump at the static height and its change per 25 mm, typical for the real car
+				wheel.setBumpSteer( 0.00, 0.00 );
+				// OpenSLRR (#484): compliance steer, degrees of toe-in per kN of cornering force pushing the tyre inboard and per kN of braking, typical for the real car
+				wheel.setComplianceSteer( -0.03, -0.01 );
+				// OpenSLRR (#484): the bushings' give, mm per kN of cornering and of longitudinal force, typical for the real car
+				wheel.setBushingCompliance( 0.05, 0.10 );
 
 				the_car.setSlotPos(101+wheelID, new Vector3(-0.124,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(-0.113,0,0), null );

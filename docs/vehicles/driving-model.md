@@ -133,7 +133,7 @@ after the original law, nicolas-found42/sl-remastered, 00454500):
 
 Wheel alignment enters as camber (above); the load itself is no longer
 scaled. In strut mode (`setHub` mode 0) the strut fit replaces the hub
-rotation, so `setYpr` camber and toe do not reach a strut wheel: the patched
+rotation, so `setYpr` camber does not reach a strut wheel: the patched
 stock struts tilt the fit itself to their static camber (#450,
 [notes](notes.md#tyres-and-suspension-geometry-450)). The copied `setCPatch` tolerance (`patch_angle`) is not read by the
 solver. Likewise, `setInstantCenter` values are retained but have no active
@@ -148,8 +148,18 @@ progression x bump^2 / 2, from the suspension script's
 `WheelRef.setCamberGain` or typical values by suspension type.
 `wheel_pose` turns the arm fit's hub by the difference between the curve and
 the fit's own change, so the tyre's camber input, the rendered wheel and the
-kingpin follow it; `VehicleDynamics::update_camber_references` finds each
-static length from the car's weight every step.
+kingpin follow it; `VehicleDynamics::update_static_references` finds each
+static length from the car's weight every step. The toe follows its own
+curve about the same height (bump steer, #484,
+[notes](notes.md#bump-steer-static-toe-and-compliance-steer-484)), from `WheelRef.setBumpSteer` or typical
+values, so the tyre's heading changes with travel: rears that toe in as
+they compress steer a rolling car towards understeer. A strut fit keeps
+the script's static toe (`setYpr` yaw), and the bushings' compliance steer
+(`WheelRef.setComplianceSteer`, `WheelState::compliance_steer`) adds toe from
+the tyre's cornering and braking forces to the driver's steering; the
+bushings' give (`WheelRef.setBushingCompliance`,
+`WheelState::compliance_offset`) moves the hub with the same forces. The
+rendered wheel shows both.
 Wheel YPR and the existing arm/hub kinematics still affect contact geometry.
 Anti-roll bars are an optional host approximation, deliberately enabling a
 stock feature whose Java commands and catalog branch were dormant. The patched

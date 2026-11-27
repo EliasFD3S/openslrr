@@ -281,7 +281,7 @@ weights) after the real car:
 
 - Fronts keep the strut fit: the lower arm is near horizontal at rest, the
   strut top sits 0.58 m up the kingpin axis, and the hub is tilted to the
-  static camber (the host ignores `setYpr` in strut mode). Double-wishbone
+  static camber (the host applies only the toe of `setYpr` in strut mode, #484). Double-wishbone
   and multilink fronts use the same fit with their steeper camber gain.
 - Independent rears are a front-view swing arm (arm length = 1 / camber
   gain) with the factory camber and toe in `setYpr`.
@@ -322,6 +322,27 @@ negative camber as the car rolls. Live rear axles do not call it.
 | Nonus Street GT / GT II | -0.90 / -1.00, -0.15 (multilink) | -0.70, -0.10 |
 | Prime DLH 500 | -0.90, -0.15 | -0.70, -0.10 |
 | SuperDuty 500 / 750 | -0.60, -0.10 (short-long arms) | live axle: none |
+
+**Bump steer (#484).** Each corner also calls `WheelRef.setBumpSteer(toe,
+progression)`: degrees of toe-in per 25 mm of bump at the static ride height
+(the toe at rest stays the table's) and its change per 25 mm. Road fronts toe
+out by 0.05 (the Ram 0.10), race fronts are set to zero; independent rears
+toe in: 0.10 for the E36 Z-axle and the Lancer, R34 and Prime multilinks,
+0.05 for the del Sol wishbones, the Impreza struts and the race cars' rears,
+0.03 for the Golf's torsion beam. Live rear axles do not call it.
+
+The fronts now have their factory static toe-in, which a strut fit keeps
+(#484): E36 325i / M3 0.10 deg per wheel, Golf III 0.08, Camaro and Prime
+0.05, Ram 0.06, Impreza, Lancer, del Sol and R34 0, the race cars 0.05 of
+toe-out. And each corner calls `WheelRef.setComplianceSteer(lateral,
+braking)`, the bushings' toe-in in degrees per kN of cornering force pushing
+the tyre inboard and per kN of braking: road fronts -0.10 / -0.03 (Ram
+-0.15 / -0.05), race fronts -0.03 / -0.01; rears E36 0 / 0.05, del Sol and
+Impreza 0.03 / 0.05, Golf 0.02 / 0.03, Lancer, R34 and Prime 0.05 / 0.08,
+race cars 0.01 / 0.02. `WheelRef.setBushingCompliance(lateral,
+longitudinal)` gives the hub's travel in mm per kN: road fronts 0.30 /
+1.00, rears 0.20 / 0.80 (E36 1.00 fore and aft, Golf 0.30 / 1.20), Ram
+0.50 / 1.50, race cars 0.05 / 0.10. Live rear axles call neither.
 
 **Caster (#458).** The stock struts had none: their strut axis and top lay
 in the front-view plane. Each front strut now leans back by its real car's

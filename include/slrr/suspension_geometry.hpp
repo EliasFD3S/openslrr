@@ -48,13 +48,18 @@ double kingpin_lift_rate(const WheelConfig& wheel, double length, double steer);
 // with the top inboard) as its arms alone give it at `length`, without the
 // curve; NaN without an arm fit.
 double geometry_camber(const WheelConfig& wheel, double length);
-// Fits the wheel's camber curve to its static ride height: `load` is the
-// static weight on the spring (N). The spring length there becomes
-// camber_reference, with the geometry's camber and gain at that length
-// (a NaN camber_gain takes the geometry's, clamped to -1.5..-0.2 deg per
-// 25 mm). Without a working spring or arm fit, camber_reference is 0 and
-// wheel_pose keeps the geometry's camber.
-void update_camber_reference(WheelConfig& wheel, double load);
-// The curve's camber change from the static height (rad) at `length`.
+// Bump steer (#484): the wheel's toe against the body (rad, positive
+// toe-in) as its arms alone give it at `length`; NaN without an arm fit.
+double geometry_toe(const WheelConfig& wheel, double length);
+// Fits the wheel's camber and toe curves to its static ride height: `load`
+// is the static weight on the spring (N). The spring length there becomes
+// static_length, with the geometry's camber, toe and camber gain at that
+// length (a NaN camber_gain takes the geometry's, clamped to -1.5..-0.2
+// deg per 25 mm). Without either curve, a working spring or an arm fit,
+// static_length is 0 and wheel_pose keeps the geometry's camber and toe.
+void update_static_reference(WheelConfig& wheel, double load);
+// The curves' camber and toe changes from the static height (rad) at
+// `length`.
 double camber_curve_change(const WheelConfig& wheel, double length);
+double toe_curve_change(const WheelConfig& wheel, double length);
 } // namespace slrr::physics

@@ -48,6 +48,12 @@ public class Baiern_CS_RL_trailing_arm extends Suspension
 				wheel.setAnti( 0.30, 0.45 );
 				// OpenSLRR (#481): camber gain per 25 mm of bump at the static height and its change per 25 mm, typical for the real car
 				wheel.setCamberGain( -0.90, -0.05 );
+				// OpenSLRR (#484): bump steer, degrees of toe-in per 25 mm of bump at the static height and its change per 25 mm, typical for the real car
+				wheel.setBumpSteer( 0.10, 0.00 );
+				// OpenSLRR (#484): compliance steer, degrees of toe-in per kN of cornering force pushing the tyre inboard and per kN of braking, typical for the real car
+				wheel.setComplianceSteer( 0.00, 0.05 );
+				// OpenSLRR (#484): the bushings' give, mm per kN of cornering and of longitudinal force, typical for the real car
+				wheel.setBushingCompliance( 0.20, 1.00 );
 				                        
 				the_car.setSlotPos(101+wheelID, new Vector3(-0.024,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(-0.013,0,0), null );

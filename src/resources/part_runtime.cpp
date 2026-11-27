@@ -94,6 +94,18 @@ struct WheelPhys {
   // the static height and its change per 25 mm.
   bool has_camber_gain = false;
   float camber_gain = 0, camber_progression = 0;
+  // setBumpSteer (patched suspensions, #484): degrees of toe-in per 25 mm
+  // of bump at the static height and its change per 25 mm.
+  bool has_bump_steer = false;
+  float bump_steer = 0, bump_steer_progression = 0;
+  // setComplianceSteer (patched suspensions, #484): degrees of toe-in per
+  // kN of inboard cornering force and per kN of braking force.
+  bool has_compliance = false;
+  float compliance_lateral = 0, compliance_braking = 0;
+  // setBushingCompliance (patched suspensions, #484): the hub's give in mm
+  // per kN of cornering and of longitudinal force.
+  bool has_bushing = false;
+  float bushing_lateral = 0, bushing_longitudinal = 0;
   int opp = -1;
   float arm[7]{}, hub[10]{};
   bool authored_position = false;
@@ -2981,7 +2993,51 @@ void dynamics_wheels(Record &rec) {
         cfg.camber_gain = front && strut_fit ? -.5 * per_25mm : std::numeric_limits<double>::quiet_NaN();
         cfg.camber_progression = (front ? strut_fit ? .1 : -.1 : 0) * per_25mm / .025;
       }
-      if (!cfg.camber_curve) cfg.camber_reference = 0;
+      // Bump steer (#484): WheelRef.setBumpSteer, or typical values: linked
+      // fronts toe out by 0.05 deg per 25 mm of bump (the track rod a little
+      // off the arm's line), independent rear arms toe in by 0.1 (laid out
+      // for understeer as the outer wheel compresses). Live axles and
+      // corners without arms keep their geometry.
+      cfg.toe_curve = false;
+      if (live.has_bump_steer) {
+        cfg.toe_curve = true;
+        cfg.bump_steer = live.bump_steer * per_25mm;
+        cfg.bump_steer_progression = live.bump_steer_progression * per_25mm / .025;
+      } else if (cfg.arm_length > 0 && cfg.arm_length < 20) {
+        cfg.toe_curve = true;
+        cfg.bump_steer = (front ? -.05 : .1) * per_25mm;
+        cfg.bump_steer_progression = 0;
+      }
+      if (!cfg.camber_curve && !cfg.toe_curve) cfg.static_length = 0;
+      // Compliance steer (#484): WheelRef.setComplianceSteer, or typical
+      // rubber bushings: linked fronts toe out by 0.10 deg per kN of
+      // cornering force and 0.03 per kN of braking (understeer, and a pull
+      // against a split), independent rear arms toe in by 0.03 and 0.05.
+      // Live axles and corners without arms stay rigid.
+      constexpr double per_kn = std::numbers::pi / 180 / 1000;
+      if (live.has_compliance) {
+        cfg.compliance_lateral = live.compliance_lateral * per_kn;
+        cfg.compliance_braking = live.compliance_braking * per_kn;
+      } else if (cfg.arm_length > 0 && cfg.arm_length < 20) {
+        cfg.compliance_lateral = (front ? -.10 : .03) * per_kn;
+        cfg.compliance_braking = (front ? -.03 : .05) * per_kn;
+      } else {
+        cfg.compliance_lateral = cfg.compliance_braking = 0;
+      }
+      // The bushings' give (#484): WheelRef.setBushingCompliance, or typical
+      // rubber: linked fronts 0.3 mm per kN sideways and 1.0 fore and aft
+      // (soft for the ride), independent rear arms 0.2 and 0.8. Live axles
+      // and corners without arms stay rigid.
+      constexpr double mm_per_kn = 1e-6;
+      if (live.has_bushing) {
+        cfg.bushing_lateral = live.bushing_lateral * mm_per_kn;
+        cfg.bushing_longitudinal = live.bushing_longitudinal * mm_per_kn;
+      } else if (cfg.arm_length > 0 && cfg.arm_length < 20) {
+        cfg.bushing_lateral = (front ? .3 : .2) * mm_per_kn;
+        cfg.bushing_longitudinal = (front ? 1.0 : .8) * mm_per_kn;
+      } else {
+        cfg.bushing_lateral = cfg.bushing_longitudinal = 0;
+      }
     }
     // WheelRef.setWidth: the tyre width in metres (Tyre.java), stored halved.
     cfg.half_width = cfg.metal_contact ? 0. : std::clamp(double(live.width), 0., .25);
@@ -3085,8 +3141,11 @@ void pose_wheels(Object *chassis, Record &rec) {
     const auto base = part_pose_matrix(rec.config->wheels[i]);
     const auto inverse = part_matrix_inverse_rigid(base);
     const double steer = wheel_steering_angle(rec, i);
-    const auto frames = physics::wheel_pose(cfg, state.length, &rec.geometry_solved[i], steer);
-    const auto hub_steered = frames.hub_rotation * physics::wheel_steering(frames.steer_axis, steer);
+    auto frames = physics::wheel_pose(cfg, state.length, &rec.geometry_solved[i], steer);
+    // The bushings' give and compliance steer (#484), as the solver has them.
+    frames.hub_origin += state.compliance_offset;
+    const auto hub_steered =
+        frames.hub_rotation * physics::wheel_steering(frames.steer_axis, steer + state.compliance_steer);
     rec.travel_frame[i] = part_matrix_multiply(
         physics::corner_matrix(frames.arm_origin, rec.geometry_solved[i]
             ? frames.arm_rotation : frames.hub_rotation), inverse);
@@ -3243,6 +3302,9 @@ void park_chassis(Object *chassis, bool shift) {
     state.seeded = true;
     state.contact = false;
     state.force = 0;
+    // Parked, no tyre force loads the bushings (#484).
+    state.compliance_steer = 0;
+    state.compliance_offset = {};
     contact += physics::wheel_pose(cfg, state.length).hub_origin -
                physics::Vec3{0, cfg.radius, 0};
     ++used;
@@ -3308,7 +3370,9 @@ bool script_pos(void *key, float *x, float *y, float *z) {
                                         parked_wheel_load(*rec, i, mass, com, count),
                                         length))
       length = static_cast<float>(cfg.rest);
-    contact += physics::wheel_pose(cfg, length).hub_origin -
+    // A running wheel's hub where its bushings hold it (#484).
+    contact += physics::wheel_pose(cfg, length).hub_origin +
+               (state.seeded ? state.compliance_offset : physics::Vec3{}) -
                physics::Vec3{0, cfg.radius, 0};
     ++used;
   }
@@ -10211,6 +10275,43 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
       w.has_camber_gain = true;
       w.camber_gain = std::clamp(gain, -3.f, 1.f);
       w.camber_progression = std::clamp(progression, -1.f, 1.f);
+    });
+  });
+  // OpenSLRR native declared by the patched WheelRef (#484): bump steer,
+  // degrees of toe-in per 25 mm of bump at the static ride height (-1 to
+  // +1, negative toes out) and its change per 25 mm of bump (-0.5 to +0.5).
+  wheel("setBumpSteer", "(FF)V", [put](Object *s, const std::vector<Value> &a) {
+    return put(s, [&](WheelPhys &w) {
+      const float toe = scalar(a, 0, 0), progression = scalar(a, 1, 0);
+      if (!std::isfinite(toe) || !std::isfinite(progression)) return;
+      w.has_bump_steer = true;
+      w.bump_steer = std::clamp(toe, -1.f, 1.f);
+      w.bump_steer_progression = std::clamp(progression, -.5f, .5f);
+    });
+  });
+  // OpenSLRR native declared by the patched WheelRef (#484): compliance
+  // steer, degrees of toe-in per kN of cornering force pushing the tyre
+  // inboard and per kN of braking force (-0.5 to +0.5 each, negative toes
+  // out).
+  wheel("setComplianceSteer", "(FF)V", [put](Object *s, const std::vector<Value> &a) {
+    return put(s, [&](WheelPhys &w) {
+      const float lateral = scalar(a, 0, 0), braking = scalar(a, 1, 0);
+      if (!std::isfinite(lateral) || !std::isfinite(braking)) return;
+      w.has_compliance = true;
+      w.compliance_lateral = std::clamp(lateral, -.5f, .5f);
+      w.compliance_braking = std::clamp(braking, -.5f, .5f);
+    });
+  });
+  // OpenSLRR native declared by the patched WheelRef (#484): the bushings'
+  // give, mm of hub travel per kN of cornering force (inboard) and per kN
+  // of longitudinal force (along it), 0 to 5 each.
+  wheel("setBushingCompliance", "(FF)V", [put](Object *s, const std::vector<Value> &a) {
+    return put(s, [&](WheelPhys &w) {
+      const float lateral = scalar(a, 0, 0), longitudinal = scalar(a, 1, 0);
+      if (!std::isfinite(lateral) || !std::isfinite(longitudinal)) return;
+      w.has_bushing = true;
+      w.bushing_lateral = std::clamp(lateral, 0.f, 5.f);
+      w.bushing_longitudinal = std::clamp(longitudinal, 0.f, 5.f);
     });
   });
   wheel("setOppWheel", "(I)V", [put](Object *s, const std::vector<Value> &a) {

@@ -2499,11 +2499,11 @@ Fix (OpenSLRR, typical values where no data was found):
   from the static height, about the hub centre. The tyre's camber input
   (#418), the rendered wheel and the kingpin (#458) all read that hub, so
   they follow the curve; the static camber stays the fit's.
-- The static height: `VehicleDynamics::update_camber_references`, each
+- The static height: `VehicleDynamics::update_static_references`, each
   step, puts the car's weight on its springs (front / rear by the centre of
   mass between the axles, then across each axle, less the wheel's own
   mass) and keeps the spring length there with the fit's camber and gain
-  (`update_camber_reference`). On the CoupeSport it gives 0.2126 m front and
+  (`update_static_reference`). On the CoupeSport it gives 0.2126 m front and
   0.2192 m rear, the #450 generator's static lengths.
 - The curve comes from the suspension's script, so mods can set it:
   `WheelRef.setCamberGain(gain, progression)`, degrees per 25 mm of bump at
@@ -2556,3 +2556,108 @@ car's current weight (fuel, parts), so the curve's centre moves with it
 instead of staying where the arms were laid out; the hub turns about its
 centre, so the track does not change with the camber as a real upright's
 would.
+
+## Bump steer, static toe and compliance steer (#484)
+
+Cause: a wheel's toe stayed at its static value whatever the travel. The
+single hinge each patched corner has (#450) adds almost none (its axis runs
+along the car), and #481 curves only the camber. Real corners steer with
+travel: a front whose track rod is not on the lower arm's line toes out in
+bump, and independent rears are laid out to toe in as they compress, so the
+loaded outer rear wheel steers the car out of the turn (roll understeer).
+
+Fix (OpenSLRR, typical values):
+
+- A toe curve about the static ride height of #481: bump steer x bump +
+  progression x bump^2 / 2 (`WheelConfig::bump_steer`,
+  `bump_steer_progression`, positive toe-in). `wheel_pose` turns the hub
+  about the body's vertical by the curve's change minus the fit's own, after
+  the camber's turn. The tyre's heading (`wheel_forward`) and the rendered
+  wheel follow it. The static references are renamed for both curves:
+  `WheelConfig::static_length`, `update_static_reference`,
+  `VehicleDynamics::update_static_references`.
+- Camber and toe are now measured from the hub's axle: a strut fit's hub is
+  pitched for its caster (#458), so the old reading of its up axis moved
+  with the toe. The static camber the curves keep is the same reading on
+  both sides, so nothing moves at rest.
+- Moddable: `WheelRef.setBumpSteer(toe, progression)`, degrees of toe-in
+  per 25 mm of bump and its change per 25 mm, a new native declared by the
+  patched `WheelRef.java`. 86 patched corners call it (the generator writes
+  the line after `setCamberGain`; live rear axles do not): road fronts
+  -0.05 (Ram -0.10), race fronts 0; rears E36, Lancer, R34 and Prime +0.10,
+  del Sol, Impreza and the race cars +0.05, Golf +0.03. Table in the
+  [patch README](../../patch/README.md#tyres-and-suspension-geometry-450).
+- Without it, `dynamics_wheels` gives linked fronts -0.05 and independent
+  rear arms +0.10; live axles and corners without arms keep their geometry.
+- Static front toe: a strut fit replaced the whole alignment, so the
+  script's `toe` (setYpr's yaw) never reached a front wheel. `arm_frames`
+  now turns a strut fit's hub by that yaw about the body's vertical (its
+  camber stays the fit's). The patched fronts get their factory toe-in:
+  E36 0.10 deg per wheel, Golf 0.08, Camaro and Prime 0.05, Ram 0.06,
+  Impreza, Lancer, del Sol and R34 0, race cars 0.05 of toe-out (the stock
+  fronts all had 0 but the Golf GTA's -0.5, which the patch already reset).
+- Compliance steer: the bushings let the tyre's forces steer the wheel.
+  `VehicleDynamics::update_compliance_steer` turns each wheel by its
+  compliance times the last step's cornering force pushing the patch
+  inboard and its braking force (driving reverses that part), clamped to
+  2 deg and settling over 30 ms (`WheelState::compliance_steer`, added to
+  the driver's steering in `steered_hub`). Moddable through
+  `WheelRef.setComplianceSteer(lateral, braking)`, degrees of toe-in per kN;
+  86 patched corners call it: road fronts -0.10 / -0.03 (understeer, Ram
+  -0.15 / -0.05), race fronts -0.03 / -0.01; rears E36 0 / 0.05, del Sol and
+  Impreza 0.03 / 0.05, Golf 0.02 / 0.03, Lancer, R34 and Prime 0.05 / 0.08,
+  race cars 0.01 / 0.02. Without it: linked fronts -0.10 / -0.03,
+  independent rear arms 0.03 / 0.05; live axles and corners without arms
+  rigid.
+- Bushing give: the same forces move the hub, along the steered wheel's
+  own side and heading (inboard under the cornering force, back under
+  braking), at most 15 mm each way, settling with the toe
+  (`WheelState::compliance_offset`, body frame). The solver's poses
+  (`state_pose`) carry it, so the patch and the contact move with the
+  wheel. Parking (`park_chassis`) clears it with the compliance steer, and
+  the support estimate of a running car adds it. Moddable through
+  `WheelRef.setBushingCompliance(lateral, longitudinal)`, mm per kN; 86
+  patched corners call it: road fronts 0.30 / 1.00, rears 0.20 / 0.80 (E36
+  1.00 fore and aft, Golf's torsion beam 0.30 / 1.20), Ram 0.50 / 1.50,
+  race cars 0.05 / 0.10. Without it: linked fronts 0.3 / 1.0, independent
+  rear arms 0.2 / 0.8; live axles and corners without arms rigid.
+- The rendered wheel (`pose_wheels`) shows both: the hub moves by the give
+  and turns by the compliance steer on top of the driver's.
+
+Validation:
+
+- Compilation: `slrr_host` Release; `WheelRef` and the 96 suspension
+  classes in `build/brake-compile-root` (all compiled, the 10 live rear
+  axles unchanged), the generator's output identical to the edited sources.
+- `vehicle_dynamics` 76/76 with two new tests: the toe curve on the patched
+  Nonus GT II strut (+0.25 / +0.6 / -0.15 deg at +25 / +50 / -25 mm for
+  0.2 / 0.1, static toe and camber unchanged, mirrored on the right); and
+  the test saloon on swing arms in a steady left turn at 16 m/s: rears
+  toeing in by 0.3 deg per 25 mm put the outer rear at +0.63 deg and yaw at
+  0.445 rad/s, toeing out -0.81 deg and 0.563 rad/s. The #481 tests still
+  pass. Two more: a strut keeps a degree of script toe (camber
+  unchanged); and compliance steer: fronts toeing out by 0.15 deg per kN
+  put the outer front at -0.43 deg in the steady turn and yaw at 0.469
+  rad/s against 0.499 rigid, and rears toeing in by 0.1 deg per kN of
+  braking toe in by 0.24 deg alike under braking, the car running
+  straight; with 0.3 mm per kN sideways and 1 mm per kN fore and aft, the
+  outer front gives 0.86 mm inboard in the turn, square to its steered
+  heading, and a braked front 3.8 mm back. `vehicle_dynamics` 78/78, `missing_support` 17/17,
+  `physics_tick_rate` 9/9.
+- In `build/needle-game` with the new classes, Tsukuba bench (straight
+  line): CoupeSport 8.74 / 34.86 / 71.98 km/h at 1 / 3 / 6 s with and
+  without bump steer, and 71.99 / 71.97 at 6 s with and without compliance
+  steer (temporary switches), 71.99 with the bushing give; the scripts'
+  values reach the host. Elias
+  drove the bump steer in game (before the compliance steer and static toe
+  were added) and liked it.
+- Not checked in game: the compliance steer, bushing give and static toe,
+  their feel and their look on the rendered wheel (a few millimetres and
+  under a degree).
+
+Limitations: the values are typical figures, not the real cars' measured
+toe curves or bushing rates; toe changes with the spring's travel only, so
+a live axle's roll steer (its whole axle yawing as the body rolls) is not
+modelled; compliance steer and give follow the last step's force with a
+fixed 30 ms lag; they are a few millimetres and under a degree, hardly
+visible on screen.

@@ -73,4 +73,22 @@ public class WheelRef extends Native
 	// values for the suspension type.
 	public native void setCamberGain( float gain, float progression );
 
+	// OpenSLRR (#484): bump steer about the static ride height: degrees of
+	// toe-in per 25 mm of bump there (negative: toe-out) and its change per
+	// 25 mm of bump. Without it the host uses typical values for the
+	// suspension type.
+	public native void setBumpSteer( float toe, float progression );
+
+	// OpenSLRR (#484): compliance steer, the bushings' toe-in in degrees per
+	// kN of cornering force pushing the tyre inboard and per kN of braking
+	// force (negative: toe-out; driving reverses the braking part). Without
+	// it the host uses typical values for the suspension type.
+	public native void setComplianceSteer( float lateral, float braking );
+
+	// OpenSLRR (#484): the bushings' give, millimetres of hub travel per kN
+	// of cornering force (inboard) and per kN of longitudinal force (along
+	// it, back under braking). Without it the host uses typical values for
+	// the suspension type.
+	public native void setBushingCompliance( float lateral, float longitudinal );
+
 }

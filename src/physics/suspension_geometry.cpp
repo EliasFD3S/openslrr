@@ -211,29 +211,65 @@ bool arm_frames(const WheelConfig& wheel, double length, CornerFrames& frames) {
   if (!wheel.has_hub) geometry.hub[0] = -1;
   // The fitted hub is driven by the vertical CFG travel, with alignment
   // applied by the hub fit. Tilting the input ray applies it twice.
-  return solve_corner_geometry(geometry, wheel.center + Vec3{0, -travel, 0}, frames);
+  if (!solve_corner_geometry(geometry, wheel.center + Vec3{0, -travel, 0}, frames)) return false;
+  // A strut fit replaces the alignment (camber and toe) with its own hub
+  // rotation; its static camber is the fit's tilt, but its static toe (the
+  // script's `toe`, through setYpr) is OpenSLRR's, turned about the body's
+  // vertical (#484).
+  if (geometry.hub[0] == 0) {
+    const Vec3 forward = wheel.hub_alignment.rotate({0, 0, -1});
+    const double toe = std::atan2(-forward.x, -forward.z);
+    if (std::isfinite(toe) && toe != 0) {
+      const Quaternion yaw{0, std::sin(toe * .5), 0, std::cos(toe * .5)};
+      frames.hub_rotation = (yaw * frames.hub_rotation).normalized();
+    }
+  }
+  return true;
 }
 
 // +1 for a left wheel (-x), whose top leans inboard towards +x.
 double outboard_side(const WheelConfig& wheel) { return wheel.center.x < 0 ? 1 : -1; }
 
+// Camber and toe from the axle, which the hub's pitch (a strut fit's, for
+// its caster) does not move: camber its rise outboard to inboard, toe its
+// sweep back.
 double frames_camber(const WheelConfig& wheel, const CornerFrames& frames) {
-  const Vec3 up = frames.hub_rotation.rotate({0, 1, 0});
-  return -std::asin(std::clamp(up.x * outboard_side(wheel), -1.0, 1.0));
+  const Vec3 axle = frames.hub_rotation.rotate({1, 0, 0});
+  return std::asin(std::clamp(axle.y * outboard_side(wheel), -1.0, 1.0));
 }
 
-// The curve replaces the geometry's change from the static height (#481):
-// the hub turns about the body's longitudinal axis by the difference, about
-// its own centre.
-void apply_camber_curve(const WheelConfig& wheel, double length, CornerFrames& frames) {
-  if (!wheel.camber_curve || !(wheel.camber_reference > 0)) return;
-  const double change = camber_curve_change(wheel, length);
-  const double correction =
-      change - (frames_camber(wheel, frames) - wheel.reference_camber);
-  if (!std::isfinite(correction) || correction == 0) return;
-  const double angle = std::clamp(correction, -.35, .35) * outboard_side(wheel);
-  const Quaternion roll{0, 0, std::sin(angle * .5), std::cos(angle * .5)};
-  frames.hub_rotation = (roll * frames.hub_rotation).normalized();
+// Toe against the body, positive when the wheel's front turns inboard.
+double frames_toe(const WheelConfig& wheel, const CornerFrames& frames) {
+  const Vec3 axle = frames.hub_rotation.rotate({1, 0, 0});
+  return std::asin(std::clamp(axle.z * outboard_side(wheel), -1.0, 1.0));
+}
+
+// The curves replace the geometry's change from the static height: the hub
+// turns about its own centre by the difference, about the body's
+// longitudinal axis for the camber (#481) and its vertical for the toe
+// (#484).
+void apply_curves(const WheelConfig& wheel, double length, CornerFrames& frames) {
+  if (!(wheel.static_length > 0)) return;
+  const double side = outboard_side(wheel);
+  if (wheel.camber_curve) {
+    const double correction = camber_curve_change(wheel, length) -
+                              (frames_camber(wheel, frames) - wheel.reference_camber);
+    if (std::isfinite(correction) && correction != 0) {
+      const double angle = std::clamp(correction, -.35, .35) * side;
+      const Quaternion roll{0, 0, std::sin(angle * .5), std::cos(angle * .5)};
+      frames.hub_rotation = (roll * frames.hub_rotation).normalized();
+    }
+  }
+  if (wheel.toe_curve) {
+    const double correction =
+        toe_curve_change(wheel, length) - (frames_toe(wheel, frames) - wheel.reference_toe);
+    if (std::isfinite(correction) && correction != 0) {
+      // Toe-in turns a left wheel's front towards +x: a negative yaw.
+      const double angle = -std::clamp(correction, -.1, .1) * side;
+      const Quaternion yaw{0, std::sin(angle * .5), 0, std::cos(angle * .5)};
+      frames.hub_rotation = (yaw * frames.hub_rotation).normalized();
+    }
+  }
 }
 }  // namespace
 
@@ -243,17 +279,28 @@ double geometry_camber(const WheelConfig& wheel, double length) {
   return frames_camber(wheel, frames);
 }
 
-void update_camber_reference(WheelConfig& wheel, double load) {
-  wheel.camber_reference = 0;
-  if (!wheel.camber_curve || !(wheel.spring > 0) || !(wheel.rest > 0) || !(load >= 0)) return;
+double geometry_toe(const WheelConfig& wheel, double length) {
+  CornerFrames frames;
+  if (!arm_frames(wheel, length, frames)) return std::numeric_limits<double>::quiet_NaN();
+  return frames_toe(wheel, frames);
+}
+
+void update_static_reference(WheelConfig& wheel, double load) {
+  wheel.static_length = 0;
+  if (!(wheel.camber_curve || wheel.toe_curve) || !(wheel.spring > 0) || !(wheel.rest > 0) ||
+      !(load >= 0))
+    return;
   const double length =
       std::clamp(wheel.rest - load / wheel.spring, wheel.minimum, std::max(wheel.minimum, wheel.maximum));
   constexpr double h = .0125;
   const double at = geometry_camber(wheel, length);
   const double bump = geometry_camber(wheel, length - h), droop = geometry_camber(wheel, length + h);
-  if (!std::isfinite(at) || !std::isfinite(bump) || !std::isfinite(droop)) return;
-  wheel.camber_reference = length;
+  const double toe = geometry_toe(wheel, length);
+  if (!std::isfinite(at) || !std::isfinite(bump) || !std::isfinite(droop) || !std::isfinite(toe))
+    return;
+  wheel.static_length = length;
   wheel.reference_camber = at;
+  wheel.reference_toe = toe;
   if (std::isfinite(wheel.camber_gain)) {
     wheel.reference_gain = wheel.camber_gain;
   } else {
@@ -266,9 +313,15 @@ void update_camber_reference(WheelConfig& wheel, double load) {
 }
 
 double camber_curve_change(const WheelConfig& wheel, double length) {
-  if (!wheel.camber_curve || !(wheel.camber_reference > 0)) return 0;
-  const double bump = wheel.camber_reference - length;
+  if (!wheel.camber_curve || !(wheel.static_length > 0)) return 0;
+  const double bump = wheel.static_length - length;
   return wheel.reference_gain * bump + .5 * wheel.camber_progression * bump * bump;
+}
+
+double toe_curve_change(const WheelConfig& wheel, double length) {
+  if (!wheel.toe_curve || !(wheel.static_length > 0)) return 0;
+  const double bump = wheel.static_length - length;
+  return wheel.bump_steer * bump + .5 * wheel.bump_steer_progression * bump * bump;
 }
 
 CornerFrames wheel_pose(const WheelConfig& wheel, double length, bool* fitted, double steer) {
@@ -278,7 +331,7 @@ CornerFrames wheel_pose(const WheelConfig& wheel, double length, bool* fitted, d
   CornerFrames frames;
   if (arm_frames(wheel, length, frames)) {
     if (fitted) *fitted = true;
-    apply_camber_curve(wheel, length, frames);
+    apply_curves(wheel, length, frames);
     // Steered, a strut's hub swings about its kingpin (#458): the wheel
     // centre moves on an arc, and the inclination lowers it either way,
     // which lifts the car.

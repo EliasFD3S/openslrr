@@ -410,6 +410,14 @@ constexpr double kWallRate = 200000, kWallDamping = 2000;
 constexpr double kHangerRate = 20000, kHangerGive = .03, kScrapeRate = 1e6;
 constexpr double kScrapeDamping = 4000, kScrapeFriction = .35;
 
+// The wheel's pose with its bushings' deflection (#484): the hub moves
+// by WheelState::compliance_offset in the body's frame.
+CornerFrames state_pose(const WheelConfig &w, const WheelState &s, double length, double steer) {
+  CornerFrames pose = wheel_pose(w, length, nullptr, steer);
+  pose.hub_origin += s.compliance_offset;
+  return pose;
+}
+
 void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
                   const Terrain &terrain, double ceiling, double dt, double steer) {
   const Vec3 local_down = w.down.normalized();
@@ -426,7 +434,7 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
   }
   s.length = std::clamp(s.length, w.minimum, w.maximum);
   const auto project = [&](double length) {
-    return body_point(body, wheel_pose(w, length, nullptr, steer).hub_origin);
+    return body_point(body, state_pose(w, s, length, steer).hub_origin);
   };
   const auto sample = [&](Vec3 world, GroundHit &hit) {
     return down.y < -.05 &&
@@ -475,7 +483,7 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
   };
   std::array<Wall, 2> walls{};
   const auto sample_footprint = [&](Vec3 hub) {
-    const auto pose = wheel_pose(w, s.length, nullptr, steer);
+    const auto pose = state_pose(w, s, s.length, steer);
     const Quaternion turn = body.orientation * pose.hub_rotation *
                             wheel_steering(pose.steer_axis, steer);
     Vec3 forward = turn.rotate({0, 0, -1}), across = turn.rotate({1, 0, 0});
@@ -808,7 +816,7 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
     } else if (suspension > 0) {
       body.add_force(axis_dir * -suspension, hard);
     }
-    const auto pose = wheel_pose(w, l1, nullptr, steer);
+    const auto pose = state_pose(w, s, l1, steer);
     s.length = l1;
     s.speed = v1;
     s.contact = contact;
@@ -894,7 +902,7 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
     if (w.unsprung > 0) travel = std::clamp((length - s.length) / dt, -10.0, 10.0);
     speed = 0;
   }
-  const auto pose = wheel_pose(w, length, nullptr, steer);
+  const auto pose = state_pose(w, s, length, steer);
   const Vec3 hub_w = body_point(body, pose.hub_origin);
   const Vec3 normal = contact_normal;
   // The damper works on the suspension's own travel rate. On the ground it
@@ -1213,9 +1221,10 @@ Vec3 wheel_forward(const RigidBody &body, double steer, Quaternion hub = {}) {
       (hub * wheel_steering(steer)).rotate({0, 0, -1}));
 }
 // The steered hub (#458): turned about its kingpin, so caster leans the
-// outer wheel's top into the turn.
+// outer wheel's top into the turn. The bushings' compliance steer (#484)
+// adds to the driver's.
 Quaternion steered_hub(const WheelState &s, double steer) {
-  return (s.hub_rotation * wheel_steering(s.steer_axis, steer)).normalized();
+  return (s.hub_rotation * wheel_steering(s.steer_axis, steer + s.compliance_steer)).normalized();
 }
 Vec3 wheel_forward(const RigidBody &body, double steer, const WheelState &s) {
   return body.orientation.rotate(steered_hub(s, steer).rotate({0, 0, -1}));
@@ -1740,11 +1749,11 @@ void VehicleDynamics::update_jacking() {
   }
 }
 
-// Camber gain (#481): each wheel's curve is centred on its static ride
+// Camber gain (#481) and bump steer (#484): each wheel's curves are centred on its static ride
 // height, the spring length under its share of the car's weight. The
 // shares follow the centre of mass between the axles and, on each axle,
 // between its wheels.
-void VehicleDynamics::update_camber_references() {
+void VehicleDynamics::update_static_references() {
   double front_z = 0, rear_z = 0;
   int fronts = 0, rears = 0;
   for (const auto &w : wheels) {
@@ -1753,15 +1762,15 @@ void VehicleDynamics::update_camber_references() {
     ++(w.center.z < body.center.z ? fronts : rears);
   }
   if (!fronts || !rears) {
-    for (auto &w : wheels) w.camber_reference = 0;
+    for (auto &w : wheels) w.static_length = 0;
     return;
   }
   front_z /= fronts;
   rear_z /= rears;
   const double front_share = std::clamp((rear_z - body.center.z) / (rear_z - front_z), 0.0, 1.0);
   for (auto &w : wheels) {
-    if (!w.enabled || !w.camber_curve) {
-      w.camber_reference = 0;
+    if (!w.enabled || !(w.camber_curve || w.toe_curve)) {
+      w.static_length = 0;
       continue;
     }
     const bool is_front = w.center.z < body.center.z;
@@ -1784,14 +1793,51 @@ void VehicleDynamics::update_camber_references() {
     // The body's mass includes the wheels, which the spring does not carry.
     const double load = body.mass * 9.81 * (is_front ? front_share : 1 - front_share) * side_share -
                         w.unsprung * 9.81;
-    update_camber_reference(w, std::max(0.0, load));
+    update_static_reference(w, std::max(0.0, load));
+  }
+}
+
+// Compliance steer (#484): the bushings let the tyre's forces steer and
+// move the wheel. A cornering force pushing the patch inboard and a braking force
+// each toe it in by their compliance (a road front's negative values toe
+// it out: understeer); driving reverses the braking part. From the last
+// step's forces, settling over 30 ms so the toe does not chase the slip it
+// changes.
+void VehicleDynamics::update_compliance_steer() {
+  const double settle = 1 - std::exp(-dt_ / .03);
+  for (size_t i = 0; i < wheels.size(); ++i) {
+    auto &s = state[i];
+    const auto &w = wheels[i];
+    double target = 0;
+    Vec3 offset;
+    if (w.enabled && s.contact) {
+      const double left = w.center.x < 0 ? 1 : -1;
+      const double inboard = s.tire_force.lateral * left;
+      const double braking = -s.tire_force.longitudinal * (s.spin < 0 ? -1 : 1);
+      const double toe_in = std::clamp(w.compliance_lateral * inboard + w.compliance_braking * braking,
+                                       -.035, .035);
+      // Toe-in turns a left wheel to the right: a negative steering angle.
+      target = -toe_in * left;
+      // The hub gives along the forces, on the steered wheel's own axes in
+      // the body's frame (its heading, and the side the lateral force acts
+      // along), at most 15 mm each way.
+      const double steer = i < drive.wheels.size() ? drive.wheels[i].steer : 0;
+      const Vec3 heading = steered_hub(s, steer).rotate({0, 0, -1});
+      const Vec3 ahead = Vec3{heading.x, 0, heading.z}.normalized();
+      const Vec3 across{-ahead.z, 0, ahead.x};
+      offset = across * std::clamp(w.bushing_lateral * s.tire_force.lateral, -.015, .015) +
+               ahead * std::clamp(w.bushing_longitudinal * s.tire_force.longitudinal, -.015, .015);
+    }
+    s.compliance_steer += (target - s.compliance_steer) * settle;
+    s.compliance_offset += (offset - s.compliance_offset) * settle;
   }
 }
 
 void VehicleDynamics::step(const Terrain &terrain) {
   apply_aero();
   update_jacking();
-  update_camber_references();
+  update_static_references();
+  update_compliance_steer();
   double ceiling = body.position.y;
   for (Vec3 p : body.corners())
     ceiling = std::max(ceiling, p.y);
@@ -1850,7 +1896,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
       s.length = w.minimum;
       s.speed = 0;
       s.seeded = true;
-      const auto pose = wheel_pose(w, s.length, nullptr, drive.wheels[i].steer);
+      const auto pose = state_pose(w, s, s.length, drive.wheels[i].steer);
       const Vec3 hub = body_point(body, pose.hub_origin);
       GroundHit hit;
       if (terrain(hub.x, hub.z, ceiling, hit)) {
@@ -1903,7 +1949,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
     body.add_force(s.normal * s.force, hard);
 
     const Vec3 point =
-        body_point(body, wheel_pose(w, s.length, nullptr, drive.wheels[i].steer).hub_origin) -
+        body_point(body, state_pose(w, s, s.length, drive.wheels[i].steer).hub_origin) -
         s.normal * w.radius;
     s.patch = point;
   }
@@ -2063,7 +2109,7 @@ void VehicleDynamics::sync_wheels() {
   for (size_t i = 0; i < wheels.size(); ++i) {
     const auto &w = wheels[i];
     auto &s = state[i];
-    const auto pose = wheel_pose(w, s.length, nullptr, drive.wheels[i].steer);
+    const auto pose = state_pose(w, s, s.length, drive.wheels[i].steer);
     s.hub = pose.hub_origin;
     s.hub_rotation = pose.hub_rotation;
     s.steer_axis = pose.steer_axis;

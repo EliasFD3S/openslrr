@@ -1956,8 +1956,9 @@ SLRR_TEST(camber_gain_follows_the_curve_about_the_static_height) {
   w.spring = 30000;
   const double load = 3500, level = w.rest - load / w.spring;
   const auto camber = [&](double length) {
-    const Vec3 up = wheel_pose(w, length).hub_rotation.rotate({0, 1, 0});
-    return -std::asin(up.x) / degree;  // left wheel: the top inboard is +x
+    // Left wheel: the axle rises towards its inboard end (+x).
+    const Vec3 axle = wheel_pose(w, length).hub_rotation.rotate({1, 0, 0});
+    return std::asin(axle.y) / degree;
   };
   const double geometry[] = {camber(level), camber(level - .025), camber(level - .05),
                              camber(level + .025)};
@@ -1970,8 +1971,8 @@ SLRR_TEST(camber_gain_follows_the_curve_about_the_static_height) {
   w.camber_progression = -.15 * per_25mm / .025;
   // No reference yet (no weight): the geometry alone.
   SLRR_REQUIRE(std::abs(camber(level - .025) - geometry[1]) < 1e-9);
-  update_camber_reference(w, load);
-  SLRR_REQUIRE(std::abs(w.camber_reference - level) < 1e-9);
+  update_static_reference(w, load);
+  SLRR_REQUIRE(std::abs(w.static_length - level) < 1e-9);
   SLRR_REQUIRE(std::abs(camber(level) - geometry[0]) < 1e-6);
   SLRR_REQUIRE(std::abs(camber(level - .025) - geometry[0] - (-1 - .075)) < .01);
   SLRR_REQUIRE(std::abs(camber(level - .05) - geometry[0] - (-2 - .3)) < .01);
@@ -1985,21 +1986,21 @@ SLRR_TEST(camber_gain_follows_the_curve_about_the_static_height) {
   right.hub[1] = -w.hub[1];
   right.hub[4] = -w.hub[4];
   right.hub[7] = -w.hub[7];
-  update_camber_reference(right, load);
+  update_static_reference(right, load);
   const auto right_camber = [&](double length) {
-    const Vec3 up = wheel_pose(right, length).hub_rotation.rotate({0, 1, 0});
-    return std::asin(up.x) / degree;
+    const Vec3 axle = wheel_pose(right, length).hub_rotation.rotate({1, 0, 0});
+    return -std::asin(axle.y) / degree;
   };
   SLRR_REQUIRE(std::abs(right_camber(level - .05) - camber(level - .05)) < .05);
   // Without a gain of its own the curve takes the geometry's at rest.
   w.camber_gain = std::numeric_limits<double>::quiet_NaN();
   w.camber_progression = 0;
-  update_camber_reference(w, load);
+  update_static_reference(w, load);
   SLRR_REQUIRE(std::abs(w.reference_gain * .025 / degree - (geometry[1] - geometry[3]) / 2) < .05);
   // No spring, no curve.
   w.spring = 0;
-  update_camber_reference(w, load);
-  SLRR_REQUIRE(w.camber_reference == 0);
+  update_static_reference(w, load);
+  SLRR_REQUIRE(w.static_length == 0);
 }
 
 SLRR_TEST(camber_gain_keeps_the_outer_wheel_leaning_into_a_turn) {
@@ -2039,6 +2040,150 @@ SLRR_TEST(camber_gain_keeps_the_outer_wheel_leaning_into_a_turn) {
   SLRR_REQUIRE(outer[1] < outer[0] - 1);
 }
 
+SLRR_TEST(bump_steer_follows_the_toe_curve_about_the_static_height) {
+  // #484: the patched Nonus GT II strut with 0.2 degrees of toe-in per
+  // 25 mm of bump, growing by 0.1 per 25 mm. The static toe stays the
+  // geometry's, and the camber does not move.
+  constexpr double degree = std::numbers::pi / 180, per_25mm = degree / .025;
+  auto w = caster_strut();
+  w.spring = 30000;
+  const double load = 3500, level = w.rest - load / w.spring;
+  // From the axle (the hub's pitch for its caster leaves it alone): toe its
+  // sweep back, camber its rise towards the inboard end.
+  const auto toe = [](const WheelConfig& wheel, double length) {
+    const Vec3 axle = wheel_pose(wheel, length).hub_rotation.rotate({1, 0, 0});
+    return std::asin(axle.z * (wheel.center.x < 0 ? 1 : -1)) / degree;
+  };
+  const auto camber = [](const WheelConfig& wheel, double length) {
+    const Vec3 axle = wheel_pose(wheel, length).hub_rotation.rotate({1, 0, 0});
+    return std::asin(axle.y * (wheel.center.x < 0 ? 1 : -1)) / degree;
+  };
+  const double geometry = toe(w, level), bumped_camber = camber(w, level - .05);
+  SLRR_REQUIRE(std::abs(geometry - geometry_toe(w, level) / degree) < 1e-9);
+  w.toe_curve = true;
+  w.bump_steer = .2 * per_25mm;
+  w.bump_steer_progression = .1 * per_25mm / .025;
+  update_static_reference(w, load);
+  SLRR_REQUIRE(std::abs(w.static_length - level) < 1e-9);
+  SLRR_REQUIRE(std::abs(toe(w, level) - geometry) < 1e-6);
+  SLRR_REQUIRE(std::abs(toe(w, level - .025) - geometry - (.2 + .05)) < .005);
+  SLRR_REQUIRE(std::abs(toe(w, level - .05) - geometry - (.4 + .2)) < .005);
+  SLRR_REQUIRE(std::abs(toe(w, level + .025) - geometry - (-.2 + .05)) < .005);
+  SLRR_REQUIRE(std::abs(camber(w, level - .05) - bumped_camber) < .01);
+  // The right wheel mirrors it.
+  auto right = w;
+  right.center.x = -w.center.x;
+  right.arm_pivot.x = -w.arm_pivot.x;
+  right.hub[1] = -w.hub[1];
+  right.hub[4] = -w.hub[4];
+  right.hub[7] = -w.hub[7];
+  update_static_reference(right, load);
+  SLRR_REQUIRE(std::abs(toe(right, level - .05) - toe(w, level - .05)) < .01);
+}
+
+SLRR_TEST(rear_toe_in_under_bump_steers_a_rolling_car_out_of_its_turn) {
+  // #484: the test saloon on 1.6 m swing arms in a steady left turn. Rear
+  // wheels that toe in as they compress steer the loaded outer one out of
+  // the turn: the car yaws less than with rears that toe out.
+  constexpr double degree = std::numbers::pi / 180, per_25mm = degree / .025;
+  double yaw[2], outer_toe[2];
+  for (int in = 0; in < 2; ++in) {
+    Car car;
+    for (size_t i = 0; i < 4; ++i) {
+      auto& w = car.dynamics.wheels[i];
+      const double side = i % 2 ? -1 : 1;
+      w.arm_length = 1.6;
+      w.arm_pivot = w.center + Vec3{side * 1.6, 0, 0};
+      w.arm_axis = {0, 0, 1};
+      w.toe_curve = true;
+      w.bump_steer = i < 2 ? 0 : (in ? .3 : -.3) * per_25mm;
+    }
+    car.run(2, 0, 0, 0);
+    car.dynamics.drive.engaged = false;
+    car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -16});
+    for (auto& s : car.dynamics.state) s.spin = 16 / .31;
+    car.run(2.5, 0, 0, .09);
+    yaw[in] = car.dynamics.body.omega().y;
+    const Vec3 forward = car.dynamics.state[3].hub_rotation.rotate({0, 0, -1});
+    outer_toe[in] = std::atan2(-forward.x, -forward.z) / degree;  // right wheel: inboard is -x
+  }
+  std::printf("BUMPSTEER yaw %.3f (toe-out) / %.3f (toe-in) rad/s, outer rear toe %.2f / %.2f deg%c",
+              yaw[0], yaw[1], outer_toe[0], outer_toe[1], 10);
+  SLRR_REQUIRE(yaw[0] > .1);
+  SLRR_REQUIRE(outer_toe[1] > .3 && outer_toe[0] < -.3);
+  SLRR_REQUIRE(yaw[1] < yaw[0] * .97);
+}
+
+SLRR_TEST(a_strut_keeps_its_scripts_static_toe) {
+  // #484: the strut fit replaces the hub's alignment, but the script's toe
+  // (setYpr's yaw, here a degree of toe-in on the left) still turns it.
+  constexpr double degree = std::numbers::pi / 180;
+  auto w = caster_strut();
+  const double camber = geometry_camber(w, .175), toe = geometry_toe(w, .175);
+  SLRR_REQUIRE(std::abs(toe) < .2 * degree);
+  w.hub_alignment = wheel_steering(-1 * degree);
+  SLRR_REQUIRE(std::abs(geometry_toe(w, .175) - toe - 1 * degree) < .01 * degree);
+  SLRR_REQUIRE(std::abs(geometry_camber(w, .175) - camber) < .01 * degree);
+}
+
+SLRR_TEST(compliance_steer_toes_the_loaded_wheels_by_their_forces) {
+  // #484: the test saloon in a steady left turn, its fronts toeing out by
+  // 0.15 deg per kN of cornering force: the outer front steers out of the
+  // turn and the car yaws less than with rigid bushings. Braking straight
+  // with rears toeing in by 0.1 deg per kN of braking, both rears toe in
+  // alike and the car runs straight.
+  constexpr double degree = std::numbers::pi / 180, per_kn = degree / 1000;
+  double yaw[2], outer[2], give = 0;
+  for (int soft = 0; soft < 2; ++soft) {
+    Car car;
+    for (size_t i = 0; i < 2; ++i) {
+      car.dynamics.wheels[i].compliance_lateral = soft ? -.15 * per_kn : 0;
+      car.dynamics.wheels[i].bushing_lateral = soft ? .3e-6 : 0;  // 0.3 mm per kN
+    }
+    car.run(2, 0, 0, 0);
+    car.dynamics.drive.engaged = false;
+    car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -16});
+    for (auto& s : car.dynamics.state) s.spin = 16 / .31;
+    car.run(2.5, 0, 0, .09);
+    yaw[soft] = car.dynamics.body.omega().y;
+    outer[soft] = car.dynamics.state[1].compliance_steer / degree;
+    if (soft) {
+      // The give follows the steered wheel's side: square to its heading.
+      const auto& s = car.dynamics.state[1];
+      give = s.compliance_offset.x;
+      const Vec3 heading = (s.hub_rotation * wheel_steering(s.steer_axis, .09 + s.compliance_steer)).rotate({0, 0, -1});
+      SLRR_REQUIRE(std::abs(s.compliance_offset.dot(heading)) < 1e-6);
+      SLRR_REQUIRE(std::abs(s.compliance_offset.z) > 1e-5);
+    }
+  }
+  Car braking;
+  for (size_t i = 0; i < 4; ++i) {
+    braking.dynamics.wheels[i].compliance_braking = i < 2 ? 0 : .1 * per_kn;
+    braking.dynamics.wheels[i].bushing_longitudinal = 1e-6;  // 1 mm per kN
+  }
+  braking.run(2, 0, 0, 0);
+  braking.dynamics.drive.engaged = false;
+  braking.dynamics.body.velocity = braking.dynamics.body.orientation.rotate({0, 0, -20});
+  for (auto& s : braking.dynamics.state) s.spin = 20 / .31;
+  braking.run(.5, 0, .6, 0);
+  const double rear_left = braking.dynamics.state[2].compliance_steer / degree,
+               rear_right = braking.dynamics.state[3].compliance_steer / degree;
+  const double back = braking.dynamics.state[0].compliance_offset.z;
+  std::printf("COMPLIANCE yaw %.3f -> %.3f rad/s, outer front %.2f deg %.2f mm; braking rears %.3f / %.3f deg, front back %.2f mm%c",
+              yaw[0], yaw[1], outer[1], give * 1000, rear_left, rear_right, back * 1000, 10);
+  // The bushings give: the outer (right) front inboard (-x), a braked front
+  // back (+z), a few millimetres.
+  SLRR_REQUIRE(give < -.0005 && give > -.005);
+  SLRR_REQUIRE(back > .001 && back < .01);
+  SLRR_REQUIRE(outer[0] == 0);
+  SLRR_REQUIRE(outer[1] < -.2);  // the outer (right) front turns right: out of the turn
+  SLRR_REQUIRE(yaw[1] < yaw[0] * .97);
+  // Toe-in: the left rear turns right, the right rear left, alike.
+  SLRR_REQUIRE(rear_left < -.05 && rear_right > .05);
+  SLRR_REQUIRE(std::abs(rear_left + rear_right) < .02);
+  SLRR_REQUIRE(std::abs(braking.dynamics.body.omega().y) < .02);
+}
+
 SLRR_TEST(hot_brake_fluid_boils_and_the_pressure_falls) {
   const auto brake = brake_hardware(0, 2, .286);
   double fluid = kAmbientTemperature;
@@ -2063,6 +2208,10 @@ int main() {
       anti_dive_and_anti_squat_carry_part_of_the_load_transfer,
       camber_gain_follows_the_curve_about_the_static_height,
       camber_gain_keeps_the_outer_wheel_leaning_into_a_turn,
+      bump_steer_follows_the_toe_curve_about_the_static_height,
+      rear_toe_in_under_bump_steers_a_rolling_car_out_of_its_turn,
+      a_strut_keeps_its_scripts_static_toe,
+      compliance_steer_toes_the_loaded_wheels_by_their_forces,
       hard_braking_declutches_so_the_engine_never_pushes_the_rear_wheels,
       coasting_engine_braking_fades_with_the_speed,
       releasing_a_hard_brake_at_speed_takes_up_without_a_jolt,
