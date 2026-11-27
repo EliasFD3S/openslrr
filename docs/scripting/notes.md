@@ -5,6 +5,16 @@ lookup and GameRef handles, moved from the knowledge base. Garbage
 collection is in [vm-gc.md](vm-gc.md); native coverage in
 [natives.md](natives.md).
 
+## #486: mod overlay folders
+
+**Cause.** The first overlay indexed game-relative filenames. It missed the same TUFA class declared in different roots or as a secondary blob. Scanning used Windows ANSI paths; ordering compared folder names byte-for-byte. A recursive resource load could return success with no primary class, and a filename differing only in case could select the wrong blob. Stock startup failure did not gate mod entries.
+
+**Change.** The VM indexes declared class identities in mod priority order, including secondary blobs. Direct resource loads keep the requested container's identities but use the winning definitions. They prefer an exact simple-name/stem match, then a case-insensitive match, then the first blob. Definitions and the primary name are registered before initializers can re-enter the loader. Discovery uses native paths and UTF-8 names, and compares order entries case-insensitively. The compiler ranks declarations by mod priority and writes output beside the winning source. Entries run only after a successful stock startup. See [the mod guide](mods.md) and [compiler guide](compiler.md#compiling-with-script-mods).
+
+**Validation.** Release host and compiler built. CTest passed `mod_overlay` and `float_literal_mode`; the host-linked `class_lifetime`, `vm_lookup`, `options_retry`, `gameref_alias`, `splash_boot` and `rpk_validation` suites passed. The fixtures cover non-ANSI mod and class filenames, case-insensitive order and unknown entries, a secondary class in a differently named higher-priority TUFA, recursive primary lookup during initialization, an unbound native during stock startup, and the top-level RPK exclusion.
+
+**In game.** In a private patched MWM install, the original host silently loaded stock `sl/Scripts/game/ClubInfo.class` and reported a missing entry method. With the same fixture, the fixed host logged `java.game.ClubInfo: mods/cross-root (overrides base)` and the entry in `mods/cross-root/system/Scripts/game/ClubInfo.class` printed its own marker. After `Init actualState=java.game.SplashScreen`, both original test mods called the winning `Stamp`: entry a / winner b, then entry b / winner b. Missing-class and missing-method entries each logged once. The Baiern spawned with 79 parts in ValoCity.
+
 ## Issues #72 / #126: exact TREE integers and integer balances
 
 `src/jvm/tree_eval.cpp:arithmetic` now handles integer operands without
@@ -108,6 +118,7 @@ pack setup logs unrelated frontend RID misses. Evidence:
 `assets/validation/class-lifetime/after.txt`.
 
 Release build, vm_lookup, tree_numbers, save_io and TUFA corpus checks pass.
+
 The corpus is unchanged: 1,501 files, 1,546 accepted classes and the existing
 Dialog.class CONS-kind-2 rejection. vm_lookup now checks immutable definitions
 in the running VM and refreshed metadata in a fresh VM. No native signatures

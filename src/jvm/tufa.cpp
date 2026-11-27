@@ -1,4 +1,5 @@
 #include "slrr/tufa.hpp"
+#include "slrr/utf8_path.hpp"
 
 #include <cstdio>
 #include <fstream>
@@ -350,7 +351,7 @@ bool tufa_load_file(const std::string& path, std::vector<TufaClass>* out,
                     std::string* err) {
   try {
     if (out) out->clear();
-    std::ifstream in(path, std::ios::binary | std::ios::ate);
+    std::ifstream in(path_from_utf8(path), std::ios::binary | std::ios::ate);
     if (!in) { if (err) *err="cannot open " + path; return false; }
     const auto length=in.tellg();
     if (length<0) { if (err) *err="cannot size " + path; return false; }

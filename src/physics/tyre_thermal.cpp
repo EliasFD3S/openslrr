@@ -57,33 +57,47 @@ TyreThermalSpec tyre_thermal_spec(double compound, double radius, double width) 
   return t;
 }
 
-// The outer two or three millimetres of tread: 8 % of the tyre.
-double tyre_surface_capacity(const TyreThermalSpec& t) { return .08 * tyre_mass(t) * kSpecificHeat; }
-double tyre_carcass_capacity(const TyreThermalSpec& t) { return .92 * tyre_mass(t) * kSpecificHeat; }
+// The tread's outer half millimetre, the skin the slide heats: 3 % of the
+// tyre; the rest of the tread band 20 %; the carcass the remaining 77 %.
+constexpr double kSkinShare = .03, kTreadShare = .20;
+double tyre_surface_capacity(const TyreThermalSpec& t) { return kSkinShare * tyre_mass(t) * kSpecificHeat; }
+double tyre_tread_capacity(const TyreThermalSpec& t) { return kTreadShare * tyre_mass(t) * kSpecificHeat; }
+double tyre_carcass_capacity(const TyreThermalSpec& t) {
+  return (1 - kSkinShare - kTreadShare) * tyre_mass(t) * kSpecificHeat;
+}
+
+double tyre_grip_temperature(const TyreTemperature& t) { return .5 * (t.surface + t.tread); }
 
 TyreTemperature step_tyre_temperature(const TyreThermalSpec& tyre, TyreTemperature t,
                                       double sliding, double rolling, double brake,
                                       double speed, double dt) {
-  if (!tyre.specified) return {kAmbientTemperature, kAmbientTemperature};
+  if (!tyre.specified) return {kAmbientTemperature, kAmbientTemperature, kAmbientTemperature};
   const double v = std::pow(std::abs(speed), .8);
   const double ambient = kAmbientTemperature;
-  // Half the sliding work heats the tread (the rest goes into the road); all
+  // Half the sliding work heats the skin (the rest goes into the road); all
   // of the hysteresis heats the carcass, and the rim conducts some of a hot
   // rotor's heat into it.
   const double rim = brake > t.carcass ? 1.5 * (brake - t.carcass) : 0;
-  const double inner = 25 * (t.carcass - t.surface);  // W, carcass to tread
-  // The tread sheds heat to the air over most of its band and to the road
-  // through the patch (while it rolls); the carcass through its sidewalls.
+  // Conduction through the rubber (0.25 W/m K) over the tread band: about
+  // 1.5 mm from the skin into the bulk, 5 mm from the bulk to the carcass.
+  const double skin_in = 160 * tread_area(tyre) * (t.surface - t.tread);  // W
+  const double tread_in = 50 * tread_area(tyre) * (t.tread - t.carcass);  // W
+  // The skin sheds heat to the air over most of the band and into the road
+  // at each pass through the patch: the shorter the contact, the steeper the
+  // gradient, so the conduction grows as the square root of the speed. The
+  // carcass sheds heat through its sidewalls.
   const double tread_air = (8 + 5 * v) * .8 * tread_area(tyre) * (t.surface - ambient);
-  const double road = 8 * std::min(1.0, std::abs(speed) / 5) * (t.surface - ambient);
+  const double road = 4 * std::sqrt(std::abs(speed)) * (t.surface - ambient);
   const double carcass_air = (6 + 4 * v) * (sidewall_area(tyre) + .2 * tread_area(tyre)) *
                              (t.carcass - ambient);
   TyreTemperature next;
-  next.surface = t.surface + (.5 * std::max(0.0, sliding) + inner - tread_air - road) * dt /
+  next.surface = t.surface + (.5 * std::max(0.0, sliding) - skin_in - tread_air - road) * dt /
                                  tyre_surface_capacity(tyre);
-  next.carcass = t.carcass + (std::max(0.0, rolling) + rim - inner - carcass_air) * dt /
+  next.tread = t.tread + (skin_in - tread_in) * dt / tyre_tread_capacity(tyre);
+  next.carcass = t.carcass + (std::max(0.0, rolling) + rim + tread_in - carcass_air) * dt /
                                  tyre_carcass_capacity(tyre);
   next.surface = std::clamp(next.surface, ambient, 400.0);
+  next.tread = std::clamp(next.tread, ambient, 350.0);
   next.carcass = std::clamp(next.carcass, ambient, 300.0);
   return next;
 }
@@ -119,7 +133,7 @@ TyrePressureEffect tyre_pressure_effect(const TyreThermalSpec& tyre, double infl
   e.rolling = 1 / std::sqrt(e.ratio);
   e.nominal_load = std::pow(e.ratio, .25);
   const double rubber =
-      std::clamp(1 - .002 * (t.surface - tyre_working_tread(tyre)), .85, 1.05);
+      std::clamp(1 - .002 * (tyre_grip_temperature(t) - tyre_working_tread(tyre)), .85, 1.05);
   e.stiffness = std::pow(e.ratio, .3) * rubber;
   return e;
 }
@@ -137,13 +151,13 @@ double tyre_wear_stiffness(double wear) {
   return 1 + .15 * (1 - std::clamp(wear, 0.0, 1.0));
 }
 
-double tyre_grip_factor(const TyreThermalSpec& tyre, double surface) {
+double tyre_grip_factor(const TyreThermalSpec& tyre, double temperature) {
   if (!tyre.specified) return 1;
   switch (tyre.compound) {
-    case TyreCompound::sport: return interpolate(kSport, surface);
-    case TyreCompound::supersport: return interpolate(kSupersport, surface);
-    case TyreCompound::drag_radial: return interpolate(kDragRadial, surface);
-    default: return interpolate(kStreet, surface);
+    case TyreCompound::sport: return interpolate(kSport, temperature);
+    case TyreCompound::supersport: return interpolate(kSupersport, temperature);
+    case TyreCompound::drag_radial: return interpolate(kDragRadial, temperature);
+    default: return interpolate(kStreet, temperature);
   }
 }
 

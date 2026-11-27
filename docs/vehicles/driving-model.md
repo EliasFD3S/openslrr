@@ -136,9 +136,20 @@ scaled. In strut mode (`setHub` mode 0) the strut fit replaces the hub
 rotation, so `setYpr` camber and toe do not reach a strut wheel: the patched
 stock struts tilt the fit itself to their static camber (#450,
 [notes](notes.md#tyres-and-suspension-geometry-450)). The copied `setCPatch` tolerance (`patch_angle`) is not read by the
-solver. Likewise, `setInstantCenter` values and the
-`WheelState::jacking` field are retained but have no active load effect:
-there is no instant-centre anti-dive/anti-squat force or jacking feedback.
+solver. Likewise, `setInstantCenter` values are retained but have no active
+load effect (their frame is unknown and the recovered exe does not use
+them). Anti-dive, anti-lift and anti-squat come from typical shares by
+suspension type instead (#469, [notes](notes.md#anti-dive-and-anti-squat-469)):
+`WheelState::jacking` pushes body and wheel apart (or together) by the share
+of each wheel's longitudinal load transfer its arms carry.
+Camber changes with suspension travel along a curve about the static ride
+height (#481, [notes](notes.md#camber-gain-481)): gain x bump +
+progression x bump^2 / 2, from the suspension script's
+`WheelRef.setCamberGain` or typical values by suspension type.
+`wheel_pose` turns the arm fit's hub by the difference between the curve and
+the fit's own change, so the tyre's camber input, the rendered wheel and the
+kingpin follow it; `VehicleDynamics::update_camber_references` finds each
+static length from the car's weight every step.
 Wheel YPR and the existing arm/hub kinematics still affect contact geometry.
 Anti-roll bars are an optional host approximation, deliberately enabling a
 stock feature whose Java commands and catalog branch were dormant. The patched
@@ -269,15 +280,21 @@ Notes and measurements: [notes](notes.md#brakes-as-hardware-abs-and-asr-446).
   ambient with a 40 s lag; past 230 deg C (DOT 4) the pressure reaching the
   pads falls, to 0.4 at 290 deg C.
 - **Tyres** (`src/physics/tyre_thermal.cpp`): with the patched `Tyre`
-  (`WheelRef.setTyreSpec`, the compound), each tyre has a tread and a
-  carcass temperature. Half the sliding work at the patch heats the tread,
-  the rolling resistance and the rotor (through the rim) heat the carcass;
-  both cool faster with speed. The tread temperature scales the tyre's
-  friction (`TireParameters::friction`) for the force law and the sticking
-  limits alike, through a curve per compound.
-- **Feedback.** While ABS works, a force feedback wheel buzzes at 14 Hz and
-  the pad the brake is bound to rumbles; the HUD lights the stock ABS / ASR
-  lamps. Driverless cars with physical brakes have ABS.
+  (`WheelRef.setTyreSpec`, the compound), each tyre has a surface skin, a
+  tread bulk and a carcass temperature (#472). Half the sliding work at the
+  patch heats the skin, which passes it to the bulk and loses it to the air
+  and the road within seconds; the rolling resistance and the rotor (through
+  the rim) heat the carcass; all cool faster with speed. The tread rubber's
+  temperature (`tyre_grip_temperature`, the mean of skin and bulk, what the
+  HUD shows) scales the tyre's friction (`TireParameters::friction`) for the
+  force law and the sticking limits alike, through a curve per compound.
+  Wear and rubber smoke follow the skin.
+- **Feedback.** Each time ABS releases a front wheel (a channel opens its
+  outlet valve), a force feedback wheel gets a short knock; each release on
+  any wheel gives the pad the brake is bound to a short pulse, at most ten a
+  second, both scaled by the vibration option (#474). The HUD lights the
+  stock ABS / ASR lamps while the aid works. Driverless cars with physical
+  brakes have ABS.
 - **ASR** (`TractionControl`, Options ASR slider): while the driver
   accelerates (clutch engaged, no brake, no shift), the engine torque factor
   follows the driven axles' mean slip past 8 % or 0.8 m/s (20 % or 2 m/s at

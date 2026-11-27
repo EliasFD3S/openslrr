@@ -25,6 +25,11 @@ using Sections = std::map<std::string, Section>;
 bool parse(std::string_view text, Sections& out,
            std::string* error = nullptr);
 
+// One flat object of strings, numbers and booleans (mod.json, #486). Rejects
+// empty or duplicate keys, nulls and containers; Number.text keeps the JSON
+// spelling of each number. On failure out is empty.
+bool parse_flat(std::string_view text, Section& out, std::string* error = nullptr);
+
 struct Entry {
   std::string section, key;
   Scalar value;

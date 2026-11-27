@@ -39,6 +39,11 @@ int main(int argc,char** argv) try {
   SLRR_REQUIRE(r.find_entry(id,1)&&r.find_entry(id,1)->alias=="alias"&&bytes<64*1024);
   SLRR_REQUIRE(r.read_payload(RpkIndex::make_full_id(id,1))==text);}
  std::puts("PASS metadata-only indexing and deferred large-offset payload read");
+ {fs::create_directories(f.root/"mods/sub");fs::create_directories(f.root/"ok/mods");save(f.root/"mods/sub/skipped.rpk",valid);save(f.root/"ok/mods/loaded.rpk",valid);
+  RpkIndex r;r.set_root(f.root.string());r.open_all();
+  SLRR_REQUIRE(!r.pack_by_path("mods\\sub\\skipped.rpk")&&!r.pack_by_path("mods/sub/skipped.rpk"));
+  SLRR_REQUIRE(r.pack_by_path("ok\\mods\\loaded.rpk")&&!r.pack_by_path("ok\\mods\\loaded.rpk")->entries.empty());
+  std::puts("PASS open_all skips top-level mods/ packs but loads nested mods/ packs");}
  auto root=node("params 0x2\n",2);
  for(int k=0;k<2;++k){size_t p=8+k*23;root[p+8]=1;put(root,p+14,55);put(root,p+18,uint32_t(root.size()));}
  path=f.root/"cycle.rpk";save(path,pack(root,1));{RpkIndex r;r.set_root(f.root.string());auto id=r.open_lib("cycle.rpk");auto map=scene_instances_ground_map(r,RpkIndex::make_full_id(id,1));SLRR_REQUIRE(map.render_id==RpkIndex::make_full_id(id,2));}

@@ -60,4 +60,17 @@ public class WheelRef extends Native
 	// (Tyre.tcSTREET 0, tcSPORT 1, tcSUPERSPORT 2, tcDRAGRADIAL 3).
 	public native void setTyreSpec( float compound );
 
+	// OpenSLRR (#469): the share of the axle's longitudinal load transfer the
+	// suspension's arms carry, 0 to 1.5: braking (front anti-dive, rear
+	// anti-lift) and driving (front anti-lift, rear anti-squat). Without it
+	// the host uses typical shares for the suspension type.
+	public native void setAnti( float braking, float driving );
+
+	// OpenSLRR (#481): the camber curve about the static ride height: the gain
+	// in degrees per 25 mm of bump there (negative: the top leans inboard)
+	// and its change per 25 mm of bump (negative: progressive, as short-long
+	// arms; positive: fading, as struts). Without it the host uses typical
+	// values for the suspension type.
+	public native void setCamberGain( float gain, float progression );
+
 }

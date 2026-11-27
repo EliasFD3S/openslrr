@@ -1,4 +1,5 @@
 #include "slrr/race_runtime.hpp"
+#include "slrr/utf8_path.hpp"
 #include "slrr/natives_boot.hpp"
 #include "natives_internal.hpp"
 
@@ -104,20 +105,14 @@ Object* script_instance_for(Jvm& jvm, const RpkIndex& rpk, uint32_t full_id) {
   if (script.size() < 7) return nullptr;
   for (char& c : script)
     if (c == '/') c = '\\';
-  std::string root = rpk.game_root();
-  if (!root.empty() && root.back() != '\\' && root.back() != '/')
-    root.push_back('\\');
-  const std::string disk = root + script;
-  if (!jvm.load_class(disk)) {
+  // The host's root string is native (ANSI); the loader takes UTF-8.
+  const std::string disk = path_to_utf8(std::filesystem::path(rpk.game_root()) / script);
+  std::string primary;
+  if (!jvm.load_class_file(disk, &primary)) {
     std::printf("[track] class miss %s\n", disk.c_str());
     return nullptr;
   }
-  std::string simple = script;
-  const auto slash = simple.find_last_of('\\');
-  if (slash != std::string::npos) simple = simple.substr(slash + 1);
-  if (simple.size() > 6 && simple.compare(simple.size() - 6, 6, ".class") == 0)
-    simple.resize(simple.size() - 6);
-  const TufaClass* tc = jvm.find_class(simple);
+  const TufaClass* tc = jvm.find_class(primary);
   if (!tc) return nullptr;
   Object* inst = jvm.new_object(tc->name());
   if (!inst) return nullptr;
@@ -160,20 +155,14 @@ Object* script_construct(Jvm& jvm, const RpkIndex& rpk, uint32_t full_id,
   if (script.size() < 7) return nullptr;
   for (char& c : script)
     if (c == '/') c = '\\';
-  std::string root = rpk.game_root();
-  if (!root.empty() && root.back() != '\\' && root.back() != '/')
-    root.push_back('\\');
-  const std::string disk = root + script;
-  if (!jvm.load_class(disk)) {
+  // The host's root string is native (ANSI); the loader takes UTF-8.
+  const std::string disk = path_to_utf8(std::filesystem::path(rpk.game_root()) / script);
+  std::string primary;
+  if (!jvm.load_class_file(disk, &primary)) {
     std::printf("[vt] class miss %s\n", disk.c_str());
     return nullptr;
   }
-  std::string simple = script;
-  const auto slash = simple.find_last_of('\\');
-  if (slash != std::string::npos) simple = simple.substr(slash + 1);
-  if (simple.size() > 6 && simple.compare(simple.size() - 6, 6, ".class") == 0)
-    simple.resize(simple.size() - 6);
-  const TufaClass* tc = jvm.find_class(simple);
+  const TufaClass* tc = jvm.find_class(primary);
   if (!tc) return nullptr;
   Object* inst = jvm.new_object(tc->name());
   if (!inst) return nullptr;
@@ -504,9 +493,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
             name = script;
             if (!jvm.find_class(name)) jvm.load_class(name);
           } else {
-            name = std::filesystem::path(script).stem().string();
-            if (!jvm.find_class(name))
-              jvm.load_class_file((std::filesystem::path(rpk.game_root()) / script).string());
+            jvm.load_class_file(path_to_utf8(std::filesystem::path(rpk.game_root()) / script), &name);
           }
         }
         const auto* cls = jvm.find_class(name);

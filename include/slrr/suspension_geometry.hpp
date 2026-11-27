@@ -44,4 +44,17 @@ double caster_trail(const WheelConfig& wheel, double length);
 // without a strut fit.
 inline constexpr double kTypicalScrubRadius = .01;
 double kingpin_lift_rate(const WheelConfig& wheel, double length, double steer);
+// Camber gain (#481). The wheel's camber against the body (rad, negative
+// with the top inboard) as its arms alone give it at `length`, without the
+// curve; NaN without an arm fit.
+double geometry_camber(const WheelConfig& wheel, double length);
+// Fits the wheel's camber curve to its static ride height: `load` is the
+// static weight on the spring (N). The spring length there becomes
+// camber_reference, with the geometry's camber and gain at that length
+// (a NaN camber_gain takes the geometry's, clamped to -1.5..-0.2 deg per
+// 25 mm). Without a working spring or arm fit, camber_reference is 0 and
+// wheel_pose keeps the geometry's camber.
+void update_camber_reference(WheelConfig& wheel, double load);
+// The curve's camber change from the static height (rad) at `length`.
+double camber_curve_change(const WheelConfig& wheel, double length);
 } // namespace slrr::physics
