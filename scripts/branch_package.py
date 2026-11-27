@@ -58,6 +58,8 @@ def payload_name(path):
     parts = path.split("/")
     if len(parts) < 3 or parts[:1] != ["patch"] or parts[1] not in PATCH_ROOTS:
         raise ValueError(f"Unsupported patch location: {path!r}")
+    if len(parts) > 32 or len(path.encode("utf-8")) > 1024:
+        raise ValueError(f"Path exceeds launcher depth or byte limit: {path!r}")
     for part in parts:
         stem = part.split(".")[0].rstrip().upper()
         if (not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_. -]{0,254}", part)
@@ -121,23 +123,34 @@ def release_binary(build):
     return data
 
 
-# Notice paths in the clean build's pinned dependency sources (not SDK or game files).
+# Bounded notice set, not a substitute for reviewing each build's dependencies.
 BUILD_NOTICES = (
-    "bgfx-src/LICENSE", "bgfx-src/3rdparty/dear-imgui/LICENSE.txt", "bimg-src/LICENSE",
+    "bgfx-src/LICENSE", "bgfx-src/3rdparty/dear-imgui/LICENSE.txt",
+    "bgfx-src/3rdparty/stb/LICENSE", "bgfx-src/3rdparty/directx-headers/LICENSE",
+    "bgfx-src/3rdparty/iconfontheaders/LICENSE",
+    "bimg-src/LICENSE", "bimg-src/3rdparty/astc-encoder/LICENSE.txt",
     "bx-src/LICENSE", "bx-src/include/tinystl/LICENSE", "sdl3-src/LICENSE.txt",
-    "sdl3-src/src/hidapi/LICENSE-bsd.txt", "sdl3_mixer-src/LICENSE.txt",
-    "sdl3_mixer-src/src/dr_libs/LICENSE",
+    "sdl3-src/src/hidapi/LICENSE-bsd.txt", "sdl3-src/src/video/yuv2rgb/LICENSE",
+    "sdl3_mixer-src/LICENSE.txt", "sdl3_mixer-src/src/dr_libs/LICENSE",
+)
+# These texts aren't shipped alongside the font arrays in the bgfx tree.
+PRODUCER_NOTICES = (
+    "branch_package_notices/ATTRIBUTIONS.txt",
+    "branch_package_notices/Apache-2.0.txt",
+    "branch_package_notices/Font-Awesome-OFL-1.1.txt",
+    "branch_package_notices/CC0-1.0.txt",
 )
 
 
 def dependency_notices(build):
-    root = (build / "_deps").resolve()
     sections = []
-    for name in BUILD_NOTICES:
-        path = root / name
-        if path.resolve() != path or not 0 < path.stat().st_size < 1024 * 1024:
-            raise ValueError(f"Unexpected dependency notice: {name}")
-        sections.extend([name.encode() + b"\n", path.read_bytes(), b"\n\n"])
+    for root, names in (((build / "_deps").resolve(), BUILD_NOTICES),
+                        (Path(__file__).resolve().parent, PRODUCER_NOTICES)):
+        for name in names:
+            path = root / name
+            if path.resolve() != path or not path.is_file() or not 0 < path.stat().st_size < 1024 * 1024:
+                raise ValueError(f"Missing or unexpected dependency notice: {name}")
+            sections.extend([name.encode() + b"\n", path.read_bytes(), b"\n\n"])
     return b"".join(sections)
 
 

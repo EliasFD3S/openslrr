@@ -102,6 +102,46 @@ class Package(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             self.package()
 
+    def test_required_notice_attribution(self):
+        self.package()
+        with ZipFile(self.output / producer.ASSET) as archive:
+            notice = archive.read("NOTICE.txt")
+        # Expectations independent of the producer lists so omissions fail the test.
+        for marker in (
+            b"Font data copyright Google 2012", b"Copyright 2015 Google Inc. All Rights Reserved.",
+            b"Copyright Dave Gandy 2016. All rights reserved.", b"Kenney.nl and SamBrishes",
+            b"Version 2.0, January 2004", b"END OF TERMS AND CONDITIONS",
+            b"SIL OPEN FONT LICENSE Version 1.1", b"TERMINATION",
+            b"CC0 1.0 Universal", b"Limitations and Disclaimers",
+            b"Copyright 2020-2024 Arm Limited",
+        ):
+            self.assertIn(marker, notice)
+        for name in ("bimg-src/3rdparty/astc-encoder/LICENSE.txt", "bgfx-src/3rdparty/stb/LICENSE",
+                     "bgfx-src/3rdparty/directx-headers/LICENSE", "bgfx-src/3rdparty/iconfontheaders/LICENSE",
+                     "sdl3-src/src/video/yuv2rgb/LICENSE"):
+            self.assertIn((name + "\n" + name + "\n\n").encode(), notice)
+
+    def test_missing_required_notice_fails(self):
+        name = "bimg-src/3rdparty/astc-encoder/LICENSE.txt"
+        (self.build / "_deps" / name).unlink()
+        with self.assertRaisesRegex(ValueError, "Missing or unexpected dependency notice"):
+            self.package()
+        self.assertFalse((self.output / producer.ASSET).exists())
+
+    def test_patch_path_depth_limit(self):
+        path = "patch/sl/" + "d/" * 29 + "a.cfg"
+        self.assertEqual(len(path.split("/")), 32)
+        self.assertEqual(producer.payload_name(path), path)
+        with self.assertRaisesRegex(ValueError, "depth or byte limit"):
+            producer.payload_name(path.replace("/a.cfg", "/d/a.cfg"))
+
+    def test_patch_path_byte_limit(self):
+        path = "patch/sl/" + ("a" * 254 + "/") * 3 + "b" * 246 + ".cfg"
+        self.assertEqual(len(path.encode("utf-8")), 1024)
+        self.assertEqual(producer.payload_name(path), path)
+        with self.assertRaisesRegex(ValueError, "depth or byte limit"):
+            producer.payload_name(path.replace(".cfg", "b.cfg"))
+
     def test_wrong_sha_or_dirty(self):
         with self.assertRaisesRegex(ValueError, "HEAD"):
             producer.check_source(self.repo, "0" * 40)

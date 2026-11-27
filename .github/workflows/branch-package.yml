@@ -34,13 +34,13 @@ jobs:
       - name: Select Python for the producer
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.10"
 
       - name: Test the trusted producer before building
-        run: python -I producer/tests/test_branch_package.py
+        run: python -IB producer/tests/test_branch_package.py
 
       - name: Verify exact official branch tip before checkout
-        run: python -I producer/scripts/branch_package.py check-tip
+        run: python -IB producer/scripts/branch_package.py check-tip
 
       - name: Check out reviewed engine commit, never the moving branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -61,15 +61,22 @@ jobs:
 
       - name: Configure fresh x64 build with Visual Studio 2022
         run: |
-          python -I producer/scripts/branch_package.py check-source --checkout engine
+          python -IB producer/scripts/branch_package.py check-source --checkout engine
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cmake -S engine -B build -G 'Visual Studio 17 2022' -A x64 -DSLRR_COMPILE_JOBS=2
       - name: Build Release host (do not run the game)
         run: cmake --build build --config Release --target slrr_host --parallel 2
-      - name: Stage committed payload and record candidate identity
-        run: python -I producer/scripts/branch_package.py package --checkout engine --build build --output candidate
-      - name: Recheck official tip before uploading candidate
-        run: python -I producer/scripts/branch_package.py check-tip
+      - name: Check producer checkout, stage candidate and recheck official tip
+        run: |
+          # Detect checkout drift before executing any post-build producer code.
+          # This is not isolation from reviewed build code running on this runner.
+          $head = git -C producer rev-parse HEAD
+          if ($LASTEXITCODE -or $head -cne $env:GITHUB_SHA) { throw 'Unexpected producer checkout HEAD' }
+          $status = git -C producer -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all --ignored=matching
+          if ($LASTEXITCODE -or $status) { throw 'Producer checkout changed during the engine build' }
+          python -IB producer/scripts/branch_package.py package --checkout engine --build build --output candidate
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -IB producer/scripts/branch_package.py check-tip
       - name: Retain candidate for manual review only
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

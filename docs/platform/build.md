@@ -15,6 +15,13 @@ produced the x64 Release host. The local ZIP contained 831 overlays in the six
 approved roots; every overlay and the engine license matched its Git blob.
 The host digest matched the build output. The game was not run.
 
+Notice coverage is intentionally bounded. The Release link inputs include `bimg.lib`;
+its generated project compiles astcenc and `image.cpp` calls its decoder. The host
+also builds bgfx’s ImGui glue (four embedded fonts and stb) and uses vendored
+DirectX and icon headers. SDL3’s static project includes the bundled YUV
+conversion code. The packager includes their notices, not licenses for unrelated
+examples or build-only tools.
+
 ## Version metadata before compilation on every generator (#103)
 
 CMakeLists.txt now defines slrr_version as an always-run custom target whose

@@ -1,0 +1,39 @@
+Attribution for embedded fonts and statically linked astcenc
+
+Font names, versions and copyright strings below come from the TTF name
+records embedded by bgfx examples/common/imgui/imgui.cpp at revision
+fe9bbdec66110f8626b9251a4947fc336ac3f62c:
+https://github.com/bkaradzic/bgfx/tree/fe9bbdec66110f8626b9251a4947fc336ac3f62c/examples/common/imgui
+
+Roboto Regular, Version 1.100141; 2013 (roboto_regular.ttf.h)
+Font data copyright Google 2012
+Licensed under the Apache License, Version 2.0
+
+Roboto Mono Regular, Version 2.000986; 2015 (robotomono_regular.ttf.h)
+Copyright 2015 Google Inc. All Rights Reserved.
+Licensed under the Apache License, Version 2.0
+
+The Apache-2.0 text for both fonts is reproduced from the 2015 addition
+of Roboto Mono to Google Fonts:
+https://github.com/google/fonts/blob/017bacd6542f9d9453267715ddafc9f71fb757bf/apache/robotomono/LICENSE.txt
+
+Font Awesome, Version 4.7.0 2016 (icons_font_awesome.ttf.h)
+Copyright Dave Gandy 2016. All rights reserved.
+The v4.7.0 project applies SIL Open Font License 1.1 to this font:
+https://github.com/FortAwesome/Font-Awesome/blob/a3fe90fa5f6fac55d197f9cbd18e3f57dafb716c/src/license.html
+The license text comes from https://openfontlicense.org/documents/OFL.txt
+(SIL's example notice placeholders are replaced with the font's own notice).
+
+Kenney Icon Font, Version 1.0 (icons_kenney.ttf.h)
+Kenney.nl and SamBrishes
+CC0 License
+https://creativecommons.org/publicdomain/zero/1.0/
+The CC0 1.0 Universal legal text comes from:
+https://creativecommons.org/publicdomain/zero/1.0/legalcode.txt
+
+Arm ASTC Encoder (astcenc)
+Copyright 2020-2024 Arm Limited
+Licensed under the Apache License, Version 2.0
+The copyright is from the vendored astcenc.h; the license text is copied
+from 3rdparty/astc-encoder/LICENSE.txt in the build's pinned bimg source.
+https://github.com/bkaradzic/bimg/tree/9bfbd6493b48a15238f2d1374a718ec026524515/3rdparty/astc-encoder
