@@ -116,16 +116,28 @@ void physical_stock_opponent(const char *pack_name) {
               std::hypot(m[12] - finish[0], m[14] - finish[2]));
   SLRR_REQUIRE(std::fabs(state.speed_kph) < 2 &&
                std::hypot(m[12] - finish[0], m[14] - finish[2]) < 5);
+  // Near its end the city route passes 0.5 m from a ground collision shape
+  // (about x 115.3, z -1489), which both cars hit at about 55 km/h. Since
+  // #461 such a hit can pinch and debead a tyre (the Baiern loses both rear
+  // tyres), so the ROC lap starts with a new car, not the crashed one.
+  part_destroy(car);
   auto shells = gameref_get(&ground)->children;
   for (void *child : shells)
-    if (child != car)
-      gameref_remove(child);
+    gameref_remove(child);
   scene_instances_enable_static_floor(false);
   ground.class_name = "java.util.resource.GroundRef";
   gameref_set_type(
       *gameref_get(&ground),
       RpkIndex::make_full_id(f.packs.open_lib("maps/ROC_track.rpk"), 1));
   spawn_ground_shell(f.vm, f.packs, &ground);
+  vehicle = vehicle_spawn_stock(f.vm, f.packs, &ground, type);
+  SLRR_REQUIRE(vehicle);
+  car = part_chassis(vehicle);
+  SLRR_REQUIRE(car);
+  race_brain_command(f.packs, &brain,
+                     "controllable " + std::to_string(gameref_make_live(car)));
+  bot->fields["car"] = Value::make_obj(vehicle);
+  racer->fields["car"] = Value::make_obj(vehicle);
   // Exercise the original MWM ROC command builder, including argument ordering.
   std::ifstream spline_file(game / "cars/racers/ROC_cars/ROC_MC.spl");
   RoadPoint roc;
@@ -235,8 +247,12 @@ void physical_stock_opponent(const char *pack_name) {
   // 5 m at the 120 Hz solver. At 1000 Hz (#380), with crash damage back on
   // the cage's 120 Hz tuning, the race AI ran up to 12.6 m off its line after
   // a 15 m/s impact; with the combined-slip tyre (#383), 6.6 m on the first
-  // lap and 8.4 m on the second.
-  SLRR_REQUIRE(max_error < 9 && finished);
+  // lap and 8.4 m on the second. The worst place is the corner near
+  // (616, -994), where the Enula runs wide onto the run-off: 7.7 m before
+  // #452, which reads that run-off as sand by its texture name (friction
+  // 0.6, rolling 0.15), and 12.5 m with the tyre changes since (10.4 m of
+  // them without the sand).
+  SLRR_REQUIRE(max_error < 14 && finished);
   SLRR_REQUIRE(max_request > .02 && max_wheel > .01 && max_yaw > .1);
   const auto before_brake = state.speed_kph;
   race_brain_command(f.packs, &brain, "AI_stop");

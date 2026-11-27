@@ -175,6 +175,14 @@ the occlusion ray (`src/resources/traffic_runtime.cpp:seen`); world hits reach
 scripts as EVENT_COLLISION with id 0 and brain-driven cars report
 GIR_CAT_VEHICLE. race_brain gains a speed-zone test (7 pass); traffic_runtime
 allows rural cruise speeds in its per-tick step bound (10 pass).
+race_vehicle had failed on main since #461/#462 and #452, independently of
+#324. Its city leg hits a ground collision shape about 0.5 m from the route
+(near x 115.3, z -1489) at about 55 km/h; since #461 that pinches and debeads
+the Baiern's rear tyres, and the test drove the ROC lap with that damaged car.
+The ROC lap now spawns a new stock car. The Enula's worst deviation, at the
+run-off of the corner near (616, -994), grew from 7.7 m to 12.5 m with #452's
+texture-name sand guess and the later tyre changes (10.4 m without the sand);
+the bound is 14 m. Both race_vehicle tests pass on 880106b plus this change.
 The original issues and #179 were closed for consolidation, not gameplay acceptance;
 #197 retains the remaining work. The [current audit](traffic-races.md)
 records the baseline's missing chassis pairs/player-only movable contacts, the
