@@ -498,16 +498,26 @@ Change: `mods/nfsu2-camera` ([README](../../mods/nfsu2-camera/README.md)),
   0.5 m/s is air time), `boxMin/boxMax`; time from `System.simTime`, so a
   paused game freezes the camera.
 - One change from the engine version: the crash jolt divides the velocity
-  change by the time since the velocity last changed, not by the frame time;
-  physics updates the velocity at 60 Hz, so at 144 fps ordinary braking read
-  as a 2.4 times larger jolt.
-- `modInit`: `ModOptions` ARCADE VIEW (choice, default FAR; a change selects
-  that view) and ARCADE SHAKE (%) (0-200, default 100); `camera.ARCADE.view`
-  is set to the default view only when missing; `ModKeys` NEXT ARCADE VIEW,
+  change by the physics step that made it (the frame time, but at least the
+  1/60 s step when the velocity changed after several unchanged frames, and
+  never more than one step): at 144 fps the frame time made ordinary braking
+  read as a 2.4 times larger jolt. Review round 1 found that dividing by the
+  time since the last change missed a hit after a standstill.
+- Switching from CLASSIC starts the eye at the classic follow camera's
+  azimuth (Track keeps that camera alive and hidden; read through
+  `GameLogic.actualState`), as `gameref.cpp` did at 46f90d7. A first
+  activation on a car or map starts behind it.
+- `modInit`: `ModOptions` ARCADE VIEW on `camera.ARCADE.view`, the key
+  `Cameras` saves the view under (one setting for the option and the V
+  cycle; the camera passes an option change on to `Cameras`' copy), and
+  ARCADE SHAKE (%) (0-200, default 100); `camera.ARCADE.view` is set to FAR
+  only when missing; `ModKeys` NEXT ARCADE VIEW,
   unbound, delivered as a global hotkey (`new Hotkey(axis, VIRTUAL, cmd,
   receiver)`) because a provider has no OSD.
 - View changes (V or the mod key) are ignored while LOOK BACK is held; `Track`
-  still delivers V then, so the mod writes its current view back.
+  still delivers V then and saves the next view, so the mod writes its view
+  back and `viewName` names the kept view in Track's message.
+- `build-run-branch.ps1` keeps an installed `mod.json`'s `enabled` value.
 - `scripts/build-run-branch.ps1` also installs the repository's `mods/`
   folders (without `tests`) into `<GameRoot>/mods`.
 
@@ -515,8 +525,10 @@ Validation (Windows, Release, private game copy with the patch and the mod):
 
 - `compile_game_sources <game> mods/nfsu2-camera`: 4 classes. VM test
   (`mods/nfsu2-camera/tests/nfsu2-camera-test`, a port of
-  `test_arcade_camera.cpp` plus the 144 Hz jolt and look-back guard cases):
-  43/43 in the game's VM.
+  `test_arcade_camera.cpp` plus jolt timing at 30/60/144 Hz with a
+  standstill before the hit, eye seeding and the look-back guard): 52/52 in
+  the game's VM. The deployment's `enabled` handling was run against a
+  temporary game root (kept `false`; a fresh install has no `enabled`).
 - Reference replay (Valo City, Baiern, `--bench-realtime`) with ARCADE
   selected, keys sent with `keybd_event`: V cycled FAR → BUMPER → HOOD →
   NEAR → FAR with the "Camera:" message; B held gave the front view of the

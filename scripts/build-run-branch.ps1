@@ -64,6 +64,26 @@ function Install-BranchPatch {
     }
     $sources = @($files | ForEach-Object { [PSCustomObject]@{ File = $_; Relative = $_.FullName.Substring($patchPrefix.Length) } }) +
         @($modFiles | ForEach-Object { [PSCustomObject]@{ File = $_; Relative = Join-Path 'mods' $_.FullName.Substring($modsPrefix.Length) } })
+    # An installed mod.json keeps the player's "enabled" choice: the new
+    # manifest is installed with the existing enabled value.
+    $staging = Join-Path ([IO.Path]::GetTempPath()) ("slrr-mod-manifests-" + [Guid]::NewGuid().ToString('N'))
+    $sources = @($sources | ForEach-Object {
+        $source = $_
+        $installed = Join-Path $Root $source.Relative
+        if ($source.Relative -match '^mods[\\/][^\\/]+[\\/]mod\.json$' -and (Test-Path -LiteralPath $installed -PathType Leaf)) {
+            $old = $null
+            try { $old = Get-Content -LiteralPath $installed -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
+            if ($old -and ($old.PSObject.Properties.Name -contains 'enabled')) {
+                $new = Get-Content -LiteralPath $source.File.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+                $new | Add-Member -NotePropertyName enabled -NotePropertyValue ([bool]$old.enabled) -Force
+                $staged = Join-Path $staging $source.Relative
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent $staged) | Out-Null
+                [IO.File]::WriteAllText($staged, ($new | ConvertTo-Json -Compress) + [Environment]::NewLine, (New-Object Text.UTF8Encoding $false))
+                $source = [PSCustomObject]@{ File = (Get-Item -LiteralPath $staged); Relative = $source.Relative }
+            }
+        }
+        $source
+    })
     $entries = @($sources | ForEach-Object {
         $relative = $_.Relative
         $destination = Join-Path $Root $relative
@@ -108,6 +128,7 @@ function Install-BranchPatch {
             throw "Patch verification failed: $($entry.Destination). Backup: $backup"
         }
     }
+    Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host "Verified all branch patch files for commit $Commit in $Root"
 }
 

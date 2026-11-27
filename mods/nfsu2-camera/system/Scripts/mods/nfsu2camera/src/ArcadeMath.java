@@ -27,6 +27,7 @@ public class ArcadeMath
 	public final static float IMPACT_SHAKE = 0.15;	// metres for the hardest crash
 	public final static float TILT_PER_G = 0.05;	// radians of tilt per g of cornering
 	public final static float MAX_TILT = 0.06;		// radians
+	public final static float PHYSICS_STEP = 1.0 / 60.0;	// host physics step, s
 
 	public static String viewName( int v )
 	{
@@ -189,6 +190,31 @@ public class ArcadeMath
 	public static float vibration( float speed )
 	{
 		return smooth01( (speed * 3.6 - 150.0) / 150.0 );
+	}
+
+	// The time a velocity change seen this frame took. The car's velocity is
+	// published once per physics step: at a high frame rate a change shows up
+	// after several unchanged frames (one step, not the frames since the last
+	// change: a car that stood still for a second and is then hit changed in
+	// one step), at a low one a frame spans several steps.
+	public static float joltInterval( float frameDt, float sinceChange )
+	{
+		float t = sinceChange;
+		if( t > PHYSICS_STEP )
+			t = PHYSICS_STEP;
+		if( t < frameDt )
+			t = frameDt;
+		return t;
+	}
+
+	// Eye azimuth (atan2(x, z)) of an eye at (ex, ez) around a car at (cx, cz);
+	// the fallback when the eye is on the car.
+	public static float azimuthOf( float ex, float ez, float cx, float cz, float fallback )
+	{
+		float dx = ex - cx, dz = ez - cz;
+		if( dx * dx + dz * dz <= 0.0001 )
+			return fallback;
+		return Math.atan2( dx, dz );
 	}
 
 	// A velocity change above IMPACT_ACCEL starts a crash shake (0..1).

@@ -170,6 +170,39 @@ public class ArcadeTest
 		c.step( 1.0 / 144.0 );
 		check( "braking no shake at 144 Hz", c.impact == 0.0 );
 
+		// A car that stands still, then is hit: 10 m/s in one 60 Hz step is
+		// 600 m/s^2 (full shake), however long it stood, at 60 or 144 frames/s.
+		c = car( 0.0 );
+		settle( c, 60 );
+		c.vx = 10.0;
+		c.step( 1.0 / 60.0 );
+		check( "plateau then crash, 60 Hz (" + c.impact + ")", c.impact > 0.9 );
+		c = car( 0.0 );
+		for( int i = 0; i < 144; i++ )
+			c.step( 1.0 / 144.0 );
+		c.vx = 10.0;
+		c.step( 1.0 / 144.0 );
+		check( "plateau then crash, 144 Hz (" + c.impact + ")", c.impact > 0.9 );
+		// At 30 frames/s a frame spans two steps: 1 g of braking stays below.
+		c = car( 30.0 );
+		c.step( 1.0 / 30.0 );
+		c.vz = -29.67;
+		c.step( 1.0 / 30.0 );
+		check( "braking no shake at 30 Hz", c.impact == 0.0 );
+		check( "jolt interval", abs( ArcadeMath.joltInterval( 1.0 / 144.0, 1.0 ) - 1.0 / 60.0 ) < 0.00001
+			&& abs( ArcadeMath.joltInterval( 1.0 / 30.0, 1.0 / 30.0 ) - 1.0 / 30.0 ) < 0.00001 );
+
+		// Seeding from the classic eye: its azimuth around the car.
+		check( "azimuth of an eye left of the car", abs( ArcadeMath.azimuthOf( -3.0, 0.0, 0.0, 0.0, 1.0 ) + pi / 2.0 ) < 0.0001 );
+		check( "azimuth fallback", ArcadeMath.azimuthOf( 0.0, 0.0, 0.0, 0.0, 1.0 ) == 1.0 );
+		c = car( 0.0 );
+		c.seeded = 1;
+		c.seedYaw = -pi / 2.0;
+		c.step( 0.0 );
+		check( "seeded start (" + c.yaw + ")", abs( c.yaw + pi / 2.0 ) < 0.0001 && c.ex < -5.0 );
+		settle( c, 300 );
+		check( "seeded eye returns behind", abs( Math.wrapAngle( c.yaw ) ) < 0.001 );
+
 		// Look back cuts to a rear view; the mounted views use the rear bumper.
 		c = car( 20.0 );
 		c.step( 0.0 );
@@ -188,6 +221,7 @@ public class ArcadeTest
 		c.back = 1;
 		c.setView( ArcadeMath.BUMPER );
 		check( "view kept while looking back", c.view == ArcadeMath.FAR );
+		check( "refused view named as the kept one", c.viewName( ArcadeMath.BUMPER ) == "FAR" );
 		c.back = 0;
 		c.setView( ArcadeMath.BUMPER );
 		check( "view changes after release", c.view == ArcadeMath.BUMPER );

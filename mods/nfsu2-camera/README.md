@@ -11,7 +11,8 @@ Copy this folder to `<game>/mods/nfsu2-camera` (next to `system/`) and
 restart. It needs OpenSLRR with mod API 1 and the patched `Track.class`
 and `system/Scripts/openslrr` classes from `patch/`. `scripts/build-run-branch.ps1`
 installs it with the patch. Remove the folder, or set `"enabled": false`
-in `mod.json`, to uninstall. The `tests` folder is not part of the mod.
+in `mod.json`, to uninstall; `build-run-branch.ps1` keeps an installed
+`"enabled"` value when it updates the mod. The `tests` folder is not part of the mod.
 
 ## Use
 
@@ -23,14 +24,17 @@ Select **ARCADE** under **Options → Game → CAMERA**. While driving:
 | B (LOOK BACK), held | Rear view: the chase views look at the car from in front of it; BUMPER and HOOD look back from the rear bumper. |
 | NEXT ARCADE VIEW | Same as V. Unbound by default; bind it under **Options → Controls → Game controls**. |
 
-The view is remembered between sessions (`camera.ARCADE.view`). Race
+The view is remembered between sessions. Switching from CLASSIC to ARCADE
+during a drive starts from the classic camera's side of the car and swings
+behind it, as the engine version did; a new car or map starts straight behind.
+Race
 staging and other scripted cameras take over as before; V brings the ARCADE
 camera back.
 
 **Options → Mods**:
 
-- **ARCADE VIEW** (BUMPER, HOOD, NEAR, FAR; default FAR): picks the view.
-  A new profile starts in it.
+- **ARCADE VIEW** (BUMPER, HOOD, NEAR, FAR; default FAR): the view. It is
+  the same setting V changes (`camera.ARCADE.view`), so the two always agree.
 - **ARCADE SHAKE (%)** (0–200, default 100): strength of the road
   vibration, nitrous and crash shakes. 0 turns them off. The tilt in bends
   is not a shake and stays.
@@ -60,7 +64,8 @@ A port of the engine arcade camera that #476 removed (commit 46f90d7,
 The values approximate NFSU2's views by eye: the game's own camera table was
 not available.
 
-V and NEXT ARCADE VIEW do nothing while LOOK BACK is held.
+V and NEXT ARCADE VIEW do nothing while LOOK BACK is held (the "Camera:"
+message then names the view that stays).
 
 For tuning, `"nfsu2camera.debug": 1` in the `mods` section of
 `save/game/openslrr_options.json` logs the camera state once a second
@@ -71,6 +76,10 @@ For tuning, `"nfsu2camera.debug": 1` in the `mods` section of
 - No right-drag look and no mouse-wheel zoom on the ARCADE views: the mod API
   has no mouse input for a provider camera.
 - NEXT ARCADE VIEW shows no "Camera:" message (only Track's V key does).
+- Starting from the classic eye reads the patched `Track`'s follow camera
+  (`GameLogic.actualState`, `Track.cam`); the mod API has no call for it.
+- A V pressed while LOOK BACK is held is still saved by `Track` before the
+  mod restores the view (two writes of the options file).
 - The NEXT ARCADE VIEW key works while the ARCADE camera is showing, also
   behind the in-game menu (it is a global hotkey: providers have no OSD).
 
@@ -83,7 +92,7 @@ For tuning, `"nfsu2camera.debug": 1` in the `mods` section of
 | `.../ArcadeCamera` | The `CameraProvider`: state, poses, placement. |
 | `.../ArcadeMath` | Pure math and tuning (no natives besides `Math`). |
 | `.../ArcadeDriver` | `animate()` callback and the key's `osdCommand`. |
-| `tests/nfsu2-camera-test` | VM test (43 checks), a separate mod; see below. |
+| `tests/nfsu2-camera-test` | VM test (52 checks), a separate mod; see below. |
 
 Sources are in `src/`. To rebuild against a private game copy that has this
 folder under `mods/`: `compile_game_sources.exe <game> mods/nfsu2-camera`.

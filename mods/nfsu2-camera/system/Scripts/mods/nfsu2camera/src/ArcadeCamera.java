@@ -5,6 +5,7 @@ import java.io.*;
 import java.util.resource.*;
 import java.render.*;
 import java.openslrr.*;
+import java.game.*;
 
 // The ARCADE camera (#470): Need for Speed: Underground 2 style driving views
 // as a java.openslrr.CameraProvider. BUMPER and HOOD are fixed to the car;
@@ -17,7 +18,8 @@ import java.openslrr.*;
 public class ArcadeCamera extends CameraProvider
 {
 	public final static String NAME = "ARCADE";
-	public final static String KEY_DEFAULT_VIEW = "nfsu2camera.view";
+	// The view, shared by Cameras (the V cycle) and the ARCADE VIEW option.
+	public final static String KEY_VIEW = "camera." + NAME + ".view";
 	public final static String KEY_SHAKE = "nfsu2camera.shake";
 	// 1 logs the camera state once a second ("[nfsu2camera]" lines); no UI.
 	public final static String KEY_DEBUG = "nfsu2camera.debug";
@@ -31,7 +33,10 @@ public class ArcadeCamera extends CameraProvider
 	GameRef			cam, car;
 	int				view = ArcadeMath.FAR;
 	int				back;				// LOOK BACK held
-	int				lastDefault = -1;	// the ARCADE VIEW option last applied
+	int				rejectedView = -1;	// a V refused while looking back (viewName)
+	GameRef			lastCar, lastWorld;	// the last activation's target and map
+	float			seedYaw;			// eye azimuth to start from (seeded)
+	int				seeded;
 
 	// Car extent (chassis frame: x right, y up, z back) for the mounted views.
 	int				boxValid;
@@ -72,14 +77,14 @@ public class ArcadeCamera extends CameraProvider
 		return theInstance;
 	}
 
-	public static int defaultView()
+	// The saved view (FAR when none is saved).
+	public static int savedView()
 	{
-		return ArcadeMath.clampView( ModSettings.getInt( KEY_DEFAULT_VIEW, ArcadeMath.FAR ) );
+		return ArcadeMath.clampView( ModSettings.getInt( KEY_VIEW, ArcadeMath.FAR ) );
 	}
 
 	public ArcadeCamera()
 	{
-		lastDefault = defaultView();
 	}
 
 	public String name()
@@ -94,17 +99,29 @@ public class ArcadeCamera extends CameraProvider
 
 	public String viewName( int v )
 	{
+		// Track names the view it asked for right after setView: a change
+		// refused while looking back names the view that stays.
+		if( v == rejectedView )
+			return ArcadeMath.viewName( view );
 		return ArcadeMath.viewName( v );
 	}
 
 	public void activate( GameRef c, Viewport vp, int v )
 	{
 		deactivate();
+		// Start from the classic follow camera's eye, as the engine version
+		// did, unless the target or the map is new (then straight behind).
+		seeded = 0;
+		if( c == lastCar && world == lastWorld )
+			seedFromFollowCamera( c );
+		lastCar = c;
+		lastWorld = world;
 		car = c;
 		view = ArcadeMath.clampView( v );
 		back = 0;
+		rejectedView = -1;
 		init = 0;
-		applyDefaultView();
+		syncSavedView();
 		cam = new GameRef( world, GameRef.RID_CAMERA, "0,0,0,0,0,0,0x02", "nfsu2 arcade cam" );
 		camera = cam;	// the GPS follows it in its camera modes
 		cam.command( "render " + vp.id() + " 0 0 1 " + (Viewport.RENDERFLAG_CLEARDEPTH | Viewport.RENDERFLAG_CLEARTARGET) );
@@ -138,11 +155,16 @@ public class ArcadeCamera extends CameraProvider
 
 	public void setView( int v )
 	{
-		// Track still delivers V while LOOK BACK is held: keep the view (and
-		// the saved index, which Track already advanced) until it is released.
+		rejectedView = -1;
+		// Track still delivers V while LOOK BACK is held and has already saved
+		// the next view: keep the current one and put the saved index back.
 		if( back )
 		{
-			Cameras.setView( this, view );
+			if( v != view )
+			{
+				rejectedView = v;
+				Cameras.setView( this, view );
+			}
 			return;
 		}
 		view = ArcadeMath.clampView( v );
@@ -153,6 +175,7 @@ public class ArcadeCamera extends CameraProvider
 	public void lookBack( int pressed )
 	{
 		back = pressed;
+		rejectedView = -1;
 	}
 
 	// NEXT ARCADE VIEW: the same cycle as the change-view key.
@@ -167,15 +190,37 @@ public class ArcadeCamera extends CameraProvider
 		setView( v );
 	}
 
-	// A change of the ARCADE VIEW option (Options > Mods) selects that view.
-	void applyDefaultView()
+	// The ARCADE VIEW option writes KEY_VIEW directly; Cameras keeps its own
+	// copy of the view, so a change made in the options is passed on here.
+	void syncSavedView()
 	{
-		int d = defaultView();
-		if( d == lastDefault )
+		int s = savedView();
+		if( s != Cameras.view( this ) )
+			Cameras.setView( this, s );
+		if( s != view && !back )
+			setView( s );
+	}
+
+	// The classic follow camera stays alive (hidden) while a provider shows:
+	// its eye is where the classic view was looking from.
+	void seedFromFollowCamera( GameRef c )
+	{
+		GameState s = GameLogic.actualState;
+		if( !(s instanceof Track) )
 			return;
-		lastDefault = d;
-		Cameras.setView( this, d );
-		setView( d );
+		GameRef follow = ((Track)s).cam;
+		if( !follow )
+			return;
+		Vector3 e = follow.getPos();
+		Vector3 p = CarState.drawnPos( c );
+		if( !e || !p )
+			return;
+		float dx = e.x - p.x, dz = e.z - p.z;
+		float d = Math.sqrt( dx * dx + dz * dz );
+		if( d < 1.0 || d > 30.0 )
+			return;
+		seedYaw = ArcadeMath.azimuthOf( e.x, e.z, p.x, p.z, 0.0 );
+		seeded = 1;
 	}
 
 	void measureBox()
@@ -200,7 +245,7 @@ public class ArcadeCamera extends CameraProvider
 	{
 		if( !cam || !car )
 			return;
-		applyDefaultView();
+		syncSavedView();
 		Vector3 p = CarState.drawnPos( car );
 		Ypr o = CarState.drawnOri( car );
 		if( !p || !o )
@@ -263,6 +308,8 @@ public class ArcadeCamera extends CameraProvider
 		if( !init )
 		{
 			yaw = target;
+			if( seeded )
+				yaw = seedYaw;
 			focusY = py;
 			speed = speedNow;
 			pull = 0.0;
@@ -297,15 +344,14 @@ public class ArcadeCamera extends CameraProvider
 			if( nitroOn )
 				rate = 3.0;
 			nitro = nitro + (nitroOn - nitro) * ArcadeMath.approach( dt, rate );
-			// A crash or a hard landing: a velocity change above 4 g. The
-			// velocity changes once per physics step, so the change is divided
-			// by the time since it last changed, not by the frame time.
+			// A crash or a hard landing: a velocity change above 4 g, over the
+			// physics step that made it (ArcadeMath.joltInterval).
 			joltTime = joltTime + dt;
 			float dx = vx - pvx, dy = vy - pvy, dz = vz - pvz;
 			float dv = Math.sqrt( dx * dx + dy * dy + dz * dz );
 			if( dv > 0.0 )
 			{
-				impact = Math.max( impact, ArcadeMath.impactFromJolt( dv / joltTime ) );
+				impact = Math.max( impact, ArcadeMath.impactFromJolt( dv / ArcadeMath.joltInterval( dt, joltTime ) ) );
 				joltTime = 0.0;
 				pvx = vx; pvy = vy; pvz = vz;
 			}
