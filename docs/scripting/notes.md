@@ -457,3 +457,46 @@ Validation (Windows, Release):
   physically driven car (the replay drives the car by pose, so they read
   ~0), `sweep` beyond a 5 m drop test (0.11), race staging, ROC, and a
   selection change from the options (no UI until #488).
+
+### Review fixes (PR #493)
+
+- GPS modes 2 and 3 follow the camera, but Track's `renderer` is null while a
+  provider shows, so `animate` read an unassigned `CamPos`. The navigator
+  now follows the new `CameraProvider.camera` field (the provider's own
+  camera) and falls back to the car.
+- `setPoseRelative` only adds the drawn origin; a body-fixed camera that
+  turns its offsets with `drawnOri` uses last frame's orientation in
+  free-running play and slides on the body. New mode Local
+  (`CameraControl.setPoseLocal`): eye, focus and up in the chassis frame,
+  turned by the drawn frame's normalized axes at draw time.
+- The repair (F6), mechanic and paint close-ups send commands to Track's
+  hidden `cam`. `providerPause` switches to the stock follow camera before
+  them (deactivating the provider); `providerResume` re-activates the provider
+  when the last one closes.
+- `part_car_local_box` took the largest mesh's transform as the chassis
+  frame. It now uses the chassis node's own drawn transform in the same
+  (reflected, parent) space as `collect_root`'s instances
+  (`scene_instance_transform(chassis, chassis)`).
+- The drawn pose now writes its roll (`mod_look_roll`, the `roll` command
+  convention) to `ypr[2]` and, unless it is the bound follow camera, to
+  `camera_roll`, so `getOri().r` and `clearPose` keep a banked horizon.
+- A non-null up vector with NaN or infinity now rejects the pose (null is
+  still world up).
+
+Validation (Windows, Release): `mod_camera` 9/9 (adds local offsets turning,
+pitching and banking with the frame, scale-free axes, zero local up, roll
+write-back against the `roll` formula, non-finite up); ctest 7/7;
+`options_retry`, `gameref_alias`, `car_select_view` pass;
+`check_knowledge_refs.py` 684 references, 0 errors. In game, with the
+throwaway provider (not shipped; view 0 now a `setPoseLocal` hood camera
+that sets `camera`) and a test-only Track that stepped through the checks on
+the Valo City replay: in GPS mode 2 and 3 the navigator followed the provider's
+camera (navigator centre within 0.5 m of it; mode 3 turns the map with the
+camera), `assets/validation/camera-provider/provider-gps-mode2.png` and
+`-mode3.png`; repair, mechanic and paint each deactivated the provider,
+rendered `cam` (`provider-repair-closeup.png`) and re-activated the
+provider on close (log). `getOri().r` on the provider camera followed the
+car's small banks (about ±0.03 rad). `boxMin/boxMax` on the Baiern:
+-0.96..0.96 x -0.75..0.58 x -2.28..2.16 m at entry, -1.31..0.96 x -1.12..0.58
+later in the drive; the box covers every mesh under the car, so a part or the
+driver outside the body widens it.
