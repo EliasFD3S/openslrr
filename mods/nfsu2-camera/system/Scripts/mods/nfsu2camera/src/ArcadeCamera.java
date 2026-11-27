@@ -19,6 +19,8 @@ public class ArcadeCamera extends CameraProvider
 	public final static String NAME = "ARCADE";
 	public final static String KEY_DEFAULT_VIEW = "nfsu2camera.view";
 	public final static String KEY_SHAKE = "nfsu2camera.shake";
+	// 1 logs the camera state once a second ("[nfsu2camera]" lines); no UI.
+	public final static String KEY_DEBUG = "nfsu2camera.debug";
 	public final static int CMD_NEXTVIEW = 4701;
 
 	static ArcadeCamera	theInstance;
@@ -51,6 +53,8 @@ public class ArcadeCamera extends CameraProvider
 	float			joltTime;		// seconds since the velocity last changed
 	int				nitroOn, airborne;
 	float			yawRate;
+	float			sweepFraction = 1.0;	// last chase sweep, for the debug log
+	float			debugTime;
 
 	// One frame's inputs: car origin and chassis axes (world).
 	float			px, py, pz;
@@ -102,6 +106,7 @@ public class ArcadeCamera extends CameraProvider
 		init = 0;
 		applyDefaultView();
 		cam = new GameRef( world, GameRef.RID_CAMERA, "0,0,0,0,0,0,0x02", "nfsu2 arcade cam" );
+		camera = cam;	// the GPS follows it in its camera modes
 		cam.command( "render " + vp.id() + " 0 0 1 " + (Viewport.RENDERFLAG_CLEARDEPTH | Viewport.RENDERFLAG_CLEARTARGET) );
 		measureBox();
 		if( !driver )
@@ -126,6 +131,7 @@ public class ArcadeCamera extends CameraProvider
 			cam.destroy();
 			cam = null;
 		}
+		camera = null;
 		car = null;
 		back = 0;
 	}
@@ -233,6 +239,13 @@ public class ArcadeCamera extends CameraProvider
 
 		step( dt );
 		place();
+		if( now - debugTime >= 1.0 && ModSettings.getInt( KEY_DEBUG, 0 ) )
+		{
+			debugTime = now;
+			System.log( "[nfsu2camera] view=" + ArcadeMath.viewName( view ) + " back=" + back + " speed=" + speed
+				+ " pull=" + pull + " fov=" + fov + " nitro=" + nitro + " impact=" + impact + " roll=" + roll
+				+ " yaw=" + yaw + " air=" + airborne + " sweep=" + sweepFraction + " box=" + boxValid );
+		}
 	}
 
 	// Advances the state by dt seconds (0: only reads it) and builds the pose.
@@ -419,6 +432,7 @@ public class ArcadeCamera extends CameraProvider
 		Vector3 from = new Vector3( px + ax, py + ay, pz + az );
 		Vector3 to = new Vector3( px + ex, py + ey, pz + ez );
 		float f = CameraControl.sweep( from, to, 0.15 );
+		sweepFraction = f;
 		if( f >= 1.0 )
 			return;
 		f = ArcadeMath.clamp( f - 0.02, 0.05, 1.0 );
@@ -427,27 +441,23 @@ public class ArcadeCamera extends CameraProvider
 		ez = az + (ez - az) * f;
 	}
 
-	// The one place the pose goes to the engine. Mounted views are built in the
-	// chassis frame and turned with the car here; chase views are already
-	// world offsets. Both are resolved against the drawn car at draw time.
+	// The one place the pose goes to the engine, resolved against the drawn
+	// car when the frame is drawn. Mounted views are in the chassis frame, so
+	// the engine also turns them with the drawn car (setPoseLocal); chase
+	// views are world offsets from the car origin (setPoseRelative).
 	void place()
 	{
-		Vector3 eye, at, up;
+		Vector3 eye = new Vector3( ex, ey, ez );
+		Vector3 at = new Vector3( ax, ay, az );
+		Vector3 up = new Vector3( upx, upy, upz );
 		if( ArcadeMath.mounted( view ) )
-		{
-			eye = toWorld( ex, ey, ez );
-			at = toWorld( ax, ay, az );
-			up = toWorld( upx, upy, upz );
-		}
+			CameraControl.setPoseLocal( cam, car, eye, at, up, fov );
 		else
-		{
-			eye = new Vector3( ex, ey, ez );
-			at = new Vector3( ax, ay, az );
-			up = new Vector3( upx, upy, upz );
-		}
-		CameraControl.setPoseRelative( cam, car, eye, at, up, fov );
+			CameraControl.setPoseRelative( cam, car, eye, at, up, fov );
 	}
 
+	// A chassis-frame vector in the world, with the axes read this frame
+	// (ArcadeTest checks the mounted views with it).
 	Vector3 toWorld( float x, float y, float z )
 	{
 		return new Vector3( rx * x + ux * y + bx * z, ry * x + uy * y + by * z, rz * x + uz * y + bz * z );
