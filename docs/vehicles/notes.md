@@ -2391,3 +2391,35 @@ their measured geometry; the slope follows the car's current brake split,
 so a balance change in the garage keeps the stated percentage instead of
 moving it as a fixed arm geometry would; the push follows the last step's
 force; the scripts' instant centres stay unused.
+
+## ABS force feedback pulses (#474)
+
+Cause (Mark, direct-drive wheel, latest `main`: the ABS vibration is far
+too strong): `update_force_feedback` forced the wheel's vibration to at
+least 0.3 at 14 Hz while `abs_active()`, twice the tyre scrub's maximum
+(0.15), and `abs_active()` stays true while any channel modulates,
+including the rebuild up to 0.3 s after the last lock: in practice the
+whole stop. The pad the brake is bound to got a 35 % rumble re-sent every
+frame, not scaled by the vibration option.
+
+Fix:
+
+- `AbsModulator::releases(i)` counts each time channel i opens its outlet
+  valve (the move to `dump`); `VehicleDynamics::abs_releases` exposes it.
+- `update_force_feedback` feels the releases, not the state: a front
+  release gives the wheel a knock of 0.15 (the scrub's maximum) at 20 Hz
+  decaying in 40 ms; any release gives the pad a 0.3 pulse of 50 ms, at most
+  every 0.1 s. Between releases nothing shakes.
+- `host_input_brake_pulse` scales the pad's pulse by the vibration option
+  (Options, force feedback vibration, 50 % by default), as the wheel's.
+
+Validation:
+
+- Compilation: `slrr_host` Release. `vehicle_dynamics` 72/72 (the ABS cycle
+  test counts the icy wheel's releases, 2 to 19 in 0.4 s, and none on the
+  grippy front).
+- Not checked in game: the feel on a wheel and a pad.
+
+Limitations: the knock is a vibration effect, not a torque kick along the
+steering axis; the rear channels' releases reach the pad only. The values
+(0.15, 40 ms, 0.3, 50 ms) are chosen, not measured.
