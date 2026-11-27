@@ -48,6 +48,9 @@ public class SuperDuty_500_RL_trailing_arm extends Suspension
 				wheel.setAnti( 0.20, 0.50 );
 				// OpenSLRR (#490): live axle, degrees of axle steer per degree of axle roll, typical for the real car
 				wheel.setLiveAxle( 0.10 );
+				// OpenSLRR (#494): the beam's mass (kg), its wrap (kN per mm) and damping ratio, typical for the real car
+				wheel.setAxleMass( 80.0 );
+				wheel.setAxleWrap( 0.30, 0.10 );
 				// OpenSLRR (#490): roll centre height above the ground (m), typical for the real car
 				wheel.setRollCenterHeight( 0.45 );
 				                        

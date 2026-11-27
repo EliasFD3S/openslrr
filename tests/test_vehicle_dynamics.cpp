@@ -2252,6 +2252,63 @@ SLRR_TEST(a_raised_roll_centre_takes_roll_moment_off_the_springs) {
   SLRR_REQUIRE(lateral[2] > lateral[1]);
 }
 
+SLRR_TEST(a_live_axle_beam_shares_its_mass_and_winds_up_under_a_launch) {
+  // #494: the test saloon's rear wheels on a live axle. A bump under the
+  // left rear alone shakes the right rear through the beam's shared mass;
+  // independent ends do not feel each other. On a launch the beam winds up
+  // fore and aft on its springs and swings about its wound-up position.
+  const auto bump_run = [](double beam) {
+    Car car;
+    for (size_t i = 2; i < 4; ++i) {
+      car.dynamics.wheels[i].live_axle = beam >= 0;
+      car.dynamics.wheels[i].axle_mass = std::max(beam, 0.0);
+    }
+    car.run(2, 0, 0, 0);
+    car.dynamics.drive.engaged = false;
+    car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -10});
+    for (auto& s : car.dynamics.state) s.spin = 10 / .31;
+    // A 4 cm, 30 cm long bump under the left track only, 3 m ahead of the rear.
+    const double start = car.dynamics.body.position.z - 3 + 1.35;
+    const Terrain bump = [start](double x, double z, double, GroundHit& hit) {
+      hit = {};
+      if (x < 0 && z < start && z > start - .3) hit.height = .04;
+      return true;
+    };
+    double shake = 0;
+    for (int k = 0; k < 120; ++k) {
+      car.dynamics.advance(1. / 120, bump);
+      shake = std::max(shake, std::abs(car.dynamics.state[3].travel_acceleration));
+    }
+    return shake;
+  };
+  const double alone = bump_run(-1), coupled = bump_run(60);
+  Car launch;
+  for (size_t i = 2; i < 4; ++i) {
+    auto& w = launch.dynamics.wheels[i];
+    w.live_axle = true;
+    w.axle_mass = 60;
+    w.axle_wrap_rate = .3e6;
+    w.axle_wrap_damping = .05;
+  }
+  launch.run(2, 0, 0, 0);
+  double most = 0, swing_low = 1, swing_high = -1;
+  for (int k = 0; k < 120; ++k) {
+    launch.run(1. / 60, 1, 0, 0);
+    const double wrap = launch.dynamics.state[2].wrap;
+    most = std::max(most, std::abs(wrap));
+    if (k > 30) {
+      swing_low = std::min(swing_low, wrap);
+      swing_high = std::max(swing_high, wrap);
+    }
+  }
+  std::printf("AXLE right rear shake %.2f -> %.2f m/s2 from a left bump, launch wrap %.1f mm, swing %.1f..%.1f mm, %.1f m/s%c",
+              alone, coupled, most * 1000, swing_low * 1000, swing_high * 1000, launch.speed(), 10);
+  SLRR_REQUIRE(coupled > alone * 1.2);
+  SLRR_REQUIRE(most > .004 && most < .04);
+  SLRR_REQUIRE(swing_high - swing_low > .0005);
+  SLRR_REQUIRE(launch.speed() > 3 && std::isfinite(launch.speed()));
+}
+
 SLRR_TEST(hot_brake_fluid_boils_and_the_pressure_falls) {
   const auto brake = brake_hardware(0, 2, .286);
   double fluid = kAmbientTemperature;
@@ -2282,6 +2339,7 @@ int main() {
       compliance_steer_toes_the_loaded_wheels_by_their_forces,
       a_live_axle_keeps_its_wheels_square_to_the_beam_and_steers_in_roll,
       a_raised_roll_centre_takes_roll_moment_off_the_springs,
+      a_live_axle_beam_shares_its_mass_and_winds_up_under_a_launch,
       hard_braking_declutches_so_the_engine_never_pushes_the_rear_wheels,
       coasting_engine_braking_fades_with_the_speed,
       releasing_a_hard_brake_at_speed_takes_up_without_a_jolt,

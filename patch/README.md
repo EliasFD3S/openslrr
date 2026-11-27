@@ -348,7 +348,10 @@ square to the beam, which steers by 0.05 deg per degree of its roll on the
 Camaro (torque arm, Panhard rod) and 0.10 on the Ram (leaf springs). Every
 corner also calls `WheelRef.setRollCenterHeight(height)` (#490): fronts 5 to
 8 cm (Ram 10), independent rears 8 to 15 cm, race cars 3 / 6 cm, the
-Camaro's Panhard rod 36 cm and the Ram's leaf-sprung axle 45 cm.
+Camaro's Panhard rod 36 cm and the Ram's leaf-sprung axle 45 cm. The live
+rears also call `WheelRef.setAxleMass` and `WheelRef.setAxleWrap` (#494):
+Camaro 55 kg on a torque arm, 0.8 kN per mm at 0.25 damping; Ram 1500 /
+2500 80 / 95 kg on leaf springs, 0.3 kN per mm at 0.10 (wheel hop).
 
 **Caster (#458).** The stock struts had none: their strut axis and top lay
 in the front-view plane. Each front strut now leans back by its real car's

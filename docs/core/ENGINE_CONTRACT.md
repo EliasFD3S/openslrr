@@ -709,7 +709,10 @@ not mix the two for one visible element.
 
 A missing ground contact means air, not an implicit floor at Y=0.
 Tire radius, centers/hubs, springs, damping, unsprung masses, and bump stops
-must stay consistent. Do not pin a car at an arbitrary height to hide a
+must stay consistent. A corner's unsprung mass comes from the parts on it
+(#494, [notes](../vehicles/notes.md#unsprung-masses-and-live-axle-beam-494));
+the CFG spring's `type` mass only marks the quarter-car solve and stands in
+when the corner has no parts. Do not pin a car at an arbitrary height to hide a
 collision problem.
 
 The scripts size the wheel of the stock rim slot (`101 + corner`). When that
