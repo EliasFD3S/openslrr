@@ -2946,16 +2946,19 @@ void dynamics_wheels(Record &rec) {
     cfg.rebound_damping = live.damp_rebound;
     cfg.unsprung = fallback.mass;
     if (inline_wheel) {
-      // Match TrafficVehicle's .25m nominal spring, .1m static sag, .65
-      // damping.
-      cfg.rest = .25;
+      // TrafficVehicle's .25m spring with .1m static sag (1.6 Hz, .65
+      // damping) and 40 cm of travel let bodies bounce and pitch like
+      // hydraulics (#324). The car keeps the same loaded ride height (.15 m
+      // spring length) on a firmer road-car spring: 5 cm sag (2.2 Hz), .8
+      // damping, 7 cm of bump and droop travel.
+      cfg.rest = .20;
       cfg.anchor = .25;
-      cfg.minimum = .05;
-      cfg.maximum = .45;
+      cfg.minimum = .08;
+      cfg.maximum = .22;
       double mass = rec.config->mass > 0 ? rec.config->mass : 1400;
-      cfg.spring = mass * 9.81 / 4 / .1;
+      cfg.spring = mass * 9.81 / 4 / .05;
       cfg.bump_damping = cfg.rebound_damping =
-          2 * std::sqrt(cfg.spring * mass / 4) * .65;
+          2 * std::sqrt(cfg.spring * mass / 4) * .8;
       cfg.unsprung = 0;
     }
     cfg.arm_length = 0;
@@ -5267,6 +5270,7 @@ struct SimImpact {
   size_t car = 0;
   physics::VehicleDynamics::Impact hit;
   physics::RigidBody body;  // the chassis when it was hit
+  size_t other = SIZE_MAX;  // the batch car it hit, for car pairs
 };
 
 struct SimLoose {
@@ -5411,8 +5415,9 @@ physics::VehicleDynamics::Impact body_pair_impact(
 }
 
 // Damage for the host; impacts below 2 m/s change nothing there.
-void sim_impact(SimBatch& batch, size_t car, const physics::VehicleDynamics::Impact& hit) {
-  if (!(hit.speed < 2)) batch.impacts.push_back({car, hit, batch.cars[car].dynamics.body});
+void sim_impact(SimBatch& batch, size_t car, const physics::VehicleDynamics::Impact& hit,
+                size_t other = SIZE_MAX) {
+  if (!(hit.speed < 2)) batch.impacts.push_back({car, hit, batch.cars[car].dynamics.body, other});
 }
 
 // SLRR_rev triangle-surface.ts. Sweep in the carrier's moving frame so a
@@ -6196,10 +6201,12 @@ void simulate_step(SimBatch& batch) {
           sim_publish(b, false);
           sim_impact(batch, vehicles[i],
                      body_pair_impact(before_a, body_a, hit->point, hit->normal,
-                                      hit->normal_impulse, hit->speed));
+                                      hit->normal_impulse, hit->speed),
+                     vehicles[j]);
           sim_impact(batch, vehicles[j],
                      body_pair_impact(before_b, body_b, hit->point, -hit->normal,
-                                      hit->normal_impulse, hit->speed));
+                                      hit->normal_impulse, hit->speed),
+                     vehicles[i]);
         }
       }
     }
@@ -6641,6 +6648,8 @@ SimBatch prepare_batch(unsigned ticks, bool open = false, unsigned horizon_steps
 // Force feedback: the hardest hit on the controlled car since the last
 // update (-1..1, positive turns the wheel left), from the committed impacts.
 double feedback_jolt = 0;
+// Car pairs that hit each other, for EVENT_COLLISION (part_take_collisions).
+std::vector<std::pair<Object*, Object*>> pending_collisions;
 void commit_batch(SimBatch& batch) {
   trace_flush();
   wind_clock += batch.solver_steps * physics::VehicleDynamics::timestep;
@@ -6724,6 +6733,15 @@ void commit_batch(SimBatch& batch) {
     }
     auto& hit = loudest[impact.car];
     if (!hit || impact.hit.speed > hit->speed) hit = &impact.hit;
+    if (impact.other < batch.cars.size() && current(batch.cars[impact.other])) {
+      const std::pair<Object*, Object*> pair{car.chassis, batch.cars[impact.other].chassis};
+      const std::pair<Object*, Object*> reverse{pair.second, pair.first};
+      if (std::find(pending_collisions.begin(), pending_collisions.end(), pair) ==
+              pending_collisions.end() &&
+          std::find(pending_collisions.begin(), pending_collisions.end(), reverse) ==
+              pending_collisions.end())
+        pending_collisions.push_back(pair);
+    }
   }
   for (const auto& [car_index, hit] : loudest)
     if (current(batch.cars[car_index])) {
@@ -8868,6 +8886,14 @@ bool part_physics_state(Object *key, PartPhysicsState &state) {
   return true;
 }
 
+std::vector<std::pair<Object*, Object*>> part_take_collisions() {
+  auto out = std::exchange(pending_collisions, {});
+  std::erase_if(out, [](const auto& pair) {
+    return !record(pair.first) || !record(pair.second);
+  });
+  return out;
+}
+
 Object* part_controlled_chassis() {
   const auto* target = gameref_find_live(controlled_vehicle);
   return target ? as_part(static_cast<Object*>(target->key)) : nullptr;
@@ -9016,6 +9042,7 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   runtime = &jvm;
   for (auto &[key, rec] : records) release_side(rec);
   records.clear();
+  pending_collisions.clear();
   paint_texture_clear_all();
   repair_relink_pending.clear();
   // Dyno sessions belong to the old world's Java objects. The registry is

@@ -140,6 +140,29 @@ eased stops (`src/resources/traffic_runtime.cpp:race_traffic_halted` returns the
 distance to the stop point) and camera-aware spawning
 (`src/resources/traffic_runtime.cpp:in_view`) are described in
 [scripting/runtime.md](../scripting/runtime.md).
+The #324 review follow-up (PR #350) fixed four reported problems:
+- Traffic stopping in the middle of roads and junctions. The physical driver
+  rebuilt its lookahead from the nearest curve every 2 s, so overlapping
+  junction curves could swap its exit mid-junction, and it let the lookahead
+  run down to 8 m before extending it. Its straight following corridor also
+  caught oncoming cars on bends and cars waiting on a crossing street, and a
+  red could stop a car whose nose was already in the junction. The driver now
+  keeps a plan of committed curves (`src/resources/race_brain.cpp:traffic_route`),
+  follows peers along that path (`src/resources/race_brain.cpp:along_path`) and
+  clears a light it is past.
+- Bouncy traffic bodies ("hydraulics"): native traffic springs are firmer with
+  the same ride height (`src/resources/part_runtime.cpp:dynamics_wheels`) and
+  traffic pedals move at a bounded rate.
+- Police chasing only along roads: AI_follow drives straight at an off-road or
+  nearby target (`src/resources/race_brain.cpp:pursuit_route`).
+- PR limitations: scouts rejoin traffic with ai_info_entertraffic
+  (`src/resources/traffic_runtime.cpp:race_traffic_request_enter`), car-to-car
+  impacts reach City as EVENT_COLLISION, physical traffic chooses exits branch
+  first and spawn candidates get a budgeted occlusion ray.
+Validation: Release build; race_brain (6), traffic_runtime (10, re-entry
+added), road_routes (6) and vehicle_contacts_runtime (12) pass. race_vehicle
+fails both tests on the merged base before these changes as well. Not run in
+game.
 The original issues and #179 were closed for consolidation, not gameplay acceptance;
 #197 retains the remaining work. The [current audit](traffic-races.md)
 records the baseline's missing chassis pairs/player-only movable contacts, the

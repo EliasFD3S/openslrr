@@ -374,15 +374,20 @@ Three seconds after a population starts (its first fill happens behind the
 loading screen), no car appears where the world camera looks: candidates and
 hidden rivals inside the view distance and a cone wide enough for a 2:1 window
 (plus a car-length margin) wait, and a car past its recycle distance stays while
-it remains in that cone. Buildings are not tested, so a hidden street in front
-also counts as seen. A frame stops searching after eight unseen-road misses.
+it remains in that cone. Up to six spawn candidates per traffic tick inside the
+cone are also tested with a scene ray from the camera to roof height; one that a
+building hides may spawn. Candidates past that budget, and the recycle test,
+still use the cone alone. A frame stops searching after eight unseen-road misses.
 
 Four-wheel native cars and native-only racer doubles now use the existing rigid
 body, floor collision and suspension solver while visible. The inline CFG wheels
 are valid physical corners even without scripted rim slots. Adapted from
 SLRR_rev traffic bea8ce0 traffic-vehicle.ts, the native driver supplies load-limited
 longitudinal/lateral tyre forces (5 m/s2 throttle, 8 m/s2 braking, friction .9),
-with four .25 m springs, .1 m static sag and damping ratio .65. Scripted cars
+with the same loaded ride height as upstream's .25 m springs at .1 m sag, but a
+firmer road-car spring since #324: .2 m rest length, 5 cm static sag (2.2 Hz),
+damping ratio .8 and 7 cm of bump and droop travel (upstream's 40 cm of travel
+and 1.6 Hz let bodies bounce like hydraulics). Scripted cars
 retain their engine/dyno drivetrain; no fictional Java engine is created for
 native-only cars. The host additionally limits braking to avoid sign oscillation
 near zero and compensates the forward gravity component while holding brakes.
@@ -407,16 +412,29 @@ within .03 m; joins are never invented by nearest street centres. The installed
 City data supplies 1,572 lane curves and 3,854 crossing curves. Physical drivers
 receive multiple connected curves ahead and steer, accelerate and brake through
 the same Part solver as opponents. The external fallback carries arc-length
-progress through lane -> crossing -> outgoing lane. The external/coarse path chooses a destination branch before one of its lanes;
-the physical brain currently rebuilds lookahead using the first connected exit.
-Native traffic uses an urban cruise target. Physical traffic and pursuers keep a
-time gap to the car ahead with v221 bot.ts followingSpeed over a straight
-corridor as wide as both cars, using a snapshot of visible cars taken once per
-physics tick (`race_set_peers`). A car held behind another for 20 s (a
-pursuer 5 s) ignores peers for 3 s, so two cars nosed into each other in a
-junction clear; a car turning round at walking pace ignores them. Rural
-speed groups, lane changes, reaction delays and the rest of the upstream
-traffic controller are not ported.
+progress through lane -> crossing -> outgoing lane. Both the external/coarse
+path and the physical brain choose a destination branch before one of its
+lanes, avoiding curves closed by a race path or crossing halt while another exit
+is open. The physical brain keeps the sequence of curves it committed to
+(`src/resources/race_brain.cpp:traffic_route`): a replan keeps them while the car
+is within 3 m of one, so overlapping junction curves can no longer swap its exit
+mid-junction, and the plan is extended to about 160 m whenever less than 40 m
+remains, so the driver never reaches the end of its lookahead and coasts to a
+stop on an open road (#324). Native traffic uses an urban cruise target.
+Physical traffic and pursuers keep a time gap to the car ahead with v221 bot.ts
+followingSpeed over a corridor as wide as both cars that follows the planned
+path (`src/resources/race_brain.cpp:along_path`), not the straight line ahead,
+so oncoming cars on a bend and cars waiting on a crossing street no longer stop
+it. The peers are a snapshot of visible cars taken once per physics tick
+(`race_set_peers` from `src/resources/part_runtime.cpp:prepare_batch`). A car
+held behind another for 10 s (a pursuer 5 s) ignores peers for 3 s, so two cars
+nosed into each other in a junction clear; a car turning round at walking pace
+ignores them. A car over the stop line, or one that could only stop inside the
+junction braking at 6 m/s², clears a red or yellow instead of stopping in the
+crossing. Traffic pedals move at a bounded rate (brake 4/s, release 2/s,
+throttle 1.5/s) except for an emergency stop or a car at rest; a stopped car
+holds .6 brake. Rural speed groups, lane changes, reaction delays and the rest
+of the upstream traffic controller are not ported.
 
 GameRef.create_native on a native car builds its CFG-backed native assembly
 and aliases the Java handle to it, without running a chassis-specific constructor.
@@ -424,7 +442,27 @@ This covers Valocity's fake_racers doubles created at (0,-10000,0), followed by
 addTrafficCar(dummycar,null). Registration owns insertion/visibility;
 remTrafficCar preserves the car, including a streamed one: Bot.followCar
 detaches a police car from traffic before driving it, and a Bot's `controllable`
-replaces the host traffic driver of that car. Explicit insertion positions are projected onto
+replaces the host traffic driver of that car. Bot.reJoinTraffic sends
+AI_GoToTraffic to its own brain; once that car drives along a lane (within
+2.5 m, heading within 25°) the next traffic tick registers it again, reusing the
+ID and ownership remTrafficCar released, and sends `ai_info_entertraffic <id>` to
+the car's EVENT_COMMAND listeners (Bot.handleEvent). City reads the new pointer
+through GII_CAR_TRAFFICPTR and re-adds its own tracker, so no second car_add is
+sent. A visible physical registration whose Bot left it is driven by the host
+again. A pursuer (AI_follow) drives straight at its target when the target or
+the pursuer is more than 12 m from a street within 250 m, when they are under
+40 m apart, or when the road route is over three times the direct distance, and
+otherwise crosses country from the road point nearest an off-road target
+(`src/resources/race_brain.cpp:pursuit_route`). Its queries no longer replace
+the route Java last queried, which the navigator plots.
+
+Car-to-car impacts that the physics batch commits are forwarded to scripts as
+GameRef.EVENT_COLLISION (1), once per pair and batch, in both directions, with
+the other car's id as the parameter (`part_take_collisions`, delivered by the
+main loop before the traffic tick). City's handler alerts the police when the
+other car reports GIR_CAT_VEHICLE, which registered traffic does; Garage's jack
+check reads the same parameter. Wall, ground and loose-part hits are not
+forwarded. Explicit insertion positions are projected onto
 actual lanes and published on the road before becoming visible. There are no
 Valocity-specific VM exceptions.
 

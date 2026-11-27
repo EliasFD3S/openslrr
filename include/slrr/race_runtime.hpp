@@ -30,6 +30,8 @@ void race_set_peers(std::vector<RacePeer> peers);
 void race_brain_forget(void *);
 void race_brains_reset();
 void race_set_traffic_mode(const RpkIndex &, Object *);
+// True when a brain currently drives the car.
+bool race_brain_drives(Object *car);
 void register_traffic_natives(Jvm &, RpkIndex &, SectionMachine &);
 // Motion is bounded independently of the pause/warp-aware signal clock.
 // Omit clock_seconds for callers already supplying simulation steps.
@@ -39,6 +41,12 @@ uint64_t race_signal_revision();
 void race_traffic_forget(void *);
 void race_traffic_reset();
 int32_t race_traffic_pointer(Object *);
+// False while a race path or crossing halt closes this traffic curve.
+bool race_traffic_edge_open(void *ground, size_t traffic_edge);
+// A Bot returning to traffic (AI_GoToTraffic) reached a lane. The next
+// traffic tick registers the car (reusing the ID remTrafficCar released) and
+// sends "ai_info_entertraffic <id>" to the car's EVENT_COMMAND listeners.
+void race_traffic_request_enter(Object *car, void *ground);
 // Canonical, incarnation-checked map retained by the traffic registration.
 void *race_traffic_ground(Object *);
 // True when the car must stop for a signal, STOP line or halt. stop_distance

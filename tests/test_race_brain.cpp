@@ -58,8 +58,9 @@ void city_route_drives_and_halts() {
                std::fabs(input.steer) > .05f);
   race_brain_command(f.packs, &brain, "AI_GoToTraffic");
   race_halt_path(f.packs, &f.ground, start, finish);
+  // Stopped traffic holds above native traffic's half-brake hold threshold.
   SLRR_REQUIRE(race_drive_input(car, start, 0, 0, .02f, input) &&
-               input.throttle == 0 && input.brake == 1);
+               input.throttle == 0 && input.brake > .5f);
   race_clear_halts(&f.ground);
   gameref_remove(&brain);
   part_destroy(car);
@@ -210,7 +211,7 @@ void traffic_follows_peer_and_bot_takes_over() {
   SLRR_REQUIRE(race_drive_input(car, start, yaw, 5, .02f, input) &&
                input.throttle == 0 && input.brake > .9f);
   SLRR_REQUIRE(race_drive_input(car, start, yaw, 0, .02f, input) &&
-               input.throttle == 0 && input.brake == 1 && !input.reverse);
+               input.throttle == 0 && input.brake > .5f && !input.reverse);
   race_set_peers({});
   SLRR_REQUIRE(race_drive_input(car, start, yaw, 0, .02f, input) &&
                input.throttle > 0);

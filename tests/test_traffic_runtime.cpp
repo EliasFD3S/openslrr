@@ -169,6 +169,19 @@ void lifecycle_and_stream() {
   SLRR_REQUIRE(gameref_find_live(car_id) == traffic &&
                race_traffic_pointer(static_cast<Object *>(traffic->key)) == 0 &&
                !traffic->streamed_hidden);
+  // Bot.reJoinTraffic: back on a lane, the car takes its old ID again.
+  race_traffic_request_enter(static_cast<Object *>(traffic->key), &f.ground);
+  traffic_step(f.vm, .1f);
+  SLRR_REQUIRE(race_traffic_pointer(static_cast<Object *>(traffic->key)) ==
+               registration);
+  // City re-adds its own tracker for a returning scout, so re-entry sends no
+  // second car_add; the next detachment's car_rem removes that tracker.
+  f.call("remTrafficCar", "(I)V", {Value::make_int(registration)});
+  traffic_step(f.vm, .1f);
+  const auto detached_again =
+      std::find(events.rbegin(), events.rend(), "car_rem " + std::to_string(car_id));
+  SLRR_REQUIRE(detached_again != events.rend());
+  events.erase(std::next(detached_again).base());
   part_destroy(static_cast<Object *>(traffic->key));
   f.call("delTraffic", "()V");
   traffic_step(f.vm, .1f);

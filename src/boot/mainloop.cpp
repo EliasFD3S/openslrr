@@ -938,6 +938,16 @@ MainLoopFrameResult mainloop_frame(Jvm& jvm, IRenderBackend& render,
   {
     sim_seconds = jvm.advance_sim_time(dt);
     character_set_sim_time(jvm.sim_time());
+    // GameRef.EVENT_COLLISION (1) for the car-to-car hits the last physics
+    // frame committed; the parameter starts with the other car's id, as City
+    // and Garage read it (#324).
+    for (const auto& [car, other] : part_take_collisions()) {
+      for (const auto& [source, hit] : {std::pair{car, other}, std::pair{other, car}}) {
+        if (!script_event_listening(jvm, source, 1)) continue;
+        auto* text = jvm.new_string(std::to_string(gameref_make_live(hit)));
+        script_event_emit(jvm, source, nullptr, 1, Value::make_obj(text));
+      }
+    }
     {
       perf::Scope scope(perf::Zone::Traffic);
       race_traffic_tick(
