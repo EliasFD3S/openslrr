@@ -2,12 +2,14 @@
 #include "install.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <system_error>
 #include <utility>
 
+#include "class_order.hpp"
 #include "classfile.hpp"
 #include "slrrc.hpp"
 
@@ -90,7 +92,7 @@ std::string real_key(std::string_view path) {
 typedef std::pair<std::string, std::string> IndexKey;
 
 IndexKey index_key(std::string_view class_dir, std::string_view name) {
-    return IndexKey(lower(class_dir), lower(name));
+    return slrrc::class_order_key(class_dir, name);
 }
 
 struct FoundClass {
@@ -127,11 +129,11 @@ struct Walk {
             if (ec2) {
                 entry_is_dir = false;
             }
-            std::string name = from_path(it->path().filename());
-            if (entry_is_dir) {
-                dirnames.push_back(std::move(name));
-            } else {
-                filenames.push_back(std::move(name));
+            try {
+                auto name = from_path(it->path().filename());
+                (entry_is_dir ? dirnames : filenames).push_back(std::move(name));
+            } catch (const std::system_error&) {
+                std::fprintf(stderr, "[compile] skipped a name not representable in UTF-8 under %s\n", dirpath.c_str());
             }
             it.increment(ec);
             if (ec) {
@@ -188,7 +190,7 @@ struct Walk {
 };
 
 bool key_less_class(const FoundClass& a, const FoundClass& b) {
-    return a.key < b.key;
+    return class_order_less(a.key, a.rel, b.key, b.rel);
 }
 
 bool key_less_source(const FoundSource& a, const FoundSource& b) {
@@ -298,8 +300,8 @@ bool Install::skipped(std::string_view dir_name) const {
 void Install::scan() {
     Walk walk{*this, {}, {}, {}};
     walk.directory(to_path(root), root, std::string());
-    // the sorts are stable: files with the same key keep the order of the walk
-    std::stable_sort(walk.found_classes.begin(), walk.found_classes.end(), key_less_class);
+    // Equal source keys keep their walk order; class order is shared with the VM.
+    std::sort(walk.found_classes.begin(), walk.found_classes.end(), key_less_class);
     std::stable_sort(walk.found_sources.begin(), walk.found_sources.end(), key_less_source);
     for (FoundClass& c : walk.found_classes) {
         class_files.push_back(std::move(c.rel));
@@ -415,7 +417,7 @@ void InstallProvider::load(const std::function<int(const std::string&)>& priorit
                 const std::string_view old_name = class_file_name(old->second);
                 const int current_rank = rank(rel), old_rank = rank(old->second);
                 if (current_rank > old_rank || (current_rank == old_rank &&
-                    !(file_name == simple && old->second != rel && old_name != simple))) {
+                    !slrrc::named_file_replaces(file_name, old_name, simple, old->second == rel))) {
                     continue;
                 }
             }

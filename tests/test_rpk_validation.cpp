@@ -40,6 +40,11 @@ int main(int argc,char** argv) try {
   SLRR_REQUIRE(r.read_payload(RpkIndex::make_full_id(id,1))==text);}
  std::puts("PASS metadata-only indexing and deferred large-offset payload read");
  {fs::create_directories(f.root/"mods/sub");fs::create_directories(f.root/"ok/mods");save(f.root/"mods/sub/skipped.rpk",valid);save(f.root/"ok/mods/loaded.rpk",valid);
+  // NTFS permits an unpaired surrogate in an extension or an RPK name.
+  const std::wstring lone(1, static_cast<wchar_t>(0xd800));
+  for (const auto& filename : {L"bad." + lone, lone + L".rpk"}) {
+    save(f.root/filename, valid); SLRR_REQUIRE(fs::is_regular_file(f.root/filename));
+  }
   RpkIndex r;r.set_root(f.root.string());r.open_all();
   SLRR_REQUIRE(!r.pack_by_path("mods\\sub\\skipped.rpk")&&!r.pack_by_path("mods/sub/skipped.rpk"));
   SLRR_REQUIRE(r.pack_by_path("ok\\mods\\loaded.rpk")&&!r.pack_by_path("ok\\mods\\loaded.rpk")->entries.empty());

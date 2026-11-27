@@ -44,6 +44,40 @@ void primary_class() {
   SLRR_REQUIRE(primary == "probe.Helper");
   std::puts("PASS resource path primary class: exact and mixed-case match, then first TUFA blob");
 }
+void stale_resource_path() {
+  Fixture f;
+  const auto original = compile(f, "ResourceScript.java",
+      "package probe; public class ResourceScript { static int marker = 1; }");
+  const auto other = compile(f, "OtherContainer.java",
+      "package other; public class ResourceScript { static int marker = 2; }");
+  const auto stale = f.root / "old" / "ResourceScript.class";
+  const auto mod = f.root / "mods" / "resource-test";
+  const auto mod_path = mod / "redirected" / "ResourceScript.class";
+  fs::create_directories(stale.parent_path());
+  fs::create_directories(mod_path.parent_path());
+  std::ofstream(mod / "mod.json") << R"({"name":"Resource test","version":"1","api":1})";
+  fs::copy_file(other, mod_path);
+  SLRR_REQUIRE(f.vm.bootstrap_classpath());
+  SLRR_REQUIRE(f.vm.load_class_file(original.string()));
+  const auto* loaded = f.vm.find_class("probe.ResourceScript");
+  SLRR_REQUIRE(loaded);
+  f.vm.set_static("probe.ResourceScript", "marker", Value::make_int(42));
+  SLRR_REQUIRE(f.vm.load_resource_class(stale.string()) == loaded);
+  SLRR_REQUIRE(f.vm.get_static("probe.ResourceScript", "marker").v.i == 42);
+  SLRR_REQUIRE(!f.vm.load_class_file(stale.string()));
+
+  // The mod's file is authoritative at this path, even though the stem also
+  // matches the already-loaded class from the unrelated package.
+  const auto redirected = f.root / "redirected" / stale.filename();
+  const auto* provided = f.vm.load_resource_class(redirected.string());
+  SLRR_REQUIRE(provided && provided->name() == "other.ResourceScript");
+  SLRR_REQUIRE(!f.vm.load_resource_class(stale.string()));  // now ambiguous
+
+  // The fallback must not have cached a primary name for a file it never read.
+  fs::copy_file(other, stale);
+  SLRR_REQUIRE(f.vm.load_resource_class(stale.string()) == provided);
+  std::puts("PASS stale resource paths reuse only a unique loaded stem and never hide a container");
+}
 void reentrant_load() {
   Fixture f;
   const auto initializer = compile(f, "Initializer.java", R"JAVA(package probe;
@@ -178,4 +212,4 @@ void stock_dummy() {
  gameref_clear();rpk_set_active(nullptr);
  std::puts("PASS actual game Dummy.class: all four constructors create native roots and preserve parent/flags");
 }
-int main(){const standalone::Test tests[]={primary_class,reentrant_load,class_lifetime,constructors,stock_dummy};return standalone::run("class_lifetime",tests);}
+int main(){const standalone::Test tests[]={primary_class,stale_resource_path,reentrant_load,class_lifetime,constructors,stock_dummy};return standalone::run("class_lifetime",tests);}

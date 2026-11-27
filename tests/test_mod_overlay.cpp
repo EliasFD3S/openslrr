@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <fstream>
 #include <sstream>
+#include <vector>
 
 namespace fs = std::filesystem;
 using namespace slrr;
@@ -76,6 +77,49 @@ void compiler_and_runtime_choose_same_file() {
   SLRR_REQUIRE(overlay.resolve(overlay.logical(f.root / "mods/a" / cls)) == expected);
   SLRR_REQUIRE(overlay.resolve("stock/Fallback.class") == f.root / "stock/Fallback.class");
   SLRR_REQUIRE(log.str().find("[mods] java.mods.extra.Marker: mods/z (overrides base; also in mods/a)") != std::string::npos);
+}
+
+void unusable_names_do_not_hide_valid_files() {
+  Fixture f;
+  f.manifest("m", R"("api":1)");
+  const fs::path dir = "mods/m/system/Scripts/mods/m";
+  f.put(dir / "src/Good.java", "package java.mods.m; public class Good {}");
+  const std::wstring lone(1, static_cast<wchar_t>(0xd800));
+  // Native paths intentionally cannot round-trip through UTF-8.
+  for (const auto& path : {dir / (lone + L".class"), fs::path("base") / (L"bad." + lone),
+                           fs::path("system/Scripts") / lone / "Nested.class"}) {
+    f.put(path, "ignored");
+    SLRR_REQUIRE(fs::is_regular_file(f.root / path));
+  }
+  const auto built = script_compile_all(path_to_utf8(f.root), path_to_utf8(dir));
+  SLRR_REQUIRE(built.succeeded == 1 && built.failed == 0);
+  ModOverlay overlay;
+  std::ostringstream log;
+  overlay.scan(f.root, log);
+  SLRR_REQUIRE(overlay.provider("java.mods.m.Good") == f.root / dir / "Good.class");
+  const auto text = log.str();
+  for (const auto& parent : {dir, fs::path("base"), fs::path("system/Scripts")})
+    SLRR_REQUIRE(text.find("skipped a name not representable in UTF-8 under " + path_to_utf8(f.root / parent)) != text.npos);
+}
+
+void invalid_containers_fall_through() {
+  Fixture f;
+  const fs::path dir = "system/Scripts/game";
+  const auto cls = dir / "Stock.class";
+  f.put(dir / "src/Stock.java", "package java.game; public class Stock {}");
+  SLRR_REQUIRE(script_compile_all(path_to_utf8(f.root), path_to_utf8(dir)).succeeded == 1);
+  f.manifest("a", R"("api":1)");
+  f.manifest("b", R"("api":1)");
+  f.put(fs::path("mods/a") / cls, "not TUFA");
+  f.put(fs::path("mods/b") / cls, "");
+  ModOverlay overlay;
+  std::ostringstream log;
+  overlay.scan(f.root, log);
+  SLRR_REQUIRE(overlay.resolve(cls) == f.root / cls);
+  SLRR_REQUIRE(log.str().find("mods/a/system/Scripts/game/Stock.class:") != std::string::npos);
+  fs::copy_file(f.root / cls, f.root / "mods/b" / cls, fs::copy_options::overwrite_existing);
+  overlay.scan(f.root, log);
+  SLRR_REQUIRE(overlay.resolve(cls) == f.root / "mods/b" / cls);
 }
 
 void cross_root_secondary_providers() {
@@ -209,11 +253,81 @@ void load_order_ignores_case_and_logs_unknown() {
   mods = discover_mods(f.root, &quiet);
   SLRR_REQUIRE(mods[0].folder == "alpha" && mods[1].folder == "Beta" && mods[3].folder == "Zed");
 }
+// Duplicates inside one mod: the compiler and the runtime must pick the same
+// file, by the shared order (lower-cased directory, then lower-cased name),
+// not by the case-sensitive fs::path order. Each class is declared twice with
+// different signatures: id() returns I in the file that must lose and F in
+// the one that must win.
+void duplicates_in_one_mod_use_compiler_order() {
+  struct Source {
+    fs::path rel;       // below mods/m
+    std::string name;   // the primary class of the file
+    const char* type;
+  };
+  auto run = [](const std::vector<Source>& sources, const fs::path& winner) {
+    Fixture f;
+    f.manifest("m", R"("api":1)");
+    const fs::path consumer = "probe";
+    f.put(consumer / "src/Consumer.java", "package java.game; public class Consumer { public static float read(){return Dup.id();} }");
+    std::vector<fs::path> dirs;
+    for (const auto& src : sources) {
+      f.put("mods/m" / src.rel, std::string("package java.game; class ") + src.name + " {} class Dup { public static " +
+                                    src.type + " id(){return 0;} }");
+      const auto dir = (f.root / "mods/m" / src.rel).parent_path().parent_path();
+      if (std::find(dirs.begin(), dirs.end(), dir) == dirs.end()) dirs.push_back(dir);
+    }
+    for (const auto& dir : dirs) {
+      const auto report = script_compile_all(path_to_utf8(f.root), path_to_utf8(fs::relative(dir, f.root)));
+      SLRR_REQUIRE(report.attempted == report.succeeded && report.succeeded >= 1);
+    }
+    auto consumer_descriptor = [&] {
+      const auto report = script_compile_all(path_to_utf8(f.root), path_to_utf8(consumer));
+      SLRR_REQUIRE(report.attempted == 1 && report.succeeded == 1);
+      std::vector<TufaClass> output;
+      std::string why;
+      SLRR_REQUIRE(tufa_load_file(path_to_utf8(f.root / consumer / "Consumer.class"), &output, &why));
+      const auto& cls = output.at(0);
+      for (uint32_t i = 0; i < cls.constants.size(); ++i) {
+        if (cls.constants[i].kind != TufaConstKind::Reference) continue;
+        const auto ref = cls.reference(i);
+        if (ref.name == "id") return ref.descriptor;
+      }
+      return std::string();
+    };
+    SLRR_REQUIRE(consumer_descriptor() == "()F");
+    ModOverlay overlay;
+    std::ostringstream log;
+    overlay.scan(f.root, log);
+    const auto expected = f.root / "mods/m" / winner;
+    SLRR_REQUIRE(overlay.provider("java.game.Dup") == expected);
+    std::vector<TufaClass> blobs;
+    std::string error;
+    SLRR_REQUIRE(overlay.load(expected, blobs, error));
+    bool float_id = false;
+    for (const auto& blob : blobs)
+      if (blob.name() == "java.game.Dup")
+        for (const auto& m : blob.static_methods)
+          if (blob.utf8(m.name) == "id" && blob.utf8(m.descriptor) == "()F") float_id = true;
+    SLRR_REQUIRE(float_id);
+  };
+  // Directories: "Zeta" sorts before "alpha" case-sensitively, after it ignoring case.
+  run({{"system/Scripts/Zeta/src/Holder.java", "Holder", "int"},
+       {"system/Scripts/alpha/src/Holder.java", "Holder", "float"}},
+      "system/Scripts/alpha/Holder.class");
+  // File names in one directory: "B2" before "a2" case-sensitively, after it ignoring case.
+  run({{"system/Scripts/game/src/B2.java", "B2", "int"}, {"system/Scripts/game/src/a2.java", "a2", "float"}},
+      "system/Scripts/game/a2.class");
+  // Exact filename preference beats the first container in sorted order.
+  run({{"system/Scripts/game/src/A.java", "A", "int"}, {"system/Scripts/game/src/Dup.java", "Aux", "float"}},
+      "system/Scripts/game/Dup.class");
+}
 }  // namespace
 
 int main() {
-  constexpr standalone::Test tests[]{gate_and_order, compiler_and_runtime_choose_same_file, cross_root_secondary_providers,
+  constexpr standalone::Test tests[]{gate_and_order, unusable_names_do_not_hide_valid_files, invalid_containers_fall_through,
+                                     compiler_and_runtime_choose_same_file, cross_root_secondary_providers,
                                      unicode_folders_and_files, load_order_ignores_case_and_logs_unknown,
-                                     invalid_order_line_is_skipped};
+                                     invalid_order_line_is_skipped,
+                                     duplicates_in_one_mod_use_compiler_order};
   return standalone::run("mod_overlay", tests);
 }
