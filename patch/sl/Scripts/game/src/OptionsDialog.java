@@ -718,6 +718,7 @@ public class OptionsDialog extends Dialog
 		m.addItem( "CRUISE CONTROL", CMD_GETKEY + 75 );
 		m.addItem( "LOOK BACK", CMD_GETKEY + 76 );
 		m.addItem( "VIEW MAP", CMD_GETKEY + 77 );
+		m.addItem( "CHANGE VIEW", CMD_GETKEY + 35 );
 
 		m = osd.createMenu( butt2, 0.98, 0.85, 0 );
 		m.addItem( "BACK", CMD_REDEFINE_DONE );
@@ -738,6 +739,8 @@ public class OptionsDialog extends Dialog
 			keyText[i] = osd.createText ("Undefined", Frontend.mediumFont, Text.ALIGN_LEFT, x, y);
 			y += 0.12;
 		}
+
+		keyText[35] = osd.createText ("Undefined", Frontend.mediumFont, Text.ALIGN_LEFT, x, y);
 
 		osd.hideGroup( redefine2Group = osd.endGroup() );
 

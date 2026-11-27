@@ -50,7 +50,10 @@ use `setPoseRelative` or `setPoseLocal` to stay on the drawn car.
 
 ## CameraControl
 
-Static natives on a script camera (a GameRef of type `GameRef.RID_CAMERA`).
+Static natives on a script camera (a GameRef of type `GameRef.RID_CAMERA`):
+the world camera or a preview camera drawn into an inset viewport (a car or
+part preview). `setPoseRelative` / `setPoseLocal` follow a car in the active
+world; in a preview world, whose car has no drawn frame there, use `setPose`.
 While a pose is set it is the camera's whole view: `move`, `look`, `dist`,
 `angle` and `roll` do not apply until `clearPose`.
 
@@ -74,11 +77,15 @@ play that is the draw-time resolution, the frame `drawnPos` reports in the
 next `animate()`), roll included (`getOri().r` is the bank of the
 up axis, in the convention of the `roll` command). The roll is also the
 camera's `roll` (except on the follow camera bound to the player's car), so
-`clearPose` continues with the same horizon.
+`clearPose` continues with the same horizon. Straight up or down, the yaw
+is taken from the up axis, so such poses keep their heading. The stock
+smoothing (the eye and focus of `move` / `look`, orbit and chase) also starts
+from the last drawn pose, so `clearPose` does not snap back to an older view.
 
 `GameRef.setMatrix` on a script camera now applies the Ypr roll (as the `roll`
 command), except on the follow camera bound to the player's car, whose roll
-stays the script's `roll`.
+stays the script's `roll`. The roll applies to a free script camera and to one
+attached to a car with a short `move` (for example Track's chase view).
 
 ## CameraProvider and Cameras
 

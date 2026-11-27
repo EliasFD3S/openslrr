@@ -538,3 +538,27 @@ while the car stood still; while the replay moved it, the two differed by
 about one frame of travel (mean 0.4 m), because the replay poses the car
 during the frame, after the draw. That gap is the draw-time versus
 script-time pose, not checked against a physically driven car.
+
+### Third review round (PR #493)
+
+- Preview cameras (inset viewports, `bgfx_lib_backend.cpp` previews) drew
+  their stock aim and ignored a pose. `gameref_mod_camera_view` resolves and
+  writes back a pose for any camera; the renderer uses it for previews and
+  `world_camera_pose` for the world camera (shared `mod_pose_view`).
+- After `clearPose` a camera with an initialised move/look, orbit or chase
+  state drew its old smoothed eye. Each resolution now also seeds `eye_s`,
+  `look_s` (velocity zero, `cam_pose_init`).
+- Straight-down poses with different up vectors wrote the same yaw.
+  `mod_look_ypr` takes the yaw from up in that case (stock up
+  `(sin y sin p, cos p, cos y sin p)`).
+- `camera_roll` (the `roll` command, setMatrix roll) was applied only on
+  the free script camera path; a camera attached to a car by a short `move`
+  (Track's chase view) returned before it. `mod_roll_up` applies it on both.
+  This also restores the stock chase view's random roll.
+
+Validation: `mod_camera` 12/12 (adds vertical yaw and the roll round trip);
+`car_select_view` adds a preview camera driven by `setPose`, the
+straight-down yaw from up, the seeded smoothing, and a free fullscreen camera
+continuing from the pose after `clearPose`. The attached-camera roll is
+covered by the unit test of `mod_roll_up` only, not by an engine test with a
+car.
