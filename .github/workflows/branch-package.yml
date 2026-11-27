@@ -1,0 +1,89 @@
+name: Windows branch package candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Exact name of the reviewed official engine branch
+        type: string
+        required: true
+      commit:
+        description: Reviewed tip of that branch (40 lowercase hex digits)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    if: github.repository == 'EliasFD3S/openslrr' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: windows-2022
+    timeout-minutes: 120
+    env:
+      ENGINE_BRANCH: ${{ inputs.branch }}
+      ENGINE_COMMIT: ${{ inputs.commit }}
+    steps:
+      - name: Check out producer from the dispatch commit on main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: producer
+
+      - name: Select Python for the producer
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12.10"
+
+      - name: Test the trusted producer before building
+        run: python -IB producer/tests/test_branch_package.py
+
+      - name: Verify exact official branch tip before checkout
+        run: python -IB producer/scripts/branch_package.py check-tip
+
+      - name: Check out reviewed engine commit, never the moving branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: EliasFD3S/openslrr
+          ref: ${{ inputs.commit }}
+          path: engine
+          fetch-depth: 0 # the host version uses the Git revision count
+          persist-credentials: false
+
+      - name: Check out the documented bgfx wrapper (also pins bx, bimg and bgfx)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: bkaradzic/bgfx.cmake
+          ref: 5ea74ee66662daef4089695846d6322da0dde94e
+          path: engine/third_party/bgfx.cmake
+          persist-credentials: false
+
+      - name: Configure fresh x64 build with Visual Studio 2022
+        run: |
+          python -IB producer/scripts/branch_package.py check-source --checkout engine
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake -S engine -B build -G 'Visual Studio 17 2022' -A x64 -DSLRR_COMPILE_JOBS=2
+      - name: Build Release host (do not run the game)
+        run: cmake --build build --config Release --target slrr_host --parallel 2
+      - name: Check producer checkout, stage candidate and recheck official tip
+        run: |
+          # Detect checkout drift before executing any post-build producer code.
+          # This is not isolation from reviewed build code running on this runner.
+          $head = git -C producer rev-parse HEAD
+          if ($LASTEXITCODE -or $head -cne $env:GITHUB_SHA) { throw 'Unexpected producer checkout HEAD' }
+          $status = git -C producer -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all --ignored=matching
+          if ($LASTEXITCODE -or $status) { throw 'Producer checkout changed during the engine build' }
+          python -IB producer/scripts/branch_package.py package --checkout engine --build build --output candidate
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -IB producer/scripts/branch_package.py check-tip
+      - name: Retain candidate for manual review only
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: branch-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            candidate/openslrr-windows-x86_64.zip
+            candidate/release-body.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

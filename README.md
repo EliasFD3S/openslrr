@@ -117,6 +117,9 @@ Open SLRR builds for Windows x64 with an MSVC-compatible compiler and uses bgfx 
 
 The original intros and the menu background are Cinepak AVI files with PCM sound, which Open SLRR decodes itself; 64-bit Windows has no Cinepak codec, and no VLC installation is needed. Other formats, such as H.264/AAC in MP4, need **VLC 3.x for Windows x64**. Open SLRR looks in the standard VideoLAN installation directory. For a custom installation, set `SLRR_VLC_DIR` to the absolute folder containing `libvlc.dll`, `libvlccore.dll`, and `plugins`.
 
+For maintainers preparing a Windows launcher package without running the game, see
+[Branch package candidates](docs/platform/branch-packages.md).
+
 ### Quick start: build and run a branch
 
 With the requirements above installed, clone this repository, then run in PowerShell:

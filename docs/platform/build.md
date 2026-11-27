@@ -4,6 +4,25 @@ CMake and generated-header notes, moved from the knowledge base. Build
 instructions are in the [README](../../README.md); build-speed edge cases
 in [AGENTS.md](../../AGENTS.md#build-speed-and-its-edge-cases).
 
+## Branch package candidates (#480)
+
+[Producer and publication runbook](branch-packages.md). The engine branch and its
+reviewed tip identify the build; the independent producer revision on main is not
+the package commit. Run `python tests/test_branch_package.py` for the offline contract tests.
+
+Offline validation at engine `09535c9`: Visual Studio 2022 (v14.44, SDK 26100)
+produced the x64 Release host. The local ZIP contained 831 overlays in the six
+approved roots; every overlay and the engine license matched its Git blob.
+The host digest matched the build output. The game was not run.
+
+Notice coverage is intentionally bounded. The Release link inputs include `bimg.lib`;
+its generated project compiles astcenc and `image.cpp` calls its decoder. The host
+embeds six fonts: four from bgfx’s ImGui glue and two defaults from vendored
+Dear ImGui (ProggyClean and ProggyForever-minimal). It also uses stb and
+vendored DirectX and icon headers. SDL3’s static project includes the bundled
+YUV conversion code. The packager includes their notices, not licenses for
+unrelated examples or build-only tools.
+
 ## Version metadata before compilation on every generator (#103)
 
 CMakeLists.txt now defines slrr_version as an always-run custom target whose
