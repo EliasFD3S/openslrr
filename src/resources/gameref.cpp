@@ -279,7 +279,7 @@ bool gameref_mod_camera_set(void* key, ModCameraMode mode, const float eye[3],
   GameRefState* n = gameref_get(key);
   if (!n || n->kind != GameRefKind::Camera) return false;
   int32_t car_id = 0;
-  if (mode == ModCameraMode::Relative) {
+  if (mode == ModCameraMode::Relative || mode == ModCameraMode::Local) {
     float frame[16];
     if (!car || !part_camera_pose(car, -1, frame)) return false;
     car_id = gameref_make_live(car);
@@ -1024,20 +1024,18 @@ static bool world_camera_pose(float eye[3], float at[3], float* fov, float* znea
   if (up) { up[0] = 0; up[1] = 1; up[2] = 0; }
   if (dt > 0.f && cam->aov_goal > 0.f)
     cam->half_aov += (cam->aov_goal - cam->half_aov) * -std::expm1(-dt * cam->aov_rate);
-  // A mod camera pose (#487) is the whole view. A Relative pose reads the
-  // car's drawn frame now, so the draw-time query matches the drawn car even
-  // when the poses were published after the scripts ran (free-running
-  // physics). Without its car it keeps the last pose written to pos/ypr.
+  // A mod camera pose (#487) is the whole view. A Relative or Local pose
+  // reads the car's drawn frame now, so the draw-time query matches the drawn
+  // car even when the poses were published after the scripts ran
+  // (free-running physics); Local also turns and banks with that frame.
+  // Without its car it keeps the last pose written to pos/ypr.
   if (cam->mod_pose.mode != ModCameraMode::None) {
-    float origin[3];
+    float frame[16];
     const float* car = nullptr;
-    if (cam->mod_pose.mode == ModCameraMode::Relative) {
-      float frame[16];
+    if (cam->mod_pose.mode == ModCameraMode::Relative ||
+        cam->mod_pose.mode == ModCameraMode::Local) {
       const GameRefState* target = gameref_find_live(cam->mod_pose_car);
-      if (target && part_camera_pose(target->key, -1, frame)) {
-        std::copy_n(frame + 12, 3, origin);
-        car = origin;
-      }
+      if (target && part_camera_pose(target->key, -1, frame)) car = frame;
     }
     float pose_up[3];
     if (mod_camera_resolve(cam->mod_pose, car, eye, at, pose_up)) {
@@ -1049,9 +1047,13 @@ static bool world_camera_pose(float eye[3], float at[3], float* fov, float* znea
       if (zfar) *zfar = 3000.f;
       if (dt > 0.f) {
         // getPos / getOri on the camera (the GPS reads the renderer's) and
-        // clearPose continue from here.
+        // clearPose continue from here, roll included. The bound follow
+        // camera's roll stays the script's `roll` command, as in setMatrix.
         std::copy_n(eye, 3, cam->pos);
         mod_look_ypr(eye, at, cam->ypr[0], cam->ypr[1]);
+        cam->ypr[2] = mod_look_roll(eye, at, pose_up);
+        if (!(cam->follow_vehicle && cam->cockpit_index < 0 && !cam->camera_free))
+          cam->camera_roll = cam->ypr[2];
       }
       return true;
     }

@@ -45,23 +45,48 @@ bool mod_camera_set(ModCameraPose& pose, ModCameraMode mode, const float eye[3],
   return true;
 }
 
-bool mod_camera_resolve(const ModCameraPose& pose, const float* car_origin, float eye[3],
+bool mod_camera_resolve(const ModCameraPose& pose, const float* car_frame, float eye[3],
                         float at[3], float up[3]) {
   if (pose.mode == ModCameraMode::None) return false;
   float base[3] = {};
-  if (pose.mode == ModCameraMode::Relative) {
-    if (!finite3(car_origin)) return false;
-    std::copy_n(car_origin, 3, base);
+  float want_up[3];
+  float level_up[3] = {0.f, 1.f, 0.f};
+  std::copy_n(pose.up, 3, want_up);
+  if (pose.mode == ModCameraMode::Relative || pose.mode == ModCameraMode::Local) {
+    if (!car_frame || !finite3(car_frame + 12)) return false;
+    std::copy_n(car_frame + 12, 3, base);
   }
-  for (int i = 0; i < 3; ++i) {
-    eye[i] = base[i] + pose.eye[i];
-    at[i] = base[i] + pose.at[i];
+  if (pose.mode == ModCameraMode::Local) {
+    // The chassis axes (x right, y up, z back), without any scale.
+    float axes[3][3];
+    for (int a = 0; a < 3; ++a) {
+      std::copy_n(car_frame + a * 4, 3, axes[a]);
+      if (!finite3(axes[a]) || !normalize(axes[a])) return false;
+    }
+    const auto rotate = [&axes](const float* v, float* out) {
+      for (int i = 0; i < 3; ++i) out[i] = axes[0][i] * v[0] + axes[1][i] * v[1] + axes[2][i] * v[2];
+    };
+    float e[3], a[3];
+    rotate(pose.eye, e);
+    rotate(pose.at, a);
+    rotate(pose.up, want_up);
+    std::copy_n(axes[1], 3, level_up);
+    for (int i = 0; i < 3; ++i) {
+      eye[i] = base[i] + e[i];
+      at[i] = base[i] + a[i];
+    }
+  } else {
+    for (int i = 0; i < 3; ++i) {
+      eye[i] = base[i] + pose.eye[i];
+      at[i] = base[i] + pose.at[i];
+    }
   }
   float forward[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
   if (!normalize(forward)) return false;
   static const float kWorldUp[3] = {0.f, 1.f, 0.f};
   static const float kWorldBack[3] = {0.f, 0.f, -1.f};
-  if (!perpendicular(forward, pose.up, up) && !perpendicular(forward, kWorldUp, up))
+  if (!perpendicular(forward, want_up, up) && !perpendicular(forward, level_up, up) &&
+      !perpendicular(forward, kWorldUp, up))
     perpendicular(forward, kWorldBack, up);
   return true;
 }
@@ -82,6 +107,19 @@ void mod_look_ypr(const float eye[3], const float at[3], float& yaw, float& pitc
   const float d[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
   yaw = std::atan2(-d[0], -d[2]);
   pitch = std::atan2(d[1], std::hypot(d[0], d[2]));
+}
+
+float mod_look_roll(const float eye[3], const float at[3], const float up[3]) {
+  float forward[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
+  if (!normalize(forward) || !finite3(up)) return 0.f;
+  static const float kWorldUp[3] = {0.f, 1.f, 0.f};
+  float right[3], level[3];
+  cross(forward, kWorldUp, right);
+  if (!normalize(right)) return 0.f;
+  cross(right, forward, level);
+  const float s = dot(up, right), c = dot(up, level);
+  if (!(s * s + c * c > 1e-12f)) return 0.f;
+  return std::atan2(s, c);
 }
 
 }  // namespace slrr
