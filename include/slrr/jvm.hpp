@@ -29,6 +29,8 @@ bool script_frame_enter(const std::string& owner, const std::string& method, Obj
                         const std::vector<Value>& args);
 void script_frame_leave();
 
+class ModOverlay;
+
 class Jvm : public TreeHost {
  public:
   explicit Jvm(NativeRegistry* natives);
@@ -51,8 +53,9 @@ class Jvm : public TreeHost {
   const NativeRegistry& natives() const { return *natives_; }
 
   bool bootstrap_classpath();
+  void initialize_mods();
   bool load_class(const std::string& fqn_or_path);
-  bool load_class_file(const std::string& path);
+  bool load_class_file(const std::string& path, std::string* primary_name = nullptr);
   const TufaClass* find_class(const std::string& fqn) const;
 
   Object* new_object(const std::string& class_fqn);
@@ -163,12 +166,13 @@ class Jvm : public TreeHost {
   NativeRegistry* natives_ = nullptr;
   std::string game_root_;
   bool classpath_ready_ = false;
+  std::unique_ptr<ModOverlay> overlay_;
   std::vector<std::pair<std::string, std::string>> classpath_;
   std::unordered_map<std::string, TufaClass> by_name_;
   // Class files currently inside load_class_file. A field path during static
   // init must not enrich the same file again.
   std::unordered_set<std::string> loading_paths_;
-  std::unordered_set<std::string> loaded_paths_;
+  std::unordered_map<std::string, std::string> loaded_paths_;  // file -> primary FQN
   std::vector<std::unique_ptr<Object>> heap_;
   std::unordered_map<std::string, std::unordered_map<std::string, Value>>
       statics_;

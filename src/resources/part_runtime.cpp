@@ -2005,15 +2005,13 @@ Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
                      script.find('.') != std::string::npos &&
                      (script.size() < 6 ||
                       script.compare(script.size() - 6, 6, ".class") != 0);
-    const std::string lookup =
-        fqn ? script : std::filesystem::path(script).stem().string();
-    if (!jvm.find_class(lookup) &&
-        !jvm.load_class(
-            fqn ? script
-                : (std::filesystem::path(resources.game_root()) / script)
-                      .string()))
+    std::string lookup = script;
+    if (fqn) {
+      if (!jvm.load_class(lookup)) return nullptr;
+    } else if (!jvm.load_class_file((std::filesystem::path(resources.game_root()) / script).string(), &lookup)) {
       return nullptr;
-    auto *cls = jvm.find_class(lookup);
+    }
+    auto* cls = jvm.find_class(lookup);
     if (!cls)
       return nullptr;
     class_name = cls->name();

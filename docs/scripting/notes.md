@@ -5,6 +5,14 @@ lookup and GameRef handles, moved from the knowledge base. Garbage
 collection is in [vm-gc.md](vm-gc.md); native coverage in
 [natives.md](natives.md).
 
+## #486: mod overlay folders
+
+**Cause.** Stock classpath roots had one filesystem owner. Installing a replacement meant overwriting the only copy. RPK callers could also select an already-loaded, unrelated class by short name after opening a script file.
+
+**Change.** Manifest order chooses the winning class file at each game-relative path, including pack-discovered paths. The compiler selects visible units using the same folder order and keeps writes in the source's layer. The resource caller now receives the primary class identity from the actual container. Game boot calls enabled entries after stock startup; see [Installing a script mod](mods.md).
+
+**Validation.** The standalone `mod_overlay` CTest checks discovery, API and enabled gates, conflict reporting, logical compilation and winning-file resolution. In a private patched MWM copy, two compiled entry classes logged in reverse priority after `Init actualState=java.game.SplashScreen`; both called the high-priority replacement, not the base or losing mod. A missing class and a missing method were logged without stopping boot.
+
 ## Issues #72 / #126: exact TREE integers and integer balances
 
 `src/jvm/tree_eval.cpp:arithmetic` now handles integer operands without

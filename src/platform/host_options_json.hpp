@@ -18,9 +18,10 @@ struct Scalar {
 
 // Every scalar under its dotted path ("input.ffb_damper", "version").
 // Arrays and nulls are skipped. Returns false, with out cleared, when the
-// text is not one valid JSON object.
+// text is not one valid JSON object. In flat-scalar mode reject duplicate or
+// empty keys, nulls and containers; Number.text retains its JSON spelling.
 bool parse(std::string_view text, std::map<std::string, Scalar>& out,
-           std::string* error = nullptr);
+           std::string* error = nullptr, bool flat_scalars_only = false);
 
 struct Entry {
   std::string section, key;

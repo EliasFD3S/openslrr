@@ -127,6 +127,8 @@ Startup begins in `main.cpp`, configures the services, opens the resources,
 and loads the classes before the game runs. Read `boot.cpp` for the exact
 order and the diagnostic paths.
 
+Script lookup layers enabled [mod folders](../scripting/mods.md) ahead of the base file for each classpath root, including RPK script paths. Stock startup sees the winning classes; the game then calls mod entries from lowest to highest priority after `Init(int)` and before the menu loop. C++ clients can query the enabled manifests with `mods_loaded()`.
+
 Conceptual outline, without every intermediate call:
 
 ```text

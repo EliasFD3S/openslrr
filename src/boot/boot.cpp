@@ -346,6 +346,7 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     jvm.set_static("java.game.GameLogic", "_autoNewPlayerName",
                    Value::make_obj(jvm.new_string(pname)));
     start_init(jvm);
+    jvm.initialize_mods();
     Value gv = jvm.get_static("java.game.GameLogic", "garage");
     if (gv.tag == ValueTag::Obj && gv.v.o) {
       sections.set_garage(gv.v.o);

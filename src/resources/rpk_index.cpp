@@ -251,6 +251,11 @@ int32_t RpkIndex::open_all() {
       ec.clear();
       continue;
     }
+    // Script overlays are not pack roots (including disabled mods).
+    if (it.depth() == 0 && _wcsicmp(it->path().filename().c_str(), L"mods") == 0) {
+      it.disable_recursion_pending();
+      continue;
+    }
     if (!it->is_regular_file(ec)) continue;
     std::string ext = it->path().extension().string();
     for (char& c : ext)

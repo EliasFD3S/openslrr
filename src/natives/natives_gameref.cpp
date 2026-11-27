@@ -108,16 +108,12 @@ Object* script_instance_for(Jvm& jvm, const RpkIndex& rpk, uint32_t full_id) {
   if (!root.empty() && root.back() != '\\' && root.back() != '/')
     root.push_back('\\');
   const std::string disk = root + script;
-  if (!jvm.load_class(disk)) {
+  std::string primary;
+  if (!jvm.load_class_file(disk, &primary)) {
     std::printf("[track] class miss %s\n", disk.c_str());
     return nullptr;
   }
-  std::string simple = script;
-  const auto slash = simple.find_last_of('\\');
-  if (slash != std::string::npos) simple = simple.substr(slash + 1);
-  if (simple.size() > 6 && simple.compare(simple.size() - 6, 6, ".class") == 0)
-    simple.resize(simple.size() - 6);
-  const TufaClass* tc = jvm.find_class(simple);
+  const TufaClass* tc = jvm.find_class(primary);
   if (!tc) return nullptr;
   Object* inst = jvm.new_object(tc->name());
   if (!inst) return nullptr;
@@ -164,16 +160,12 @@ Object* script_construct(Jvm& jvm, const RpkIndex& rpk, uint32_t full_id,
   if (!root.empty() && root.back() != '\\' && root.back() != '/')
     root.push_back('\\');
   const std::string disk = root + script;
-  if (!jvm.load_class(disk)) {
+  std::string primary;
+  if (!jvm.load_class_file(disk, &primary)) {
     std::printf("[vt] class miss %s\n", disk.c_str());
     return nullptr;
   }
-  std::string simple = script;
-  const auto slash = simple.find_last_of('\\');
-  if (slash != std::string::npos) simple = simple.substr(slash + 1);
-  if (simple.size() > 6 && simple.compare(simple.size() - 6, 6, ".class") == 0)
-    simple.resize(simple.size() - 6);
-  const TufaClass* tc = jvm.find_class(simple);
+  const TufaClass* tc = jvm.find_class(primary);
   if (!tc) return nullptr;
   Object* inst = jvm.new_object(tc->name());
   if (!inst) return nullptr;
@@ -503,9 +495,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
             name = script;
             if (!jvm.find_class(name)) jvm.load_class(name);
           } else {
-            name = std::filesystem::path(script).stem().string();
-            if (!jvm.find_class(name))
-              jvm.load_class_file((std::filesystem::path(rpk.game_root()) / script).string());
+            jvm.load_class_file((std::filesystem::path(rpk.game_root()) / script).string(), &name);
           }
         }
         const auto* cls = jvm.find_class(name);

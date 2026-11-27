@@ -1,4 +1,6 @@
 #include "slrr/jvm.hpp"
+#include "mod_overlay.hpp"
+#include <iostream>
 #include "slrr/scene_presentation.hpp"
 #include "slrr/script_threads.hpp"
 #include "slrr/script_events.hpp"
@@ -158,29 +160,36 @@ bool Jvm::bootstrap_classpath() {
       {"parts/scripts/bodypart", "java.game.parts.bodypart"},
       {"parts/accessories/scripts", "java.game.parts.accessories"},
   };
-  // Engine/running-gear base classes live below parts/scripts. Resource
-  // classes in individual car packs add their own directory when loaded.
-  std::error_code directory_error;
-  const std::filesystem::path parts_root=std::filesystem::path(game_root_)/"parts/scripts";
-  if(std::filesystem::is_directory(parts_root,directory_error))
-    for(const auto& entry:std::filesystem::recursive_directory_iterator(parts_root))if(entry.is_directory()) {
-      auto suffix=entry.path().lexically_relative(parts_root).generic_string();
-      std::string package="java.game.parts."+suffix;std::replace(package.begin(),package.end(),'/','.');
-      classpath_.push_back({"parts/scripts/"+suffix,package});
+  overlay_ = std::make_unique<ModOverlay>();
+  overlay_->scan(game_root_, std::cout);
+  publish_mod_list(overlay_->mods());
+  namespace fs = std::filesystem;
+  // Union of package directories, including packages absent in the base.
+  // Store logical paths so every root uses the very same overlay resolver.
+  auto add_packages = [&](const fs::path& layer, const std::string& dir, const std::string& prefix) {
+    const auto root = layer / dir;
+    std::error_code ec;
+    for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+         it != end; it.increment(ec)) {
+      if (!it->is_directory(ec)) continue;
+      if (_wcsicmp(it->path().filename().c_str(), L"src") == 0) {
+        it.disable_recursion_pending();
+        continue;
+      }
+      const auto suffix = it->path().lexically_relative(root).generic_string();
+      auto pkg = prefix + "." + suffix;
+      std::replace(pkg.begin(), pkg.end(), '/', '.');
+      auto candidate = std::make_pair(dir + "/" + suffix, pkg);
+      if (std::find(classpath_.begin(), classpath_.end(), candidate) == classpath_.end())
+        classpath_.push_back(std::move(candidate));
     }
-  // Any other system/Scripts folder is its java.* package, as in the stock
-  // engine: system/Scripts/render/osdx holds java.render.osdx.
-  const std::filesystem::path system_root=std::filesystem::path(game_root_)/"system/Scripts";
-  if(std::filesystem::is_directory(system_root,directory_error))
-    for(const auto& entry:std::filesystem::recursive_directory_iterator(system_root,directory_error)) {
-      if(!entry.is_directory())continue;
-      const auto suffix=entry.path().lexically_relative(system_root).generic_string();
-      if(suffix=="src"||suffix.ends_with("/src")||suffix.find("/src/")!=std::string::npos)continue;
-      std::string package="java."+suffix;std::replace(package.begin(),package.end(),'/','.');
-      const std::string dir="system/Scripts/"+suffix;
-      if(std::none_of(classpath_.begin(),classpath_.end(),[&](const auto& root){return root.first==dir;}))
-        classpath_.push_back({dir,package});
-    }
+  };
+  auto add_layer = [&](const fs::path& layer) {
+    add_packages(layer, "parts/scripts", "java.game.parts");
+    add_packages(layer, "system/Scripts", "java");
+  };
+  add_layer(game_root_);
+  for (const auto& mod : overlay_->mods()) add_layer(fs::path(game_root_) / "mods" / mod.folder);
   classpath_ready_ = true;
   std::printf("[jvm] classpath ready (%zu roots) under %s\n", classpath_.size(),
               game_root_.c_str());
@@ -196,14 +205,45 @@ std::string Jvm::resolve_class_path(const std::string& fqn) const {
 
   for (const auto& root : classpath_) {
     if (!pkg.empty() && root.second != pkg) continue;
-    const std::string path = (std::filesystem::path(game_root_)/root.first/(simple+".class")).string();
+    const std::string path = overlay_->resolve(std::filesystem::path(root.first) / (simple + ".class")).string();
     if (file_readable(path)) return path;
   }
   for (const auto& root : classpath_) {
-    const std::string path = (std::filesystem::path(game_root_)/root.first/(simple+".class")).string();
+    const std::string path = overlay_->resolve(std::filesystem::path(root.first) / (simple + ".class")).string();
     if (file_readable(path)) return path;
   }
   return {};
+}
+
+void Jvm::initialize_mods() {
+  const auto& mods = overlay_->mods();
+  for (auto it = mods.rbegin(); it != mods.rend(); ++it) {
+    if (it->entry.empty()) continue;
+    try {
+      // An entry is an exact class identity, not a legacy short-name alias.
+      if (!by_name_.contains(it->entry)) {
+        const auto path = resolve_class_path(it->entry);
+        if (!path.empty()) load_class_file(path);
+      }
+      const auto cls = by_name_.find(it->entry);
+      if (cls == by_name_.end()) {
+        std::printf("[mods] mods/%s: missing entry class %s\n", it->folder.c_str(), it->entry.c_str());
+        continue;
+      }
+      const auto& c = cls->second;
+      const bool found = std::any_of(c.static_methods.begin(), c.static_methods.end(), [&](const auto& m) {
+        return (m.flags & 0x01u) && c.utf8(m.name) == "modInit" && c.utf8(m.descriptor) == "()V";
+      });
+      if (!found) {
+        std::printf("[mods] mods/%s: missing public static void %s.modInit()\n", it->folder.c_str(), it->entry.c_str());
+        continue;
+      }
+      invoke(it->entry, "modInit", "()V", {}, true);
+      std::printf("[mods] mods/%s: %s.modInit() returned\n", it->folder.c_str(), it->entry.c_str());
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "[mods] mods/%s: %s.modInit(): %s\n", it->folder.c_str(), it->entry.c_str(), error.what());
+    }
+  }
 }
 
 void Jvm::seed_static_fields(const TufaClass& cls) {
@@ -400,7 +440,11 @@ void Jvm::apply_field_defaults(Object* obj) {
   --field_init_depth_;
 }
 
-bool Jvm::load_class_file(const std::string& path) {
+bool Jvm::load_class_file(const std::string& requested, std::string* primary_name) {
+  // Resource scripts may name a game-relative file directly instead of a FQN.
+  const auto relative = overlay_ ? overlay_->logical(requested) : std::filesystem::absolute(requested);
+  if (relative.empty()) return false;
+  const auto path = overlay_ ? overlay_->resolve(relative).string() : requested;
   std::error_code error;
   auto absolute = std::filesystem::absolute(path, error);
   std::string path_key = (error ? std::filesystem::path(path) : absolute).lexically_normal().string();
@@ -408,7 +452,10 @@ bool Jvm::load_class_file(const std::string& path) {
   std::transform(path_key.begin(), path_key.end(), path_key.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 #endif
-  if (loaded_paths_.contains(path_key)) return true;
+  if (auto it = loaded_paths_.find(path_key); it != loaded_paths_.end()) {
+    if (primary_name) *primary_name = it->second;
+    return true;
+  }
   if (!loading_paths_.insert(path_key).second) return true;
   struct LoadingGuard {
     std::unordered_set<std::string>* set;
@@ -423,6 +470,13 @@ bool Jvm::load_class_file(const std::string& path) {
                  err.c_str());
     return false;
   }
+  if (blobs.empty()) return false;
+  std::string primary = blobs.front().name();
+  const auto stem = relative.stem().string();
+  for (const auto& cls : blobs) {
+    const auto name = cls.name();
+    if (name == stem || name.ends_with("." + stem)) { primary = name; break; }
+  }
   for (auto& cls : blobs) {
     const std::string name = cls.name();
     // A class definition and its trees must outlive every executing/suspended
@@ -430,7 +484,7 @@ bool Jvm::load_class_file(const std::string& path) {
     if (by_name_.contains(name)) continue;
     auto dot=name.find_last_of('.');
     if(dot!=std::string::npos){
-      auto directory=std::filesystem::absolute(path).parent_path().string();
+      auto directory=relative.parent_path().generic_string();
       std::string package=name.substr(0,dot);
       auto candidate=std::make_pair(directory,package);
       if(std::find(classpath_.begin(),classpath_.end(),candidate)==classpath_.end())classpath_.push_back(candidate);
@@ -442,8 +496,8 @@ bool Jvm::load_class_file(const std::string& path) {
       enrich_static_fields(entry->second);
     }
   }
-  if (blobs.empty()) return false;
-  loaded_paths_.insert(path_key);
+  loaded_paths_.emplace(path_key, primary);
+  if (primary_name) *primary_name = primary;
   return true;
 }
 
