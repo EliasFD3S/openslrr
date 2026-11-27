@@ -231,7 +231,7 @@ body panel, confirming texture stability and absence of stray vertices.
 ## bgfx backend selection and the Vulkan spike (#186)
 
 A spike, not a port: Direct3D 11 stays the default and the only backend
-validated in game. The numbers below come from one laptop (i9-13905H, RTX 4060
+validated in game. The plan that follows from it is #478. The numbers below come from one laptop (i9-13905H, RTX 4060
 Laptop GPU, Windows 11, 1600x900), not from the #358 machine.
 
 What the build and the host do now:
