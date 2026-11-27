@@ -384,9 +384,11 @@ Cars are always drawn between their last two 60 Hz host steps, so they move smoo
 
 ## Change-view key (#470)
 
-One **change-view key, V**, cycles the driving views (`Track.nextCamera`): follow → chase → each cockpit camera (not the mirror and look-back ones) → follow. A short message names the view. The F1 (cockpit), F2 (TV), F3 (follow), F4 (chase), F5 (reverse chase) and F9 (free) view keys are gone; the TV, reverse-chase and free views are no longer on a key. Rebind it under **Options → Controls → Game controls → CHANGE VIEW** (ControlSet slot 35, the stock `AXIS_LOOK_PREVNEXT`). A controls file saved by an older build still holds the stock F1/F2 pair there; it is moved to V once when loaded (a later F1 binding is kept). The hidden stock F5 look-back (slot 37) is removed too; LOOK BACK stays on B. Race scripts' special cameras (`cameraMode` 3 and 4), held staging cameras, look back and the free camera are unchanged. This needs the patched `Track.class`, `OsdxOptions.class` and `system/Scripts/io/ControlSet.class`; `Track.class` is compiled from the MWM `Track.java` (source in `src/`), so mods that ship their own `Track.class` replace these keys.
+Press **V** to cycle follow → chase → each cockpit camera → follow. The cycle skips mirror and look-back cameras; holding LOOK BACK in the cockpit pauses the cycle until release. A short message names each view. Rebind V under **Options → Controls → Game controls → CHANGE VIEW**. The former F1–F5/F9 view hotkeys are gone. TV, reverse chase and free view no longer have a key; race scripts can still select their own cameras.
 
-The Need for Speed: Underground 2 style arcade camera is not part of the engine or this patch: it moves to a mod built on the mod overlay folders (#486), a camera provider hook (#487) and mod keys and settings (#488).
+On load, a stock F1/F2 pair in slots 35/36 migrates to V. Stock F2 is cleared from the hidden slot 36 even if slot 35 was already rebound or cleared. A later F1 binding stays on F1. The hidden F5 look-back binding (slot 37) is also cleared; LOOK BACK defaults to B.
+
+This requires the patched `Track.class`, `OsdxOptions.class` and `system/Scripts/io/ControlSet.class`. A mod that replaces the MWM `Track.class` also replaces this cycle.
 
 **Camera mods (#487).** A mod registers a camera provider (`java.openslrr.CameraProvider`, see [docs/scripting/mod-api.md](../docs/scripting/mod-api.md)). While one is selected it replaces the follow view: V cycles its views and LOOK BACK goes to it; any other camera (cockpit, race staging, TV) takes over until V brings it back. Without a camera mod nothing changes. This needs the patched `Track.class`, `City.class`, `ROCTrack.class` and the `system/Scripts/openslrr` classes.
 
