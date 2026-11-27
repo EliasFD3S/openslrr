@@ -2449,6 +2449,14 @@ SLRR_TEST(the_braking_force_builds_over_the_longitudinal_relaxation_length) {
   SLRR_REQUIRE(relaxation_load_factor(.5 * fz0, t205) < .8);
   SLRR_REQUIRE(relaxation_load_factor(1.5 * fz0, t205) > 1.05);
   SLRR_REQUIRE(relaxation_load_factor(0, t205) == .3);
+  // The patch's offset under a lateral force (the aligning torque's lever
+  // for Fx, #458) is the carcass' compliance: per newton the same at half
+  // the nominal load as at the nominal load.
+  const auto offset_per_newton = [&](double load) {
+    const auto f = tire_forces(load, 1, 20, 20, 20 * std::tan(.5 * std::numbers::pi / 180), t205);
+    return f.offset / f.lateral;
+  };
+  SLRR_REQUIRE(std::abs(offset_per_newton(.5 * fz0) / offset_per_newton(fz0) - 1) < .02);
 }
 
 SLRR_TEST(hot_brake_fluid_boils_and_the_pressure_falls) {

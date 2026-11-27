@@ -514,7 +514,8 @@ Declared by the patched `parts/scripts/src/WheelRef.java`:
 `parts/scripts/src/WheelRef.java`: the tyre's longitudinal relaxation length
 in metres (0.02 to 1), the rolling distance over which its braking and
 driving force builds; it grows with the load and as the pressure falls.
-No stock tyre calls it; without it, half the lateral length of
+The patched `Tyre` sends 0.75 of its lateral length for a drag radial and 0
+for the other compounds; with 0, half the lateral length of
 `setRelaxation` ([notes](../vehicles/notes.md#longitudinal-tyre-relaxation-498)).
 
 ### Math functions (#463)

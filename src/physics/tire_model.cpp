@@ -262,7 +262,11 @@ TireForces tire_forces(double load, double alignment, double wheel_speed,
   // The lateral force pulls the patch its way; the longitudinal force,
   // acting there, adds offset x Fx (#458): braking in a turn turns the wheel
   // into the turn and lightens the steering, traction adds to it.
-  const double relaxation = std::clamp(tire.relaxation_length, .05, 2.0);
+  // The carcass' lateral compliance (relaxation / cornering stiffness)
+  // does not change with the load: the length grows with the stiffness
+  // (#498), so a light wheel's patch is not pushed further than a loaded
+  // one's by the same force.
+  const double relaxation = std::clamp(tire.relaxation_length * relaxation_load_factor(aligned_load, tire), .05, 2.0);
   const double offset =
       k.kya > 0 ? std::clamp(lateral * relaxation / k.kya, -kMaximumOffset, kMaximumOffset) : 0;
   return {longitudinal, lateral, trail * slip_lateral * kept + offset * longitudinal, offset};

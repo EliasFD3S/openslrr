@@ -2898,37 +2898,53 @@ stopping or parked car is not pushed back and forth by a lagged force.
 
 - Scripted length: `TireParameters::longitudinal_relaxation`, set by
   `WheelRef.setLongitudinalRelaxation(m)` (a new native declared by the
-  patched `WheelRef.java`; no stock tyre calls it), scaled by the pressure,
-  temperature and puncture like the lateral one; zero keeps half the
-  lateral length.
+  patched `WheelRef.java`), scaled by the pressure, temperature and
+  puncture like the lateral one; zero keeps half the lateral length. The
+  patched `Tyre.SetInflation` gives a drag radial 0.75 of its lateral
+  length (its soft sidewall winds up far fore and aft at a launch) and
+  sends 0 for every other compound, which also clears a drag radial's
+  length when another tyre replaces it on the corner.
 - Load: both lengths now scale with the load as the tyre's cornering
   stiffness does (the carcass' stiffness stays):
   `relaxation_load_factor`, 1 at the nominal load, about 0.7 at half of it
   and 1.15 at 1.5 times, 0.3 to 1.5.
 - The aligning torque already follows the relaxation: `tire_forces` takes
   its pneumatic trail and its offset x Fx part from the relaxed slip angle
-  and slip ratio it is given.
+  and slip ratio it is given. The patch's offset (#458), lateral force x
+  relaxation / cornering stiffness, now uses the load-scaled length: the
+  carcass' compliance stays the same at any load, where the unscaled
+  length made a light wheel's patch move further for the same force.
 
 Validation:
 
-- Compilation: `slrr_host` Release; `WheelRef` in
-  `build/brake-compile-root`.
+- Compilation: `slrr_host` Release; `WheelRef` and `Tyre` in
+  `build/brake-compile-root` (the patched `Tyre` first recompiled byte for
+  byte from its source).
 - `vehicle_dynamics` 85/85 with a new test: braking hard from 25 m/s, a
   0.05 m and a 0.4 m longitudinal length give 782 / 489 N of front braking
   force after the first frame, 3820 / 3848 N once built, stops of 33.7 /
   33.8 m, and a scripted 0.4 m with the short lateral length the same as
   the long one (491 N); at walking pace the relaxed slip equals the real
   one; the load factor is 1 at the nominal load, below 0.8 at half, above
-  1.05 at 1.5 times. The other tests unchanged (dive 2.43 deg against
+  1.05 at 1.5 times; the patch offset per newton is the same (within 2 %)
+  at half the nominal load as at it. The other tests unchanged (dive 2.43 deg against
   2.42). `missing_support` 17/17,
   `physics_tick_rate` 9/9.
 - Tsukuba bench with ASR forced (temporary switch): CoupeSport 75.32, MC
   86.13, SuperDuty 90.35 km/h at 6 s (75.32 / 86.18 / 90.33 before); the
   CoupeSport the same without ASR.
-- Not checked: ABS and ASR cycling and launches in game, their feel; the
-  #383 wheelspin runaway at 120 Hz.
+- `build/needle-game` had the stock `Math.class` with an older `Tyre`:
+  the patched `Tyre` calls `Math.clamp`, which only the patched `Math`
+  declares, so with the stock one its pressure and relaxation came out 0
+  (0.05 m after the host's clamp) and the CoupeSport spun its wheels. With
+  the patched `Math`, `Tyre` and `WheelRef` copied there (as in `game/`):
+  lateral length 0.300 m read from the script, longitudinal 0 (a sport
+  tyre), CoupeSport 9.29 / 36.88 / 75.32 km/h at 1 / 3 / 6 s, no missing
+  method.
+- Not checked: ABS and ASR cycling and launches in game, their feel; a
+  drag radial in game; the #383 wheelspin runaway at 120 Hz.
 
-Limitations: the stock tyres keep half their lateral length (none sets its
-own); the load factor follows the model's cornering stiffness, not a
-measured carcass; the patch offset of the aligning torque (#458) still uses
-the unscaled lateral length.
+Limitations: street, sport and soft racing tyres keep half their lateral
+length (only the drag radial sets its own); the load factor follows the
+model's cornering stiffness, not a measured carcass (there is no measured
+data for these tyres).
