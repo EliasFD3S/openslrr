@@ -281,9 +281,12 @@ Notes and measurements: [notes](notes.md#brakes-as-hardware-abs-and-asr-446).
   HUD shows) scales the tyre's friction (`TireParameters::friction`) for the
   force law and the sticking limits alike, through a curve per compound.
   Wear and rubber smoke follow the skin.
-- **Feedback.** While ABS works, a force feedback wheel buzzes at 14 Hz and
-  the pad the brake is bound to rumbles; the HUD lights the stock ABS / ASR
-  lamps. Driverless cars with physical brakes have ABS.
+- **Feedback.** Each time ABS releases a front wheel (a channel opens its
+  outlet valve), a force feedback wheel gets a short knock; each release on
+  any wheel gives the pad the brake is bound to a short pulse, at most ten a
+  second, both scaled by the vibration option (#474). The HUD lights the
+  stock ABS / ASR lamps while the aid works. Driverless cars with physical
+  brakes have ABS.
 - **ASR** (`TractionControl`, Options ASR slider): while the driver
   accelerates (clutch engaged, no brake, no shift), the engine torque factor
   follows the driven axles' mean slip past 8 % or 0.8 m/s (20 % or 2 m/s at

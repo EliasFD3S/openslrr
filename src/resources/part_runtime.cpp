@@ -8222,6 +8222,10 @@ namespace {
 // the torque for a moment, then lets go of the wheel.
 physics::SteeringFeedback steering_feedback;
 double feedback_idle = 0;
+// ABS knocks (#474): the releases already felt per channel, the wheel's
+// decaying knock and the time since the pad's last pulse.
+std::array<unsigned, 4> abs_felt{};
+double abs_knock = 0, abs_pad_wait = 0;
 void update_force_feedback(double frame_seconds, bool committed) {
   Object* chassis = part_controlled_chassis();
   Record* rec = chassis ? record(chassis) : nullptr;
@@ -8256,13 +8260,31 @@ void update_force_feedback(double frame_seconds, bool committed) {
   const auto out = steering_feedback.update(front, dynamics.body.velocity.length(),
                                             std::max(frame_seconds, 1e-3), feedback_jolt);
   feedback_jolt = 0;
-  // ABS at work (#446): the pump and valves shake the car; the wheel gets a
-  // 14 Hz buzz and a pad the brake is bound to a light rumble.
+  // ABS at work (#446, #474): each time a channel opens its outlet valve to
+  // release a wheel, the pressure drop knocks back. A front release gives
+  // the wheel a short knock (decaying in 40 ms, at most the tyre scrub's
+  // strength); any release gives the pad the brake is bound to a short
+  // pulse, at most ten a second. Between releases nothing shakes.
   float vibration = out.vibration, vibration_hz = out.vibration_hz;
-  if (dynamics.abs_active()) {
-    if (vibration < .3f) vibration_hz = 14.f;
-    vibration = std::max(vibration, .3f);
-    host_input_brake_pulse(.35f);
+  bool front_release = false, any_release = false;
+  for (size_t i = 0; i < abs_felt.size(); ++i) {
+    const unsigned releases = dynamics.abs_releases(i);
+    if (releases > abs_felt[i]) {
+      any_release = true;
+      front_release = front_release || i < 2;
+    }
+    abs_felt[i] = releases;  // a new car starts from its own count
+  }
+  abs_knock *= std::exp(-frame_seconds / .04);
+  if (front_release) abs_knock = 1;
+  if (abs_knock > .05 && .15f * static_cast<float>(abs_knock) > vibration) {
+    vibration = .15f * static_cast<float>(abs_knock);
+    vibration_hz = 20.f;
+  }
+  abs_pad_wait = std::max(0.0, abs_pad_wait - frame_seconds);
+  if (any_release && abs_pad_wait <= 0) {
+    host_input_brake_pulse(.3f);
+    abs_pad_wait = .1;
   }
   host_input_force_feedback(out.torque, out.damper, out.detail, out.impact, vibration,
                             vibration_hz, static_cast<float>(frame_seconds));

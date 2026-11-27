@@ -261,7 +261,11 @@ void host_input_force_feedback(float torque, float damper, float detail, float i
 void host_input_brake_pulse(float strength) {
   const auto& options = host_game_options();
   if (brake_device < 3 || !options.ffb || strength <= 0.f) return;
-  host_input_devices().rumble(brake_device - 3, std::clamp(strength, 0.f, 1.f) * options.ffb_strength, 90);
+  // A short pulse (#474), scaled like the wheel's vibration by the
+  // vibration option.
+  const float vibration = std::clamp(host_input_tuning().ffb_vibration, 0, 200) / 100.f;
+  const float amount = std::clamp(strength * vibration, 0.f, 1.f) * options.ffb_strength;
+  if (amount > 0.f) host_input_devices().rumble(brake_device - 3, amount, 50);
 }
 
 void host_input_force_feedback_stop() {

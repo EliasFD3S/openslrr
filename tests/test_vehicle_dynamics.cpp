@@ -1433,6 +1433,10 @@ SLRR_TEST(abs_cycles_one_wheel_holds_the_rear_axle_together_and_delays_the_yaw) 
   }
   SLRR_REQUIRE(minimum_left < .3);
   SLRR_REQUIRE(abs.active());
+  // #474: each cycle on the icy wheels counts one release (the feedback's
+  // knocks); the grippy front never released its wheel.
+  SLRR_REQUIRE(abs.releases(0) >= 2 && abs.releases(0) < 20);
+  SLRR_REQUIRE(abs.releases(1) == 0);
   // The grippy front wheel may not take the full pedal at once.
   SLRR_REQUIRE(high_side < .9);
   SLRR_REQUIRE(abs.pressure(1) > high_side);
