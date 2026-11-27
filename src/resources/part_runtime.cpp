@@ -8923,9 +8923,10 @@ bool part_car_angular_velocity(void* car, float* omega) {
   return true;
 }
 bool part_car_local_box(void *key, float *lo, float *hi) {
-  if (!key || !lo || !hi || !car(static_cast<Object *>(key)))
+  Object *chassis = key && lo && hi ? car(static_cast<Object *>(key)) : nullptr;
+  if (!chassis)
     return false;
-  const auto instances = scene_instances_collect_root(key);
+  const auto instances = scene_instances_collect_root(chassis);
   // The chassis shell (the largest mesh) carries the chassis frame in the
   // instances' own space; every mesh corner is measured in that frame
   // (part_camera_pose's frame is not in the instances' space).

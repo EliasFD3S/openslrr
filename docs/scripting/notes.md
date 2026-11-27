@@ -393,3 +393,67 @@ Validation: the classes compiled with `compile_game_sources` in
 (TestTrack: same speeds as before, 30.8 / 55.3 km/h at 3 / 5 s; a career
 through `MainMenu`, the garage and Tsukuba) with no script message. Not
 exercised: `City`, `CarLot`, `ROCTrack`, the dealer.
+
+## Issue #487: camera provider hook and mod car/camera API
+
+Request: a hook so that a camera mod (the NFSU2 camera of #470) can supply a
+driving camera without replacing `java.game.Track`, plus the car and camera
+state it needs (gaps 2-5 of the workspace wiki's camera-mod-support analysis).
+
+Change:
+
+- `java.openslrr` (`patch/system/Scripts/openslrr`, new package, picked up by
+  the system/Scripts classpath scan): `OpenSLRR`, `CarState`,
+  `CameraControl`, `CameraProvider`, `Cameras`; natives in
+  `natives_openslrr.cpp`; `kModApiVersion` = 1 in `mod_api.hpp` (same file
+  as the #486 branch). Reference: [mod-api.md](mod-api.md).
+- `GameRefState::mod_pose` (`mod_camera.hpp`): `world_camera_pose` returns
+  it before every other camera rule. Frame order (`mainloop.cpp`): scripts
+  and `animate()` -> `gameref_advance_world_camera` -> `part_physics_begin`
+  -> `render.flush` (the renderer's `gameref_world_camera`) ->
+  `part_physics_end`. Frame-locked batches publish render poses in
+  `part_physics_end`, so scripts see this frame's drawn pose; the game's
+  free-running mode publishes them in `free_running_sync` inside
+  `part_physics_begin`, after the scripts. A Relative pose therefore reads
+  `part_camera_pose` on every query; `CarState.drawnPos` read in `animate()`
+  is one frame old in free-running mode.
+- `gameref_set_camera_roll_from_matrix`: `setMatrix` roll on non-follow
+  cameras. `part_car_angular_velocity`; `part_car_local_box` (from the
+  removed #470 arcade camera) now resolves the chassis first: given the
+  Vehicle it measured nothing (all zero).
+- Track: `CAMMODE_PROVIDER` 8, `providerOn` / `providerOff` /
+  `syncCameraProvider`; `changeCamInternal`, `makeCamExternal` and
+  `changeCamNone` deactivate first; `refreshCamera` re-activates on a new
+  target; `nextCamera` and look back route to the provider. The follow camera
+  stays alive and hidden while a provider shows, because `City` /
+  `ROCTrack` and the MWM tracks use `cam` directly. `City` day-race staging
+  and `ROCTrack.moveCamera` switch back to the follow camera.
+
+Validation (Windows, Release):
+
+- ctest 7/7 including `mod_camera` (7 checks: exact world pose, relative
+  pose following the origin, up/roll fallbacks, invalid input, fov clamp,
+  `getOri`-compatible Euler extraction, stock camera yaw/pitch);
+  `options_retry`, `gameref_alias`, `car_select_view` pass.
+- `compile_game_sources`: the five `java.openslrr` classes, then `Track`,
+  then `City` and `ROCTrack` in a full private game copy. Unchanged
+  `City.java` / `ROCTrack.java` rebuild their shipped classes (ROCTrack byte
+  for byte, City with one differing byte), so the diffs are the edits.
+- In game, with a throwaway provider that was not shipped (`java.camtest`,
+  registered by a test-only Track build; view 0 `setPoseRelative` 6 m
+  behind, view 1 `setPose` from `drawnPos`): the Valo City replay in
+  free-running mode (`--bench-realtime`). The provider took the follow view
+  on entry, V cycled 0 -> 1 -> 0 -> 1 (`setView`), B held gave `lookBack 1`
+  and the front view, release `lookBack 0`
+  (`assets/validation/camera-provider/test-provider-views.png`).
+  `OpenSLRR.apiVersion` 1; `boxMin/boxMax` -1.31..0.96 x -1.12..0.58 x
+  -2.28..2.16 m on the Baiern; `drawnOri` equals `getOri`; `drawnPos` is the
+  chassis origin, 0.74 m above `getPos`'s contact-based point. Judder: 30
+  window grabs per burst (about 25 ms apart) tracked the red car's centroid;
+  over frame pairs with stable lighting the step RMS was 0.15-0.3 px for
+  `setPoseRelative` and 0.1-0.6 px for `setPose` from `drawnPos` (one burst
+  had 2.8 px steps), i.e. no visible judder against the car at 6 m.
+- Not exercised: speed, nitrous, angular velocity and wheel contact on a
+  physically driven car (the replay drives the car by pose, so they read
+  ~0), `sweep` beyond a 5 m drop test (0.11), race staging, ROC, and a
+  selection change from the options (no UI until #488).

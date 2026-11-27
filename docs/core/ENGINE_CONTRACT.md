@@ -886,6 +886,19 @@ V); the stock F1-F5/F9 view hotkeys are not created. The engine has no
 arcade (NFSU2-style) chase camera: that camera is planned as a script mod on
 the mod overlay folders, camera provider hook and mod keys/settings (#486,
 #487, #488).
+Camera mods (#487) register a `java.openslrr.CameraProvider`; the patched
+Track hands it the follow view (`CAMMODE_PROVIDER`), cycles its views on the
+change-view key, sends it LOOK BACK and deactivates it before any other camera
+change, keeping its own follow camera alive but hidden. A script camera with a
+`CameraControl` pose (`GameRefState::mod_pose`) bypasses every other camera
+rule in `world_camera_pose`; a Relative pose adds the car's drawn origin
+(`part_camera_pose`) on every query, so the draw-time query matches the drawn
+car even though free-running physics publishes the frame's poses after the
+scripts ran (inside `part_physics_begin`). Values a script reads in
+`animate()` (`CarState.drawnPos`) are therefore one frame old in free-running
+mode and exact in frame-locked mode. `GameRef.setMatrix` on a camera other
+than the bound follow camera sets `camera_roll` from the Ypr roll. Reference:
+[scripting/mod-api.md](../scripting/mod-api.md).
 
 SDL3 owns joystick/gamepad discovery and polling on that same host thread;
 Win32 still owns the window, keyboard scan codes and mouse. Devices 0/1 remain

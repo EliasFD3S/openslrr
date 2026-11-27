@@ -445,3 +445,12 @@ The patched `system/Scripts/lang/Math.java` declares, besides the stock
 
 `tests/test_script_safety.cpp` calls the natives and runs a script compiled
 against the shipped `Math.class` that reads `Math.PI` and calls the helpers.
+
+### Mod API natives (#487)
+
+`src/natives/natives_openslrr.cpp` binds the static natives of the shipped
+`java.openslrr` classes: `OpenSLRR.apiVersion`, `CarState` (`drawnPos`,
+`drawnOri`, `vel`, `angVel`, `speed`, `nitro`, `wheelsOnGround`, `boxMin`,
+`boxMax`) and `CameraControl` (`setPose`, `setPoseRelative`, `clearPose`,
+`sweep`). Units, timing and failure values are in [mod-api.md](mod-api.md).
+The pure pose math is `src/resources/mod_camera.cpp` (ctest `mod_camera`).
