@@ -2330,3 +2330,151 @@ III's mufflers scrape under full throttle (its authored ride height is
 low); the lift uses the parked estimate, so a car whose springs or weight
 change in the garage gets it again only when its body supports are
 rebuilt.
+
+## Anti-dive and anti-squat (#469)
+
+Cause: braking and drive forces acted on the body at the contact patch and
+the whole longitudinal load transfer went through the springs, as if every
+arm were level: the car dived and squatted fully. The scripts'
+`setInstantCenter` side-view centres (`LICy`, `LICz`) are stored but
+inactive since the 8ac2ba9 baseline; the recovered exe (sl-remastered)
+copies them without using them, and their frame is unknown (one reading
+gives the CoupeSport 13 % anti-dive, another an instant centre 1.4 m above
+the wheel).
+
+Fix (OpenSLRR, typical values chosen over the original's data):
+
+- `VehicleDynamics::update_jacking`, at the start of each step from the last
+  step's tyre forces: a wheel's longitudinal force F moves F x h / L of load
+  (h the CoM's height above the tyres, L the wheelbase). `anti_brake` and
+  `anti_drive` are the usual percentages, the share of the axle's transfer
+  the arms carry at the car's own split (the front axle's share of the
+  brake torques the brake scripts give, 70 % without any; the drive on the
+  driven axles, halved on four-wheel drive), which fixes each arm's
+  side-view slope; each wheel's arms push by its own force times that slope
+  (`WheelState::jacking`). Braking is a force against the wheel's spin.
+- The push adds to the suspension force between body and wheel in the three
+  support paths (the quarter-car solve, the massless linked wheel, the
+  unlinked one), so the tyre still carries the whole transfer while the
+  spring takes less of it.
+- The shares come from the suspension's script, so mods can set them:
+  `WheelRef.setAnti(braking, driving)`, a new native declared by the
+  patched `WheelRef.java`. The 96 patched stock corners call it with typical
+  shares for their real car (table in the
+  [patch README](../../patch/README.md#anti-dive-and-anti-squat-469); the
+  #450 generator writes the line). A corner whose script does not call it
+  gets typical shares by suspension type in `dynamics_wheels`: linked fronts
+  15 % anti-dive and 10 % anti-lift driving, independent rear arms 30 %
+  anti-lift and 40 % anti-squat, live axles (the #456 25 m arm) 30 % and
+  80 %; corners without arms none.
+
+Validation:
+
+- Compilation: `slrr_host` Release; `WheelRef` and the 96 suspension
+  classes in `build/brake-compile-root` (all compiled), the generator's
+  output identical to the edited sources. `vehicle_dynamics` 72/72 with a
+  new test (the test saloon, its brakes split 50 / 50, braking from 20 m/s:
+  dive 2.42 to 1.99 degrees, the stop 21.4 m either way; launching: squat
+  1.41 to 1.18 degrees, the undriven front still rising),
+  `missing_support` 17/17, `physics_tick_rate` 9/9.
+- `physics_lab` unchanged (its car has no shares).
+- In `build/needle-game` with the new classes: the MC reads its scripts'
+  0.20 / 0.10 front and 0.40 / 1.00 rear. Bench drives on Tsukuba (flat;
+  the TestTrack start straddles a change of slope, where the MC rests on its
+  body with all four wheels in the air): CoupeSport 8.74 / 34.9 km/h at 1 /
+  3 s either way, GT III 14.9 / 49.5 against 14.8 / 49.2, MC 9.94 / 40.4
+  either way.
+- Not checked in game: the pitch under braking and launch, its feel.
+
+Limitations: the stock shares are typical figures for the real cars, not
+their measured geometry; the slope follows the car's current brake split,
+so a balance change in the garage keeps the stated percentage instead of
+moving it as a fixed arm geometry would; the push follows the last step's
+force; the scripts' instant centres stay unused.
+
+## Tyre surface stays hot after a slide (#472)
+
+Cause (Mark, direct-drive wheel, latest `main`: tyres heat far too fast,
+the DevilSport has no grip): the #446 tread lump was 8 % of the tyre (two
+or three millimetres) and set the grip. Wheelspin (40-60 kW into a rear
+tyre) heated it to 150-200 deg C in seconds, as a burnout does, but it then
+cooled only through the air, 25 W/K into the carcass and 8 W/K into the
+road: 15-40 s, during which the grip stayed 10-20 % low, so the car slid
+again and heated more. Measured on Tsukuba with temporary hooks:
+
+- The heat input is not the cause: the sliding work with the raw lateral
+  slip speed differs from the relaxed one by about 3 %.
+- The DevilSport's balance in a gentle slalom at 58 km/h is sound (slightly
+  understeering, like the CoupeSport). Full throttle on a straight, its
+  330 Nm in first (realistic for the E36 M3, no ASR) spin the rears at
+  10-15 m/s for 2 s and the car swaps ends near 57 km/h; the CoupeSport
+  launches at 0.9 m/s of slip. A wheel spinning that much has almost no
+  lateral grip: realistic, but it feeds the heat.
+
+Fix (`tyre_thermal.cpp`):
+
+- Three lumps: the skin (3 % of the tyre, its outer half millimetre) takes
+  half the sliding work; the tread bulk (20 %) is fed by it through 160 W/K
+  per square metre of tread band (0.25 W/m K over about 1.5 mm) and feeds
+  the carcass (77 %) through 50 W/K/m² (about 5 mm). The skin loses heat to
+  the air as before and to the road as 4 x sqrt(speed) W/K: the patch's
+  contact is shorter, so its gradient steeper, the faster the tyre rolls.
+- `tyre_grip_temperature` (the mean of skin and bulk) sets the grip, the
+  cornering stiffness's rubber term and the HUD's tread readout; wear and
+  rubber smoke follow the skin. `TyreTemperature` gains `tread` (the bulk).
+
+Validation:
+
+- Compilation: `slrr_host` and `physics_lab` Release. `vehicle_dynamics`
+  72/72 (the tyre heat test adds a 4 s, 40 kW wheelspin on a 275/40R19
+  sport tyre: after 4 s rolling at 15 m/s the grip temperature keeps less
+  than 60 % of its rise, the bulk at least 10 deg C), `missing_support`
+  17/17, `physics_tick_rate` 9/9.
+- Lumped model alone (275/40R19): a 4 s, 40 kW burnout peaks at about
+  82 deg C either way; 4 s later the grip temperature is 53 deg C against
+  73, at 20 s 37 against 51. Three minutes at 3 kW of sliding: 45 deg C
+  against 50 (slower warm-up). Ten minutes at 100 km/h: carcass 56 deg C.
+- In game (`build/needle-game`, DevilSport on Tsukuba, temporary hook: 3 s
+  full throttle then lift): the rear tread rubber peaks at 64 deg C either
+  way; 1.5 s after the lift 54 against 61 deg C; 10 s after, 42-46 against
+  55-62.
+- Not checked in game by a driver: the feel of the grip after a slide, the
+  HUD readout.
+
+Limitations: the conductances and the road term are estimates from rubber
+properties, not a measured tyre; the share of the sliding work the tyre
+takes stays at half. The DevilSport still spins its rears and swaps ends on
+a full-throttle launch without ASR: that is its torque, not the heat. The
+#461 tyre save keeps no temperatures (unchanged).
+
+## ABS force feedback pulses (#474)
+
+Cause (Mark, direct-drive wheel, latest `main`: the ABS vibration is far
+too strong): `update_force_feedback` forced the wheel's vibration to at
+least 0.3 at 14 Hz while `abs_active()`, twice the tyre scrub's maximum
+(0.15), and `abs_active()` stays true while any channel modulates,
+including the rebuild up to 0.3 s after the last lock: in practice the
+whole stop. The pad the brake is bound to got a 35 % rumble re-sent every
+frame, not scaled by the vibration option.
+
+Fix:
+
+- `AbsModulator::releases(i)` counts each time channel i opens its outlet
+  valve (the move to `dump`); `VehicleDynamics::abs_releases` exposes it.
+- `update_force_feedback` feels the releases, not the state: a front
+  release gives the wheel a knock of 0.15 (the scrub's maximum) at 20 Hz
+  decaying in 40 ms; any release gives the pad a 0.3 pulse of 50 ms, at most
+  every 0.1 s. Between releases nothing shakes.
+- `host_input_brake_pulse` scales the pad's pulse by the vibration option
+  (Options, force feedback vibration, 50 % by default), as the wheel's.
+
+Validation:
+
+- Compilation: `slrr_host` Release. `vehicle_dynamics` 72/72 (the ABS cycle
+  test counts the icy wheel's releases, 2 to 19 in 0.4 s, and none on the
+  grippy front).
+- Not checked in game: the feel on a wheel and a pad.
+
+Limitations: the knock is a vibration effect, not a torque kick along the
+steering axis; the rear channels' releases reach the pad only. The values
+(0.15, 40 ms, 0.3, 50 ms) are chosen, not measured.

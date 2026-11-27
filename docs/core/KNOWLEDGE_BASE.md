@@ -891,8 +891,9 @@ Physics:
   load smoothing), fed a relaxed slip angle
   ([driving model](../vehicles/driving-model.md)).
   `setCPatch` tolerance and `setInstantCenter` data are copied/stored but have
-  no active solver effect; there is no jacking or shared lateral impulse
-  bound. The approved brake fix consumes one impulse budget before tyre
+  no active solver effect; there is no shared lateral impulse bound. Anti-dive
+  and anti-squat use typical shares by suspension type instead
+  (`WheelState::jacking`, #469, [notes](../vehicles/notes.md#anti-dive-and-anti-squat-469)). The approved brake fix consumes one impulse budget before tyre
   force and holds the reaction with the unused budget; raised launch take-up
   still requires the service brake below 0.05
   (`src/physics/vehicle_dynamics.cpp:VehicleDynamics::step_drive`).

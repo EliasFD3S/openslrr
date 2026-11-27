@@ -44,6 +44,8 @@ public class Focer_300_FL_McPherson_strut extends Suspension
 				              -0.0770, -0.0430, -0.0040,
 				              0.0710, 0.4061, 0.0263,
 				              0.1217, 0.7134, 0.0377);
+				// OpenSLRR (#469): anti-dive braking, anti-lift driving, typical for the real car
+				wheel.setAnti( 0.15, 0.10 );
 
 				the_car.setSlotPos(101+wheelID, new Vector3(-0.124,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(-0.113,0,0), null );

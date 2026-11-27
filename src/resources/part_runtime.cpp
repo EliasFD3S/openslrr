@@ -86,6 +86,9 @@ struct WheelPhys {
   // setTyreSpec (patched Tyre, #446): the compound, Tyre.tcSTREET (0) to
   // tcDRAGRADIAL (3); -1 without the patch.
   float tyre_compound = -1;
+  // setAnti (patched suspensions, #469): the share of the axle's load
+  // transfer the arms carry, braking and driving; -1 when not set.
+  float anti_brake = -1, anti_drive = -1;
   int opp = -1;
   float arm[7]{}, hub[10]{};
   bool authored_position = false;
@@ -2935,6 +2938,23 @@ void dynamics_wheels(Record &rec) {
       }
     }
     cfg.metal_contact = (!inline_wheel && !has_any_rim) || (rec.debeaded[i] && mount);
+    // Anti-dive / anti-lift / anti-squat (#469): what the suspension's
+    // script sets with WheelRef.setAnti (the patched stock corners give their
+    // real car's typical shares); otherwise typical shares by suspension
+    // type: linked fronts 15 % anti-dive braking and 10 % anti-lift driving,
+    // independent rear arms 30 % anti-lift and 40 % anti-squat, live axles
+    // (the #456 25 m arm) 30 % and 80 %. A corner without arms (the generic
+    // kernel) has none unless its script sets it.
+    cfg.anti_brake = cfg.anti_drive = 0;
+    if (live.anti_brake >= 0) {
+      cfg.anti_brake = live.anti_brake;
+      cfg.anti_drive = live.anti_drive;
+    } else if (cfg.arm_length > 0) {
+      const bool front = i < 2;
+      const bool live_axle = cfg.arm_length >= 20;
+      cfg.anti_brake = front ? .15 : .30;
+      cfg.anti_drive = front ? .10 : live_axle ? .80 : .40;
+    }
     // WheelRef.setWidth: the tyre width in metres (Tyre.java), stored halved.
     cfg.half_width = cfg.metal_contact ? 0. : std::clamp(double(live.width), 0., .25);
     cfg.rest = live.rest;
@@ -3595,7 +3615,7 @@ DriveRefresh configure_drive(Object *chassis, Record &rec, bool controlled) {
     const auto &wheel = rec.wheels[i];
     out.weight = std::max(0.f, wheel.drive);
     out.brake = std::max(0.f, wheel.brake);
-    out.handbrake = std::max(0.f, wheel.hbrake);
+      out.handbrake = std::max(0.f, wheel.hbrake);
     // A brake class without a spec (DrumBrake, a mod's own) on a car with
     // physical brakes keeps the stock law's gain (#446).
     if (physical_brakes && !(wheel.brake_diameter > 0)) {
@@ -8263,6 +8283,10 @@ namespace {
 // the torque for a moment, then lets go of the wheel.
 physics::SteeringFeedback steering_feedback;
 double feedback_idle = 0;
+// ABS knocks (#474): the releases already felt per channel, the wheel's
+// decaying knock and the time since the pad's last pulse.
+std::array<unsigned, 4> abs_felt{};
+double abs_knock = 0, abs_pad_wait = 0;
 void update_force_feedback(double frame_seconds, bool committed) {
   Object* chassis = part_controlled_chassis();
   Record* rec = chassis ? record(chassis) : nullptr;
@@ -8297,13 +8321,31 @@ void update_force_feedback(double frame_seconds, bool committed) {
   const auto out = steering_feedback.update(front, dynamics.body.velocity.length(),
                                             std::max(frame_seconds, 1e-3), feedback_jolt);
   feedback_jolt = 0;
-  // ABS at work (#446): the pump and valves shake the car; the wheel gets a
-  // 14 Hz buzz and a pad the brake is bound to a light rumble.
+  // ABS at work (#446, #474): each time a channel opens its outlet valve to
+  // release a wheel, the pressure drop knocks back. A front release gives
+  // the wheel a short knock (decaying in 40 ms, at most the tyre scrub's
+  // strength); any release gives the pad the brake is bound to a short
+  // pulse, at most ten a second. Between releases nothing shakes.
   float vibration = out.vibration, vibration_hz = out.vibration_hz;
-  if (dynamics.abs_active()) {
-    if (vibration < .3f) vibration_hz = 14.f;
-    vibration = std::max(vibration, .3f);
-    host_input_brake_pulse(.35f);
+  bool front_release = false, any_release = false;
+  for (size_t i = 0; i < abs_felt.size(); ++i) {
+    const unsigned releases = dynamics.abs_releases(i);
+    if (releases > abs_felt[i]) {
+      any_release = true;
+      front_release = front_release || i < 2;
+    }
+    abs_felt[i] = releases;  // a new car starts from its own count
+  }
+  abs_knock *= std::exp(-frame_seconds / .04);
+  if (front_release) abs_knock = 1;
+  if (abs_knock > .05 && .15f * static_cast<float>(abs_knock) > vibration) {
+    vibration = .15f * static_cast<float>(abs_knock);
+    vibration_hz = 20.f;
+  }
+  abs_pad_wait = std::max(0.0, abs_pad_wait - frame_seconds);
+  if (any_release && abs_pad_wait <= 0) {
+    host_input_brake_pulse(.3f);
+    abs_pad_wait = .1;
   }
   host_input_force_feedback(out.torque, out.damper, out.detail, out.impact, vibration,
                             vibration_hz, static_cast<float>(frame_seconds));
@@ -8751,7 +8793,8 @@ bool part_vehicle_hud(VehicleHudState &state) {
     c.tyre = rec->dynamics.wheels[i].enabled && cfg.tyre_heat.specified;
     c.rotor = static_cast<float>(wheel.brake_temperature);
     c.fluid = static_cast<float>(wheel.fluid_temperature);
-    c.tread = static_cast<float>(wheel.tyre_temperature.surface);
+    // The tread rubber's temperature, the one that sets the grip (#472).
+    c.tread = static_cast<float>(physics::tyre_grip_temperature(wheel.tyre_temperature));
     c.carcass = static_cast<float>(wheel.tyre_temperature.carcass);
     c.pad = static_cast<float>(physics::pad_friction_factor(cfg.hardware, wheel.brake_temperature));
     c.grip = static_cast<float>(physics::tyre_grip_factor(cfg.tyre_heat, c.tread));
@@ -10205,6 +10248,14 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
   // compound (Tyre.tcSTREET 0, tcSPORT 1, tcSUPERSPORT 2, tcDRAGRADIAL 3).
   wheel("setTyreSpec", "(F)V", [put](Object *s, const std::vector<Value> &a) {
     return put(s, [&](WheelPhys &w) { w.tyre_compound = std::max(0.f, scalar(a, 0, 0)); });
+  });
+  // OpenSLRR native declared by the patched WheelRef (#469): anti-dive /
+  // anti-lift braking and anti-lift / anti-squat driving, 0 to 1.5.
+  wheel("setAnti", "(FF)V", [put](Object *s, const std::vector<Value> &a) {
+    return put(s, [&](WheelPhys &w) {
+      w.anti_brake = std::clamp(scalar(a, 0, 0), 0.f, 1.5f);
+      w.anti_drive = std::clamp(scalar(a, 1, 0), 0.f, 1.5f);
+    });
   });
   wheel("setOppWheel", "(I)V", [put](Object *s, const std::vector<Value> &a) {
     return put(s, [&](WheelPhys &w) { w.opp = number(a, 0); });

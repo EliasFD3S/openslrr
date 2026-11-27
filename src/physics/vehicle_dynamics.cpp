@@ -753,7 +753,8 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
     // with l1 = l0 + dt v1, the tyre active only while it penetrates.
     const auto solve = [&](bool tyre, double damping) {
       double lhs = m / dt + spring * dt + damping;
-      double rhs = m * v0 / dt + spring * (w.rest - l0) + m * gravity;
+      // The arms' push (#469) acts with the spring between body and wheel.
+      double rhs = m * v0 / dt + spring * (w.rest - l0) + m * gravity + s.jacking;
       if (tyre) {
         lhs += g * (tyre_rate * g * dt + kTyreDamping * g);
         rhs -= g * (tyre_rate * (p0 + body_rate * dt) + kTyreDamping * body_rate);
@@ -795,7 +796,7 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
       ++s.rim_strikes;
     s.on_rim = rim;
     double suspension = suspension_force(l1, v1, w.rest, w.maximum, w.spring, w.bump_damping,
-                                         w.rebound_damping);
+                                         w.rebound_damping) + s.jacking;
     const bool contact = tyre_force > 0;
     if (contact) {
       // Through the bump stop the body takes the whole tyre force; otherwise
@@ -905,7 +906,7 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
                           ? (length - s.length) / dt
                           : speed + body.point_velocity(hard).dot(normal);
   double force = suspension_force(length, rate, w.rest, w.maximum, w.spring,
-                                  w.bump_damping, w.rebound_damping);
+                                  w.bump_damping, w.rebound_damping) + s.jacking;
   // Bottomed: the ground still pushes the wheel in, and the tyre takes it
   // as a radial spring (#380). Before, the remaining penetration went to the
   // rigid deep-penetration stop, so a kerb taller than the bump travel (7 cm
@@ -1121,7 +1122,7 @@ TireParameters effective_tyre(const DriveWheel &cfg, const WheelState &s, double
                               TyrePressureEffect *pressure_out = nullptr) {
   TireParameters tyre = cfg.tyre;
   const auto pressure = tyre_pressure_effect(cfg.tyre_heat, cfg.inflation, s.tyre_temperature);
-  tyre.friction *= tyre_grip_factor(cfg.tyre_heat, s.tyre_temperature.surface) *
+  tyre.friction *= tyre_grip_factor(cfg.tyre_heat, tyre_grip_temperature(s.tyre_temperature)) *
                    s.surface.friction * tyre_wear_grip(cfg.tread_wear);
   tyre.stiffness *= pressure.stiffness * tyre_wear_stiffness(cfg.tread_wear);
   tyre.relaxation_length *= pressure.relaxation;
@@ -1688,8 +1689,60 @@ void VehicleDynamics::step_drive() {
   }
 }
 
+// Anti-dive / anti-lift / anti-squat (#469). Longitudinal force moves F x
+// h / L of load between the axles (h the CoM's height above the tyres, L the
+// wheelbase): braking dives the front and lifts the rear, driving squats.
+// anti_brake / anti_drive are the usual percentages: the share of the
+// axle's load transfer its arms carry at the car's own split (the front
+// axle's share of the brake torques; the drive on the driven axles, halved
+// on four-wheel drive). That fixes each arm's side-view slope, A x h / L /
+// split, and each wheel's arms push body and wheel apart (or together) by
+// its own force times that slope, which the spring no longer takes. From
+// the last step's force; braking is a force against the wheel's spin.
+void VehicleDynamics::update_jacking() {
+  double front_z = 0, rear_z = 0, ground = 0;
+  int fronts = 0, rears = 0, touching = 0;
+  for (size_t i = 0; i < wheels.size(); ++i) {
+    if (!wheels[i].enabled) continue;
+    (wheels[i].center.z < body.center.z ? front_z : rear_z) += wheels[i].center.z;
+    ++(wheels[i].center.z < body.center.z ? fronts : rears);
+    if (state[i].contact) {
+      ground += state[i].patch.y;
+      ++touching;
+    }
+  }
+  const double base = fronts && rears ? rear_z / rears - front_z / fronts : 0;
+  const double height = touching ? body.position.y - ground / touching : 0;
+  bool front_driven = false, rear_driven = false;
+  double front_brake = 0, rear_brake = 0;
+  for (size_t i = 0; i < wheels.size() && i < drive.wheels.size(); ++i) {
+    if (!wheels[i].enabled) continue;
+    const bool is_front = wheels[i].center.z < body.center.z;
+    if (drive.wheels[i].weight > 0) (is_front ? front_driven : rear_driven) = true;
+    (is_front ? front_brake : rear_brake) += std::max(0.0, drive.wheels[i].brake);
+  }
+  const double drive_split = front_driven && rear_driven ? .5 : 1;
+  // Without brake torques (a car with none set), the usual 70 / 30.
+  const double front_split =
+      front_brake + rear_brake > 0 ? std::clamp(front_brake / (front_brake + rear_brake), .3, .9)
+                                   : .7;
+  for (size_t i = 0; i < wheels.size(); ++i) {
+    auto &s = state[i];
+    s.jacking = 0;
+    const auto &w = wheels[i];
+    if (!w.enabled || !s.contact || !(base > .5) || !(height > 0)) continue;
+    const double force = s.tire_force.longitudinal;
+    const bool braking = force * (s.spin != 0 ? s.spin : 1) < 0;
+    const bool is_front = w.center.z < body.center.z;
+    const double share = braking ? w.anti_brake : w.anti_drive;
+    const double split = braking ? (is_front ? front_split : 1 - front_split) : drive_split;
+    s.jacking = (is_front ? -1 : 1) * std::clamp(share, 0.0, 1.5) / split * force * height / base;
+  }
+}
+
 void VehicleDynamics::step(const Terrain &terrain) {
   apply_aero();
+  update_jacking();
   double ceiling = body.position.y;
   for (Vec3 p : body.corners())
     ceiling = std::max(ceiling, p.y);
@@ -1796,7 +1849,7 @@ void VehicleDynamics::step(const Terrain &terrain) {
     double force = suspension_force(
         length, body.point_velocity(hard).dot(s.normal), w.rest, w.maximum,
         w.spring, w.bump_damping, w.rebound_damping);
-    force += std::max(0.0, w.minimum - length) * w.spring * 8;
+    force += std::max(0.0, w.minimum - length) * w.spring * 8 + s.jacking;
     s.force = std::clamp(force, 0.0, body.mass * 9.81 * 3);
     body.add_force(s.normal * s.force, hard);
 
