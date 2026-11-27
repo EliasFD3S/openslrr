@@ -158,14 +158,22 @@ public class ControlSet
 						}
 					}
 
-					// OpenSLRR (#470): a file saved before the change-view key
-					// still holds the stock F1 / F2 view axis; move it to V.
-					if( deviceID[35] == KEYBOARD && axisID[35] == Input.RCDIK_F1 )
-						axisID[35] = Input.RCDIK_V;
-					if( deviceID[36] == KEYBOARD && axisID[36] == Input.RCDIK_F2 )
+					// OpenSLRR (#470): a file saved before the change-view key has
+					// the stock F1 / F2 view pair; move it to V and clear F2. Once
+					// slot 36 is empty a later F1 rebind of slot 35 is kept.
+					if( deviceID[35] == KEYBOARD && axisID[35] == Input.RCDIK_F1
+						&& deviceID[36] == KEYBOARD && axisID[36] == Input.RCDIK_F2 )
 					{
+						axisID[35] = Input.RCDIK_V;
 						deviceID[36] = -1;
 						axisID[36] = -1;
+					}
+					// The hidden stock F5 look-back (slot 37) is gone; the visible
+					// LOOK BACK is slot 76. The options cannot bind slot 37.
+					if( deviceID[37] == KEYBOARD && axisID[37] == Input.RCDIK_F5 )
+					{
+						deviceID[37] = -1;
+						axisID[37] = -1;
 					}
 
 					n=ctrlFile.readInt();
@@ -466,10 +474,10 @@ public class ControlSet
 		// OpenSLRR (#470): one change-view key cycles the camera views
 		// (Track.nextCamera); the F1..F5 and F9 view hotkeys are gone. It is
 		// GAME CONTROLS > CHANGE VIEW in the options. The stock previous-view
-		// slot stays empty.
+		// slot and the hidden F5 look-back (37) stay empty.
 		define (35, 1, Input.AXIS_LOOK_PREVNEXT, KEYBOARD, Input.RCDIK_V, 0.0, 1.0, 0.0, 1.0, 0.0 );
 		define (36, 1, Input.AXIS_LOOK_PREVNEXT, -1, -1, 0.0, 1.0, 0.0, -1.0, 0.0 );
-		define (37, 1, Input.AXIS_LOOK_REAR, KEYBOARD, Input.RCDIK_F5, 0.0, 1.0, 0.0, 1.0, 0.0 );
+		define (37, 1, Input.AXIS_LOOK_REAR, -1, -1, 0.0, 1.0, 0.0, 1.0, 0.0 );
 
 		//menu control group
 		define (38, 2, Input.AXIS_SELECT, KEYBOARD, Input.RCDIK_ENTER, 0.0, 1.0, 0.0, 1.0, 0.0 );

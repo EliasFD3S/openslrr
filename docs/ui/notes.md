@@ -583,3 +583,9 @@ both kinds, air time and tilt). In game, B held for 12 s in the reference
 replay showed the rear view and returned behind the car on release
 (`assets/validation/arcade-camera/arcade-look-back.png`). Nitrous, crash and
 bend tilt were not seen in game: the replay drives the car by pose.
+
+Review fixes (independent review of 8c60d17): the F1/F2 -> V migration ran on
+every load, so a deliberate F1 binding of CHANGE VIEW was lost on restart; it
+now runs only for the stock pair (slot 35 F1 with slot 36 F2) and empties slot
+36, so it fires once. The hidden stock slot 37 (`AXIS_LOOK_REAR` on F5, not in
+the options) is now empty by default and cleared on load.
