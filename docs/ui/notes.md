@@ -594,3 +594,11 @@ A look-back release missed while the camera mode changed (a script cockpit
 switch, the change-view key, a style change) left `arcade_look_back` set, and
 the rear view came back with that camera. `Track` now sends `arcadeback 0` on
 every look-back release, and `gameref_activate_camera` clears the flag.
+
+NFSU2 camera data (follow-up): NFSU2's own `GLOBAL/GlobalB.lzc` is JDLZ
+(16-byte header, decompressed size at +8; 5,145,778 -> 8,008,064 bytes, 298
+chunks). It has no camera table: no camera chunk, no BUMPER/HOOD/CLOSE/FAR
+strings or bStringHash values, and the float tables present belong to other
+systems. `SPEED2.EXE` holds the chase camera (`CubicCameraMover`) and the
+look-back/change-view controls, so its values are compiled in; no disassembler
+was available, and the approximations stay, as the requester chose.
