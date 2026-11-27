@@ -348,6 +348,23 @@ classes byte for byte). Not run in game, not checked on a real rig.
 Not done: per-class filter settings (separate dead zone and gamma for pad and
 wheel); today the Options sliders still apply to every class.
 
+## Mod settings and bindings (#488)
+
+The stock control table ended at slot 117; scripts had to hard-code raw keys
+for extra actions. `ControlSet` now reserves 118–133 in DEFAULTSET. The
+optional MKEY trailer after the smoothing table stores the action ID and an
+explicit-clear flag. Older readers skip the extra slots. `Controller.user_Add`
+already passes positive virtual axes through to `mapped_axis`; no host-side
+hotkey special case was necessary. Options resolves a mod row against the
+control set being edited, which need not use registration order.
+
+`mod_keys` exercises 78/118-slot v16 files, registration limits and reorder,
+removed mods, clearing bindings, and the host virtual hotkey path.
+`options_retry` invokes the six settings natives and reloads the JSON file;
+`host_options_json` checks scalar encoding. All passed against the Release
+build. For the script APIs and camera keys see the
+[registration examples](../scripting/mod-api-keys-settings.md).
+
 ## Car controls per device class (#405)
 
 Request: the input classes split by #393 (keyboard, pad, wheel) should each
