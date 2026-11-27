@@ -158,13 +158,12 @@ public class ControlSet
 						}
 					}
 
-					// OpenSLRR (#470): a file saved before the change-view key has
-					// the stock F1 / F2 view pair; move it to V and clear F2. Once
-					// slot 36 is empty a later F1 rebind of slot 35 is kept.
-					if( deviceID[35] == KEYBOARD && axisID[35] == Input.RCDIK_F1
-						&& deviceID[36] == KEYBOARD && axisID[36] == Input.RCDIK_F2 )
+					// Only the stock F1/F2 pair migrates to V. Always retire its hidden
+					// F2 binding, even if the visible slot was rebound or cleared.
+					if( deviceID[36] == KEYBOARD && axisID[36] == Input.RCDIK_F2 )
 					{
-						axisID[35] = Input.RCDIK_V;
+						if( deviceID[35] == KEYBOARD && axisID[35] == Input.RCDIK_F1 )
+							axisID[35] = Input.RCDIK_V;
 						deviceID[36] = -1;
 						axisID[36] = -1;
 					}

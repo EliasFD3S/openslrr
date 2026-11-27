@@ -984,6 +984,10 @@ abstract public class Track extends Scene implements GameState
 		else
 		if( cameraMode == CAMMODE_INTERNAL )
 		{
+			// Look back temporarily renders another camera; release restores cameraNum.
+			float rear = player.controller.user_GetAxisVal( Input.AXIS_LOOK_REAR );
+			if( rear > 0.5 || rear < -0.5 ) return;
+
 			// changeCamInternal's next camera, skipping the mirror and
 			// look-back cameras; after the last one, back to follow.
 			int cameras = cameraTarget.getInfo( GameType.GII_RENDER );
