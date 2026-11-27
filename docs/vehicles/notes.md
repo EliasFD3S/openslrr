@@ -2876,3 +2876,40 @@ Limitations: the instant centre is placed from the roll centre and its
 migration rate, not the arms' real pivots; the rod is level at rest and its
 shift does not steer the axle; the rates, the bead radius and the parts'
 shares in the inertia are typical figures.
+
+## Longitudinal tyre relaxation (#498)
+
+Cause: the tyre's lateral force built over its relaxation length (#383,
+scaled by pressure and temperature since #424 / #461), but its longitudinal
+force followed the slip at once: a braking or driving force appeared in the
+same step as the slip that made it, with no fore-and-aft wind-up of the
+tread. The limitation was listed in #383 and #424.
+
+Fix (OpenSLRR): `VehicleDynamics` relaxes the slip ratio like the slip
+angle, implicitly: `WheelState::slip_ratio` follows slip speed / reference
+speed with a lag of length / speed, the length being
+`kLongitudinalRelaxation` (0.5, a tyre's usual ratio) times the lateral
+relaxation length, so it follows the same pressure and temperature scaling
+and the scripts' `WheelRef.setRelaxation`. The tyre curve gets the relaxed
+slip; the step's force limit, the heat and the wear keep the real slip.
+The relaxation fades out from 5 m/s down to 1 m/s, so a stopping or
+parked car is not pushed back and forth by a lagged force (#426).
+
+Validation:
+
+- Compilation: `slrr_host` Release.
+- `vehicle_dynamics` 85/85 with a new test: braking hard from 25 m/s, a
+  0.05 m and a 0.4 m longitudinal length give 782 / 489 N of front braking
+  force after the first frame, 3820 / 3848 N once built, stops of 33.7 /
+  33.8 m; at walking pace the relaxed slip equals the real one. The other
+  tests unchanged (dive 2.43 deg against 2.42). `missing_support` 17/17,
+  `physics_tick_rate` 9/9.
+- Tsukuba bench with ASR forced (temporary switch): CoupeSport 75.32, MC
+  86.13, SuperDuty 90.35 km/h at 6 s (75.32 / 86.18 / 90.33 before); the
+  CoupeSport the same without ASR.
+- Not checked: ABS and ASR cycling and launches in game, their feel; the
+  #383 wheelspin runaway at 120 Hz.
+
+Limitations: the longitudinal length is a fixed share of the lateral one,
+not its own scripted value; it does not change with the load; the
+relaxation does not reach the aligning torque's longitudinal part.

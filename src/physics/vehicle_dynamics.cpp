@@ -1120,6 +1120,9 @@ constexpr double rpm_per_rad = 9.54929658551372;
 // The wheel's spin inertia (kg m^2): WheelConfig::spin_inertia (#497,
 // from its rim, tyre and brake rotor), or the fixed 1.6 it replaces.
 constexpr double kWheelInertia = 1.6;
+// The longitudinal relaxation length as a share of the lateral one (#498):
+// a tyre's is about half (Pacejka, Tyre and Vehicle Dynamics, ch. 7-8).
+constexpr double kLongitudinalRelaxation = .5;
 double spin_inertia(const WheelConfig &w) { return w.spin_inertia > 0 ? w.spin_inertia : kWheelInertia; }
 
 // The tyre as it is now (#446, #452, #461): its grip at the tread
@@ -1620,7 +1623,7 @@ void VehicleDynamics::step_drive() {
 
     if (!s.contact || s.force <= 0) {
       s.spin *= 1 - .25 * dt_ / wheel_inertia;
-      s.slip_angle = 0;
+      s.slip_angle = s.slip_ratio = 0;
     } else {
       s.slip_speed = s.spin * radius - road;
       s.lateral_speed = lateral;
@@ -1633,6 +1636,16 @@ void VehicleDynamics::step_drive() {
       s.slip_angle = (relaxation * s.slip_angle + lateral * dt_) /
                      (relaxation + reference * dt_);
       const double relaxed_lateral = s.slip_angle * reference;
+      // Longitudinal relaxation (#498): the tread's fore-and-aft deflection
+      // builds the same way over kLongitudinalRelaxation of the lateral
+      // length (so it follows the pressure and temperature too). Faded out
+      // from 5 m/s down to walking pace, where a lagged force would push a
+      // stopping car back and forth (#426).
+      const double longitudinal_relaxation =
+          kLongitudinalRelaxation * relaxation * std::clamp((std::abs(road) - 1) / 4, 0.0, 1.0);
+      s.slip_ratio = (longitudinal_relaxation * s.slip_ratio + s.slip_speed * dt_) /
+                     (longitudinal_relaxation + reference * dt_);
+      const double relaxed_slip = s.slip_ratio * reference;
       // Camber against the road (#418): the hub's down axis leaning along the
       // tyre's lateral axis; positive when the tyre's top leans to +side.
       const Vec3 hub_down = body.orientation.rotate(steered_hub(s, cfg.steer).rotate({0, -1, 0}));
@@ -1644,7 +1657,7 @@ void VehicleDynamics::step_drive() {
         const double factor = slip > 1e-9 ? .4 * s.surface.friction * s.force / slip : 0;
         force = {s.slip_speed * factor, -lateral * factor};
       } else {
-        force = tire_forces(s.force, 1, s.spin * radius, road, relaxed_lateral,
+        force = tire_forces(s.force, 1, road + relaxed_slip, road, relaxed_lateral,
                             tyre, camber, lateral);
       }
 

@@ -244,6 +244,9 @@ struct WheelState {
   // Relaxed tan(slip angle): the tyre's lateral deflection builds over its
   // relaxation length instead of following the slip at once (#383).
   double slip_angle = 0;
+  // Relaxed slip ratio (#498): the longitudinal deflection, built over the
+  // longitudinal relaxation length like slip_angle.
+  double slip_ratio = 0;
   // Unspent brake/bearing budget at the patch (N s), not free tyre grip.
   double holding_impulse = 0;
   // Rotor temperature (deg C) and the service brake pressure reaching the

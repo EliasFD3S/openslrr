@@ -2403,6 +2403,40 @@ SLRR_TEST(a_lighter_wheel_spins_down_faster_under_the_same_brake) {
   SLRR_REQUIRE(std::abs(drop[1] / drop[0] - 1.6 / .9) < .05);
 }
 
+SLRR_TEST(the_braking_force_builds_over_the_longitudinal_relaxation_length) {
+  // #498: braking hard at 25 m/s with a short and a long tyre (0.1 and
+  // 0.8 m of lateral relaxation, so 0.05 and 0.4 m fore and aft). The long
+  // one's braking force lags: lower in the first steps, the same once
+  // built; both cars stop alike. At walking pace there is no lag at all.
+  double early[2], settled[2], stop[2];
+  for (int lazy = 0; lazy < 2; ++lazy) {
+    Car car;
+    for (auto& d : car.dynamics.drive.wheels) d.tyre.relaxation_length = lazy ? .8 : .1;
+    car.run(2, 0, 0, 0);
+    car.dynamics.drive.engaged = false;
+    car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -25});
+    for (auto& s : car.dynamics.state) s.spin = 25 / .31;
+    const Vec3 start = car.dynamics.body.position;
+    car.run(1. / 60, 0, 0, 0);
+    car.run(1. / 60, 0, 1, 0);
+    early[lazy] = std::abs(car.dynamics.state[0].tire_force.longitudinal);
+    car.run(.3, 0, 1, 0);
+    settled[lazy] = std::abs(car.dynamics.state[0].tire_force.longitudinal);
+    for (int k = 0; k < 600 && car.speed() > .1; ++k) car.run(1. / 60, 0, 1, 0);
+    stop[lazy] = (car.dynamics.body.position - start).length();
+    if (lazy) {
+      const auto& s = car.dynamics.state[0];
+      SLRR_REQUIRE(car.speed() < 1);
+      SLRR_REQUIRE(std::abs(s.slip_ratio * 1.5 - s.slip_speed) < 1e-9);
+    }
+  }
+  std::printf("RELAXATION early braking force %.0f / %.0f N, settled %.0f / %.0f N, stop %.1f / %.1f m%c",
+              early[0], early[1], settled[0], settled[1], stop[0], stop[1], 10);
+  SLRR_REQUIRE(early[1] < early[0] * .9);
+  SLRR_REQUIRE(std::abs(settled[1] - settled[0]) < .1 * settled[0]);
+  SLRR_REQUIRE(std::abs(stop[1] - stop[0]) < .05 * stop[0]);
+}
+
 SLRR_TEST(hot_brake_fluid_boils_and_the_pressure_falls) {
   const auto brake = brake_hardware(0, 2, .286);
   double fluid = kAmbientTemperature;
@@ -2437,6 +2471,7 @@ int main() {
       a_migrating_roll_centre_drops_on_the_loaded_wheel,
       a_panhard_rod_pulls_the_axle_towards_its_body_end,
       a_lighter_wheel_spins_down_faster_under_the_same_brake,
+      the_braking_force_builds_over_the_longitudinal_relaxation_length,
       hard_braking_declutches_so_the_engine_never_pushes_the_rear_wheels,
       coasting_engine_braking_fades_with_the_speed,
       releasing_a_hard_brake_at_speed_takes_up_without_a_jolt,
