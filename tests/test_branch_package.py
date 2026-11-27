@@ -121,6 +121,21 @@ class Package(unittest.TestCase):
                      "sdl3-src/src/video/yuv2rgb/LICENSE"):
             self.assertIn((name + "\n" + name + "\n\n").encode(), notice)
 
+        # Dear ImGui already contributes its own MIT text; check the font section.
+        heading = b"branch_package_notices/Proggy-MIT.txt\n"
+        self.assertIn(b"\n" + heading, notice)
+        proggy = notice.split(b"\n" + heading, 1)[1].split(b"\nbranch_package_notices/", 1)[0]
+        for marker in (
+            b"The MIT License (MIT)",
+            b"ProggyClean.ttf\nCopyright (c) 2004, 2005 Tristan Grimmer",
+            b"ProggyForever-Regular-minimal.ttf\n"
+            b"Copyright (c) 2026 Disco Hello, Copyright (c) 2019,2023 Tristan Grimmer",
+            b"Permission is hereby granted, free of charge",
+            b"The above copyright notice and this permission notice shall be included",
+            b'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND',
+        ):
+            self.assertIn(marker, proggy)
+
     def test_missing_required_notice_fails(self):
         name = "bimg-src/3rdparty/astc-encoder/LICENSE.txt"
         (self.build / "_deps" / name).unlink()

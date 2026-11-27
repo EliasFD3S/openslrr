@@ -133,12 +133,13 @@ BUILD_NOTICES = (
     "sdl3-src/src/hidapi/LICENSE-bsd.txt", "sdl3-src/src/video/yuv2rgb/LICENSE",
     "sdl3_mixer-src/LICENSE.txt", "sdl3_mixer-src/src/dr_libs/LICENSE",
 )
-# These texts aren't shipped alongside the font arrays in the bgfx tree.
+# Supplemental notices for embedded fonts and astcenc.
 PRODUCER_NOTICES = (
     "branch_package_notices/ATTRIBUTIONS.txt",
     "branch_package_notices/Apache-2.0.txt",
     "branch_package_notices/Font-Awesome-OFL-1.1.txt",
     "branch_package_notices/CC0-1.0.txt",
+    "branch_package_notices/Proggy-MIT.txt",
 )
 
 

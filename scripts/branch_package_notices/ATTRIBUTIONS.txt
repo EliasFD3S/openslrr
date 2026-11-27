@@ -31,6 +31,13 @@ https://creativecommons.org/publicdomain/zero/1.0/
 The CC0 1.0 Universal legal text comes from:
 https://creativecommons.org/publicdomain/zero/1.0/legalcode.txt
 
+Dear ImGui default fonts (ProggyClean.ttf and ProggyForever-Regular-minimal.ttf)
+The copyright notices come from the embedded font sections of bgfx's vendored
+Dear ImGui at the same pin:
+https://github.com/bkaradzic/bgfx/blob/fe9bbdec66110f8626b9251a4947fc336ac3f62c/3rdparty/dear-imgui/imgui_draw.cpp#L6278-L6285
+https://github.com/bkaradzic/bgfx/blob/fe9bbdec66110f8626b9251a4947fc336ac3f62c/3rdparty/dear-imgui/imgui_draw.cpp#L6466-L6473
+Their copyright notices and MIT license text are reproduced in Proggy-MIT.txt.
+
 Arm ASTC Encoder (astcenc)
 Copyright 2020-2024 Arm Limited
 Licensed under the Apache License, Version 2.0

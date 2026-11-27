@@ -11,6 +11,10 @@ Installing a branch package requires the **unreleased branch-package launcher co
 
 ## Build trust boundary
 
+The workflow on `main` owns the fixed `bgfx.cmake` pin, which in turn pins
+bgfx, bx and bimg. The requested engine branch does not select this pin.
+Branches that require a different pin are unsupported by this workflow.
+
 After the build, the workflow checks the producer checkout’s original dispatch SHA and cleanliness before running its packaging and tip-check code. This detects checkout drift, not a hostile build. The reviewed engine build and its dependencies run on the same runner as the producer and can affect the filesystem, tools, build output and subsequent steps. There is no game installation, gameplay, shared PR cache, injected repository secrets, signing material or publication credentials. Repository access is read-only and checkout does not persist Git credentials. GitHub still provides the runner credentials needed to retain an artifact. Keep publication credentials entirely out of the build job.
 
 ## Verify before deciding whether to publish
@@ -25,7 +29,7 @@ After the build, the workflow checks the producer checkout’s original dispatch
 No release is needed to test the producer. When maintainers separately approve publication, follow these rules:
 
 1. Compute the tag as `branch-<hash>-<commit>` where `hash` is the 64 lowercase hex digits of SHA-256 of the **exact UTF-8 branch name**, without newline, trimming, case folding, escaping or Unicode normalization. Confirm it against the run log. For example, the hash of `main` is `0d6e4079e36703ebd37c00722f5891d28b0e2811dc114b129215123adcce3605`. Only in this separately authorized step, create a **lightweight** tag in the official engine repository pointing directly to the **exact reviewed commit** (not the default branch/producer commit). Never reuse, move or overwrite a tag or asset. Stop on collision. Verify `GET /repos/EliasFD3S/openslrr/git/ref/tags/<tag>` returns `ref: "refs/tags/<tag>"`, `object.type: "commit"` and `object.sha` equal to the reviewed SHA. An annotated tag (`object.type: "tag"`) does not meet the contract, even if it peels to the same commit.
-2. **Draft:** Create a draft prerelease under that exact tag, not latest/stable. Use the contents of `release-body.json` as the entire release body: JSON only, no Markdown fence, generated notes or checksums. Example body for a hypothetical commit:
+2. **Draft:** Create a draft prerelease under that exact tag, not latest/stable. Use the contents of `release-body.json` as the entire release body: JSON only, no Markdown fence, generated notes or checksums. The example shows the required JSON fields and values for a hypothetical commit; its whitespace and key order are not a byte contract:
 
 ```json
 {"schemaVersion":1,"repository":"EliasFD3S/openslrr","branch":"main","commit":"0123456789abcdef0123456789abcdef01234567","target":"windows-x86_64"}
