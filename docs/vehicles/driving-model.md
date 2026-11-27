@@ -106,6 +106,11 @@ after the original law, nicolas-found42/sl-remastered, 00454500):
   flat spot that thumps once a turn and shortens the rolling radius as it
   passes (about 0.75 mm after a locked stop from 100 km/h); the Tyre saves
   it and a garage repair clears it.
+- Kerbs beside the tyre (#467): ground beside the hub more than 12 cm up
+  (above the sidewall bulge) leaves the tyre's vertical support and pushes
+  the body at the carcass' lateral rate, square to the kerb's edge, as a
+  wall against the sidewall; a kerb ahead, or met more from ahead than from
+  the side, is still rolled onto.
 - Ground surface (#452, [notes](notes.md#ground-surface-friction-and-rolling-resistance-452)):
   each map collision face carries its SCM material (`GroundSurface`).
   Friction and rolling are averaged over the 13 tread samples. The
@@ -192,9 +197,11 @@ stop remains. An absent scripted compression limit falls back to CFG spring
 and four longitudinal sectors. It excludes running gear (already represented
 by wheels), hinged panels (whose floor contact remains unsupported) and
 engine hardware (`EnginePart`: exhaust pipes, tips, mufflers; see
-[notes](notes.md#a-lowered-car-rode-on-its-exhaust-426)),
-respects slot poses/deformation, and refreshes after assembly changes,
-damage and repair. Hiding a mesh does not remove its physical support. In an
+[notes](notes.md#a-lowered-car-rode-on-its-exhaust-426)), whose low points
+become scrape points instead (#467, [notes](notes.md#hanging-parts-and-tall-kerbs-467)):
+a hanger-then-pipe spring with metal friction, raised to 5 mm clear of the
+ground the car rests on. It respects slot poses/deformation, and refreshes
+after assembly changes, damage and repair. Hiding a mesh does not remove its physical support. In an
 upright car these samples replace fictitious underside AABB corners; the
 old box remains the fallback for callers without samples and after rollover.
 Floor-only support does not turn a low panel rubbing the ground into a

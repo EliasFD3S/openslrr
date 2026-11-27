@@ -2,6 +2,7 @@
 #include "slrr/dyno_model.hpp"
 #include "slrr/vehicle_dynamics.hpp"
 #include <algorithm>
+
 #include <cmath>
 #include <numbers>
 #include <stdexcept>
@@ -397,6 +398,17 @@ void VehicleDynamics::apply_aero() {
 // squash before the rim (about half a 55-series sidewall): typical values,
 // not recovered from the original game (#380).
 constexpr double kTyreRate = 250000, kTyreDamping = 1500, kTyreDeflection = .06;
+// The tyre's side (#467): the sidewall bulge stands 2 cm outside the tread
+// edge and 10 cm above the ground; ground beside the tyre higher than 12 cm
+// bears on the sidewall as a wall, at the carcass' lateral rate.
+constexpr double kSidewallBulge = .02, kWallHeight = .12;
+constexpr double kWallRate = 200000, kWallDamping = 2000;
+// Hanging engine hardware on the ground (#467): 20 kN/m over the first 3 cm
+// (rubber exhaust hangers, engine mounts), then 1 MN/m (the pipe or the pan
+// itself: the suspension, in series, then lifts the car), damped, sliding at
+// 0.35 (steel on asphalt).
+constexpr double kHangerRate = 20000, kHangerGive = .03, kScrapeRate = 1e6;
+constexpr double kScrapeDamping = 4000, kScrapeFriction = .35;
 
 void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
                   const Terrain &terrain, double ceiling, double dt, double steer) {
@@ -452,6 +464,16 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
   // After the grid, one refined point per direction (front, back, left,
   // right) at the exact position of the nearest step.
   std::array<Footprint, kPoints + 4> footprint{};
+  // A kerb beside the tyre that stands above its sidewall bulge (#467): the
+  // tyre cannot roll onto it sideways, its sidewall bears against the kerb's
+  // face. Per side: how far the face is inside the tyre's outer face (m),
+  // where, and the horizontal push away from it.
+  struct Wall {
+    bool active = false;
+    double depth = 0;
+    Vec3 point, normal;
+  };
+  std::array<Wall, 2> walls{};
   const auto sample_footprint = [&](Vec3 hub) {
     const auto pose = wheel_pose(w, s.length, nullptr, steer);
     const Quaternion turn = body.orientation * pose.hub_rotation *
@@ -541,6 +563,105 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
     refine(1, {0, 1, 3, 5});
     refine(2, {0, 7, 13});
     refine(3, {0, 8, 14});
+    // Across, ground higher than the sidewall bulge stands against the
+    // sidewall rather than under it: those samples leave the support (they
+    // lifted the wheel by the kerb's excess in one step) and become a wall.
+    // Along the tread a kerb still lifts the wheel as it rolls onto it.
+    walls = {};
+    const auto &centre_sample = footprint[0];
+    if (hw > 1e-3 && centre_sample.valid) {
+      const auto above = [&](const Footprint &f) {
+        return f.valid && centre_sample.normal.dot(f.ground - centre_sample.ground) > kWallHeight;
+      };
+      // The wall is decided beside the hub (the tread edge, the bulge and the
+      // refined edge across): ahead of it a kerb is rolled onto, and the
+      // centre line, reaching further ahead, finds it first.
+      const size_t beside[2][3] = {{7, 13, kPoints + 2}, {8, 14, kPoints + 3}};
+      for (int side = 0; side < 2; ++side)
+        for (size_t k : beside[side]) {
+          const auto &f = footprint[k];
+          if (!above(f)) continue;
+          const double offset = std::abs(across.dot(f.ground - hub));
+          const double depth = std::max(0.0, hw + kSidewallBulge - offset);
+          auto &wall = walls[side];
+          if (!wall.active || depth > wall.depth)
+            wall = {true, depth, f.ground, across * (side == 0 ? 1.0 : -1.0)};
+        }
+      // The kerb's face square to its edge: where it crosses the tyre's side
+      // 0.4 R ahead of and behind the hub (bisected across from the centre
+      // line to the outer face). A kerb met at an angle then pushes square
+      // to itself, by the overlap beside the hub measured along that push.
+      const auto face = [&](int side, double along_fraction, Vec3 &edge) {
+        const double sign = side == 0 ? -1.0 : 1.0;
+        const double along = along_fraction * w.radius;
+        const auto ground_at = [&](double lateral, Vec3 &out) {
+          const Vec3 point = hub + forward * along + across * (sign * lateral);
+          GroundHit hit;
+          if (!sample(point, hit)) return false;
+          out = {point.x, hit.height, point.z};
+          return true;
+        };
+        const auto high = [&](const Vec3 &ground) {
+          return centre_sample.normal.dot(ground - centre_sample.ground) > kWallHeight;
+        };
+        // The edge must cross the tyre's side there: high ground at its outer
+        // face, low ground under its centre line (a kerb already under the
+        // centre line is being rolled onto, as when met nearly square).
+        Vec3 ground;
+        if (!ground_at(hw + kSidewallBulge, ground) || !high(ground)) return false;
+        Vec3 inner;
+        if (!ground_at(0, inner) || high(inner)) return false;
+        double lo = 0, hi = hw + kSidewallBulge;
+        edge = ground;
+        for (int i = 0; i < 6; ++i) {
+          const double mid = .5 * (lo + hi);
+          if (!ground_at(mid, ground)) break;
+          if (high(ground)) {
+            hi = mid;
+            edge = ground;
+          } else {
+            lo = mid;
+          }
+        }
+        return true;
+      };
+      for (int side = 0; side < 2; ++side) {
+        auto &wall = walls[side];
+        if (!wall.active) continue;
+        // Two points of the edge: both ends, or one end and the edge beside
+        // the hub when the kerb crosses only half of the tyre's side.
+        Vec3 front, back;
+        const bool has_front = face(side, -.4, front), has_back = face(side, .4, back);
+        if (!has_front && !has_back) continue;
+        if (!has_front) front = wall.point;
+        if (!has_back) back = wall.point;
+        Vec3 line = front - back;
+        line.y = 0;
+        if (line.length() < 1e-4) continue;
+        line = line.normalized();
+        Vec3 normal{-line.z, 0, line.x};
+        Vec3 inward = hub - wall.point;
+        inward.y = 0;
+        if (normal.dot(inward) < 0) normal = normal * -1.0;
+        // A face met more from ahead than from the side is rolled onto (the
+        // centre line climbs it), not a wall.
+        if (std::abs(normal.dot(across)) < .7071) {
+          wall.active = false;
+          continue;
+        }
+        // The overlap beside the hub, measured square to the face.
+        wall.normal = normal;
+        wall.depth *= std::abs(normal.dot(across));
+      }
+      // On a side with a wall, the samples standing on the kerb leave the
+      // support: they lifted the wheel by the kerb's excess in one step.
+      for (size_t k = 7; k < footprint.size(); ++k) {
+        if ((k >= used && k < kPoints) || k == kPoints || k == kPoints + 1) continue;
+        auto &f = footprint[k];
+        if (!above(f)) continue;
+        if (walls[across.dot(f.ground - hub) < 0 ? 0 : 1].active) f.valid = false;
+      }
+    }
   };
   // Penetration of the deepest footprint sample for a hub at `world`, and
   // which sample it is (-1: none).
@@ -562,6 +683,17 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
   // The contact normal at a hub: the deepest sample's plane, unless that plane
   // does not reach under the hub (an edge, such as a kerb's): then the tyre
   // touches the edge itself, and the normal runs from the edge to the hub.
+  // The sidewall against a kerb's face: a lateral spring and damper on the
+  // body at the kerb's edge, as stiff as the tyre's carcass sideways.
+  const auto push_walls = [&] {
+    for (const auto &wall : walls) {
+      if (!wall.active) continue;
+      const double closing = -body.point_velocity(wall.point).dot(wall.normal);
+      const double push = std::clamp(kWallRate * wall.depth + kWallDamping * closing, 0.0,
+                                     body.mass * 9.81 * 3);
+      body.add_force(wall.normal * push, wall.point);
+    }
+  };
   const auto contact_normal_at = [&](Vec3 hub, int deepest) {
     const auto &f = footprint[static_cast<size_t>(deepest)];
     if (deepest == 0) return f.normal;
@@ -686,6 +818,7 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
     s.steer_axis = pose.steer_axis;
     s.center = body_point(body, pose.hub_origin);
     s.patch = s.center - s.normal * w.radius;
+    push_walls();
     return;
   }
   double speed = 0;
@@ -813,6 +946,7 @@ void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
   s.steer_axis = pose.steer_axis;
   s.center = hub_w;
   s.patch = s.center - normal * w.radius;
+  push_walls();
 }
 
 namespace {
@@ -1573,6 +1707,30 @@ void VehicleDynamics::step(const Terrain &terrain) {
     if (depth < 0) continue;
     const Vec3 surface = point + normal * depth;
     fixed_contacts[fixed_count++] = fixed_support(body, surface, normal, depth, true, dt_);
+  }
+  // Exhausts and sumps scrape (#467): a compliant contact that pushes up
+  // and drags, never a support the car rests on.
+  for (size_t i = 0; i < std::min(scrape_count, scrape_points.size()); ++i) {
+    const Vec3 point = body_point(body, scrape_points[i] + Vec3{0, scrape_lift[i], 0});
+    GroundHit hit;
+    if (!terrain(point.x, point.z, ceiling, hit)) continue;
+    const Vec3 normal = hit.normal.normalized();
+    if (normal.y <= .05) continue;
+    const double depth = (hit.height - point.y) * normal.y;
+    if (depth <= 0) continue;
+    const Vec3 velocity = body.point_velocity(point);
+    const double closing = -velocity.dot(normal);
+    const double push = std::clamp(kHangerRate * std::min(depth, kHangerGive) +
+                                       kScrapeRate * std::max(0.0, depth - kHangerGive) +
+                                       kScrapeDamping * closing,
+                                   0.0, body.mass * 9.81 * 3);
+    const Vec3 slide = velocity - normal * velocity.dot(normal);
+    const double speed = slide.length();
+    // Full drag above 0.5 m/s, fading to none at rest so a parked car is not
+    // pushed around.
+    const Vec3 drag = speed > 1e-6 ? slide * (-kScrapeFriction * push * std::min(1.0, speed / .5) / speed)
+                                   : Vec3{};
+    body.add_force(normal * push + drag, point);
   }
   for (size_t i = 0; i < wheels.size(); ++i) {
     const auto &w = wheels[i];

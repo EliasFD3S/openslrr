@@ -97,9 +97,11 @@ which the fixed-step benchmark, `--physics-batch` and the tests still use.
   | 20 km/h, 8 degrees | not measured | 0.88 g, 0 ms, 0.58 g |
 
   The kerb now resists in proportion to speed, and 120, 250 and 1000 Hz agree.
-  Taken from the side, the first 5 cm of a 15 cm kerb are still a sudden lift:
-  it is taller than the sidewall, which the 2.5D contact treats as a step
-  rather than as a wall against the tyre.
+  Taken from the side, the first 5 cm of a 15 cm kerb were still a sudden
+  lift: it is taller than the sidewall, which the 2.5D contact treated as a
+  step rather than as a wall against the tyre. Since #467 ground beside the
+  hub more than 12 cm up bears on the sidewall as a wall
+  ([notes](notes.md#hanging-parts-and-tall-kerbs-467)).
 - **Quarter-car wheel.** A wheel with unsprung mass is no longer placed on
   the ground kinematically each step. It is a mass between the suspension
   (spring and damper to the body) and the tyre (a radial spring of 250 kN/m

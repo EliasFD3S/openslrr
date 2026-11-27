@@ -1726,6 +1726,162 @@ SLRR_TEST(a_locked_stop_grinds_a_flat_spot_that_thumps_once_a_turn) {
   SLRR_REQUIRE(front.flat_spot == 0);
 }
 
+SLRR_TEST(a_kerb_taller_than_the_sidewall_stops_the_tyre_sideways) {
+  // #467: drifting at 1.5 m/s into a 13 cm kerb beside the right wheels
+  // (the test body's box hangs 15 cm up, wider than the tyres). Above the
+  // sidewall bulge it bears on the sidewall: the car is pushed back, not
+  // thrown up by the kerb's excess over the bulge.
+  for (double kerb : {.13, .08}) {
+    Car car;
+    for (auto& w : car.dynamics.wheels) w.half_width = .1025;
+    car.run(2, 0, 0, 0);
+    auto& d = car.dynamics;
+    double right = -1e9;
+    for (size_t i = 1; i < 4; i += 2) right = std::max(right, d.state[i].center.x);
+    const double edge = right + .1025 + .02 + .05;
+    const Terrain ground = [&](double x, double, double, GroundHit& hit) {
+      hit = {};
+      hit.height = x > edge ? kerb : 0;
+      return true;
+    };
+    d.drive.engaged = false;
+    d.body.velocity = d.body.orientation.rotate({0, 0, -8}) + Vec3{1.5, 0, 0};
+    for (auto& w : d.state) w.spin = 8 / .31;
+    double rise = 0, lowest_side = 1e9;
+    const double y0 = d.body.position.y;
+    for (int i = 0; i < 90; ++i) {
+      d.advance(1. / 60, ground);
+      rise = std::max(rise, d.body.position.y - y0);
+      lowest_side = std::min(lowest_side, d.body.velocity.x);
+    }
+    std::printf("KERB %.2f m beside: body rise %.1f mm, lateral speed down to %.2f m/s%c",
+                kerb, rise * 1000, lowest_side, 10);
+    if (kerb > .12) {
+      // The wall: pushed back out; the body only rolls on the impact (main:
+      // 76 mm, the wheel jumping onto the kerb).
+      SLRR_REQUIRE(lowest_side < .3);
+      SLRR_REQUIRE(rise < .035);
+    } else {
+      // Below the bulge the tyre rolls onto it: the car climbs.
+      SLRR_REQUIRE(rise > .035);
+    }
+  }
+}
+
+SLRR_TEST(an_angled_kerb_beside_the_tyre_pushes_square_to_itself) {
+  // #467: the same 13 cm kerb, parallel or closing in at 20 degrees ahead of
+  // the right wheels. Its face pushes square to itself, so the angled one
+  // also slows the car (pushing across the wheel only, it did not); met at
+  // 2.5 m/s across, the tyre then climbs it, as a real one would.
+  double slowed[2], rise[2];
+  for (int angled = 0; angled < 2; ++angled) {
+    Car car;
+    for (auto& w : car.dynamics.wheels) w.half_width = .1025;
+    car.run(2, 0, 0, 0);
+    auto& d = car.dynamics;
+    double right = -1e9;
+    for (size_t i = 1; i < 4; i += 2) right = std::max(right, d.state[i].center.x);
+    const double edge = right + .1025 + .02 + .02;
+    const double z0 = d.body.position.z, slope = angled ? std::tan(20 * std::numbers::pi / 180) : 0;
+    // Ahead (z below z0) the angled kerb comes in by tan(20 deg) per metre.
+    const Terrain ground = [&](double x, double z, double, GroundHit& hit) {
+      hit = {};
+      hit.height = x > edge - slope * std::max(0.0, z0 - 1.3 - z) ? .13 : 0;
+      return true;
+    };
+    d.drive.engaged = false;
+    d.body.velocity = d.body.orientation.rotate({0, 0, -6}) + Vec3{.3, 0, 0};
+    for (auto& w : d.state) w.spin = 6 / .31;
+    const double y0 = d.body.position.y;
+    rise[angled] = 0;
+    for (int i = 0; i < 60; ++i) {
+      d.advance(1. / 60, ground);
+      rise[angled] = std::max(rise[angled], d.body.position.y - y0);
+    }
+    slowed[angled] = 6 + d.body.velocity.z;  // forward is -z
+  }
+  std::printf("ANGLED KERB: speed lost %.2f m/s parallel, %.2f m/s at 20 deg; rise %.1f / %.1f mm%c",
+              slowed[0], slowed[1], rise[0] * 1000, rise[1] * 1000, 10);
+  SLRR_REQUIRE(slowed[1] > slowed[0] + .3);
+  SLRR_REQUIRE(rise[0] < .035);
+}
+
+SLRR_TEST(an_exhaust_scrapes_over_a_hump_instead_of_passing_through) {
+  // #467: an exhaust 2 cm clear of the road at rest, a 7 cm hump between
+  // the wheels. Without a scrape point the pipe passes 5 cm through it; with
+  // one it gives 3 cm on its hangers, then the pipe hits and the car is
+  // lifted on its suspension; it drags too.
+  double speed[2], deepest[2];
+  for (int scraping = 0; scraping < 2; ++scraping) {
+    Car car;
+    car.run(2, 0, 0, 0);
+    auto& d = car.dynamics;
+    const auto body_point = [&](const RigidBody& b, Vec3 p) {
+      return b.position + b.orientation.rotate(p - b.center);
+    };
+    // A point under the floor, 2 cm above the road where the car rests.
+    const Vec3 local{0, 0, 0};
+    const double clearance = body_point(d.body, local).y;
+    const Vec3 pipe = local + Vec3{0, .02 - clearance, 0};
+    if (scraping) {
+      d.scrape_points[0] = pipe;
+      d.scrape_count = 1;
+    }
+    const double z0 = d.body.position.z;
+    const Terrain hump = [&](double x, double z, double, GroundHit& hit) {
+      hit = {};
+      // Ramped up over a metre, flat for 4 m, down over a metre.
+      const double along = z0 - 2 - z;
+      hit.height = std::abs(x) < .3 ? .07 * std::clamp(std::min(along, 6 - along), 0.0, 1.0) : 0;
+      return true;
+    };
+    d.drive.engaged = false;
+    d.body.velocity = d.body.orientation.rotate({0, 0, -5});
+    for (auto& w : d.state) w.spin = 5 / .31;
+    deepest[scraping] = 0;
+    for (int i = 0; i < 120; ++i) {
+      d.advance(1. / 60, hump);
+      const Vec3 at = body_point(d.body, pipe);
+      GroundHit hit;
+      hump(at.x, at.z, 0, hit);
+      deepest[scraping] = std::max(deepest[scraping], hit.height - at.y);
+    }
+    speed[scraping] = car.speed();
+  }
+  std::printf("SCRAPE over a 7 cm hump: %.2f m/s (pipe %.1f cm into it) without, %.2f m/s (%.1f cm) with%c",
+              speed[0], deepest[0] * 100, speed[1], deepest[1] * 100, 10);
+  SLRR_REQUIRE(deepest[0] > .045);  // passed through
+  // The hangers' 3 cm, then the pipe stops and the suspension lifts the car.
+  SLRR_REQUIRE(deepest[1] < .045 && deepest[1] < deepest[0] - .007);
+  SLRR_REQUIRE(speed[1] < speed[0] - .05);  // and dragged
+}
+
+SLRR_TEST(an_exhaust_in_the_road_at_rest_is_raised_clear) {
+  // #467: a mesh the static ride height puts 1 cm into level ground. The host
+  // raises it to 5 mm clear (scrape_lift, from the parked car): a straight is
+  // then not slowed, while the same point left in the road drags.
+  double speed[3];
+  for (int scraping = 0; scraping < 3; ++scraping) {
+    Car car;
+    car.run(2, 0, 0, 0);
+    auto& d = car.dynamics;
+    const Vec3 local{0, 0, 0};
+    const double clearance = (d.body.position + d.body.orientation.rotate(local - d.body.center)).y;
+    if (scraping) {
+      d.scrape_points[0] = local + Vec3{0, -.01 - clearance, 0};
+      d.scrape_count = 1;
+      d.scrape_lift[0] = scraping == 2 ? .015 : 0;
+    }
+    d.drive.engaged = false;
+    d.body.velocity = d.body.orientation.rotate({0, 0, -10});
+    for (auto& w : d.state) w.spin = 10 / .31;
+    car.run(2, 0, 0, 0);
+    speed[scraping] = car.speed();
+  }
+  SLRR_REQUIRE(speed[1] < speed[0] - .05);           // left in the road: drags
+  SLRR_REQUIRE(std::abs(speed[2] - speed[0]) < .01);  // raised clear: does not
+}
+
 SLRR_TEST(hot_brake_fluid_boils_and_the_pressure_falls) {
   const auto brake = brake_hardware(0, 2, .286);
   double fluid = kAmbientTemperature;
@@ -1743,6 +1899,10 @@ int main() {
       hot_tyres_gain_pressure_and_soften, the_tread_wears_with_hot_sliding,
       a_punctured_tyre_deflates_and_the_corner_sinks,
       a_locked_stop_grinds_a_flat_spot_that_thumps_once_a_turn,
+      a_kerb_taller_than_the_sidewall_stops_the_tyre_sideways,
+      an_angled_kerb_beside_the_tyre_pushes_square_to_itself,
+      an_exhaust_scrapes_over_a_hump_instead_of_passing_through,
+      an_exhaust_in_the_road_at_rest_is_raised_clear,
       hard_braking_declutches_so_the_engine_never_pushes_the_rear_wheels,
       coasting_engine_braking_fades_with_the_speed,
       releasing_a_hard_brake_at_speed_takes_up_without_a_jolt,

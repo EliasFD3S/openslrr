@@ -2597,13 +2597,17 @@ void invalidate_body_support(Object* part) {
     if (auto* rec = record(chassis)) rec->body_support_dirty = true;
 }
 
+void lift_scrape_points(Object* chassis, Record& rec);
 void rebuild_body_support(Object* chassis, Record& rec) {
   using physics::Vec3;
   auto& dynamics = rec.dynamics;
   dynamics.body_support_count = 0;
-  std::array<Vec3, 8> lowest{};
-  std::array<double, 8> height;
+  dynamics.scrape_count = 0;
+  dynamics.scrape_lift = {};
+  std::array<Vec3, 8> lowest{}, hanging{};
+  std::array<double, 8> height, hanging_height;
   height.fill(std::numeric_limits<double>::infinity());
+  hanging_height.fill(std::numeric_limits<double>::infinity());
   const auto to_chassis = part_matrix_inverse_rigid(world_matrix(chassis));
   const auto transform = [](const PartMatrix& m, Vec3 p) {
     return Vec3{m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12],
@@ -2613,6 +2617,7 @@ void rebuild_body_support(Object* chassis, Record& rec) {
   for (const auto& item : part_installed_tree(chassis)) {
     auto* part = record(item.object);
     if (!part) continue;
+    bool scrapes = false;
     if (item.object != chassis) {
       auto* branch = part;
       int depth = 0;
@@ -2629,9 +2634,9 @@ void rebuild_body_support(Object* chassis, Record& rec) {
       // the floor and scrapes; it does not hold the car up. Counted as body
       // supports, a lowered car's exhaust carried up to 1.5 kN at rest and
       // dragged on the road at 0.4 friction: the rear lost its load and the
-      // car went sideways under power (Baiern GT III).
-      if (runtime && runtime->tree_instance_of(item.object, "java.game.parts.EnginePart"))
-        continue;
+      // car went sideways under power (Baiern GT III). Its low points are
+      // scrape points instead (#467).
+      scrapes = runtime && runtime->tree_instance_of(item.object, "java.game.parts.EnginePart");
     }
     const auto part_frame = world_matrix(item.object);
     const auto from_part = part_matrix_multiply(to_chassis, part_frame);
@@ -2654,15 +2659,19 @@ void rebuild_body_support(Object* chassis, Record& rec) {
             std::max(.01, dynamics.body.maximum.z - dynamics.body.minimum.z);
         const size_t sector = (p.x >= dynamics.body.center.x ? 4 : 0) +
             static_cast<size_t>(std::clamp(z * 4, 0.0, 3.0));
-        if (p.y < height[sector]) {
-          height[sector] = p.y;
-          lowest[sector] = p;
+        auto& low = scrapes ? hanging_height : height;
+        if (p.y < low[sector]) {
+          low[sector] = p.y;
+          (scrapes ? hanging : lowest)[sector] = p;
         }
       }
     }
   }
   for (size_t i = 0; i < lowest.size(); ++i)
     if (std::isfinite(height[i])) dynamics.body_supports[dynamics.body_support_count++] = lowest[i];
+  for (size_t i = 0; i < hanging.size(); ++i)
+    if (std::isfinite(hanging_height[i])) dynamics.scrape_points[dynamics.scrape_count++] = hanging[i];
+  lift_scrape_points(chassis, rec);
   rec.body_support_dirty = false;
 }
 
@@ -3093,6 +3102,56 @@ float parked_wheel_load(const Record& rec, size_t i, float mass, const float (&c
   const size_t axle = i & ~size_t{1};
   const double left = fraction(wheels[axle].center.x, wheels[axle + 1].center.x, com[0]);
   return static_cast<float>(mass * (i < 2 ? front : 1 - front) * (i % 2 ? 1 - left : left));
+}
+
+// Scrape points the parked car would push into level ground (#467) are
+// raised to 5 mm above it: the plane through the tyre contacts at the parked
+// spring lengths (park_chassis) and the tyres' static deflection under
+// their load (250 kN/m).
+void lift_scrape_points(Object* chassis, Record& rec) {
+  auto& d = rec.dynamics;
+  float mass = 0.f, com[3]{};
+  assembly_mass_center(chassis, mass, com);
+  int count = 0;
+  for (const auto& wheel : d.wheels) count += wheel.enabled;
+  if (!(mass > 0.f) || count < 3) return;
+  // Least squares plane y = a + b x + c z through the contacts.
+  double sx = 0, sz = 0, sy = 0, sxx = 0, szz = 0, sxz = 0, sxy = 0, szy = 0, n = 0;
+  for (size_t i = 0; i < 4 && i < d.wheels.size(); ++i) {
+    const auto& w = d.wheels[i];
+    if (!w.enabled) continue;
+    const float load = parked_wheel_load(rec, i, mass, com, count);
+    float length = static_cast<float>(w.rest);
+    if (!part_parked_spring_length(static_cast<float>(w.rest), static_cast<float>(w.minimum),
+                                   static_cast<float>(w.maximum), static_cast<float>(w.spring),
+                                   load, length))
+      length = static_cast<float>(w.rest);
+    const physics::Vec3 p = physics::wheel_pose(w, length).hub_origin -
+                            physics::Vec3{0, w.radius - load * 9.81 / 250000.0, 0};
+    sx += p.x; sz += p.z; sy += p.y; sxx += p.x * p.x; szz += p.z * p.z; sxz += p.x * p.z;
+    sxy += p.x * p.y; szy += p.z * p.y; ++n;
+  }
+  // Solve the 3x3 normal equations (Cramer).
+  const double m[3][3] = {{n, sx, sz}, {sx, sxx, sxz}, {sz, sxz, szz}}, r[3] = {sy, sxy, szy};
+  const auto det3 = [](const double a[3][3]) {
+    return a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) -
+           a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) +
+           a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
+  };
+  const double det = det3(m);
+  if (std::abs(det) < 1e-12) return;
+  double coef[3];
+  for (int k = 0; k < 3; ++k) {
+    double t[3][3];
+    for (int a = 0; a < 3; ++a)
+      for (int b = 0; b < 3; ++b) t[a][b] = b == k ? r[a] : m[a][b];
+    coef[k] = det3(t) / det;
+  }
+  for (size_t i = 0; i < d.scrape_count; ++i) {
+    const auto& p = d.scrape_points[i];
+    const double ground = coef[0] + coef[1] * p.x + coef[2] * p.z;
+    d.scrape_lift[i] = std::max(0.0, ground + .005 - p.y);
+  }
 }
 
 void park_chassis(Object *chassis, bool shift) {
