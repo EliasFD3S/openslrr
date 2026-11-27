@@ -159,7 +159,13 @@ the script's static toe (`setYpr` yaw), and the bushings' compliance steer
 the tyre's cornering and braking forces to the driver's steering; the
 bushings' give (`WheelRef.setBushingCompliance`,
 `WheelState::compliance_offset`) moves the hub with the same forces. The
-rendered wheel shows both.
+rendered wheel shows both. A live axle's two wheels stay square to the beam
+joining their hubs, which also steers with its roll (#490,
+[notes](notes.md#live-axle-camber-roll-steer-and-roll-centres-490); `WheelRef.setLiveAxle`,
+`VehicleDynamics::update_live_axles`). Each corner's arms take its
+cornering force into the body at its roll centre's height
+(`WheelRef.setRollCenterHeight`, as a push in `WheelState::jacking`), so
+part of the roll moment skips the springs.
 Wheel YPR and the existing arm/hub kinematics still affect contact geometry.
 Anti-roll bars are an optional host approximation, deliberately enabling a
 stock feature whose Java commands and catalog branch were dormant. The patched

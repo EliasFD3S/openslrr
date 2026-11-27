@@ -410,14 +410,6 @@ constexpr double kWallRate = 200000, kWallDamping = 2000;
 constexpr double kHangerRate = 20000, kHangerGive = .03, kScrapeRate = 1e6;
 constexpr double kScrapeDamping = 4000, kScrapeFriction = .35;
 
-// The wheel's pose with its bushings' deflection (#484): the hub moves
-// by WheelState::compliance_offset in the body's frame.
-CornerFrames state_pose(const WheelConfig &w, const WheelState &s, double length, double steer) {
-  CornerFrames pose = wheel_pose(w, length, nullptr, steer);
-  pose.hub_origin += s.compliance_offset;
-  return pose;
-}
-
 void solve_linked(RigidBody &body, const WheelConfig &w, WheelState &s,
                   const Terrain &terrain, double ceiling, double dt, double steer) {
   const Vec3 local_down = w.down.normalized();
@@ -1222,9 +1214,9 @@ Vec3 wheel_forward(const RigidBody &body, double steer, Quaternion hub = {}) {
 }
 // The steered hub (#458): turned about its kingpin, so caster leans the
 // outer wheel's top into the turn. The bushings' compliance steer (#484)
-// adds to the driver's.
+// and a live axle's roll steer (#490) add to the driver's.
 Quaternion steered_hub(const WheelState &s, double steer) {
-  return (s.hub_rotation * wheel_steering(s.steer_axis, steer + s.compliance_steer)).normalized();
+  return (s.hub_rotation * wheel_steering(s.steer_axis, steer_total(s, steer))).normalized();
 }
 Vec3 wheel_forward(const RigidBody &body, double steer, const WheelState &s) {
   return body.orientation.rotate(steered_hub(s, steer).rotate({0, 0, -1}));
@@ -1739,13 +1731,37 @@ void VehicleDynamics::update_jacking() {
     auto &s = state[i];
     s.jacking = 0;
     const auto &w = wheels[i];
-    if (!w.enabled || !s.contact || !(base > .5) || !(height > 0)) continue;
-    const double force = s.tire_force.longitudinal;
-    const bool braking = force * (s.spin != 0 ? s.spin : 1) < 0;
+    if (!w.enabled || !s.contact) continue;
     const bool is_front = w.center.z < body.center.z;
-    const double share = braking ? w.anti_brake : w.anti_drive;
-    const double split = braking ? (is_front ? front_split : 1 - front_split) : drive_split;
-    s.jacking = (is_front ? -1 : 1) * std::clamp(share, 0.0, 1.5) / split * force * height / base;
+    if (base > .5 && height > 0) {
+      const double force = s.tire_force.longitudinal;
+      const bool braking = force * (s.spin != 0 ? s.spin : 1) < 0;
+      const double share = braking ? w.anti_brake : w.anti_drive;
+      const double split = braking ? (is_front ? front_split : 1 - front_split) : drive_split;
+      s.jacking = (is_front ? -1 : 1) * std::clamp(share, 0.0, 1.5) / split * force * height / base;
+    }
+    // Roll centre (#490): the arms take the cornering force into the body
+    // at the roll centre's height, not at the ground. Their slope from the
+    // patch to it, height over half the track, turns the force into a push:
+    // a force towards the car's middle (the outer wheel's) lifts the body,
+    // one away from it (the inner wheel's) pulls it down, so that much of
+    // the roll moment no longer goes through the springs.
+    if (w.roll_center_height > 0) {
+      double across = 0;
+      int partners = 0;
+      for (size_t j = 0; j < wheels.size(); ++j)
+        if (j != i && wheels[j].enabled && (wheels[j].center.z < body.center.z) == is_front &&
+            (wheels[j].center.x < 0) != (w.center.x < 0)) {
+          across += wheels[j].center.x;
+          ++partners;
+        }
+      const double half_track = partners ? std::abs(w.center.x - across / partners) / 2
+                                          : std::abs(w.center.x - body.center.x);
+      if (half_track > .3) {
+        const double inboard = s.tire_force.lateral * (w.center.x < 0 ? 1 : -1);
+        s.jacking += inboard * std::min(w.roll_center_height, .6) / half_track;
+      }
+    }
   }
 }
 
@@ -1833,11 +1849,45 @@ void VehicleDynamics::update_compliance_steer() {
   }
 }
 
+// Live axle (#490): both wheels sit square to the beam joining their hubs.
+// The beam tilts against the body by atan(length difference / track): the
+// wheel on the longer (drooping) spring is lower, so both lean towards its
+// side, positive camber on it and negative on the other. In roll the beam
+// stays near the road's slope, so the wheels stay near upright on the road.
+// The beam also yaws by roll_steer times that tilt, towards the turn for a
+// rear axle (roll understeer), away from it for a front one. From the last
+// step's lengths.
+void VehicleDynamics::update_live_axles() {
+  for (size_t i = 0; i < wheels.size(); ++i) {
+    auto &s = state[i];
+    s.axle_camber = s.axle_steer = 0;
+    const auto &w = wheels[i];
+    if (!w.enabled || !w.live_axle) continue;
+    const bool is_front = w.center.z < body.center.z;
+    for (size_t j = 0; j < wheels.size(); ++j) {
+      const auto &o = wheels[j];
+      if (j == i || !o.enabled || !o.live_axle || (o.center.z < body.center.z) != is_front ||
+          (o.center.x < 0) == (w.center.x < 0))
+        continue;
+      const bool left = w.center.x < 0;
+      const double track = std::abs(w.center.x - o.center.x);
+      if (!(track > .5)) break;
+      const double left_length = left ? s.length : state[j].length;
+      const double right_length = left ? state[j].length : s.length;
+      const double tilt = std::atan2(left_length - right_length, track);
+      s.axle_camber = left ? tilt : -tilt;
+      s.axle_steer = std::clamp(w.roll_steer, -1.0, 1.0) * tilt * (is_front ? -1 : 1);
+      break;
+    }
+  }
+}
+
 void VehicleDynamics::step(const Terrain &terrain) {
   apply_aero();
   update_jacking();
   update_static_references();
   update_compliance_steer();
+  update_live_axles();
   double ceiling = body.position.y;
   for (Vec3 p : body.corners())
     ceiling = std::max(ceiling, p.y);

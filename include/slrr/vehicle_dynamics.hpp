@@ -171,6 +171,16 @@ struct WheelConfig {
   // cornering force pushing the patch inboard and along the tyre's
   // longitudinal force (back under braking). Zero: rigid.
   double bushing_lateral = 0, bushing_longitudinal = 0;
+  // Live axle (#490): this wheel shares a rigid beam with the other wheel
+  // of its axle that is also on it. Its camber follows the beam's tilt
+  // between the two hubs, and the beam yaws by roll_steer radians per
+  // radian of its roll against the body (positive: roll understeer).
+  bool live_axle = false;
+  double roll_steer = 0;
+  // Roll centre (#490): its height above the ground at this corner (m).
+  // The arms take the cornering force into the body there, so part of the
+  // roll moment skips the springs. Zero: at the ground.
+  double roll_center_height = 0;
   // Set by update_static_reference (suspension_geometry.hpp) from the car's
   // weight: the static spring length (0 unknown) and, there, the
   // geometry's camber and toe (rad) and the camber gain the curve uses
@@ -182,7 +192,8 @@ struct WheelState {
   bool contact = false, seeded = false;
   // force: spring and damper support, used as the tyre load. jacking: the
   // arms' vertical push from the longitudinal force (#469, N, extending the
-  // suspension; WheelConfig::anti_brake / anti_drive), from the last step.
+  // suspension; WheelConfig::anti_brake / anti_drive) and the cornering
+  // force (#490, WheelConfig::roll_center_height), from the last step.
   double length = 0, speed = 0, force = 0, jacking = 0;
   Vec3 center, normal{0, 1, 0}, hub, patch;
   // The ground under the tread (#452): friction and rolling averaged over
@@ -196,6 +207,10 @@ struct WheelState {
   double compliance_steer = 0;
   // The hub's displacement in the body's frame (m) from the bushings' give.
   Vec3 compliance_offset;
+  // Live axle (#490): the camber the beam's tilt gives this wheel against
+  // the body (rad, negative with the top inboard) and the road steering
+  // angle of the beam's yaw (rad, positive to the left).
+  double axle_camber = 0, axle_steer = 0;
   double spin = 0, rotation = 0;
   double slip_speed = 0, lateral_speed = 0;
   // Relaxed tan(slip angle): the tyre's lateral deflection builds over its
@@ -400,6 +415,7 @@ private:
   void update_jacking();
   void update_static_references();
   void update_compliance_steer();
+  void update_live_axles();
   void apply_aero();
   void step_drive();
   void update_gear(double rpm, double shaft, double road_shaft);

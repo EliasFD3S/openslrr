@@ -62,4 +62,12 @@ void update_static_reference(WheelConfig& wheel, double load);
 // `length`.
 double camber_curve_change(const WheelConfig& wheel, double length);
 double toe_curve_change(const WheelConfig& wheel, double length);
+// The wheel's pose with its state's share (#484, #490): the bushings' give
+// moves the hub and a live axle's beam tilts it. The steering the state
+// adds (compliance and axle steer) is in steer_total.
+CornerFrames state_pose(const WheelConfig& wheel, const WheelState& state, double length,
+                        double steer, bool* fitted = nullptr);
+inline double steer_total(const WheelState& state, double steer) {
+  return steer + state.compliance_steer + state.axle_steer;
+}
 } // namespace slrr::physics

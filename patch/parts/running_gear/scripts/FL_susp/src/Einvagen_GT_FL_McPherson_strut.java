@@ -54,6 +54,8 @@ public class Einvagen_GT_FL_McPherson_strut extends Suspension
 				wheel.setComplianceSteer( -0.10, -0.03 );
 				// OpenSLRR (#484): the bushings' give, mm per kN of cornering and of longitudinal force, typical for the real car
 				wheel.setBushingCompliance( 0.30, 1.00 );
+				// OpenSLRR (#490): roll centre height above the ground (m), typical for the real car
+				wheel.setRollCenterHeight( 0.08 );
 
 				the_car.setSlotPos(101+wheelID, new Vector3(-0.124,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(-0.113,0,0), null );
