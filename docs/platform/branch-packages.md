@@ -1,0 +1,30 @@
+# Windows branch package candidates (#480)
+
+Branch packages let the launcher install the host and its engine overlays without compiling on the player's machine. A workflow artifact is a review candidate, **not a release**. Building one never creates a tag, edits a release, or changes the stable channel.
+
+## Request a candidate
+
+1. In `EliasFD3S/openslrr`, inspect the exact tip of the official branch you intend to distribute. Copy its full lowercase 40-character commit SHA. Review its build scripts (CMake executes code), dependency pins, patch and redistribution rights. An official branch name is not a substitute for review. Do not build untrusted PR code, including code merely copied to an official branch.
+2. A maintainer with write access opens **Actions → Windows branch package candidate → Run workflow**. Under **Use workflow from**, select **main**. Supply the exact engine branch name (not a URL, tag, fork or PR ref) and the reviewed SHA as separate inputs. These can identify a different engine commit from the producer's workflow SHA.
+3. The [workflow](../../.github/workflows/branch-package.yml) compares the named head in the official repository with that SHA, checks out the SHA, and checks the source before configuring and again before packaging. A clean Windows runner builds the Visual Studio 2022 x64 Release target. There is no game installation, gameplay, cache shared with PRs, signing secret or publication token. If the branch moved, review the new tip and dispatch again. A branch with an unsupported build or payload layout must fail, not silently omit required overlays.
+4. Open the successful official manual run, verify its actor, workflow revision, inputs, run ID and attempt, and download **its** candidate artifact within seven days. Extract the **outer** Actions archive. Keep the inner engine ZIP unchanged. Do not use an artifact from a PR, fork, unrelated run or failed rerun.
+
+## Verify before deciding whether to publish
+
+- Independently recheck the exact official branch head (e.g. `git ls-remote --exit-code --heads https://github.com/EliasFD3S/openslrr.git "refs/heads/<exact branch>"`). Compare both the full ref and SHA. Do this again immediately before publication. If the branch moved, stop; do not relabel the old host.
+- Confirm that `openslrr-windows-x86_64.zip` has the byte size and SHA-256 printed by the packaging step. In PowerShell use `(Get-Item ./openslrr-windows-x86_64.zip).Length` and `(Get-FileHash ./openslrr-windows-x86_64.zip -Algorithm SHA256).Hash`. The Actions artifact's digest describes a different, outer archive.
+- Inspect the inner ZIP: root x64 Release `slrr_host.exe`, `manifest.json`, engine LICENSE and notices plus the supported overlay files from the target commit's `patch/`. No containing directory, source archive, patch README, arbitrary build outputs, local game files, SDKs, saves or credentials. The [packager](../../scripts/branch_package.py) reads the patch and engine notices from Git blobs, not from the working tree. It bundles notices from a fixed list of pinned build dependencies. Review attribution against everything actually linked in this revision and confirm rights for the patch: the engine's MIT license does **not** cover original game scripts or data. If rights or notices are incomplete, stop and correct the producer or source; do not hand-edit the ZIP.
+- The manifest must be JSON with `schemaVersion: 1`, `version: "0.0.0-branch.<commit>"`, `commit: "<commit>"` and `target: "windows-x86_64"`. Both occurrences of the SHA are lowercase and full length. Verify the separate `release-body.json` against the reviewed branch/commit, not against the workflow head.
+
+## Separate human publication step (only when authorized)
+
+No release is needed to test the producer. When maintainers separately approve publication, follow these rules:
+
+1. Compute the tag as `branch-<hash>-<commit>` where `hash` is the 64 lowercase hex digits of SHA-256 of the **exact UTF-8 branch name**, without newline, trimming, case folding, escaping or Unicode normalization. Confirm it against the run log. For example, the hash of `main` is `0d6e4079e36703ebd37c00722f5891d28b0e2811dc114b129215123adcce3605`. Create this tag in the official engine repository at the **exact reviewed commit** (not the default branch/producer commit). Never reuse, move or overwrite a tag or asset. Stop on collision.
+2. Under that exact tag, create a **prerelease**, not latest/stable. Upload only the unchanged inner ZIP as a regular asset named `openslrr-windows-x86_64.zip`. Use the contents of `release-body.json` as the entire release body: JSON only, no Markdown fence, generated notes or checksums. Example body for a hypothetical commit:
+
+```json
+{"schemaVersion":1,"repository":"EliasFD3S/openslrr","branch":"main","commit":"0123456789abcdef0123456789abcdef01234567","target":"windows-x86_64"}
+```
+
+3. The published release must be **not draft**. Independently read `GET /repos/EliasFD3S/openslrr/releases/tags/<tag>`. Verify exact tag, body fields, `prerelease: true` and `draft: false`. In its assets, require a unique uploaded engine ZIP with its official release download URL, a positive byte size equal to the candidate's, and a GitHub-supplied `digest: "sha256:<64 lowercase hex>"` matching the candidate. Verify the downloaded asset against both values and its manifest. Do not use GitHub's automatic source archives, an Actions URL, the tag alone or a digest asserted only in release notes. If any check fails, do not recommend or consume the release. Stable `vMAJOR.MINOR.PATCH` releases remain separate.

@@ -4,6 +4,12 @@ CMake and generated-header notes, moved from the knowledge base. Build
 instructions are in the [README](../../README.md); build-speed edge cases
 in [AGENTS.md](../../AGENTS.md#build-speed-and-its-edge-cases).
 
+## Branch package candidates (#480)
+
+[Producer and publication runbook](branch-packages.md). The engine branch and its
+reviewed tip identify the build; the independent producer revision on main is not
+the package commit. Run `python tests/test_branch_package.py` for the offline contract tests.
+
 ## Version metadata before compilation on every generator (#103)
 
 CMakeLists.txt now defines slrr_version as an always-run custom target whose
