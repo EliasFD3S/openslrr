@@ -1882,6 +1882,54 @@ SLRR_TEST(an_exhaust_in_the_road_at_rest_is_raised_clear) {
   SLRR_REQUIRE(std::abs(speed[2] - speed[0]) < .01);  // raised clear: does not
 }
 
+SLRR_TEST(anti_dive_and_anti_squat_carry_part_of_the_load_transfer) {
+  // #469: braking from 20 m/s and launching, with no anti geometry and with
+  // the typical strut / independent arm shares. The arms take part of the
+  // load transfer: the car dives and squats less, and stops about as short.
+  const auto pitch = [](const Car& car) {
+    const Vec3 forward = car.dynamics.body.orientation.rotate({0, 0, -1});
+    return std::asin(std::clamp(forward.y, -1.0, 1.0));  // nose up positive
+  };
+  double dive[2], squat[2], stop[2];
+  for (int anti = 0; anti < 2; ++anti) {
+    const auto set = [&](Car& car) {
+      for (size_t i = 0; i < 4; ++i) {
+        car.dynamics.wheels[i].anti_brake = anti ? (i < 2 ? .15 : .30) : 0;
+        car.dynamics.wheels[i].anti_drive = anti ? (i < 2 ? .10 : .40) : 0;
+      }
+    };
+    Car braking;
+    set(braking);
+    braking.run(2, 0, 0, 0);
+    const double level = pitch(braking);
+    braking.dynamics.drive.engaged = false;
+    braking.dynamics.body.velocity = braking.dynamics.body.orientation.rotate({0, 0, -20});
+    for (auto& w : braking.dynamics.state) w.spin = 20 / .31;
+    const Vec3 start = braking.dynamics.body.position;
+    dive[anti] = 0;
+    for (int i = 0; i < 240 && braking.speed() > .1; ++i) {
+      braking.run(1. / 60, 0, 1, 0);
+      dive[anti] = std::max(dive[anti], level - pitch(braking));
+    }
+    stop[anti] = (braking.dynamics.body.position - start).length();
+    Car launching;
+    set(launching);
+    launching.run(2, 0, 0, 0);
+    squat[anti] = 0;
+    for (int i = 0; i < 120; ++i) {
+      launching.run(1. / 60, 1, 0, 0);
+      squat[anti] = std::max(squat[anti], pitch(launching) - level);
+    }
+  }
+  std::printf("ANTI dive %.2f -> %.2f deg, squat %.2f -> %.2f deg, stop %.1f -> %.1f m%c",
+              dive[0] * 57.3, dive[1] * 57.3, squat[0] * 57.3, squat[1] * 57.3, stop[0], stop[1], 10);
+  // About 15 % front and 30 % rear of the dive; the rear's 40 % of the squat
+  // (the undriven front still rises).
+  SLRR_REQUIRE(dive[1] < dive[0] * .85 && dive[1] > dive[0] * .6);
+  SLRR_REQUIRE(squat[1] < squat[0] * .9);
+  SLRR_REQUIRE(std::abs(stop[1] - stop[0]) < .05 * stop[0]);
+}
+
 SLRR_TEST(hot_brake_fluid_boils_and_the_pressure_falls) {
   const auto brake = brake_hardware(0, 2, .286);
   double fluid = kAmbientTemperature;
@@ -1903,6 +1951,7 @@ int main() {
       an_angled_kerb_beside_the_tyre_pushes_square_to_itself,
       an_exhaust_scrapes_over_a_hump_instead_of_passing_through,
       an_exhaust_in_the_road_at_rest_is_raised_clear,
+      anti_dive_and_anti_squat_carry_part_of_the_load_transfer,
       hard_braking_declutches_so_the_engine_never_pushes_the_rear_wheels,
       coasting_engine_braking_fades_with_the_speed,
       releasing_a_hard_brake_at_speed_takes_up_without_a_jolt,

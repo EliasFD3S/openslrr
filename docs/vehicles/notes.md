@@ -2330,3 +2330,64 @@ III's mufflers scrape under full throttle (its authored ride height is
 low); the lift uses the parked estimate, so a car whose springs or weight
 change in the garage gets it again only when its body supports are
 rebuilt.
+
+## Anti-dive and anti-squat (#469)
+
+Cause: braking and drive forces acted on the body at the contact patch and
+the whole longitudinal load transfer went through the springs, as if every
+arm were level: the car dived and squatted fully. The scripts'
+`setInstantCenter` side-view centres (`LICy`, `LICz`) are stored but
+inactive since the 8ac2ba9 baseline; the recovered exe (sl-remastered)
+copies them without using them, and their frame is unknown (one reading
+gives the CoupeSport 13 % anti-dive, another an instant centre 1.4 m above
+the wheel).
+
+Fix (OpenSLRR, typical values chosen over the original's data):
+
+- `VehicleDynamics::update_jacking`, at the start of each step from the last
+  step's tyre forces: a wheel's longitudinal force F moves F x h / L of load
+  (h the CoM's height above the tyres, L the wheelbase). `anti_brake` and
+  `anti_drive` are the usual percentages, the share of the axle's transfer
+  the arms carry at the car's own split (the front axle's share of the
+  brake torques the brake scripts give, 70 % without any; the drive on the
+  driven axles, halved on four-wheel drive), which fixes each arm's
+  side-view slope; each wheel's arms push by its own force times that slope
+  (`WheelState::jacking`). Braking is a force against the wheel's spin.
+- The push adds to the suspension force between body and wheel in the three
+  support paths (the quarter-car solve, the massless linked wheel, the
+  unlinked one), so the tyre still carries the whole transfer while the
+  spring takes less of it.
+- The shares come from the suspension's script, so mods can set them:
+  `WheelRef.setAnti(braking, driving)`, a new native declared by the
+  patched `WheelRef.java`. The 96 patched stock corners call it with typical
+  shares for their real car (table in the
+  [patch README](../../patch/README.md#anti-dive-and-anti-squat-469); the
+  #450 generator writes the line). A corner whose script does not call it
+  gets typical shares by suspension type in `dynamics_wheels`: linked fronts
+  15 % anti-dive and 10 % anti-lift driving, independent rear arms 30 %
+  anti-lift and 40 % anti-squat, live axles (the #456 25 m arm) 30 % and
+  80 %; corners without arms none.
+
+Validation:
+
+- Compilation: `slrr_host` Release; `WheelRef` and the 96 suspension
+  classes in `build/brake-compile-root` (all compiled), the generator's
+  output identical to the edited sources. `vehicle_dynamics` 72/72 with a
+  new test (the test saloon, its brakes split 50 / 50, braking from 20 m/s:
+  dive 2.42 to 1.99 degrees, the stop 21.4 m either way; launching: squat
+  1.41 to 1.18 degrees, the undriven front still rising),
+  `missing_support` 17/17, `physics_tick_rate` 9/9.
+- `physics_lab` unchanged (its car has no shares).
+- In `build/needle-game` with the new classes: the MC reads its scripts'
+  0.20 / 0.10 front and 0.40 / 1.00 rear. Bench drives on Tsukuba (flat;
+  the TestTrack start straddles a change of slope, where the MC rests on its
+  body with all four wheels in the air): CoupeSport 8.74 / 34.9 km/h at 1 /
+  3 s either way, GT III 14.9 / 49.5 against 14.8 / 49.2, MC 9.94 / 40.4
+  either way.
+- Not checked in game: the pitch under braking and launch, its feel.
+
+Limitations: the stock shares are typical figures for the real cars, not
+their measured geometry; the slope follows the car's current brake split,
+so a balance change in the garage keeps the stated percentage instead of
+moving it as a fixed arm geometry would; the push follows the last step's
+force; the scripts' instant centres stay unused.

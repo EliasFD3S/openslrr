@@ -425,6 +425,15 @@ video page's Preset choice is script-side: `OptionsDialog.applyPreset` calls the
 setters and moves the controls with `MultiChoice.setValue` / `Slider.setValue`,
 which do not send their command.
 
+### Suspension anti shares (#469)
+
+`WheelRef.setAnti(braking, driving)`, declared by the patched
+`parts/scripts/src/WheelRef.java`: the share of the axle's longitudinal load
+transfer the suspension's arms carry (0 to 1.5), braking (front anti-dive,
+rear anti-lift) and driving (front anti-lift, rear anti-squat). The 96
+patched stock corners call it; without it the host uses typical shares for
+the suspension type ([notes](../vehicles/notes.md#anti-dive-and-anti-squat-469)).
+
 ### Math functions (#463)
 
 The patched `system/Scripts/lang/Math.java` declares, besides the stock
