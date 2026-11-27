@@ -498,6 +498,7 @@ void gameref_activate_camera(GameRefState& camera, GameRefState& viewport, int p
   camera.cam_seq = ++g_camera_sequence;
   camera.chase_fov = 0.f;  // re-entered views restart from the current speed
   camera.arcade.init = false;
+  camera.arcade_look_back = false;  // OpenSLRR (#470): a re-activated camera starts without the look-back view
 }
 
 bool gameref_scene_command(void* key, const std::string& line) {

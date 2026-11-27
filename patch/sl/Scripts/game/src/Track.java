@@ -1299,6 +1299,10 @@ abstract public class Track extends Scene implements GameState
 			{
 				// OpenSLRR (#470): on the arcade camera the look-back key cuts
 				// straight to a rear view while held, as in NFSU2.
+				// The release is always delivered, even if the camera mode or style
+				// changed while the key was held; the engine only stores the flag.
+				if( !((Event)m).flags && cam )
+					cam.command( "arcadeback 0" );
 				if( cameraMode == CAMMODE_FOLLOW && cam && OptionsDialog.getRendererOption( 34 ) == 1 )
 				{
 					if( ((Event)m).flags )

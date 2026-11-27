@@ -589,3 +589,8 @@ every load, so a deliberate F1 binding of CHANGE VIEW was lost on restart; it
 now runs only for the stock pair (slot 35 F1 with slot 36 F2) and empties slot
 36, so it fires once. The hidden stock slot 37 (`AXIS_LOOK_REAR` on F5, not in
 the options) is now empty by default and cleared on load.
+
+A look-back release missed while the camera mode changed (a script cockpit
+switch, the change-view key, a style change) left `arcade_look_back` set, and
+the rear view came back with that camera. `Track` now sends `arcadeback 0` on
+every look-back release, and `gameref_activate_camera` clears the flag.
