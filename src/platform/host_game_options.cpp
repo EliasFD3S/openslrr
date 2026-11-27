@@ -10,7 +10,8 @@
 #include <cstdio>
 #include <fstream>
 #include <iterator>
-#include <map>
+#include <limits>
+#include <utility>
 #include <string_view>
 #include <vector>
 #include <filesystem>
@@ -24,7 +25,15 @@ Clock::time_point changed, next_sample;
 GameOptions current;
 uint64_t driving_revision = 0;
 std::string host_options_path;
+options_json::Section mod_settings;
 bool save_host_options();
+
+void set_mod_setting(const std::string& key, options_json::Scalar value) {
+  const auto it = mod_settings.find(key);
+  if (it != mod_settings.end() && it->second == value) return;
+  mod_settings.insert_or_assign(key, std::move(value));
+  save_host_options();
+}
 
 // Host-only settings (#405: one table, saved as JSON). Config has a fixed
 // binary layout, so a new field there would need a patched Config class.
@@ -175,19 +184,22 @@ void load_host_options(const std::string& root) {
   host_input_tuning() = {};
   host_sfx_spatial_options() = {};
 
+  mod_settings.clear();
   bool loaded_json = false;
   if (std::ifstream in{host_options_path, std::ios::binary}) {
     const std::string text{std::istreambuf_iterator<char>(in), {}};
     in.close();
-    std::map<std::string, options_json::Scalar> values;
+    options_json::Sections values;
     std::string error;
     if (options_json::parse(text, values, &error)) {
       // A missing or unreadable key keeps its default.
       for (const auto& o : kOptions) {
-        const auto it = values.find(std::string(o.section) + "." + o.key);
+        const auto& section = values[o.section];
+        const auto it = section.find(o.key);
         int value = 0;
-        if (it != values.end() && read_value(o, it->second, value)) set_option(o, value);
+        if (it != section.end() && read_value(o, it->second, value)) set_option(o, value);
       }
+      mod_settings = std::move(values["mods"]);
       loaded_json = true;
     } else {
       // Keep the damaged file for a look; the next save writes a new one.
@@ -229,6 +241,7 @@ bool save_host_options() {
     }
     entries.push_back(std::move(e));
   }
+  for (const auto& [key, value] : mod_settings) entries.push_back({"mods", key, value});
   // Write beside it, then replace: a crash mid-save keeps the old file.
   const std::string temporary = host_options_path + ".tmp";
   {
@@ -313,6 +326,30 @@ HudTuning& host_hud_tuning() {
 EnhancedGraphics& host_enhanced_graphics() {
   static EnhancedGraphics graphics;
   return graphics;
+}
+int host_mod_get_int(const std::string& key, int fallback) {
+  const auto it = mod_settings.find(key);
+  if (it == mod_settings.end() || it->second.kind != options_json::Scalar::Number) return fallback;
+  const double n = it->second.number;
+  if (n < INT32_MIN || n > INT32_MAX || n != std::trunc(n)) return fallback;
+  return static_cast<int>(n);
+}
+float host_mod_get_float(const std::string& key, float fallback) {
+  const auto it = mod_settings.find(key);
+  if (it == mod_settings.end() || it->second.kind != options_json::Scalar::Number ||
+      std::abs(it->second.number) > std::numeric_limits<float>::max()) return fallback;
+  return static_cast<float>(it->second.number);
+}
+std::optional<std::string> host_mod_get_string(const std::string& key) {
+  const auto it = mod_settings.find(key);
+  if (it == mod_settings.end() || it->second.kind != options_json::Scalar::String) return {};
+  return it->second.text;
+}
+void host_mod_set_number(const std::string& key, double value) {
+  if (std::isfinite(value)) set_mod_setting(key, {options_json::Scalar::Number, value});
+}
+void host_mod_set_string(const std::string& key, const std::string& value) {
+  set_mod_setting(key, {options_json::Scalar::String, 0, false, value});
 }
 bool host_save_graphics_options() { return save_host_options(); }
 bool host_option_get(int id, int& value) {

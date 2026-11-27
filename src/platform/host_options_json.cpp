@@ -12,7 +12,7 @@ namespace {
 struct Parser {
   std::string_view s;
   size_t i = 0;
-  std::map<std::string, Scalar>* out = nullptr;
+  Sections& out;
   std::string error;
   int depth = 0;
 
@@ -26,6 +26,13 @@ struct Parser {
   bool literal(std::string_view word) {
     if (s.substr(i, word.size()) != word) return false;
     i += word.size();
+    return true;
+  }
+  bool hex4(unsigned& code) {
+    if (i + 4 > s.size() ||
+        std::from_chars(s.data() + i, s.data() + i + 4, code, 16).ptr != s.data() + i + 4)
+      return fail("bad \\u escape");
+    i += 4;
     return true;
   }
   bool string(std::string& text) {
@@ -48,18 +55,27 @@ struct Parser {
         case 't': text.push_back('\t'); break;
         case 'u': {
           unsigned code = 0;
-          if (i + 4 > s.size() ||
-              std::from_chars(s.data() + i, s.data() + i + 4, code, 16).ptr != s.data() + i + 4)
-            return fail("bad \\u escape");
-          i += 4;
-          // Keys and values are ASCII; keep other code points as UTF-8.
+          if (!hex4(code)) return false;
+          if (code >= 0xD800 && code <= 0xDBFF) {
+            unsigned low = 0;
+            if (!literal("\\u") || !hex4(low) || low < 0xDC00 || low > 0xDFFF)
+              return fail("expected low surrogate");
+            code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+          } else if (code >= 0xDC00 && code <= 0xDFFF) {
+            return fail("unexpected low surrogate");
+          }
           if (code < 0x80) {
             text.push_back(static_cast<char>(code));
           } else if (code < 0x800) {
             text.push_back(static_cast<char>(0xC0 | code >> 6));
             text.push_back(static_cast<char>(0x80 | (code & 0x3F)));
-          } else {
+          } else if (code < 0x10000) {
             text.push_back(static_cast<char>(0xE0 | code >> 12));
+            text.push_back(static_cast<char>(0x80 | (code >> 6 & 0x3F)));
+            text.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+          } else {
+            text.push_back(static_cast<char>(0xF0 | code >> 18));
+            text.push_back(static_cast<char>(0x80 | (code >> 12 & 0x3F)));
             text.push_back(static_cast<char>(0x80 | (code >> 6 & 0x3F)));
             text.push_back(static_cast<char>(0x80 | (code & 0x3F)));
           }
@@ -83,13 +99,12 @@ struct Parser {
       return fail("bad number");
     return true;
   }
-  // path: where a scalar is stored; empty for an array element (skipped).
-  bool value(const std::string& path) {
+  bool value(Section* section, const std::string* key) {
     space();
     if (i >= s.size()) return fail("expected a value");
     Scalar scalar;
     const char c = s[i];
-    if (c == '{') return object(path);
+    if (c == '{') return object(depth == 1 && key ? &out[*key] : nullptr);
     if (c == '[') return array();
     if (c == '"') {
       scalar.kind = Scalar::String;
@@ -106,10 +121,10 @@ struct Parser {
     } else {
       return fail("unexpected character");
     }
-    if (!path.empty()) (*out)[path] = std::move(scalar);
+    if (section && key) (*section)[*key] = std::move(scalar);
     return true;
   }
-  bool object(const std::string& path) {
+  bool object(Section* section) {
     if (++depth > 16) return fail("nested too deep");
     ++i;  // '{'
     space();
@@ -125,8 +140,7 @@ struct Parser {
       space();
       if (i >= s.size() || s[i] != ':') return fail("expected ':'");
       ++i;
-      if (!value(path.empty() && depth == 1 ? key : path.empty() ? "" : path + "." + key))
-        return false;
+      if (!value(section, &key)) return false;
       space();
       if (i < s.size() && s[i] == ',') {
         ++i;
@@ -150,7 +164,7 @@ struct Parser {
       return true;
     }
     for (;;) {
-      if (!value("")) return false;
+      if (!value(nullptr, nullptr)) return false;
       space();
       if (i < s.size() && s[i] == ',') {
         ++i;
@@ -200,12 +214,11 @@ void scalar(std::string& out, const Scalar& value) {
 
 }  // namespace
 
-bool parse(std::string_view text, std::map<std::string, Scalar>& out, std::string* error) {
+bool parse(std::string_view text, Sections& out, std::string* error) {
   out.clear();
-  Parser p{text, 0, &out};
+  Parser p{text, 0, out};
   p.space();
-  // The root object's keys are paths themselves (depth 1).
-  bool ok = p.i < text.size() && text[p.i] == '{' ? p.object("") : p.fail("expected an object");
+  bool ok = p.i < text.size() && text[p.i] == '{' ? p.object(nullptr) : p.fail("expected an object");
   if (ok) {
     p.space();
     if (p.i != text.size()) ok = p.fail("text after the object");

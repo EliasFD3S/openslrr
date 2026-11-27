@@ -33,6 +33,54 @@
 
 namespace slrr {
 namespace {
+void register_mod_settings(Jvm& jvm) {
+  constexpr const char* cls = "java.openslrr.ModSettings";
+  auto& registry = jvm.natives();
+  registry.register_method(cls, "getInt", "(Ljava.lang.String;I)I",
+      [](Object*, const std::vector<Value>& args) {
+        const auto* key = native_arg_object(args, 0);
+        const int def = native_arg_integer(args, 1);
+        return Value::make_int(key ? host_mod_get_int(key->str, def) : def);
+      });
+  registry.register_method(cls, "setInt", "(Ljava.lang.String;I)V",
+      [](Object*, const std::vector<Value>& args) {
+        const auto* key = native_arg_object(args, 0);
+        if (key && args.size() >= 2 && args[1].tag == ValueTag::Int)
+          host_mod_set_number(key->str, args[1].v.i);
+        return Value::make_void();
+      });
+  registry.register_method(cls, "getFloat", "(Ljava.lang.String;F)F",
+      [](Object*, const std::vector<Value>& args) {
+        const auto* key = native_arg_object(args, 0);
+        const float def = args.size() > 1 && args[1].tag == ValueTag::Float
+            ? args[1].v.f : native_arg_number(args, 1);
+        return Value::make_float(key ? host_mod_get_float(key->str, def) : def);
+      });
+  registry.register_method(cls, "setFloat", "(Ljava.lang.String;F)V",
+      [](Object*, const std::vector<Value>& args) {
+        const auto* key = native_arg_object(args, 0);
+        if (key && args.size() >= 2) {
+          if (args[1].tag == ValueTag::Float) host_mod_set_number(key->str, args[1].v.f);
+          else if (args[1].tag == ValueTag::Int)
+            host_mod_set_number(key->str, static_cast<float>(args[1].v.i));
+        }
+        return Value::make_void();
+      });
+  registry.register_method(cls, "getString", "(Ljava.lang.String;Ljava.lang.String;)Ljava.lang.String;",
+      [&jvm](Object*, const std::vector<Value>& args) {
+        if (const auto* key = native_arg_object(args, 0))
+          if (auto found = host_mod_get_string(key->str)) return Value::make_obj(jvm.new_string(*found));
+        return Value::make_obj(native_arg_object(args, 1));
+      });
+  registry.register_method(cls, "setString", "(Ljava.lang.String;Ljava.lang.String;)V",
+      [](Object*, const std::vector<Value>& args) {
+        const auto* key = native_arg_object(args, 0);
+        const auto* value = native_arg_object(args, 1);
+        if (key && value) host_mod_set_string(key->str, value->str);
+        return Value::make_void();
+      });
+}
+
 std::vector<VideoMode> display_modes() {
   std::vector<VideoMode> modes;
 #ifdef _WIN32
@@ -59,6 +107,7 @@ std::vector<VideoMode> display_modes() {
 
 
 void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
+  register_mod_settings(jvm);
   // Host-only options by id: the table in host_game_options.cpp (#405).
   jvm.natives().register_method("java.game.OptionsDialog", "getRendererOption", "(I)I",
       [](Object*, const std::vector<Value>& args) {

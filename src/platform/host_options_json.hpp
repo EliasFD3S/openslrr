@@ -14,12 +14,15 @@ struct Scalar {
   double number = 0;
   bool boolean = false;
   std::string text;
+  bool operator==(const Scalar&) const = default;
 };
 
-// Every scalar under its dotted path ("input.ffb_damper", "version").
-// Arrays and nulls are skipped. Returns false, with out cleared, when the
-// text is not one valid JSON object.
-bool parse(std::string_view text, std::map<std::string, Scalar>& out,
+using Section = std::map<std::string, Scalar>;
+using Sections = std::map<std::string, Section>;
+
+// Only direct scalar members of section objects are settings. A literal dot
+// (including one in a mod key) is never a path separator. On failure out is empty.
+bool parse(std::string_view text, Sections& out,
            std::string* error = nullptr);
 
 struct Entry {
