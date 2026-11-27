@@ -8946,59 +8946,6 @@ bool part_car_ground(void *key, float *y) {
   return true;
 }
 
-bool part_car_local_box(void *key, float *lo, float *hi) {
-  if (!key || !lo || !hi || !car(static_cast<Object *>(key)))
-    return false;
-  const auto instances = scene_instances_collect_root(key);
-  // The chassis shell (the largest mesh) carries the chassis frame in the
-  // instances' own space; every mesh corner is measured in that frame.
-  const float *frame = nullptr;
-  float largest = -1.f;
-  for (const auto &instance : instances) {
-    if (!instance.geometry)
-      continue;
-    const auto &info = instance.geometry->info;
-    const float s = instance.geometry->position_scale;
-    const float volume = (info.bbox_max[0] - info.bbox_min[0]) * (info.bbox_max[1] - info.bbox_min[1]) *
-                         (info.bbox_max[2] - info.bbox_min[2]) * s * s * s;
-    if (volume > largest) {
-      largest = volume;
-      frame = instance.transform.data();
-    }
-  }
-  if (!frame)
-    return false;
-  bool any = false;
-  for (const auto &instance : instances) {
-    if (!instance.geometry)
-      continue;
-    const auto &geo = *instance.geometry;
-    const float scale = geo.position_scale;
-    const float *m = instance.transform.data();
-    for (int corner = 0; corner < 8; ++corner) {
-      const float x = (corner & 1 ? geo.info.bbox_max[0] : geo.info.bbox_min[0]) * scale;
-      const float y = (corner & 2 ? geo.info.bbox_max[1] : geo.info.bbox_min[1]) * scale;
-      const float z = (corner & 4 ? geo.info.bbox_max[2] : geo.info.bbox_min[2]) * scale;
-      // Mesh point in the instances' space (the convention of
-      // part_car_ground), relative to the chassis origin.
-      float d[3];
-      for (int i = 0; i < 3; ++i)
-        d[i] = m[i] * x + m[4 + i] * y - m[8 + i] * z + m[12 + i] - frame[12 + i];
-      // Chassis axes: x, y up, and back (a mesh's +Z is drawn along -m[8..10]).
-      for (int axis = 0; axis < 3; ++axis) {
-        const float *a = frame + axis * 4;
-        const float len = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
-        const float sign = axis == 2 ? -1.f : 1.f;
-        const float v = len > 1e-6f ? sign * (d[0] * a[0] + d[1] * a[1] + d[2] * a[2]) / len : 0.f;
-        if (!any || v < lo[axis]) lo[axis] = v;
-        if (!any || v > hi[axis]) hi[axis] = v;
-      }
-      any = true;
-    }
-  }
-  return any;
-}
-
 Object *vehicle_spawn_stock(Jvm &jvm, RpkIndex &resources, Object *parent,
                             uint32_t chassis, uint32_t texture) {
   if (!texture) {

@@ -954,27 +954,13 @@ abstract public class Track extends Scene implements GameState
 		cameraMode = CAMMODE_INVCH;
 	}
 
-	// OpenSLRR (#470): the change-view key. CLASSIC (Options > Game >
-	// CAMERA) cycles the driving views: follow, chase, then each cockpit
-	// camera (not the mirror and look-back ones), back to follow. ARCADE
-	// cycles the four Need for Speed Underground 2 views on the follow
-	// camera: BUMPER, HOOD, NEAR, FAR (host option 35, drawn by the host).
-	final static int ARCADE_VIEWS = 4;
-
+	// OpenSLRR (#470): the change-view key cycles the driving views:
+	// follow, chase, then each cockpit camera (not the mirror and look-back
+	// ones), back to follow.
 	public void nextCamera()
 	{
 		if (!cameraTarget)	return;
 		if (!cameraTarget.id())	return;
-
-		if( OptionsDialog.getRendererOption( 34 ) == 1 )
-		{
-			if( cameraMode == CAMMODE_FOLLOW )
-				OptionsDialog.setRendererOption( 35, (OptionsDialog.getRendererOption( 35 ) + 1) % ARCADE_VIEWS );
-			else
-				changeCamFollow();
-			showArcadeView();
-			return;
-		}
 
 		if( cameraMode == CAMMODE_FOLLOW )
 		{
@@ -1019,15 +1005,6 @@ abstract public class Track extends Scene implements GameState
 				changeCamFollow();
 			setMessage( "Camera: follow" );
 		}
-	}
-
-	void showArcadeView()
-	{
-		int v = OptionsDialog.getRendererOption( 35 );
-		if( v == 0 )		setMessage( "Camera: bumper" );
-		else if( v == 1 )	setMessage( "Camera: hood" );
-		else if( v == 2 )	setMessage( "Camera: near" );
-		else				setMessage( "Camera: far" );
 	}
 
 	public void changeCamFree()
@@ -1297,20 +1274,6 @@ abstract public class Track extends Scene implements GameState
 
 			if( cmd == CMD_LOOKBACK )
 			{
-				// OpenSLRR (#470): on the arcade camera the look-back key cuts
-				// straight to a rear view while held, as in NFSU2.
-				// The release is always delivered, even if the camera mode or style
-				// changed while the key was held; the engine only stores the flag.
-				if( !((Event)m).flags && cam )
-					cam.command( "arcadeback 0" );
-				if( cameraMode == CAMMODE_FOLLOW && cam && OptionsDialog.getRendererOption( 34 ) == 1 )
-				{
-					if( ((Event)m).flags )
-						cam.command( "arcadeback 1" );
-					else
-						cam.command( "arcadeback 0" );
-				}
-				else
 				if(cameraMode == CAMMODE_FOLLOW)
 				{
 					if( ((Event)m).flags )	//press

@@ -40,9 +40,7 @@ struct HostOption {
   bool boolean;
   int (*get)();
   void (*set)(int);
-  // A named option (low = 0, one name per value up to high), saved by
-  // name; else null.
-  const char* names[4];
+  const char* names[2];  // a named two-value option, saved by name; else null
 };
 
 #define SLRR_GRAPHICS_INT(id, key, low, high)                         \
@@ -104,15 +102,6 @@ const HostOption kOptions[] = {
     HostOption{32, "hud", "temperatures", 0, 1, true,
                +[] { return int(host_hud_tuning().temperatures); },
                +[](int v) { host_hud_tuning().temperatures = v != 0; }, {}},
-    // Chase camera style (#470), saved by name.
-    HostOption{34, "camera", "style", 0, 1, false,
-               +[] { return host_camera_tuning().style; },
-               +[](int v) { host_camera_tuning().style = v; }, {"classic", "arcade"}},
-    // Arcade camera view (#470), cycled by the change-view key.
-    HostOption{35, "camera", "arcade_view", 0, 3, false,
-               +[] { return host_camera_tuning().arcade_view; },
-               +[](int v) { host_camera_tuning().arcade_view = v; },
-               {"bumper", "hood", "near", "far"}},
 };
 #undef SLRR_GRAPHICS_INT
 #undef SLRR_GRAPHICS_BOOL
@@ -142,7 +131,7 @@ bool read_value(const HostOption& o, const options_json::Scalar& v, int& out) {
       out = v.boolean;
       return o.boolean;
     case options_json::Scalar::String:
-      for (int i = 0; i < 4; ++i)
+      for (int i = 0; i < 2; ++i)
         if (o.names[i] && v.text == o.names[i]) {
           out = i;
           return true;
@@ -185,7 +174,6 @@ void load_host_options(const std::string& root) {
   host_enhanced_graphics() = {};
   host_input_tuning() = {};
   host_sfx_spatial_options() = {};
-  host_camera_tuning() = {};
 
   bool loaded_json = false;
   if (std::ifstream in{host_options_path, std::ios::binary}) {
@@ -320,10 +308,6 @@ InputTuning& host_input_tuning() {
 }
 HudTuning& host_hud_tuning() {
   static HudTuning tuning;
-  return tuning;
-}
-CameraTuning& host_camera_tuning() {
-  static CameraTuning tuning;
   return tuning;
 }
 EnhancedGraphics& host_enhanced_graphics() {

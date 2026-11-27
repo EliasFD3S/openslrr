@@ -99,9 +99,6 @@ Object *part_showing_texture(uint32_t texture);
 // World height of the tyre contact under a car. The camera's `move` spring
 // hangs on this point; `look` stays on the chassis origin.
 bool part_car_ground(void *key, float *y);
-// Extent of a car's meshes in its chassis frame (x, y up, z back), for the
-// arcade camera's bumper and hood views (#470).
-bool part_car_local_box(void *key, float *lo, float *hi);
 bool part_camera_pose(void* car, int camera, float* matrix);
 // World linear velocity of a car's chassis body, in m/s.
 bool part_car_velocity(void* car, float* velocity);

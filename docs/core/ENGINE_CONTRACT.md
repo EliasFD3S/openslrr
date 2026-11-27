@@ -880,23 +880,12 @@ view angle widens with the smoothed chassis speed (smoothstep from 30 to
 view is activated. In the chase view only, smoothed forward acceleration
 moves the eye up to 1.2 m back while pulling and 0.8 m closer while braking
 (`update_chase_feel` in `gameref.cpp`).
-Host option 34 (`camera.style`, #470) replaces that plain chase view with
-the arcade camera of `arcade_camera.hpp` when set to arcade, in the view
-of host option 35 (`camera.arcade_view`): bumper and hood ride fixed on the
-chassis (placed from `part_car_local_box`, no wall sweep, the chassis up
-axis); near and far follow the heading blended toward the direction of travel
-with a short spring lag, their own speed-dependent view angle and reach, and a
-right-drag look that decays once released. All arcade views add NFSU2's
-motion: nitrous widening, reach and shake, road vibration from 150 km/h, a
-crash shake above a 40 m/s^2 velocity change, a bend tilt from yaw rate x
-speed (chase views), a softer height follow in the air, and the camera
-command `arcadeback 0|1` (sent by the patched Track's look-back key) for an
-immediate rear view. The patched `Track.nextCamera`
-cycles the views on the change-view key (ControlSet slot 35,
-`AXIS_LOOK_PREVNEXT`, V); the stock F1-F5/F9 view hotkeys are not created. Script variants (`cameraMode` 3 and 4), a held or
-`angle`-turned follow camera, cockpit, attached and free cameras keep their
-behaviour; both chase styles share the eye collision sweep and hand over
-their eye when the style changes.
+The patched `Track.nextCamera` (#470) cycles follow, chase and the cockpit
+cameras on the change-view key (ControlSet slot 35, `AXIS_LOOK_PREVNEXT`,
+V); the stock F1-F5/F9 view hotkeys are not created. The engine has no
+arcade (NFSU2-style) chase camera: that camera is planned as a script mod on
+the mod overlay folders, camera provider hook and mod keys/settings (#486,
+#487, #488).
 
 SDL3 owns joystick/gamepad discovery and polling on that same host thread;
 Win32 still owns the window, keyboard scan codes and mouse. Devices 0/1 remain

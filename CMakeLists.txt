@@ -101,7 +101,6 @@ add_executable(slrr_host
   src/formats/skeleton_text.cpp
   src/formats/matrixdata.cpp
   src/resources/gameref.cpp
-  src/resources/arcade_camera.cpp
   src/resources/script_lights.cpp
   src/resources/light_resource.cpp
   src/resources/ground_surface.cpp
@@ -450,11 +449,6 @@ if(BUILD_TESTING)
   target_compile_features(tyre_effects PRIVATE cxx_std_20)
   target_compile_options(tyre_effects PRIVATE /W3 /utf-8)
   add_test(NAME tyre_effects COMMAND tyre_effects)
-  add_executable(arcade_camera tests/test_arcade_camera.cpp src/resources/arcade_camera.cpp)
-  target_include_directories(arcade_camera PRIVATE include)
-  target_compile_features(arcade_camera PRIVATE cxx_std_20)
-  target_compile_options(arcade_camera PRIVATE /W3 /utf-8)
-  add_test(NAME arcade_camera COMMAND arcade_camera)
 endif()
 
 install(TARGETS slrr_host RUNTIME DESTINATION bin)

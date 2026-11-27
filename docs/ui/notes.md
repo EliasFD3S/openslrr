@@ -454,151 +454,59 @@ Verified on the PR branch (f422ebb), by reading the code; not run in game.
 - `host_input_cancel_pointer_gestures` turns a held world button into a
   `world_release`, which `dispatch_world_pointer` emits as cursor event 2
   in the frame after the boundary, without a matching press in that scene.
+## Change-view key (#470)
 
-## Arcade chase camera (#470)
-
-Request: an optional "Need for Speed Underground 2" chase camera, chosen in
-**Options → Game** as CLASSIC (the existing camera, default) or ARCADE. The
-issue points at [NFSU2Recomp](https://github.com/TalhaMudo/NFSU2Recomp); that
-repository is a static recompilation runtime (Metal, input, HUD and FOV
-patches) and ships no game code, so it has no camera logic to port. The
-arcade camera is therefore modelled on NFSU2's chase view as observed, not a
-port.
+Request: an optional "Need for Speed Underground 2" chase camera, and, in
+review, one rebindable change-view key (V) instead of the F-key view set. The
+NFSU2 camera was first built into the engine on this branch; it was removed
+again (see the end of this section) and moves to a mod. What remains is the
+change-view key.
 
 Change:
 
-- `include/slrr/arcade_camera.hpp`, `src/resources/arcade_camera.cpp`: pure
-  pose math. The eye azimuth follows the chassis heading blended toward the
-  direction of travel (60 % of a slide up to 0.6 rad, from about 40 km/h;
-  reversing keeps the heading), with a spring lag of 4-6 /s capped at
-  1.2 rad. The focus is 0.75 m above the car origin with its height smoothed
-  (10 /s, at most 0.8 m behind); the eye sits 6.3 m back and 1.45 m above it,
-  looking 0.6-2.4 m past the car. Speed adds 1 m of reach and widens the
-  vertical view from 50 to 72 degrees (smoothstep 20-250 km/h), forward
-  acceleration up to 4 degrees and 0.9 m more (braking 0.5 m closer).
-- `gameref.cpp:driving_camera_pose` takes the arcade branch for the plain
-  follow view when host option 34 is arcade (`arcade_chase_selected`). Script
-  variants (`cameraMode` 3, 4), a held or `angle`-turned follow camera, the
-  cockpit, attached and free cameras are unchanged. Both styles share
-  `finish_chase_pose` (eye collision sweep, recorded pose). The arcade eye
-  is written into the classic follow body (`eye_s`, `look_s`), and the
-  arcade camera seeds its azimuth from the classic eye, so switching style
-  mid-drive does not cut. A right-drag look decays at 3 /s after release; the
-  wheel zoom scales the arcade distance by `cam_distance` / 7 m.
-  `world_camera_pose` returns `arcade.fov` while the arcade pose is active.
-- Host option 34 (`camera.style`, saved by name `"classic"`/`"arcade"`,
-  `host_camera_tuning`); `OptionsDialog.CMD_CAMERA_STYLE` (538) and a CAMERA
-  choice in `OsdxOptions.buildGame`.
-
-Validation (Windows, Release build of this branch):
-
-- `arcade_camera` (ctest): 7 checks pass (parked framing, read-only queries,
-  bounded lag then settling, slide/reverse/spin targets, speed view angle and
-  reach, seeding and zoom, bump smoothing).
-- `run_save_io_tests.ps1` suites `options_retry` (every id 0-34, name
-  round trip, unknown name keeps classic), `gameref_alias` and
-  `car_select_view` pass.
-- `compile_game_sources` compiles the patched `OptionsDialog.java` and
-  `OsdxOptions.java` (other units in that folder need the `parts` tree and
-  were not rebuilt).
-- In game: the reference Valo City replay
-  (`assets/validation/perf-baseline/drive.path`) with each style, frames in
-  `assets/validation/arcade-camera/`. The replay drives the car by pose, so
-  the speed-dependent angle, slide swing and look-back decay were not
-  exercised there; they are covered by the unit tests only. The Options menu
-  item itself was not opened in game.
-
-### Change-view key and the four arcade views (#470, review)
-
-Requested in review: one change-view key (V, rebindable) cycling every view
-instead of the F-key set; F-keys removed; Classic cycles the driving views;
-Arcade gets NFSU2's views and default with NFSU2's values. NFSU2Recomp ships
-no game data (only its input map: `JOY_EVENT_CAMERA_POV_CHANGE` = C,
-`JOY_EVENT_CAMERA_LOOKBACK` = X), and the `GlobalB.lzc` supplied is from NFS
-Carbon (track list "(5000) Carbon World", cop-light and wind-tunnel parts) with
-no camera table, so the values remain approximations, chosen with the
-requester's agreement until NFSU2's own data is available.
-
 - `Track.java` (MWM source, now shipped compiled): the F1-F5/F9 view hotkeys
   are replaced by a virtual hotkey on `Input.AXIS_LOOK_PREVNEXT` (the stock
-  "change camera" axis no script used), `CMD_NEXTCAM` 4700, `nextCamera`.
-  Classic: follow -> chase -> cockpit cameras (skipping the mirror and
-  look-back ones) -> follow; a car without cockpit cameras goes back to follow.
-  Arcade: `changeCamFollow` from any other mode, else option 35 + 1 mod 4.
+  "change camera" axis no script used), `CMD_NEXTCAM` 4700, `nextCamera`:
+  follow -> chase -> cockpit cameras (skipping the mirror and look-back ones)
+  -> follow; a car without cockpit cameras goes back to follow.
 - `ControlSet`: slot 35 defaults to V, slot 36 (stock previous camera, F2)
-  is empty; `load` moves a saved stock F1/F2 there. `OsdxOptions` game
-  controls list CHANGE VIEW (slot 35).
-- Host option 35 `camera.arcade_view` (names bumper/hood/near/far, default
-  far); `HostOption.names` grew to four.
-- `arcade_camera`: per-view tuning (`arcade_view_tuning`). Near: 4.4 m back,
-  1.1 m up, 54-74 degrees; far unchanged. Bumper: 0.55 m above the lowest
-  mesh point, 5 cm ahead of the front; hood: 6 % of the height under the top,
-  35 % of the length from the front, looking down 1 m over 10 m. Mounted views
-  use the chassis up axis and skip the wall sweep.
-- `part_car_local_box`: corners of every mesh of the car, measured in the
-  frame of its largest mesh (the shell). Measured against
-  `part_camera_pose`'s frame the result was offset by about 2,000 m in x (the
-  instance transforms are not in that frame's space); the shell's own
-  transform gives -1.31..0.96 x -1.12..0.58 x -2.28..2.16 m for the Baiern.
-  A first hood eye at 80 % height / 30 % length sat under the bonnet skin.
+  is empty; `load` moves a saved stock F1/F2 pair to V once (only when slot
+  35 holds F1 and slot 36 F2, so a later F1 binding of CHANGE VIEW is kept).
+  The hidden stock slot 37 (`AXIS_LOOK_REAR` on F5, not in the options) is
+  empty by default and cleared on load. `OsdxOptions` game controls list
+  CHANGE VIEW (slot 35).
 
-Validation (Windows, Release):
+Validation (Windows, Release): `compile_game_sources` builds `Track.java`,
+`OsdxOptions.java` and `ControlSet.java` in a full private game copy;
+`options_retry`, `gameref_alias`, `car_select_view` and ctest pass. In game,
+reference replay with V sent by `keybd_event` every 10 s: follow -> chase ->
+cockpit cameras (`assets/validation/change-view/classic-change-view.png`).
+The rebinding page and the F1/F2 migration of an old controls file were not
+exercised in game.
 
-- `arcade_camera` ctest 9/9 (adds view order and the mounted views, rolled
-  car included); `options_retry` (ids 0-35, arcade view names),
-  `gameref_alias`, `car_select_view` pass; `compile_game_sources` builds
-  `Track.java`, `OsdxOptions.java` and `ControlSet.java` in a full private
-  game copy.
-- In game, reference replay with V sent by `keybd_event` every 10 s:
-  Arcade far -> bumper -> hood -> near -> far, Classic follow -> chase ->
-  cockpit cameras (`assets/validation/arcade-camera/*-change-view.png`). The
-  rebinding page and the F1/F2 migration of an old controls file were not
-  exercised in game.
+### NFSU2 camera moves to a mod
 
-### NFSU2 camera behaviour (#470, review)
+The engine arcade camera of the first review rounds (`arcade_camera.cpp`,
+host options 34 `camera.style` and 35 `camera.arcade_view`, the
+`arcadeback` camera command, `part_car_local_box` and the Options → Game →
+CAMERA item) is removed. The NFSU2 camera is to be a script mod, built on
+three engine features: mod overlay folders (#486), a camera provider hook
+with a car/camera mod API (#487) and mod key bindings and settings (#488).
+The removed C++ (in this branch's history, `8c60d17`..`5aeb5fb`) is the
+reference for the mod's behaviour: four views (bumper, hood, near, far),
+slide swing with lag, speed view angle and reach, nitrous, vibration, crash
+shake, bend tilt, air time and look back.
 
-Requested: the arcade views should behave like NFSU2's, not only sit where
-they do. Added to `arcade_camera` (values by eye, as above):
+Findings that still apply to the mod:
 
-- Nitrous (`PartPhysicsState.nitro_active`): +10 degrees, +0.8 m reach, the
-  eye 8 % lower and a 2 cm shake while it burns; eases in at 3 /s, out at 1.5 /s.
-- Road vibration from 150 km/h (smoothstep to 300), 1.2 cm, x1.4 mounted and
-  x2 on the bumper; crash shake when the velocity changes faster than
-  40 m/s^2 (4 g), up to 15 cm, decaying at 6 /s. Shakes move eye and look
-  point together.
-- Bend tilt (chase views): yaw rate x speed, 0.05 rad per g, at most
-  0.06 rad, following at 3 /s; none in the air.
-- Air time (no wheel contact): the slide is not followed and the height
-  follows at 3 /s instead of 10 /s; at speed the chase eye sits up to 12 %
-  lower.
-- Look back: `Track` sends `arcadeback 1` / `0` to the follow camera while
-  LOOK BACK is held in arcade style (the stock flip of the classic camera is
-  unchanged). Chase views cut to the same distance in front of the car without
-  lag or player look; mounted views move to the rear bumper facing back.
-  `gameref.cpp` samples nitrous, contact and yaw rate from
-  `part_physics_state` on timed steps.
-
-Validation: `arcade_camera` 13/13 (nitrous, crash vs. braking, look back
-both kinds, air time and tilt). In game, B held for 12 s in the reference
-replay showed the rear view and returned behind the car on release
-(`assets/validation/arcade-camera/arcade-look-back.png`). Nitrous, crash and
-bend tilt were not seen in game: the replay drives the car by pose.
-
-Review fixes (independent review of 8c60d17): the F1/F2 -> V migration ran on
-every load, so a deliberate F1 binding of CHANGE VIEW was lost on restart; it
-now runs only for the stock pair (slot 35 F1 with slot 36 F2) and empties slot
-36, so it fires once. The hidden stock slot 37 (`AXIS_LOOK_REAR` on F5, not in
-the options) is now empty by default and cleared on load.
-
-A look-back release missed while the camera mode changed (a script cockpit
-switch, the change-view key, a style change) left `arcade_look_back` set, and
-the rear view came back with that camera. `Track` now sends `arcadeback 0` on
-every look-back release, and `gameref_activate_camera` clears the flag.
-
-NFSU2 camera data (follow-up): NFSU2's own `GLOBAL/GlobalB.lzc` is JDLZ
-(16-byte header, decompressed size at +8; 5,145,778 -> 8,008,064 bytes, 298
-chunks). It has no camera table: no camera chunk, no BUMPER/HOOD/CLOSE/FAR
-strings or bStringHash values, and the float tables present belong to other
-systems. `SPEED2.EXE` holds the chase camera (`CubicCameraMover`) and the
-look-back/change-view controls, so its values are compiled in; no disassembler
-was available, and the approximations stay, as the requester chose.
+- NFSU2Recomp ships no game code or data (only its input map:
+  `JOY_EVENT_CAMERA_POV_CHANGE` = C, `JOY_EVENT_CAMERA_LOOKBACK` = X).
+  NFSU2's own `GLOBAL/GlobalB.lzc` (JDLZ, 5,145,778 -> 8,008,064 bytes, 298
+  chunks) has no camera table; `SPEED2.EXE` holds the chase camera
+  (`CubicCameraMover`), so its values are compiled in and were approximated
+  by eye with the requester's agreement.
+- A car's mesh extent must be measured in the frame of its largest mesh (the
+  shell), not `part_camera_pose`'s frame (about 2,000 m off in x); the shell
+  frame gives -1.31..0.96 x -1.12..0.58 x -2.28..2.16 m for the Baiern. A hood
+  eye at 80 % height / 30 % length sat under the bonnet skin; 6 % under the
+  top and 35 % from the front did not.
