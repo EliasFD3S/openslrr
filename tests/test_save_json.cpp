@@ -86,7 +86,8 @@ Builder car_with_frames() {
          [&] {
            b.i(2); b.s(nullptr); b.i(7);  // slot 2 holds a tyre on its slot 7
            b.part(&tags[1], "Tyre", "parts\\tyres.rpk", [] {},
-                  [&] { b.i(1); b.f(2.1f); });
+                  // Tyre version 2 (#461) adds the flat spot: depth and angle.
+                  [&] { b.i(2); b.f(2.1f); b.f(0.001953125f); b.f(1.5f); });
            b.i(4); b.s("dent"); b.i(0);  // damaged empty slot
            b.i(5); b.s(nullptr); b.i(1);
            b.part(&tags[2], "Block", "parts\\engines\\Emer.rpk", [] {},
@@ -156,6 +157,7 @@ SLRR_TEST(vehicle_part_tree_names_stock_classes_and_keeps_mod_values) {
                              "\"wheelDamage\": [null, \"flat\"]", "\"mileage\": 1234.5",
                              "\"script\": \"Spoiler\"", "\"values\": [\"wing\", 42]",
                              "\"inflation\": 2.1", "\"damage\": \"dent\"",
+                             "\"flatSpot\": 0.001953125", "\"flatSpotAngle\": 1.5",
                              "\"bestNightQM\": 13.5", "\"rpk\": \"cars/racers/Focer.rpk\""})
     SLRR_REQUIRE(text.find(needle) != std::string::npos);
   // Block wrote an int where the stock script writes a float: generic values.

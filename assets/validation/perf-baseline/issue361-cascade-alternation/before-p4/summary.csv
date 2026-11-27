@@ -1,0 +1,2 @@
+﻿"run","end_kmh","fps","frame_avg_ms","frame_p95_ms","frame_max_ms","scripts_ms","physics_ms","flush_ms","collect_ms","collect_batches_ms","collect_instances_ms","shadows_ms","refl_ms","world_ms","worker_submit_ms","present_ms","render_thread_ms","gpu_ms","draws"
+"day-p4-saved","0.00","160,66","7,47","10,02","11,56","0,63","1,21","4,56","1,15","0,58","0,31","1,08","0,19","0,34","2,74","0,09","2,74","4,45","3000,54"

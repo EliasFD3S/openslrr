@@ -12,7 +12,12 @@ public:
   DeformationCage(Vec3 minimum, Vec3 maximum, double mass, Vec3 mount, bool hood);
   void impact(Vec3 point, Vec3 normal, double speed, double radius);
   using GroundContact = std::function<bool(Vec3 position, Vec3& point, Vec3& normal)>;
+  // Advances by `steps` vehicle solver steps. The cage keeps its own fixed
+  // rate (kRate, the former solver rate) whatever the solver runs at (#380):
+  // its compliance, mount strength and settling were tuned for that step.
+  // Returns whether a cage step ran.
   bool advance(unsigned steps, const GroundContact& ground = {});
+  static constexpr unsigned kRate = 120;
   Vec3 displacement(Vec3 point) const;
   Matrix carry_frame(const Matrix& original) const;
   bool active() const { return active_; }
@@ -30,7 +35,8 @@ private:
   double inverse_mass_;
   double yield_ = .003, plastic_rate_ = 120;
   double mount_strength_ = 0, impact_load_ = 0;
-  unsigned age_ = 0, quiet_ = 0;
+  unsigned age_ = 0, quiet_ = 0;  // cage steps
+  double clock_ = 0;  // solver time not yet stepped, seconds
   bool active_ = false, released_ = false;
   std::vector<Node> nodes_;
   std::vector<Beam> beams_;

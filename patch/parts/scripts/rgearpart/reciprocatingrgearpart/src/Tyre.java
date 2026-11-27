@@ -1,0 +1,487 @@
+package java.game.parts.rgearpart.reciprocatingrgearpart;
+
+import java.render.osd.*;
+import java.io.*;
+import java.util.*;
+import java.util.resource.*;
+import java.game.cars.*;
+import java.game.*;
+import java.game.parts.*;
+import java.game.parts.bodypart.*;
+import java.game.parts.enginepart.*;
+import java.game.parts.rgearpart.*;
+
+public class Tyre extends ReciprocatingRGearPart
+{
+	final static int	tcSTREET = 0;
+	final static int	tcSPORT = 1;
+	final static int	tcSUPERSPORT = 2;
+	final static int	tcDRAGRADIAL = 3;
+
+	float	friction = 1.0;	//static friction coeff.
+	float	sliction = 1.0;	//ratio of dynamic/static
+	float	frictn_x = 1.0;	//factor (unused now)
+	float	radius   = 0.01;
+	float	stiffness = 10.0;
+	float	rollres  = 0.01;	//rolling resistance
+	float	loadcap  = 5000.0;	//load capacity
+	float	loadsmooth = 0.5;
+	float	CPatchMaximumAngle = 0.300;
+
+	// Sala: the following variables are used for scripted calculations //
+
+	float	insider_friction = 1.0;
+	float	wheel_radius;
+	float	profile_ratio;
+	float	tyre_width;
+	float	profile_height;
+	float	min_radius;
+	float	max_radius;
+	float	slide_interval;
+
+	float	min_rollres;
+	float	optimal_inflation;
+	float	inflation;
+	float	par_8;
+
+	int	maxRimWidth_i;
+	int	minRimWidth_i;
+	float	maxRimWidth;
+	float	minRimWidth;
+
+	float	default_fric=1.0;
+	float	fric_mul=1.30;
+	float	load_mul2=10.500;
+	float	CPatchMaxA=16.000;
+	float	CPatchMinA= 4.000;
+	float	roll_res_mul = 0.725;
+	float	slic_mul=1.100;
+	float	rubber_rigidity=1.000;
+//	float	load_progress = 0.000;
+
+	float	load_mul=1.000;
+	// OpenSLRR (#446): the compound for the host's tyre temperature
+	// (tcSTREET 0 ... tcDRAGRADIAL 3), sent with WheelRef.setTyreSpec.
+	float	rubber_type = 0.0;
+	// OpenSLRR (#450): the compound's longitudinal/lateral friction ratio.
+	float	compound_frictn_x = 1.0;
+	int	compound = 0;
+	// OpenSLRR (#461): the flat spot a locked wheel ground into the tread,
+	// its depth in metres and the wheel rotation where it touches the ground.
+	// The host keeps them up to date; they are saved with the tyre and a
+	// repair clears them.
+	float	flat_spot = 0.0;
+	float	flat_spot_angle = 0.0;
+
+	// debug vars, remove them after use //
+	float	slide_cm;
+	
+	int[]	render_types = new int[22];
+	String	tyre_size_label;
+
+	public Tyre()
+	{
+		repair_max_wear = 0.0;
+		prestige_calc_weight = 15.0;
+
+		catalog_view_ypr = new Ypr( 1.571, -0.7, 0.0 );
+	}
+
+	public void SetInflation( float I )
+	{
+		SetInflation( I, 0 );
+	}
+
+	public void SetInflation( float I, int forced )
+	{
+		if (inflation != I || forced)
+		{
+			// OpenSLRR: up to 50 % over-inflation
+			inflation = Math.clamp(I, 0.5, optimal_inflation*1.5);
+
+			float misinflation;
+
+			if (inflation < optimal_inflation)
+				misinflation = inflation / optimal_inflation;
+			else
+				misinflation = optimal_inflation / inflation;
+
+			misinflation = misinflation*misinflation*misinflation*0.6+0.4;
+
+			// OpenSLRR: pressure against the optimum. Under-inflation loses grip with
+			// the stiffness (the sidewall squirms); over-inflation shrinks the contact
+			// patch, so it loses grip while the carcass gets a little stiffer.
+			float pressure = 1.0;
+			if (optimal_inflation > 0.0)
+				pressure = inflation/optimal_inflation;
+			float grip_factor = 0.5+0.5*misinflation;
+			float stiffness_factor = 0.5+0.5*misinflation;
+			if (pressure > 1.0)
+			{
+				grip_factor = 1.0-0.3*(1.0-1.0/pressure);
+				stiffness_factor = 1.0+0.2*(1.0-1.0/pressure);
+			}
+
+//			System.log("misinflation = "+misinflation);
+
+			// OpenSLRR (#450): physical tyre spec. The peak friction is the
+			// compound's (warm, at the nominal load); the host reads setFriction
+			// against 1.76863 for mu 1.15, hence the 1.537939 scale. The width no
+			// longer multiplies the friction (it added 32 % between a 195 and a
+			// 345): a wider tyre carries more load (loadcap), so it loses less
+			// grip to load sensitivity.
+			float mu = 1.00;
+			float crr = 0.010;
+			float carcass = 0.95;
+			compound_frictn_x = 1.0;
+			if (compound == tcSPORT)
+			{
+				mu = 1.10; crr = 0.011; carcass = 1.00;
+			} else
+			if (compound == tcSUPERSPORT)
+			{
+				mu = 1.30; crr = 0.013; carcass = 1.15;
+			} else
+			if (compound == tcDRAGRADIAL)
+			{
+				// soft sidewall and a wrinkle-wall carcass: weak sideways,
+				// strong in a straight line
+				mu = 1.05; crr = 0.015; carcass = 0.75; compound_frictn_x = 1.35;
+			}
+			insider_friction = mu * 1.537939 * grip_factor;
+//			insider_friction = friction * (0.5+0.5*(tyre_width/275.0)) * fric_mul * grip_factor;
+
+			float t = profile_ratio*optimal_inflation/inflation;
+
+			// OpenSLRR (#450): the host's nominal load is loadcap/2, 4000 N for a
+			// 205 mm tyre, growing with the width and a little with the pressure.
+			loadcap = 8000.0*(tyre_width/205.0)*Math.pow(pressure,0.25);
+//			loadcap = 4000.0+(0.75+profile_ratio/0.4*0.25)*(0.9+0.1*t)*(tyre_width-165.0)*9.81*load_mul*1.350/friction/fric_mul; // tyre: max load capacity (Ns = kgs*gravity)
+//			loadcap /= rubber_rigidity;
+			CPatchMaximumAngle = Math.DEG2RAD * (CPatchMinA+(0.6+(405.0-tyre_width)/405.0*0.4) /* *misinflation */ *profile_ratio*(CPatchMaxA-CPatchMinA));
+//			System.log(name+"->CPatchMaximumAngle = "+CPatchMaximumAngle);
+			// OpenSLRR (#450): cornering stiffness per unit load from the sidewall
+			// (aspect ratio to the 1/4 power, 17.68 for a 45-series sport tyre),
+			// the carcass and the rim fit. The stock formula put every low-profile
+			// tyre at its clamp of 40.
+			stiffness = 17.68*Math.pow(0.45/profile_ratio,0.25)*carcass*(1.0-slide_interval)*stiffness_factor;
+//			stiffness = -18.0+(1.0-slide_interval)*(1.0-profile_ratio)*stiffness_factor*80.0;
+			stiffness = clampTo(stiffness,6.0,40.0);
+			radius = max_radius; // min_radius+(max_radius-min_radius)/misinflation;
+			// OpenSLRR (#450): real rolling resistance coefficients (0.004 before),
+			// lower when over-inflated, higher when under-inflated.
+			rollres = crr/Math.sqrt(pressure);
+//			rollres = misinflation*min_rollres;//*(1.0-(tyre_width-215.0)/1000.0);		// tyre: rolling resistance - hungarian note: az inflation fuggvenye
+
+			setMaxWear((0.15+(rubber_rigidity*rubber_rigidity*rubber_rigidity*rubber_rigidity)*0.85)*50000000000.0*misinflation);
+
+			par_8 = 1.055+(insider_friction-default_fric)*0.045;
+		}
+
+		WheelRef w = getWheel();
+
+		if (w)
+		{
+			w.setSliction( sliction );
+			w.setPacejka( 1, 0.0 );
+			w.setFriction( insider_friction );
+			w.setPacejka( 3, 0.000 );//0.013 );
+			w.setStiffness( stiffness );
+			w.setPacejka( 5, 0.0 );
+			w.setPacejka( 6, 0.0 );
+			w.setPacejka( 7, 0.0 );
+			w.setPacejka( 8, -1.00000 );//par_8 );
+			w.setPacejka( 9, 0.0 );
+			w.setPacejka( 10, 0.0 );
+			w.setMaxLoad( loadcap );
+			w.setPacejka( 12, 1.0 );//0.2 );
+//			w.setPacejka( 15, load_progress ); // nevleges load a 'stiffness'-hez
+//			w.setPacejka( 16, load_progress ); // +load ; 15+16 -nal lesz fel 'stiffness' ertek
+			w.setFrictn_x( compound_frictn_x );	// OpenSLRR (#450): was 1.0 for every compound
+			w.setLoadSmooth( 0.4 );
+
+			w.setRadius( radius );
+			w.setWidth( tyre_width/1000.0 );
+			w.setRollRes( rollres );
+			// OpenSLRR: the lateral relaxation length grows as the pressure falls,
+			// and with the sidewall (#450): 0.3 m for a 113 mm sidewall (205/55).
+			if (optimal_inflation > 0.0)
+				w.setRelaxation( 0.3*Math.sqrt(profile_height/(113.0*inflation/optimal_inflation)) );
+			w.setTyreSpec( rubber_type );
+			w.setBearing( 20.0 );
+
+			/*
+			System.log("Pacejka vars for tyre #"+getWheelID()+" ("+name+")");
+			System.log("  Sliction: "+sliction);
+			System.log("  #1: "+0.0);
+			System.log("  Friction: "+friction);
+			System.log("  #3: "+0.000 );//0.013 );
+			System.log("  Stiffness: "+stiffness);
+			System.log("  #5: "+0.0);
+			System.log("  #6: "+0.0);
+			System.log("  #7: "+0.0);
+			System.log("  #8: "+(-1.00000) );//par_8 );
+			System.log("  #9: "+0.0);
+			System.log("  #10: "+0.0);
+			System.log("  Load capacity: "+loadcap);
+			System.log("  #12: "+1.0 );//0.2 );
+			System.log("  Friction-x: "+1.0);
+			System.log("  LoadSmooth: "+0.4);
+			*/
+
+			int whlID = getWheelID();
+
+			if ((whlID>=0) && ((whlID % 2)==1))
+				setSlotPos(1, new Vector3(0.0,0.0,0.0), new Ypr(0.0,0.0,0.0) );
+			else
+				setSlotPos(1, new Vector3(0.0,0.0,0.0), new Ypr(Math.PI,0.0,0.0) );
+		}
+	}
+
+	public void SetupRubber( int RT )
+	{
+		String compound_label;
+		rubber_type = RT;
+		compound = RT;
+
+		if (RT == tcSPORT) // sport tyre //
+		{
+			rubber_rigidity	=    0.900;
+			load_mul	=    0.800*load_mul2;
+			min_rollres	=    0.005*roll_res_mul;		// tyre: depends on contact patch
+			friction	=    default_fric/rubber_rigidity;	// tyre: static friction (compound efficiency)
+			sliction	=    0.740*slic_mul;		// tyre: slip ratio (sliction*friction = slipfriction)
+			frictn_x	=    1.000;			// tyre: longitudinal friction and sliction * ratio = horizontal friction and sliction
+			loadsmooth	=    0.300;
+			compound_label	= " medium compound sport tyre";
+			police_check_fine_value = 0.0;
+		} else
+		if (RT == tcSUPERSPORT) // supersport tyre //
+		{
+			rubber_rigidity	=    0.750;
+			load_mul	=    0.800*load_mul2;
+			min_rollres	=    0.004*roll_res_mul;		// tyre: depends on contact patch
+			friction	=    default_fric/rubber_rigidity;	// tyre: static friction (compound efficiency)
+			sliction	=    0.760*slic_mul;		// tyre: slip ratio (sliction*friction = slipfriction)
+			frictn_x	=    1.000;			// tyre: longitudinal friction and sliction * ratio = horizontal friction and sliction
+			loadsmooth	=    0.250;
+			compound_label	= " soft compound racing tyre";
+			police_check_fine_value = 50.0;
+		} else
+		if (RT == tcDRAGRADIAL) // drag-radial //
+		{
+			rubber_rigidity	=    0.550;
+			load_mul	=    1.800*load_mul2;
+			min_rollres	=    0.002*roll_res_mul;		// tyre: depends on contact patch
+			friction	=    default_fric/rubber_rigidity;	// tyre: static friction (compound efficiency)
+			sliction	=    0.720*slic_mul;		// tyre: slip ratio (sliction*friction = slipfriction)
+			frictn_x	=    1.000;			// tyre: longitudinal friction and sliction * ratio = horizontal friction and sliction
+			loadsmooth	=    0.750;
+			compound_label	= " drag radial";
+			police_check_fine_value = 50.0;
+		}
+		else
+		if (RT == tcSTREET) // street tyre //
+		{
+			rubber_rigidity	=    1.000;
+			load_mul	=    0.750*load_mul2;
+			min_rollres	=    0.0055*roll_res_mul;		// tyre: depends on contact patch
+			friction	=    default_fric/rubber_rigidity;	// tyre: static friction (compound efficiency)
+			sliction	=    0.695*slic_mul;		// tyre: slip ratio (sliction*friction = slipfriction)
+			frictn_x	=    1.000;			// tyre: longitudinal friction and sliction * ratio = horizontal friction and sliction
+			loadsmooth	=    0.500;
+			compound_label	= " hard compound street tyre";
+			police_check_fine_value = 0.0;
+		}
+		else
+		{
+			rubber_rigidity	=    1.000;
+			load_mul	=    0.750*load_mul2;
+			min_rollres	=    0.0055*roll_res_mul;		// tyre: depends on contact patch
+			friction	=    default_fric/rubber_rigidity;	// tyre: static friction (compound efficiency)
+			sliction	=    0.695*slic_mul;		// tyre: slip ratio (sliction*friction = slipfriction)
+			frictn_x	=    1.000;			// tyre: longitudinal friction and sliction * ratio = horizontal friction and sliction
+			loadsmooth	=    0.500;
+			compound_label	= " tyre";
+			police_check_fine_value = 0.0;
+		}
+		friction = (1.3+(friction-1.0)/0.8*0.4)*1.15;
+		value /= rubber_rigidity;
+		brand_new_prestige_value = 25.0/rubber_rigidity + tyre_width/10.0-20.0;
+		name = name_prefix + " " + tyre_size_label+compound_label;
+	}
+
+	public void calcStuffs()
+	{
+		for (minRimWidth_i=0; minRimWidth_i<21; minRimWidth_i++)
+			if (render_types[minRimWidth_i])
+			{
+				minRimWidth = minRimWidth_i*0.5+5.0;
+				break;
+			}
+
+		for (maxRimWidth_i=20; maxRimWidth_i>=0; maxRimWidth_i--)
+			if (render_types[maxRimWidth_i])
+			{
+				maxRimWidth = maxRimWidth_i*0.5+5.0;
+				break;
+			}
+			
+		float R = wheel_radius*2.0/25.4;
+		description = "This "+name+" is a "+Float.toString(tyre_width, "%1.0f mm wide ")+" tyre, that's diameter is "+Float.toString(R, "%1.0f inch at the rims and the height of its sidewalls is ")+Float.toString(profile_height, "%1.0f mm. ")+Float.toString(R, "It is compatible with all %1.0f inch rims ")+Float.toString(minRimWidth, "that are between %1.1f and ")+Float.toString(maxRimWidth, "%1.1f inch in width.");
+
+		if (police_check_fine_value > 0.0)
+			description = description + Float.toString(police_check_fine_value, " This tyre is not street legal! Police may fine you up to $%1.0f!");
+	}
+
+	public String installCheck( Part p, int[] slotId )
+	{
+		if (p)
+		{
+			if (p instanceof Wheel)
+			{
+				Wheel wheel = p;
+				int wr1=wheel.wheel_radius*1000.0;
+				int wr2=wheel_radius;
+				if (wr1 != wr2)
+					return "The tyre inner radius does not match the rim!";
+				else
+				if (wheel.rim_width > maxRimWidth)
+					return "This tyre is too narrow for this rim!";
+				else
+				if (wheel.rim_width < minRimWidth)
+					return "This tyre is too wide for this rim!";
+
+				return null;
+			}
+			else
+				return "Tyres can only be installed on rims!";
+		}
+		//else
+		return "There's nothing to install this part to!";
+	}
+
+	public void SetupTyre( float W, float r, float R, float rW, int compound_type )
+	{
+		SetupTyre( W, r, R, rW, compound_type, -1.0 );
+	}
+
+	public void SetupTyre( float W, float r, float R, float rW, int compound_type, float optI )
+	{
+		value = HUF2USD(W*80+2500*(R-13.0));
+
+		wheel_radius	= R*25.4/2.0;
+		tyre_width	= W;
+		profile_ratio	= r/100.0;
+		if (optI > 0.0)
+			optimal_inflation = optI;
+		slide_cm	= (tyre_width-rW*25.4)/10.0;
+		slide_interval	= (tyre_width-rW*25.4)/tyre_width; // Sala: percentage to the tyre width //
+		if (slide_interval < 0.0)
+			slide_interval = 0.0;
+		if (slide_interval > 1.0)
+			slide_interval = 1.0;
+
+		profile_height	= tyre_width*profile_ratio;
+		max_radius      = (wheel_radius+profile_height)/1000.0; // Sala: mm -> m //
+		min_radius      = wheel_radius/1000.0; // Sala: 1.5cm more than rim diameter, mm -> m //
+		if (max_radius < min_radius)
+			min_radius = max_radius-0.01;
+
+		SetupRubber(compound_type);
+		if (optI > 0.0)
+			SetInflation(optimal_inflation);
+	}
+
+	public void updatevariables()
+	{
+		SetInflation(inflation,1);
+	}
+
+	public void load( File saveGame )
+	{
+		super.load( saveGame );
+
+		int	save_ver = saveGame.readInt();
+
+		if (save_ver >= 1)
+		{
+			inflation = saveGame.readFloat();
+		}
+		if (save_ver >= 2)
+		{
+			flat_spot = saveGame.readFloat();
+			flat_spot_angle = saveGame.readFloat();
+		}
+	}
+
+	public void save( File saveGame )
+	{
+		super.save( saveGame );
+
+		int	save_ver = 2;	// OpenSLRR (#461): 2 adds the flat spot
+
+		saveGame.write( save_ver );
+		if (save_ver >= 1)
+		{
+			saveGame.write( inflation );
+		}
+		if (save_ver >= 2)
+		{
+			saveGame.write( flat_spot );
+			saveGame.write( flat_spot_angle );
+		}
+	}
+
+	// OpenSLRR (#461): a repair in the garage trues the tread again.
+	public void repair()
+	{
+		super.repair();
+		flat_spot = 0.0;
+		flat_spot_angle = 0.0;
+	}
+
+	//---------tuning
+	public int isTuneable()
+	{
+		return 1;
+	}
+
+	// backup values //
+	float	old_inflation;	
+	float	new_inflation;
+
+	public void buildTuningMenu( Menu m )
+	{
+		old_inflation = inflation;
+		new_inflation = inflation;
+		m.addItem( "Inflation",		1, inflation, 0.5, optimal_inflation*1.5, (optimal_inflation*1.5-0.5)/0.1+1, null ).changeVLabelText( Float.toString(new_inflation, "%1.2f bar")+Float.toString(new_inflation*14.7, " (%1.2f psi)"));
+	}
+
+	public void endTuningSession( int cancelled )
+	{
+		if( cancelled )
+		{
+			SetInflation(old_inflation,1);
+		}
+		else
+		{
+			SetInflation(new_inflation,1);
+			GameLogic.spendTime(1*60);
+		}
+
+		getCar_LocalVersion();
+		if (the_car)
+			the_car.forceUpdate();
+	}
+
+	public void handleMessage( Event m )
+	{
+		if( m.cmd == 1 )
+		{
+			new_inflation = ((Slider)m.gadget).value;
+			((Slider)m.gadget).changeVLabelText( Float.toString(new_inflation, "%1.2f bar")+Float.toString(new_inflation*14.7, " (%1.2f psi)"));
+		}
+	}
+	//---------tuning
+}

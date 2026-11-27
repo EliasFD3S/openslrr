@@ -1,9 +1,13 @@
 #pragma once
+#include "slrr/brake_system.hpp"
+#include "slrr/ground_surface.hpp"
 #include "slrr/tire_model.hpp"
+#include "slrr/tyre_thermal.hpp"
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 namespace slrr::physics {
 // Script-space metres, kilograms and seconds. Renderer handedness stays
@@ -57,6 +61,7 @@ public:
   void set_omega(Vec3 angular_velocity);
   Vec3 point_velocity(Vec3 point) const;
   void add_force(Vec3 force, Vec3 point);
+  void add_torque(Vec3 torque) { torque_ += torque; }
   void impulse(Vec3 impulse, Vec3 point);
   void integrate(double dt);
   // Split semi-implicit integration for constraints that must remove slip
@@ -74,10 +79,45 @@ private:
 struct GroundHit {
   double height = 0;
   Vec3 normal{0, 1, 0};
+  // The ground material (#452): see GroundSurface.
+  GroundSurface surface;
 };
 // from_y is a ray origin/ceiling, not a default ground height. False = air.
 using Terrain =
     std::function<bool(double x, double z, double from_y, GroundHit &)>;
+// Real-life aerodynamics (ENGINE_CONTRACT §11): ½ρv² forces from the air
+// velocity relative to the car, with typical road-car coefficients.
+// The mean wind of a weather report: m/s at 10 m height, blowing towards
+// `heading` (degrees from +Z towards +X).
+struct Wind {
+  double speed = 0, heading = 0;
+};
+// Air velocity (world m/s) at car height at a world position and time: the
+// mean wind reduced by the log wind profile, plus gusts that travel with it.
+Vec3 wind_velocity(const Wind &wind, Vec3 position, double seconds);
+struct AeroWing {
+  // One face of a wing in chassis-frame metres: unit normal, planform m².
+  Vec3 position, normal;
+  double area = 0;
+};
+struct Aerodynamics {
+  // Chassis.C_drag (kg/m): the extra drag of missing body panels, against
+  // the velocity of drag_center (chassis frame) above 1 m/s.
+  double drag = 0;
+  Vec3 drag_center;
+  // Drag and lift of the body, sized by the rigid body's bounds.
+  bool body = false;
+  std::vector<AeroWing> wings;
+  // Air velocity around the car (world m/s); every force uses the car's
+  // velocity relative to it.
+  Vec3 wind;
+};
+// Resultant aerodynamic force (world) and its torque about the centre of
+// mass for one step of `dt`, as VehicleDynamics applies it.
+struct AeroLoad {
+  Vec3 force, torque;
+};
+AeroLoad aero_load(const Aerodynamics &aero, const RigidBody &body, double dt);
 struct WheelConfig {
   bool enabled = false;
   // Fixed suspension travel with compliant tyre/bump-stop support.
@@ -85,6 +125,9 @@ struct WheelConfig {
   bool metal_contact = false; // no installed rim/tyre, only hub hardware
   Vec3 center, down{0, -1, 0};
   double radius = 0, rest = 0, minimum = 0, maximum = 0;
+  // Half the tyre width (m). The linked contact samples the tyre footprint
+  // across it; zero samples the centre line only (#380).
+  double half_width = 0;
   // CFG spring base + travel, independent of the tunable spring rest length.
   // Zero is the generic kernel fallback (anchor at rest length).
   double anchor = 0;
@@ -111,13 +154,57 @@ struct WheelState {
   // reserved legacy field; the intended solver does not add it to the load.
   double length = 0, speed = 0, force = 0, jacking = 0;
   Vec3 center, normal{0, 1, 0}, hub, patch;
+  // The ground under the tread (#452): friction and rolling averaged over
+  // the tread samples, the rest from the centre.
+  GroundSurface surface;
   Quaternion hub_rotation;
+  // The steering axis in the hub's frame (CornerFrames::steer_axis, #458).
+  Vec3 steer_axis{0, 1, 0};
   double spin = 0, rotation = 0;
   double slip_speed = 0, lateral_speed = 0;
+  // Relaxed tan(slip angle): the tyre's lateral deflection builds over its
+  // relaxation length instead of following the slip at once (#383).
+  double slip_angle = 0;
   // Unspent brake/bearing budget at the patch (N s), not free tyre grip.
   double holding_impulse = 0;
+  // Rotor temperature (deg C) and the service brake pressure reaching the
+  // caliper after ABS/ASR, as a fraction of full pedal (#446).
+  double brake_temperature = kAmbientTemperature, brake_pressure = 0;
+  // Brake fluid in the caliper (deg C) and the tyre's tread and carcass.
+  double fluid_temperature = kAmbientTemperature;
+  TyreTemperature tyre_temperature;
+  // Hot gauge pressure (bar, 0 when not known) and the tread's wear work so
+  // far: the sliding joules, each weighted by tyre_wear_weight (#461). The
+  // host turns its growth into the tyre part's wear.
+  double tyre_pressure = 0, wear_work = 0;
+  // A puncture's deflation, 0 inflated to 1 flat; the tyre's vertical rate
+  // (N/m, from the pressure and the deflation; 0 is the stock 250 kN/m);
+  // rim strikes so far (the tyre squashed to the rim while closing fast,
+  // which pinches it) and whether it is on the rim now (#461).
+  double deflation = 0, tyre_rate = 0;
+  int rim_strikes = 0;
+  bool on_rim = false;
+  // Flat spot (#461): a locked wheel sliding on one place of its tread
+  // grinds it flat there. Its depth (m) and the wheel rotation at which it
+  // touches the ground; while locked, the spot being ground (it replaces
+  // the old one once deeper); the support it takes away now (m), as the
+  // spot rolls under the patch; and the tyre it belongs to.
+  double flat_spot = 0, flat_spot_angle = 0;
+  double lock_spot = 0, lock_angle = 0, flat_drop = 0;
+  bool locked = false;
+  std::uintptr_t flat_tyre = 0;
+  int flat_serial = 0;
   TireForces tire_force{};
 };
+// Sliding joules (weighted by tyre_wear_weight) that grind one millimetre
+// of flat spot: a locked stop from 100 km/h (about 170 kJ on a front tyre)
+// leaves about 1 mm (#461).
+inline constexpr double kFlatSpotEnergy = 1.7e8;  // J per metre of depth
+// Depth at which a flat spot reaches the cords and the tyre blows out.
+inline constexpr double kFlatSpotCords = .006;
+// Closing speed (m/s) at which a tyre squashed to its rim pinches, at its
+// working pressure; a soft tyre pinches sooner (#461).
+inline constexpr double kPinchSpeed = 2.5;
 // Optional host anti-roll approximation, in N/m and N s/m. Invalid or
 // negative coefficients act as zero; no installed bar means both stay zero.
 struct AntiRollConfig {
@@ -127,6 +214,24 @@ struct DriveWheel {
   double weight = 0, steer = 0, brake = 0, handbrake = 0, bearing = 0;
   double rolling_resistance = 0;
   TireParameters tyre;
+  // Pad, rotor and diameter from WheelRef.setBrakeSpec (#446); unspecified
+  // brakes stay cold and never fade.
+  BrakeHardware hardware;
+  // Compound and size from WheelRef.setTyreSpec (#446); unspecified tyres
+  // stay at ambient with their scripted grip.
+  TyreThermalSpec tyre_heat;
+  // The Tyre script's cold gauge pressure (bar, its `inflation`; 0 when not
+  // known) and the tyre part's condition (1 new, 0 worn out), #461.
+  double inflation = 0, tread_wear = 1;
+  // A punctured tyre (#461): 0 sound, 1 a slow leak (a pinch), 2 a blowout.
+  int puncture = 0;
+  // Which tyre is fitted (any value that changes with the tyre part; 0
+  // none) and the flat spot it carries (#461): depth (m) and angle, as the
+  // Tyre saved them. The solver takes them when the tyre or flat_serial
+  // changes (a tyre fitted, a game loaded, a repair).
+  std::uintptr_t tyre_id = 0;
+  double flat_spot = 0, flat_spot_angle = 0;
+  int flat_serial = 0;
 };
 struct DriveInput {
   bool native_traffic = false; // SLRR_rev TrafficVehicle tyre-force driver.
@@ -137,11 +242,19 @@ struct DriveInput {
   bool automatic_first = false;
   double throttle = 0, brake = 0, handbrake = 0;
   double brake_scale = 0, handbrake_scale = 0, bearing_scale = 0;
+  // Driving aids (Options ABS / ASR sliders, #446): 0 off, 1 the tightest
+  // slip targets.
   double abs_strength = 0;
-  double launch_help = 0;
+  double asr_strength = 0;
+  // Rear proportioning valve (#446): above `knee` (a fraction of full
+  // pedal) the rear pressure rises by `slope` only. Knee 0 disables it; an
+  // active ABS replaces it with its electronic distribution.
+  double rear_valve_knee = 0, rear_valve_slope = 1;
   double differential_lock = 0;
   double inertia = 0, idle = 0, limit = 0, starter = 0;
   double clutch = 1;
+  // Net open-throttle crank torque (Nm) at the requested rpm, including
+  // the shared mechanical friction loss; the solver applies no extra gain.
   std::function<double(double)> torque;
   // Optional wet dyno bank. Empty/zero leaves the existing dry drive unchanged.
   std::function<double(double)> nitro_torque;
@@ -151,12 +264,26 @@ double suspension_force(double length, double velocity, double rest,
                         double maximum, double spring, double bump,
                         double rebound);
 
+// Compile all consumers with the same experimental solver rate (#203).
+// The game additionally requires a multiple of its 60 Hz shared-world tick.
+#ifndef SLRR_VEHICLE_PHYSICS_HZ
+#define SLRR_VEHICLE_PHYSICS_HZ 1000
+#endif
+
 class VehicleDynamics {
 public:
-  // SLRR_rev physics-timing.ts driving frequency.
-  static constexpr unsigned frequency = 120;
-  static constexpr unsigned update_frequency = 60;
-  static constexpr double timestep = 1.0 / frequency;
+  // Solver rate (#380). SLRR_VEHICLE_PHYSICS_HZ is the start value;
+  // set_frequency changes it at run time (Physics Lab, physics thread). All
+  // vehicles share it: change it only while no solver step is running.
+  static inline unsigned frequency = SLRR_VEHICLE_PHYSICS_HZ;
+  static constexpr unsigned update_frequency = 60;  // host script tick
+  static_assert(SLRR_VEHICLE_PHYSICS_HZ >= 60, "solver rate must be at least 60 Hz");
+  static inline double timestep = 1.0 / SLRR_VEHICLE_PHYSICS_HZ;
+  static void set_frequency(unsigned hz);
+  // Solver steps in host tick number `tick` (0-based, counted from any fixed
+  // origin): floor((tick+1) f / 60) - floor(tick f / 60). Always f/60 when 60
+  // divides f; 16 or 17 at 1000 Hz.
+  static unsigned steps_in_host_tick(uint64_t tick);
   RigidBody body;
   struct Impact {
     Vec3 point, normal;
@@ -178,12 +305,30 @@ public:
   // is created when the runtime supplies none. Contact is floor-only.
   std::array<Vec3, 8> body_supports{};
   std::size_t body_support_count = 0;
+  // Hanging engine hardware (exhausts, mufflers, the sump), body frame
+  // (#467): they scrape rather than carry the car. Each gives on its
+  // hangers or mounts first, then the pipe or the pan hits, sliding at metal
+  // friction.
+  std::array<Vec3, 8> scrape_points{};
+  std::size_t scrape_count = 0;
+  // A mesh that the static ride height puts into level ground would drag
+  // the car at rest and on every straight: the host raises such a point to
+  // 5 mm above the ground the parked car stands on (m, body up), so it
+  // scrapes only when the body comes lower than at rest.
+  std::array<double, 8> scrape_lift{};
   DriveInput drive;
+  Aerodynamics aero;
   double engine_omega = 0;
   bool engine_running = false;
   int gear = 0;
   uint64_t ticks = 0;
-  unsigned advance(double seconds, const Terrain &terrain);
+  // Runs the whole solver steps owed after adding `seconds`, at most one host
+  // tick's worth. With `merge`, all owed steps run as one step of their total
+  // length: distant traffic steps at a fraction of the rate (#380). Returns
+  // the solver steps consumed.
+  unsigned advance(double seconds, const Terrain &terrain, bool merge = false);
+  // Adds time without stepping; a later advance runs it.
+  void defer(double seconds) { accumulator_ += seconds; }
   void reset_clock();
   void release_wheels();
   void reset_drive();
@@ -191,16 +336,31 @@ public:
   double engine_limit_fraction() const;
   uint64_t backlog() const;
   void sync_wheels();
+  // Driving aids at the last step (#446), for the HUD and the debug view.
+  bool abs_active() const { return abs_.active(); }
+  bool asr_active() const { return asr_.active(); }
+  double reference_speed() const { return reference_.speed(); }
 
 private:
   double accumulator_ = 0;
+  double dt_ = timestep;  // length of the step being run
   double previous_rpm_ = 0, shift_time_ = 0;
   double starter_remaining_ = 0, service_brake_ = 0;
-  double launch_factor_ = 1;
+  // What the ABS/ASR controller measures (#446): the forward speed of the
+  // previous step (for the accelerometer), the wheel circumferential speeds
+  // and their filtered rates.
+  double forward_speed_previous_ = 0, travel_direction_ = 1;
+  bool sensors_seeded_ = false;
+  std::array<double, 4> wheel_speed_previous_{}, wheel_acceleration_{};
+  ReferenceSpeed reference_;
+  AbsModulator abs_;
+  TractionControl asr_;
+  // How far the auto clutch is opened for a hard stop, 0..1 (#448).
+  double braking_clutch_ = 0;
   int previous_shift_ = 0;
   bool accelerator_down_ = false, forced_reverse_ = false;
-  bool launch_active_ = false;
   void step(const Terrain &terrain);
+  void apply_aero();
   void step_drive();
   void update_gear(double rpm, double shaft, double road_shaft);
 };

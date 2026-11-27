@@ -168,6 +168,19 @@ bool Jvm::bootstrap_classpath() {
       std::string package="java.game.parts."+suffix;std::replace(package.begin(),package.end(),'/','.');
       classpath_.push_back({"parts/scripts/"+suffix,package});
     }
+  // Any other system/Scripts folder is its java.* package, as in the stock
+  // engine: system/Scripts/render/osdx holds java.render.osdx.
+  const std::filesystem::path system_root=std::filesystem::path(game_root_)/"system/Scripts";
+  if(std::filesystem::is_directory(system_root,directory_error))
+    for(const auto& entry:std::filesystem::recursive_directory_iterator(system_root,directory_error)) {
+      if(!entry.is_directory())continue;
+      const auto suffix=entry.path().lexically_relative(system_root).generic_string();
+      if(suffix=="src"||suffix.ends_with("/src")||suffix.find("/src/")!=std::string::npos)continue;
+      std::string package="java."+suffix;std::replace(package.begin(),package.end(),'/','.');
+      const std::string dir="system/Scripts/"+suffix;
+      if(std::none_of(classpath_.begin(),classpath_.end(),[&](const auto& root){return root.first==dir;}))
+        classpath_.push_back({dir,package});
+    }
   classpath_ready_ = true;
   std::printf("[jvm] classpath ready (%zu roots) under %s\n", classpath_.size(),
               game_root_.c_str());
@@ -911,7 +924,7 @@ Value Jvm::invoke_by_name(const std::string& class_fqn,
       if (osd) {
         std::vector<Value> again = call_args;
         again.insert(again.begin(), Value::make_obj(osd));
-        return invoke_by_name("java.render.Osd", method, again, false);
+        return invoke_by_name(osd->class_name, method, again, false);
       }
     }
     std::fprintf(stderr, "[jvm] invoke_by_name miss %s.%s argc=%d\n",

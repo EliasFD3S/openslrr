@@ -68,6 +68,15 @@ struct OsdWidget {
   Object* value_str = nullptr;
   Object* gadget = nullptr;
   void* text_key = nullptr;
+  // OSD v2 (docs/ui/osd-v2.md): the owner Osd called OsdHost.attach. The
+  // widget draws as written (texture, tint, z order) and its hit box sends
+  // EVENT_CURSOR to the box's parent GameRef; no role is guessed.
+  bool plain = false;
+  float z = 0.f;                 // RenderRef matrix z (Osd priority * LAYER_FACTOR)
+  uint32_t tint = 0xFFFFFFFFu;   // ARGB, OsdHost.tint
+  float fade = 1.f;              // alpha factor, OsdHost.fade (OsdAnimator)
+  Object* phy = nullptr;         // PhysicsRef of a hit box
+  Object* event_group = nullptr; // its parent GameRef (the Group)
 };
 
 void osd_clear_widgets();
@@ -198,5 +207,21 @@ void osd_pixel_to_text(int32_t px, int32_t py, int32_t fb_w, int32_t fb_h,
 void osd_on_field_write(Object* recv, const std::string& field);
 // Group.setFlags(WORLDTREELEAF) hides that group; clearFlags shows it.
 void osd_on_group_leaf(Object* group, bool leaf);
+
+// OSD v2 (docs/ui/osd-v2.md). OsdHost.attach(osd) opts an Osd in: its
+// widgets are plain, and the pointer over its hit boxes becomes
+// EVENT_CURSOR calls on the box's parent GameRef (Group.handleEvent), with
+// the stock parameter layout. The legacy hover/click/slider code skips it.
+void osd_cursor_attach(Object* osd);
+bool osd_cursor_osd(const Object* osd);
+// Delivers handleEvent(GameRef, int, String) to a listener.
+using OsdCursorFn = std::function<void(Object* group, Object* phy, const std::string& param)>;
+void osd_set_cursor_dispatch(OsdCursorFn fn);
+// Pointer input in OSD text coordinates. Each returns true when an attached
+// Osd took it, so the legacy path must not act on it.
+bool osd_cursor_move(float osd_x, float osd_y);
+bool osd_cursor_button(bool down, float osd_x, float osd_y);
+void osd_cursor_reset();
+void osd_set_widget_tint(int32_t index, uint32_t argb);
 
 }  // namespace slrr

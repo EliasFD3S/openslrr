@@ -8,10 +8,12 @@ void snapshot_contract() {
   perf::end_frame();
   perf::add(perf::Zone::Traffic, 2000000);
   perf::add(perf::Zone::Physics, 3000000);
+  perf::add(perf::Zone::Interpolation, 500000);
   perf::end_frame();
   auto s = perf::snapshot();
   SLRR_REQUIRE(s.ready && s.zones[size_t(perf::Zone::Traffic)] == 2 &&
-               s.zones[size_t(perf::Zone::Physics)] == 3);
+               s.zones[size_t(perf::Zone::Physics)] == 3 &&
+               s.zones[size_t(perf::Zone::Interpolation)] == .5);
   perf::end_frame();
   s = perf::snapshot();
   SLRR_REQUIRE(s.ready && s.zones[size_t(perf::Zone::Traffic)] == 0);

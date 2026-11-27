@@ -216,11 +216,16 @@ float lampTileVisibilityFast(mat4 sampleMatrix,vec4 tileInfo,vec2 size,vec3 worl
 // Car lights (#279) are spot lamps: lightData(192+i,0) holds the beam
 // direction and the cosine of the outer half-angle, lightData(128+i,0).w the
 // inner one. Omnidirectional lamps (street lamps) store an outer cosine of -2.
+// lightData(128+i,2).x is the low-beam cutoff: that share of the light goes
+// above the beam axis (+1 to +3.4 degrees), so trees and walls ahead are not
+// lit like the road the beam is aimed at.
 float lampCone(int i,vec3 toward)
 {
     vec4 spot=lightData(192+i,0);
     if(spot.w<-1.5) return 1.0;
-    return smoothstep(spot.w,lightData(128+i,0).w,dot(-toward,spot.xyz));
+    float cone=smoothstep(spot.w,lightData(128+i,0).w,dot(-toward,spot.xyz));
+    float above=-toward.y-spot.y;
+    return cone*(1.0-lightData(128+i,2).x*smoothstep(0.02,0.06,above));
 }
 vec3 lampRadiance(int i,vec3 n,vec3 delta,float d2)
 {
@@ -422,93 +427,68 @@ float shadowCubicWeight(float distance) {
     return x<1.0?(4.0-6.0*x*x+3.0*x*x*x)/6.0:
            x<2.0?pow(2.0-x,3.0)/6.0:0.0;
 }
-float fieldReceiverTap(vec2 uv,vec3 p,vec2 receiverUv,vec2 gradient,float scale,float bias) {
-    float depth=p.z+dot(gradient,(uv-receiverUv)/scale)-bias;
-    return shadow2D(s_staticShadow,vec3(uv,depth));
-}
-float shadowTapField(vec3 p,vec2 tile,float scale,float bias,vec2 gradient)
+SAMPLER2DSHADOW(s_staticShadowPrev, 13);
+uniform mat4 u_shadowCascadesPrev[4];
+// x: weight of the previous sun direction's atlas while the shadows
+// crossfade after a sun step (#371); 0 outside a crossfade.
+uniform vec4 u_shadowBlend;
+#define SHADOW_ATLAS s_staticShadow
+#define SHADOW_CASCADES u_shadowCascades
+#define SHADOW_FIELD_TAP fieldReceiverTap
+#define SHADOW_TAP_FIELD shadowTapField
+#define SHADOW_CASCADE_VISIBILITY cascadeVisibility
+#define SHADOW_COVERAGE 0
+#include "scene_shadow_cascade.sh"
+#undef SHADOW_ATLAS
+#undef SHADOW_CASCADES
+#undef SHADOW_FIELD_TAP
+#undef SHADOW_TAP_FIELD
+#undef SHADOW_CASCADE_VISIBILITY
+#undef SHADOW_COVERAGE
+#define SHADOW_ATLAS s_staticShadowPrev
+#define SHADOW_CASCADES u_shadowCascadesPrev
+#define SHADOW_FIELD_TAP fieldReceiverTapPrev
+#define SHADOW_TAP_FIELD shadowTapFieldPrev
+#define SHADOW_CASCADE_VISIBILITY cascadeVisibilityPrev
+#define SHADOW_COVERAGE 1
+#include "scene_shadow_cascade.sh"
+#undef SHADOW_ATLAS
+#undef SHADOW_CASCADES
+#undef SHADOW_FIELD_TAP
+#undef SHADOW_TAP_FIELD
+#undef SHADOW_CASCADE_VISIBILITY
+#undef SHADOW_COVERAGE
+// Tyre smoke's shadow (#454): an orthographic map from the sun fitted to the
+// smoke, rgb what the smoke lets through, a the light depth of its front.
+// Only receivers below that front darken. Level 0: no gradient needed.
+SAMPLER2D(s_smokeShadow, 14);
+uniform mat4 u_smokeShadowMtx;
+uniform vec4 u_smokeShadowParams; // enabled, depth tolerance
+float smokeShadowTransmit(vec3 world)
 {
-    float edge=min(min(p.x,1.0-p.x),min(p.y,1.0-p.y));
-    float texel=u_staticShadowParams.y/scale;
-    if(edge<=texel*2.0 || p.z<=0.0 || p.z>=1.0) return 1.0;
-    vec2 atlasTexel=vec2(u_staticShadowParams.y,u_staticShadowParams.y);
-    vec2 uv=p.xy*scale+tile;
-    vec2 grid=uv/atlasTexel-vec2(0.5,0.5);
-    vec2 base=(floor(grid)+vec2(0.5,0.5))*atlasTexel;
-    vec2 phase=fract(grid);
-    if(u_shadowFilter.x>0.5) {
-        bool wide=u_shadowFilter.x>1.5;
-        float result=0.0;
-        for(int y=-1;y<=2;++y) for(int x=-1;x<=2;++x) {
-            vec2 offset=vec2(float(x),float(y));
-            vec2 delta=offset-phase;
-            vec2 tent=max(vec2(2.0,2.0)-abs(delta),vec2(0.0,0.0))*0.25;
-            vec2 cubic=vec2(shadowCubicWeight(delta.x),shadowCubicWeight(delta.y));
-            vec2 weight=wide?tent:mix(cubic,tent,0.25);
-            vec2 q=clamp(base+offset*atlasTexel,tile+atlasTexel*0.5,tile+vec2(scale,scale)-atlasTexel*0.5);
-            result+=weight.x*weight.y*fieldReceiverTap(q,p,uv,gradient,scale,bias);
-        }
-        return result;
-    }
-    vec2 weight=u_shadowFilter.x<0.5?smoothstep(vec2(0.15,0.15),vec2(0.85,0.85),phase):phase;
-    vec2 a=base,b=base+vec2(atlasTexel.x,0.0),c=base+vec2(0.0,atlasTexel.y),d=base+atlasTexel;
-    return mix(mix(fieldReceiverTap(a,p,uv,gradient,scale,bias),fieldReceiverTap(b,p,uv,gradient,scale,bias),weight.x),
-               mix(fieldReceiverTap(c,p,uv,gradient,scale,bias),fieldReceiverTap(d,p,uv,gradient,scale,bias),weight.x),weight.y);
-}
-float cascadeVisibility(vec3 world, float distanceToEye)
-{
-    // Evaluate coordinates outside distance branches to keep their derivatives coherent.
-    vec4 w=vec4(world-u_shadowOrigin.xyz,1.0);
-    vec3 p0=mul(u_shadowCascades[0],w).xyz;
-    vec3 p1=mul(u_shadowCascades[1],w).xyz;
-    vec3 p2=mul(u_shadowCascades[2],w).xyz;
-    vec3 p3=mul(u_shadowCascades[3],w).xyz;
-    // Bias represents 2 cm along the light depth, independent of cascade size.
-    vec4 bias=vec4(.02,.02,.02,.02)/(2.0*(u_shadowRanges*1.1+vec4(768.0,768.0,768.0,768.0)));
-    // Evaluate derivatives before radial selection and correct each texel's
-    // reference depth on the receiver plane, including the widest footprint.
-    vec2 g0=shadowReceiverGradient(p0),g1=shadowReceiverGradient(p1);
-    vec2 g2=shadowReceiverGradient(p2),g3=shadowReceiverGradient(p3);
-    // A pixel quad that straddles two surfaces (pole on ground, kerb, wall/
-    // floor crease) yields an arbitrary slope; applied across the 4x4
-    // footprint it compares taps against far-off depths. Bound it to a real
-    // receiver slope of 20:1 (about 87 degrees from the light), converted to
-    // this cascade's depth/width units: width 2*extent, depth 2*(extent+768).
-    vec4 extent=u_shadowRanges*1.1;
-    vec4 slopeLimit=vec4(20.0,20.0,20.0,20.0)*extent/(extent+vec4(768.0,768.0,768.0,768.0));
-    g0=clampReceiverGradient(g0,slopeLimit.x);g1=clampReceiverGradient(g1,slopeLimit.y);
-    g2=clampReceiverGradient(g2,slopeLimit.z);g3=clampReceiverGradient(g3,slopeLimit.w);
-    // Select only the current and adjacent level; do not sample every tile.
-    float s1=step(u_shadowRanges.x,distanceToEye);
-    float s2=step(u_shadowRanges.y,distanceToEye);
-    float s3=step(u_shadowRanges.z,distanceToEye);
-    vec3 primary=mix(p0,p1,s1);
-    primary=mix(primary,p2,s2);primary=mix(primary,p3,s3);
-    vec3 adjacent=mix(p1,p2,s1);adjacent=mix(adjacent,p3,s2);
-    vec2 tile=mix(vec2(0.0,0.0),vec2(.5,0.0),s1);
-    tile=mix(tile,vec2(0.0,.5),s2);tile=mix(tile,vec2(.5,.5),s3);
-    vec2 nextTile=mix(vec2(.5,0.0),vec2(0.0,.5),s1);
-    nextTile=mix(nextTile,vec2(.5,.5),s2);
-    float primaryBias=mix(bias.x,bias.y,s1);
-    primaryBias=mix(primaryBias,bias.z,s2);primaryBias=mix(primaryBias,bias.w,s3);
-    float nextBias=mix(bias.y,bias.z,s1);nextBias=mix(nextBias,bias.w,s2);
-    float radius=mix(u_shadowRanges.x,u_shadowRanges.y,s1);
-    radius=mix(radius,u_shadowRanges.z,s2);
-    float blend=smoothstep(radius*.85,radius,distanceToEye)*(1.0-s3);
-    vec2 gradient=mix(g0,g1,s1);gradient=mix(gradient,g2,s2);gradient=mix(gradient,g3,s3);
-    vec2 nextGradient=mix(g1,g2,s1);nextGradient=mix(nextGradient,g3,s2);
-    float a=shadowTapField(primary,tile,.5,primaryBias,gradient);
-    float result=a;
-    if(blend>0.0) result=mix(a,shadowTapField(adjacent,nextTile,.5,nextBias,nextGradient),blend);
-    return mix(result,1.0,smoothstep(u_shadowRanges.w*.9,u_shadowRanges.w,distanceToEye));
+    if(u_smokeShadowParams.x<0.5) return 1.0;
+    vec3 p=mul(u_smokeShadowMtx,vec4(world,1.0)).xyz;
+    if(p.x<=0.0 || p.y<=0.0 || p.x>=1.0 || p.y>=1.0) return 1.0;
+    vec4 smoke=texture2DLod(s_smokeShadow,p.xy,0.0);
+    // Even a thick cloud lets 60 % of the sun through: it scatters as much
+    // light down as it stops.
+    return mix(1.0,max(smoke.r,0.6),smoothstep(smoke.a-u_smokeShadowParams.y,smoke.a+u_smokeShadowParams.y,p.z));
 }
 float sceneShadowVisibility(vec3 p,vec3 world)
 {
     if(u_staticShadowParams.x<=0.0) return 1.0;
     if(u_pointShadowParams.x>0.5) return pointShadowVisibility(world);
     float distanceToEye=length(world-u_staticShadowEye.xyz);
-    if(u_shadowRanges.x>0.0)
-        return mix(1.0,cascadeVisibility(world,distanceToEye),u_staticShadowParams.x);
+    if(u_shadowRanges.x>0.0) {
+        float visible=cascadeVisibility(world,distanceToEye);
+        // Crossfade from the previous sun direction (#371). A uniform branch:
+        // the derivatives inside stay in uniform control flow.
+        if(u_shadowBlend.x>0.0) {
+            float previous=cascadeVisibilityPrev(world,distanceToEye);
+            if(previous>=0.0) visible=mix(visible,previous,u_shadowBlend.x);
+        }
+        return mix(1.0,visible,u_staticShadowParams.x);
+    }
     float edge=min(min(p.x,1.0-p.x),min(p.y,1.0-p.y));
     // A fitted interior field (w=0) covers its complete footprint. The
     // projection/tap boundary already rejects points outside that field.

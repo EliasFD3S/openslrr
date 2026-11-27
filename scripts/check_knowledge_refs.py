@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Check that code references in the knowledge documents still resolve.
+"""Check that code references in the documentation still resolve.
 
-The knowledge documents cite the code with backticked anchors:
+The documents under docs/ cite the code with backticked anchors:
 
     `src/natives/native_registry.cpp`                  file must exist
     `src/natives/native_registry.cpp:descriptor_match` symbol must appear in it
@@ -34,7 +34,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-DEFAULT_DOCS = ["docs/KNOWLEDGE_BASE.md", "docs/EXTERNAL_RESEARCH.md", "docs/MILESTONES.md"]
+# Every Markdown file under docs/ (see docs/README.md for the layout).
+DEFAULT_DOCS = sorted(p.relative_to(REPO).as_posix() for p in (REPO / "docs").rglob("*.md"))
 LOCAL_ROOTS = (
     "src/", "include/", "shaders/", "docs/", "patch/", "third_party/",
     "cmake/", "assets/", "scripts/",
@@ -92,7 +93,7 @@ def check_target(base: Path, path: str, anchor: str | None) -> str | None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("docs", nargs="*", default=DEFAULT_DOCS,
-                        help="documents to check (default: the knowledge documents)")
+                        help="documents to check (default: every Markdown file under docs/)")
     parser.add_argument("--external", action="append", default=[], metavar="NAME=DIR",
                         help="checkout used for NAME: references, e.g. SLRR_rev=../SLRR_rev")
     args = parser.parse_args()

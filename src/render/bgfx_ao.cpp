@@ -1,4 +1,5 @@
 #include "bgfx_lib_backend.hpp"
+#include "slrr/particle_cloud.hpp"
 #include <algorithm>
 #include <bx/math.h>
 #include <cmath>
@@ -13,6 +14,7 @@ void LibBgfxBackend::destroy_ao_targets() {
   ao_linear_tex_ = ao_normal_tex_ = BGFX_INVALID_HANDLE;
   ao_width_ = ao_height_ = ao_screen_width_ = ao_screen_height_ = 0;
   ao_active_ = false;
+  scene_depth_active_ = false;
   ao_world_view_ = UINT16_MAX;
 }
 void LibBgfxBackend::bind_ambient_occlusion(bool enabled) {
@@ -39,8 +41,12 @@ void LibBgfxBackend::update_ambient_occlusion(const float *view,
                                               uint16_t width, uint16_t height,
                                               uint16_t world_view) {
   const auto &options = host_enhanced_graphics();
-  if (options.ao_method <= 0 || options.ao_strength <= 0 || !width || !height ||
-      !bgfx::isValid(ao_program_) || !render_debug().ambient_occlusion) {
+  const bool ao = options.ao_method > 0 && options.ao_strength > 0 &&
+                  bgfx::isValid(ao_program_) && render_debug().ambient_occlusion;
+  // Without AO the depth prepass still runs while tyre smoke or dust lives,
+  // so the particles stay soft against the scene (#454).
+  const bool depth = ao || (!particles().empty() && render_debug().soft_particles);
+  if (!depth || !width || !height) {
     destroy_ao_targets();
     return;
   }
@@ -106,7 +112,8 @@ void LibBgfxBackend::update_ambient_occlusion(const float *view,
                     caps->homogeneousDepth ? 1.f : 0.f,
                     caps->originBottomLeft ? 1.f : 0.f};
   ao_world_view_ = world_view;
-  ao_active_ = true;
+  ao_active_ = ao;
+  scene_depth_active_ = true;
   // A camera-matched, single-sample reversed-Z depth prepass. No swapchain
   // read, MSAA depth resolve, post-darkening of direct light or UI processing.
   bgfx::setViewFrameBuffer(140, ao_depth_fb_);
@@ -166,6 +173,8 @@ void LibBgfxBackend::update_ambient_occlusion(const float *view,
   // static_shadow_local_, which the world's receivers read meanwhile.
   draw_prop_batches(140, prop_batches_, true, false, true, 1);
   });
+  // Depth only, for the particles: no AO passes.
+  if (!ao) return;
   const float screen[4] = {1.f / width, 1.f / height, projection[0],
                            projection[5]};
   const float config[4] = {float(std::clamp(options.ao_method, 1, 2)),

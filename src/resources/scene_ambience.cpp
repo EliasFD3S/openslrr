@@ -118,15 +118,6 @@ size_t random_index(size_t count) {
   return static_cast<size_t>((static_cast<int64_t>(rand15()) * static_cast<int64_t>(count)) >> 15);
 }
 
-std::string config_text(const RpkIndex& rpk, uint32_t type) {
-  const auto bytes = rpk.read_payload(type);
-  if (bytes.size() < 10 || std::memcmp(bytes.data(), "ICFG", 4) != 0) return {};
-  const auto separator = std::find(bytes.begin() + 8, bytes.end(), 0);
-  if (separator == bytes.end()) return {};
-  const auto offset = static_cast<size_t>(separator - bytes.begin()) + 1;
-  return std::string(reinterpret_cast<const char*>(bytes.data() + offset), bytes.size() - offset);
-}
-
 float positive_prop(const RpkIndex& rpk, uint32_t id, const char* key, float fallback) {
   const auto text = rpk.payload_prop(id, key);
   if (text.empty()) return fallback;
@@ -165,7 +156,16 @@ void stop_shell(ShellAmbience& shell) {
     if (emitter.loop) stop_loop(*emitter.loop);
 }
 
-void update_loop(LoopState& loop, int32_t now, float distance_squared) {
+// Map emitters keep the stock gain law; the host adds pan, Doppler and the
+// environment reverb (#390).
+HostSfxPlace emitter_place(const float position[3]) {
+  HostSfxPlace place;
+  std::copy(position, position + 3, place.position);
+  place.attenuate = false;
+  return place;
+}
+
+void update_loop(LoopState& loop, int32_t now, float distance_squared, const float position[3]) {
   const auto& c = loop.config;
   const float gain = scene_ambience_gain(loop.sound.volume, loop.sound.min_distance,
                                          loop.sound.max_distance, std::sqrt(distance_squared));
@@ -177,10 +177,11 @@ void update_loop(LoopState& loop, int32_t now, float distance_squared) {
   }
   if (loop.voice && host_sfx_is_playing(loop.voice)) {
     host_sfx_update_loop(loop.voice, 1.f, gain);
+    host_sfx_set_place(loop.voice, emitter_place(position));
     return;
   }
   if (g_clock < loop.retry_at) return;
-  loop.voice = host_sfx_play_file(loop.sound.path, 1.f, gain, true);
+  loop.voice = host_sfx_play_at(loop.sound.path, emitter_place(position), 1.f, gain, true);
   if (!loop.voice) {
     loop.retry_at = g_clock + 1.0;
     return;
@@ -191,7 +192,7 @@ void update_loop(LoopState& loop, int32_t now, float distance_squared) {
 
 // One object timer (0x4660f7 schedules it, 0x467983 handles it): the entry
 // that fires is drawn at random, and its own delay schedules the next one.
-void update_randoms(Emitter& emitter, int32_t now, float distance_squared) {
+void update_randoms(Emitter& emitter, int32_t now, float distance_squared, const float position[3]) {
   if (emitter.randoms.empty()) return;
   const size_t count = emitter.randoms.size();
   if (!emitter.scheduled) {
@@ -209,7 +210,7 @@ void update_randoms(Emitter& emitter, int32_t now, float distance_squared) {
     const float gain = scene_ambience_gain(entry.sound.volume, entry.sound.min_distance,
                                            entry.sound.max_distance, std::sqrt(distance_squared));
     if (scene_ambience_audible(distance_squared, c.radius) && gain > 1e-3f &&
-        host_sfx_play_file(entry.sound.path, 1.f, gain, false)) {
+        host_sfx_play_at(entry.sound.path, emitter_place(position), 1.f, gain, false)) {
       if (log_randoms())
         std::printf("[ambience] random %s gain=%.3f dist=%.1f\n", entry.sound.path.c_str(),
                     gain, std::sqrt(distance_squared));
@@ -302,7 +303,7 @@ void scene_ambience_attach(void* shell, const RpkIndex& rpk, const GroundMapData
   size_t loops = 0, randoms = 0;
   for (const auto& placement : map.placements) {
     auto [found, added] = configs.try_emplace(placement.type);
-    if (added) found->second = scene_ambience_parse(config_text(rpk, placement.type));
+    if (added) found->second = scene_ambience_parse(rpk.native_config(placement.type));
     const AmbienceConfig& config = found->second;
     if (config.empty()) continue;
     const int32_t owner = RpkIndex::pack_from_full(placement.type);
@@ -357,8 +358,9 @@ void scene_ambience_tick(double seconds) {
       const float dy = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13] - eye[1];
       const float dz = m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14] - eye[2];
       const float distance_squared = dx * dx + dy * dy + dz * dz;
-      if (emitter.loop) update_loop(*emitter.loop, now, distance_squared);
-      update_randoms(emitter, now, distance_squared);
+      const float position[3] = {dx + eye[0], dy + eye[1], dz + eye[2]};
+      if (emitter.loop) update_loop(*emitter.loop, now, distance_squared, position);
+      update_randoms(emitter, now, distance_squared, position);
     }
     ++it;
   }

@@ -1,11 +1,18 @@
 #include "slrr/host_game_options.hpp"
 #include "slrr/jvm.hpp"
+#include "host_input_devices.hpp"
+#include "slrr/host_sfx.hpp"
+#include "host_options_json.hpp"
 #include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <iterator>
+#include <map>
+#include <string_view>
+#include <vector>
 #include <filesystem>
 #include <string>
 
@@ -16,76 +23,231 @@ bool loaded = false, dirty = false, save_failed = false;
 Clock::time_point changed, next_sample;
 GameOptions current;
 uint64_t driving_revision = 0;
-FramerateMode framerate_mode = FramerateMode::Adaptive;
 std::string host_options_path;
+bool save_host_options();
 
-bool integer_option(const std::string& line,const char* key,int& target,int low,int high) {
-  const std::string prefix=std::string(key)+"=";
-  if(line.rfind(prefix,0)!=0) return false;
-  int value=target;const auto* begin=line.data()+prefix.size();
-  auto [end,error]=std::from_chars(begin,line.data()+line.size(),value);
-  if(error==std::errc{} && end==line.data()+line.size()) target=std::clamp(value,low,high);
-  return true;
+// Host-only settings (#405: one table, saved as JSON). Config has a fixed
+// binary layout, so a new field there would need a patched Config class.
+// Each entry is one OptionsDialog renderer option: its id, where it is saved,
+// its range, and how to read and write it. Booleans are 0..1. A new option
+// is one line here. Id 5 was the framerate mode: cars are always drawn
+// between ticks now, and an old "framerate_mode" key is ignored.
+struct HostOption {
+  int id;
+  const char* section;
+  const char* key;
+  int low, high;
+  bool boolean;
+  int (*get)();
+  void (*set)(int);
+  const char* names[2];  // a named two-value option, saved by name; else null
+};
+
+#define SLRR_GRAPHICS_INT(id, key, low, high)                         \
+  HostOption{id, "video", #key, low, high, false,                      \
+             +[] { return host_enhanced_graphics().key; },             \
+             +[](int v) { host_enhanced_graphics().key = v; }, {}}
+#define SLRR_GRAPHICS_BOOL(id, key)                                   \
+  HostOption{id, "video", #key, 0, 1, true,                            \
+             +[] { return int(host_enhanced_graphics().key); },        \
+             +[](int v) { host_enhanced_graphics().key = v != 0; }, {}}
+#define SLRR_AUDIO_BOOL(id, key, field)                               \
+  HostOption{id, "audio", key, 0, 1, true,                             \
+             +[] { return int(host_sfx_spatial_options().field); },    \
+             +[](int v) { host_sfx_spatial_options().field = v != 0; }, {}}
+#define SLRR_INPUT_INT(id, key, low, high)                            \
+  HostOption{id, "input", #key, low, high, false,                      \
+             +[] { return host_input_tuning().key; },                  \
+             +[](int v) { host_input_tuning().key = v; }, {}}
+
+const HostOption kOptions[] = {
+    SLRR_GRAPHICS_INT(0, msaa, 0, 3),
+    SLRR_GRAPHICS_BOOL(6, anisotropic_filtering),
+    SLRR_GRAPHICS_BOOL(1, dynamic_reflections),
+    SLRR_GRAPHICS_BOOL(2, volumetric_clouds),
+    SLRR_GRAPHICS_BOOL(3, dynamic_lighting),
+    SLRR_GRAPHICS_BOOL(4, local_lights),
+    SLRR_GRAPHICS_INT(7, ao_method, 0, 2),
+    SLRR_GRAPHICS_INT(8, ao_quality, 0, 2),
+    SLRR_GRAPHICS_INT(11, ao_strength, 0, 200),
+    SLRR_GRAPHICS_INT(12, ao_radius, 25, 300),
+    SLRR_GRAPHICS_INT(9, shadow_quality, 0, 2),
+    SLRR_GRAPHICS_INT(10, shadow_smoothing, 0, 2),
+    // Advanced video page (#377).
+    SLRR_GRAPHICS_BOOL(13, vsync),
+    SLRR_GRAPHICS_INT(14, view_distance, 500, 3000),
+    SLRR_GRAPHICS_INT(15, prop_detail, 0, 3),
+    SLRR_GRAPHICS_BOOL(16, fog),
+    SLRR_GRAPHICS_BOOL(17, car_lights),
+    SLRR_GRAPHICS_BOOL(18, headlight_shadows),
+    SLRR_GRAPHICS_BOOL(19, street_lamps),
+    SLRR_GRAPHICS_INT(20, shadowed_lamps, 0, 6),
+    SLRR_GRAPHICS_INT(33, tyre_smoke_density, 0, 400),
+    // Spatial audio (#390).
+    SLRR_AUDIO_BOOL(22, "audio_positioning", positioning),
+    SLRR_AUDIO_BOOL(23, "audio_doppler", doppler),
+    SLRR_AUDIO_BOOL(24, "audio_reverb", reverb),
+    // Controls (#383) and force feedback (#395, #399, #405).
+    SLRR_INPUT_INT(21, steer_speed_sensitivity, 0, 100),
+    HostOption{25, "input", "ffb_invert", 0, 1, true,
+               +[] { return int(host_input_tuning().ffb_invert); },
+               +[](int v) { host_input_tuning().ffb_invert = v != 0; }, {}},
+    SLRR_INPUT_INT(26, ffb_detail, 0, 200),
+    SLRR_INPUT_INT(27, ffb_impacts, 0, 200),
+    SLRR_INPUT_INT(28, ffb_vibration, 0, 200),
+    SLRR_INPUT_INT(29, ffb_damper, 0, 200),
+    SLRR_INPUT_INT(30, ffb_min_force, 0, 20),
+    SLRR_INPUT_INT(31, ffb_smoothing, 0, 50),
+    // HUD (#446).
+    HostOption{32, "hud", "temperatures", 0, 1, true,
+               +[] { return int(host_hud_tuning().temperatures); },
+               +[](int v) { host_hud_tuning().temperatures = v != 0; }, {}},
+};
+#undef SLRR_GRAPHICS_INT
+#undef SLRR_GRAPHICS_BOOL
+#undef SLRR_AUDIO_BOOL
+#undef SLRR_INPUT_INT
+
+constexpr int kOptionsVersion = 1;
+
+const HostOption* option_by_id(int id) {
+  for (const auto& o : kOptions)
+    if (o.id == id) return &o;
+  return nullptr;
 }
 
-// Host-only settings live beside the stock options. Config has a fixed
-// binary layout, so a new field there would need a patched Config class.
-void load_host_options(const std::string& root) {
-  host_options_path = root;
-  if (!host_options_path.empty() && host_options_path.back() != '\\' &&
-      host_options_path.back() != '/')
-    host_options_path.push_back('\\');
-  host_options_path += "save\\game\\openslrr_options";
-  host_enhanced_graphics() = {};
-  framerate_mode = FramerateMode::Adaptive;
-  auto& graphics = host_enhanced_graphics();
-  std::ifstream in(host_options_path);
-  for (std::string line; std::getline(in, line);)
-    if (line == "framerate_mode=classic") framerate_mode = FramerateMode::Classic;
-    else if (line == "framerate_mode=adaptive") framerate_mode = FramerateMode::Adaptive;
-    else if (line == "msaa=0") graphics.msaa = 0;
-    else if (line == "msaa=1") graphics.msaa = 1;
-    else if (line == "msaa=2") graphics.msaa = 2;
-    else if (line == "msaa=3") graphics.msaa = 3;
-    else if(integer_option(line,"ao_method",graphics.ao_method,0,2) ||
-            integer_option(line,"ao_quality",graphics.ao_quality,0,2) ||
-            integer_option(line,"ao_strength",graphics.ao_strength,0,200) ||
-            integer_option(line,"ao_radius",graphics.ao_radius,25,300) ||
-            integer_option(line,"shadow_quality",graphics.shadow_quality,0,2) ||
-            integer_option(line,"shadow_smoothing",graphics.shadow_smoothing,0,2)) {}
-    else for (const auto& entry : {std::pair{"anisotropic_filtering", &graphics.anisotropic_filtering},
-                                  std::pair{"dynamic_reflections", &graphics.dynamic_reflections},
-                                  std::pair{"volumetric_clouds", &graphics.volumetric_clouds},
-                                  std::pair{"dynamic_lighting", &graphics.dynamic_lighting},
-                                  std::pair{"local_lights", &graphics.local_lights}}) {
-      if (line == std::string(entry.first) + "=0") *entry.second = false;
-      if (line == std::string(entry.first) + "=1") *entry.second = true;
+void set_option(const HostOption& o, int value) {
+  o.set(o.boolean ? int(value != 0) : std::clamp(value, o.low, o.high));
+}
+
+// A saved value: a number (booleans also as 0/1), a boolean, or a name.
+bool read_value(const HostOption& o, const options_json::Scalar& v, int& out) {
+  switch (v.kind) {
+    case options_json::Scalar::Number:
+      if (!std::isfinite(v.number)) return false;
+      out = static_cast<int>(std::lround(std::clamp(v.number, -1e9, 1e9)));
+      return true;
+    case options_json::Scalar::Bool:
+      out = v.boolean;
+      return o.boolean;
+    case options_json::Scalar::String:
+      for (int i = 0; i < 2; ++i)
+        if (o.names[i] && v.text == o.names[i]) {
+          out = i;
+          return true;
+        }
+      return false;
+  }
+  return false;
+}
+
+// The key=value file written before #405 (save/game/openslrr_options).
+void read_legacy_options(std::istream& in) {
+  for (std::string line; std::getline(in, line);) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    const auto eq = line.find('=');
+    if (eq == std::string::npos) continue;
+    const std::string key = line.substr(0, eq), text = line.substr(eq + 1);
+    for (const auto& o : kOptions) {
+      if (key != o.key) continue;
+      options_json::Scalar value;
+      int parsed = 0;
+      const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), parsed);
+      if (error == std::errc{} && end == text.data() + text.size()) {
+        value.number = parsed;
+      } else {
+        value.kind = options_json::Scalar::String;
+        value.text = text;
+      }
+      if (read_value(o, value, parsed)) set_option(o, parsed);
     }
+  }
+}
+
+void load_host_options(const std::string& root) {
+  std::string dir = root;
+  if (!dir.empty() && dir.back() != '\\' && dir.back() != '/') dir.push_back('\\');
+  dir += "save\\game\\";
+  host_input_devices().set_calibration_file(dir + "openslrr_axis_calibration");
+  host_options_path = dir + "openslrr_options.json";
+  const std::string legacy_path = dir + "openslrr_options";
+  host_enhanced_graphics() = {};
+  host_input_tuning() = {};
+  host_sfx_spatial_options() = {};
+
+  bool loaded_json = false;
+  if (std::ifstream in{host_options_path, std::ios::binary}) {
+    const std::string text{std::istreambuf_iterator<char>(in), {}};
+    in.close();
+    std::map<std::string, options_json::Scalar> values;
+    std::string error;
+    if (options_json::parse(text, values, &error)) {
+      // A missing or unreadable key keeps its default.
+      for (const auto& o : kOptions) {
+        const auto it = values.find(std::string(o.section) + "." + o.key);
+        int value = 0;
+        if (it != values.end() && read_value(o, it->second, value)) set_option(o, value);
+      }
+      loaded_json = true;
+    } else {
+      // Keep the damaged file for a look; the next save writes a new one.
+      std::fprintf(stderr, "[options] %s: %s; using defaults\n", host_options_path.c_str(),
+                   error.c_str());
+      std::error_code ec;
+      std::filesystem::rename(host_options_path, host_options_path + ".bad", ec);
+    }
+  }
+  if (!loaded_json) {
+    // First start after #405: take the old file over and save it as JSON.
+    // The old file stays, for older builds.
+    if (std::ifstream legacy{legacy_path}) {
+      read_legacy_options(legacy);
+      legacy.close();
+      save_host_options();
+    }
+  }
+  host_sfx_apply_spatial_options();
 }
 
 bool save_host_options() {
   if (host_options_path.empty()) return false;
   std::error_code error;
-  std::filesystem::create_directories(std::filesystem::path(host_options_path).parent_path(), error);
-  const auto& graphics = host_enhanced_graphics();
-  std::ofstream out(host_options_path, std::ios::trunc);
-  out << "framerate_mode="
-      << (framerate_mode == FramerateMode::Classic ? "classic" : "adaptive") << '\n'
-      << "msaa=" << std::clamp(graphics.msaa, 0, 3) << '\n'
-      << "anisotropic_filtering=" << graphics.anisotropic_filtering << '\n'
-      << "dynamic_reflections=" << graphics.dynamic_reflections << '\n'
-      << "volumetric_clouds=" << graphics.volumetric_clouds << '\n'
-      << "dynamic_lighting=" << graphics.dynamic_lighting << '\n'
-      << "local_lights=" << graphics.local_lights << '\n'
-      << "ao_method=" << std::clamp(graphics.ao_method,0,2) << '\n'
-      << "ao_quality=" << std::clamp(graphics.ao_quality,0,2) << '\n'
-      << "ao_strength=" << std::clamp(graphics.ao_strength,0,200) << '\n'
-      << "ao_radius=" << std::clamp(graphics.ao_radius,25,300) << '\n'
-      << "shadow_quality=" << std::clamp(graphics.shadow_quality,0,2) << '\n'
-      << "shadow_smoothing=" << std::clamp(graphics.shadow_smoothing,0,2) << '\n';
-  out.close();
-  if (!out) std::fprintf(stderr, "[options] could not save %s\n", host_options_path.c_str());
-  return bool(out);
+  const std::filesystem::path path(host_options_path);
+  std::filesystem::create_directories(path.parent_path(), error);
+  std::vector<options_json::Entry> entries;
+  for (const auto& o : kOptions) {
+    options_json::Entry e{o.section, o.key, {}};
+    const int value = std::clamp(o.get(), o.low, o.high);
+    if (o.names[0]) {
+      e.value.kind = options_json::Scalar::String;
+      e.value.text = o.names[value];
+    } else if (o.boolean) {
+      e.value.kind = options_json::Scalar::Bool;
+      e.value.boolean = value != 0;
+    } else {
+      e.value.number = value;
+    }
+    entries.push_back(std::move(e));
+  }
+  // Write beside it, then replace: a crash mid-save keeps the old file.
+  const std::string temporary = host_options_path + ".tmp";
+  {
+    std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+    out << options_json::write(kOptionsVersion, entries);
+    out.close();
+    if (!out) {
+      std::fprintf(stderr, "[options] could not save %s\n", temporary.c_str());
+      return false;
+    }
+  }
+  std::filesystem::rename(temporary, path, error);
+  if (error) {
+    std::fprintf(stderr, "[options] could not save %s: %s\n", host_options_path.c_str(),
+                 error.message().c_str());
+    std::filesystem::remove(temporary, error);
+    return false;
+  }
+  return true;
 }
 
 void write_video_mode(Jvm& jvm, const VideoMode& mode) {
@@ -135,21 +297,40 @@ GameOptions read_options(Jvm& jvm) {
   options.head_acceleration = std::clamp(read("head_move_acc", 1.f), 0.f, 2.f);
   options.traffic_density = read("trafficDensity", .2f);
   options.pedestrian_density = read("pedestrianDensity", .1f);
+  options.ffb = integer("ForceFeedBack", 1) != 0;
+  options.ffb_strength = std::clamp(read("FFB_strength", 1.f), 0.f, 1.f);
   return options;
 }
+}
+InputTuning& host_input_tuning() {
+  static InputTuning tuning;
+  return tuning;
+}
+HudTuning& host_hud_tuning() {
+  static HudTuning tuning;
+  return tuning;
 }
 EnhancedGraphics& host_enhanced_graphics() {
   static EnhancedGraphics graphics;
   return graphics;
 }
 bool host_save_graphics_options() { return save_host_options(); }
-const GameOptions& host_game_options() { return current; }
-FramerateMode host_framerate_mode() { return framerate_mode; }
-void host_set_framerate_mode(FramerateMode mode) {
-  if (mode == framerate_mode) return;
-  framerate_mode = mode;
-  save_host_options();
+bool host_option_get(int id, int& value) {
+  const HostOption* o = option_by_id(id);
+  if (!o) return false;
+  value = o->get();
+  return true;
 }
+bool host_option_set(int id, int value) {
+  const HostOption* o = option_by_id(id);
+  if (!o) return false;
+  const int before = o->get();
+  set_option(*o, value);
+  if (std::string_view(o->section) == "audio") host_sfx_apply_spatial_options();
+  if (o->get() != before) save_host_options();
+  return true;
+}
+const GameOptions& host_game_options() { return current; }
 uint64_t host_driving_options_revision() { return driving_revision; }
 
 void host_game_options_load(Jvm& jvm) {

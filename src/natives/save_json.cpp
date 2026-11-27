@@ -821,7 +821,10 @@ template <class IO> bool part_spec(IO& io, std::string_view script) {
   if (script == "TurboCharger")
     return versioned([&](int32_t v) { if (v >= 1) io.f("wastegatePressure"); });
   if (script == "Tyre")
-    return versioned([&](int32_t v) { if (v >= 1) io.f("inflation"); });
+    return versioned([&](int32_t v) {
+      if (v >= 1) io.f("inflation");
+      if (v >= 2) { io.f("flatSpot"); io.f("flatSpotAngle"); }  // #461
+    });
   if (script == "ShockAbsorber")
     return versioned([&](int32_t v) { if (v >= 1) { io.f("damping"); io.f("reboundFactor"); } });
   if (script == "Pneumatic_ShockAbsorber") {

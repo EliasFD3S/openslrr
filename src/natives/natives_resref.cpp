@@ -3,6 +3,7 @@
 
 #include "slrr/gameref.hpp"
 #include "slrr/job_system.hpp"
+#include "slrr/script_particles.hpp"
 #include "slrr/scene_ambience.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/part_runtime.hpp"
@@ -41,6 +42,9 @@ void spawn_ground_shell(Jvm& jvm, const RpkIndex& rpk, Object* ground) {
     return;
   GameRefState* st = gameref_get(ground);
   if (!st || st->type_id == 0) return;
+  // 00463220 builds the ground with Config.ground_friction (1 when <= 0).
+  const Value friction = jvm.get_static("java.util.Config", "ground_friction");
+  scene_instances_set_ground_friction(friction.tag == ValueTag::Float ? friction.v.f : 1.f);
   const auto primary = static_cast<uint32_t>(st->type_id);
   std::vector<uint32_t> pending{primary};
   std::unordered_set<uint32_t> visited;
@@ -392,6 +396,9 @@ void register_resref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
       });
   jvm.natives().register_method(kResRef, "destroy", "()V",
                                 [](Object* self, const std::vector<Value>&) {
+                                  // A ParticleSystem's emitters go with it (#454);
+                                  // its particles finish their lives.
+                                  script_particles_destroy(self);
                                   // changeTexture destroys the old picture before the
                                   // replacement exists. Drop that quad first: a part
                                   // record returns before the hide below.

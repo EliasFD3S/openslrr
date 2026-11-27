@@ -5,6 +5,7 @@
 #include "slrr/light_resource.hpp"
 
 #include "slrr/paint_texture.hpp"
+#include "slrr/ptx_image.hpp"
 #include "slrr/scene_collision.hpp"
 #include <limits>
 #include "slrr/gameref.hpp"
@@ -31,6 +32,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -60,6 +62,25 @@ struct StaticMesh {
   float cell_size = 2.f;
   std::unordered_map<uint64_t, std::vector<uint32_t>> cells;
   std::vector<uint32_t> large_triangles;
+  // Ground surfaces (#452), as in ScxGeometry: per triangle, into `surfaces`.
+  std::vector<uint16_t> triangle_surfaces;
+  std::vector<GroundSurface> surfaces;
+  // With surfaces, each cell list's triangles' surface ids, one per triangle
+  // in the list's order (cells hold vertex triples, not triangle ids).
+  std::unordered_map<uint64_t, std::vector<uint16_t>> surface_cells;
+  std::vector<uint16_t> large_surfaces;
+  GroundSurface surface(uint16_t s) const {
+    return s < surfaces.size() ? surfaces[s] : GroundSurface{};
+  }
+  // The surface ids parallel to `list` (a cell list or large_triangles of
+  // this mesh), or null when the mesh has none.
+  const std::vector<uint16_t>* surfaces_for(const std::vector<uint32_t>& list,
+                                            uint64_t cell) const {
+    if (triangle_surfaces.empty()) return nullptr;
+    if (&list == &large_triangles) return &large_surfaces;
+    const auto found = surface_cells.find(cell);
+    return found == surface_cells.end() ? nullptr : &found->second;
+  }
 };
 std::vector<StaticMesh> g_static;
 bool g_static_enabled = true;
@@ -219,9 +240,14 @@ bool g_floor_prepared = false;
 uint64_t g_floor_builds = 0;
 uint64_t g_floor_revision = 1;
 using FloorCells = std::unordered_map<uint64_t, std::vector<uint32_t>>;
+using SurfaceCells = std::unordered_map<uint64_t, std::vector<uint16_t>>;
 // Indexes triangles [first, last) of the mesh into cells and large.
+// With surfaces, surface_cells and large_surfaces get each listed
+// triangle's surface id in the same order.
 void index_triangles(const StaticMesh& mesh, size_t first, size_t last, FloorCells& cells,
-                     std::vector<uint32_t>& large) {
+                     std::vector<uint32_t>& large, SurfaceCells& surface_cells,
+                     std::vector<uint16_t>& large_surfaces) {
+  const bool surfaces = !mesh.triangle_surfaces.empty();
   for (size_t i = first * 3; i + 2 < mesh.indices.size() && i < last * 3; i += 3) {
     float min_x = 0, max_x = 0, min_z = 0, max_z = 0;
     bool valid = true;
@@ -249,17 +275,22 @@ void index_triangles(const StaticMesh& mesh, size_t first, size_t last, FloorCel
     }
     if (!valid)
       continue;
+    const uint16_t surface = surfaces && i / 3 < mesh.triangle_surfaces.size()
+                                 ? mesh.triangle_surfaces[i / 3] : uint16_t(0xffff);
     const int32_t x0 = cell_coordinate(min_x, mesh), x1 = cell_coordinate(max_x, mesh);
     const int32_t z0 = cell_coordinate(min_z, mesh), z1 = cell_coordinate(max_z, mesh);
     if ((int64_t(x1) - x0 + 1) * (int64_t(z1) - z0 + 1) > 4096) {
       large.insert(large.end(), mesh.indices.begin() + i, mesh.indices.begin() + i + 3);
+      if (surfaces) large_surfaces.push_back(surface);
       continue;
     }
     for (int32_t x = x0; x <= x1; ++x)
       for (int32_t z = z0; z <= z1; ++z) {
-        auto &cell = cells[floor_cell(x, z)];
+        const uint64_t key = floor_cell(x, z);
+        auto &cell = cells[key];
         cell.insert(cell.end(), mesh.indices.begin() + i,
                     mesh.indices.begin() + i + 3);
+        if (surfaces) surface_cells[key].push_back(surface);
       }
   }
 }
@@ -274,12 +305,13 @@ bool pool_floor_index(const StaticMesh& mesh) {
 
 void index_floor(StaticMesh &mesh) {
   // Static garage triangles are indexed once in script space. Physics asks
-  // for several support samples per 240 Hz tick; rescanning the whole shell
+  // for several support samples per 120 Hz substep; rescanning the whole shell
   // for every wheel/corner is unnecessary.
   const size_t triangles = mesh.indices.size() / 3;
   const size_t workers = pool_floor_index(mesh) && !jobs_inside() ? jobs_concurrency() : 1;
   if (workers < 2) {
-    index_triangles(mesh, 0, triangles, mesh.cells, mesh.large_triangles);
+    index_triangles(mesh, 0, triangles, mesh.cells, mesh.large_triangles, mesh.surface_cells,
+                    mesh.large_surfaces);
     return;
   }
   // Each job indexes a contiguous run of triangles. Appending the runs in
@@ -287,13 +319,21 @@ void index_floor(StaticMesh &mesh) {
   struct Run {
     FloorCells cells;
     std::vector<uint32_t> large;
+    SurfaceCells surface_cells;
+    std::vector<uint16_t> large_surfaces;
   };
   std::vector<Run> runs(std::min(workers * 2, triangles / 4096 + 1));
   jobs_parallel_for(runs.size(), [&](size_t r) {
     index_triangles(mesh, triangles * r / runs.size(), triangles * (r + 1) / runs.size(),
-                    runs[r].cells, runs[r].large);
+                    runs[r].cells, runs[r].large, runs[r].surface_cells, runs[r].large_surfaces);
   });
   for (auto& run : runs) {
+    for (auto& [key, list] : run.surface_cells) {
+      auto& cell = mesh.surface_cells[key];
+      cell.insert(cell.end(), list.begin(), list.end());
+    }
+    mesh.large_surfaces.insert(mesh.large_surfaces.end(), run.large_surfaces.begin(),
+                               run.large_surfaces.end());
     for (auto& [key, list] : run.cells) {
       auto& cell = mesh.cells[key];
       if (cell.empty())
@@ -312,6 +352,8 @@ StaticMesh bake_static_mesh(const ScxGeometry& geo, const PartMatrix& matrix,
   mesh.scale = 1.f;
   if (geo.indices.size() > 100000) mesh.cell_size = 8.f;
   mesh.indices = geo.indices;
+  mesh.triangle_surfaces = geo.triangle_surfaces;
+  mesh.surfaces = geo.surfaces;
   mesh.positions.resize(geo.positions.size());
   for (size_t i = 0; i + 2 < geo.positions.size(); i += 3) {
     const float x = geo.positions[i] * geo.position_scale;
@@ -331,6 +373,8 @@ StaticMesh transform_static_mesh(const StaticMesh& source, const PartMatrix& mat
   mesh.scale = 1.f;
   mesh.cell_size = source.cell_size;
   mesh.indices = source.indices;
+  mesh.triangle_surfaces = source.triangle_surfaces;
+  mesh.surfaces = source.surfaces;
   mesh.positions.resize(source.positions.size());
   for (size_t i = 0; i + 2 < source.positions.size(); i += 3) {
     const float x = source.positions[i] * source.scale;
@@ -368,6 +412,21 @@ void merge_static_meshes(std::vector<StaticMesh>& meshes) {
                    combined.indices.begin() + static_cast<std::ptrdiff_t>(index_at[m]),
                    [first](uint32_t index) { return first + index; });
   });
+  // Surfaces follow their triangles, each table appended after the last.
+  if (std::any_of(meshes.begin(), meshes.end(),
+                  [](const StaticMesh& m) { return !m.triangle_surfaces.empty(); })) {
+    combined.triangle_surfaces.assign(combined.indices.size() / 3, 0xffff);
+    for (size_t m = 0; m < meshes.size(); ++m) {
+      const auto& source = meshes[m];
+      const size_t base = combined.surfaces.size();
+      combined.surfaces.insert(combined.surfaces.end(), source.surfaces.begin(),
+                               source.surfaces.end());
+      for (size_t t = 0; t < source.triangle_surfaces.size() && t < source.indices.size() / 3; ++t)
+        if (source.triangle_surfaces[t] < source.surfaces.size() && base + source.triangle_surfaces[t] < 0xffff)
+          combined.triangle_surfaces[index_at[m] / 3 + t] =
+              static_cast<uint16_t>(base + source.triangle_surfaces[t]);
+    }
+  }
   if (combined.indices.size() > 100000) combined.cell_size = 8.f;
   index_floor(combined);
   meshes.clear();
@@ -531,6 +590,8 @@ struct GroundWalk {
   std::unordered_set<uint32_t> walked_offsets;
   const std::vector<uint8_t> *file = nullptr;
   std::string params;
+  // The whole value: render id, six numbers, the SCM path, the TRC path.
+  std::string params_line;
   std::vector<PolySection> poly;
   std::vector<uint32_t> exterior_slots;
   ScxGeometry collision;
@@ -546,8 +607,13 @@ void append_ground_placement(GroundWalk& walk, std::string_view text) {
   const auto type = std::from_chars(text.data(), end, placement.type, 16);
   if (type.ec != std::errc{}) return;
   text.remove_prefix(type.ptr - text.data());
-  const auto params = text.find_first_not_of("\r\n");
-  if (params == std::string_view::npos) return;
+  const auto params = text.find_first_not_of(std::string_view("\r\n\0", 3));
+  if (params == std::string_view::npos) {
+    // No params line: the native sits at the map origin. Track Wizard places
+    // a track's render-only meshes this way (`gametype 0x...` alone).
+    walk.placements.push_back(placement);
+    return;
+  }
   text.remove_prefix(params);
   constexpr std::string_view params_prefix = "params ";
   if (!text.starts_with(params_prefix)) return;
@@ -592,11 +658,17 @@ void append_ground_collision(ScxGeometry& mesh, const uint8_t* data, size_t size
   const uint8_t* positions = data + vertices_offset + 4;
   for (size_t i = 0; i < static_cast<size_t>(vertices) * 3; ++i)
     mesh.positions.push_back(rdf(positions + i * 4));
+  // A face: its SCM material index, three vertex indices and its normal
+  // (#452). The material index is resolved once the SCM is read.
   for (uint32_t i = 0; i < faces; ++i) {
     const uint8_t* face = data + 4 + static_cast<size_t>(i) * 28;
     const uint32_t a = rd32(face + 4), b = rd32(face + 8), c = rd32(face + 12);
-    if (a < vertices && b < vertices && c < vertices)
+    if (a < vertices && b < vertices && c < vertices) {
       mesh.indices.insert(mesh.indices.end(), {base + a, base + b, base + c});
+      const uint32_t material = rd32(face);
+      mesh.triangle_surfaces.push_back(material < 0xffff ? static_cast<uint16_t>(material)
+                                                         : uint16_t(0xffff));
+    }
   }
 }
 
@@ -631,8 +703,10 @@ void take_params(GroundWalk &w, const uint8_t *data, const uint8_t *end) {
     while (e < text.size() && text[e] != ' ' && text[e] != '\t' &&
            text[e] != ',')
       ++e;
-    if (e > v)
+    if (e > v) {
       w.params = text.substr(v, e - v);
+      w.params_line = text.substr(v);
+    }
   }
 }
 
@@ -829,6 +903,7 @@ void scene_instances_preload(const std::vector<uint32_t>& resources) {
 }
 
 void scene_instances_set_resources(const RpkIndex *resources) {
+  part_physics_join();  // the collision caches below are read by a running batch
   character_forget_all();
   g_resources = resources;
   g_world = g_sky = nullptr;
@@ -892,14 +967,22 @@ std::string scene_instances_envmap() {
 }
 void scene_instances_select(void *world, void *skydome, bool preview_lamps,
                             SceneEnvironment environment) {
+  if (auto *sky = gameref_get(skydome))
+    sky->sky_render = true;
+  // Called every frame. The free-running physics thread reads the collision
+  // caches, so join it only for a real change (#380): an unconditional join
+  // paused the thread for the rest of every frame. The physics sync prepares
+  // the caches each frame anyway.
+  if (g_world == world && g_sky == skydome && g_preview_lamps == preview_lamps &&
+      g_environment_kind == environment)
+    return;
+  part_physics_join();
   if (g_world != world) ++g_floor_revision;
   g_world = world;
   g_sky = skydome;
   g_preview_lamps = preview_lamps;
   g_environment_kind = environment;
   g_floor_prepared = false;
-  if (auto *sky = gameref_get(skydome))
-    sky->sky_render = true;
 }
 
 bool scene_instances_outdoor() {
@@ -1167,71 +1250,104 @@ std::vector<GameRefState*> render_nodes_in_world(void* root, bool physics = fals
   return nodes;
 }
 
-void floor_triangles(const float *m, const std::vector<float> &pos,
-                     const std::vector<uint32_t> &idx, float scale, float x,
-                     float z, float below, float &best, bool &hit,
-                     float *normal) {
-  if (!m || idx.size() < 3 || pos.size() < 9)
+// One triangle of a floor query, already in script space: keeps the highest
+// surface under (x, z) that is not above `below` (+5 cm).
+// `surface` is the triangle's; `surface_out` receives it when it wins.
+void floor_test(const float (&v)[3][3], float x, float z, float below, float &best,
+                bool &hit, float *normal, const GroundSurface &surface,
+                GroundSurface *surface_out) {
+  const float x0 = v[0][0], z0 = v[0][2], x1 = v[1][0], z1 = v[1][2];
+  const float x2 = v[2][0], z2 = v[2][2];
+  const float denom = (z1 - z2) * (x0 - x2) + (x2 - x1) * (z0 - z2);
+  if (std::fabs(denom) < 1e-8f)
     return;
-  for (size_t t = 0; t + 2 < idx.size(); t += 3) {
-    float v[3][3];
-    bool ok = true;
-    float min_x = 0, max_x = 0, min_z = 0, max_z = 0;
-    for (int k = 0; k < 3; ++k) {
-      const uint32_t vi = idx[t + static_cast<size_t>(k)];
-      if (static_cast<size_t>(vi) * 3 + 2 >= pos.size()) {
-        ok = false;
-        break;
-      }
-      const float vx = pos[vi * 3] * scale;
-      const float vy = pos[vi * 3 + 1] * scale;
-      const float vz = pos[vi * 3 + 2] * scale;
-      v[k][0] = m[0] * vx + m[4] * vy + m[8] * vz + m[12];
-      v[k][1] = m[1] * vx + m[5] * vy + m[9] * vz + m[13];
-      v[k][2] = m[2] * vx + m[6] * vy + m[10] * vz + m[14];
-      if (k == 0) {
-        min_x = max_x = v[0][0];
-        min_z = max_z = v[0][2];
-      } else {
-        min_x = std::min(min_x, v[k][0]);
-        max_x = std::max(max_x, v[k][0]);
-        min_z = std::min(min_z, v[k][2]);
-        max_z = std::max(max_z, v[k][2]);
-      }
-    }
-    if (!ok || x < min_x || x > max_x || z < min_z || z > max_z)
-      continue;
-    const float x0 = v[0][0], z0 = v[0][2], x1 = v[1][0], z1 = v[1][2];
-    const float x2 = v[2][0], z2 = v[2][2];
-    const float denom = (z1 - z2) * (x0 - x2) + (x2 - x1) * (z0 - z2);
-    if (std::fabs(denom) < 1e-8f)
-      continue;
-    const float a = ((z1 - z2) * (x - x2) + (x2 - x1) * (z - z2)) / denom;
-    const float b = ((z2 - z0) * (x - x2) + (x0 - x2) * (z - z2)) / denom;
-    const float c = 1.f - a - b;
-    if (a < -1e-4f || b < -1e-4f || c < -1e-4f)
-      continue;
-    const float y = a * v[0][1] + b * v[1][1] + c * v[2][1];
-    if (y > below + 0.05f)
-      continue;
-    if (!hit || y > best) {
-      best = y;
-      hit = true;
-      if (normal) {
-        const float ax = v[1][0] - v[0][0], ay = v[1][1] - v[0][1],
-                    az = v[1][2] - v[0][2];
-        const float bx = v[2][0] - v[0][0], by = v[2][1] - v[0][1],
-                    bz = v[2][2] - v[0][2];
-        float nx = ay * bz - az * by, ny = az * bx - ax * bz,
-              nz = ax * by - ay * bx;
-        const float size = std::sqrt(nx * nx + ny * ny + nz * nz);
-        const float sign = ny < 0 ? -1.f : 1.f;
-        normal[0] = nx / size * sign;
-        normal[1] = ny / size * sign;
-        normal[2] = nz / size * sign;
-      }
+  const float a = ((z1 - z2) * (x - x2) + (x2 - x1) * (z - z2)) / denom;
+  const float b = ((z2 - z0) * (x - x2) + (x0 - x2) * (z - z2)) / denom;
+  const float c = 1.f - a - b;
+  if (a < -1e-4f || b < -1e-4f || c < -1e-4f)
+    return;
+  const float y = a * v[0][1] + b * v[1][1] + c * v[2][1];
+  if (y > below + 0.05f)
+    return;
+  if (!hit || y > best) {
+    best = y;
+    hit = true;
+    if (surface_out) *surface_out = surface;
+    if (normal) {
+      const float ax = v[1][0] - v[0][0], ay = v[1][1] - v[0][1],
+                  az = v[1][2] - v[0][2];
+      const float bx = v[2][0] - v[0][0], by = v[2][1] - v[0][1],
+                  bz = v[2][2] - v[0][2];
+      float nx = ay * bz - az * by, ny = az * bx - ax * bz,
+            nz = ax * by - ay * bx;
+      const float size = std::sqrt(nx * nx + ny * ny + nz * nz);
+      const float sign = ny < 0 ? -1.f : 1.f;
+      normal[0] = nx / size * sign;
+      normal[1] = ny / size * sign;
+      normal[2] = nz / size * sign;
     }
   }
+}
+
+// Triangle t (an offset in idx) transformed by m, with its X/Z bounds. False
+// for an index outside the positions.
+bool floor_triangle(const float *m, const std::vector<float> &pos,
+                    const std::vector<uint32_t> &idx, size_t t, float scale,
+                    float (&v)[3][3], float (&bounds)[4]) {
+  for (int k = 0; k < 3; ++k) {
+    const uint32_t vi = idx[t + static_cast<size_t>(k)];
+    if (static_cast<size_t>(vi) * 3 + 2 >= pos.size())
+      return false;
+    const float vx = pos[vi * 3] * scale;
+    const float vy = pos[vi * 3 + 1] * scale;
+    const float vz = pos[vi * 3 + 2] * scale;
+    v[k][0] = m[0] * vx + m[4] * vy + m[8] * vz + m[12];
+    v[k][1] = m[1] * vx + m[5] * vy + m[9] * vz + m[13];
+    v[k][2] = m[2] * vx + m[6] * vy + m[10] * vz + m[14];
+    if (k == 0) {
+      bounds[0] = bounds[1] = v[0][0];
+      bounds[2] = bounds[3] = v[0][2];
+    } else {
+      bounds[0] = std::min(bounds[0], v[k][0]);
+      bounds[1] = std::max(bounds[1], v[k][0]);
+      bounds[2] = std::min(bounds[2], v[k][2]);
+      bounds[3] = std::max(bounds[3], v[k][2]);
+    }
+  }
+  return true;
+}
+
+// The triangles of `idx` (a cell list of `mesh`, or its large triangles),
+// in script space. `surfaces` lists their surface ids, or is null.
+void floor_triangles(const StaticMesh &mesh, const std::vector<uint32_t> &idx,
+                     const std::vector<uint16_t> *surfaces, float x, float z,
+                     float below, float &best, bool &hit, float *normal,
+                     GroundSurface *surface_out) {
+  if (idx.size() < 3 || mesh.positions.size() < 9)
+    return;
+  float eye[16];
+  identity(eye);
+  for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+    float v[3][3], bounds[4];
+    if (!floor_triangle(eye, mesh.positions, idx, t, mesh.scale, v, bounds) ||
+        x < bounds[0] || x > bounds[1] || z < bounds[2] || z > bounds[3])
+      continue;
+    const GroundSurface surface =
+        surfaces && t / 3 < surfaces->size() ? mesh.surface((*surfaces)[t / 3]) : GroundSurface{};
+    floor_test(v, x, z, below, best, hit, normal, surface, surface_out);
+  }
+}
+
+// The cell under (x, z) and the large triangles of one mesh.
+void floor_mesh(const StaticMesh &mesh, float x, float z, float below, float &best,
+                bool &hit, float *normal, GroundSurface *surface_out) {
+  const uint64_t key = floor_cell(cell_coordinate(x, mesh), cell_coordinate(z, mesh));
+  const auto cell = mesh.cells.find(key);
+  if (cell != mesh.cells.end())
+    floor_triangles(mesh, cell->second, mesh.surfaces_for(cell->second, key), x, z, below,
+                    best, hit, normal, surface_out);
+  floor_triangles(mesh, mesh.large_triangles, mesh.surfaces_for(mesh.large_triangles, 0), x,
+                  z, below, best, hit, normal, surface_out);
 }
 } // namespace
 
@@ -1319,6 +1435,7 @@ bool scene_instances_floor(float x, float z, float below, void *ignore,
   return true;
 }
 void scene_instances_prepare_physics() {
+  part_physics_join();
   gameref_process_collision_requests();
   g_script_collision_shapes.clear();
   std::unordered_set<void *> active;
@@ -1787,47 +1904,149 @@ bool scene_instances_sample_floor(float x, float z, float below, void *ignore,
   if (!g_floor_prepared) scene_instances_prepare_physics();
   float best = 0.f;
   bool hit = false;
+  GroundSurface surface;
   // Preloaded garage shells are drawn at identity with unflipped script XZ.
-  float eye[16];
-  identity(eye);
   if (g_static_enabled)
-    for (const auto &mesh : g_static) {
-      const auto cell =
-          mesh.cells.find(floor_cell(cell_coordinate(x, mesh), cell_coordinate(z, mesh)));
-      if (cell != mesh.cells.end())
-        floor_triangles(eye, mesh.positions, cell->second, mesh.scale, x, z,
-                        below, best, hit, sample.normal);
-      floor_triangles(eye, mesh.positions, mesh.large_triangles, mesh.scale, x,
-                      z, below, best, hit, sample.normal);
-    }
-  for (const auto& [key, ground] : g_ground_collision) {
-    for (const auto& mesh : ground.meshes) {
-      const auto cell = mesh.cells.find(floor_cell(cell_coordinate(x, mesh),
-                                                   cell_coordinate(z, mesh)));
-      if (cell != mesh.cells.end())
-        floor_triangles(eye, mesh.positions, cell->second, mesh.scale, x, z,
-                        below, best, hit, sample.normal);
-      floor_triangles(eye, mesh.positions, mesh.large_triangles, mesh.scale, x,
-                      z, below, best, hit, sample.normal);
-    }
-  }
+    for (const auto &mesh : g_static)
+      floor_mesh(mesh, x, z, below, best, hit, sample.normal, &surface);
+  for (const auto& [key, ground] : g_ground_collision)
+    for (const auto& mesh : ground.meshes)
+      floor_mesh(mesh, x, z, below, best, hit, sample.normal, &surface);
   for (const auto &entry : g_floor_meshes) {
     const auto &cached = entry.second;
     if (ignore && std::find(cached.ancestors.begin(), cached.ancestors.end(),
                             ignore) != cached.ancestors.end())
       continue;
-    const auto &mesh = cached.mesh;
-    auto cell =
-        mesh.cells.find(floor_cell(cell_coordinate(x, mesh), cell_coordinate(z, mesh)));
-    if (cell != mesh.cells.end())
-      floor_triangles(eye, mesh.positions, cell->second, mesh.scale, x, z,
-                      below, best, hit, sample.normal);
-    floor_triangles(eye, mesh.positions, mesh.large_triangles, mesh.scale, x, z,
-                    below, best, hit, sample.normal);
+    floor_mesh(cached.mesh, x, z, below, best, hit, sample.normal, &surface);
   }
   if (!hit)
     return false;
   sample.height = best;
+  sample.surface = surface;
+  return true;
+}
+
+namespace {
+constexpr float kPatchCell = .5f;  // metres
+constexpr int kPatchCells = 64;    // per axis at most
+}  // namespace
+
+void scene_instances_floor_patch(float x0, float z0, float x1, float z1, void *ignore,
+                                 SceneFloorPatch &patch) {
+  if (!g_floor_prepared) scene_instances_prepare_physics();
+  patch.triangles.clear();
+  patch.start.clear();
+  patch.list.clear();
+  patch.ignore = ignore;
+  patch.revision = g_floor_revision;
+  patch.x0 = x0;
+  patch.z0 = z0;
+  patch.x1 = x1;
+  patch.z1 = z1;
+  patch.nx = patch.nz = 0;
+  if (!(x1 >= x0 && z1 >= z0) || x1 - x0 > kPatchCell * kPatchCells ||
+      z1 - z0 > kPatchCell * kPatchCells)
+    return;  // no grid: every query falls back
+  float eye[16];
+  identity(eye);
+  // The meshes in the order scene_instances_sample_floor tests them; each
+  // mesh's cell triangles before its large ones.
+  const auto add_list = [&](const StaticMesh &mesh, const std::vector<uint32_t> &idx,
+                            uint64_t key) {
+    if (idx.size() < 3 || mesh.positions.size() < 9) return;
+    const auto *surfaces = mesh.surfaces_for(idx, key);
+    for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+      SceneFloorPatch::Triangle tri;
+      if (!floor_triangle(eye, mesh.positions, idx, t, mesh.scale, tri.v, tri.bounds) ||
+          tri.bounds[1] < x0 || tri.bounds[0] > x1 || tri.bounds[3] < z0 || tri.bounds[2] > z1)
+        continue;
+      if (surfaces && t / 3 < surfaces->size()) tri.surface = mesh.surface((*surfaces)[t / 3]);
+      patch.triangles.push_back(tri);
+    }
+  };
+  const auto add_mesh = [&](const StaticMesh &mesh) {
+    const int32_t cx0 = cell_coordinate(x0, mesh), cx1 = cell_coordinate(x1, mesh);
+    const int32_t cz0 = cell_coordinate(z0, mesh), cz1 = cell_coordinate(z1, mesh);
+    for (int32_t cx = cx0; cx <= cx1; ++cx)
+      for (int32_t cz = cz0; cz <= cz1; ++cz) {
+        const uint64_t key = floor_cell(cx, cz);
+        const auto cell = mesh.cells.find(key);
+        if (cell != mesh.cells.end()) add_list(mesh, cell->second, key);
+      }
+    add_list(mesh, mesh.large_triangles, 0);
+  };
+  if (g_static_enabled)
+    for (const auto &mesh : g_static) add_mesh(mesh);
+  for (const auto &[key, ground] : g_ground_collision)
+    for (const auto &mesh : ground.meshes) add_mesh(mesh);
+  for (const auto &entry : g_floor_meshes) {
+    const auto &cached = entry.second;
+    if (ignore && std::find(cached.ancestors.begin(), cached.ancestors.end(), ignore) !=
+                      cached.ancestors.end())
+      continue;
+    add_mesh(cached.mesh);
+  }
+  // A grid of kPatchCell cells over the rectangle, each listing its
+  // triangles in the order above (counted, then filled).
+  patch.nx = std::clamp(static_cast<int>(std::ceil((x1 - x0) / kPatchCell)), 1, kPatchCells);
+  patch.nz = std::clamp(static_cast<int>(std::ceil((z1 - z0) / kPatchCell)), 1, kPatchCells);
+  const auto column = [&](float x) {
+    return std::clamp(static_cast<int>(std::floor((x - x0) / kPatchCell)), 0, patch.nx - 1);
+  };
+  const auto row = [&](float z) {
+    return std::clamp(static_cast<int>(std::floor((z - z0) / kPatchCell)), 0, patch.nz - 1);
+  };
+  patch.start.assign(static_cast<size_t>(patch.nx * patch.nz) + 1, 0);
+  for (int pass = 0; pass < 2; ++pass) {
+    if (pass == 1) {
+      for (size_t c = 1; c < patch.start.size(); ++c) patch.start[c] += patch.start[c - 1];
+      patch.list.resize(patch.start.back());
+    }
+    for (uint32_t t = 0; t < patch.triangles.size(); ++t) {
+      const auto &b = patch.triangles[t].bounds;
+      const int cx0 = column(b[0]), cx1 = column(b[1]), cz0 = row(b[2]), cz1 = row(b[3]);
+      for (int cz = cz0; cz <= cz1; ++cz)
+        for (int cx = cx0; cx <= cx1; ++cx) {
+          const size_t c = static_cast<size_t>(cz * patch.nx + cx);
+          if (pass == 0) ++patch.start[c + 1];
+          else patch.list[patch.start[c]++] = t;
+        }
+    }
+  }
+  // The fill advanced each start to the next cell's: shift them back.
+  for (size_t c = patch.start.size() - 1; c > 0; --c) patch.start[c] = patch.start[c - 1];
+  patch.start[0] = 0;
+}
+
+bool scene_instances_floor_patch_covers(const SceneFloorPatch &patch, float x0, float z0,
+                                        float x1, float z1, void *ignore) {
+  return patch.nx && g_floor_prepared && patch.revision == g_floor_revision &&
+         patch.ignore == ignore && x0 >= patch.x0 && x1 <= patch.x1 && z0 >= patch.z0 &&
+         z1 <= patch.z1;
+}
+
+bool scene_instances_sample_floor(const SceneFloorPatch &patch, float x, float z,
+                                  float below, SceneFloorHit &sample) {
+  if (!patch.nx || !(x >= patch.x0 && x <= patch.x1 && z >= patch.z0 && z <= patch.z1))
+    return scene_instances_sample_floor(x, z, below, patch.ignore, sample);
+  const int cx = std::clamp(static_cast<int>(std::floor((x - patch.x0) / kPatchCell)), 0,
+                            patch.nx - 1);
+  const int cz = std::clamp(static_cast<int>(std::floor((z - patch.z0) / kPatchCell)), 0,
+                            patch.nz - 1);
+  const size_t c = static_cast<size_t>(cz * patch.nx + cx);
+  float best = 0.f;
+  bool hit = false;
+  GroundSurface surface;
+  for (uint32_t i = patch.start[c]; i < patch.start[c + 1]; ++i) {
+    const auto &tri = patch.triangles[patch.list[i]];
+    if (x < tri.bounds[0] || x > tri.bounds[1] || z < tri.bounds[2] || z > tri.bounds[3])
+      continue;
+    floor_test(tri.v, x, z, below, best, hit, sample.normal, tri.surface, &surface);
+  }
+  if (!hit)
+    return false;
+  sample.height = best;
+  sample.surface = surface;
   return true;
 }
 
@@ -2092,7 +2311,7 @@ std::vector<SceneInstance> collect_root(void *root, bool defer_skin) {
     }
     // Legacy resource cues (flags 640, e.g. finishObject) animate independently
     // of the script pose. Host timing/opacity defaults are documented in
-    // SCRIPT_RUNTIME.md; original per-bit semantics are not established.
+    // docs/scripting/runtime.md; original per-bit semantics are not established.
     uint32_t resource_flags = 0;
     scene_shadow_info(static_cast<uint32_t>(n->type_id), &resource_flags, nullptr);
     if (root == g_world && n->kind == GameRefKind::RenderRef && !n->vehicle_material &&
@@ -2456,6 +2675,8 @@ constexpr size_t kParallelCellMin = 16;
 constexpr size_t kParallelThreadMin = 4;
 // Fewer new walker palettes than this are built on the host thread (#268).
 constexpr size_t kParallelSkinMin = 8;
+// Placements below which collect_batches merges on the calling thread (#359).
+constexpr size_t kParallelMergeMin = 8192;
 
 std::vector<SceneInstance> scene_instances_collect(
     const SceneFrustum* frustum,
@@ -2690,6 +2911,7 @@ void scene_instances_collect_batches(const SceneFrustum* frustum,
   };
   struct Hit {
     uint32_t slot;
+    uint32_t pos;  // index in its batch, assigned in serial order below
     const GroundProp* prop;
   };
   static std::vector<std::vector<Hit>> hit_runs;
@@ -2726,13 +2948,37 @@ void scene_instances_collect_batches(const SceneFrustum* frustum,
           const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
           if (dist > 12.f && extent / dist * 128.f < 4.f) return;
         }
-        list.push_back({static_cast<uint32_t>(visible.shell->offset + batch.slot), &prop});
+        list.push_back({static_cast<uint32_t>(visible.shell->offset + batch.slot), 0, &prop});
       });
     }
   });
+  // Merge. A few thousand placements (the main view, about 3,000 in the
+  // city; reflection faces, about 200) are cheapest copied in order on this
+  // thread. The outer sun-cascade frustum lists about 21,000: there (#359)
+  // every hit is numbered within its batch in run order, each batch is sized
+  // once and the copies run on the pool. Either way each batch lists its
+  // placements in exactly the serial order.
+  size_t hit_total = 0;
+  for (size_t run = 0; run < runs; ++run) hit_total += hit_runs[run].size();
+  if (runs == 1 || hit_total < kParallelMergeMin) {
+    for (size_t run = 0; run < runs; ++run)
+      for (const auto& hit : hit_runs[run])
+        out[hit.slot].instances.push_back({hit.prop->render_matrix, hit.prop->color});
+    return;
+  }
+  static std::vector<uint32_t> slot_fill;  // host thread only, capacity kept
+  slot_fill.assign(out.size(), 0);
   for (size_t run = 0; run < runs; ++run)
-    for (const auto& hit : hit_runs[run])
-      out[hit.slot].instances.push_back({hit.prop->render_matrix, hit.prop->color});
+    for (auto& hit : hit_runs[run]) hit.pos = slot_fill[hit.slot]++;
+  for (size_t slot = 0; slot < out.size(); ++slot)
+    if (slot_fill[slot]) out[slot].instances.resize(slot_fill[slot]);
+  jobs_parallel_for(runs, [&](size_t run) {
+    for (const auto& hit : hit_runs[run]) {
+      auto& instance = out[hit.slot].instances[hit.pos];
+      instance.transform = hit.prop->render_matrix;
+      instance.color = hit.prop->color;
+    }
+  });
 }
 
 void scene_instances_override_mesh(uint32_t id,
@@ -2741,10 +2987,13 @@ void scene_instances_override_mesh(uint32_t id,
     g_overrides[id] = std::move(geo);
 }
 void scene_instances_enable_static_floor(bool enabled) {
-  if (g_static_enabled != enabled) ++g_floor_revision;
+  if (g_static_enabled == enabled) return;  // every frame: join only on a change
+  part_physics_join();
+  ++g_floor_revision;
   g_static_enabled = enabled;
 }
 void scene_instances_add_static_mesh(const ScxGeometry &geo) {
+  part_physics_join();
   if (!geo.info.ok || geo.indices.size() < 3 || geo.positions.size() < 9)
     return;
   StaticMesh mesh;
@@ -2758,7 +3007,131 @@ void scene_instances_add_static_mesh(const ScxGeometry &geo) {
 
 void scene_instances_override_collision(uint32_t id,
                                         std::shared_ptr<const ScxGeometry> geo) {
+  part_physics_join();
   if (id && geo) g_collision_overrides[id] = std::move(geo);
+}
+
+// The map SCM's surfaces for the collision faces (#452). The SCM is the
+// 8th field of the ground native's params; its material i is the SCY's
+// material i, whose texture names a surface the SCM leaves unset.
+// Config.ground_friction when the ground native ran (natives_resref).
+static std::atomic<float> g_ground_friction{1.f};
+
+// The average colour (ARGB) of a ground texture, decoded once on the CPU, or 0
+// when it cannot be read: the dust a tyre raises from that ground (#454).
+static uint32_t ground_texture_color(const std::string &absolute) {
+  static std::unordered_map<std::string, uint32_t> cache;
+  if (const auto it = cache.find(absolute); it != cache.end()) return it->second;
+  uint32_t colour = 0;
+  PaintImage image;
+  if (paint_image_from_texture(load_texture_file(absolute), &image) && image.valid()) {
+    double sum[3] = {};
+    double count = 0;
+    const size_t pixels = size_t(image.width) * image.height;
+    const size_t step = std::max<size_t>(1, pixels / 4096);
+    for (size_t i = 0; i < pixels; i += step) {
+      for (int k = 0; k < 3; ++k) sum[k] += image.rgba[i * 4 + k];
+      ++count;
+    }
+    if (count > 0)
+      colour = 0xff000000u | uint32_t(std::lround(sum[0] / count)) << 16 |
+               uint32_t(std::lround(sum[1] / count)) << 8 | uint32_t(std::lround(sum[2] / count));
+  }
+  cache.emplace(absolute, colour);
+  return colour;
+}
+
+static void attach_ground_surfaces(const RpkIndex &rpk, int32_t pack, const std::string &params,
+                            const std::vector<GroundMat> &mats,
+                            const RpkIndex::ModelRef &model, ScxGeometry &collision) {
+  std::string path;
+  {
+    size_t field = 0, start = 0;
+    for (size_t i = 0; i <= params.size(); ++i)
+      if (i == params.size() || params[i] == ',') {
+        if (field++ == 7) {
+          path = params.substr(start, i - start);
+          break;
+        }
+        start = i + 1;
+      }
+  }
+  while (!path.empty() && std::isspace(static_cast<unsigned char>(path.back()))) path.pop_back();
+  while (!path.empty() && std::isspace(static_cast<unsigned char>(path.front()))) path.erase(0, 1);
+  std::vector<GroundMaterialEntry> entries;
+  if (!path.empty()) {
+    std::replace(path.begin(), path.end(), '\\', '/');
+    std::ifstream in(std::filesystem::path(rpk.game_root()) / path, std::ios::binary);
+    if (in)
+      entries = parse_ground_materials(
+          {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()});
+  }
+  std::vector<std::string> textures(mats.size());
+  for (size_t i = 0; i < mats.size(); ++i)
+    if (model.ok && mats[i].tex < model.textures.size()) textures[i] = model.textures[mats[i].tex];
+  // Without an SCM the SCY material count still lets the texture names speak.
+  if (entries.empty()) entries.resize(mats.size());
+  collision.surfaces = ground_surfaces(entries, textures, g_ground_friction.load());
+  // Loose ground: its texture's colour for the dust.
+  for (size_t i = 0; i < collision.surfaces.size() && i < textures.size(); ++i)
+    if (collision.surfaces[i].rolling > 0 && !textures[i].empty()) {
+      std::string relative = textures[i];
+      std::replace(relative.begin(), relative.end(), '\\', '/');
+      collision.surfaces[i].dust_color =
+          ground_texture_color((std::filesystem::path(rpk.game_root()) / relative).string());
+    }
+  // skid_SFX names a sound in the ground pack's dependency slots.
+  for (auto &surface : collision.surfaces)
+    if (surface.slide_sound)
+      surface.slide_sound = (surface.slide_sound >> 16) == 0xffff
+                                ? 0
+                                : rpk.resolve_embedded_id(pack, surface.slide_sound);
+  // skid_PS and skid_SM (#454) too, except the name fallbacks' local ids of
+  // particles.rpk. 0 stays 0: the effects use the stock defaults.
+  const RpkPack *particles = rpk.pack_by_name("particles.rpk");
+  const auto resolve_effect = [&](uint32_t id) -> uint32_t {
+    if (!id) return 0;
+    if ((id & 0xffff0000u) == kParticlesLocal)
+      return particles ? RpkIndex::make_full_id(particles->pack_id, id) : 0;
+    return rpk.resolve_embedded_id(pack, id);
+  };
+  for (auto &surface : collision.surfaces) {
+    surface.skid_particles = resolve_effect(surface.skid_particles);
+    surface.skid_mark = resolve_effect(surface.skid_mark);
+  }
+  // The materials off the road, with their texture: what to check in game.
+  std::string soft;
+  size_t count = 0;
+  for (size_t i = 0; i < collision.surfaces.size(); ++i) {
+    const auto &surface = collision.surfaces[i];
+    if (surface.friction == 1.f && surface.rolling == 0.f && surface.bounce == .2f &&
+        !surface.mark_color && !surface.slide_sound && !surface.skid_particles &&
+        !surface.skid_mark)
+      continue;
+    if (++count > 16) continue;
+    char line[160];
+    std::snprintf(line, sizeof line, " %zu:%s(%s) %.2f/%.3f", i, entries[i].name.c_str(),
+                  std::filesystem::path(textures[i]).filename().string().c_str(),
+                  surface.friction, surface.rolling);
+    soft += line;
+    if (surface.bounce != .2f || surface.mark_color || surface.slide_sound) {
+      std::snprintf(line, sizeof line, "[bounce %.2f mark %08x sfx %08x]", surface.bounce,
+                    surface.mark_color, surface.slide_sound);
+      soft += line;
+    }
+    if (surface.skid_particles || surface.skid_mark) {
+      std::snprintf(line, sizeof line, "[ps %08x sm %08x dust %08x]", surface.skid_particles,
+                    surface.skid_mark, surface.dust_color);
+      soft += line;
+    }
+  }
+  jobs_printf("[scene] ground surfaces %s: %zu materials, %zu not road%s\n",
+              path.empty() ? "(no scm)" : path.c_str(), collision.surfaces.size(), count,
+              soft.c_str());
+}
+
+void scene_instances_set_ground_friction(float friction) {
+  g_ground_friction.store(std::isfinite(friction) && friction > 0 ? friction : 1.f);
 }
 
 GroundMapData scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id) {
@@ -2800,13 +3173,6 @@ GroundMapData scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id
           if (const auto* exterior = rpk.pack_by_path(dep.path))
             map.exterior_maps.push_back(RpkIndex::make_full_id(exterior->pack_id, 1));
   }
-  if (!walk.collision.indices.empty()) {
-    walk.collision.position_scale = 1.f;
-    map.collision = std::make_shared<ScxGeometry>(std::move(walk.collision));
-  }
-  if (walk.poly.empty())
-    return map;
-
   const RpkIndex::ModelRef model = rpk.model_for_resource(
       RpkIndex::pack_from_full(map.render_id), map.render_id & 0xffffu);
   std::filesystem::path table;
@@ -2816,6 +3182,13 @@ GroundMapData scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id
     table = std::filesystem::path(rpk.game_root()) / source;
   }
   const std::vector<GroundMat> mats = read_ground_materials(table);
+  if (!walk.collision.indices.empty()) {
+    walk.collision.position_scale = 1.f;
+    attach_ground_surfaces(rpk, pack, walk.params_line, mats, model, walk.collision);
+    map.collision = std::make_shared<ScxGeometry>(std::move(walk.collision));
+  }
+  if (walk.poly.empty())
+    return map;
 
   auto geo = std::make_shared<ScxGeometry>();
   geo->ground_polygons = true;
@@ -2897,14 +3270,10 @@ GroundMapData scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id
 
 namespace {
 bool ground_prop_config(const RpkIndex& rpk, uint32_t type, PartConfig& out) {
-  const auto bytes = rpk.read_payload(type);
-  if (bytes.size() < 10 || std::memcmp(bytes.data(), "ICFG", 4) != 0) return false;
-  const auto separator = std::find(bytes.begin() + 8, bytes.end(), 0);
-  if (separator == bytes.end()) return false;
-  const auto offset = static_cast<size_t>(separator - bytes.begin());
-  const std::string_view subtype(reinterpret_cast<const char*>(bytes.data() + 8), offset - 8);
+  std::string subtype;
+  std::string cfg = rpk.native_config(type, &subtype);
+  if (cfg.empty()) return false;
   if (subtype != "object" && subtype != "trlight" && subtype != "building") return false;
-  std::string cfg(reinterpret_cast<const char*>(bytes.data() + offset + 1), bytes.size() - offset - 1);
   // Several stock lane supports have a malformed yaw token on their second render.
   constexpr std::string_view joined_yaw = "-1.570.000000";
   for (size_t pos = cfg.find(joined_yaw); pos != std::string::npos;
@@ -2912,7 +3281,7 @@ bool ground_prop_config(const RpkIndex& rpk, uint32_t type, PartConfig& out) {
     cfg.replace(pos, joined_yaw.size(), "-1.570");
   out = parse_part_config(cfg, &rpk, RpkIndex::pack_from_full(type));
   out.resource = type;
-  out.native_kind = std::string(subtype);
+  out.native_kind = subtype;
   return true;
 }
 
@@ -3069,6 +3438,7 @@ SceneryLightList scene_instances_ground_lights(uint32_t render_id) {
 void scene_instances_add_ground_props(const GroundMapData& map) {
   if (!g_resources || map.placements.empty() || g_ground_props.contains(map.render_id))
     return;
+  part_physics_join();
   auto& props_map = g_ground_props[map.render_id];
   auto& cells = props_map.cells;
   std::unordered_map<uint32_t, PartConfig> object_types;

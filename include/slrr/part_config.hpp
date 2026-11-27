@@ -40,6 +40,18 @@ struct PartWheelSpring {
   float mass = 0.f;
   bool authored = false;
 };
+// `wing type x y z nx ny nz area suction exponent`: one aerodynamic panel in
+// the part's frame. As the MWM EXE's CFG handler (0x4443C0) does, the normal
+// is stored normalised, the area and suction factor as magnitudes, and a
+// missing exponent is 1. Only type 4 occurs in the stock CFGs.
+struct PartWing {
+  int type = 0;
+  std::array<float, 3> position{};
+  std::array<float, 3> normal{};
+  float area = 0.f;
+  float suction = 0.f;
+  float exponent = 1.f;
+};
 struct PartSlotLink {
   uint32_t resource = 0;
   int slot = 0;
@@ -84,7 +96,9 @@ struct PartRender {
 };
 enum class HudSlot : size_t {
   Gauge, RpmPin, SpeedPin, Rpm, Speed, Gear, Mileage, Handbrake,
-  Damage, Nitro, Turbo, Count
+  Damage, Nitro, Turbo,
+  // The ABS and ASR lamps (#446): build 606's `osd_abs` / `osd_asr`.
+  Abs, Asr, Count
 };
 struct HudElement {
   bool defined = false;
@@ -122,6 +136,8 @@ struct PartConfig {
   int category = 0;
   float mass = 0;
   std::vector<PartBody> bodies;
+  // At most 16, the EXE's per-part capacity.
+  std::vector<PartWing> wings;
   std::vector<PartWheelSpring> wheel_springs;
   uint32_t render = 0, mesh = 0, texture = 0;
   PartPose render_pose;
@@ -174,4 +190,11 @@ bool part_slot_matrix(const PartConfig &config, const PartSlot &slot,
 // `force` is the spring rate in N/m. Returns false when the spring is unset.
 bool part_parked_spring_length(float rest, float minimum, float maximum,
                                float force, float mass_on_wheel, float &length);
+// How the original Invictus Aero calculator authored a `wing` line: a wing
+// (airfoil) face or a body surface, and the face's flattened area in m².
+// Its SLRR method stores 30× that area for surfaces and 90× for wings
+// (exponent 0.667); its CRC and Experimental methods store about 1.27× and
+// write wings as type 5.
+bool part_wing_is_airfoil(const PartWing &wing);
+float part_wing_area(const PartWing &wing);
 } // namespace slrr

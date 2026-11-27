@@ -309,6 +309,32 @@ void stock_mounts_and_generic_compatibility() {
   }
 }
 
+// #413: the exe's Chassis.getMass returns the assembled vehicle body's mass
+// (CarInfo kg/HP, Garage, catalog delivery price). Part.getMass stays the
+// part's own CFG mass, so the chassis alone reads its _main_ body only.
+void chassis_mass_is_the_assembled_car() {
+  SwaybarFixture f;
+  auto *car = f.spawn(kBaiern);
+  auto mass = [&](const char *owner, Object *part) {
+    const auto value = f.registry.invoke(owner, "getMass", "()F", part, {});
+    SLRR_REQUIRE(value.tag == ValueTag::Float && std::isfinite(value.v.f));
+    return double(value.v.f);
+  };
+  double sum = 0;
+  for (const auto &part : part_installed_tree(car))
+    sum += mass("java.game.parts.Part", part.object);
+  const double body = mass("java.game.parts.Part", car);
+  const double total = mass("java.game.parts.bodypart.Chassis", car);
+  f.coast(car); // the released body carries the assembled physics mass
+  const double physics = f.state(car).mass;
+  std::printf("CHASSIS MASS body=%.1f total=%.1f sum=%.1f physics=%.1f\n", body,
+              total, sum, physics);
+  SLRR_REQUIRE(std::fabs(body - 838.5) < .5);
+  SLRR_REQUIRE(std::fabs(total - sum) < .01 * sum);
+  SLRR_REQUIRE(std::fabs(total - physics) < .01 * total);
+  SLRR_REQUIRE(total > 1300 && total < 1700);
+}
+
 void refresh_remove_transfer_and_destroy_are_isolated() {
   SwaybarFixture f;
   auto *a = f.spawn(kDuhen), *b = f.spawn(kDuhen);
@@ -516,21 +542,26 @@ void patched_stock_cars_install_their_listed_bars() {
     SLRR_REQUIRE(bar && f.vm.tree_instance_of(bar, kSwaybar));
     const auto part = installed(bar);
     const double health = std::clamp<double>(part.wear, 0, 1) * std::clamp<double>(part.tear, 0, 1);
-    return Axle{kStock.stiffness * health, kStock.damping * health};
+    return Axle{number(bar, "force") * health, number(bar, "damping") * health};
   };
+  // #419: the patched bars carry per-car rates from the real cars' bar
+  // diameters (N/m at the wheel) and no damping.
   const struct {
     CarType car;
     uint32_t front, rear;
+    float front_force, rear_force;
   } expected[] = {
-      {kDuhen, 0x41ff, 0x017c},    // authored mounts; rear entry corrected
-      {kEinvagen, 0x0185, 0x0186}, // authored front, added rear mount
-      {kBaiern, 0x0219, 0x021a},   // both mounts added
+      {kDuhen, 0x41ff, 0x017c, 13200, 3400},     // authored mounts; rear entry corrected
+      {kEinvagen, 0x0185, 0x0186, 20800, 13700}, // authored front, added rear mount
+      {kBaiern, 0x0219, 0x021a, 43200, 8300},    // both mounts added
   };
   for (const auto &row : expected) {
     auto *car = f.spawn(row.car);
     auto *front = on_slot(car, 701), *rear = on_slot(car, 702);
     SLRR_REQUIRE(installed(front).resource == f.resource("parts.rpk", row.front));
     SLRR_REQUIRE(installed(rear).resource == f.resource("parts.rpk", row.rear));
+    SLRR_REQUIRE(number(front, "force") == row.front_force && number(front, "damping") == 0);
+    SLRR_REQUIRE(number(rear, "force") == row.rear_force && number(rear, "damping") == 0);
     f.expect(car, axle(front), axle(rear));
     size_t bars = 0;
     for (const auto &part : part_installed_tree(car))
@@ -641,6 +672,7 @@ void installed_damping_reduces_contacted_stock_chassis_roll() {
 int main() {
   const standalone::Test tests[] = {
       stock_mounts_and_generic_compatibility,
+      chassis_mass_is_the_assembled_car,
       refresh_remove_transfer_and_destroy_are_isolated,
       invalid_coefficients_disable_the_pair_without_poisoning_physics,
       native_wear_tear_attenuate_and_stock_repair_restores,

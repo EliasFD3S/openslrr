@@ -515,9 +515,14 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
       receiver_hint = stack.back().v.o;
     const bool menu_receiver = !receiver_hint ||
         receiver_hint->class_name == "java.render.osd.Menu";
-    const bool menu_call =
-        (name == "addItem" && menu_receiver && argc != 6 &&
-         (argc_unset || argc >= 2)) || name == "addSeparator" || name == "setSliderStyle";
+    // Only the stock Menu needs the receiver repair below. A known Menu of
+    // another package (java.render.osdx.Menu) keeps its own call.
+    const bool foreign_menu = receiver_hint && !menu_receiver &&
+        receiver_hint->class_name.size() > 5 &&
+        receiver_hint->class_name.compare(receiver_hint->class_name.size() - 5, 5, ".Menu") == 0;
+    const bool menu_call = !foreign_menu &&
+        ((name == "addItem" && menu_receiver && argc != 6 &&
+          (argc_unset || argc >= 2)) || name == "addSeparator" || name == "setSliderStyle");
     const bool osd_build = name == "createMenu" || name == "createButton" ||
                            name == "createText" || name == "createRectangle" ||
                            name == "createHeader" ||
@@ -686,8 +691,15 @@ TreeEvalResult tree_eval(TreeHost* host, const TufaClass& cls,
     }
     pending_super = false;
     // Prefer Menu/Osd owner from receiver class when method ref owner wrong.
-    if (recv && menu_call) owner = "java.render.osd.Menu";
-    if (osd_build && recv) owner = "java.render.Osd";
+    // Virtual dispatch on the receiver: an Osd of another package (osdx)
+    // runs its own builders, not java.render.Osd's.
+    // A repaired receiver (last_menu) can be an osdx Menu: run its class.
+    if (recv && menu_call)
+      owner = recv->class_name.size() > 5 &&
+                      recv->class_name.compare(recv->class_name.size() - 5, 5, ".Menu") == 0
+                  ? recv->class_name
+                  : "java.render.osd.Menu";
+    if (osd_build && recv) owner = is_osd(recv) ? recv->class_name : "java.render.Osd";
 
     Value r;
     const bool static_call = is_static && !recv_from_path;

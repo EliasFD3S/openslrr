@@ -1,30 +1,37 @@
 # Agent working guide
 
-Before changing the engine, read [ENGINE_CONTRACT.md](docs/ENGINE_CONTRACT.md).
+Before changing the engine, read [ENGINE_CONTRACT.md](docs/core/ENGINE_CONTRACT.md).
 This guide describes the SLRR contract, subsystem responsibilities, and
 compatibility pitfalls. Then read the specialized documentation for your task:
 
-- VM, threads, events, and dialogs: [SCRIPT_RUNTIME.md](docs/SCRIPT_RUNTIME.md).
+- VM, threads, events, and dialogs: [scripting/runtime.md](docs/scripting/runtime.md).
 - Host threads, the worker pool and how to add parallel work:
-  [KNOWLEDGE_BASE.md §5.10](docs/KNOWLEDGE_BASE.md#510-threads-and-the-worker-pool)
-  and [ENGINE_CONTRACT.md §6](docs/ENGINE_CONTRACT.md#host-threads-and-the-worker-pool).
-- Object lifetime: [VM_GC.md](docs/VM_GC.md).
-- Script compilation: [SCRIPT_COMPILER.md](docs/SCRIPT_COMPILER.md).
-- Bindings, no-ops, and limitations: [NATIVE_AUDIT.md](docs/NATIVE_AUDIT.md).
+  [KNOWLEDGE_BASE.md §5.10](docs/core/KNOWLEDGE_BASE.md#510-threads-and-the-worker-pool)
+  and [ENGINE_CONTRACT.md §6](docs/core/ENGINE_CONTRACT.md#host-threads-and-the-worker-pool).
+- Object lifetime: [scripting/vm-gc.md](docs/scripting/vm-gc.md).
+- Script compilation: [scripting/compiler.md](docs/scripting/compiler.md).
+- Bindings, no-ops, and limitations: [scripting/natives.md](docs/scripting/natives.md).
 - Building and running: [README.md](README.md).
 - Verified code map, known doc drift, open risks and issue entry points:
-  [KNOWLEDGE_BASE.md](docs/KNOWLEDGE_BASE.md).
+  [KNOWLEDGE_BASE.md](docs/core/KNOWLEDGE_BASE.md).
 - Formats, mechanics and lessons from SLRR_rev and draft PR #3:
-  [EXTERNAL_RESEARCH.md](docs/EXTERNAL_RESEARCH.md).
-- Proposed roadmap: [MILESTONES.md](docs/MILESTONES.md).
+  [EXTERNAL_RESEARCH.md](docs/research/EXTERNAL_RESEARCH.md).
+- Proposed roadmap: [MILESTONES.md](docs/planning/MILESTONES.md).
+- Everything else (rendering, vehicles, world, UI, saves, resources, build)
+  is grouped by subsystem; start from the [documentation index](docs/README.md).
 
 SLRR_rev (https://github.com/nedobylskiy/SLRR_rev) implements most game
 mechanics. Before implementing a missing native or mechanic, check whether
 SLRR_rev already has it and migrate it, following
-[EXTERNAL_RESEARCH.md §7](docs/EXTERNAL_RESEARCH.md#7-migrating-mechanics-from-slrr_rev).
+[EXTERNAL_RESEARCH.md §7](docs/research/EXTERNAL_RESEARCH.md#7-migrating-mechanics-from-slrr_rev).
 
-After changing code that the knowledge base cites, run
+After changing code that the documentation cites, run
 `python scripts/check_knowledge_refs.py`.
+
+Write an issue's verified notes (cause, fix, validation) in its subsystem's
+notes file under `docs/<subsystem>/`, not in the knowledge base. The
+knowledge base keeps only cross-cutting knowledge; its §14 lists where each
+subsystem's notes live.
 
 Check the active code: some audits and comments describe earlier implementations.
 Preserve changes already present in the working tree. Fix general primitives

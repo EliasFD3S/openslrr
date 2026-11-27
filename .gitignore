@@ -9,6 +9,7 @@
 /build-bgfx-x64/
 /tools/*
 !/tools/compile_game_sources.cpp
+!/tools/physics_lab.cpp
 cmake-build-*/
 CMakeFiles/
 CMakeCache.txt

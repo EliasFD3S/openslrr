@@ -11,6 +11,9 @@ namespace slrr {
 // Registers System / File / FindFile / GameLogic / OSD stubs for career boot.
 void register_boot_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections);
 void register_gc_natives(Jvm& jvm);
+// Math.randomize seeds the script RNG from the clock; a seed >= 0 makes it
+// use that seed instead, for repeatable benchmark runs (#358).
+void natives_fix_random_seed(int64_t seed);
 // java.game.Painter (natives_painter.cpp). painter_tick, once a frame,
 // expires a decal preview the script stopped refreshing.
 void register_painter_natives(Jvm& jvm);

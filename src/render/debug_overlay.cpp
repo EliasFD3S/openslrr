@@ -15,6 +15,7 @@
 
 #include <imgui/imgui.h>
 
+#include <cfloat>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -52,7 +53,7 @@ void draw_render_session(Jvm* vm) {
     ImGui::Text("CPU scripts %.2f | traffic %.2f | physics %.2f ms",
                 ms(perf::Zone::Scripts), ms(perf::Zone::Traffic),
                 ms(perf::Zone::Physics));
-    ImGui::Text("CPU vehicles %.2f | pedestrians %.2f | collision %.2f ms",
+    ImGui::Text("Physics thread %.2f | pedestrians %.2f | collision %.2f ms",
                 ms(perf::Zone::Vehicles), ms(perf::Zone::Pedestrians),
                 ms(perf::Zone::Collision));
     ImGui::Text("CPU collect %.2f | shadows %.2f | reflections %.2f ms",
@@ -186,6 +187,7 @@ constexpr std::pair<perf::Zone, const char*> kRenderZones[] = {
     {perf::Zone::LampSelect, "Street lamp selection"},
     {perf::Zone::Shadows, "Shadow updates (all)"},
     {perf::Zone::SunShadows, "  sun cascades / point"},
+    {perf::Zone::SunCollect, "    sun caster collection"},
     {perf::Zone::CarDepth, "  vehicle depth (sun)"},
     {perf::Zone::LampShadows, "  lamp + car lamp tiles"},
     {perf::Zone::FixtureShadows, "Garage fixture shadows"},
@@ -197,10 +199,10 @@ constexpr std::pair<perf::Zone, const char*> kRenderZones[] = {
     // Main-thread host work outside the renderer (#260).
     {perf::Zone::Scripts, "Scripts"},
     {perf::Zone::Traffic, "Traffic"},
-    {perf::Zone::Physics, "Physics (all)"},
-    {perf::Zone::Vehicles, "  vehicles"},
+    {perf::Zone::Physics, "Physics on the host (prepare, wait, publish)"},
     {perf::Zone::Pedestrians, "  pedestrians"},
     {perf::Zone::Collision, "  collision"},
+    {perf::Zone::Vehicles, "Physics thread (beside the host)"},
     {perf::Zone::Gc, "GC"},
     {perf::Zone::Flush, "Render flush (all renderer zones)"},
 };
@@ -395,6 +397,7 @@ void draw_render_passes(DebugOverlay::RenderOptions& options) {
   auto& o = render_debug();
   ImGui::TextDisabled("Debug overrides: not saved, reset on restart.");
   ImGui::Checkbox("Ambient occlusion pass", &o.ambient_occlusion);
+  ImGui::Checkbox("Soft particles depth", &o.soft_particles);
   for (int i = 0; i < 4; ++i) {
     char label[48];
     std::snprintf(label, sizeof(label), "Sun cascade %d", i);
@@ -402,7 +405,9 @@ void draw_render_passes(DebugOverlay::RenderOptions& options) {
     ImGui::Checkbox(label, &o.sun_cascades[size_t(i)]);
   }
   ImGui::Checkbox("Shadow caching (off: redraw every frame)", &o.shadow_caching);
-  ImGui::Checkbox("Worker encoders (AO prepass, car tiles, reflections)", &o.worker_encoders);
+  ImGui::Checkbox("Far cascades on alternate frames while moving", &o.cascade_alternation);
+  ImGui::Checkbox("Reuse the sun's map props across frames", &o.sun_batch_cache);
+  ImGui::Checkbox("Worker encoders (AO prepass, car tiles, sun cascades, reflections)", &o.worker_encoders);
   ImGui::Checkbox("Headlight shadows", &o.headlight_shadows);
   ImGui::Checkbox("Map shadows", &options.map_shadows);
   ImGui::Checkbox("Vehicle shadow casters", &options.shadows);
@@ -457,6 +462,8 @@ void draw_render_budgets(DebugOverlay::RenderOptions& options) {
   size_combo("Sun cascade tile", o.sun_shadow_size, 512,
              "From Shadow quality\0" "512\0" "1024\0" "2048\0" "4096\0");
   ImGui::SliderFloat("Cascade radius scale", &o.cascade_scale, .25f, 4.f, "%.2fx");
+  ImGui::SliderFloat("Shadow sun step (0: every frame)", &o.shadow_sun_step, 0.f, .5f, "%.3f deg");
+  ImGui::SliderFloat("Shadow crossfade after a step (0: jump)", &o.shadow_crossfade, 0.f, 3.f, "%.2f s");
   ImGui::SliderFloat("AO resolution scale (2 = full res)", &o.ao_resolution_scale, .25f, 2.f, "%.2fx");
   ImGui::Checkbox("AO reference sampling (full-res depth)", &o.ao_reference);
   ImGui::SliderInt("Reflection faces per frame (0 freezes)", &options.reflection_faces, 0, 6);
@@ -500,6 +507,7 @@ void draw_render_options(DebugOverlay::RenderOptions& options, const char* refle
   ImGui::Combo("Ambient occlusion",&enhanced.ao_method,"Off\0HBAO\0GTAO\0");
   ImGui::Combo("AO quality",&enhanced.ao_quality,"Low\0Medium\0High\0");
   ImGui::SliderInt("AO strength (%)",&enhanced.ao_strength,0,200);
+  ImGui::SliderInt("Tyre smoke density (%)",&enhanced.tyre_smoke_density,0,400);
   ImGui::SliderInt("AO radius (cm)",&enhanced.ao_radius,25,300);
   ImGui::Combo("Shadow quality",&enhanced.shadow_quality,"Low\0Medium\0High\0");
   ImGui::Combo("Shadow smoothing",&enhanced.shadow_smoothing,"Sharp\0Soft\0Very soft\0");
@@ -554,15 +562,26 @@ void draw_tuning(Jvm* vm) {
                            {Value::make_float(warp)});
   }
   ImGui::SeparatorText("Tyre model");
-  auto& tuning = physics::tire_tuning();
-  const auto slider = [](const char* label, float& value, float minimum, float maximum) {
-    ImGui::SliderFloat(label, &value, minimum, maximum, "%.2fx", ImGuiSliderFlags_NoInput);
+  // The physics thread reads the tuning during a batch: edit a copy and
+  // apply it between batches.
+  auto tuning = physics::tire_tuning();
+  bool changed = false;
+  const auto slider = [&changed](const char* label, float& value, float minimum, float maximum) {
+    changed |= ImGui::SliderFloat(label, &value, minimum, maximum, "%.2fx",
+                                  ImGuiSliderFlags_NoInput);
   };
   slider("Lateral grip", tuning.lateral_grip, .25f, 2.f);
   slider("Longitudinal grip", tuning.longitudinal_grip, .25f, 2.f);
   slider("Lateral response", tuning.lateral_response, .25f, 2.f);
   slider("Load sensitivity", tuning.load_sensitivity, 0.f, 2.5f);
-  if (ImGui::Button("Reset tyre settings")) tuning = {};
+  if (ImGui::Button("Reset tyre settings")) {
+    tuning = {};
+    changed = true;
+  }
+  if (changed) {
+    part_physics_join();
+    physics::tire_tuning() = tuning;
+  }
 }
 
 void draw_section(Jvm* vm, const SectionMachine* sections, bool& edit_fields) {
@@ -671,8 +690,56 @@ std::string vehicle_label(Object* vehicle) {
   return name + " #" + std::to_string(vehicle_id(vehicle));
 }
 
+// Rolling telemetry history for the Vehicle tab (#380), one sample per frame.
+struct TelemetryHistory {
+  static constexpr int kSize = 600;
+  float speed[kSize]{}, rpm[kSize]{}, yaw[kSize]{}, slip_angle[kSize]{}, rear_slip[kSize]{};
+  int next = 0;
+  void push(const PartPhysicsState& state) {
+    speed[next] = static_cast<float>(state.speed_kph);
+    rpm[next] = static_cast<float>(state.rpm);
+    yaw[next] = static_cast<float>(state.yaw_rate * kDegrees);
+    const auto& rl = state.tires[2];
+    const auto& rr = state.tires[3];
+    const double road = std::max(1.5, std::abs((rl.wheel_speed - rl.slip_speed +
+                                                rr.wheel_speed - rr.slip_speed) * .5));
+    slip_angle[next] = static_cast<float>(
+        std::atan2((rl.lateral_speed + rr.lateral_speed) * .5, road) * kDegrees);
+    rear_slip[next] = static_cast<float>((rl.slip_speed + rr.slip_speed) * .5);
+    next = (next + 1) % kSize;
+  }
+};
+
+void plot(const char* label, const float* values, int offset, const char* unit) {
+  char overlay[64];
+  std::snprintf(overlay, sizeof overlay, "%.1f %s",
+                values[(offset + TelemetryHistory::kSize - 1) % TelemetryHistory::kSize], unit);
+  ImGui::PlotLines(label, values, TelemetryHistory::kSize, offset, overlay, FLT_MAX, FLT_MAX,
+                   ImVec2(0, 48));
+}
+
 void draw_vehicle(const PartPhysicsState& state) {
+  static TelemetryHistory history;
+  history.push(state);
+  const auto clock = part_physics_clock_stats();
+  ImGui::Text("Solver %u Hz | %s | %.0f steps/s | thread %.1f %%", clock.hz,
+              clock.free_running ? "free-running" : "frame-locked", clock.steps_per_second,
+              clock.thread_load * 100.);
+  if (clock.dropped > 0 || clock.host_wait > .01)
+    ImGui::TextColored(ImVec4(1, .55f, .2f, 1),
+                       "Behind real time: frame waits %.0f %% | %.0f ms/s dropped",
+                       clock.host_wait * 100., clock.dropped * 1e3);
+  ImGui::Text("Throttle %.2f | Brake %.2f | Clutch %.2f", state.throttle, state.brake,
+              state.clutch);
   ImGui::Text("%.1f km/h | %.0f rpm | Gear %d", state.speed_kph, state.rpm, state.gear);
+  // Brakes and driving aids (#446): rotor temperature and caliper pressure.
+  ImGui::Text("ABS %s | ASR %s | Reference %.1f km/h", state.abs_active ? "ACTIVE" : "-",
+              state.asr_active ? "ACTIVE" : "-", state.reference_speed * 3.6);
+  ImGui::Text("Brakes FL %.0f C %.0f%% | FR %.0f C %.0f%% | RL %.0f C %.0f%% | RR %.0f C %.0f%%",
+              state.brake_temperature[0], state.brake_pressure[0] * 100.,
+              state.brake_temperature[1], state.brake_pressure[1] * 100.,
+              state.brake_temperature[2], state.brake_pressure[2] * 100.,
+              state.brake_temperature[3], state.brake_pressure[3] * 100.);
   ImGui::Text("Physics %s | Mass %.0f kg | Yaw %.1f deg/s",
               state.active ? "active" : "inactive", state.mass, state.yaw_rate * kDegrees);
   ImGui::Text("Steering %.0f%% help | %+.1f deg requested | %+.1f deg applied | %+.1f deg assist",
@@ -681,9 +748,15 @@ void draw_vehicle(const PartPhysicsState& state) {
   ImGui::Text("Ticks %llu | Backlog %llu",
               static_cast<unsigned long long>(state.ticks),
               static_cast<unsigned long long>(state.backlog));
-  if (!ImGui::BeginTable("wheels", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+  plot("Speed", history.speed, history.next, "km/h");
+  plot("RPM", history.rpm, history.next, "rpm");
+  plot("Yaw rate", history.yaw, history.next, "deg/s");
+  plot("Rear slip angle", history.slip_angle, history.next, "deg");
+  plot("Rear wheelspin", history.rear_slip, history.next, "m/s");
+  if (!ImGui::BeginTable("wheels", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
     return;
-  for (const char* name : {"Wheel", "Load / steer", "Slip X / Y", "Force X / Y"})
+  for (const char* name : {"Wheel", "Load / steer", "Wheel speed", "Slip ratio / angle",
+                           "Slip X / Y", "Force X / Y"})
     ImGui::TableSetupColumn(name);
   ImGui::TableHeadersRow();
   const char* names[] = {"FL", "FR", "RL", "RR"};
@@ -691,9 +764,19 @@ void draw_vehicle(const PartPhysicsState& state) {
     const auto& tire = state.tires[i];
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
-    ImGui::Text("%s %s", names[i], state.contact[i] ? "ground" : "air");
+    ImGui::Text("%s %s | drive %.2f", names[i], state.contact[i] ? "ground" : "air",
+                tire.drive);
     ImGui::TableNextColumn();
     ImGui::Text("%.0f N / %+.1f deg", state.force[i], tire.steer * kDegrees);
+    ImGui::TableNextColumn();
+    ImGui::Text("%.2f m/s", tire.wheel_speed);
+    ImGui::TableNextColumn();
+    {
+      const double road = tire.wheel_speed - tire.slip_speed;
+      const double reference = std::max(1.5, std::abs(road));
+      ImGui::Text("%+.2f / %+.1f deg", tire.slip_speed / reference,
+                  std::atan2(tire.lateral_speed, reference) * kDegrees);
+    }
     ImGui::TableNextColumn();
     ImGui::Text("%+.2f / %+.2f m/s", tire.slip_speed, tire.lateral_speed);
     ImGui::TableNextColumn();
@@ -704,12 +787,14 @@ void draw_vehicle(const PartPhysicsState& state) {
 
 void draw_input() {
   const auto& input = host_input();
-  ImGui::Text("Steering %+.3f (%s)", input.drive_steer,
-              input.drive_steer_analog ? "analog" : "digital");
+  constexpr const char* kinds[] = {"none", "keyboard", "mouse", "pad", "wheel"};
+  ImGui::Text("Steering %+.3f (%s, %s)", input.drive_steer,
+              input.drive_steer_analog ? "analog" : "digital",
+              kinds[static_cast<int>(input.drive_steer_kind) + 1]);
   ImGui::Text("Throttle %.3f | Brake %.3f | Clutch %.3f",
               input.drive_throttle, input.drive_brake, input.drive_clutch);
-  ImGui::Text("Handbrake %s | Reverse %s | Shift %+.2f",
-              input.drive_handbrake ? "on" : "off",
+  ImGui::Text("Handbrake %.3f | Reverse %s | Shift %+.2f",
+              input.drive_handbrake,
               input.drive_reverse ? "on" : "off", input.drive_shift);
 }
 }  // namespace
@@ -889,6 +974,7 @@ void DebugOverlay::shutdown() {
   sections_ = nullptr;
   jvm_ = nullptr;
   render_options_ = {};
+  part_physics_join();
   physics::tire_tuning() = {};
   mouse_buttons_ = 0;
 }

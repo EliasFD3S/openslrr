@@ -267,20 +267,30 @@ bool lookup(UnitScope& scope, std::string_view name, std::string& full) {
     if (scope.find(full) != nullptr) {
         return true;
     }
+    // As in Java, a single-class import shadows the classes of a star import,
+    // whatever their order: java.render.osdx.Osd wins over java.render.*.
     for (const Import& imp : scope.imports) {
         if (imp.is_star) {
-            full = imp.name;
-            full += '.';
-            full += name;
-        } else if (imp.name == name ||
-                   (imp.name.size() > name.size() &&
-                    imp.name[imp.name.size() - name.size() - 1] == '.' &&
-                    std::string_view(imp.name).substr(imp.name.size() - name.size()) == name)) {
-            // imp == name or imp.endswith('.' + name)
-            full = imp.name;
-        } else {
             continue;
         }
+        if (imp.name == name ||
+            (imp.name.size() > name.size() &&
+             imp.name[imp.name.size() - name.size() - 1] == '.' &&
+             std::string_view(imp.name).substr(imp.name.size() - name.size()) == name)) {
+            // imp == name or imp.endswith('.' + name)
+            full = imp.name;
+            if (scope.find(full) != nullptr) {
+                return true;
+            }
+        }
+    }
+    for (const Import& imp : scope.imports) {
+        if (!imp.is_star) {
+            continue;
+        }
+        full = imp.name;
+        full += '.';
+        full += name;
         if (scope.find(full) != nullptr) {
             return true;
         }

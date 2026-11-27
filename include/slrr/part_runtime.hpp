@@ -100,12 +100,42 @@ Object *part_showing_texture(uint32_t texture);
 // hangs on this point; `look` stays on the chassis origin.
 bool part_car_ground(void *key, float *y);
 bool part_camera_pose(void* car, int camera, float* matrix);
+// World linear velocity of a car's chassis body, in m/s.
+bool part_car_velocity(void* car, float* velocity);
 // Chassis owning a render node, with its active-world script frame.
 void *part_shadow_source(void *render, float *frame);
 // Advance only cars belonging to the active world, at a fixed physics step.
+// The bodies step on the physics thread (#203): part_physics_begin prepares
+// the frame's host ticks and starts them, part_physics_end waits for them and
+// publishes the results, then poses panels, drivers and pedestrians. Between
+// the two the host may render, but must not run scripts, destroy parts or
+// change scene collision without part_physics_join() first.
+// part_physics_advance does both at once.
+void part_physics_begin(double seconds);
+void part_physics_end();
 void part_physics_advance(double seconds);
+// Waits for a running batch without publishing it. A no-op without one.
+void part_physics_join();
+// Free-running physics thread (#380): the solver steps on the wall clock,
+// independently of the frame rate; the host syncs with it once per frame.
+// The fixed-step benchmark turns it off (frame-locked batches).
+void part_physics_set_free_running(bool free_running);
+// --physics-trace: appends the controlled car's solver steps around each
+// vertical jolt over 1.5 g (0.6 s before, 0.3 s after) to a CSV file.
+void part_physics_trace(const std::string& path);
+// False runs each batch on the calling thread (--physics-inline).
+void part_physics_set_threaded(bool threaded);
+// The wind on released cars: m/s at 10 m height, blowing towards
+// heading_degrees from +Z towards +X (physics::wind_velocity). 0 is calm.
+void part_set_wind(double speed, double heading_degrees);
 // External traffic motion owns pose/velocity; physics resumes from that pose on release.
 void part_set_external_motion(Object*,bool);
+// The chassis local matrix physics published last; false before physics
+// runs, while suspended, or for a car in external motion (#358).
+bool part_published_local(Object* car, float* local16);
+// Poses a car in external motion from a local matrix and turns its wheels by
+// the travel since the previous pose, dt seconds ago (#358 drive replay).
+bool part_set_external_pose(Object* car, const float* local16, double dt);
 // Metres travelled and road-wheel steering angle for externally driven traffic.
 void part_animate_external_wheels(Object*,float metres,float steer);
 // GroundRef pedestrian natives. Density is people per square metre after the
@@ -132,6 +162,8 @@ struct PartPhysicsState {
   struct TireSample {
     double steer = 0, slip_speed = 0, lateral_speed = 0;
     double longitudinal_force = 0, lateral_force = 0;
+    double wheel_speed = 0;  // spin x radius, m/s (#380 telemetry)
+    double drive = 0;        // the wheel's script drive weight (setDrive)
   };
   std::array<TireSample, 4> tires{};
   double speed_kph = 0, rpm = 0, yaw_rate = 0;
@@ -140,7 +172,31 @@ struct PartPhysicsState {
   double steering_help = 0, steering_request = 0, steering_angle = 0;
   double steering_correction = 0;
   int gear = 0;
+  // Drive inputs the solver applies (#380 telemetry).
+  double throttle = 0, brake = 0, clutch = 0;
+  // Brakes and driving aids (#446): rotor temperature (deg C), caliper
+  // pressure (fraction of full pedal), the controller's reference speed.
+  std::array<double, 4> brake_temperature{}, brake_pressure{};
+  // Brake fluid and tyre tread / carcass temperatures (deg C); whether the
+  // patched scripts gave the brake and the tyre a spec.
+  std::array<double, 4> fluid_temperature{}, tyre_surface{}, tyre_carcass{};
+  std::array<bool, 4> brake_specified{}, tyre_specified{};
+  bool abs_active = false, asr_active = false;
+  double reference_speed = 0;
 };
+// Solver statistics over the last second (#380): rate, steps actually run
+// per second and the physics thread's busy fraction (free-running mode).
+struct PartPhysicsClockStats {
+  unsigned hz = 0;
+  double steps_per_second = 0, thread_load = 0;
+  double dropped = 0;  // game seconds per second dropped: the thread fell behind
+  double host_wait = 0;  // share of wall time the frame waited for the thread
+  bool free_running = false;
+};
+PartPhysicsClockStats part_physics_clock_stats();
+// Solver steps the next `host_ticks` frame-locked 60 Hz host ticks will run
+// (2 per tick at 120 Hz, 16 or 17 at 1000 Hz).
+unsigned part_physics_steps_ahead(unsigned host_ticks);
 bool part_physics_state(Object *car, PartPhysicsState &state);
 Object* part_controlled_chassis();
 // Top-level cars of the active world, for trigger volumes: the chassis key,
@@ -175,10 +231,24 @@ struct VehicleHudState {
   float nitro = 0, turbo = 0;
   int gear = 0;
   bool handbrake = false;
+  // ABS / ASR intervening this step (#446): the stock lamps light then.
+  bool abs = false, asr = false;
+  // Brake and tyre temperatures per wheel (#446), front left, front right,
+  // rear left, rear right, for the panel host option 32 turns on.
+  struct Corner {
+    bool brake = false, tyre = false;  // the patched scripts gave a spec
+    float rotor = 25, fluid = 25, tread = 25, carcass = 25;  // deg C
+    float pad = 1, grip = 1;  // friction relative to the working value
+    bool pad_cold = false, tread_cold = false, boiling = false;
+  };
+  std::array<Corner, 4> corners{};
+  bool temperatures = false;
   // Engine (category 1), body (category 2) and wheel parts of the car. A
   // part absent from the tree is absent here, so its gauge blip goes away.
   std::array<VehicleHudPart, 192> parts{};
   size_t part_count = 0;
+  // The chassis itself (wear * tear); colours the car outline glyph.
+  float chassis_condition = 1;
 };
 void part_set_hud_preview(const std::string &path);
 bool part_vehicle_hud(VehicleHudState &state);

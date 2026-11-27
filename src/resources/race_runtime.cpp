@@ -76,10 +76,8 @@ Ground *ground_state(const RpkIndex &rpk, void *key) {
       maps.insert(maps.end(), map.exterior_maps.begin(),
                   map.exterior_maps.end());
       for (const auto &placement : map.placements) {
-        auto bytes = rpk.read_payload(placement.type);
-        if (bytes.size() > 16 &&
-            std::equal(bytes.begin(), bytes.begin() + 4, "ICFG") &&
-            std::equal(bytes.begin() + 8, bytes.begin() + 16, "trlight\0"))
+        std::string kind;
+        if (!rpk.native_config(placement.type, &kind).empty() && kind == "trlight")
           signals.push_back(placement.position);
       }
     }

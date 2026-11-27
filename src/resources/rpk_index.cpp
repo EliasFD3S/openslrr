@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <sstream>
 #include <unordered_set>
 #include <vector>
 
@@ -550,6 +551,32 @@ uint32_t RpkIndex::resolve_embedded_id(int32_t owner_pack,
 std::string RpkIndex::payload_prop(uint32_t full_id, const char* key) const {
   const auto all = payload_props(full_id, key);
   return all.empty() ? std::string{} : all.front();
+}
+
+std::string RpkIndex::native_config(uint32_t full_id, std::string* kind) const {
+  const auto bytes = read_payload(full_id);
+  if (bytes.size() >= 10 && std::memcmp(bytes.data(), "ICFG", 4) == 0) {
+    const auto separator = std::find(bytes.begin() + 8, bytes.end(), 0);
+    if (separator == bytes.end()) return {};
+    const auto offset = static_cast<size_t>(separator - bytes.begin());
+    if (kind) kind->assign(reinterpret_cast<const char*>(bytes.data() + 8), offset - 8);
+    return std::string(reinterpret_cast<const char*>(bytes.data() + offset + 1),
+                       bytes.size() - offset - 1);
+  }
+  const std::string native = payload_prop(full_id, "native");
+  const auto split = native.find_first_of(" \t");
+  if (split == std::string::npos) return {};
+  const auto begin = native.find_first_not_of(" \t", split);
+  if (begin == std::string::npos) return {};
+  std::string path = resolve_disk_path(native.substr(begin));
+  while (!path.empty() && std::isspace(static_cast<unsigned char>(path.back())))
+    path.pop_back();
+  std::ifstream in(path, std::ios::binary);
+  if (!in) return {};
+  std::ostringstream text;
+  text << in.rdbuf();
+  if (kind) kind->assign(native, 0, split);
+  return text.str();
 }
 
 std::string RpkIndex::texture_path_for_id(uint32_t id) const {

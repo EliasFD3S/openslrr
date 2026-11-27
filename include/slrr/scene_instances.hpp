@@ -213,6 +213,9 @@ struct GroundMapData {
   std::vector<Placement> placements;
 };
 GroundMapData scene_instances_ground_map(const RpkIndex &rpk, uint32_t ground_id);
+// Config.ground_friction, read by the ground native before it parses its
+// maps: it multiplies every ground material's friction (#452).
+void scene_instances_set_ground_friction(float friction);
 void scene_instances_add_ground_props(const GroundMapData& map);
 // Light `render` children of the map's placements (type-13 resources, #237),
 // in the ground shell's local script space. Null when the map has none or its
@@ -272,6 +275,7 @@ uint64_t scene_instances_floor_revision();
 struct SceneFloorHit {
   float height = 0;
   float normal[3] = {0, 1, 0};
+  GroundSurface surface;  // the map SCM material's, else plain road (#452)
 };
 // Renderer-space projection onto the sampled receiver, along the scene light.
 bool scene_shadow_projection(const float *script_frame,
@@ -282,6 +286,32 @@ bool scene_shadow_info(uint32_t type_id, uint32_t *flags,
                        SceneShadowDecal *decal);
 bool scene_instances_sample_floor(float x, float z, float below, void *ignore,
                                   SceneFloorHit &hit);
+// The floor triangles under an XZ rectangle, copied into a small grid, for
+// the many floor queries one car makes in a solver step (#380). A query in
+// the rectangle tests the same triangles as scene_instances_sample_floor
+// (ties between equally high triangles may pick another one's normal); a
+// query outside it falls back to scene_instances_sample_floor. Valid until
+// the scene's collision changes (scene_instances_floor_revision).
+struct SceneFloorPatch {
+  struct Triangle {
+    float bounds[4];  // min x, max x, min z, max z
+    float v[3][3];
+    GroundSurface surface;
+  };
+  float x0 = 0, z0 = 0, x1 = -1, z1 = -1;
+  void *ignore = nullptr;
+  uint64_t revision = 0;  // scene_instances_floor_revision when built
+  int nx = 0, nz = 0;
+  std::vector<Triangle> triangles;
+  std::vector<uint32_t> start, list;  // per grid cell: triangles[list[start[c]..start[c+1])]
+};
+void scene_instances_floor_patch(float x0, float z0, float x1, float z1, void *ignore,
+                                 SceneFloorPatch &patch);
+// True while `patch` is current and covers the rectangle for `ignore`.
+bool scene_instances_floor_patch_covers(const SceneFloorPatch &patch, float x0, float z0,
+                                        float x1, float z1, void *ignore);
+bool scene_instances_sample_floor(const SceneFloorPatch &patch, float x, float z,
+                                  float below, SceneFloorHit &hit);
 // One entry per mesh under `root`: x, z and the lowest vertex Y, in script
 // space (the same Y the chassis pose uses).
 bool scene_instances_supports(void *root,

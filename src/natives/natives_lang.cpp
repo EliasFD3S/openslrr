@@ -27,6 +27,7 @@
 namespace slrr {
 
 namespace {
+int64_t g_fixed_random_seed = -1;
 
 float bits_f32(uint32_t u) {
   float f = 0.f;
@@ -235,6 +236,11 @@ void register_gc_natives(Jvm& jvm) {
       });
 }
 
+void natives_fix_random_seed(int64_t seed) {
+  g_fixed_random_seed = seed;
+  if (seed >= 0) std::srand(static_cast<unsigned>(seed));
+}
+
 void register_lang_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   register_gc_natives(jvm);
   jvm.natives().register_method("java.lang.Vector3", "rotate", "(Ljava.lang.Ypr;)Ljava.lang.Vector3;",
@@ -330,6 +336,56 @@ void register_lang_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         if (a < 0.f) a = 0.f;
         return Value::make_float(std::sqrt(a));
       });
+  // OpenSLRR (#450): Math.pow, declared by the patched Math class (SLRR 2.3.1
+  // has it). A negative base with a fractional exponent, or an overflow,
+  // returns 0 rather than a NaN or infinity that would poison script physics.
+  jvm.natives().register_method(
+      "java.lang.Math", "pow", "(FF)F",
+      [](Object*, const std::vector<Value>& args) {
+        float a[2] = {0.f, 0.f};
+        for (size_t i = 0; i < 2 && i < args.size(); ++i) {
+          if (args[i].tag == ValueTag::Float) a[i] = args[i].v.f;
+          else if (args[i].tag == ValueTag::Int)
+            a[i] = static_cast<float>(args[i].v.i);
+        }
+        const float r = std::pow(a[0], a[1]);
+        return Value::make_float(std::isfinite(r) ? r : 0.f);
+      });
+  // OpenSLRR (#463): trigonometry, exp, log and wrapAngle, declared by the patched
+  // Math class. Same contract as pow: a NaN or infinite result becomes 0,
+  // asin and acos clamp their input to [-1, 1] and log returns 0 for a <= 0.
+  auto register_unary = [&jvm](const char* name, double (*fn)(double)) {
+    jvm.natives().register_method(
+        "java.lang.Math", name, "(F)F",
+        [fn](Object*, const std::vector<Value>& args) {
+          const float r = static_cast<float>(
+              fn(static_cast<double>(native_arg_number(args, 0))));
+          return Value::make_float(std::isfinite(r) ? r : 0.f);
+        });
+  };
+  register_unary("sin", [](double a) { return std::sin(a); });
+  register_unary("cos", [](double a) { return std::cos(a); });
+  register_unary("tan", [](double a) { return std::tan(a); });
+  register_unary("asin", [](double a) {
+    return std::asin(std::clamp(a, -1.0, 1.0));
+  });
+  register_unary("acos", [](double a) {
+    return std::acos(std::clamp(a, -1.0, 1.0));
+  });
+  register_unary("atan", [](double a) { return std::atan(a); });
+  register_unary("exp", [](double a) { return std::exp(a); });
+  register_unary("log", [](double a) { return a > 0.0 ? std::log(a) : 0.0; });
+  register_unary("wrapAngle", [](double a) {
+    return std::remainder(a, 6.283185307179586);
+  });
+  jvm.natives().register_method(
+      "java.lang.Math", "atan2", "(FF)F",
+      [](Object*, const std::vector<Value>& args) {
+        const float r = static_cast<float>(
+            std::atan2(static_cast<double>(native_arg_number(args, 0)),
+                       static_cast<double>(native_arg_number(args, 1))));
+        return Value::make_float(std::isfinite(r) ? r : 0.f);
+      });
   jvm.natives().register_method(
       "java.lang.Math", "random", "()F",
       [](Object*, const std::vector<Value>&) {
@@ -340,7 +396,8 @@ void register_lang_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   jvm.natives().register_method(
       "java.lang.Math", "randomize", "()V",
       [](Object*, const std::vector<Value>&) {
-        std::srand(static_cast<unsigned>(std::time(nullptr)));
+        std::srand(g_fixed_random_seed >= 0 ? static_cast<unsigned>(g_fixed_random_seed)
+                                            : static_cast<unsigned>(std::time(nullptr)));
         return Value::make_void();
       });
   // Cooperative stacks resume run() from the host frame; start remains asynchronous.

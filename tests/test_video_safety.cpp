@@ -1,6 +1,8 @@
 #include "save_io_fixture.hpp"
 #include "slrr/video_cinepak.hpp"
 #include "slrr/host_audio.hpp"
+#include <SDL3/SDL.h>
+#include <SDL3_mixer/SDL_mixer.h>
 #include "slrr/video_frame.hpp"
 #include <fstream>
 #include "slrr/video_fmv.hpp"
@@ -101,18 +103,18 @@ int main() {
     SLRR_REQUIRE(!avi_read_cinepak(plain,index));
   }
   auto mixer=host_audio_acquire();SLRR_REQUIRE(mixer);
-  SLRR_REQUIRE(mixer->fmv->setVolume(0)==FMOD_OK);
+  SLRR_REQUIRE(MIX_SetMixerGain(mixer->fmv,0));
   video_fmv_set_game_root(f.root.string());
   SLRR_REQUIRE(video_fmv_open("Data\\FMV\\Cinepak.avi",1,0)==0 && video_fmv_is_playing());
   SLRR_REQUIRE(video_fmv_audio_running()&&video_fmv_audio_stream_count()==1);
-  int channels=0;SLRR_REQUIRE(mixer->fmv->getNumChannels(&channels)==FMOD_OK&&channels==1);
+  SLRR_REQUIRE(cinepak_fmv_audio_track()&&MIX_TrackPlaying(cinepak_fmv_audio_track()));
   video_fmv_pump();
   SLRR_REQUIRE(video_fmv_frame_ready() && video_fmv_width()==8 && video_fmv_height()==4 && video_fmv_frame_serial()==1);
   SLRR_REQUIRE(std::vector<uint8_t>(video_fmv_bgra(),video_fmv_bgra()+16)==cat(cat(colour,colour),cat(colour,colour)));
   for(int i=0;i<400 && video_fmv_is_playing();++i){video_fmv_pump();Sleep(5);}
   SLRR_REQUIRE(!video_fmv_is_playing());
   video_fmv_close();
-  SLRR_REQUIRE(mixer->fmv->getNumChannels(&channels)==FMOD_OK&&channels==0);
+  SLRR_REQUIRE(!cinepak_fmv_audio_track());
   SLRR_REQUIRE(video_fmv_open("Data\\FMV\\Cinepak.avi",1,1)==0);
   const auto loop_serial=video_fmv_frame_serial();
   for(int i=0;i<400;++i){
@@ -121,27 +123,30 @@ int main() {
     Sleep(5);
   }
   SLRR_REQUIRE(video_fmv_is_playing()&&video_fmv_audio_running()&&video_fmv_frame_serial()>loop_serial+4);
-  SLRR_REQUIRE(mixer->fmv->getNumChannels(&channels)==FMOD_OK&&channels==1);
+  SLRR_REQUIRE(cinepak_fmv_audio_track()&&MIX_TrackPlaying(cinepak_fmv_audio_track()));
   video_fmv_close();
-  SLRR_REQUIRE(!video_fmv_audio_running()&&mixer->fmv->getNumChannels(&channels)==FMOD_OK&&channels==0);
+  SLRR_REQUIRE(!video_fmv_audio_running()&&!cinepak_fmv_audio_track());
   SLRR_REQUIRE(video_fmv_open("Data\\FMV\\Cinepak.avi",1,0)==0);
   Sleep(250);video_fmv_pump(); // Audio can end between widely spaced pumps.
   SLRR_REQUIRE(!video_fmv_is_playing());
   SLRR_REQUIRE(video_fmv_open("Data\\FMV\\Mono8.avi",1,0)==0);
-  FMOD::Channel* pcm_channel=nullptr;FMOD::Sound* pcm_sound=nullptr;unsigned samples=0;
-  SLRR_REQUIRE(mixer->fmv->getChannel(0,&pcm_channel)==FMOD_OK&&pcm_channel->getCurrentSound(&pcm_sound)==FMOD_OK);
-  SLRR_REQUIRE(pcm_sound->getLength(&samples,FMOD_TIMEUNIT_PCM)==FMOD_OK&&samples==8001);
+  MIX_Audio* pcm_sound=cinepak_fmv_audio_track()?MIX_GetTrackAudio(cinepak_fmv_audio_track()):nullptr;
+  SDL_AudioSpec pcm_spec{};
+  // 8 kHz PCM is upsampled linearly to the mixer rate (#389); every frame is kept.
+  SLRR_REQUIRE(pcm_sound&&MIX_GetAudioFormat(pcm_sound,&pcm_spec)&&pcm_spec.freq==host_audio_mixer_rate(mixer->fmv)&&
+               pcm_spec.channels==1&&pcm_spec.format==SDL_AUDIO_F32&&
+               uint64_t(MIX_GetAudioDuration(pcm_sound))==host_audio_output_frames(mixer->fmv,8001,8000));
   video_fmv_pump();Sleep(150);video_fmv_pump();
   SLRR_REQUIRE(video_fmv_is_playing()&&video_fmv_audio_running()); // Audio outlasts the two video frames.
   for(int i=0;i<400&&video_fmv_is_playing();++i){video_fmv_pump();Sleep(5);}
   SLRR_REQUIRE(!video_fmv_is_playing());
   SLRR_REQUIRE(video_fmv_open("Data\\FMV\\Mono8.avi",1,0)==0);
   const auto stopped_serial=video_fmv_frame_serial();
-  SLRR_REQUIRE(mixer->fmv->stop()==FMOD_OK); // Inject early channel invalidation.
+  SLRR_REQUIRE(MIX_StopAllTracks(mixer->fmv,0)); // Inject an early track stop.
   video_fmv_pump();SLRR_REQUIRE(video_fmv_is_playing()&&video_fmv_frame_serial()==stopped_serial+1);
   for(int i=0;i<400&&video_fmv_is_playing();++i){video_fmv_pump();Sleep(5);}
   SLRR_REQUIRE(!video_fmv_is_playing());video_fmv_close();
-  std::puts("PASS Cinepak FMOD stereo16/odd mono8 PCM, loop restart, EOF/cancel and continuous clock after channel failure");
+  std::puts("PASS Cinepak SDL_mixer stereo16/odd mono8 PCM, loop restart, EOF/cancel and continuous clock after channel failure");
   int playback_ticks=0;
   const auto active_played=video_fmv_play_boot_intros(0,[&](){return ++playback_ticks<2;});
   SLRR_REQUIRE(active_played==1 && playback_ticks==2 && !video_fmv_is_playing() && !video_fmv_block_osd());

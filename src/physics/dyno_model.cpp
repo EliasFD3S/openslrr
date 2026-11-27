@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <functional>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -123,11 +125,20 @@ enum Word : int {
   kPeakTorqueRpm = 112,
   kPeakHorsepowerRpm = 113,
   kPeakGrossRpm = 114,
-  kPeakNetRpm = 115
+  kPeakNetRpm = 115,
+  kKnockCompression = 116,
+  kChargerType = 117,
+  kChargerLeak = 118,
+  kChargerEfficiency = 119,
+  kChargerBelt = 120,
+  kChargerPulley = 121,
+  kChargerSlip = 122,
+  kChargerDrive = 123,
+  kChargerCooled = 124
 };
 
 struct Bank {
-  float v[116]{};
+  float v[125]{};
   double get(int i) const { return v[i]; }
   void set(int i, double x) { v[i] = static_cast<float>(x); }
 };
@@ -260,6 +271,77 @@ double turbo_pressure(const Bank& s, double rpm) {
   return std::min(response * s.get(kTurboPressure), s.get(kWastePressure));
 }
 
+// #415 positive-displacement supercharger (DynoData.charger_type 1). The
+// blower moves a fixed volume per turn, so its delivery follows its own speed,
+// rpm * drive ratio (rpm_turbo_mul, from the crank and blower pulleys). At full
+// speed it reaches 1 + P_turbo_max times the inlet pressure; internal leakage
+// returns a volume flow that does not depend on speed, so the delivered share
+// is 1 - leak / blower rpm. A slipping belt turns the blower slower (slip < 1).
+// The bypass valve caps the boost at P_turbo_waste.
+bool positive_displacement(const Bank& s) { return s.get(kChargerType) > 0.5; }
+
+double positive_displacement_pressure(const Bank& s, double rpm) {
+  const double blower = rpm * s.get(kTurboMultiplier) * s.get(kChargerSlip);
+  if (!(blower > 0)) return 0;
+  const double delivered = std::max(0.0, 1.0 - s.get(kChargerLeak) / blower);
+  const double ratio = (1.0 + s.get(kTurboPressure)) * s.get(kChargerSlip) * delivered;
+  return std::clamp(ratio - 1.0, 0.0, std::max(0.0, s.get(kWastePressure)));
+}
+
+double charger_pressure(const Bank& s, double rpm) {
+  return positive_displacement(s) ? positive_displacement_pressure(s, rpm) : turbo_pressure(s, rpm);
+}
+
+// Adiabatic compression: T2 = T1 (1 + (PR^((g-1)/g) - 1) / efficiency), g = 1.4.
+double compressor_outlet_temperature(const Bank& s, double pressure_ratio) {
+  const double efficiency = std::max(0.05, static_cast<double>(s.get(kChargerEfficiency)));
+  return s.get(kIntakeTemperature) *
+         (1.0 + (std::pow(pressure_ratio, 0.4 / 1.4) - 1.0) / efficiency);
+}
+
+// #407 knock. The fuel sets the knock-limited static compression of a
+// naturally aspirated 20 C charge (DynoData.knockCompression, 0 = no knock).
+// The unburned charge at TDC is compressed polytropically (n = 1.3, as in
+// step()) from the boosted intake pressure and the intake temperature
+// (intercooling and nitrous cooling included). The boost heating of prepare()
+// is left out: DynoData carries no intercooler, and with that heating every
+// stock turbo engine would knock as if it had none. The equivalent
+// compression is the naturally aspirated one with the same Douaud-Eyzat
+// ignition delay, tau ~ p^-1.7 exp(3800/T).
+double knock_equivalent_compression(const Bank& s) {
+  const double compression = s.get(kCompression);
+  const double pressure = s.get(kEffectivePressure) / 101325.0;
+  // Superchargers (#415) are treated as turbos here: their outlet heating
+  // drives density and drive power, not knock, for the same missing
+  // intercooler data.
+  const double temperature = s.get(kIntakeTemperature);
+  if (!(compression > 1) || !(pressure > 0) || !(temperature > 0)) return compression;
+  const auto delay = [](double pressure_ratio, double tdc_temperature) {
+    return -1.7 * std::log(pressure_ratio) + 3800.0 / tdc_temperature;
+  };
+  const double target = delay(pressure * std::pow(compression, 1.3),
+                              temperature * std::pow(compression, 0.3));
+  // The naturally aspirated delay falls monotonically with compression.
+  double low = 1, high = 200;
+  for (int i = 0; i < 60; ++i) {
+    const double mid = 0.5 * (low + high);
+    if (delay(std::pow(mid, 1.3), 293.15 * std::pow(mid, 0.3)) > target)
+      low = mid;
+    else
+      high = mid;
+  }
+  return 0.5 * (low + high);
+}
+
+// Spark retard costs about 2.5% of the burned heat per compression point
+// above the knock limit, down to 60%.
+double knock_heat_factor(const Bank& s) {
+  const double limit = s.get(kKnockCompression);
+  if (!(limit > 0)) return 1.0;
+  const double excess = knock_equivalent_compression(s) - limit;
+  return excess > 0 ? std::max(0.6, 1.0 - 0.025 * excess) : 1.0;
+}
+
 void prepare(Bank& s) {
   mixture(s);
   s.set(kSpark, advance_timing(s, kSparkStart, kSparkShift, kSparkRpm0, kSparkRpm1));
@@ -272,7 +354,18 @@ void prepare(Bank& s) {
   s.set(kEffectiveHeat, s.get(kMixtureHeat));
   s.set(kEffectiveTemperature, s.get(kIntakeTemperature));
   s.set(kEffectiveDensity, s.get(kIntakeDensity));
-  if (s.get(kTurboMultiplier) > 0 && s.get(kTurboRange) > 0) {
+  if (positive_displacement(s) && s.get(kTurboMultiplier) > 0) {
+    const double ratio = 1.0 + positive_displacement_pressure(s, s.get(kRpm));
+    // The game has no intercooler part, so the charge-cooling share
+    // (charger_intercooled, 1 = back to intake temperature) defaults to 1 and
+    // bypasses the outlet heating; the drive power still pays for it.
+    const double outlet = compressor_outlet_temperature(s, ratio);
+    const double cooled = std::clamp(static_cast<double>(s.get(kChargerCooled)), 0.0, 1.0);
+    const double charge = outlet - cooled * (outlet - s.get(kIntakeTemperature));
+    s.set(kEffectivePressure, ratio * s.get(kIntakePressure));
+    s.set(kEffectiveTemperature, charge);
+    s.set(kEffectiveDensity, s.get(kIntakeDensity) * ratio * s.get(kIntakeTemperature) / charge);
+  } else if (s.get(kTurboMultiplier) > 0 && s.get(kTurboRange) > 0) {
     const double boost = std::sqrt(turbo_pressure(s, s.get(kRpm)) + 1.0);
     s.set(kEffectivePressure, boost * boost * s.get(kIntakePressure));
     s.set(kEffectiveTemperature, s.get(kIntakeTemperature) * boost);
@@ -285,6 +378,7 @@ void prepare(Bank& s) {
   double shortening = s.get(kRpm) * s.get(kBurnSpeed);
   if (shortening >= 0.9) shortening = 0.9;
   s.set(kEffectiveBurnTime, (1.0 - shortening) * s.get(kBurnTime));
+  s.set(kEffectiveHeat, s.get(kEffectiveHeat) * knock_heat_factor(s));
 }
 
 bool valve_open(const Bank& s, int open, int close) {
@@ -310,10 +404,14 @@ bool step(Bank& s) {
     const double swept = s.get(kVmax) - s.get(kVmin);
     s.set(kMeanPressure, swept <= 1e-8 ? 0.0 : s.get(kPreviousWork) / swept);
     const double pressure_work = s.get(kMeanPressure) * swept;
-    s.set(kTorque, s.get(kCylinders) * pressure_work * 0.125);
-    s.set(kGrossPower, s.get(kRpm) * pressure_work * 0.01666666753590107 * s.get(kCylinders));
-    s.set(kFrictionPower, s.get(kRpm) * s.get(kRpm) * s.get(kRpm) * 2e-8);
-    s.set(kNetPower, s.get(kGrossPower) - s.get(kFrictionPower));
+    // One four-stroke cycle turns the crank through 4*pi radians.
+    const double omega = s.get(kRpm) * engine_rpm_to_rad;
+    const double indicated_torque = s.get(kCylinders) * pressure_work / (4 * std::numbers::pi);
+    const double friction = engine_friction_torque(s.get(kRpm));
+    s.set(kTorque, indicated_torque - friction);
+    s.set(kGrossPower, indicated_torque * omega);
+    s.set(kFrictionPower, friction * omega);
+    s.set(kNetPower, s.get(kTorque) * omega);
     s.set(kHorsepower, s.get(kNetPower) * 0.001341);
   }
   s.set(kAngle, s.get(kAngle) + s.get(kAngularSpeed) * s.get(kDt));
@@ -447,6 +545,52 @@ struct Curve {
   std::vector<float> nitro_watts;
 };
 
+bool converge_row(Bank& s) {
+  prepare(s);
+  s.set(kDt, s.get(kPeriod) * 0.0043290043249726295);
+  reset_cycle(s);
+  if (!cycle(s)) return false;
+  double previous = s.get(kMeanPressure);
+  for (int repeat = 0; repeat < 10; ++repeat) {
+    if (!cycle(s)) return false;
+    if (std::fabs(previous / s.get(kMeanPressure) - 1.0) < 0.05) break;
+    previous = previous * 0.4 + s.get(kMeanPressure) * 0.6;
+  }
+  return true;
+}
+
+// #415 blower drive. The crank turns the blower: the power it takes is the
+// compression work of the delivered air, mdot cp (T2 - T1), cp = 1005 J/(kg K).
+// The belt transmits at most charger_belt_force (N) at the blower pulley's
+// rim speed; above that it slips, the blower turns slower and the row is
+// computed again with the speed the belt can hold.
+bool blower_drive(Bank& s) {
+  const double omega = s.get(kRpm) * engine_rpm_to_rad;
+  const auto drive_power = [&] {
+    const double ratio = s.get(kEffectivePressure) / s.get(kIntakePressure);
+    const double heating = compressor_outlet_temperature(s, ratio) - s.get(kIntakeTemperature);
+    return std::max(0.0, s.get(kAirConsumption) * 1005.0 * heating);
+  };
+  double power = drive_power();
+  const double force = s.get(kChargerBelt), radius = s.get(kChargerPulley);
+  if (force > 0 && radius > 0) {
+    for (int i = 0; i < 4; ++i) {
+      const double rim = omega * s.get(kTurboMultiplier) * s.get(kChargerSlip) * radius;
+      const double capacity = force * rim;
+      if (!(power > capacity * 1.01)) break;
+      s.set(kChargerSlip, std::clamp(s.get(kChargerSlip) * capacity / power, 0.0, 1.0));
+      if (!converge_row(s)) return false;
+      power = drive_power();
+    }
+  }
+  const double drive = omega > 0 ? power / omega : 0;
+  s.set(kChargerDrive, drive);
+  s.set(kTorque, s.get(kTorque) - drive);
+  s.set(kNetPower, s.get(kTorque) * omega);
+  s.set(kHorsepower, s.get(kNetPower) * 0.001341);
+  return true;
+}
+
 bool table(Bank& s, int step_rpm, std::vector<float>* torque, std::vector<float>* power) {
   zero_range(s, kPeakPressure, kPeakNetRpm);
   const int count = static_cast<int>(std::trunc(std::trunc(s.get(kMaximumRpm)) / step_rpm));
@@ -460,16 +604,9 @@ bool table(Bank& s, int step_rpm, std::vector<float>* torque, std::vector<float>
     s.set(kPeriod, 120.0 / s.get(kRpm));
     s.set(kAngularSpeed, s.get(kRpm) * 0.10471975803375244);
     s.set(kPistonSpeed, s.get(kAngularSpeed) * s.get(kCrank));
-    prepare(s);
-    s.set(kDt, s.get(kPeriod) * 0.0043290043249726295);
-    reset_cycle(s);
-    if (!cycle(s)) return false;
-    double previous = s.get(kMeanPressure);
-    for (int repeat = 0; repeat < 10; ++repeat) {
-      if (!cycle(s)) return false;
-      if (std::fabs(previous / s.get(kMeanPressure) - 1.0) < 0.05) break;
-      previous = previous * 0.4 + s.get(kMeanPressure) * 0.6;
-    }
+    s.set(kChargerSlip, 1);
+    if (!converge_row(s)) return false;
+    if (positive_displacement(s) && !blower_drive(s)) return false;
     if (s.get(kPeakGrossPower) < s.get(kGrossPower)) {
       s.set(kPeakGrossPower, s.get(kGrossPower));
       s.set(kPeakGrossRpm, s.get(kRpm));
@@ -483,6 +620,8 @@ bool table(Bank& s, int step_rpm, std::vector<float>* torque, std::vector<float>
     if (s.get(kPeakPressure) < s.get(kMeanPressure)) {
       s.set(kPeakPressure, s.get(kMeanPressure));
       s.set(kPeakPressureRpm, s.get(kRpm));
+    }
+    if (s.get(kPeakTorque) < s.get(kTorque)) {
       s.set(kPeakTorqueRpm, s.get(kRpm));
       s.set(kPeakTorque, s.get(kTorque));
     }
@@ -503,7 +642,8 @@ float field_of(const std::unordered_map<std::string, float>& fields, const char*
 
 struct Session {
   Bank state;
-  Curve curve;
+  // Immutable once published: a sampler may keep it after a recalculation.
+  std::shared_ptr<const Curve> curve = std::make_shared<Curve>();
   DynoStats stats;
 };
 
@@ -586,6 +726,22 @@ bool calculate_into(Session* session, const std::unordered_map<std::string, floa
   s.set(kIntakeDuration, s.get(kIntakeClose) - s.get(kIntakeOpen));
   s.set(kExhaustDuration, s.get(kExhaustClose) - s.get(kExhaustOpen));
   s.set(kTurboPlateau, 0);
+  const std::pair<int, const char*> charger[] = {
+      {kChargerType, "charger_type"}, {kChargerLeak, "charger_leak_rpm"},
+      {kChargerEfficiency, "charger_efficiency"}, {kChargerBelt, "charger_belt_force"},
+      {kChargerPulley, "charger_pulley_radius"}};
+  for (const auto& [index, name] : charger) {
+    const float value = field_of(fields, name, 0.f);
+    if (!std::isfinite(value)) return bad(name);
+    s.set(index, value);
+  }
+  s.set(kChargerSlip, 1);
+  const float cooled = field_of(fields, "charger_intercooled", 1.f);
+  if (!std::isfinite(cooled)) return bad("charger_intercooled");
+  s.set(kChargerCooled, cooled);
+  const float knock = field_of(fields, "knockCompression", 0.f);
+  if (!std::isfinite(knock)) return bad("knockCompression");
+  s.set(kKnockCompression, knock);
   const float intercooling = field_of(fields, "intercooling", 1.f);
   if (!std::isfinite(intercooling)) return bad("intercooling");
   s.set(kIntakeTemperature, intercooling * 293.15);
@@ -639,7 +795,7 @@ bool calculate_into(Session* session, const std::unordered_map<std::string, floa
     }
   }
   session->state = s;
-  session->curve = std::move(next);
+  session->curve = std::make_shared<const Curve>(std::move(next));
   session->stats = stats;
   return true;
 }
@@ -660,10 +816,13 @@ float sample_curve(const Curve& curve, float rpm, float nitro, bool watts) {
     const float fraction = static_cast<float>(position - std::floor(position));
     return table[index] * (1.f - fraction) + table[index + 1] * fraction;
   };
-  const float primary = sample(watts ? curve.watts : curve.torque);
-  const std::vector<float>& secondary = watts ? curve.nitro_watts : curve.nitro_torque;
-  if (secondary.empty()) return primary;
-  return primary * (1.f - nitro) + sample(secondary) * nitro;
+  const float primary = sample(curve.torque);
+  const float torque = curve.nitro_torque.empty()
+      ? primary
+      : primary * (1.f - nitro) + sample(curve.nitro_torque) * nitro;
+  // Interpolate torque first: interpolating watts independently violates
+  // P=T*omega between table nodes, including blended nitrous curves.
+  return watts ? static_cast<float>(torque * (rpm * engine_rpm_to_rad)) : torque;
 }
 
 bool near(double got, double want, double tolerance) {
@@ -692,7 +851,15 @@ bool dyno_calculate(void* key, const std::unordered_map<std::string, float>& fie
 float dyno_sample(void* key, float rpm, float nitro, bool watts) {
   const auto it = g_sessions.find(key);
   if (it == g_sessions.end()) return 0.f;
-  return sample_curve(it->second.curve, rpm, nitro, watts);
+  return sample_curve(*it->second.curve, rpm, nitro, watts);
+}
+
+std::function<double(double)> dyno_torque_function(void* key, float nitro) {
+  const auto it = g_sessions.find(key);
+  if (it == g_sessions.end()) return [](double) { return 0.0; };
+  return [curve = it->second.curve, nitro](double rpm) {
+    return static_cast<double>(sample_curve(*curve, static_cast<float>(rpm), nitro, false));
+  };
 }
 
 float dyno_boost_fraction(void* key, float rpm) {
@@ -700,7 +867,7 @@ float dyno_boost_fraction(void* key, float rpm) {
   if (it == g_sessions.end() || !std::isfinite(rpm)) return 0.f;
   const auto& state = it->second.state;
   const double maximum = std::min(state.get(kTurboPressure), state.get(kWastePressure));
-  return maximum > 0 ? static_cast<float>(std::clamp(turbo_pressure(state, rpm) / maximum, 0.0, 1.0))
+  return maximum > 0 ? static_cast<float>(std::clamp(charger_pressure(state, rpm) / maximum, 0.0, 1.0))
                      : 0.f;
 }
 
@@ -719,13 +886,17 @@ bool dyno_self_check(char* msg, std::size_t msg_cap) {
   std::string error;
   if (!calculate_into(&fresh, {{"maxRPM", 7000.f}}, 16.f, &error))
     return fail(error.c_str());
-  const Curve& curve = fresh.curve;
+  const Curve& curve = *fresh.curve;
   if (curve.rpm_step != 437.f || curve.torque.size() != 16 || curve.watts.size() != 16)
     return fail("dyno table shape");
+  // Preserve the recovered cycle-work witness, not its legacy non-SI scales.
+  constexpr double witness_work = 82.08709716796875 * 8;
+  const double witness_torque = witness_work / (4 * std::numbers::pi) -
+                                engine_friction_torque(437);
   if (!near(fresh.stats.displacement, 0.0019011663971468806, 1e-9) ||
       !near(fresh.stats.compression, 10.50583267211914, 2e-6) ||
-      !near(curve.torque[1], 82.08709716796875, 0.002) ||
-      !near(curve.watts[1], 4781.27294921875, 0.05)) {
+      !near(curve.torque[1], witness_torque, 0.002) ||
+      !near(curve.watts[1], witness_torque * 437 * engine_rpm_to_rad, 0.05)) {
     if (msg && msg_cap)
       std::snprintf(msg, msg_cap,
                     "dyno witness fail torque=%.6f watts=%.4f disp=%.12g comp=%.8g",
@@ -735,7 +906,7 @@ bool dyno_self_check(char* msg, std::size_t msg_cap) {
   }
   Session tuned;
   if (!calculate_into(&tuned, {{"maxRPM", 7000.f}}, 28.f, &error)) return fail(error.c_str());
-  const float base = tuned.curve.torque[14];
+  const float base = tuned.curve->torque[14];
   if (!calculate_into(&tuned,
                       {{"maxRPM", 7000.f},
                        {"rpm_turbo_mul", 1.f},
@@ -744,15 +915,15 @@ bool dyno_self_check(char* msg, std::size_t msg_cap) {
                        {"P_turbo_max", 0.8f}},
                       28.f, &error))
     return fail(error.c_str());
-  if (!(tuned.curve.torque[14] > base)) return fail("dyno turbo did not raise torque");
+  if (!(tuned.curve->torque[14] > base)) return fail("dyno turbo did not raise torque");
   if (!calculate_into(&tuned, {{"maxRPM", 7000.f}, {"nitro_H", 1.2f}, {"nitro_cooling", 0.9f}},
                       28.f, &error))
     return fail(error.c_str());
-  if (tuned.curve.nitro_torque.size() <= 14 ||
-      !(tuned.curve.nitro_torque[14] > tuned.curve.torque[14]))
+  if (tuned.curve->nitro_torque.size() <= 14 ||
+      !(tuned.curve->nitro_torque[14] > tuned.curve->torque[14]))
     return fail("dyno nitrous bank");
   if (!calculate_into(&tuned, {{"maxRPM", 7000.f}}, 28.f, &error)) return fail(error.c_str());
-  if (!tuned.curve.nitro_torque.empty() || !tuned.curve.nitro_watts.empty())
+  if (!tuned.curve->nitro_torque.empty() || !tuned.curve->nitro_watts.empty())
     return fail("dyno stale nitrous bank was retained");
   Session bad;
   if (calculate_into(&bad, {{"stroke", 1.f}}, 28.f, &error)) return fail("dyno geometry accepted");

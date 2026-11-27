@@ -89,6 +89,11 @@ int character_skin_palette(void* key, int32_t type_id, const RpkIndex& packs,
 void* character_skin_prepare(void* key, int32_t type_id, const RpkIndex& packs);
 int character_skin_palette_prepared(void* prepared, float* out, int capacity);
 
+// The current pose of `bone` in the render's local frame, column-major,
+// translation in metres (the worlds are centimetres). False without a
+// skeleton or such a bone. Particle sources on a bone use it (#454).
+bool character_bone_world(void* key, int32_t type_id, const RpkIndex& packs, int bone,
+                          float* out);
 // Skeleton index, or 0 when the render has no matching bone. Never negative.
 int character_bone_id(void* key, int32_t type_id, const RpkIndex& packs,
                       const std::string& name);

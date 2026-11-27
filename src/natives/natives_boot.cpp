@@ -385,7 +385,6 @@ void osd_world_to_ndc(Object* osd, float wx, float wy, float* nx, float* ny) {
 
 void osd_mesh_halves(Object* osd, float mesh_w, float mesh_h, float* hw,
                      float* hh, bool* plate) {
-  (void)osd;
   constexpr float kScaleFs = 1.47f;
   float vp_a = osd_framebuffer_aspect();
   if (vp_a < 0.1f) vp_a = 1.f;
@@ -400,8 +399,12 @@ void osd_mesh_halves(Object* osd, float mesh_w, float mesh_h, float* hw,
   // button is authored to fill that slot (Style(itemWidth*2, itemHeight*2)).
   // Dialog shield is Style(2, 2, vpAspect). backShieldOsd is built with
   // aspect 0, so rWidth is 0 and the box does not cover the menu.
-  if (is_plate && half_w < 0.05f && half_h > 0.5f) half_w = 1.f;
-  if (is_plate && half_h < 0.05f && half_w > 0.5f) half_h = 1.f;
+  // An attached (OSD v2) Osd gets its sizes as written: a wide rule is not
+  // the dialog shield (docs/ui/osd-v2.md).
+  if (!osd_cursor_osd(osd)) {
+    if (is_plate && half_w < 0.05f && half_h > 0.5f) half_w = 1.f;
+    if (is_plate && half_h < 0.05f && half_w > 0.5f) half_h = 1.f;
+  }
   if (hw) *hw = half_w;
   if (hh) *hh = half_h;
   if (plate) *plate = is_plate;
@@ -609,6 +612,7 @@ void register_boot_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
   register_race_natives(jvm,rpk,sections);
   register_painter_natives(jvm);
   register_light_natives(jvm);
+  register_particle_natives(jvm, rpk);
   install_osd_script_hover(jvm);
 
   // Statics

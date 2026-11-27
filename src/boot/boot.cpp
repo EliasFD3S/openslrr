@@ -1,4 +1,5 @@
 #include "slrr/boot.hpp"
+#include "slrr/drive_path.hpp"
 #include "slrr/frame_profiler.hpp"
 
 #include "slrr/gameref.hpp"
@@ -223,6 +224,7 @@ int boot_probe(Jvm& jvm, const BootOptions& opt) {
 int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
   jvm.set_game_root(opt.game_root);
   if (!jvm.bootstrap_classpath()) return 2;
+  natives_fix_random_seed(opt.random_seed);
 
   host_sfx_set_game_root(opt.game_root);
   host_music_set_root(opt.game_root);
@@ -239,6 +241,9 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
 
   const int32_t opened = rpk.open_all();
   if (!opt.vehicle_osd.empty()) part_set_hud_preview(opt.vehicle_osd);
+  part_set_wind(opt.wind_speed, opt.wind_heading);
+  std::printf("[phys] wind %.1f m/s at 10 m towards %.0f deg\n", opt.wind_speed,
+              opt.wind_heading);
   const RpkPack* fe_found = rpk.pack_by_path("frontend.rpk");
   const RpkPack* garage_found = rpk.pack_by_path("misc\\garage.rpk");
   const RpkPack* mwm_found = rpk.pack_by_path("MW_Mod.rpk");
@@ -520,6 +525,14 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     if (until_quit)
       std::printf("[boot] Soft MainLoop until window close\n");
     if (opt.perf_log) perf::enable(opt.perf_log_path);
+    // Free-running physics thread (#380), except for the benchmark, which
+    // steps fixed 1/60 s frames: there the frame-locked batches keep its
+    // results independent of the wall clock. --physics-batch also turns it off.
+    const bool fixed_step_bench =
+        (opt.bench_drive_seconds > 0 || !opt.replay_path.empty() || !opt.bench_map.empty() ||
+         opt.auto_demo) && !opt.bench_realtime;
+    if (!fixed_step_bench && !opt.physics_batch) part_physics_set_free_running(true);
+    if (!opt.physics_trace.empty()) part_physics_trace(opt.physics_trace);
     // Development benchmark: a straight full-throttle run from the spot
     // where the player first drives an outdoor world.
     bool bench_running = false;
@@ -530,15 +543,48 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
     constexpr int kBenchSettle = 2 * kBenchRate;
     bool bench_map_started = opt.bench_map.empty();
     int bench_shot = 0;
+    // A track without ground props (Test Track, drag strip) never reports
+    // them; there the car resting on all its wheels for 5 s is the cue.
+    int bench_supported_frames = 0;
+    // --auto-cmd demo: MainMenu.CMD_DEMO once the main menu is up; the race
+    // is then measured like the benchmark drive (#358).
+    constexpr int kMainMenuDemo = 59;
+    bool demo_requested = false;
+    // Recorded drives (#358): --record-path writes the player car's pose
+    // every frame of normal play; --replay-path moves the benchmark car
+    // along a recording, so every build renders the same drive.
+    DrivePathWriter path_writer;
+    if (!opt.record_path.empty()) {
+      if (path_writer.open(opt.record_path))
+        std::printf("[path] recording to %s\n", opt.record_path.c_str());
+      else
+        std::fprintf(stderr, "[path] cannot write %s\n", opt.record_path.c_str());
+    }
+    DrivePath replay;
+    float bench_seconds = opt.bench_drive_seconds;
+    if (!opt.replay_path.empty()) {
+      std::string error;
+      if (replay.load(opt.replay_path, &error)) {
+        if (bench_seconds <= 0.f) bench_seconds = static_cast<float>(replay.duration());
+        std::printf("[path] replay %s: %zu samples, %.1f s\n", opt.replay_path.c_str(),
+                    replay.samples().size(), replay.duration());
+      } else {
+        std::fprintf(stderr, "[path] %s\n", error.c_str());
+      }
+    }
     while (until_quit || frames < opt.max_frames) {
       // Soft PollWindowQuit adjacency — pump before Input/sim like stock
       // neighbors (Input_tick still inside mainloop_frame).
       render.pump(16);
       mainloop_sync_section_render(render, sections);
       const double real_dt = elapsed();
-      MainLoopFrameResult fr = mainloop_frame(
-          jvm, render, sections,
-          bench_running && !opt.bench_realtime ? 1.0 / kBenchRate : real_dt);
+      const double frame_dt = bench_running && !opt.bench_realtime ? 1.0 / kBenchRate : real_dt;
+      MainLoopFrameResult fr = mainloop_frame(jvm, render, sections, frame_dt);
+      if (path_writer.is_open() && !bench_running) {
+        float local[16];
+        if (Object* car = part_controlled_chassis(); car && part_published_local(car, local))
+          path_writer.write(frame_dt, local);
+      }
       {
         perf::Scope scope(perf::Zone::Gc);
         jvm.gc_safe_point();
@@ -555,6 +601,10 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
       if (fr.quit) break;
       if (!bench_map_started && sections.actual() &&
           sections.actual()->class_name.find("Garage") != std::string::npos) {
+        // --bench-traffic: the city traffic density, without the options menu.
+        if (opt.bench_traffic >= 0.f)
+          jvm.set_static("java.util.Config", "trafficDensity",
+                         Value::make_float(opt.bench_traffic));
         // Same call TrackSelect makes for TAKE IT, without the menu.
         bench_map_started = true;
         const Value maps = jvm.get_static("java.game.GameLogic", "MapBox");
@@ -587,11 +637,41 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
           std::fprintf(stderr, "[bench] no MapBox track matches %s\n", opt.bench_map.c_str());
         }
       }
-      if (opt.bench_drive_seconds > 0.f) {
+      if (opt.auto_demo && !demo_requested && sections.actual() &&
+          sections.actual()->class_name.find("MainMenu") != std::string::npos) {
+        demo_requested = true;
+        std::printf("[demo] MainMenu.osdCommand(%d)\n", kMainMenuDemo);
+        jvm.invoke("java.game.MainMenu", "osdCommand", "(I)V",
+                   {Value::make_obj(sections.actual()), Value::make_int(kMainMenuDemo)},
+                   false);
+      }
+      if (demo_requested && !bench_running && bench_seconds > 0.f && sections.actual() &&
+          sections.actual()->class_name.find("Valocity") != std::string::npos &&
+          !scene_transition_active() && !osd_loading_dialog() &&
+          osd_loading_overlay().empty()) {
+        // The demo picks a random hour; --bench-time replaces it.
+        bench_running = true;
+        bench_frames = -kBenchSettle;
+        if (opt.bench_hour >= 0.f) {
+          const float seconds = std::fmod(opt.bench_hour, 24.f) * 3600.f;
+          jvm.invoke("java.game.GameLogic", "setTime", "(F)V",
+                     {Value::make_float(seconds)}, true);
+          scene_sun_set_time(seconds);
+        }
+        std::printf("[demo] measuring %.1f s\n", bench_seconds);
+      }
+      if (bench_seconds > 0.f) {
         auto& input = host_input();
-        if (!bench_running && part_controlled_chassis() &&
-            scene_instances_has_ground_props() && !scene_transition_active() &&
-            !osd_loading_dialog() && osd_loading_overlay().empty()) {
+        Object* bench_car = part_controlled_chassis();
+        PartPhysicsState resting;
+        bool supported = !bench_running && bench_car &&
+                         part_physics_state(bench_car, resting) && resting.active;
+        for (bool contact : resting.contact) supported = supported && contact;
+        bench_supported_frames = supported ? bench_supported_frames + 1 : 0;
+        if (!bench_running && bench_car &&
+            (scene_instances_has_ground_props() || bench_supported_frames >= 5 * kBenchRate) &&
+            !scene_transition_active() && !osd_loading_dialog() &&
+            osd_loading_overlay().empty()) {
           bench_running = true;
           bench_frames = -kBenchSettle;
           if (opt.bench_hour >= 0.f) {
@@ -602,10 +682,18 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
             scene_sun_set_time(seconds);
           }
           std::printf("[bench] drive start: %.1f s full throttle\n",
-                      opt.bench_drive_seconds);
+                      bench_seconds);
         }
         if(bench_running&&bench_frames>=0&&!bench_profile_started&&opt.perf_log){perf::restart(opt.bench_realtime?0:kBenchRate);bench_profile_started=true;}
         input.bench_throttle = !bench_running ? -1.f : bench_frames >= 0 ? 1.f : 0.f;
+        // A 10 Hz trace, the interval of the original-game telemetry
+        // (EXTERNAL_RESEARCH §4), to compare straight-line acceleration.
+        PartPhysicsState trace;
+        if (bench_running && bench_frames >= 0 && bench_frames % (kBenchRate / 10) == 0 &&
+            bench_car && part_physics_state(bench_car, trace))
+          std::printf("[bench] t=%.1f speed=%.2f km/h rpm=%.0f gear=%d\n",
+                      bench_frames / double(kBenchRate), trace.speed_kph, trace.rpm,
+                      trace.gear);
         if (bench_running && !opt.bench_shots.empty() && bench_frames >= 0 &&
             bench_frames >= 10 * kBenchRate * bench_shot) {
           char name[32];
@@ -613,7 +701,15 @@ int boot_game(Jvm& jvm, IRenderBackend& render, const BootOptions& opt) {
           render.request_screenshot(opt.bench_shots + name);
           ++bench_shot;
         }
-        if (bench_running && bench_frames >= opt.bench_drive_seconds * kBenchRate) {
+        if (bench_running && bench_car && !replay.empty()) {
+          // From the settle on, the car follows the recording: held at its
+          // first pose while the drive settles, then at the fixed step.
+          if (bench_frames == -kBenchSettle) part_set_external_motion(bench_car, true);
+          const double t = (bench_frames > 0 ? bench_frames : 0) / double(kBenchRate);
+          const auto pose = replay.at(t);
+          part_set_external_pose(bench_car, pose.data(), 1.0 / kBenchRate);
+        }
+        if (bench_running && bench_frames >= bench_seconds * kBenchRate) {
           std::printf("[bench] drive done\n");
           break;
         }

@@ -16,8 +16,13 @@ constexpr const char *kZoneNames[] = {
     "collect_batches", "sun_shadows", "car_depth", "fixture_shadows",
     "lamp_select", "lamp_shadows", "ao", "world_list", "world_copy",
     "collect_instances", "collect_skins", "collect_previews", "residency",
-    "worker_submit", "submit_wait"};
+    "worker_submit", "submit_wait", "interpolation", "sun_collect"};
 static_assert(std::size(kZoneNames) == static_cast<size_t>(Zone::Count));
+
+constexpr const char *kGpuPassNames[] = {
+    "map_shadows", "car_depth", "interior_sun", "world", "ao_prepass", "ao", "reflections",
+    "lamp_tiles", "headlight_tiles", "previews", "osd", "other"};
+static_assert(std::size(kGpuPassNames) == static_cast<size_t>(GpuPass::Count));
 
 struct State {
   bool enabled = false;
@@ -30,6 +35,7 @@ struct State {
   std::vector<double> frame_ms;
   double render_thread = 0., gpu = 0., wait_render = 0.;
   double draws = 0., instances = 0., batch_instances = 0.;
+  std::array<double, static_cast<size_t>(GpuPass::Count)> gpu_passes{};
   uint32_t render_samples = 0;
   uint32_t second = 0;
   int frames_per_window = 0;
@@ -43,6 +49,11 @@ State &state() {
 double to_ms(int64_t ticks) { return static_cast<double>(ticks) * 1e-6; }
 
 } // namespace
+
+const char *gpu_pass_name(GpuPass pass) {
+  const auto index = static_cast<size_t>(pass);
+  return index < std::size(kGpuPassNames) ? kGpuPassNames[index] : "other";
+}
 
 bool &worker_thread() {
   static thread_local bool worker = false;
@@ -66,7 +77,10 @@ void enable(const std::string &csv_path) {
       for (const char *name : kZoneNames)
         std::fprintf(s.csv, ",%s_ms", name);
       std::fprintf(s.csv, ",render_thread_ms,gpu_ms,wait_render_ms,draws,"
-                          "instances,batch_instances\n");
+                          "instances,batch_instances");
+      for (const char *name : kGpuPassNames)
+        std::fprintf(s.csv, ",gpu_%s_ms", name);
+      std::fprintf(s.csv, "\n");
       std::fflush(s.csv);
     } else {
       std::fprintf(stderr, "[perf] cannot open %s\n", csv_path.c_str());
@@ -86,6 +100,7 @@ void restart(int frames_per_window) {
   s.frame_ms.clear();
   s.render_thread = s.gpu = s.wait_render = 0.;
   s.draws = s.instances = s.batch_instances = 0.;
+  s.gpu_passes.fill(0.);
   s.render_samples = 0;
   s.second = 0;
   s.last = {};
@@ -105,6 +120,8 @@ void set_render_sample(const RenderSample &sample) {
   s.draws += sample.draws;
   s.instances += sample.instances;
   s.batch_instances += sample.batch_instances;
+  for (size_t i = 0; i < s.gpu_passes.size(); ++i)
+    s.gpu_passes[i] += sample.gpu_pass_ms[i];
   ++s.render_samples;
 }
 
@@ -163,16 +180,20 @@ void end_frame() {
                  1000. * static_cast<double>(frames) / window, avg, p95, worst);
     for (const double zone : s.window_zones)
       std::fprintf(s.csv, ",%.3f", zone / static_cast<double>(frames));
-    std::fprintf(s.csv, ",%.3f,%.3f,%.3f,%.0f,%.0f,%.0f\n",
+    std::fprintf(s.csv, ",%.3f,%.3f,%.3f,%.0f,%.0f,%.0f",
                  s.render_thread / samples, s.gpu / samples,
                  s.wait_render / samples, s.draws / samples,
                  s.instances / samples, s.batch_instances / samples);
+    for (const double pass : s.gpu_passes)
+      std::fprintf(s.csv, ",%.3f", pass / samples);
+    std::fprintf(s.csv, "\n");
     std::fflush(s.csv);
   }
   s.frame_ms.clear();
   s.window_zones.fill(0.);
   s.render_thread = s.gpu = s.wait_render = 0.;
   s.draws = s.instances = s.batch_instances = 0.;
+  s.gpu_passes.fill(0.);
   s.render_samples = 0;
   s.window_start = now;
 }

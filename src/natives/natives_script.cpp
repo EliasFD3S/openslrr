@@ -4,6 +4,8 @@
 #include "slrr/gameref.hpp"
 #include "slrr/host_cursor.hpp"
 #include "slrr/host_input.hpp"
+#include "../platform/host_input_capture.hpp"
+#include "../platform/host_input_devices.hpp"
 #include "slrr/host_sfx.hpp"
 #include "slrr/host_music.hpp"
 #include "slrr/host_game_options.hpp"
@@ -57,53 +59,20 @@ std::vector<VideoMode> display_modes() {
 
 
 void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
+  // Host-only options by id: the table in host_game_options.cpp (#405).
   jvm.natives().register_method("java.game.OptionsDialog", "getRendererOption", "(I)I",
       [](Object*, const std::vector<Value>& args) {
-        const auto& graphics = host_enhanced_graphics();
-        switch (native_arg_integer(args, 0, -1)) {
-          case 0: return Value::make_int(graphics.msaa);
-          case 1: return Value::make_int(graphics.dynamic_reflections);
-          case 2: return Value::make_int(graphics.volumetric_clouds);
-          case 3: return Value::make_int(graphics.dynamic_lighting);
-          case 4: return Value::make_int(graphics.local_lights);
-          case 5: return Value::make_int(static_cast<int>(host_framerate_mode()));
-          case 6: return Value::make_int(graphics.anisotropic_filtering);
-          case 7: return Value::make_int(graphics.ao_method);
-          case 8: return Value::make_int(graphics.ao_quality);
-          case 9: return Value::make_int(graphics.shadow_quality);
-          case 10: return Value::make_int(graphics.shadow_smoothing);
-          case 11: return Value::make_int(graphics.ao_strength);
-          case 12: return Value::make_int(graphics.ao_radius);
-          default: return Value::make_int(0);
-        }
+        int value = 0;
+        host_option_get(native_arg_integer(args, 0, -1), value);
+        return Value::make_int(value);
       });
   jvm.natives().register_method("java.game.OptionsDialog", "setRendererOption", "(II)V",
       [](Object*, const std::vector<Value>& args) {
-        auto& graphics = host_enhanced_graphics();
         if (args.size() < 2 ||
             (args[0].tag != ValueTag::Int && args[0].tag != ValueTag::Float) ||
             (args[1].tag != ValueTag::Int && args[1].tag != ValueTag::Float))
           return Value::make_void();
-        const int value = native_arg_integer(args, 1);
-        switch (native_arg_integer(args, 0, -1)) {
-          case 0: graphics.msaa = std::clamp(value, 0, 3); break;
-          case 1: graphics.dynamic_reflections = value != 0; break;
-          case 2: graphics.volumetric_clouds = value != 0; break;
-          case 3: graphics.dynamic_lighting = value != 0; break;
-          case 4: graphics.local_lights = value != 0; break;
-          case 5:
-            host_set_framerate_mode(value ? FramerateMode::Adaptive : FramerateMode::Classic);
-            return Value::make_void();
-          case 6: graphics.anisotropic_filtering = value != 0; break;
-          case 7: graphics.ao_method=std::clamp(value,0,2);break;
-          case 8: graphics.ao_quality=std::clamp(value,0,2);break;
-          case 9: graphics.shadow_quality=std::clamp(value,0,2);break;
-          case 10: graphics.shadow_smoothing=std::clamp(value,0,2);break;
-          case 11: graphics.ao_strength=std::clamp(value,0,200);break;
-          case 12: graphics.ao_radius=std::clamp(value,25,300);break;
-          default: return Value::make_void();
-        }
-        host_save_graphics_options();
+        host_option_set(native_arg_integer(args, 0, -1), native_arg_integer(args, 1));
         return Value::make_void();
       });
   jvm.natives().register_method("java.lang.System", "getConfigOptions", "()V",
@@ -138,7 +107,33 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
           : under_game(rpk.game_root(), rpk.payload_prop(resource_id_of(self), "sourcefile"));
       auto num=[&](size_t i,float fallback){return i>=args.size()?fallback:args[i].tag==ValueTag::Float?args[i].v.f:args[i].tag==ValueTag::Int?static_cast<float>(args[i].v.i):fallback;};
       if(path.empty())return Value::make_int(0);
-      return Value::make_int(host_sfx_play_file(path.string(),num(2,1),num(3,1),static_cast<int>(num(4,0))&1,static_cast<int>(num(5,0))));
+      const float pitch=num(2,1),volume=num(3,1);
+      const bool loop=static_cast<int>(num(4,0))&1;
+      const int32_t instance=static_cast<int>(num(5,0));
+      // A position places the sound in the world (#390): the resource's
+      // mindist/maxdist give the distance model, a positive radius caps it.
+      Object* where=native_arg_object(args,0);
+      float position[3]{};
+      bool placed=where!=nullptr;
+      const char* axes[3]={"x","y","z"};
+      for(int i=0;placed&&i<3;++i){
+        const auto f=where->fields.find(axes[i]);
+        placed=f!=where->fields.end()&&(f->second.tag==ValueTag::Float?std::isfinite(f->second.v.f):f->second.tag==ValueTag::Int);
+        if(placed)position[i]=f->second.tag==ValueTag::Float?f->second.v.f:static_cast<float>(f->second.v.i);
+      }
+      if(!placed)return Value::make_int(host_sfx_play_file(path.string(),pitch,volume,loop,instance));
+      HostSfxPlace place;
+      std::copy(position,position+3,place.position);
+      const auto prop=[&](const char* key,float fallback){
+        const auto text=rpk.payload_prop(resource_id_of(self),key);
+        const float value=text.empty()?fallback:std::strtof(text.c_str(),nullptr);
+        return std::isfinite(value)&&value>0.f?value:fallback;
+      };
+      place.reference=prop("mindist",2.5f);
+      place.maximum=(std::max)(place.reference,prop("maxdist",60.f));
+      const float radius=num(1,0);
+      if(std::isfinite(radius)&&radius>0.f)place.maximum=(std::max)(place.reference,radius);
+      return Value::make_int(host_sfx_play_at(path.string(),place,pitch,volume,loop,instance));
     });
   jvm.natives().register_method("java.util.resource.SfxRef", "stop", "(I)V",
     [](Object*,const std::vector<Value>& args){if(!args.empty())host_sfx_stop(args[0].v.i);return Value::make_void();});
@@ -488,6 +483,108 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) 
         }
         return Value::make_void();
       });
+  // java.io.InputDevices (#345): the SDL3 devices for Options > Controls.
+  // Index i is ControlSet device i + 3.
+  {
+    const char* kDevices = "java.io.InputDevices";
+    auto info = [integer](const std::vector<Value>& args) {
+      return host_input_devices().info(integer(args, 0));
+    };
+    jvm.natives().register_method(kDevices, "refresh", "()I",
+        [](Object*, const std::vector<Value>&) {
+          host_input_devices().refresh();
+          return Value::make_int(host_input_devices().count());
+        });
+    jvm.natives().register_method(kDevices, "count", "()I",
+        [](Object*, const std::vector<Value>&) { return Value::make_int(host_input_devices().count()); });
+    jvm.natives().register_method(kDevices, "name", "(I)Ljava.lang.String;",
+        [&jvm, info](Object*, const std::vector<Value>& a) { return Value::make_obj(jvm.new_string(info(a).name)); });
+    jvm.natives().register_method(kDevices, "type", "(I)Ljava.lang.String;",
+        [&jvm, info](Object*, const std::vector<Value>& a) { return Value::make_obj(jvm.new_string(info(a).type)); });
+    jvm.natives().register_method(kDevices, "power", "(I)Ljava.lang.String;",
+        [&jvm, info](Object*, const std::vector<Value>& a) { return Value::make_obj(jvm.new_string(info(a).power)); });
+    jvm.natives().register_method(kDevices, "connected", "(I)I",
+        [info](Object*, const std::vector<Value>& a) { return Value::make_int(info(a).connected); });
+    jvm.natives().register_method(kDevices, "axes", "(I)I",
+        [info](Object*, const std::vector<Value>& a) { return Value::make_int(info(a).axes); });
+    jvm.natives().register_method(kDevices, "buttons", "(I)I",
+        [info](Object*, const std::vector<Value>& a) { return Value::make_int(info(a).buttons); });
+    jvm.natives().register_method(kDevices, "hats", "(I)I",
+        [info](Object*, const std::vector<Value>& a) { return Value::make_int(info(a).hats); });
+    jvm.natives().register_method(kDevices, "battery", "(I)I",
+        [info](Object*, const std::vector<Value>& a) { return Value::make_int(info(a).battery); });
+    jvm.natives().register_method(kDevices, "canForceFeedback", "(I)I",
+        [info](Object*, const std::vector<Value>& a) { return Value::make_int(info(a).force_feedback); });
+    jvm.natives().register_method(kDevices, "testForceFeedback", "(I)I",
+        [integer](Object*, const std::vector<Value>& a) {
+          return Value::make_int(host_input_devices().test_force(integer(a, 0)));
+        });
+    jvm.natives().register_method(kDevices, "canRumble", "(I)I",
+        [info](Object*, const std::vector<Value>& a) { return Value::make_int(info(a).rumble); });
+    jvm.natives().register_method(kDevices, "calibrated", "(I)I",
+        [info](Object*, const std::vector<Value>& a) { return Value::make_int(info(a).calibrated); });
+    jvm.natives().register_method(kDevices, "calibrating", "(I)I",
+        [info](Object*, const std::vector<Value>& a) { return Value::make_int(info(a).calibrating); });
+    jvm.natives().register_method(kDevices, "activity", "(I)F",
+        [integer](Object*, const std::vector<Value>& a) {
+          return Value::make_float(host_input_devices().activity(integer(a, 0)));
+        });
+    jvm.natives().register_method(kDevices, "rumble", "(IFI)I",
+        [integer](Object*, const std::vector<Value>& a) {
+          float strength = .5f;
+          if (a.size() > 1) strength = a[1].tag == ValueTag::Float ? a[1].v.f
+                                     : a[1].tag == ValueTag::Int ? float(a[1].v.i) : .5f;
+          return Value::make_int(host_input_devices().rumble(integer(a, 0), strength, integer(a, 2)));
+        });
+    jvm.natives().register_method(kDevices, "calibrateBegin", "(I)V",
+        [integer](Object*, const std::vector<Value>& a) {
+          host_input_devices().calibrate_begin(integer(a, 0));
+          return Value::make_void();
+        });
+    jvm.natives().register_method(kDevices, "calibrateEnd", "(I)I",
+        [integer](Object*, const std::vector<Value>& a) {
+          return Value::make_int(host_input_devices().calibrate_end(integer(a, 0)));
+        });
+    jvm.natives().register_method(kDevices, "calibrateReset", "(I)V",
+        [integer](Object*, const std::vector<Value>& a) {
+          host_input_devices().calibrate_reset(integer(a, 0));
+          return Value::make_void();
+        });
+    // Device class of a ControlSet device id (InputKind): 0 keyboard,
+    // 1 mouse, 2 pad, 3 wheel/sim peripheral, -1 none.
+    jvm.natives().register_method(kDevices, "kind", "(I)I",
+        [integer](Object*, const std::vector<Value>& a) {
+          return Value::make_int(static_cast<int>(host_input_device_kind(integer(a, 0))));
+        });
+    // The rebind listener (host_input_capture.hpp) over every device at once.
+    auto none = [](Object*, const std::vector<Value>&) { return Value::make_void(); };
+    jvm.natives().register_method(kDevices, "captureBegin", "()V",
+        [none](Object* o, const std::vector<Value>& a) { host_input_capture_begin(); return none(o, a); });
+    // Only the device classes in the mask (1 << kind) may be taken (#405).
+    jvm.natives().register_method(kDevices, "captureBeginKinds", "(I)V",
+        [none, integer](Object* o, const std::vector<Value>& a) {
+          host_input_capture_begin(integer(a, 0));
+          return none(o, a);
+        });
+    jvm.natives().register_method(kDevices, "captureCancel", "()V",
+        [none](Object* o, const std::vector<Value>& a) { host_input_capture_cancel(); return none(o, a); });
+    jvm.natives().register_method(kDevices, "captureState", "()I",
+        [](Object*, const std::vector<Value>&) { return Value::make_int(host_input_capture().state()); });
+    jvm.natives().register_method(kDevices, "captureDevice", "()I",
+        [](Object*, const std::vector<Value>&) { return Value::make_int(host_input_capture().device()); });
+    jvm.natives().register_method(kDevices, "captureAxis", "()I",
+        [](Object*, const std::vector<Value>&) { return Value::make_int(host_input_capture().axis()); });
+    jvm.natives().register_method(kDevices, "captureAnalog", "()I",
+        [](Object*, const std::vector<Value>&) { return Value::make_int(host_input_capture().analog()); });
+    jvm.natives().register_method(kDevices, "captureHeld", "()I",
+        [](Object*, const std::vector<Value>&) { return Value::make_int(host_input_capture().held()); });
+    jvm.natives().register_method(kDevices, "captureRest", "()F",
+        [](Object*, const std::vector<Value>&) { return Value::make_float(host_input_capture().rest()); });
+    jvm.natives().register_method(kDevices, "capturePeak", "()F",
+        [](Object*, const std::vector<Value>&) { return Value::make_float(host_input_capture().peak()); });
+    jvm.natives().register_method(kDevices, "captureProgress", "()F",
+        [](Object*, const std::vector<Value>&) { return Value::make_float(host_input_capture_progress()); });
+  }
   jvm.natives().register_method(
       "java.io.Input", "activeAxis", "(I)I",
       [integer](Object*, const std::vector<Value>& args) {

@@ -2,7 +2,7 @@ param(
   [string]$BuildDir = "build",
   [string]$BaselineRef = "",
   [switch]$CorpusOnly,
-  [ValidateSet("save_io", "save_persistence", "save_json", "scx_skin", "physics_position", "garage_shell", "map_props", "asset_bounds", "ped_crossing", "time_format", "night_props", "sun_cycle", "tree_numbers", "ui_lifetime", "resource_cache", "tufa_validation", "rpk_validation", "audio_recovery", "vm_lookup", "script_safety", "video_safety", "options_retry", "live_lookup", "driver_mask", "driver_selector", "pad_fallback", "sdl_input", "class_lifetime", "static_increment", "inventory_transition", "map_views", "map_alpha", "physics_recovery", "findfile_paths", "splash_boot", "menu_debounce", "tooltip_render", "car_select_view", "trigger_markers", "trigger_volume", "gameref_alias", "osd_text_batch", "osd_text_gpu", "outline_font", "road_routes", "race_brain", "traffic_runtime", "race_vehicle", "frame_profiler", "render_programs_gpu", "scene_mesh_cache", "gc_runtime", "vehicle_contacts_runtime", "paint_texture", "scene_shadow_gpu", "script_lights", "scenery_lights", "host_clipboard", "prop_lod", "car_lights", "nitrous", "vehicle_dynamics", "catalog_resources", "swaybars", "cockpit_needles")]
+  [ValidateSet("save_io", "save_persistence", "save_json", "scx_skin", "physics_position", "garage_shell", "map_props", "asset_bounds", "ped_crossing", "time_format", "night_props", "sun_cycle", "tree_numbers", "ui_lifetime", "resource_cache", "tufa_validation", "rpk_validation", "audio_recovery", "vm_lookup", "script_safety", "video_safety", "options_retry", "live_lookup", "driver_mask", "driver_selector", "pad_fallback", "sdl_input", "class_lifetime", "static_increment", "inventory_transition", "map_views", "map_alpha", "physics_recovery", "findfile_paths", "splash_boot", "menu_debounce", "tooltip_render", "car_select_view", "trigger_markers", "trigger_volume", "gameref_alias", "osd_text_batch", "osd_text_gpu", "outline_font", "road_routes", "race_brain", "traffic_runtime", "race_vehicle", "frame_profiler", "render_programs_gpu", "scene_mesh_cache", "gc_runtime", "vehicle_contacts_runtime", "paint_texture", "scene_shadow_gpu", "script_lights", "scenery_lights", "host_clipboard", "prop_lod", "car_lights", "nitrous", "vehicle_dynamics", "port_flow", "catalog_resources", "swaybars", "cockpit_needles")]
   [string]$Suite = "save_io"
 )
 $ErrorActionPreference = "Stop"
@@ -71,24 +71,6 @@ try {
   $testObject = Join-Path $outputRoot "$suiteName-$label.obj"
   & $compiler /nologo /std:c++20 /EHsc /MD /O2 /utf-8 /D_CRT_SECURE_NO_WARNINGS /Iinclude /Isrc/natives @suiteIncludes "tests/test_$Suite.cpp" "/Fe:$executable" "/Fo:$testObject" @objects @libraries
   if ($LASTEXITCODE -ne 0) { throw "Save I/O regression link failed" }
-  # Every suite links the host objects, including the FMOD import library.
-  # Prefer the copy the host build placed in Release; otherwise resolve the SDK
-  # the build was configured with (cache, then environment, then default).
-  $fmod = Join-Path $buildRoot 'Release/fmod.dll'
-  if (-not (Test-Path -LiteralPath $fmod)) {
-    $sdkDirs = @()
-    $cache = Join-Path $buildRoot 'CMakeCache.txt'
-    if (Test-Path -LiteralPath $cache) {
-      $line = Select-String -LiteralPath $cache -Pattern '^SLRR_FMOD_SDK_DIR:[A-Z]+=(.+)$' | Select-Object -First 1
-      if ($line) { $sdkDirs += $line.Matches[0].Groups[1].Value.Trim() }
-    }
-    if ($env:SLRR_FMOD_SDK_DIR) { $sdkDirs += $env:SLRR_FMOD_SDK_DIR }
-    $sdkDirs += 'C:/Program Files (x86)/FMOD SoundSystem/FMOD Studio API Windows'
-    $fmod = $sdkDirs | ForEach-Object { Join-Path $_ 'api/core/lib/x64/fmod.dll' } |
-      Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-  }
-  if (-not $fmod) { throw "fmod.dll not found: build slrr_host Release or set SLRR_FMOD_SDK_DIR to the FMOD Studio API Windows SDK root" }
-  Copy-Item -LiteralPath $fmod -Destination $outputRoot -Force
   $log = Join-Path $outputRoot "$label.log"
   if ($CorpusOnly -and $Suite -notin @('tufa_validation','rpk_validation')) { throw "CorpusOnly requires a validation suite" }
   # Windows PowerShell 5 treats redirected native stderr as ErrorRecords, even

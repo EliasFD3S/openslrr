@@ -232,11 +232,17 @@ void physical_stock_opponent(const char *pack_name) {
   std::printf("ROC gear=%d rpm=%.1f speed=%.3f steer=%.3f yawrate=%.3f\n",
               state.gear, state.rpm, state.speed_kph, state.steering_angle,
               state.yaw_rate);
-  SLRR_REQUIRE(max_error < 5 && finished);
+  // 5 m at the 120 Hz solver. At 1000 Hz (#380), with crash damage back on
+  // the cage's 120 Hz tuning, the race AI ran up to 12.6 m off its line after
+  // a 15 m/s impact; with the combined-slip tyre (#383), 6.6 m on the first
+  // lap and 8.4 m on the second.
+  SLRR_REQUIRE(max_error < 9 && finished);
   SLRR_REQUIRE(max_request > .02 && max_wheel > .01 && max_yaw > .1);
   const auto before_brake = state.speed_kph;
   race_brain_command(f.packs, &brain, "AI_stop");
-  for (int i = 0; i < 300; ++i)
+  // About 5.2 s from 166 km/h with the combined-slip tyre's locked-wheel
+  // grip (#383); 4 s before, when a locked tyre kept more of its peak.
+  for (int i = 0; i < 420; ++i)
     part_physics_advance(1. / 60.);
   part_physics_state(car, state);
   std::printf("BRAKE before=%.3f after=%.3f\n", before_brake, state.speed_kph);

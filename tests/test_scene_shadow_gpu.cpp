@@ -11,6 +11,7 @@
 #include "dxbc/fs_mesh.sc.bin.h"
 #include "dxbc/fs_vehicle.sc.bin.h"
 #include <chrono>
+#include <thread>
 #include "slrr/frame_profiler.hpp"
 #include "slrr/job_system.hpp"
 #include <limits>
@@ -421,7 +422,9 @@ struct SceneShadowRegression {
                 ahead0,ahead2,ahead1,far0,far2,rear0,rear2,red0,red,green0,green,front_red);
     // Beams light the road ahead, a lost headlight takes about half away,
     // nothing reaches behind the car; brake lights add red only, behind.
-    SLRR_REQUIRE(ahead2>ahead0+25*60 && far2>far0+25*15);
+    // The road 24 m ahead lies above these 5-degree-down beams: the low-beam
+    // cutoff and the quadratic falloff leave it a little light.
+    SLRR_REQUIRE(ahead2>ahead0+25*60 && far2>far0+25*5 && far2-far0<(ahead2-ahead0)/3);
     SLRR_REQUIRE(ahead1>ahead0+(ahead2-ahead0)/4 && ahead1<ahead2-(ahead2-ahead0)/4);
     SLRR_REQUIRE(rear2==rear0);
     SLRR_REQUIRE(red>red0+25*20 && green-green0<(red-red0)/8 && front_red==ahead0);
@@ -1512,7 +1515,11 @@ struct SceneShadowRegression {
   // pass toggle removes its views (no GPU time) and restores them; budgets
   // bound the lamp selections. Also prints a first per-view cost table.
   static void render_debug_overrides(LibBgfxBackend& b) {
+    // The harness runs with the sun-step crossfade off (main); compare the rest.
+    const float harness_fade=render_debug().shadow_crossfade;
+    render_debug().shadow_crossfade=RenderDebugOverrides{}.shadow_crossfade;
     SLRR_REQUIRE(render_debug()==RenderDebugOverrides{});
+    render_debug().shadow_crossfade=harness_fade;
     SLRR_REQUIRE(render_debug_budget(-1,40,40)==40 && render_debug_budget(70,40,40)==40 &&
                  render_debug_budget(3,40,40)==3);
     SLRR_REQUIRE(local_shadow_resolution()==uint16_t(256u<<std::clamp(host_enhanced_graphics().shadow_quality,0,2)));
@@ -1654,7 +1661,7 @@ struct SceneShadowRegression {
       SLRR_REQUIRE(bx::length(bx::sub(bx::Vec3{lamp.position[0],lamp.position[1],lamp.position[2]},
                                       bx::Vec3{0,2.5f,-7}))<=60.f+LibBgfxBackend::kLampShadowReach);
     o.local_shadow_tile=256;SLRR_REQUIRE(local_shadow_resolution()==256);
-    o.cascade_scale=2.f;SLRR_REQUIRE(cascade_radii()[0]==64.f);
+    o.cascade_scale=2.f;SLRR_REQUIRE(cascade_radii()[0]==2.f*shadow_radii[0]);
     {
       // Snapshot header (#243): only overrides that differ from the defaults.
       const auto text=render_debug_overrides_text(o);
@@ -1666,7 +1673,7 @@ struct SceneShadowRegression {
       SLRR_REQUIRE(text.find("ambient occlusion")==std::string::npos);
       SLRR_REQUIRE(render_debug_overrides_text(RenderDebugOverrides{}).empty());
     }
-    o={};SLRR_REQUIRE(render_debug()==RenderDebugOverrides{});
+    o={};SLRR_REQUIRE(render_debug()==RenderDebugOverrides{});o.shadow_crossfade=harness_fade;
     run(5);
     bgfx::setDebug(BGFX_DEBUG_NONE);
     bgfx::frame();bgfx::destroy(fb);
@@ -2182,6 +2189,11 @@ struct SceneShadowRegression {
           b.lamp_shadow_dt_override_=10.f;
           b.defer_submits_=b.parallel_submission_ready();
           VideoOptions video;video.shadows=2;
+          if(day) {
+            // #359: the sun cascades queue one job each, as in a game frame.
+            const float script_eye[3]={frame_matrix[12],frame_matrix[13]+2.f,frame_matrix[14]};
+            b.update_static_shadow(script_eye,video);
+          }
           const float car_script[3]={frame_matrix[12]+14.f,frame_matrix[13],frame_matrix[14]+1.5f};
           b.set_lamp_shadow_focus(car_script);
           b.update_lamp_shadows(video);
@@ -2195,7 +2207,7 @@ struct SceneShadowRegression {
           b.upload_light_data();
           b.defer_submits_=false;
         }
-        if(day) {
+        if(day && !workers) {
           VideoOptions video;video.shadows=2;
           const float script_eye[3]={frame_matrix[12],frame_matrix[13]+2.f,frame_matrix[14]};
           b.update_static_shadow(script_eye,video);
@@ -2217,7 +2229,12 @@ struct SceneShadowRegression {
         bgfx::setViewTransform(view_id,view,render);
         b.view_draws_.fill(0);
         start=std::chrono::steady_clock::now();
-        if(workers) b.run_worker_submits([&]{b.draw_dynamic_world(view_id);});
+        if(workers) {
+          // The game's world submission (#359): with worker encoders the
+          // opaque part goes to kWorldOpaqueView on a worker, ordered first.
+          b.apply_base_view_order();
+          b.submit_world(view_id,fb,{0,0,width,height},BGFX_CLEAR_COLOR|BGFX_CLEAR_DEPTH,0xff,view,render,false);
+        }
         else b.draw_dynamic_world(view_id);
         if(crowd) {bgfx::setViewFrameBuffer(LibBgfxBackend::kPreview0,fb);b.draw_previews();}
         const double submit=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
@@ -2375,7 +2392,7 @@ struct SceneShadowRegression {
     const size_t differ=compare(off.image,on.image,worst);
     uint64_t lit=0;for(size_t i=0;i<on.image.size();i+=4) lit+=on.image[i]+on.image[i+1]+on.image[i+2];
     std::printf("CITY FRAME caches on vs off: %zu bytes differ, max %d (sum %llu)\n",differ,worst,(unsigned long long)lit);
-    // A known flake, older than #266 (KNOWLEDGE_BASE.md, #266 and #268):
+    // A known flake, older than #266 (docs/rendering/performance.md, #266 and #268):
     // about one run in three a capture differs from another run's by 1 in a
     // few dozen scattered lamp-lit pixels. Anything larger is a real change.
     const auto flake=[](size_t bytes,int max){return bytes<=64&&max<=1;};
@@ -3633,11 +3650,67 @@ struct SceneShadowRegression {
     b.update_static_shadow(eye, video);
     bgfx::frame();
     SLRR_REQUIRE(b.shadow_atlas_revision_ == revision);
+    // #371: the shadow light direction holds until the sun has moved
+    // shadow_sun_step degrees. Seconds of game clock move it by a few
+    // thousandths of a degree: the atlas stays.
+    const float sun_step = render_debug().shadow_sun_step;
+    SLRR_REQUIRE(sun_step > 0.f);
+    const auto held = b.shadow_sun_direction_;
+    scene_sun_set_time(scene_sun_time() + 2.f);
+    b.update_static_shadow(eye, video);
+    bgfx::frame();
+    SLRR_REQUIRE(b.shadow_atlas_revision_ == revision && b.shadow_sun_direction_ == held);
+    // A larger move (about a degree) redraws it with the new direction.
+    scene_sun_set_time(scene_sun_time() + 240.f);
+    b.update_static_shadow(eye, video);
+    bgfx::frame();
+    SLRR_REQUIRE(b.shadow_atlas_revision_ == revision + 1 && b.shadow_sun_direction_ != held);
+    revision = b.shadow_atlas_revision_;
+    b.update_static_shadow(eye, video);
+    bgfx::frame();
+    revision = b.shadow_atlas_revision_;
+    // Step 0 follows the sun every frame, as before #371.
+    render_debug().shadow_sun_step = 0.f;
     scene_sun_set_time(scene_sun_time() + .01f);
     b.update_static_shadow(eye, video);
     bgfx::frame();
     SLRR_REQUIRE(b.shadow_atlas_revision_ == revision + 1);
+    render_debug().shadow_sun_step = sun_step;
     revision = b.shadow_atlas_revision_;
+    {
+      // #371 crossfade: a sun step in consecutive frames keeps the previous
+      // atlas and its matrices, swaps the atlases and fades the old one out.
+      const float saved_fade = render_debug().shadow_crossfade;
+      render_debug().shadow_crossfade = .2f;
+      // Two continuous frames with a moved camera draw a complete atlas.
+      const float moved[3] = {eye[0] + 7.f, eye[1], eye[2]};
+      ++b.frames_;
+      b.update_static_shadow(moved, video);bgfx::frame();
+      ++b.frames_;
+      b.update_static_shadow(eye, video);bgfx::frame();
+      const auto old_texture = b.static_shadow_tex_;
+      const auto old_matrices = b.shadow_cascade_matrices_;
+      scene_sun_set_time(scene_sun_time() + 240.f);
+      ++b.frames_;
+      b.update_static_shadow(eye, video);bgfx::frame();
+      SLRR_REQUIRE(b.shadow_blending_ && b.shadow_blend_ > .5f);
+      SLRR_REQUIRE(b.static_shadow_prev_tex_.idx == old_texture.idx && b.static_shadow_tex_.idx != old_texture.idx);
+      SLRR_REQUIRE(b.shadow_cascade_prev_matrices_ == old_matrices && b.shadow_cascade_matrices_ != old_matrices);
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+      ++b.frames_;
+      b.update_static_shadow(eye, video);bgfx::frame();
+      SLRR_REQUIRE(!b.shadow_blending_ && b.shadow_blend_ == 0.f);
+      // Crossfade 0: the step lands at once, without a second atlas swap.
+      render_debug().shadow_crossfade = 0.f;
+      const auto current = b.static_shadow_tex_;
+      scene_sun_set_time(scene_sun_time() + 240.f);
+      ++b.frames_;
+      b.update_static_shadow(eye, video);bgfx::frame();
+      SLRR_REQUIRE(!b.shadow_blending_ && b.static_shadow_tex_.idx == current.idx);
+      render_debug().shadow_crossfade = saved_fade;
+      revision = b.shadow_atlas_revision_;
+      std::puts("PASS sun step crossfade keeps the previous atlas and fades it out (#371)");
+    }
     const auto children = gameref_get(root)->children;
     SLRR_REQUIRE(!children.empty());
     auto *shell = gameref_get(children.front());
@@ -3657,13 +3730,52 @@ struct SceneShadowRegression {
     b.update_static_shadow(eye, video);
     bgfx::frame();
     SLRR_REQUIRE(b.shadow_atlas_revision_ == revision + 1);
+    {
+      // #361: a moving camera redraws the far cascades (2, 3) on alternate
+      // frames; the skipped one keeps the matrix its tile was drawn with.
+      // A still camera, a gap of one frame or alternation off draws all.
+      const bool saved = render_debug().cascade_alternation;
+      float moving[3] = {eye[0], eye[1], eye[2]};
+      const auto step = [&](float dx) {
+        moving[0] += dx;
+        ++b.frames_;
+        const auto before = b.shadow_cascade_matrices_;
+        b.update_static_shadow(moving, video);
+        bgfx::frame();
+        std::array<bool, 4> drawn{};
+        for (size_t c = 0; c < 4; ++c) drawn[c] = b.shadow_cascade_matrices_[c] != before[c];
+        return drawn;
+      };
+      render_debug().cascade_alternation = true;
+      step(3.f);  // continuity starts here: everything is drawn
+      size_t far_draws = 0;
+      for (int frame = 0; frame < 6; ++frame) {
+        const auto drawn = step(3.f);
+        SLRR_REQUIRE(drawn[0] && drawn[1]);
+        SLRR_REQUIRE(drawn[2] != drawn[3]);
+        far_draws += size_t(drawn[2]) + size_t(drawn[3]);
+      }
+      SLRR_REQUIRE(far_draws == 6);
+      b.frames_ += 2;  // a frame without the sun cascades: all tiles stale
+      {
+        const auto drawn = step(3.f);
+        SLRR_REQUIRE(drawn[0] && drawn[1] && drawn[2] && drawn[3]);
+      }
+      render_debug().cascade_alternation = false;
+      for (int frame = 0; frame < 2; ++frame) {
+        const auto drawn = step(3.f);
+        SLRR_REQUIRE(drawn[0] && drawn[1] && drawn[2] && drawn[3]);
+      }
+      render_debug().cascade_alternation = saved;
+      std::puts("PASS far sun cascades alternate while the camera moves (#361)");
+    }
     for (auto child : children)
       gameref_remove(child);
     gameref_remove(root);
     scene_instances_set_resources(nullptr);
     b.instances_.clear();
-    std::puts("PASS real map: unchanged atlas reused, small sun/caster motion "
-              "invalidates");
+    std::puts("PASS real map: unchanged atlas reused, sun held within its step (#371), "
+              "larger sun and caster motion invalidates");
   }
 
   static void run(LibBgfxBackend &b) {
@@ -3924,11 +4036,11 @@ struct SceneShadowRegression {
                    std::abs(captured - dark) <= 3);
     }
     darkTile = 0;
-    b.static_shadow_eye_ = {-27.2f, 0, 0};
+    b.static_shadow_eye_ = {-.85f * shadow_radii[0], 0, 0};  // the 85-100 % blend band
     const auto transitionStart = pixel(true, true, .2f, 5);
-    b.static_shadow_eye_ = {-29.6f, 0, 0};
+    b.static_shadow_eye_ = {-.925f * shadow_radii[0], 0, 0};
     const auto transitionMid = pixel(true, true, .2f, 5);
-    b.static_shadow_eye_ = {-32.1f, 0, 0};
+    b.static_shadow_eye_ = {-1.003f * shadow_radii[0], 0, 0};
     const auto transitionEnd = pixel(true, true, .2f, 5);
     SLRR_REQUIRE(transitionStart < transitionMid &&
                  transitionMid < transitionEnd);
@@ -4072,6 +4184,9 @@ int main() {
     SLRR_REQUIRE(backend.open(320, 240, "Scene shadow integration"));
     SLRR_REQUIRE(bgfx::getRendererType() == bgfx::RendererType::Direct3D11);
     ShowWindow(static_cast<HWND>(backend.native_hwnd()), SW_HIDE);
+    // Captures compare frames rendered at once: a real-time crossfade after a
+    // sun step would weigh them differently (#371). Its own test enables it.
+    render_debug().shadow_crossfade = 0.f;
     SceneShadowRegression::run(backend);
     SceneShadowRegression::real_world_cache(backend);
     SceneShadowRegression::addon_bounds(backend);
@@ -4099,6 +4214,8 @@ int main() {
     SceneShadowRegression::city_submission(backend,2560,1440,true);
     SceneShadowRegression::city_submission(backend,1280,720,true,true);
     SceneShadowRegression::city_submission(backend,1280,720,true,false,true);
+    // #359: by day, with the sun cascades on worker encoders.
+    SceneShadowRegression::city_submission(backend,1280,720,true,true,true);
     backend.close();
     std::puts("PASS vehicle/scenery shadow visibility, preview/emission "
               "isolation and reflection-view parity");

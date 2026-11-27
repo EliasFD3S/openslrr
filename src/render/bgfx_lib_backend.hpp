@@ -66,6 +66,10 @@ class LibBgfxBackend final : public IRenderBackend {
   static constexpr uint16_t kOsdUnder = 7;
   static constexpr uint16_t kPreview0 = 8;
   static constexpr uint16_t kOsdView = 70;
+  // Opaque part of the world on worker encoders (#359): consecutive views
+  // drawn just before kWorldView into the same target, in submission order.
+  static constexpr uint16_t kWorldOpaqueView = 151;
+  static constexpr uint16_t kWorldOpaqueViews = 4;
 
  public:
   const char* name() const override { return "bgfx"; }
@@ -371,13 +375,40 @@ class LibBgfxBackend final : public IRenderBackend {
     std::vector<PropPlacement> placements;
   };
   std::vector<BlendedPropGroup> blended_groups_;  // rebuilt per world draw, capacity kept
+  size_t blended_group_count_ = 0;
   std::vector<PropPlacement> placement_scratch_;
   void refresh_distance_fog(const float render_eye[3]);
 
   void draw_sky(uint16_t view_id, const float* view, const float* projection);
+  // The world in one Sequential view: build_blended_groups, then the opaque
+  // part (prop batches, pass 0), then the blended part (pass 1, night
+  // overlays). With worker encoders, flush gives the opaque part its own
+  // view (kWorldOpaqueView, ordered just before the world view, which it
+  // clears) on a worker while the host submits the blended part (#359).
   void draw_dynamic_world(uint16_t view_id);
+  // Runs the queued worker passes and submits the world (sky when `sky`),
+  // split as above when worker encoders are on; host_after runs on the host
+  // after the world, inside the same window (#359).
+  void submit_world(uint16_t world_view, bgfx::FrameBufferHandle target,
+                    const std::array<uint16_t, 4>& rect, uint16_t clear_flags,
+                    uint32_t clear_color, const float* view, const float* proj, bool sky,
+                    const std::function<void()>& host_after = {});
+  void build_blended_groups();
+  void draw_world_opaque(uint16_t view_id);
+  void draw_world_blended(uint16_t view_id);
+  // One pass over instances_[begin, end) (pass 1 adds the night overlays);
+  // `groups` also draws the blended prop groups' sections of that pass.
+  void draw_world_pass(uint16_t view_id, int pass, size_t begin = 0,
+                       size_t end = SIZE_MAX, bool groups = true);
+  // Draw order of every view; draw_previews may reorder it for an inset
+  // world viewport. Called every frame so kWorldOpaqueView always runs
+  // just before the world view.
+  void apply_base_view_order();
   void draw_sun_flare(const float* view, const float* projection, uint16_t view_id);
   void draw_nitro_flares(const float* view, const float* projection, uint16_t view_id);
+  void draw_skid_marks(uint16_t view_id);
+  // Tyre smoke and ground dust (#454): volumetric impostors, after the marks.
+  void draw_particles(const float* view, const float* projection, uint16_t view_id);
 
   void draw_previews();
 
@@ -537,12 +568,40 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::UniformHandle u_alpha_test_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_color_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle vehicle_program_ = BGFX_INVALID_HANDLE;
+  // Particles and textured skid marks (#454, vs/fs_particle.sc).
+  bgfx::ProgramHandle particle_program_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_particle_sun_ = BGFX_INVALID_HANDLE, u_particle_sun_color_ = BGFX_INVALID_HANDLE,
+      u_particle_ambient_ = BGFX_INVALID_HANDLE, u_particle_cam_ = BGFX_INVALID_HANDLE,
+      u_particle_params_ = BGFX_INVALID_HANDLE, u_particle_depth_ = BGFX_INVALID_HANDLE,
+      s_particle_depth_ = BGFX_INVALID_HANDLE;
+  // Binds the particle program's light, camera and soft-depth uniforms.
+  void bind_particle_uniforms(const float* view, uint16_t view_id);
   bgfx::UniformHandle s_mix_=BGFX_INVALID_HANDLE,s_env_=BGFX_INVALID_HANDLE,s_bake_=BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_layers_=BGFX_INVALID_HANDLE,u_channels_=BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_base_uv_=BGFX_INVALID_HANDLE,u_mix_uv_=BGFX_INVALID_HANDLE,u_env_uv_=BGFX_INVALID_HANDLE,u_diffuse_=BGFX_INVALID_HANDLE,u_spec_=BGFX_INVALID_HANDLE,u_sun_diff_=BGFX_INVALID_HANDLE,u_sun_amb_=BGFX_INVALID_HANDLE,u_sun_spec_=BGFX_INVALID_HANDLE,u_sun_dir_=BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle static_shadow_program_ = BGFX_INVALID_HANDLE;
   bgfx::FrameBufferHandle static_shadow_fb_ = BGFX_INVALID_HANDLE;
   bgfx::TextureHandle static_shadow_tex_ = BGFX_INVALID_HANDLE;
+  // The sun atlas of the previous held direction while the shadows
+  // crossfade after a sun step (#371). The two atlases swap on each step.
+  bgfx::FrameBufferHandle static_shadow_prev_fb_ = BGFX_INVALID_HANDLE;
+  bgfx::TextureHandle static_shadow_prev_tex_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle s_static_shadow_prev_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_shadow_cascades_prev_ = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_shadow_blend_ = BGFX_INVALID_HANDLE;
+  std::array<std::array<float,16>,4> shadow_cascade_prev_matrices_{};
+  float shadow_blend_ = 0.f;          // weight of the previous atlas this frame
+  bool shadow_blending_ = false;
+  double shadow_blend_start_ = 0.;    // seconds, steady clock
+  std::array<float,3> atlas_sun_direction_{};
+  bool atlas_sun_valid_ = false;
+  void destroy_prev_shadow_atlas() {
+    if (bgfx::isValid(static_shadow_prev_fb_)) bgfx::destroy(static_shadow_prev_fb_);
+    static_shadow_prev_fb_ = BGFX_INVALID_HANDLE;
+    static_shadow_prev_tex_ = BGFX_INVALID_HANDLE;
+    shadow_blending_ = false;
+    shadow_blend_ = 0.f;
+  }
   bgfx::UniformHandle s_static_shadow_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_static_shadow_mtx_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_static_shadow_params_ = BGFX_INVALID_HANDLE;
@@ -578,7 +637,16 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::UniformHandle u_ao_params_=BGFX_INVALID_HANDLE,u_ao_sampling_=BGFX_INVALID_HANDLE,u_ao_field_size_=BGFX_INVALID_HANDLE;
   std::array<float,4> ao_projection_{};
   uint16_t ao_width_=0,ao_height_=0,ao_screen_width_=0,ao_screen_height_=0,ao_world_view_=UINT16_MAX;
+  // Views whose world draws receive AO: the AO world view, plus
+  // kWorldOpaqueView when the opaque world is split off it (#359).
+  bool ao_receiver_view(uint16_t view) const {
+    return view == ao_world_view_ ||
+           (view >= kWorldOpaqueView && view < kWorldOpaqueView + kWorldOpaqueViews &&
+            ao_world_view_ == kWorldView);
+  }
   bool ao_active_=false;
+  // The AO depth prepass ran this frame, with or without AO (#454).
+  bool scene_depth_active_=false;
 
   static constexpr size_t kFixtureLights=12;
   std::vector<SpotLight> fixture_lights_;
@@ -595,9 +663,15 @@ class LibBgfxBackend final : public IRenderBackend {
   // Car lights (#279) lead the unshadowed part of scenery_lamps_: at most
   // kCarLights, the followed car's first, then by distance to the eye.
   static constexpr size_t kCarLights=16;
-  // Tuned in scene_shadow_gpu case car_lights; see KNOWLEDGE_BASE #279.
+  // Tuned in scene_shadow_gpu case car_lights; see docs/rendering/lighting.md #279.
   static constexpr float kCarLightMaxDistance=150.f;
-  static constexpr float kHeadlightIntensity=3.f, kHeadlightRange=60.f;
+  // Headlights fall off as 1/(1 + (d/kHeadlightFalloff)^2): the road 8 m
+  // ahead keeps its #279 level, a tree 40 m away gets about a fifth of it.
+  // Above the beam axis kHeadlightAboveAxis of the light remains, the stock
+  // attV profile (racers light_beams/attV.ptx, rows above the centre 15-40 %
+  // of the band below it).
+  static constexpr float kHeadlightIntensity=3.5f, kHeadlightRange=60.f, kHeadlightFalloff=12.f;
+  static constexpr float kHeadlightAboveAxis=.25f;
   static constexpr float kHeadlightInnerDegrees=14.f, kHeadlightOuterDegrees=30.f;
   static constexpr float kBrakeLightIntensity=1.5f, kBrakeLightRange=6.f, kBrakeLightQuadratic=.3f;
   static constexpr float kBrakeLightInnerDegrees=55.f, kBrakeLightOuterDegrees=85.f;
@@ -719,6 +793,17 @@ class LibBgfxBackend final : public IRenderBackend {
   // tile + 1 in its colour's w.
   static constexpr size_t kHeadlightShadows=6;
   static constexpr uint16_t kHeadlightShadowView=145;
+  // Smoke shadow transmittance (#454), fitted to the smoke every frame.
+  static constexpr uint16_t kSmokeShadowView=139;
+  bgfx::FrameBufferHandle smoke_shadow_fb_=BGFX_INVALID_HANDLE;
+  bgfx::TextureHandle smoke_shadow_tex_=BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle s_smoke_shadow_=BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_smoke_shadow_mtx_=BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_smoke_shadow_params_=BGFX_INVALID_HANDLE;
+  std::array<float,16> smoke_shadow_matrix_{};
+  float smoke_shadow_depth_scale_=1.f;  // light depth per metre
+  bool smoke_shadow_active_=false;
+  void update_smoke_shadow(const VideoOptions& video);
   static constexpr float kHeadlightShadowNear=.15f, kHeadlightShadowMargin=2.f;  // degrees
   void update_headlight_shadows(const VideoOptions& video);
   void set_headlight_focus(const void* car) { headlight_focus_car_=car; }
@@ -762,6 +847,24 @@ class LibBgfxBackend final : public IRenderBackend {
   bgfx::UniformHandle u_lamp_shadow_params_=BGFX_INVALID_HANDLE;
   std::vector<ShadowCasterStamp> shadow_cached_casters_;
   std::array<float,3> shadow_cached_origin_{};
+  // Light direction of the sun shadow maps (#371), held until the sun has
+  // moved render_debug().shadow_sun_step degrees.
+  std::array<float,3> shadow_sun_direction_{};
+  bool shadow_sun_valid_ = false;
+  std::array<float,3> shadow_sun_direction(const SceneSun& sun);
+  void update_shadow_crossfade(const std::array<float,3>& sun_direction, uint16_t size);
+  // Sun outer-frustum map props reused across frames (#359).
+  std::shared_ptr<const std::vector<SceneBatch>> sun_batch_cache_;
+  std::array<float,3> sun_batch_focus_{}, sun_batch_direction_{}, sun_batch_origin_{};
+  void* sun_batch_world_ = nullptr;
+  int32_t sun_batch_frame_ = 0;
+  std::shared_ptr<const std::vector<SceneBatch>> sun_prop_batches(const float* relative_focus,
+                                                                 const float* direction, uint16_t resolution);
+  // Cascade alternation (#361): which atlas tiles hold a map drawn with
+  // shadow_cascade_matrices_ and the current origin, and the last frame
+  // that reached the sun cascades.
+  std::array<bool,4> cascade_tile_valid_{};
+  int32_t sun_cascade_frame_ = -2;
   bool shadow_cache_valid_ = false;
   uint64_t shadow_atlas_revision_ = 0;
   bool shadow_cascades_active_ = false;

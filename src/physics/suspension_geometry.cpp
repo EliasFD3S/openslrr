@@ -1,6 +1,8 @@
 #include "slrr/suspension_geometry.hpp"
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <numbers>
 namespace slrr::physics {
 namespace {
 Quaternion axis_angle(Vec3 axis, double angle) {
@@ -101,6 +103,8 @@ bool solve_corner_geometry(const CornerGeometry &g, Vec3 point,
       return false;
     solved.hub_origin =
         solved.arm_origin - solved.hub_rotation.rotate(hub_point);
+    // The hub turns about its kingpin: the line the fit lays on the strut.
+    solved.steer_axis = target.normalized();
   }
   if (!solved.arm_origin.finite() || !solved.hub_origin.finite())
     return false;
@@ -108,11 +112,91 @@ bool solve_corner_geometry(const CornerGeometry &g, Vec3 point,
   return true;
 }
 
+namespace {
+// The caster trail of a solved strut fit (see caster_trail).
+double fitted_caster_trail(const WheelConfig& wheel, const CornerFrames& frames) {
+  constexpr double none = std::numeric_limits<double>::quiet_NaN();
+  // setHub 0x441880: the strut top is reference + p3 - p1 (solve_corner_geometry).
+  const Vec3 hub_point{wheel.hub[1], wheel.hub[2], wheel.hub[3]};
+  const Vec3 upper = wheel.center + Vec3{wheel.hub[7], wheel.hub[8], wheel.hub[9]} - hub_point;
+  const Vec3 axis = upper - frames.arm_origin;
+  if (!(axis.y > 1e-3)) return none;
+  // Forward is -z: the axis leaning back at the top meets the ground ahead.
+  // Under a degree of inclination (the stock struts' 0.3 from the hub
+  // offset) counts as none.
+  if (std::abs(axis.z) < std::sin(std::numbers::pi / 180) * axis.length()) return none;
+  const Vec3 patch = frames.hub_origin - Vec3{0, wheel.radius, 0};
+  const Vec3 ground = frames.arm_origin + axis * ((patch.y - frames.arm_origin.y) / axis.y);
+  const double trail = -(ground.z - patch.z);
+  return std::isfinite(trail) ? trail : none;
+}
+
+bool strut(const WheelConfig& wheel) {
+  return wheel.has_hub && wheel.hub[0] == 0 && wheel.radius > 0;
+}
+
+// Where the kingpin meets the ground (#458). The axis keeps the fit's
+// direction (inclination and caster) but not its place: the stock strut's
+// ball joint sits 7.7 cm outboard of the wheel centre, so its line meets the
+// ground about 17 cm outside the patch, and the wheel would drop as it
+// steered. A road car's meets the ground at its caster trail ahead and a
+// scrub radius outboard of the patch.
+Vec3 kingpin_ground(const WheelConfig& wheel, const CornerFrames& frames) {
+  const Vec3 patch = frames.hub_origin - Vec3{0, wheel.radius, 0};
+  const double outboard = wheel.center.x < 0 ? -1 : 1;
+  const double trail = fitted_caster_trail(wheel, frames);
+  return patch + Vec3{outboard * kTypicalScrubRadius, 0, -(std::isfinite(trail) ? trail : 0)};
+}
+
+// The steering rotation in the body's frame, about the kingpin's direction.
+Quaternion kingpin_turn(const CornerFrames& frames, double steer) {
+  const Quaternion hub = frames.hub_rotation.normalized();
+  const Quaternion inverse{-hub.x, -hub.y, -hub.z, hub.w};
+  return hub * wheel_steering(frames.steer_axis, steer) * inverse;
+}
+}  // namespace
+
+double caster_trail(const WheelConfig& wheel, double length) {
+  constexpr double none = std::numeric_limits<double>::quiet_NaN();
+  if (!strut(wheel)) return none;
+  bool fitted = false;
+  const CornerFrames frames = wheel_pose(wheel, length, &fitted);
+  return fitted ? fitted_caster_trail(wheel, frames) : none;
+}
+
+double kingpin_lift_rate(const WheelConfig& wheel, double length, double steer) {
+  constexpr double none = std::numeric_limits<double>::quiet_NaN();
+  if (!strut(wheel)) return none;
+  bool fitted = false;
+  const CornerFrames frames = wheel_pose(wheel, length, &fitted);
+  if (!fitted) return none;
+  const Vec3 ground = kingpin_ground(wheel, frames);
+  const Vec3 axle = frames.hub_rotation.rotate({1, 0, 0});
+  // The tyre stands on the lowest point of its circle.
+  const auto lift = [&](double angle) {
+    const Quaternion turn = kingpin_turn(frames, angle);
+    const Vec3 centre = ground + turn.rotate(frames.hub_origin - ground);
+    const Vec3 across = turn.rotate(axle);
+    return -(centre.y - wheel.radius * std::sqrt(std::max(0.0, 1 - across.y * across.y)));
+  };
+  constexpr double h = 1e-3;
+  return (lift(steer + h) - lift(steer - h)) / (2 * h);
+}
+
 Quaternion wheel_steering(double angle) {
   return {0, std::sin(angle * .5), 0, std::cos(angle * .5)};
 }
 
-CornerFrames wheel_pose(const WheelConfig& wheel, double length, bool* fitted) {
+Quaternion wheel_steering(Vec3 axis, double angle) {
+  if (!(axis.length() > .5)) return wheel_steering(angle);
+  axis = axis.normalized();
+  // `angle` is the wheel's heading on the road: about an axis leaning by
+  // beta the heading turns by atan(tan(angle) cos beta), so turn further.
+  const double turn = std::atan2(std::sin(angle), std::cos(angle) * std::max(.5, axis.y));
+  return axis_angle(axis, turn);
+}
+
+CornerFrames wheel_pose(const WheelConfig& wheel, double length, bool* fitted, double steer) {
   const double travel = length - wheel.anchor_length();
   const Vec3 ray = wheel.center + wheel.down.normalized() * travel;
   if (fitted) *fitted = false;
@@ -130,6 +214,13 @@ CornerFrames wheel_pose(const WheelConfig& wheel, double length, bool* fitted) {
     // applied by the hub fit. Tilting the input ray applies it twice.
     if (solve_corner_geometry(geometry, wheel.center + Vec3{0, -travel, 0}, frames)) {
       if (fitted) *fitted = true;
+      // Steered, a strut's hub swings about its kingpin (#458): the wheel
+      // centre moves on an arc, and the inclination lowers it either way,
+      // which lifts the car.
+      if (steer != 0 && strut(wheel)) {
+        const Vec3 ground = kingpin_ground(wheel, frames);
+        frames.hub_origin = ground + kingpin_turn(frames, steer).rotate(frames.hub_origin - ground);
+      }
       return frames;
     }
   }

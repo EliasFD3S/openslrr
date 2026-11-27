@@ -1,15 +1,25 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
+#include <numbers>
 #include <string>
 #include <unordered_map>
 
 namespace slrr {
 
+inline constexpr double engine_rpm_to_rad = std::numbers::pi / 30.0;
+// The recovered cubic mechanical loss, shared by dyno and crank integration.
+// At WOT the sampled curve is already net of this loss; do not subtract twice.
+inline double engine_friction_torque(double rpm) {
+  return rpm > 0 ? rpm * rpm * (2e-8 / engine_rpm_to_rad) : 0;
+}
+
 // Combustion cycle recovered from SLRR_rev combustion-model.ts
 // (codex/physics-reverse-port @ c65675fe), itself adapted from
-// sl-remastered dyno_model.cpp. State is stored as float32; the
-// 437 RPM witness is the acceptance check, not x87 bit parity.
+// sl-remastered dyno_model.cpp. State is float32, not x87 bit parity.
+// #203 converts cycle work to SI net crank torque/power; legacy output scales
+// are intentionally not retained. Torque is Nm; power samples are watts.
 struct DynoStats {
   bool ok = false;
   float rpm_step = 0.f;
@@ -30,6 +40,11 @@ struct DynoStats {
 bool dyno_calculate(void* key, const std::unordered_map<std::string, float>& fields,
                     float table_size, DynoStats* stats);
 float dyno_sample(void* key, float rpm, float nitro, bool watts);
+// Net torque (Nm) against rpm from the session's current curves. The function
+// keeps its own immutable copy: it stays valid, unchanged, after a
+// recalculation or release, so another thread may call it (#203). A missing
+// session gives zero torque.
+std::function<double(double)> dyno_torque_function(void* key, float nitro);
 float dyno_boost_fraction(void* key, float rpm);
 void dyno_forget(void* key);
 void dyno_clear_sessions();

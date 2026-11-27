@@ -4,6 +4,7 @@
 #include "shadow_quality.hpp"
 #include "shadow_cascades.hpp"
 #include "slrr/frame_profiler.hpp"
+#include "slrr/particle_cloud.hpp"
 
 #include <bx/math.h>
 #include <algorithm>
@@ -176,6 +177,7 @@ void LibBgfxBackend::update_lamp_shadows(const VideoOptions &video) {
   if (garage_ || night < kLampShadowNightMin || sun.shadowing || !scenery_lights_count() ||
       video.shadows == 0 ||
       !render_debug().lamp_shadows || !render_debug().lamp_lighting ||
+      !host_enhanced_graphics().street_lamps ||
       !debug_overlay_.render_options().map_shadows ||
       !host_enhanced_graphics().local_lights ||
       !bgfx::isValid(static_shadow_program_)) {
@@ -238,8 +240,10 @@ void LibBgfxBackend::update_lamp_shadows(const VideoOptions &video) {
     return -1;
   };
   // Debug budget (#243): fewer shadowed lamps; extra held slots fade out.
-  const size_t shadow_budget = size_t(render_debug_budget(render_debug().shadowed_lamps,
-      int(kLampShadows), int(kLampShadows)));
+  // The saved option (#377) sets the default; the debug budget can lower it.
+  const int saved_lamps = std::clamp(host_enhanced_graphics().shadowed_lamps, 0, int(kLampShadows));
+  const size_t shadow_budget = size_t(std::min(saved_lamps,
+      render_debug_budget(render_debug().shadowed_lamps, int(kLampShadows), int(kLampShadows))));
   // 1. Held lamps keep their slot while their light still reaches the focus.
   for (auto &slot : lamp_shadow_slots_) {
     if (!slot.source) continue;
@@ -686,6 +690,7 @@ void LibBgfxBackend::update_headlight_shadows(const VideoOptions &video) {
   const size_t budget = size_t(render_debug_budget(render_debug().headlight_tiles,
       int(kHeadlightShadows), int(kHeadlightShadows)));
   if (garage_ || video.shadows == 0 || !render_debug().headlight_shadows || !budget ||
+      !host_enhanced_graphics().headlight_shadows || !host_enhanced_graphics().car_lights ||
       !render_debug().car_lights || !host_enhanced_graphics().local_lights ||
       !bgfx::isValid(static_shadow_program_))
     return;
@@ -1099,6 +1104,119 @@ void LibBgfxBackend::update_static_shadow(const float *eye, const VideoOptions &
   update_static_shadow_inner(eye, video);
 }
 
+// #371: after a sun step, the atlas of the previous direction stays as it
+// was (with the matrices its tiles were drawn with) and the receivers fade
+// from it to the new atlas over render_debug().shadow_crossfade seconds, so
+// a step moves the shadows smoothly. The two atlases swap; the new one is
+// drawn in full. A crossfade starts only from a complete atlas of the
+// previous frame, and stops if the shadow origin rebases (the previous
+// matrices are relative to the old origin).
+void LibBgfxBackend::update_shadow_crossfade(const std::array<float, 3>& sun_direction, uint16_t size) {
+  const float duration = std::clamp(render_debug().shadow_crossfade, 0.f, 5.f);
+  const double now =
+      std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  const bool stepped = atlas_sun_valid_ && sun_direction != atlas_sun_direction_;
+  const bool complete = sun_cascade_frame_ == frames_ - 1 && shadow_cached_origin_ == shadow_origin_ &&
+                        std::all_of(cascade_tile_valid_.begin(), cascade_tile_valid_.end(),
+                                    [](bool valid) { return valid; });
+  if (stepped && duration > 0.f && complete) {
+    if (!bgfx::isValid(static_shadow_prev_fb_)) {
+      const auto depth = bgfx::createTexture2D(size, size, false, 1, bgfx::TextureFormat::D32F,
+          BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+      if (bgfx::isValid(depth)) {
+        static_shadow_prev_fb_ = bgfx::createFrameBuffer(1, &depth, true);
+        if (bgfx::isValid(static_shadow_prev_fb_)) static_shadow_prev_tex_ = depth;
+        else bgfx::destroy(depth);
+      }
+    }
+    if (bgfx::isValid(static_shadow_prev_fb_)) {
+      std::swap(static_shadow_fb_, static_shadow_prev_fb_);
+      std::swap(static_shadow_tex_, static_shadow_prev_tex_);
+      shadow_cascade_prev_matrices_ = shadow_cascade_matrices_;
+      shadow_blend_start_ = now;
+      shadow_blending_ = true;
+      cascade_tile_valid_.fill(false);
+      shadow_cache_valid_ = false;
+    }
+  }
+  atlas_sun_direction_ = sun_direction;
+  atlas_sun_valid_ = true;
+  float weight = 0.f;
+  if (shadow_blending_) {
+    weight = duration > 0.f ? 1.f - float((now - shadow_blend_start_) / duration) : 0.f;
+    if (weight <= 0.f || shadow_cached_origin_ != shadow_origin_) {
+      shadow_blending_ = false;
+      weight = 0.f;
+    }
+  }
+  shadow_blend_ = weight;
+}
+
+// #359: the map props of the sun's outer frustum, reused across frames.
+// They are static map placements, so the collection depends only on the
+// frustum: it is made over the outer box widened by kSunBatchMargin and kept
+// while the camera stays within half that margin of where it was made, the
+// held sun direction (#371), the world and the shadow origin are unchanged,
+// for at most kSunBatchFrames frames (prop LOD follows the main camera). Each
+// cascade still culls the placements against its own frustum, so the cached
+// superset draws exactly what a fresh collection would.
+std::shared_ptr<const std::vector<SceneBatch>> LibBgfxBackend::sun_prop_batches(
+    const float* relative_focus, const float* direction, uint16_t resolution) {
+  constexpr float kSunBatchMargin = 40.f;
+  constexpr int32_t kSunBatchFrames = 60;
+  const std::array<float, 3> focus{relative_focus[0] + shadow_origin_[0], relative_focus[1] + shadow_origin_[1],
+                                   relative_focus[2] + shadow_origin_[2]};
+  const std::array<float, 3> light{direction[0], direction[1], direction[2]};
+  const float moved = std::hypot(focus[0] - sun_batch_focus_[0], focus[1] - sun_batch_focus_[1],
+                                 focus[2] - sun_batch_focus_[2]);
+  if (sun_batch_cache_ && render_debug().sun_batch_cache && moved <= kSunBatchMargin * .5f &&
+      light == sun_batch_direction_ && sun_batch_world_ == scene_instances_world() &&
+      sun_batch_origin_ == shadow_origin_ && frames_ - sun_batch_frame_ >= 0 &&
+      frames_ - sun_batch_frame_ < kSunBatchFrames)
+    return sun_batch_cache_;
+  const auto* caps = bgfx::getCaps();
+  const auto wide = shadow_projection(relative_focus, direction, cascade_radii().back() + kSunBatchMargin,
+                                      resolution, caps->homogeneousDepth, caps->originBottomLeft);
+  auto world_view = wide.view;
+  for (int row = 0; row < 3; ++row)
+    for (int axis = 0; axis < 3; ++axis) world_view[12 + row] -= wide.view[axis * 4 + row] * shadow_origin_[axis];
+  const auto frustum = view_frustum(world_view.data(), wide.projection.data());
+  // A fresh vector: the cascade jobs of earlier frames may still read the
+  // previous one.
+  auto batches = std::make_shared<std::vector<SceneBatch>>();
+  scene_instances_collect_batches(&frustum, *batches);
+  sun_batch_cache_ = std::move(batches);
+  sun_batch_focus_ = focus;
+  sun_batch_direction_ = light;
+  sun_batch_world_ = scene_instances_world();
+  sun_batch_origin_ = shadow_origin_;
+  sun_batch_frame_ = frames_;
+  return sun_batch_cache_;
+}
+
+// #371: a sun direction that rotates every frame (the game clock advances
+// it continuously) rotates the cascade light basis by a tiny angle each
+// frame; texel snapping only absorbs translation, so caster edges flip
+// texels everywhere. Hold the direction until the sun has moved a few
+// hundredths of a degree: a shadow then shifts by millimetres at once,
+// every few seconds, and a still camera can reuse the cached atlas.
+std::array<float, 3> LibBgfxBackend::shadow_sun_direction(const SceneSun& sun) {
+  std::array<float, 3> current{sun.direction[0], sun.direction[1], sun.direction[2]};
+  const float length = std::sqrt(current[0] * current[0] + current[1] * current[1] +
+                                 current[2] * current[2]);
+  if (length > 1e-6f)
+    for (auto& axis : current) axis /= length;
+  const float step = std::clamp(render_debug().shadow_sun_step, 0.f, 5.f);
+  if (shadow_sun_valid_ && step > 0.f) {
+    const float cosine = current[0] * shadow_sun_direction_[0] + current[1] * shadow_sun_direction_[1] +
+                         current[2] * shadow_sun_direction_[2];
+    if (cosine >= std::cos(step * 3.14159265f / 180.f)) return shadow_sun_direction_;
+  }
+  shadow_sun_direction_ = current;
+  shadow_sun_valid_ = true;
+  return current;
+}
+
 void LibBgfxBackend::update_static_shadow_inner(const float *eye,
                                           const VideoOptions &video) {
   const uint16_t point_shadow_tile=local_shadow_resolution();
@@ -1113,6 +1231,7 @@ void LibBgfxBackend::update_static_shadow_inner(const float *eye,
   shadow_cascades_active_ = false;
   shadow_meshes_.clear();
   point_shadow_active_ = false;
+  shadow_blend_ = 0.f;
   if (point_light_ && point_light_->valid() && point_light_->casts_shadows &&
       video.shadows != 0 && debug_overlay_.render_options().map_shadows &&
       bgfx::isValid(static_shadow_program_)) {
@@ -1124,6 +1243,7 @@ void LibBgfxBackend::update_static_shadow_inner(const float *eye,
         bgfx::destroy(static_shadow_fb_);
       static_shadow_fb_ = BGFX_INVALID_HANDLE;
       static_shadow_tex_ = BGFX_INVALID_HANDLE;
+      destroy_prev_shadow_atlas();
       const auto depth = bgfx::createTexture2D(
           point_shadow_width, point_shadow_height, false, 1,
           bgfx::TextureFormat::D32F,
@@ -1232,6 +1352,9 @@ void LibBgfxBackend::update_static_shadow_inner(const float *eye,
     if (bgfx::isValid(static_shadow_fb_)) bgfx::destroy(static_shadow_fb_);
     static_shadow_fb_ = BGFX_INVALID_HANDLE;
     static_shadow_tex_ = BGFX_INVALID_HANDLE;
+    destroy_prev_shadow_atlas();
+    atlas_sun_valid_ = false;
+    sun_batch_cache_.reset();  // let an unloaded world's props go
     return;
   }
   if (!debug_overlay_.render_options().map_shadows || !bgfx::isValid(static_shadow_program_))
@@ -1239,7 +1362,9 @@ void LibBgfxBackend::update_static_shadow_inner(const float *eye,
   // The selected world's light is independent of visible terrain geometry.
   // Dealers/addons may contain only ordinary SCX meshes, or no ground in view.
   const auto sun = scene_instances_light();
-  if (!sun.has_direction || sun.direction[1] >= 0.02f) return;
+  if (!sun.has_direction) return;
+  const auto sun_direction = shadow_sun_direction(sun);
+  if (sun_direction[1] >= 0.02f) return;
   const uint16_t size = resolution * 2;
   const bool conservative =
       (bgfx::getCaps()->supported & BGFX_CAPS_CONSERVATIVE_RASTER) != 0;
@@ -1248,6 +1373,7 @@ void LibBgfxBackend::update_static_shadow_inner(const float *eye,
     bgfx::destroy(static_shadow_fb_);
     static_shadow_fb_ = BGFX_INVALID_HANDLE;
     static_shadow_tex_ = BGFX_INVALID_HANDLE;
+    destroy_prev_shadow_atlas();
   }
   if (!bgfx::isValid(static_shadow_fb_)) {
     const auto depth = bgfx::createTexture2D(
@@ -1262,20 +1388,23 @@ void LibBgfxBackend::update_static_shadow_inner(const float *eye,
     }
     static_shadow_tex_ = depth;
     static_shadow_size_ = size;
+    cascade_tile_valid_.fill(false);
   }
   const auto *caps = bgfx::getCaps();
   const float focus[3] = {eye[0], eye[1], -eye[2]};
-  const float direction[3] = {sun.direction[0], sun.direction[1],
-                              -sun.direction[2]};
+  const float direction[3] = {sun_direction[0], sun_direction[1],
+                              -sun_direction[2]};
   static_shadow_eye_ = {focus[0], focus[1], focus[2]};
-  // Refresh moving sunlight every frame; texel-snapped projections remove
-  // camera swimming without an eight-metre cache jump.
+  // The held sun direction (shadow_sun_direction) moves in small steps;
+  // texel-snapped projections remove camera swimming without an
+  // eight-metre cache jump.
   if(shadow_origin_world_!=scene_instances_world()) {
     shadow_cache_valid_=false;
     shadow_origin_world_=scene_instances_world();
     shadow_origin_={focus[0],focus[1],focus[2]};
   }
   shadow_rebase_origin(shadow_origin_,focus,direction,resolution);
+  update_shadow_crossfade(sun_direction, size);
   const float relative_focus[3]={focus[0]-shadow_origin_[0],focus[1]-shadow_origin_[1],focus[2]-shadow_origin_[2]};
   const auto outer = shadow_projection(relative_focus,direction,cascade_radii().back(),resolution,
       caps->homogeneousDepth,caps->originBottomLeft);
@@ -1284,9 +1413,22 @@ void LibBgfxBackend::update_static_shadow_inner(const float *eye,
     outer_world_view[12+row]-=outer.view[axis*4+row]*shadow_origin_[axis];
   const auto outer_frustum=view_frustum(outer_world_view.data(),outer.projection.data());
   // One scene traversal; nested light volumes reuse these immutable draw records.
-  const auto casters=scene_instances_collect(&outer_frustum,nullptr,false);
-  std::vector<SceneBatch> outer_batches;
-  scene_instances_collect_batches(&outer_frustum,outer_batches);
+  // Shared with the cascade jobs (#359), which may run on worker encoders
+  // after this function returns; nothing writes them after collection.
+  struct SunCasters {
+    std::vector<SceneInstance> casters;
+    std::shared_ptr<const std::vector<SceneBatch>> batches;
+    std::vector<const SceneInstance*> skinned;
+    std::vector<float> skinned_distance;
+  };
+  const auto sun_casters=std::make_shared<SunCasters>();
+  {
+    perf::Scope collect_scope(perf::Zone::SunCollect);
+    sun_casters->casters=scene_instances_collect(&outer_frustum,nullptr,false);
+    sun_casters->batches=sun_prop_batches(relative_focus,direction,resolution);
+  }
+  const auto& casters=sun_casters->casters;
+  const auto& outer_batches=*sun_casters->batches;
   for(const auto& instance:casters) {
     if(!instance.geometry || instance.sky || instance.vehicle_material || instance.gpu_skin ||
        instance.light_flags || instance.emissive_overlay) continue;
@@ -1300,8 +1442,8 @@ void LibBgfxBackend::update_static_shadow_inner(const float *eye,
   // palettes are already complete. The outer collection deliberately skips
   // palette completion; recomputing it for off-camera characters would bring
   // back that CPU cost, so off-screen characters do not cast.
-  std::vector<const SceneInstance*> skinned_casters;
-  std::vector<float> skinned_distance;
+  auto& skinned_casters=sun_casters->skinned;
+  auto& skinned_distance=sun_casters->skinned_distance;
   for(const auto& instance:instances_) {
     if(!instance.geometry || !instance.gpu_skin || instance.skin.size()<48u*16u ||
        instance.light_flags || instance.emissive_overlay || instance.opacity<.99f) continue;
@@ -1341,12 +1483,25 @@ void LibBgfxBackend::update_static_shadow_inner(const float *eye,
       stamps.back().revision^=skin_palette_hash(instance->skin);
     }
   }
+  // A frame that did not reach the sun cascades (no sun, point light in the
+  // same atlas, shadows off) or a rebased origin leaves no reusable tile.
+  if(sun_cascade_frame_!=frames_-1 || shadow_cached_origin_!=shadow_origin_)
+    cascade_tile_valid_.fill(false);
+  sun_cascade_frame_=frames_;
   const bool unchanged=shadow_cache_valid_ && same_projection && stamps==shadow_cached_casters_ &&
                        render_debug().shadow_caching;
   if(unchanged) {
     static_shadow_active_=true;shadow_cascades_active_=true;return;
   }
+  // #361: while the camera moves, the two far cascades (320 m and 1000 m by
+  // default) redraw on alternate frames. The skipped one keeps its tile and
+  // the matrix it was drawn with; receivers sample it with that matrix, and
+  // its 10 % extent margin covers the camera's motion in one frame. A still
+  // camera (same_projection) draws them all, as the caster cache expects.
+  const bool alternate=render_debug().cascade_alternation && !same_projection;
   for (size_t cascade = 0; cascade < size_t(4); ++cascade) {
+    if(alternate && cascade>=2 && cascade_tile_valid_[cascade] && ((size_t(frames_)+cascade)&1u))
+      continue;
     const auto& projection=projections[cascade];
     shadow_cascade_matrices_[cascade] = projection.sample;
     auto world_view=projection.view;
@@ -1361,9 +1516,25 @@ void LibBgfxBackend::update_static_shadow_inner(const float *eye,
     bgfx::setViewClear(view_id, BGFX_CLEAR_DEPTH, 0, 1.f, 0);
     bgfx::setViewTransform(view_id, projection.view.data(),
                            projection.projection.data());
-    enc()->touch(view_id);
     // Debug toggle (#243): an off cascade stays cleared (fully lit).
-    if (!render_debug().sun_cascades[cascade]) continue;
+    if (!render_debug().sun_cascades[cascade]) {
+      enc()->touch(view_id);
+      cascade_tile_valid_[cascade]=false;
+      continue;
+    }
+    cascade_tile_valid_[cascade]=true;
+    // One job per cascade view (#359): culling and submission may run on a
+    // worker encoder, like the car lamp tiles (#270). The view setup above
+    // stays on the API thread; the job only reads the shared casters, the
+    // mesh cache (filled above, before any job runs) and its own copies.
+    const auto origin=shadow_origin_;
+    const float cascade_radius=cascade_radii()[cascade];
+    queue_or_run([this,sun_casters,frustum,view_id,origin,cascade_radius,conservative] {
+    const auto& casters=sun_casters->casters;
+    const auto& outer_batches=*sun_casters->batches;
+    const auto& skinned_casters=sun_casters->skinned;
+    const auto& skinned_distance=sun_casters->skinned_distance;
+    enc()->touch(view_id);
     for (const auto &instance : casters) {
       // Vehicles retain their separate nearby depth map. The scenery depth
       // shader has no skin palette; skinned casters need their own path.
@@ -1399,7 +1570,7 @@ void LibBgfxBackend::update_static_shadow_inner(const float *eye,
         set_uniform(u_static_shadow_params_, params);
         enc()->setTexture(0, s_tex_, tex);
         auto relative=instance.transform;
-        for(int axis=0;axis<3;++axis) relative[12+axis]-=shadow_origin_[axis];
+        for(int axis=0;axis<3;++axis) relative[12+axis]-=origin[axis];
         enc()->setTransform(relative.data());
         enc()->setVertexBuffer(0, part.vbh);
         enc()->setIndexBuffer(part.ibh, group.index_start, group.index_count);
@@ -1419,16 +1590,18 @@ void LibBgfxBackend::update_static_shadow_inner(const float *eye,
         if(shadow_bounds_visible(*batch.geometry,instance.transform,frustum)) filtered.instances.push_back(instance);
       if(!filtered.instances.empty()) shadow_batches.push_back(std::move(filtered));
     }
-    draw_prop_batches(view_id, shadow_batches, true, conservative);
+    // Not a lamp-local field: pass that explicitly rather than reading
+    // static_shadow_local_ from a worker (#270 rule).
+    draw_prop_batches(view_id, shadow_batches, true, conservative, false, 0);
     if(bgfx::isValid(ao_skin_depth_program_) && render_debug().skinned_casters)
       for(size_t i=0;i<skinned_casters.size();++i) {
         // Skinned bounds describe the rest pose, not the animated limbs. Cull
         // by the camera-centred cascade radius instead (plus a body margin).
-        if(skinned_distance[i]>cascade_radii()[cascade]+3.f) continue;
+        if(skinned_distance[i]>cascade_radius+3.f) continue;
         const auto* instance=skinned_casters[i];
         const auto& part=instance_meshes_.at(instance->geometry.get());
         auto relative=instance->transform;
-        for(int axis=0;axis<3;++axis) relative[12+axis]-=shadow_origin_[axis];
+        for(int axis=0;axis<3;++axis) relative[12+axis]-=origin[axis];
         for(const auto& group:part.shadow_groups) {
           const auto surface=scx_surface(part.geo.info.version,group);
           if(surface.blend) continue;
@@ -1448,6 +1621,7 @@ void LibBgfxBackend::update_static_shadow_inner(const float *eye,
           submit_counted(view_id,ao_skin_depth_program_);
         }
       }
+    });
   }
   ++shadow_atlas_revision_;
   shadow_cached_casters_=std::move(stamps);
@@ -1484,9 +1658,11 @@ void LibBgfxBackend::update_car_depth(const float* position, const VideoOptions&
   }
 
   const auto sun = scene_instances_light();
-  const bx::Vec3 direction = sun.has_direction
-      ? bx::Vec3{sun.direction[0], sun.direction[1], -sun.direction[2]}
-      : bx::Vec3{0.f, -1.f, 0.f};
+  // The same held direction as the cascades (#371): the car map would
+  // otherwise flicker on its own as the sun moves.
+  const auto sun_direction = sun.has_direction ? shadow_sun_direction(sun)
+                                               : std::array<float, 3>{0.f, -1.f, 0.f};
+  const bx::Vec3 direction{sun_direction[0], sun_direction[1], -sun_direction[2]};
   const auto travel = bx::normalize(direction);
   if (travel.y >= 0.02f) return;
   const bx::Vec3 centre{position[0], position[1], -position[2]};
@@ -1527,6 +1703,144 @@ void LibBgfxBackend::update_car_depth(const float* position, const VideoOptions&
     }
   }
   car_depth_active_ = true;
+}
+
+// Smoke shadows (#454): what the tyre smoke lets through of the sun, in an
+// orthographic map seen from the sun and fitted every frame to all the
+// smoke (at most 200 m a side). RGB multiplies to the transmittance of
+// every puff in a texel's column; alpha keeps, by MIN, the light depth of
+// the puffs' fronts nearest the sun, so only receivers below the smoke
+// darken (scene_shadow.sh smokeShadowTransmit, in fs_mesh and fs_vehicle).
+// Debris casts nothing. No sorting: both blends are order-independent.
+void LibBgfxBackend::update_smoke_shadow(const VideoOptions& video) {
+  smoke_shadow_active_ = false;
+  const auto& list = particles();
+  const auto& clouds = particle_clouds();
+  if (list.empty() || !bgfx::isValid(particle_program_) || video.shadows == 0 ||
+      !debug_overlay_.render_options().shadows)
+    return;
+  const auto sun = scene_instances_light();
+  if (!sun.has_direction) return;
+  // The cascades' held direction (#371), into render space.
+  const auto held = shadow_sun_direction(sun);
+  const bx::Vec3 t = bx::normalize(bx::Vec3{held[0], held[1], -held[2]});
+  if (t.y >= -.02f) return;  // the sun below the horizon casts nothing
+  const bx::Vec3 up_hint = std::abs(t.y) > .98f ? bx::Vec3{0, 0, 1} : bx::Vec3{0, 1, 0};
+  const bx::Vec3 right = bx::normalize(bx::cross(up_hint, t));
+  const bx::Vec3 up = bx::cross(t, right);
+  // The light-space box of every cloud particle.
+  std::vector<uint32_t> chosen;
+  chosen.reserve(list.size());
+  float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
+  for (uint32_t i = 0; i < list.size() && chosen.size() < 16000; ++i) {
+    const auto& p = list[i];
+    if (p.cloud >= clouds.size() || clouds[p.cloud].type == 1) continue;
+    const float life = std::clamp(p.age / p.life, 0.f, 1.f);
+    const float radius = particle_width(p) * .5f;
+    const bx::Vec3 c{p.position[0], p.position[1], -p.position[2]};
+    const float axis[3] = {bx::dot(c, right), bx::dot(c, up), bx::dot(c, t)};
+    for (int k = 0; k < 3; ++k) {
+      lo[k] = std::min(lo[k], axis[k] - radius);
+      hi[k] = std::max(hi[k], axis[k] + radius);
+    }
+    chosen.push_back(i);
+  }
+  if (chosen.empty()) return;
+  constexpr float kMaxSide = 200.f;
+  float half[2];
+  float mid[2];
+  for (int k = 0; k < 2; ++k) {
+    mid[k] = (lo[k] + hi[k]) * .5f;
+    half[k] = std::clamp((hi[k] - lo[k]) * .5f + 1.f, 2.f, kMaxSide * .5f);
+  }
+  const float depth = std::max(hi[2] - lo[2] + 2.f, 4.f);
+  const bx::Vec3 eye = bx::add(bx::add(bx::mul(right, mid[0]), bx::mul(up, mid[1])),
+                               bx::mul(t, lo[2] - 1.f));
+  const auto* caps = bgfx::getCaps();
+  float view[16], proj[16], clip[16];
+  bx::mtxLookAt(view, eye, bx::add(eye, t), up);
+  bx::mtxOrtho(proj, -half[0], half[0], -half[1], half[1], 0.f, depth, 0.f, caps->homogeneousDepth);
+  bx::mtxMul(clip, view, proj);
+  const float crop[16] = {
+      .5f, 0.f, 0.f, 0.f, 0.f, caps->originBottomLeft ? .5f : -.5f, 0.f, 0.f,
+      0.f, 0.f, caps->homogeneousDepth ? .5f : 1.f, 0.f, .5f, .5f,
+      caps->homogeneousDepth ? .5f : 0.f, 1.f};
+  bx::mtxMul(smoke_shadow_matrix_.data(), clip, crop);
+  smoke_shadow_depth_scale_ = 1.f / depth;
+
+  constexpr uint16_t kSize = 1024;
+  if (!bgfx::isValid(smoke_shadow_fb_)) {
+    smoke_shadow_tex_ = bgfx::createTexture2D(kSize, kSize, false, 1, bgfx::TextureFormat::RGBA16F,
+        BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+    if (!bgfx::isValid(smoke_shadow_tex_)) return;
+    smoke_shadow_fb_ = bgfx::createFrameBuffer(1, &smoke_shadow_tex_, true);
+    if (!bgfx::isValid(smoke_shadow_fb_)) {
+      bgfx::destroy(smoke_shadow_tex_);
+      smoke_shadow_tex_ = BGFX_INVALID_HANDLE;
+      return;
+    }
+  }
+  const uint32_t n = static_cast<uint32_t>(chosen.size());
+  if (bgfx::getAvailTransientVertexBuffer(n * 4, layout_) < n * 4 ||
+      bgfx::getAvailTransientIndexBuffer(n * 6) < n * 6) return;
+  bgfx::TransientVertexBuffer vb;
+  bgfx::TransientIndexBuffer ib;
+  bgfx::allocTransientVertexBuffer(&vb, n * 4, layout_);
+  bgfx::allocTransientIndexBuffer(&ib, n * 6);
+  auto* out = reinterpret_cast<MeshVertex*>(vb.data);
+  auto* index = reinterpret_cast<uint16_t*>(ib.data);
+  static constexpr float kCorner[4][2] = {{-1.f, -1.f}, {1.f, -1.f}, {-1.f, 1.f}, {1.f, 1.f}};
+  for (uint32_t j = 0; j < n; ++j) {
+    const auto& p = list[chosen[j]];
+    const float life = std::clamp(p.age / p.life, 0.f, 1.f);
+    const float radius = particle_width(p) * .5f;
+    // The same alpha as draw_particles.
+    const float alpha = std::clamp((p.alpha0 + (p.alpha1 - p.alpha0) * std::pow(life, 1.5f)) *
+                                       std::clamp(p.age / .15f, 0.f, 1.f), 0.f, 1.f);
+    const uint32_t rgba = 0x00ffffffu | static_cast<uint32_t>(std::lround(alpha * 255.f)) << 24;
+    for (int k = 0; k < 4; ++k) {
+      MeshVertex v{};
+      const float u = kCorner[k][0], w = kCorner[k][1];
+      v.x = p.position[0] + (right.x * u + up.x * w) * radius;
+      v.y = p.position[1] + (right.y * u + up.y * w) * radius;
+      v.z = -p.position[2] + (right.z * u + up.z * w) * radius;
+      v.u = u;
+      v.v = w;
+      v.u2 = radius;
+      v.v2 = p.seed;
+      v.v3 = 3.f;  // fs_particle: the smoke shadow mode
+      v.rgba = rgba;
+      out[j * 4 + k] = v;
+    }
+    const uint16_t base = static_cast<uint16_t>(j * 4);
+    const uint16_t tri[6] = {base, uint16_t(base + 1), uint16_t(base + 2),
+                             uint16_t(base + 1), uint16_t(base + 3), uint16_t(base + 2)};
+    std::copy(std::begin(tri), std::end(tri), index + j * 6);
+  }
+  bgfx::setViewFrameBuffer(kSmokeShadowView, smoke_shadow_fb_);
+  bgfx::setViewRect(kSmokeShadowView, 0, 0, kSize, kSize);
+  bgfx::setViewClear(kSmokeShadowView, BGFX_CLEAR_COLOR, 0xffffffffu);
+  bgfx::setViewTransform(kSmokeShadowView, view, proj);
+  float identity[16];
+  bx::mtxIdentity(identity);
+  static const auto start = std::chrono::steady_clock::now();
+  const float time = static_cast<float>(std::fmod(
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(), 600.0));
+  // y: light depth per metre of the fitted box.
+  const float params[4] = {time, smoke_shadow_depth_scale_, 0.f, 0.f};
+  enc()->setUniform(u_particle_params_, params);
+  enc()->setTransform(identity);
+  enc()->setVertexBuffer(0, &vb);
+  enc()->setIndexBuffer(&ib);
+  enc()->setTexture(0, s_tex_, white_tex_);
+  enc()->setTexture(1, s_particle_depth_, white_tex_);
+  enc()->setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                  BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_DST_COLOR, BGFX_STATE_BLEND_ZERO,
+                                                 BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_ONE) |
+                  BGFX_STATE_BLEND_EQUATION_SEPARATE(BGFX_STATE_BLEND_EQUATION_ADD,
+                                                     BGFX_STATE_BLEND_EQUATION_MIN));
+  submit_counted(kSmokeShadowView, particle_program_);
+  smoke_shadow_active_ = true;
 }
 
 }  // namespace slrr

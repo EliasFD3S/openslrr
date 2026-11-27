@@ -1,0 +1,10 @@
+﻿
+run             end_kmh    fps frame_avg_ms frame_p95_ms frame_max_ms scripts_ms physics_ms flush_ms collect_ms
+---             -------    --- ------------ ------------ ------------ ---------- ---------- -------- ----------
+day-all-saved   0.00    214,67         4,79         5,38         6,25       0,39        0,6     3,53       0,99
+day-e4-saved    0.00    133,55         7,82          8,4         9,76        0,5       0,66     6,31        2,1
+night-all-saved 0.00     287,6          3,6         4,23          5,4       0,32        0,5     2,55       0,92
+night-e4-saved  0.00    219,26            5         5,64         6,92       0,41       0,54     3,75        1,8
+
+
+

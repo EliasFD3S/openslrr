@@ -12,7 +12,7 @@ namespace slrr {
 class RpkIndex;
 
 // Stock light resources: RPK type 13 (RESTYPE_RENDER_LIGHT), text payloads
-// such as objects.rpk 0x1C7 "street" (#237). Survey in KNOWLEDGE_BASE
+// such as objects.rpk 0x1C7 "street" (#237). Survey in docs/rendering/lighting.md
 // "Stock light resources and placement (#235)".
 enum class LightResourceType : uint8_t {
   None,  // base class without a `type` line

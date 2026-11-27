@@ -246,6 +246,59 @@ SLRR_TEST(hard_body_landing_still_reports_a_ground_impact) {
   SLRR_REQUIRE(d.body.position.finite());
 }
 
+VehicleDynamics baiern_on_struts() {
+  // Geometry captured from the 8ac2ba9 Baiern replay (see below).
+  auto d = car(true);
+  d.body.configure(1523.64, {-.865, -.577, -2.106}, {.865, .577, 2.106},
+                    {.003, -.221, -.046});
+  Matrix frame{};
+  frame[0] = frame[5] = frame[10] = frame[15] = 1;
+  frame[13] = .9f;
+  d.body.set_frame(frame);
+  for (size_t i = 0; i < 4; ++i) {
+    auto& w = d.wheels[i];
+    const double side = i % 2 ? 1 : -1;
+    w.center = {side * (i < 2 ? .709 : .727), -.590, i < 2 ? -1.480 : 1.256};
+    w.radius = .329;
+    w.rest = w.maximum = i < 2 ? .265 : .268;
+    w.minimum = .178;
+    w.anchor = .390;
+    w.spring = i < 2 ? 71613 : 73575;
+    w.bump_damping = w.rebound_damping = i < 2 ? 3300 : 3000;
+    w.unsprung = 10;
+    w.arm_length = i < 2 ? .296 : .420;
+    w.arm_pivot = {side * (i < 2 ? .415 : .375), i < 2 ? -.560 : -.408,
+                   i < 2 ? -1.480 : 1.080};
+    w.arm_axis = i < 2 ? Vec3{0, 0, 1} : Vec3{-side * .904, 0, 1.077};
+    w.has_hub = true;
+    if (i < 2) w.hub = {0, float(side * .077), -.043f, -.004f,
+                       float(-side * .071), .407f, 0, float(-side * .071), .407f, 0};
+    else {
+      w.hub = {-1, float(-side * .121), 0, 0, 0, 0, 0, 0, 0, 0};
+      w.down = {side * .026, -1, 0};
+      w.hub_alignment = Quaternion{.0001, side * .0087, side * .0131, .9999}.normalized();
+    }
+  }
+  return d;
+}
+
+SLRR_TEST(steered_struts_lift_the_car_on_their_kingpins) {
+  // #458: steered, a strut's hub swings about its kingpin; the inclination
+  // lowers the wheel either way, so the parked car rises on its springs and
+  // stays where it is.
+  auto d = baiern_on_struts();
+  d.drive.brake = 1;
+  run(d, 4, flat());
+  const auto start = d.body.position;
+  for (int i = 0; i < 2; ++i) d.drive.wheels[i].steer = .35;
+  run(d, 3, flat());
+  const double lift = d.body.position.y - start.y;
+  std::printf("KINGPIN lift %.2f mm at 20 deg\n", lift * 1000);
+  SLRR_REQUIRE(lift > .0005 && lift < .01);
+  SLRR_REQUIRE(horizontal(d.body.position - start) < .01);
+  SLRR_REQUIRE(d.body.velocity.length() < .01);
+}
+
 SLRR_TEST(baiern_rear_hub_geometry_does_not_glide_with_a_missing_spring) {
   // Geometry captured from the 8ac2ba9 Baiern replay. Use the intended
   // generic box inertia here; the application replay checks assembly moments.
@@ -350,6 +403,7 @@ int main() {
     zero_longitudinal_grip_is_not_replaced_by_parking_friction,
     low_grip_tyres_cannot_stick_above_their_reference_friction_limit,
     static_tyre_limits_keep_longitudinal_and_lateral_script_inputs_separate,
+    steered_struts_lift_the_car_on_their_kingpins,
   };
   return slrr::standalone::run("missing_support", tests);
 }

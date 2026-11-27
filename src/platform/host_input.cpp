@@ -1,3 +1,4 @@
+#include "host_input_capture.hpp"
 #include "host_input_mapping.hpp"
 #include "host_input_devices.hpp"
 #include "slrr/host_input.hpp"
@@ -49,6 +50,73 @@ struct Hotkey {
 std::vector<Hotkey> hotkeys;
 uint64_t next_hotkey = 0;
 
+InputCapture capture;
+
+// The force feedback wheel: the first steering binding on a device with
+// haptics, and the sign from the logical axis to that device's axis.
+int ffb_device = -1;
+float ffb_sign = 1.f;
+// The controller the brake (axis 29) is bound to, for the ABS pulse (#446).
+int brake_device = -1;
+
+void choose_force_feedback(const ControllerInput* input) {
+  ffb_device = -1;
+  brake_device = -1;
+  if (!input) return;
+  for (const auto& b : input->bindings)
+    if (b.axis == 29 && b.device >= 3) {
+      brake_device = b.device;
+      break;
+    }
+  for (const auto& b : input->bindings) {
+    if (b.axis != 1 || b.device < 3 || !host_input_devices().has_force_feedback(b.device)) continue;
+    // Logical steer = lerp(low, high, (physical - from) / (to - from)).
+    const float slope = (b.to - b.from) * (b.high - b.low);
+    if (slope == 0.f) continue;
+    ffb_device = b.device;
+    ffb_sign = slope > 0 ? 1.f : -1.f;
+    return;
+  }
+}
+
+double capture_clock() {
+  using namespace std::chrono;
+  return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
+// Every channel the rebind listener may take, on every device at once.
+// Device classes the listener may take (1 << InputKind), see
+// host_input_capture_begin.
+int capture_kinds = -1;
+
+bool capture_kind(int device) {
+  const int kind = static_cast<int>(host_input_device_kind(device));
+  return kind >= 0 && (capture_kinds & (1 << kind));
+}
+
+std::vector<CaptureChannel> capture_channels() {
+  std::vector<CaptureChannel> out;
+  constexpr int kEscape = 0x01;
+  const bool keyboard = capture_kind(0);
+  for (int i = 1; i < static_cast<int>(keys.size()); ++i)
+    if (keyboard || i == kEscape)
+      out.push_back({0, i, host_input_physical_axis(0, i), false, false});
+  // Pointer motion is never taken; the left button (the click that opened the
+  // listener, or a click elsewhere) cancels it.
+  const bool buttons = capture_kind(1);
+  for (int i = 3; i < static_cast<int>(mouse.size()); ++i)
+    if (buttons || i == 3)
+      out.push_back({1, i, mouse[static_cast<size_t>(i)], false, i == 3});
+  auto& devices = host_input_devices();
+  for (int slot = kPad; slot < 3 + devices.count(); ++slot) {
+    if (!devices.capturable(slot) || !capture_kind(slot)) continue;
+    for (int i = 0; i < devices.channels(slot); ++i)
+      if (devices.available(slot, i))
+        out.push_back({slot, i, devices.axis(slot, i), devices.analog_axis(slot, i), false});
+  }
+  return out;
+}
+
 bool captures_binding(Object* focus) {
   if (!focus) return false;
   auto handler = focus->fields.find("globalHandler");
@@ -59,6 +127,8 @@ bool captures_binding(Object* focus) {
     const auto it = fields.find(name);
     return it != fields.end() && it->second.tag == ValueTag::Int ? it->second.v.i : -1;
   };
+  // A screen that captures a binding says so (OsdxOptions.capturingInput).
+  if (read("capturingInput") > 0) return true;
   const int group = read("actGroup");
   return read("getKey") >= 0 && group >= 0 &&
          (group == read("redefineGroup") || group == read("redefine2Group") ||
@@ -142,6 +212,69 @@ void host_input_poll_keys() {
   host_input_devices().poll(focused);
   pad = host_input_devices().pad();
 #endif
+  if (capture.state() != InputCapture::Idle) capture.update(capture_clock(), capture_channels());
+}
+
+void host_input_capture_begin(int kinds) {
+  capture_kinds = kinds;
+  capture.begin(capture_clock());
+}
+void host_input_capture_cancel() { capture.reset(); }
+const InputCapture& host_input_capture() { return capture; }
+float host_input_capture_progress() { return capture.settle_progress(capture_clock()); }
+
+namespace {
+float ffb_smoothed = 0.f;  // the low-passed force, before the minimum force
+}
+
+void host_input_force_feedback(float torque, float damper, float detail, float impact,
+                               float vibration, float vibration_hz, float dt) {
+  const auto& options = host_game_options();
+  if (ffb_device < 0 || !options.ffb || options.ffb_strength <= 0.f) {
+    host_input_force_feedback_stop();
+    return;
+  }
+  const auto& tuning = host_input_tuning();
+  auto gain = [](int percent) { return std::clamp(percent, 0, 200) / 100.f; };
+  const float strength = options.ffb_strength;
+  float force = std::clamp((torque + detail * gain(tuning.ffb_detail) +
+                            impact * gain(tuning.ffb_impacts)) * strength, -1.f, 1.f);
+  // A light low-pass takes the frame-to-frame steps out of the force, which a
+  // belt or gear wheel otherwise plays as grain.
+  const float tau = std::clamp(tuning.ffb_smoothing, 0, 50) / 1000.f;
+  ffb_smoothed = tau > 0.f && dt > 0.f
+                     ? ffb_smoothed + (force - ffb_smoothed) * (1.f - std::exp(-dt / tau))
+                     : force;
+  force = ffb_smoothed;
+  // Minimum force: a wheel with a dead band ignores small forces; lift every
+  // non-zero force past it, keeping the response proportional above.
+  const float floor = std::clamp(tuning.ffb_min_force, 0, 20) / 100.f;
+  if (floor > 0.f && std::abs(force) > 1e-3f)
+    force = std::copysign(floor + (1.f - floor) * std::abs(force), force);
+  const float invert = tuning.ffb_invert ? -1.f : 1.f;
+  host_input_devices().set_force(ffb_device, force * ffb_sign * invert,
+                                 damper * gain(tuning.ffb_damper) * strength,
+                                 vibration * gain(tuning.ffb_vibration) * strength,
+                                 vibration_hz);
+}
+
+void host_input_brake_pulse(float strength) {
+  const auto& options = host_game_options();
+  if (brake_device < 3 || !options.ffb || strength <= 0.f) return;
+  host_input_devices().rumble(brake_device - 3, std::clamp(strength, 0.f, 1.f) * options.ffb_strength, 90);
+}
+
+void host_input_force_feedback_stop() {
+  ffb_smoothed = 0.f;
+  host_input_devices().stop_force();
+}
+
+int host_input_force_feedback_device() { return ffb_device; }
+
+InputKind host_input_device_kind(int device) {
+  if (device == 0) return InputKind::Keyboard;
+  if (device == 1) return InputKind::Mouse;
+  return device >= kPad ? host_input_devices().kind(device) : InputKind::None;
 }
 
 const char* host_input_device_name(int device) {
@@ -255,17 +388,44 @@ void host_input_update_controller(Object* controller, float dt) {
   auto axis = [&](int id) { return host_input_controller_axis(controller, id); };
   // Stock AXIS_TURN_LEFTRIGHT is positive to the left, like the chassis yaw.
   in.drive_steer = axis(1);
-  in.drive_steer_analog = false;
-  if (controller && controller->input) {
-    in.drive_steer_analog = input_mapping::steering_is_analog(
-        *controller->input, host_input_physical_axis, pad,
-        [](int device, int axis) { return host_input_devices().analog_axis(device, axis); },
-        physical_available);
+  choose_force_feedback(controller ? controller->input.get() : nullptr);
+  if (!controller || !controller->input) {
+    in.drive_steer_analog = false;
+    in.drive_steer_kind = InputKind::None;
+  } else {
+    auto analog_axis = [](int device, int axis) {
+      return host_input_devices().analog_axis(device, axis);
+    };
+    // A binding counts as active past 1 % of its travel. Below that, keep the
+    // class that steered last: 1 % of a 900-degree wheel is 4.5 degrees, and
+    // treating it as a key there applied the keyboard window and help at
+    // speed, a dead zone around the centre and a notch when leaving it.
+    const auto kind = input_mapping::steering_kind(
+        *controller->input, host_input_physical_axis, pad, analog_axis,
+        host_input_device_kind, physical_available);
+    if (kind != InputKind::None) {
+      in.drive_steer_analog = input_mapping::steering_is_analog(
+          *controller->input, host_input_physical_axis, pad, analog_axis, physical_available);
+      in.drive_steer_kind = kind;
+    }
+    // Steering skips the stock ControlSet smoothing (#383): its power 1.5
+    // curve gave a half-turned wheel or stick 35 % of the lock, and its rate
+    // (Config.steerSpeed 0.01) lagged about 400 ms behind the input. An analog
+    // wheel or stick now steers directly; a key is shaped by steering_filter.
+    // A script-forced steer still wins.
+    // The STEERING GAMMA option (the axis' ControlSet power) still shapes it.
+    const auto& input = *controller->input;
+    if (input.forced_axes.find(1) == input.forced_axes.end()) {
+      float steer = std::clamp(mapped_axis(input, 1), -1.f, 1.f);
+      if (const auto smooth = input.smoothing.find(1); smooth != input.smoothing.end())
+        steer = std::copysign(std::pow(std::abs(steer), smooth->second.power), steer);
+      in.drive_steer = steer;
+    }
   }
   in.drive_throttle = axis(28);
   in.drive_brake = axis(29);
   in.drive_nitro = std::clamp(axis(31), 0.f, 1.f);
-  in.drive_handbrake = axis(48) > .5f;
+  in.drive_handbrake = std::clamp(axis(48), 0.f, 1.f);
   in.drive_clutch = axis(49);
   in.free_camera_x = -axis(4);
   in.free_camera_y = axis(5);
@@ -281,7 +441,8 @@ void host_input_update_controller(Object* controller, float dt) {
     in.drive_brake = 0.f;
     in.drive_steer = 0.f;
     in.drive_steer_analog = false;
-    in.drive_handbrake = false;
+    in.drive_steer_kind = InputKind::None;
+    in.drive_handbrake = 0.f;
     in.drive_reverse = false;
   }
 }
@@ -360,7 +521,8 @@ void host_input_check_hotkeys(Jvm& jvm, Object* controller, Object* focus) {
         host_commit_video_dialog(jvm, hk.handler, video_command->second.v.i))
       continue;
     if (hk.owner) {
-      jvm.invoke("java.render.Osd", "handleEvent", "(Ljava.io.Hotkey;)V",
+      // The owner's own class: java.render.osdx.Osd has its own handleEvent.
+      jvm.invoke(hk.owner->class_name, "handleEvent", "(Ljava.io.Hotkey;)V",
                  {Value::make_obj(hk.owner), Value::make_obj(hk.key)}, false);
     } else if (hk.handler) {
       auto command = hk.key->fields.find("command");

@@ -1,0 +1,113 @@
+[music] scan Garage_Shop: 4 tracks
+[music] scan Roam_ride: 6 tracks
+[music] scan Race_chase: 4 tracks
+[music] scan Main_menu: 1 tracks
+[part] no compatible free slot child=0x90104 root=0x90006
+[part] no compatible free slot child=0x9010e root=0x90006
+[part] no compatible free slot child=0x9011a root=0x90006
+[part] no compatible free slot child=0x90112 root=0x90006
+[part] no compatible free slot child=0x90111 root=0x90006
+[part] no compatible free slot child=0x90110 root=0x90006
+[part] no compatible free slot child=0x90117 root=0x90006
+[part] no compatible free slot child=0x90116 root=0x90006
+[part] no compatible free slot child=0x90108 root=0x90006
+[part] no compatible free slot child=0x90109 root=0x90006
+[part] no compatible free slot child=0x90114 root=0x90006
+[part] no compatible free slot child=0x90119 root=0x90006
+[part] no compatible free slot child=0x9010f root=0x90006
+[part] no compatible free slot child=0x9010d root=0x90006
+[part] no compatible free slot child=0x9010b root=0x90006
+[part] no compatible free slot child=0x90107 root=0x90006
+[part] no compatible free slot child=0x90118 root=0x90006
+[part] no compatible free slot child=0x90102 root=0x90006
+[part] no compatible free slot child=0x90106 root=0x90006
+[part] no compatible free slot child=0x9011e root=0x90006
+[part] no compatible free slot child=0x90115 root=0x90006
+[part] no compatible free slot child=0x9010a root=0x90006
+[part] no compatible free slot child=0x90103 root=0x90006
+[part] no compatible free slot child=0x90126 root=0x90006
+[part] no compatible free slot child=0x90128 root=0x90006
+[part] no compatible free slot child=0x9010c root=0x90006
+[part] no compatible free slot child=0x90113 root=0x90006
+[part] no compatible free slot child=0x130019 root=0x90006
+[part] no compatible free slot child=0x130019 root=0x90006
+[part] no compatible free slot child=0x130019 root=0x90006
+[part] no compatible free slot child=0x130019 root=0x90006
+[part] no compatible free slot child=0x90105 root=0x90006
+[audio] FMOD Core 00020400 initialized
+[music] set=0 track=1/4 playing=1 garage maditation v3_3 - hotel sinus.mp3
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.setWater (Ljava.lang.Vector3;Ljava.lang.Vector3;FF)V (from java.util.resource.GroundRef)
+[jvm] native/empty TREE without host binding java.util.resource.GroundRef.addWaterLimit (Ljava.lang.Vector3;Ljava.lang.Vector3;)V (from java.util.resource.GroundRef)
+[music] set=1 track=1/6 playing=1 C.D.N. and Dramaties - Ali Ali radio edit masterded - Acti.mp3
+[driver] vin seated
+[ped] city.walk rows=1799
+[ped] want=720 active=3 density=0.01800 slider=1.50 area=40017 radius=2.5
+[ped] 3 walkers
+[ped] want=1025 active=363 density=0.01800 slider=1.50 area=56978 radius=2.5
+[ped] want=1025 active=726 density=0.01800 slider=1.50 area=56978 radius=2.5
+[ped] want=1025 active=1025 density=0.01800 slider=1.50 area=56978 radius=2.5
+[ped] want=999 active=999 density=0.01800 slider=1.50 area=55527 radius=2.5
+[ped] want=978 active=980 density=0.01800 slider=1.50 area=54388 radius=2.5
+[ped] want=972 active=973 density=0.01800 slider=1.50 area=54050 radius=2.5
+[ped] want=992 active=1002 density=0.01800 slider=1.50 area=55162 radius=2.5
+[ped] want=990 active=991 density=0.01800 slider=1.50 area=55046 radius=2.5
+[ped] want=1006 active=1006 density=0.01800 slider=1.50 area=55933 radius=2.5
+[ped] want=929 active=955 density=0.01800 slider=1.50 area=51625 radius=2.5
+[ped] want=924 active=915 density=0.01800 slider=1.50 area=51336 radius=2.5
+[ped] want=933 active=933 density=0.01800 slider=1.50 area=51888 radius=2.5
+[ped] want=857 active=857 density=0.01800 slider=1.50 area=47624 radius=2.5
+[ped] want=876 active=876 density=0.01800 slider=1.50 area=48685 radius=2.5
+[ped] want=954 active=940 density=0.01800 slider=1.50 area=53020 radius=2.5
+[ped] want=979 active=979 density=0.01800 slider=1.50 area=54435 radius=2.5
+[ped] want=1008 active=1017 density=0.01800 slider=1.50 area=56011 radius=2.5
+[ped] want=980 active=1005 density=0.01800 slider=1.50 area=54480 radius=2.5
+[ped] want=926 active=932 density=0.01800 slider=1.50 area=51476 radius=2.5
+[ped] want=912 active=890 density=0.01800 slider=1.50 area=50696 radius=2.5
+[ped] want=827 active=827 density=0.01800 slider=1.50 area=45949 radius=2.5
+[ped] want=678 active=687 density=0.01800 slider=1.50 area=37695 radius=2.5
+[ped] want=662 active=611 density=0.01800 slider=1.50 area=36826 radius=2.5
+[ped] want=577 active=577 density=0.01800 slider=1.50 area=32081 radius=2.5
+[ped] want=481 active=459 density=0.01800 slider=1.50 area=26742 radius=2.5
+[ped] want=541 active=537 density=0.01800 slider=1.50 area=30105 radius=2.5
+[ped] want=599 active=599 density=0.01800 slider=1.50 area=33304 radius=2.5
+[ped] want=449 active=528 density=0.01800 slider=1.50 area=24950 radius=2.5
+[ped] want=499 active=499 density=0.01800 slider=1.50 area=27748 radius=2.5
+[ped] want=526 active=526 density=0.01800 slider=1.50 area=29273 radius=2.5
+[ped] want=519 active=519 density=0.01800 slider=1.50 area=28870 radius=2.5
+[ped] want=505 active=519 density=0.01800 slider=1.50 area=28056 radius=2.5
+[ped] want=492 active=492 density=0.01800 slider=1.50 area=27340 radius=2.5
+[ped] want=485 active=485 density=0.01800 slider=1.50 area=26990 radius=2.5
+[ped] want=486 active=471 density=0.01800 slider=1.50 area=27043 radius=2.5
+[ped] want=570 active=579 density=0.01800 slider=1.50 area=31669 radius=2.5
+[ped] want=592 active=597 density=0.01800 slider=1.50 area=32922 radius=2.5
+[ped] want=556 active=556 density=0.01800 slider=1.50 area=30921 radius=2.5
+[ped] want=581 active=581 density=0.01800 slider=1.50 area=32307 radius=2.5
+[ped] want=544 active=544 density=0.01800 slider=1.50 area=30264 radius=2.5
+[ped] want=487 active=487 density=0.01800 slider=1.50 area=27099 radius=2.5
+[ped] want=471 active=472 density=0.01800 slider=1.50 area=26204 radius=2.5
+[ped] want=489 active=489 density=0.01800 slider=1.50 area=27207 radius=2.5
+[ped] want=462 active=461 density=0.01800 slider=1.50 area=25697 radius=2.5
+[ped] want=416 active=416 density=0.01800 slider=1.50 area=23123 radius=2.5
+[ped] want=418 active=401 density=0.01800 slider=1.50 area=23272 radius=2.5
+[ped] want=387 active=392 density=0.01800 slider=1.50 area=21555 radius=2.5
+[ped] want=422 active=422 density=0.01800 slider=1.50 area=23469 radius=2.5
+[ped] want=451 active=456 density=0.01800 slider=1.50 area=25075 radius=2.5
+[ped] want=420 active=424 density=0.01800 slider=1.50 area=23384 radius=2.5
+[ped] want=455 active=455 density=0.01800 slider=1.50 area=25314 radius=2.5
+[ped] want=466 active=474 density=0.01800 slider=1.50 area=25935 radius=2.5
+[ped] want=474 active=474 density=0.01800 slider=1.50 area=26377 radius=2.5
+[ped] want=469 active=469 density=0.01800 slider=1.50 area=26093 radius=2.5
+[ped] want=484 active=484 density=0.01800 slider=1.50 area=26899 radius=2.5
+[ped] want=434 active=425 density=0.01800 slider=1.50 area=24149 radius=2.5
+[ped] want=424 active=446 density=0.01800 slider=1.50 area=23570 radius=2.5
+[ped] want=475 active=484 density=0.01800 slider=1.50 area=26406 radius=2.5
+[ped] want=405 active=483 density=0.01800 slider=1.50 area=22505 radius=2.5
+[ped] want=471 active=452 density=0.01800 slider=1.50 area=26200 radius=2.5
+[ped] want=461 active=477 density=0.01800 slider=1.50 area=25666 radius=2.5
+[ped] want=465 active=465 density=0.01800 slider=1.50 area=25882 radius=2.5
+[ped] want=474 active=474 density=0.01800 slider=1.50 area=26339 radius=2.5
+[ped] want=433 active=434 density=0.01800 slider=1.50 area=24066 radius=2.5
+[ped] want=394 active=394 density=0.01800 slider=1.50 area=21906 radius=2.5
+[ped] want=394 active=394 density=0.01800 slider=1.50 area=21906 radius=2.5
+[ped] want=394 active=394 density=0.01800 slider=1.50 area=21906 radius=2.5
+[ped] want=394 active=394 density=0.01800 slider=1.50 area=21906 radius=2.5

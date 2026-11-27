@@ -13,25 +13,6 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake/CMakeLists.txt
   message(FATAL_ERROR "Missing third_party/bgfx.cmake. See README.md for setup.")
 endif()
 
-# FMOD Core is an external Windows x64 SDK; never download or vendor it.
-set(_slrr_fmod_default "C:/Program Files (x86)/FMOD SoundSystem/FMOD Studio API Windows")
-if(DEFINED ENV{SLRR_FMOD_SDK_DIR} AND NOT "$ENV{SLRR_FMOD_SDK_DIR}" STREQUAL "")
-  set(_slrr_fmod_default "$ENV{SLRR_FMOD_SDK_DIR}")
-endif()
-set(SLRR_FMOD_SDK_DIR "${_slrr_fmod_default}" CACHE PATH "FMOD Studio API Windows SDK root (Core 2.04)")
-file(TO_CMAKE_PATH "${SLRR_FMOD_SDK_DIR}" _slrr_fmod_dir)
-foreach(_slrr_fmod_file IN ITEMS api/core/inc/fmod.hpp api/core/inc/fmod.h
-    api/core/lib/x64/fmod_vc.lib api/core/lib/x64/fmod.dll)
-  if(NOT EXISTS "${_slrr_fmod_dir}/${_slrr_fmod_file}")
-    message(FATAL_ERROR "Missing FMOD Core SDK file: ${_slrr_fmod_dir}/${_slrr_fmod_file}. Install the Windows x64 FMOD Studio API SDK and set SLRR_FMOD_SDK_DIR (CMake cache or environment) to its root.")
-  endif()
-endforeach()
-add_library(FMOD::Core SHARED IMPORTED)
-set_target_properties(FMOD::Core PROPERTIES
-  IMPORTED_IMPLIB "${_slrr_fmod_dir}/api/core/lib/x64/fmod_vc.lib"
-  IMPORTED_LOCATION "${_slrr_fmod_dir}/api/core/lib/x64/fmod.dll"
-  INTERFACE_INCLUDE_DIRECTORIES "${_slrr_fmod_dir}/api/core/inc")
-
 # Visual Studio compiles the files of one project one after the other unless
 # /MP is set, which left most cores idle. It covers bgfx.cmake's targets too.
 # SLRR_COMPILE_JOBS caps the cl.exe processes per project; empty uses every core.
@@ -57,6 +38,14 @@ target_link_libraries(compile_game_sources PRIVATE slrr_script_compiler)
 target_include_directories(compile_game_sources PRIVATE include)
 target_compile_options(compile_game_sources PRIVATE /utf-8)
 
+# Physics Lab (#380): offline vehicle-solver bench, any solver rate.
+add_executable(physics_lab tools/physics_lab.cpp
+  src/physics/vehicle_dynamics.cpp src/physics/tire_model.cpp src/physics/steering_feedback.cpp
+  src/physics/brake_system.cpp src/physics/tyre_thermal.cpp
+  src/physics/suspension_geometry.cpp src/physics/dyno_model.cpp)
+target_include_directories(physics_lab PRIVATE include)
+target_compile_options(physics_lab PRIVATE /utf-8)
+
 add_executable(slrr_host
   src/main.cpp
   src/jvm/script_compiler.cpp
@@ -66,9 +55,11 @@ add_executable(slrr_host
   src/platform/host_input_devices.cpp
   src/platform/host_clipboard.cpp
   src/platform/host_audio.cpp
+  src/platform/audio_reverb.cpp
   src/platform/host_sfx.cpp
   src/platform/host_music.cpp
   src/platform/host_game_options.cpp
+  src/platform/host_options_json.cpp
   src/platform/host_cursor.cpp
   src/platform/job_system.cpp
   src/platform/video_cinepak.cpp
@@ -87,6 +78,7 @@ add_executable(slrr_host
   src/natives/natives_script.cpp
   src/natives/natives_painter.cpp
   src/natives/natives_lights.cpp
+  src/natives/natives_particles.cpp
   src/ui/osd_registry.cpp
   src/ui/osd_script.cpp
   src/ui/ui_time.cpp
@@ -97,6 +89,11 @@ add_executable(slrr_host
   src/resources/scene_sun.cpp
   src/resources/part_config.cpp
   src/resources/part_runtime.cpp
+  src/resources/skid_marks.cpp
+  src/resources/particle_cloud.cpp
+  src/resources/surface_effects.cpp
+  src/resources/script_particles.cpp
+  src/resources/water.cpp
   src/resources/pedestrian_lines.cpp
   src/formats/walk.cpp
   src/formats/rest.cpp
@@ -106,6 +103,7 @@ add_executable(slrr_host
   src/resources/gameref.cpp
   src/resources/script_lights.cpp
   src/resources/light_resource.cpp
+  src/resources/ground_surface.cpp
   src/resources/scene_instances.cpp
   src/resources/scene_ambience.cpp
   src/resources/scene_triggers.cpp
@@ -129,10 +127,14 @@ add_executable(slrr_host
   src/boot/mainloop.cpp
   src/boot/script_events.cpp
   src/boot/boot.cpp
+  src/boot/drive_path.cpp
   src/physics/sl2_pacejka.cpp
   src/physics/tire_model.cpp
+  src/physics/steering_feedback.cpp
   src/physics/dyno_model.cpp
   src/physics/vehicle_dynamics.cpp
+  src/physics/brake_system.cpp
+  src/physics/tyre_thermal.cpp
   src/physics/vehicle_contacts.cpp
   src/physics/scene_collision.cpp
   src/physics/deformation_cage.cpp
@@ -163,6 +165,15 @@ set_property(SOURCE src/boot/boot.cpp APPEND PROPERTY
 
 target_include_directories(slrr_host PRIVATE include "${CMAKE_BINARY_DIR}/generated")
 
+# Vehicle solver rate (#380): 1000 Hz on the free-running physics thread.
+# --physics-hz changes it at run time; any rate from 60 Hz works (a 60 Hz host
+# tick runs floor((n+1) f / 60) - floor(n f / 60) solver steps when frame-locked).
+set(SLRR_VEHICLE_PHYSICS_HZ 1000 CACHE STRING "Vehicle solver rate (Hz)")
+if(SLRR_VEHICLE_PHYSICS_HZ LESS 60)
+  message(FATAL_ERROR "SLRR_VEHICLE_PHYSICS_HZ must be at least 60")
+endif()
+target_compile_definitions(slrr_host PRIVATE SLRR_VEHICLE_PHYSICS_HZ=${SLRR_VEHICLE_PHYSICS_HZ})
+
 # The standard headers most sources include, parsed once instead of per file.
 target_precompile_headers(slrr_host PRIVATE
   <algorithm> <array> <chrono> <cmath> <cstdint> <cstdio> <cstring> <filesystem>
@@ -175,12 +186,12 @@ endif()
 
 if(WIN32)
   # strmiids = DirectShow GUIDs for FMV (GfxEngine.openVideo).
-  # vfw32 = AVIFile fallback; stock Cinepak PCM is mixed through FMOD.
+  # vfw32 = AVIFile fallback; stock Cinepak PCM is mixed through SDL3_mixer.
   target_link_libraries(slrr_host PRIVATE user32 gdi32 opengl32 winmm ole32
-                                          oleaut32 strmiids vfw32 FMOD::Core)
+                                          oleaut32 strmiids vfw32)
 endif()
 
-# SDL handles peripherals only; keep the existing Win32 window, audio and renderer.
+# SDL handles peripherals and audio output; keep the existing Win32 window and renderer.
 include(FetchContent)
 if(POLICY CMP0135)
   cmake_policy(SET CMP0135 NEW)
@@ -191,14 +202,17 @@ set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
 set(SDL_TESTS OFF CACHE BOOL "" FORCE)
 set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
-foreach(_slrr_sdl_subsystem IN ITEMS AUDIO VIDEO GPU RENDER CAMERA HAPTIC POWER SENSOR DIALOG)
+set(SDL_AUDIO ON CACHE BOOL "" FORCE)
+# Haptics drive force feedback wheels (DirectInput constant force and damper).
+set(SDL_HAPTIC ON CACHE BOOL "" FORCE)
+foreach(_slrr_sdl_subsystem IN ITEMS VIDEO GPU RENDER CAMERA POWER SENSOR DIALOG)
   set(SDL_${_slrr_sdl_subsystem} OFF CACHE BOOL "" FORCE)
 endforeach()
 FetchContent_Declare(SDL3
-  URL https://github.com/libsdl-org/SDL/releases/download/release-3.2.30/SDL3-3.2.30.tar.gz
-  URL_HASH SHA256=4c3b09330d866dc52eb65b66259a6684ad387252ca8c57901b3a2b534eb42e3d)
-# SDL gates this probe on audio/video's SDL_DIRECTX option. Input-only builds
-# still need DirectInput for wheels, pedals and shifters on a fresh CMake cache.
+  URL https://github.com/libsdl-org/SDL/releases/download/release-3.4.20/SDL3-3.4.20.tar.gz
+  URL_HASH SHA256=f3bb06f55bed9557227a700af2ea62e49497ebdf58037732a731a5fb3ef8581f)
+# SDL gates this probe on audio/video's SDL_DIRECTX option. Keep the explicit
+# check so wheels, pedals and shifters never silently lose DirectInput.
 include(CheckIncludeFileCXX)
 check_include_file_cxx(dinput.h HAVE_DINPUT_H)
 if(NOT HAVE_DINPUT_H)
@@ -206,6 +220,32 @@ if(NOT HAVE_DINPUT_H)
 endif()
 FetchContent_MakeAvailable(SDL3)
 target_link_libraries(slrr_host PRIVATE SDL3::SDL3-static)
+
+# SDL3_mixer mixes effects, music and stock Cinepak PCM. Only its built-in
+# WAV and dr_mp3 decoders are used: the release tarball has no vendored
+# libraries, and the game ships WAV effects and MP3/WAV music.
+set(SDLMIXER_VENDORED OFF CACHE BOOL "" FORCE)
+set(SDLMIXER_INSTALL OFF CACHE BOOL "" FORCE)
+set(SDLMIXER_TESTS OFF CACHE BOOL "" FORCE)
+set(SDLMIXER_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(SDLMIXER_DEPS_SHARED OFF CACHE BOOL "" FORCE)
+foreach(_slrr_mixer_codec IN ITEMS AIFF VOC AU FLAC GME MOD MIDI OPUS VORBIS_STB
+    VORBIS_VORBISFILE VORBIS_TREMOR WAVPACK MP3_MPG123)
+  set(SDLMIXER_${_slrr_mixer_codec} OFF CACHE BOOL "" FORCE)
+endforeach()
+set(SDLMIXER_WAVE ON CACHE BOOL "" FORCE)
+set(SDLMIXER_MP3 ON CACHE BOOL "" FORCE)
+set(SDLMIXER_MP3_DRMP3 ON CACHE BOOL "" FORCE)
+# SDL3_mixer follows BUILD_SHARED_LIBS; build it static without changing the
+# value seen by later subprojects.
+set(_slrr_shared_libs "${BUILD_SHARED_LIBS}")
+set(BUILD_SHARED_LIBS OFF)
+FetchContent_Declare(SDL3_mixer
+  URL https://github.com/libsdl-org/SDL_mixer/releases/download/release-3.2.4/SDL3_mixer-3.2.4.tar.gz
+  URL_HASH SHA256=182a07c745375e113dc740d43964ff21b0be29f29f59876c4dbc4db3d32f6901)
+FetchContent_MakeAvailable(SDL3_mixer)
+set(BUILD_SHARED_LIBS "${_slrr_shared_libs}")
+target_link_libraries(slrr_host PRIVATE SDL3_mixer::SDL3_mixer)
 
 # bgfx is the game's renderer.
 set(BGFX_BUILD_TOOLS ON CACHE BOOL "" FORCE)
@@ -322,7 +362,7 @@ target_include_directories(slrr_host PRIVATE
 
 bgfx_compile_shaders(
   TYPE VERTEX
-  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_osd_text.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh_inst.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_skin.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_ao.sc"
+  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_osd_text.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_mesh_inst.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_skin.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_ao.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vs_particle.sc"
   VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
   OUTPUT_DIR "${SLRR_SHADER_OUT}"
   INCLUDE_DIRS "${_bgfx_shader_inc}"
@@ -332,7 +372,7 @@ bgfx_compile_shaders(
 )
 bgfx_compile_shaders(
   TYPE FRAGMENT
-  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_osd_text.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_static_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_ao.sc"
+  SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_osd_text.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_mesh.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_vehicle.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_static_shadow.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_ao.sc" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fs_particle.sc"
   VARYING_DEF "${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
   OUTPUT_DIR "${SLRR_SHADER_OUT}"
   INCLUDE_DIRS "${_bgfx_shader_inc}"
@@ -346,7 +386,7 @@ bgfx_compile_shaders(
 foreach(_shadow_receiver IN ITEMS mesh vehicle)
   add_custom_command(
     OUTPUT "${SLRR_SHADER_OUT}/dxbc/fs_${_shadow_receiver}.sc.bin.h"
-    APPEND DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene_shadow.sh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/ambient_occlusion.sh"
+    APPEND DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene_shadow.sh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/scene_shadow_cascade.sh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/ambient_occlusion.sh"
   )
 endforeach()
 
@@ -381,27 +421,34 @@ if(BUILD_TESTING)
   target_compile_options(vehicle_hud_damage PRIVATE /W3 /utf-8)
   add_test(NAME vehicle_hud_damage COMMAND vehicle_hud_damage)
   add_executable(audio_recovery tests/test_audio_recovery.cpp
-    src/platform/host_audio.cpp src/platform/host_sfx.cpp src/platform/host_music.cpp)
+    src/platform/host_audio.cpp src/platform/audio_reverb.cpp src/platform/host_sfx.cpp src/platform/host_music.cpp)
   target_include_directories(audio_recovery PRIVATE include)
   target_compile_options(audio_recovery PRIVATE /W3 /utf-8)
   target_compile_definitions(audio_recovery PRIVATE _CRT_SECURE_NO_WARNINGS)
-  target_link_libraries(audio_recovery PRIVATE FMOD::Core)
+  target_link_libraries(audio_recovery PRIVATE SDL3_mixer::SDL3_mixer SDL3::SDL3-static)
   add_test(NAME audio_recovery COMMAND audio_recovery)
   add_executable(save_json tests/test_save_json.cpp src/natives/save_json.cpp)
   target_include_directories(save_json PRIVATE src/natives)
   target_compile_features(save_json PRIVATE cxx_std_20)
   target_compile_options(save_json PRIVATE /W3 /utf-8)
   add_test(NAME save_json COMMAND save_json)
+  add_executable(float_literal_mode tests/test_float_literal_mode.cpp
+    src/jvm/script_compiler.cpp src/jvm/tufa.cpp)
+  target_link_libraries(float_literal_mode PRIVATE slrr_script_compiler)
+  target_include_directories(float_literal_mode PRIVATE include)
+  target_compile_options(float_literal_mode PRIVATE /W3 /utf-8)
+  add_test(NAME float_literal_mode COMMAND float_literal_mode)
+  add_executable(ground_surface tests/test_ground_surface.cpp src/resources/ground_surface.cpp)
+  target_include_directories(ground_surface PRIVATE include)
+  target_compile_features(ground_surface PRIVATE cxx_std_20)
+  target_compile_options(ground_surface PRIVATE /W3 /utf-8)
+  add_test(NAME ground_surface COMMAND ground_surface)
+  add_executable(tyre_effects tests/test_tyre_effects.cpp src/resources/particle_cloud.cpp
+    src/resources/skid_marks.cpp src/resources/water.cpp)
+  target_include_directories(tyre_effects PRIVATE include)
+  target_compile_features(tyre_effects PRIVATE cxx_std_20)
+  target_compile_options(tyre_effects PRIVATE /W3 /utf-8)
+  add_test(NAME tyre_effects COMMAND tyre_effects)
 endif()
 
-foreach(_slrr_audio_target IN ITEMS slrr_host audio_recovery)
-  if(TARGET ${_slrr_audio_target})
-    add_custom_command(TARGET ${_slrr_audio_target} POST_BUILD
-      COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-        "$<TARGET_FILE:FMOD::Core>" "$<TARGET_FILE_DIR:${_slrr_audio_target}>"
-      VERBATIM)
-  endif()
-endforeach()
-
 install(TARGETS slrr_host RUNTIME DESTINATION bin)
-install(FILES "$<TARGET_FILE:FMOD::Core>" DESTINATION bin)

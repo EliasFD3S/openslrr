@@ -8,6 +8,15 @@
 
 namespace slrr {
 void install_osd_script_hover(Jvm& jvm) {
+  // OSD v2: the box's parent GameRef (a Group) gets the stock EVENT_CURSOR
+  // call; all focus, press, click and drag behaviour is in its Java code.
+  osd_set_cursor_dispatch([&jvm](Object* group, Object* phy, const std::string& param) {
+    jvm.invoke(group->class_name, "handleEvent",
+               "(Ljava.util.resource.GameRef;ILjava.lang.String;)V",
+               {Value::make_obj(group), Value::make_obj(phy), Value::make_int(0x00010000),
+                Value::make_obj(jvm.new_string(param))},
+               false);
+  });
   osd_set_slider_handler([&jvm](const OsdWidget& w, float x, float) {
     auto object = [](Object* o, const char* key) -> Object* {
       if (!o) return nullptr;

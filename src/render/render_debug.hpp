@@ -11,14 +11,21 @@
 
 #include <bgfx/bgfx.h>
 
+#include "slrr/frame_profiler.hpp"
+
 namespace slrr {
 
 struct RenderDebugOverrides {
   // Pass toggles. false removes the pass (its view stays empty).
   bool ambient_occlusion = true;
+  // The depth prepass for soft tyre smoke while AO is off (#454).
+  bool soft_particles = true;
   std::array<bool, 4> sun_cascades{true, true, true, true};
   bool shadow_caching = true;      // false redraws cached shadow maps every frame
-  // AO prepass, car tiles, reflections on worker encoders (#270). On by
+  // While the camera moves, sun cascades 2 and 3 redraw on alternate frames
+  // and keep their previous tile and matrix in between (#361).
+  bool cascade_alternation = true;
+  // AO prepass, car tiles, sun cascades (#359), reflections on worker encoders (#270). On by
   // default since the in-game A/B (Valo City night, 2560x1440): renderer
   // host time 5.80 -> 5.13 ms, frame 8.15 -> 7.35 ms. Fewer than 3 pool
   // threads still submit on the host.
@@ -49,6 +56,15 @@ struct RenderDebugOverrides {
   int local_shadow_tile = 0;       // 0: from Shadow quality, else 256/512/1024
   int sun_shadow_size = 0;         // 0: from Shadow quality, else 1024/2048/4096
   float cascade_scale = 1.f;       // multiplies the four cascade radii
+  // The sun shadow maps keep their light direction until the sun has moved
+  // this many degrees (#371): a direction rotating every frame flips caster
+  // texels everywhere. 0 follows the sun every frame.
+  float shadow_sun_step = .05f;
+  // Seconds over which the shadows crossfade from the previous sun step's
+  // atlas to the new one (#371). 0 jumps at once.
+  float shadow_crossfade = .75f;
+  // Reuse the sun's outer-frustum map props across frames (#359).
+  bool sun_batch_cache = true;
   float ao_resolution_scale = 1.f; // multiplies the half-res AO buffer (0.25-2, 2 = full)
   bool ao_reference = false;       // AO pass 1 samples the full-res depth (pre-#256)
   float lod_bias = 1.f;            // map prop LOD distance multiplier (>1: lower detail sooner)
@@ -102,12 +118,15 @@ inline std::string render_debug_overrides_text(const RenderDebugOverrides &o) {
     out += line;
   };
   flag("ambient occlusion", o.ambient_occlusion, d.ambient_occlusion);
+  flag("soft particles", o.soft_particles, d.soft_particles);
   for (size_t i = 0; i < o.sun_cascades.size(); ++i) {
     char name[32];
     std::snprintf(name, sizeof(name), "sun cascade %zu", i);
     flag(name, o.sun_cascades[i], d.sun_cascades[i]);
   }
   flag("shadow caching", o.shadow_caching, d.shadow_caching);
+  flag("cascade alternation", o.cascade_alternation, d.cascade_alternation);
+  flag("sun prop cache", o.sun_batch_cache, d.sun_batch_cache);
   flag("worker encoders", o.worker_encoders, d.worker_encoders);
   flag("character casters", o.skinned_casters, d.skinned_casters);
   flag("garage fixture shadows", o.fixture_shadows, d.fixture_shadows);
@@ -134,6 +153,8 @@ inline std::string render_debug_overrides_text(const RenderDebugOverrides &o) {
   number("local shadow tile", o.local_shadow_tile, d.local_shadow_tile, " px");
   number("sun cascade tile", o.sun_shadow_size, d.sun_shadow_size, " px");
   number("cascade radius scale", o.cascade_scale, d.cascade_scale, "x");
+  number("shadow sun step", o.shadow_sun_step, d.shadow_sun_step, " deg");
+  number("shadow crossfade", o.shadow_crossfade, d.shadow_crossfade, " s");
   number("AO resolution scale", o.ao_resolution_scale, d.ao_resolution_scale, "x");
   flag("AO reference sampling", o.ao_reference, d.ao_reference);
   number("prop LOD bias", o.lod_bias, d.lod_bias, "x");
@@ -151,6 +172,8 @@ inline const char *render_debug_view_name(uint16_t view) {
   case 3: return "Sun cascade 2 / point face 3";
   case 4: return "Sun cascade 3 / point face 4";
   case 5: return "World";
+  case 151: return "World opaque (sky, prop batches)";
+  case 152: case 153: case 154: return "World opaque (instances)";
   case 6: return "FMV layer";
   case 7: return "OSD under world";
   case 64: return "Point face 5";
@@ -169,7 +192,26 @@ inline const char *render_debug_view_name(uint16_t view) {
   if (view >= 8 && view < 64) return "Script viewport preview";
   if (view >= 72 && view < 84) return "Reflection face";
   if (view >= 128 && view < 136) return "Fixture / lamp shadow tile";
+  if (view == 139) return "Smoke shadow";
   if (view >= 145 && view < 151) return "Headlight shadow tile";
   return "Other";
+}
+
+// The --perf-log GPU pass of a bgfx view (#362), in the view layout above.
+inline perf::GpuPass render_gpu_pass(uint16_t view) {
+  using perf::GpuPass;
+  if (view <= 4 && view != 1) return GpuPass::MapShadows;
+  if (view == 64) return GpuPass::MapShadows;
+  if (view == 1 || view == 139) return GpuPass::CarDepth;
+  if (view == 65 || view == 66) return GpuPass::InteriorSun;
+  if (view == 5 || (view >= 151 && view <= 154)) return GpuPass::World;
+  if (view == 140) return GpuPass::AoPrepass;
+  if (view >= 141 && view <= 144) return GpuPass::AmbientOcclusion;
+  if (view >= 72 && view < 84) return GpuPass::Reflections;
+  if (view >= 128 && view <= 136) return GpuPass::LampTiles;
+  if (view >= 145 && view <= 150) return GpuPass::HeadlightTiles;
+  if (view >= 8 && view < 64) return GpuPass::Previews;
+  if (view == 6 || view == 7 || view == 70 || view == 71) return GpuPass::Osd;
+  return GpuPass::Other;
 }
 } // namespace slrr

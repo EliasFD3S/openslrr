@@ -266,17 +266,18 @@ ImpactPair first_x_impact(ContactFixture &f, Object *a, Object *b,
                           unsigned limit = 120, bool passive_target = false) {
   auto before_a = sample(a), before_b = sample(b, !passive_target);
   for (unsigned tick = 0; tick < limit; ++tick) {
+    const unsigned steps = part_physics_steps_ahead(1);
     f.advance();
     auto after_a = sample(a), after_b = sample(b, !passive_target);
-    // Released cars share both 120 Hz substeps of each host update. A truly
+    // Released cars share every solver substep of each host update. A truly
     // parked body does not integrate until contact wakes it (possibly midway
     // through this update), but participates with finite mass throughout.
-    SLRR_REQUIRE(after_a.physics.ticks == before_a.physics.ticks + 2);
+    SLRR_REQUIRE(after_a.physics.ticks == before_a.physics.ticks + steps);
     if (before_b.physics.active)
-      SLRR_REQUIRE(after_b.physics.ticks == before_b.physics.ticks + 2);
+      SLRR_REQUIRE(after_b.physics.ticks == before_b.physics.ticks + steps);
     else
       SLRR_REQUIRE(after_b.physics.ticks >= before_b.physics.ticks &&
-                   after_b.physics.ticks <= before_b.physics.ticks + 2);
+                   after_b.physics.ticks <= before_b.physics.ticks + steps);
     const double da = after_a.velocity[0] - before_a.velocity[0];
     const double db = after_b.velocity[0] - before_b.velocity[0];
     if (da < -.5 && db > .5) {
@@ -337,12 +338,7 @@ void native_mechanical_high_speed_head_on_does_not_tunnel() {
 }
 
 void mechanical_baiern_rear_end_and_offset_side_wake_parked_cars() {
-  struct RestoreFramerate {
-    FramerateMode previous = host_framerate_mode();
-    ~RestoreFramerate() { host_set_framerate_mode(previous); }
-  } restore; // Declared first so the fixture cleans up before mode restoration.
   ContactFixture f;
-  host_set_framerate_mode(FramerateMode::Adaptive);
   const auto render_near_physics = [](Object *car, const Sample &physics) {
     PartMatrix drawn;
     SLRR_REQUIRE(scene_instances_render_matrix(car, drawn.data()));
@@ -574,9 +570,10 @@ void fresh_dealer_car_keeps_loaded_wheels(const char *pack, bool mechanical) {
   std::puts("PASS fresh dealer's loaded wheel frames, intentional steering and "
             "asleep chassis survive first configuration and repeated ticks");
   SLRR_REQUIRE(part_command(car, "start"));
+  const unsigned start_steps = part_physics_steps_ahead(120);
   f.advance(120);
   const auto started = sample(car);
-  SLRR_REQUIRE(started.physics.ticks == 240);
+  SLRR_REQUIRE(started.physics.ticks == start_steps);
   for (size_t i = 0; i < 4; ++i)
     SLRR_REQUIRE(started.physics.contact[i] && started.physics.length[i] > .05);
   std::puts("PASS the same freshly configured passive car starts and settles on all wheels");
@@ -914,12 +911,13 @@ void controller_handoff_deletion_and_zero_time_pause_keep_shared_ownership() {
   faulted_node->local_matrix[0] = std::numeric_limits<float>::quiet_NaN();
   faulted_node->ypr[0] = std::numeric_limits<float>::quiet_NaN();
   faulted_node->matrix_override = true;
+  const unsigned fault_steps = part_physics_steps_ahead(1);
   f.advance();
   PartPhysicsState faulted;
   SLRR_REQUIRE(part_physics_state(a, faulted) && !faulted.active);
   for (float value : gameref_get(a)->local_matrix)
     SLRR_REQUIRE(std::isfinite(value));
-  SLRR_REQUIRE(sample(b).physics.ticks == healthy_ticks + 2);
+  SLRR_REQUIRE(sample(b).physics.ticks == healthy_ticks + fault_steps);
   // A valid setMatrix/setState retry must restore pair eligibility, not only
   // ordinary ticking: the old fault flag must not leave a permanent ghost.
   f.place(a, -8, 0);
@@ -954,8 +952,9 @@ void controller_handoff_deletion_and_zero_time_pause_keep_shared_ownership() {
   const auto dead_id = gameref_make_live(a);
   f.destroy(a);
   SLRR_REQUIRE(!gameref_find_live(dead_id) && part_controlled_chassis() == nullptr);
+  const unsigned steps_12 = part_physics_steps_ahead(12);
   f.advance(12);
-  SLRR_REQUIRE(sample(b).physics.ticks == paused_b.physics.ticks + 24);
+  SLRR_REQUIRE(sample(b).physics.ticks == paused_b.physics.ticks + steps_12);
   SLRR_REQUIRE(gameref_get(&free)->pos[1] < free_before.pos[1]);
   for (const auto &vehicle : part_vehicle_positions())
     SLRR_REQUIRE(vehicle.chassis != a);

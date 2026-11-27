@@ -7,7 +7,10 @@
 #include "slrr/sl2_pacejka.hpp"
 #include "slrr/natives_boot.hpp"
 #include "slrr/gameref.hpp"
+#include "slrr/part_runtime.hpp"
+#include "slrr/vehicle_dynamics.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -25,13 +28,16 @@ void usage() {
       "  slrr_host --probe-dyno\n"
       "  slrr_host --probe-gc [--root DIR]\n"
       "  slrr_host --game [--root DIR] [--window] [--no-wait] [--auto-new]\n"
-      "           [--auto-cmd mainmenu|street|N]\n"
+      "           [--auto-cmd mainmenu|street|demo|N] [--seed N]\n"
       "           [--spawn-car cars/racers/Baiern.rpk:0x6]\n"
       "           [--vehicle-osd PATH]\n"
       "           [--perf-log CSV|-] [--bench-map TRACK] [--bench-drive SECONDS]\n"
-      "           [--bench-career SAVE_DIRECTORY] [--bench-realtime]\n"
+      "           [--bench-career SAVE_DIRECTORY] [--bench-realtime] [--bench-traffic 0..1]\n"
       "           [--bench-time HOUR] [--bench-shots DIR]\n"
-      "           [--no-vsync] [--debug-overlay]\n"
+      "           [--record-path FILE] [--replay-path FILE]\n"
+      "           [--wind M/S[,HEADING]]\n"
+      "           [--no-vsync] [--debug-overlay] [--physics-inline] [--physics-batch] [--physics-hz HZ]\n"
+      "           [--physics-trace FILE]\n"
       "           [PlayerName]\n"
       "\n"
       "Default --game: FMV intros → Init(int) (Soft splash / menu).\n"
@@ -111,7 +117,10 @@ int main(int argc, char** argv) {
         opt.auto_cmd = 109;
       else if (std::strcmp(c, "escape") == 0)
         opt.auto_cmd = 119;
-      else
+      else if (std::strcmp(c, "demo") == 0) {
+        opt.auto_cmd = 101;  // to the main menu, then MainMenu.CMD_DEMO
+        opt.auto_demo = true;
+      } else
         opt.auto_cmd = static_cast<int32_t>(std::atoi(c));
       continue;
     }
@@ -123,6 +132,22 @@ int main(int argc, char** argv) {
     }
     if (std::strcmp(a, "--no-vsync") == 0) {
       opt.vsync = false;
+      continue;
+    }
+    if (std::strcmp(a, "--physics-hz") == 0 && i + 1 < argc) {
+      // Vehicle solver rate (#380): 60-4000 Hz; 120 by default.
+      slrr::physics::VehicleDynamics::set_frequency(
+          static_cast<unsigned>(std::atoi(argv[++i])));
+      continue;
+    }
+    if (std::strcmp(a, "--physics-batch") == 0) {
+      // Frame-locked batches instead of the free-running thread (#380).
+      opt.physics_batch = true;
+      continue;
+    }
+    if (std::strcmp(a, "--physics-inline") == 0) {
+      // Step physics on the host thread instead of the physics thread.
+      part_physics_set_threaded(false);
       continue;
     }
     if (std::strcmp(a, "--debug-overlay") == 0) {
@@ -137,7 +162,27 @@ int main(int argc, char** argv) {
       opt.bench_shots = argv[++i];
       continue;
     }
+    if (std::strcmp(a, "--seed") == 0 && i + 1 < argc) {
+      opt.random_seed = std::atoll(argv[++i]);
+      continue;
+    }
+    if (std::strcmp(a, "--record-path") == 0 && i + 1 < argc) {
+      opt.record_path = argv[++i];
+      continue;
+    }
+    if (std::strcmp(a, "--replay-path") == 0 && i + 1 < argc) {
+      opt.replay_path = argv[++i];
+      continue;
+    }
     if(std::strcmp(a,"--bench-realtime")==0){opt.bench_realtime=true;continue;}
+    if (std::strcmp(a, "--physics-trace") == 0 && i + 1 < argc) {
+      opt.physics_trace = argv[++i];
+      continue;
+    }
+    if (std::strcmp(a, "--bench-traffic") == 0 && i + 1 < argc) {
+      opt.bench_traffic = std::clamp(static_cast<float>(std::atof(argv[++i])), 0.f, 1.f);
+      continue;
+    }
     if(std::strcmp(a,"--bench-career")==0&&i+1<argc){opt.bench_career=argv[++i];opt.auto_new=true;continue;}
     if (std::strcmp(a, "--bench-map") == 0 && i + 1 < argc) {
       opt.bench_map = argv[++i];
@@ -145,6 +190,13 @@ int main(int argc, char** argv) {
     }
     if (std::strcmp(a, "--bench-drive") == 0 && i + 1 < argc) {
       opt.bench_drive_seconds = static_cast<float>(std::atof(argv[++i]));
+      continue;
+    }
+    if (std::strcmp(a, "--wind") == 0 && i + 1 < argc) {
+      char* rest = nullptr;
+      opt.wind_speed = std::strtof(argv[++i], &rest);
+      if (!(opt.wind_speed >= 0)) opt.wind_speed = 0;
+      if (rest && *rest == ',') opt.wind_heading = std::strtof(rest + 1, nullptr);
       continue;
     }
     if (std::strcmp(a, "--root") == 0 && i + 1 < argc) {

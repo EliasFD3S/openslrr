@@ -3,6 +3,7 @@
 #include "slrr/osd_registry.hpp"
 
 #include "slrr/object.hpp"
+#include "slrr/gameref.hpp"
 #include "slrr/slrr_font.hpp"
 
 #include <cmath>
@@ -169,7 +170,8 @@ void osd_forget(Object* object) {
     if (w.owner == object || w.handler == object || w.button == object ||
         w.picture_source == object || w.highlight_for == object ||
         w.label_src == object || w.value_str == object || w.gadget == object ||
-        w.text_key == object) osd_hide_widget(w.id);
+        w.text_key == object || w.phy == object || w.event_group == object)
+      osd_hide_widget(w.id);
 }
 void osd_compact_widgets() {
   const int32_t hover = g_hover_index >= 0 ? g_widgets[g_hover_index].id : -1;
@@ -237,6 +239,7 @@ int32_t osd_add_widget(OsdWidget w) {
   }
   if (w.layer == 0) w.layer = osd_viewport_pri(w.owner);
   if (owner_suppressed(w)) w.hidden = true;
+  w.plain = osd_cursor_osd(w.owner);
   g_widget_ids[id] = g_widgets.size();
   g_widgets.push_back(std::move(w));
   return id;
@@ -541,7 +544,8 @@ bool osd_widget_is_slider(const OsdWidget& widget) {
 }
 
 bool osd_set_hover_at(float osd_x, float osd_y) {
-  const int32_t idx = osd_hit_index(osd_x, osd_y);
+  int32_t idx = osd_hit_index(osd_x, osd_y);
+  if (const OsdWidget* w = osd_widget_at(idx); w && w->plain) idx = -1;
   auto target=[](const OsdWidget* w)->Object* {
     if(!w || !w->button)return nullptr;
     auto i=w->button->fields.find("parent");
@@ -993,6 +997,25 @@ void osd_sync_button_pictures() {
 
 void osd_on_field_write(Object* recv, const std::string& field) {
   if (!recv || field.empty()) return;
+  // A group is any GameRef whose `osd` field is set to an Osd (stock
+  // java.render.Group, java.render.osdx.Group, a new container).
+  if (field == "osd" && gameref_get(recv)) {
+    if (Object* osd = field_o(recv, "osd"); osd && is_osd_class(osd)) {
+      const auto have = recv->fields.find("_host_group");
+      if (have == recv->fields.end() || have->second.tag != ValueTag::Int) {
+        const int32_t id = alloc_group_id();
+        recv->fields["_host_group"] = Value::make_int(id);
+        g_current_group = id;
+      }
+      return;
+    }
+  }
+  // OSD v2: an attached Osd's gadgets are not reverse-engineered from their
+  // fields. Only the viewport and picture-replacement hooks below apply.
+  if (field != "vp" && field != "ins") {
+    if (osd_cursor_osd(recv)) return;
+    if (Object* osd = field_o(recv, "osd"); osd && osd_cursor_osd(osd)) return;
+  }
   if (field == "globalHandler" && is_osd_class(recv)) {
     Object* dialog = field_o(recv, "globalHandler");
     if (field_o(dialog, "osd") != recv) return;
@@ -1075,7 +1098,7 @@ void osd_on_field_write(Object* recv, const std::string& field) {
 }
 
 void osd_on_group_leaf(Object* group, bool leaf) {
-  if (!group || group->class_name != "java.render.Group") return;
+  if (!group) return;
   auto it = group->fields.find("_host_group");
   if (it == group->fields.end() || it->second.tag != ValueTag::Int) return;
   if (leaf)
@@ -1084,6 +1107,8 @@ void osd_on_group_leaf(Object* group, bool leaf) {
     show_group_exact(it->second.v.i);
 }
 
+
+void osd_cursor_visit_roots(const GcRootVisitor& visit);
 
 void osd_visit_gc_roots(const GcRootVisitor& visit) {
   g_widget_gc_refs.clear();
@@ -1096,6 +1121,101 @@ void osd_visit_gc_roots(const GcRootVisitor& visit) {
     if (w.dead) continue;
     root(w.handler); root(w.owner); root(w.button); root(w.picture_source);
     root(w.event_source); root(w.highlight_for); root(w.label_src); root(w.value_str); root(w.gadget); root(w.text_key);
+    root(w.phy); root(w.event_group);
   }
+  osd_cursor_visit_roots(visit);
+}
+// ---- OSD v2 cursor events (docs/ui/osd-v2.md) ----
+namespace {
+OsdCursorFn g_cursor_dispatch;
+Object* g_cursor_hover = nullptr;  // PhysicsRef under the pointer
+Object* g_cursor_hover_group = nullptr;
+Object* g_cursor_down = nullptr;   // PhysicsRef the left button went down on
+Object* g_cursor_down_group = nullptr;
+constexpr uint32_t kEventCursor = 0x00010000u;
+
+const OsdWidget* cursor_target(float x, float y) {
+  const OsdWidget* w = osd_widget_at(osd_hit_index(x, y));
+  return w && w->plain && w->hit_only && w->phy && w->event_group ? w : nullptr;
+}
+
+std::string cursor_number(float v) {
+  char buffer[32];
+  std::snprintf(buffer, sizeof buffer, "%.4f", static_cast<double>(v));
+  return buffer;
+}
+
+// Stock layout: hover/leave/down/up "ec x y id [moved]", click "ec 0 id".
+void cursor_send(Object* group, Object* phy, int ec, float x, float y) {
+  if (!group || !phy || !g_cursor_dispatch) return;
+  const GameRefState* listener = gameref_get(group);
+  if (!listener || !(listener->event_mask & kEventCursor)) return;
+  const std::string id = std::to_string(gameref_make_live(phy));
+  std::string param = std::to_string(ec) + ' ';
+  if (ec == 5) param += "0 " + id;
+  else param += cursor_number(x) + ' ' + cursor_number(y) + ' ' + id + (ec == 15 ? " 1" : "");
+  g_cursor_dispatch(group, phy, param);
+}
+}  // namespace
+
+void osd_cursor_attach(Object* osd) {
+  if (osd) osd->fields["_osd_v2"] = Value::make_int(1);
+}
+
+bool osd_cursor_osd(const Object* osd) {
+  if (!osd) return false;
+  const auto it = osd->fields.find("_osd_v2");
+  return it != osd->fields.end() && it->second.tag == ValueTag::Int && it->second.v.i != 0;
+}
+
+void osd_set_cursor_dispatch(OsdCursorFn fn) { g_cursor_dispatch = std::move(fn); }
+
+void osd_cursor_reset() {
+  g_cursor_hover = g_cursor_hover_group = nullptr;
+  g_cursor_down = g_cursor_down_group = nullptr;
+}
+
+bool osd_cursor_move(float x, float y) {
+  const OsdWidget* hit = cursor_target(x, y);
+  Object* phy = hit ? hit->phy : nullptr;
+  Object* group = hit ? hit->event_group : nullptr;
+  if (phy != g_cursor_hover) {
+    Object* old = g_cursor_hover;
+    Object* old_group = g_cursor_hover_group;
+    g_cursor_hover = phy;
+    g_cursor_hover_group = group;
+    if (old) cursor_send(old_group, old, 16, x, y);
+    if (phy) cursor_send(group, phy, 15, x, y);
+  }
+  return phy != nullptr || g_cursor_down != nullptr;
+}
+
+bool osd_cursor_button(bool down, float x, float y) {
+  const OsdWidget* hit = cursor_target(x, y);
+  Object* phy = hit ? hit->phy : nullptr;
+  Object* group = hit ? hit->event_group : nullptr;
+  if (down) {
+    if (!phy) return false;
+    g_cursor_down = phy;
+    g_cursor_down_group = group;
+    cursor_send(group, phy, 1, x, y);
+    return true;
+  }
+  Object* pressed = g_cursor_down;
+  Object* pressed_group = g_cursor_down_group;
+  g_cursor_down = g_cursor_down_group = nullptr;
+  if (!pressed) return phy != nullptr;
+  cursor_send(pressed_group, pressed, 2, x, y);
+  if (phy == pressed) cursor_send(pressed_group, pressed, 5, x, y);
+  return true;
+}
+
+void osd_set_widget_tint(int32_t index, uint32_t argb) {
+  if (OsdWidget* w = osd_widget_mut(index)) w->tint = argb;
+}
+
+void osd_cursor_visit_roots(const GcRootVisitor& visit) {
+  visit(g_cursor_hover); visit(g_cursor_hover_group);
+  visit(g_cursor_down); visit(g_cursor_down_group);
 }
 }  // namespace slrr

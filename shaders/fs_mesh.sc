@@ -23,7 +23,8 @@ uniform vec4 u_cloudSky;
 uniform vec4 u_cloudWind;
 // x: legacy cutout when positive, or -(reference + 1) / 255 for SCX4
 // y: unlit (skip ndl — OSD icons)
-// z: 0 opaque, 1 texture alpha for blending, 2 alpha-to-coverage
+// z: 0 opaque, 1 texture alpha for blending, 2 alpha-to-coverage;
+//    plus 4 for an authored two-sided SCX4 surface (sun lights either face)
 uniform vec4 u_alphaTest;
 // Text.changeColor modulate (ARGB → rgba 0..1). Default white.
 uniform vec4 u_color;
@@ -180,6 +181,10 @@ void main()
         gl_FragColor=vec4(gl_FragCoord.z,1.0-texture2D(s_texColor,uv).a,0.0,1.0);
         return;
     }
+	// Geometric facing, before any discard keeps the derivatives defined.
+	vec3 face = cross(dFdx(v_worldPos), dFdy(v_worldPos));
+	bool twoSided = u_alphaTest.z > 3.5;
+	float coverage = twoSided ? u_alphaTest.z - 4.0 : u_alphaTest.z;
 	vec3 n = normalize(v_normal);
 	float ndl = max(abs(dot(n, normalize(vec3(0.35, 0.85, 0.45)))), 0.22);
 	vec4 tex = texture2D(s_texColor, mapUv(uvSet(u_lightmap.y, v_texcoord0, v_texcoord1, v_texcoord2), u_meshBaseUv));
@@ -189,12 +194,12 @@ void main()
 	}
 	// MSAA coverage must retain both sides of the authored cutoff. A hard
 	// discard first would remove the partially covered edge samples.
-	if (u_alphaTest.z < 1.5 && ((u_alphaTest.x > 0.5 && tex.a < 0.5)
+	if (coverage < 1.5 && ((u_alphaTest.x > 0.5 && tex.a < 0.5)
 		|| (u_alphaTest.x < 0.0 && tex.a * 255.0 <= -u_alphaTest.x * 255.0 - 1.0)))
 		discard;
 	float light = (u_alphaTest.y > 0.75) ? 1.0 : ((u_alphaTest.y > 0.25) ? 0.65 + 0.35 * ndl : ndl);
-	float outA = (u_alphaTest.z > 0.5) ? tex.a : 1.0;
-	if (u_alphaTest.z > 1.5) {
+	float outA = (coverage > 0.5) ? tex.a : 1.0;
+	if (coverage > 1.5) {
 		float cutoff = (-u_alphaTest.x * 255.0 - 1.0) / 255.0;
 		// Centre the pixel footprint on the cutoff: alpha == cutoff covers
 		// half the samples. The old one-sided ramp eroded thin leaves as
@@ -237,6 +242,7 @@ void main()
 	bake = mix(vec3(1.0, 1.0, 1.0), bake, use);
 	float visibility = use < 0.5 ? sceneShadowVisibility(v_staticShadow, v_worldPos) : 1.0;
 	float carVisibility = 1.0;
+	float smokeTransmit = smokeShadowTransmit(v_worldPos);
 	if (u_carDepthParams.x > 0.5) {
 		vec3 p = mul(u_carDepthMtx, vec4(v_worldPos, 1.0)).xyz;
 		float edge = min(min(p.x, 1.0 - p.x), min(p.y, 1.0 - p.y));
@@ -252,11 +258,24 @@ void main()
 	}
 	float sunVisibility = u_staticShadowParams.w > 0.5 ? 1.0 : visibility;
 	float localVisibility = u_staticShadowParams.w > 0.5 ? visibility : 1.0;
-	vec3 illumination = vec3(light, light, light) * sunVisibility * mix(0.55, 1.0, carVisibility);
+	vec3 illumination = vec3(light, light, light) * sunVisibility * mix(0.55, 1.0, carVisibility) *
+	                    mix(0.55, 1.0, smokeTransmit);
 	if (u_sunDir.w < -0.5) illumination = u_sunAmb.rgb*ambientVisibility(gl_FragCoord.xy);
 	else if (u_sunDir.w > 0.5 && use < 0.5) {
-		float direct = max(dot(n, normalize(u_sunDir.xyz)), 0.0);
-		illumination = u_sunAmb.rgb*ambientVisibility(gl_FragCoord.xy) + u_sunDiff.rgb * direct * min(sunVisibility, carVisibility);
+		vec3 sun = normalize(u_sunDir.xyz);
+		// A two-sided card (Track Wizard foliage) has one normal, bent up
+		// toward its authored front. With the sun behind that front, the
+		// card went dark while its crossing card stayed lit. The sun lights
+		// whichever face it reaches: mirror the normal through the card.
+		vec3 sunNormal = n;
+		float faceLength = length(face);
+		if (twoSided && faceLength > 1e-12) {
+			vec3 f = face / faceLength;
+			float across = dot(n, f);
+			if (across * dot(sun, f) < 0.0) sunNormal = n - 2.0 * across * f;
+		}
+		float direct = max(dot(sunNormal, sun), 0.0);
+		illumination = u_sunAmb.rgb*ambientVisibility(gl_FragCoord.xy) + u_sunDiff.rgb * direct * min(sunVisibility, carVisibility) * smokeTransmit;
 	}
 	if (u_localLight.w > 0.0) {
 		vec3 delta = u_localLight.xyz - v_worldPos;
@@ -267,7 +286,12 @@ void main()
     vec3 fixtureDiffuse,fixtureHighlight;
     fixtureLighting(n,vec3(0.0,1.0,0.0),v_worldPos,1.0,false,fixtureDiffuse,fixtureHighlight);
     illumination+=fixtureDiffuse;
-    illumination+=lampLighting(n,v_worldPos);
+    // Cutout cards (grass, bushes, leaves) have normals that face a side of
+    // the card, not the plant: a headlight at bumper height lit them like a
+    // wall while the ground beside them stayed grazing-dark. Lamps light them
+    // as the ground they stand on.
+    bool cutoutCard=u_alphaTest.x>0.5 || u_alphaTest.x<0.0;
+    illumination+=lampLighting(cutoutCard?vec3(0.0,1.0,0.0):n,v_worldPos);
 	illumination += interiorSunDiffuse(n,v_worldPos);
 	vec3 shaded = tex.rgb * bake * tint * placement * illumination;
 	if (u_alphaTest.y > 1.5) {

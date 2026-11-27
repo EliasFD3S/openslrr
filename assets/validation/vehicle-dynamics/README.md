@@ -26,7 +26,7 @@ inertia-dependent old bound). A full-brake/full-throttle kernel probe moved
 4.84 m in 3 s despite zero final wheel speeds. The approved stage-A fix
 migrated the tests and reduced the same probe to 0.0021 m. These are kernel
 results, not an in-game burnout claim. The
-[revised migration plan](../../../docs/VEHICLE_DYNAMICS_PLAN.md) separates
+[revised migration plan](../../../docs/vehicles/dynamics-plan.md) separates
 completed checks from the remaining application/visual gates.
 
 ## Historical comparison

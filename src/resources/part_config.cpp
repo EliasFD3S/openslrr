@@ -112,6 +112,23 @@ bool part_parked_spring_length(float rest, float minimum, float maximum,
   return true;
 }
 
+namespace {
+// The SLRR method's exponents: 0.666 for surfaces, 0.667 for wings.
+bool slrr_method(const PartWing &wing) {
+  return std::abs(wing.exponent - .6665f) < .002f;
+}
+} // namespace
+
+bool part_wing_is_airfoil(const PartWing &wing) {
+  return wing.type == 5 || (wing.type == 4 && std::abs(wing.exponent - .667f) < 5e-4f);
+}
+
+float part_wing_area(const PartWing &wing) {
+  if (slrr_method(wing))
+    return wing.area / (part_wing_is_airfoil(wing) ? 90.f : 30.f);
+  return wing.area / 1.27f;
+}
+
 bool part_slot_matrix(const PartConfig &config, const PartSlot &slot,
                       PartMatrix &matrix) {
   PartMatrix frame = identity();
@@ -185,7 +202,7 @@ PartConfig parse_part_config(const std::string &source,
       if (command.starts_with("osd_")) {
         constexpr const char *names[] = {"osd_gauge", "osd_rpmpin", "osd_spdpin",
             "osd_rpm", "osd_speed", "osd_gear", "osd_mileage", "osd_hbrake",
-            "osd_damage", "osd_nos", "osd_turbo"};
+            "osd_damage", "osd_nos", "osd_turbo", "osd_abs", "osd_asr"};
         const auto field = std::find(std::begin(names), std::end(names), command);
         if (field == std::end(names)) continue;
         const size_t slot = static_cast<size_t>(field - std::begin(names));
@@ -437,6 +454,33 @@ PartConfig parse_part_config(const std::string &source,
         }
         out.bodies.push_back(body);
         out.mass += body.mass;
+      } else if (command == "wing") {
+        // EXE sscanf "%d %f..." (0x4443C0): the values after the first one
+        // that fails keep their defaults, so a malformed line never
+        // invalidates the part. Fields after the exponent are read but unused.
+        float value[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+        size_t parsed = 0;
+        for (; parsed < std::size(value) && parsed + 1 < t.size(); ++parsed) {
+          try {
+            value[parsed] = number(t, parsed + 1);
+          } catch (const std::exception &) {
+            break;
+          }
+        }
+        if (parsed > 0 && std::floor(value[0]) == value[0] &&
+            std::abs(value[0]) <= 65535 && out.wings.size() < 16) {
+          PartWing wing;
+          wing.type = static_cast<int>(value[0]);
+          const float length = std::hypot(value[4], value[5], value[6]);
+          for (size_t i = 0; i < 3; ++i) {
+            wing.position[i] = value[1 + i];
+            wing.normal[i] = length > 0.f ? value[4 + i] / length : 0.f;
+          }
+          wing.area = std::abs(value[7]);
+          wing.suction = std::abs(value[8]);
+          wing.exponent = value[9];
+          out.wings.push_back(wing);
+        }
       } else if (command == "nocollision" && !out.bodies.empty()) {
         out.bodies.back().collision = false;
         out.bodies.back().collision_mesh.clear();

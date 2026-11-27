@@ -82,6 +82,10 @@
 #include "dxbc/fs_ao.sc.bin.h"
 #include "glsl/fs_ao.sc.bin.h"
 #include "glsl/fs_static_shadow.sc.bin.h"
+#include "dxbc/vs_particle.sc.bin.h"
+#include "glsl/vs_particle.sc.bin.h"
+#include "dxbc/fs_particle.sc.bin.h"
+#include "glsl/fs_particle.sc.bin.h"
 
 #include "bgfx_lib_backend.hpp"
 #include "reflection_capture.hpp"
@@ -104,6 +108,9 @@ static const bgfx::EmbeddedShader k_skin[] = {
 static const bgfx::EmbeddedShader k_fs[] = {
     BGFX_EMBEDDED_SHADER(fs_mesh),
     BGFX_EMBEDDED_SHADER(fs_static_shadow),
+    BGFX_EMBEDDED_SHADER_END()};
+static const bgfx::EmbeddedShader k_particle[] = {
+    BGFX_EMBEDDED_SHADER(vs_particle), BGFX_EMBEDDED_SHADER(fs_particle),
     BGFX_EMBEDDED_SHADER_END()};
 static const bgfx::EmbeddedShader k_ao[] = {
     BGFX_EMBEDDED_SHADER(vs_ao), BGFX_EMBEDDED_SHADER(fs_ao), BGFX_EMBEDDED_SHADER_END()};
@@ -157,6 +164,11 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
 
     bgfx::Init init;
     init.type = bgfx::RendererType::Count;
+    // A day frame queues the AO prepass, car tiles, reflection faces, four
+    // sun cascades and four opaque world runs (#359). With bgfx's default of
+    // eight encoders (the host's included) the jobs left without one ran on
+    // the host after the world, serially.
+    init.limits.maxEncoders = 16;
     init.platformData.type = bgfx::NativeWindowHandleType::Default;
     init.swapChain.nwh = hwnd_;
     init.swapChain.width = static_cast<uint32_t>(width_);
@@ -220,12 +232,25 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
     u_static_shadow_params_ = bgfx::createUniform("u_staticShadowParams", bgfx::UniformType::Vec4);
     u_static_shadow_eye_ = bgfx::createUniform("u_staticShadowEye", bgfx::UniformType::Vec4);
     u_shadow_cascades_ = bgfx::createUniform("u_shadowCascades", bgfx::UniformType::Mat4,4);
+    s_static_shadow_prev_ = bgfx::createUniform("s_staticShadowPrev", bgfx::UniformType::Sampler);
+    u_shadow_cascades_prev_ = bgfx::createUniform("u_shadowCascadesPrev", bgfx::UniformType::Mat4, 4);
+    u_shadow_blend_ = bgfx::createUniform("u_shadowBlend", bgfx::UniformType::Vec4);
     u_shadow_origin_ = bgfx::createUniform("u_shadowOrigin", bgfx::UniformType::Vec4);
     u_shadow_ranges_ = bgfx::createUniform("u_shadowRanges", bgfx::UniformType::Vec4);
     u_shadow_filter_=bgfx::createUniform("u_shadowFilter",bgfx::UniformType::Vec4);
     vehicle_program_ = create_owned_program(
         bgfx::createEmbeddedShader(k_vehicle, rt, "vs_vehicle"),
         bgfx::createEmbeddedShader(k_vehicle, rt, "fs_vehicle"));
+    particle_program_ = create_owned_program(
+        bgfx::createEmbeddedShader(k_particle, rt, "vs_particle"),
+        bgfx::createEmbeddedShader(k_particle, rt, "fs_particle"));
+    u_particle_sun_ = bgfx::createUniform("u_particleSun", bgfx::UniformType::Vec4);
+    u_particle_sun_color_ = bgfx::createUniform("u_particleSunColor", bgfx::UniformType::Vec4);
+    u_particle_ambient_ = bgfx::createUniform("u_particleAmbient", bgfx::UniformType::Vec4);
+    u_particle_cam_ = bgfx::createUniform("u_particleCam", bgfx::UniformType::Vec4, 4);
+    u_particle_params_ = bgfx::createUniform("u_particleParams", bgfx::UniformType::Vec4);
+    u_particle_depth_ = bgfx::createUniform("u_particleDepth", bgfx::UniformType::Vec4);
+    s_particle_depth_ = bgfx::createUniform("s_particleDepth", bgfx::UniformType::Sampler);
     s_mix_ = bgfx::createUniform("s_vehicleMix", bgfx::UniformType::Sampler);
     s_env_ = bgfx::createUniform("s_vehicleEnv", bgfx::UniformType::Sampler);
     s_bake_ = bgfx::createUniform("s_vehicleBake", bgfx::UniformType::Sampler);
@@ -248,6 +273,9 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
     s_car_depth_ = bgfx::createUniform("s_carDepth", bgfx::UniformType::Sampler);
     u_car_depth_mtx_ = bgfx::createUniform("u_carDepthMtx", bgfx::UniformType::Mat4);
     u_car_depth_params_ = bgfx::createUniform("u_carDepthParams", bgfx::UniformType::Vec4);
+    s_smoke_shadow_ = bgfx::createUniform("s_smokeShadow", bgfx::UniformType::Sampler);
+    u_smoke_shadow_mtx_ = bgfx::createUniform("u_smokeShadowMtx", bgfx::UniformType::Mat4);
+    u_smoke_shadow_params_ = bgfx::createUniform("u_smokeShadowParams", bgfx::UniformType::Vec4);
     u_cloud_wind_ = bgfx::createUniform("u_cloudWind", bgfx::UniformType::Vec4);
     u_cloud_sky_ = bgfx::createUniform("u_cloudSky", bgfx::UniformType::Vec4);
     u_fog_color_ = bgfx::createUniform("u_fogColor", bgfx::UniformType::Vec4);
@@ -289,7 +317,8 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
         {"mesh", program_}, {"osd_text", text_program_}, {"skin", skin_program_},
         {"ao",ao_program_},{"ao_skin_depth",ao_skin_depth_program_},
         {"static_shadow", static_shadow_program_}, {"inst", inst_program_},
-        {"inst_shadow", inst_shadow_program_}, {"vehicle", vehicle_program_}};
+        {"inst_shadow", inst_shadow_program_}, {"vehicle", vehicle_program_},
+        {"particle", particle_program_}};
     for (const auto& [name, handle] : programs)
       if (!bgfx::isValid(handle))
         std::fprintf(stderr, "[bgfx] program %s failed to link\n", name);
@@ -430,6 +459,21 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
       u_skin_bones_ = BGFX_INVALID_HANDLE;
     }
     if (bgfx::isValid(vehicle_program_)) bgfx::destroy(vehicle_program_);
+    if (bgfx::isValid(particle_program_)) bgfx::destroy(particle_program_);
+    if (bgfx::isValid(smoke_shadow_fb_)) bgfx::destroy(smoke_shadow_fb_);
+    smoke_shadow_fb_ = BGFX_INVALID_HANDLE;
+    smoke_shadow_tex_ = BGFX_INVALID_HANDLE;
+    for (auto* handle : {&s_smoke_shadow_, &u_smoke_shadow_mtx_, &u_smoke_shadow_params_}) {
+      if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
+      *handle = BGFX_INVALID_HANDLE;
+    }
+    particle_program_ = BGFX_INVALID_HANDLE;
+    for (auto* handle : {&u_particle_sun_, &u_particle_sun_color_, &u_particle_ambient_,
+                         &u_particle_cam_, &u_particle_params_, &u_particle_depth_,
+                         &s_particle_depth_}) {
+      if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
+      *handle = BGFX_INVALID_HANDLE;
+    }
     vehicle_program_ = BGFX_INVALID_HANDLE;
     destroy_reflections();
     if (bgfx::isValid(car_depth_fb_)) bgfx::destroy(car_depth_fb_);
@@ -445,6 +489,7 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
     }
     if (bgfx::isValid(static_shadow_program_)) bgfx::destroy(static_shadow_program_);
     if (bgfx::isValid(static_shadow_fb_)) bgfx::destroy(static_shadow_fb_);
+    destroy_prev_shadow_atlas();
     static_shadow_program_ = BGFX_INVALID_HANDLE;
     static_shadow_fb_ = BGFX_INVALID_HANDLE;
     static_shadow_tex_ = BGFX_INVALID_HANDLE;
@@ -475,6 +520,7 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
     for (auto *handle :
          {&s_static_shadow_, &u_static_shadow_mtx_, &u_static_shadow_params_,
           &u_static_shadow_eye_, &u_shadow_cascades_, &u_shadow_ranges_, &u_shadow_filter_,
+          &s_static_shadow_prev_, &u_shadow_cascades_prev_, &u_shadow_blend_,
           &u_shadow_origin_, &u_point_light_color_, &u_point_shadow_faces_,
           &u_point_shadow_params_, &s_interior_sun_, &s_sun_aperture_, &u_interior_sun_mtx_,
           &u_interior_sun_dir_, &u_interior_sun_color_, &u_aperture_params_,
@@ -616,7 +662,8 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
     view_draws_.fill(0);
     auto video = host_game_options().video;
     const auto& debug_render = debug_overlay_.render_options();
-    video.view_distance = 3000.f;
+    // Advanced video options (#377): 3 km by default.
+    video.view_distance = float(std::clamp(host_enhanced_graphics().view_distance, 500, 3000));
     apply_video_mode(video.mode);
     const bool loading = osd_loading_dialog() || !osd_loading_overlay().empty();
     const bool covered = !osd_loading_overlay().empty() && !video_fmv_block_osd();
@@ -645,7 +692,7 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
                              BGFX_RESET_MSAA_X4, BGFX_RESET_MSAA_X8};
     // Debug overrides (#243) switch MSAA / anisotropy off without saving.
     const auto& overrides = render_debug();
-    const uint32_t flags = (debug_render.vsync ? BGFX_RESET_VSYNC : BGFX_RESET_NONE)
+    const uint32_t flags = (debug_render.vsync && host_enhanced_graphics().vsync ? BGFX_RESET_VSYNC : BGFX_RESET_NONE)
                            | (overrides.msaa ? msaa[std::clamp(host_enhanced_graphics().msaa, 0, 3)] : BGFX_RESET_NONE)
                            | (host_enhanced_graphics().anisotropic_filtering && overrides.anisotropic
                                   ? BGFX_RESET_MAXANISOTROPY : 0);
@@ -779,16 +826,20 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
                          0.f, 0);
     } else {
       bgfx::setViewRect(world_view, 0, 0, ww, hh);
-      const uint32_t clear = (garage_ || world_cam) ? 0x3a342cff : 0x1a2230ff;
-      bgfx::setViewClear(world_view, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL,
-                         clear, 0.f, 0);
     }
+    // The world view's clear colour and rect, reused by kWorldOpaqueView (#359).
+    const uint32_t world_clear = (garage_ || world_cam) ? 0x3a342cff : 0x1a2230ff;
+    std::array<uint16_t, 4> world_rect{0, 0, ww, hh};
+    if (!fmv_bg)
+      bgfx::setViewClear(world_view, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL,
+                         world_clear, 0.f, 0);
     if (world_cam && world_inset) {
       const int x = std::clamp(int(world_vp->vp_x * width_), 0, width_ - 1);
       const int y = std::clamp(int(world_vp->vp_y * height_), 0, height_ - 1);
-      bgfx::setViewRect(world_view, x, y,
-          std::clamp(int(world_vp->vp_w * width_), 1, width_ - x),
-          std::clamp(int(world_vp->vp_h * height_), 1, height_ - y));
+      world_rect = {uint16_t(x), uint16_t(y),
+                    uint16_t(std::clamp(int(world_vp->vp_w * width_), 1, width_ - x)),
+                    uint16_t(std::clamp(int(world_vp->vp_h * height_), 1, height_ - y))};
+      bgfx::setViewRect(world_view, world_rect[0], world_rect[1], world_rect[2], world_rect[3]);
     }
     bgfx::setViewTransform(world_view, view, render_proj);
     set_view_sequential(world_view);
@@ -832,6 +883,7 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       }
       else destroy_ao_targets();
       update_car_depth(garage_ ? nullptr : position, video);
+      update_smoke_shadow(video);
       // Every world camera reflects its scene. The car dealers have a map and a
       // script camera but neither the garage flag nor a followed car, so their
       // cars used to lose the cubemap and render matte.
@@ -881,19 +933,25 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       // encoder binds it (#270).
       upload_light_data();
       defer_submits_ = false;
-      run_worker_submits([&] {
-        if (world_cam && (outdoor_lighting_ ||
-            std::any_of(instances_.begin(), instances_.end(),
-                        [](const SceneInstance& instance) { return instance.sky; })))
-          draw_sky(world_view, view, render_proj);
-        draw_dynamic_world(world_view);
-        if (garage_ && !parts_.empty()) draw_scene(world_view);
-      });
+      const bool sky = world_cam && (outdoor_lighting_ ||
+          std::any_of(instances_.begin(), instances_.end(),
+                      [](const SceneInstance& instance) { return instance.sky; }));
+      submit_world(world_view, BGFX_INVALID_HANDLE, world_rect,
+                   BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL, world_clear,
+                   view, render_proj, sky, [&] {
+                     if (garage_ && !parts_.empty()) draw_scene(world_view);
+                   });
 
       if (debug_render.sun_flare && video.flares) draw_sun_flare(view, render_proj, world_view);
       // Runtime reports only active-world nitrous children. Never submit this
       // optical glow to previews/reflection/shadow passes or the light arrays.
       if (video.flares) draw_nitro_flares(view, render_proj, world_view);
+      // Tyre marks after the world's opaque and blended draws.
+      if (world_cam) {
+        draw_skid_marks(world_view);
+        // Smoke last: it blends over the world, the cars and the marks.
+        draw_particles(view, render_proj, world_view);
+      }
     }
     // Previews start at view 8. OSD plates under the cars are view 7; the
     // rest of the interface is view 70.
@@ -928,6 +986,15 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       debug_overlay_.draw(hwnd_, ww, hh, capture, vehicles);
     }
     debug_was_visible_ = show_debug;
+    {
+      // Per-view GPU times need the bgfx profiler: on while the debug menu
+      // is open, and for the per-pass --perf-log columns (#362).
+      static bool profiler = false;
+      if (profiler != (show_debug || perf::enabled())) {
+        profiler = show_debug || perf::enabled();
+        bgfx::setDebug(profiler ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE);
+      }
+    }
     auto& input = host_input();
     const bool capture = !lmb_down_ && !input.rmb_down && debug_overlay_.captures_mouse();
     if (capture && !input.debug_mouse_capture) {
@@ -953,6 +1020,12 @@ void LibBgfxBackend::apply_video_mode(const VideoMode& mode) {
       for (const auto& instance : instances_) sample.instances += instance.sky ? 0u : 1u;
       for (const auto& batch : prop_batches_)
         sample.batch_instances += static_cast<uint32_t>(batch.instances.size());
+      // Per-view GPU times exist while the bgfx profiler is on (#362).
+      for (uint16_t i = 0; i < stats->numViews; ++i) {
+        const auto& view = stats->viewStats[i];
+        sample.gpu_pass_ms[size_t(render_gpu_pass(view.view))] +=
+            ms(view.gpuTimeEnd - view.gpuTimeBegin, stats->gpuTimerFreq);
+      }
       perf::set_render_sample(sample);
     }
     // The swap chain is filled while the window is hidden. Showing it first
@@ -1129,7 +1202,10 @@ void LibBgfxBackend::cache_scene_mesh(
     // Map prop LOD from the main camera (#252); the other passes reuse it.
     ScenePropLodView lod_view;
     lod_view.eye = {cull_eye_[0], cull_eye_[1], cull_eye_[2]};
-    lod_view.bias = render_debug().lod_bias;
+    // Prop detail option (#377): low, medium, high (the #252 default), ultra.
+    constexpr float kPropDetailBias[4] = {2.f, 1.4f, 1.f, .7f};
+    lod_view.bias = render_debug().lod_bias *
+        kPropDetailBias[std::clamp(host_enhanced_graphics().prop_detail, 0, 3)];
     lod_view.force_highest = render_debug().force_highest_lod;
     lod_view.update = lod_view.valid = true;
     scene_instances_set_lod_view(lod_view);
@@ -1399,13 +1475,8 @@ void LibBgfxBackend::update_local_light() {
 // scenery_lights_select fades lamps near the cut so the set changes without
 // pops.
 // Numbers and texture handles for the OpenSLRR Debug renderer menu (#243).
-// Per-view GPU times need the bgfx profiler, on only while the menu is open.
+// Its per-view GPU times need the bgfx profiler, switched on in flush (#362).
 void LibBgfxBackend::publish_debug_stats() {
-    static bool profiler = false;
-    if (profiler != debug_overlay_.visible()) {
-      profiler = debug_overlay_.visible();
-      bgfx::setDebug(profiler ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE);
-    }
     auto& stats = render_debug_stats();
     stats.instances = uint32_t(instances_.size());
     stats.view_draws = view_draws_;
@@ -1445,7 +1516,7 @@ void LibBgfxBackend::publish_debug_stats() {
 // below. Unshadowed.
 void LibBgfxBackend::update_car_lights() {
     car_lamp_count_ = 0;
-    if (!render_debug().car_lights) return;
+    if (!render_debug().car_lights || !host_enhanced_graphics().car_lights) return;
     std::vector<CarLight> lights = car_lights_override_ ? *car_lights_override_ : part_car_lights();
     if (lights.empty()) return;
     // The followed car (lamp shadow focus) else the eye: its own lights,
@@ -1482,7 +1553,10 @@ void LibBgfxBackend::update_car_lights() {
         lamp.color = hue(light.diffuse, {1.f, .96f, .88f});
         lamp.intensity = kHeadlightIntensity;
         lamp.range = std::min(light.range > 0.f ? light.range : kHeadlightRange, kHeadlightRange);
-        lamp.attenuation = light.attenuation;
+        // Not the authored 1 .03 0: the stock lit vertices through attH/attV,
+        // and a linear falloff left trees 40 m ahead at 70 % of the road.
+        lamp.attenuation = {1.f, 0.f, 1.f / (kHeadlightFalloff * kHeadlightFalloff)};
+        lamp.above_axis_cut = 1.f - kHeadlightAboveAxis;
         lamp.cos_inner = std::cos(kHeadlightInnerDegrees * 3.14159265f / 180.f);
         lamp.cos_outer = std::cos(kHeadlightOuterDegrees * 3.14159265f / 180.f);
       } else {
@@ -1513,7 +1587,8 @@ void LibBgfxBackend::update_scenery_lights() {
     // shadow beside the sun's.
     const float night = scene_instances_sun_state().night;
     const uint32_t groups = night > kLampNightMin ? kLightGroupCity : 0u;
-    if (!groups || !scenery_lights_count() || !render_debug().lamp_lighting)
+    if (!groups || !scenery_lights_count() || !render_debug().lamp_lighting ||
+        !host_enhanced_graphics().street_lamps)
       return;
     // cull_eye_ is script space (sync_instances); the lights are render space,
     // like the frustum planes of the culled view.
@@ -1849,12 +1924,72 @@ void LibBgfxBackend::refresh_distance_fog(const float render_eye[3]) {
   fog_enabled_ = true;
 }
 
-void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
+void LibBgfxBackend::submit_world(uint16_t world_view, bgfx::FrameBufferHandle target,
+                                  const std::array<uint16_t, 4>& rect, uint16_t clear_flags,
+                                  uint32_t clear_color, const float* view, const float* proj,
+                                  bool sky, const std::function<void()>& host_after) {
+    // #359: the opaque world (sky, prop batches, pass 0) goes to its own
+    // Sequential view on a worker, ordered just before the world view and
+    // drawing into the same target; it takes over the world view's clear.
+    // The host submits the blended part (pass 1, night overlays) to the world
+    // view meanwhile. Only for kWorldView (not a world drawn over a video).
+    const bool split = world_view == kWorldView && parallel_submission_ready();
+    if (split) {
+      // The opaque world in serial order, cut into consecutive views run in
+      // that order: sky and prop batches; then pass 0 over three equal runs
+      // of instances_, the last also drawing the blended groups' opaque
+      // sections. Only the first view clears.
+      for (uint16_t k = 0; k < kWorldOpaqueViews; ++k) {
+        const uint16_t id = uint16_t(kWorldOpaqueView + k);
+        bgfx::setViewFrameBuffer(id, target);
+        bgfx::setViewRect(id, rect[0], rect[1], rect[2], rect[3]);
+        bgfx::setViewClear(id, k == 0 ? clear_flags : uint16_t(BGFX_CLEAR_NONE), clear_color, 0.f, 0);
+        bgfx::setViewTransform(id, view, proj);
+        set_view_sequential(id);
+      }
+      bgfx::setViewClear(world_view, BGFX_CLEAR_NONE);
+      build_blended_groups();
+      std::array<float, 16> view_copy, proj_copy;
+      std::copy_n(view, 16, view_copy.begin());
+      std::copy_n(proj, 16, proj_copy.begin());
+      worker_jobs_.push_back([this, sky, view_copy, proj_copy] {
+        enc()->touch(kWorldOpaqueView);
+        if (sky) draw_sky(kWorldOpaqueView, view_copy.data(), proj_copy.data());
+        draw_prop_batches(kWorldOpaqueView, prop_batches_, false);
+      });
+      constexpr size_t kRuns = kWorldOpaqueViews - 1;
+      const size_t count = instances_.size();
+      for (size_t run = 0; run < kRuns; ++run) {
+        const uint16_t id = uint16_t(kWorldOpaqueView + 1 + run);
+        const size_t begin = count * run / kRuns, end = count * (run + 1) / kRuns;
+        const bool last = run + 1 == kRuns;
+        worker_jobs_.push_back([this, id, begin, end, last] {
+          enc()->touch(id);
+          draw_world_pass(id, 0, begin, end, last);
+        });
+      }
+    }
+    run_worker_submits([&] {
+      if (split) {
+        draw_world_blended(world_view);
+      } else {
+        if (sky) draw_sky(world_view, view, proj);
+        draw_dynamic_world(world_view);
+      }
+      if (host_after) host_after();
+    });
+  }
+  void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
+    build_blended_groups();
+    draw_world_opaque(view_id);
+    draw_world_blended(view_id);
+  }
+  void LibBgfxBackend::build_blended_groups() {
     perf::Scope perf_scope(perf::Zone::World);
-    draw_prop_batches(view_id, prop_batches_, false);
     // Props with a blended section, one group per mesh and lighting in first
     // appearance order (#264). Their records stay in instances_ for shadows,
-    // AO and reflections; here they are drawn instanced instead.
+    // AO and reflections; here they are drawn instanced instead. Built on the
+    // host before either part is submitted; both parts only read the groups.
     size_t groups = 0;
     for (const auto& instance : instances_) {
       if (!blended_prop_instance(instance)) continue;
@@ -1877,8 +2012,21 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
       }
       blended_groups_[g].placements.push_back({instance.transform.data(), instance.color});
     }
+    blended_group_count_ = groups;
+  }
+  void LibBgfxBackend::draw_world_opaque(uint16_t view_id) {
+    perf::Scope perf_scope(perf::Zone::World);
+    draw_prop_batches(view_id, prop_batches_, false);
+    draw_world_pass(view_id, 0);
+  }
+  void LibBgfxBackend::draw_world_blended(uint16_t view_id) {
+    perf::Scope perf_scope(perf::Zone::World);
+    draw_world_pass(view_id, 1);
+  }
+  void LibBgfxBackend::draw_world_pass(uint16_t view_id, int pass, size_t begin, size_t end,
+                                       bool groups) {
     const auto draw_blended = [&](int pass) {
-      for (size_t g = 0; g < groups; ++g) {
+      for (size_t g = 0; g < blended_group_count_; ++g) {
         const auto& group = blended_groups_[g];
         const auto found = instance_meshes_.find(group.geometry);
         if (found == instance_meshes_.end()) continue;
@@ -1886,8 +2034,10 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
                              group.placements.data(), group.placements.size());
       }
     };
-    for (int pass = 0; pass < 2; ++pass) {
-      for (const auto& instance : instances_) {
+    {
+      end = std::min(end, instances_.size());
+      for (size_t index = begin; index < end; ++index) {
+        const auto& instance = instances_[index];
         if (instance.sky || blended_prop_instance(instance)) continue;
         // The mesh stays resident, so a pedestrian walking into view does not
         // upload on that frame. The triangles behind the camera are not sent.
@@ -1917,14 +2067,13 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
                                placement_scratch_.data(), placement_scratch_.size());
         }
       }
-      draw_blended(pass);
+      if (groups) draw_blended(pass);
     }
   }
-  void LibBgfxBackend::draw_previews()
+  void LibBgfxBackend::apply_base_view_order()
 {
-    perf::Scope perf_scope(perf::Zone::World);
     // Reset each frame: closing the map must restore normal world/OSD order.
-    std::array<uint16_t, 151> base_order{};
+    std::array<uint16_t, 151 + kWorldOpaqueViews> base_order{};
     size_t base_slot = 0;
     for (uint16_t i = 0; i < 64; ++i) {
       if (i == kWorldView) {
@@ -1932,6 +2081,8 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
         if (point_shadow_active_) base_order[base_slot++] = 64;
         base_order[base_slot++] = 65;
         base_order[base_slot++] = 66;
+        for (uint16_t k = 0; k < kWorldOpaqueViews; ++k)
+          base_order[base_slot++] = uint16_t(kWorldOpaqueView + k);
       }
       base_order[base_slot++] = i;
     }
@@ -1939,6 +2090,11 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
       base_order[base_slot++] = 64;
     for(uint16_t f=67;f<128;++f) base_order[base_slot++]=f;
     bgfx::setViewOrder(0, uint16_t(base_order.size()), base_order.data());
+  }
+  void LibBgfxBackend::draw_previews()
+{
+    perf::Scope perf_scope(perf::Zone::World);
+    apply_base_view_order();
     const auto* main_camera = fullscreen_script_camera();
     const auto* main_vp = main_camera ? gameref_get(main_camera->viewport) : nullptr;
     const bool inset = main_vp && (main_vp->vp_w < .99f || main_vp->vp_h < .99f);
@@ -1949,7 +2105,7 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
       std::stable_sort(views.begin(), views.end(), [](const auto& a, const auto& b) {
         return a.first < b.first;
       });
-      std::array<uint16_t, 151> order{};
+      std::array<uint16_t, 151 + kWorldOpaqueViews> order{};
       size_t slot = 0;
       for (uint16_t i = 0; i < kWorldView; ++i) order[slot++] = i;
       for(uint16_t f=128;f<151;++f) order[slot++]=f;
@@ -1958,7 +2114,12 @@ void LibBgfxBackend::draw_dynamic_world(uint16_t view_id) {
       order[slot++] = 66;
       order[slot++] = kFmvLayer;
       order[slot++] = kOsdUnder;
-      for (const auto& entry : views) order[slot++] = entry.second;
+      for (const auto& entry : views) {
+        if (entry.second == kWorldView)
+          for (uint16_t k = 0; k < kWorldOpaqueViews; ++k)
+            order[slot++] = uint16_t(kWorldOpaqueView + k);
+        order[slot++] = entry.second;
+      }
       for (uint16_t i = kPreview0 + uint16_t(views.size() - 1); i < 64; ++i) order[slot++] = i;
       if (!point_shadow_active_)
         order[slot++] = 64;
@@ -2480,6 +2641,7 @@ std::string map_texture_key(std::string path) {
       if (!self) return;
       self->lmb_down_ = false;
       self->slider_drag_index_ = -1;
+      osd_cursor_reset();
       self->inventory_drag_source_ = nullptr;
       if (self->inventory_dragging_) host_cursor_set_pointer(self->inventory_drag_cursor_);
       self->inventory_dragging_ = false;
@@ -2530,6 +2692,12 @@ std::string map_texture_key(std::string path) {
         self->lmb_down_ = true;
         float x, y;
         osd_pixel_to_text(self->lmb_x_, self->lmb_y_, self->width_, self->height_, &x, &y);
+        // OSD v2 (attached Osd): the Group receives EC_LDOWN itself.
+        if (!video_fmv_block_osd() && osd_cursor_button(true, x, y)) {
+          self->slider_drag_index_ = -1;
+          self->inventory_drag_source_ = nullptr;
+          return 0;
+        }
         const int slider_hit=osd_hit_index(x,y);
         self->slider_drag_index_=!video_fmv_block_osd() && osd_update_slider_at(slider_hit,x,y) ? slider_hit : -1;
         self->inventory_drag_source_ = video_fmv_block_osd()
@@ -2559,6 +2727,15 @@ std::string map_texture_key(std::string path) {
       }
       if (msg == WM_LBUTTONUP && self && self->lmb_down_ && !in.rmb_down) {
         self->lmb_down_ = false;
+        {
+          float ux, uy;
+          osd_pixel_to_text(static_cast<short>(LOWORD(lp)), static_cast<short>(HIWORD(lp)),
+                            self->width_, self->height_, &ux, &uy);
+          if (!video_fmv_block_osd() && osd_cursor_button(false, ux, uy)) {
+            ReleaseCapture();
+            return 0;
+          }
+        }
         if (self->slider_drag_index_ >= 0) {
           float x,y;
           osd_pixel_to_text(static_cast<short>(LOWORD(lp)),static_cast<short>(HIWORD(lp)),
@@ -2704,7 +2881,9 @@ std::string map_texture_key(std::string path) {
         if (!in.rmb_down) {
           float ox = 0.f, oy = 0.f;
           osd_pixel_to_text(x, y, self->width_, self->height_, &ox, &oy);
-          if (osd_set_hover_at(ox, oy)) {
+          if (!video_fmv_block_osd() && osd_cursor_move(ox, oy)) {
+            osd_set_hover_at(-100.f, -100.f);
+          } else if (osd_set_hover_at(ox, oy)) {
             const OsdWidget* pointed = osd_widget_at(osd_hover_index());
             if (pointed && !pointed->hidden &&
                 (osd_hover_widget() || pointed->disabled))

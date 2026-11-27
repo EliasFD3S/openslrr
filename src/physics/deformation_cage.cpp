@@ -9,7 +9,7 @@ namespace slrr::physics {
 namespace {
 constexpr int nx = 5, ny = 2, nz = 7;
 constexpr int index(int x, int y, int z) { return (z * ny + y) * nx + x; }
-constexpr double dt = VehicleDynamics::timestep;
+
 }
 
 DeformationCage::DeformationCage(Vec3 minimum, Vec3 maximum, double mass)
@@ -112,7 +112,8 @@ void DeformationCage::impact(Vec3 point, Vec3 normal, double speed, double radiu
 }
 
 double DeformationCage::step(const GroundContact& ground) {
-  constexpr double dt2 = dt * dt;
+  const double dt = 1.0 / kRate;
+  const double dt2 = dt * dt;
   const double damping = std::exp(-14 * dt);
   for (auto& n : nodes_) {
     n.previous = n.position;
@@ -139,7 +140,7 @@ double DeformationCage::step(const GroundContact& ground) {
     }
     for (auto& n : nodes_) {
       if (!n.fixed) continue;
-      constexpr double alpha = 1e-7 / dt2;
+      const double alpha = 1e-7 / dt2;
       const Vec3 dl = (n.rest - n.position - n.lambda * alpha) /
                       (inverse_mass_ + alpha);
       n.lambda += dl;
@@ -177,6 +178,7 @@ double DeformationCage::step(const GroundContact& ground) {
 }
 
 void DeformationCage::yield_beams() {
+  const double dt = 1.0 / kRate;
   for (auto& b : beams_) {
     const double length = (nodes_[b.a].position - nodes_[b.b].position).length();
     const double strain = (length - b.rest) / b.original;
@@ -189,17 +191,23 @@ void DeformationCage::yield_beams() {
 
 bool DeformationCage::advance(unsigned steps, const GroundContact& ground) {
   if (!steps || !active_) return false;
-  for (unsigned i = 0; i < steps && active_; ++i) {
+  constexpr double cage_step = 1.0 / kRate;
+  // At most a quarter second per call, like a stalled frame.
+  clock_ = std::min(clock_ + steps * VehicleDynamics::timestep, .25);
+  bool ran = false;
+  while (clock_ + 1e-9 >= cage_step && active_) {
+    clock_ -= cage_step;
+    ran = true;
     const double speed = step(ground);
     ++age_;
     quiet_ = speed < .03 ? quiet_ + 1 : 0;
-    if (released_ || (age_ >= VehicleDynamics::frequency / 2 &&
-                      quiet_ >= VehicleDynamics::frequency / 5)) {
+    if (released_ || (age_ >= kRate / 2 && quiet_ >= kRate / 5)) {
       active_ = false;
+      clock_ = 0;
       for (auto& node : nodes_) node.velocity = {};
     }
   }
-  return true;
+  return ran;
 }
 
 float DeformationCage::condition() const {

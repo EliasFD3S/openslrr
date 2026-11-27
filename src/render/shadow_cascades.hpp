@@ -9,7 +9,10 @@
 namespace slrr {
 // Camera-centred distance cascades: useful also for cubemap views around the
 // car.
-inline constexpr std::array<float, 4> shadow_radii{32.f, 100.f, 320.f, 1000.f};
+// #371: the first cascade reached only 32 m; thin shadows faded out where a
+// street-level camera still sees them. Each radius divides 8000 (see
+// shadow_rebase_origin).
+inline constexpr std::array<float, 4> shadow_radii{64.f, 160.f, 400.f, 1000.f};
 // The radii in use: shadow_radii times the debug cascade scale (#243).
 inline std::array<float, 4> cascade_radii() {
   const float scale = std::clamp(render_debug().cascade_scale, .25f, 4.f);
@@ -84,7 +87,7 @@ inline void shadow_rebase_origin(std::array<float,3>& origin,const float focus[3
   float basis[16];bx::mtxLookAt(basis,bx::mul(travel,-1.f),{0,0,0},up);
   float local[3]{};
   // Common multiple of every cascade texel size: do not change lattice phase
-  // when rebasing after a long drive. LCM(32,100,320,1000) is 8000.
+  // when rebasing after a long drive. LCM(64,160,400,1000) is 8000.
   const float common_step=2.2f*8000.f/resolution;
   for(int row=0;row<3;++row) {
     for(int axis=0;axis<3;++axis) local[row]+=delta[axis]*basis[axis*4+row];

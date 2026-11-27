@@ -1,5 +1,5 @@
 // java.render.LightSource and its subclasses (#235). The Java classes are
-// shipped in patch/system/Scripts/render; see docs/ENGINE_CONTRACT.md
+// shipped in patch/system/Scripts/render; see docs/rendering/contract.md
 // "Script light sources" for the contract.
 #include "natives_internal.hpp"
 

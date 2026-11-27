@@ -43,6 +43,56 @@ Object* copy_vector3(Jvm& jvm, const Object* source) {
 }  // namespace
 
 void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
+  // OSD v2 host API (docs/ui/osd-v2.md), java.render.osdx.OsdHost.
+  jvm.natives().register_method(
+      "java.render.osdx.OsdHost", "attach", "(Ljava.util.resource.GameRef;)V",
+      [](Object*, const std::vector<Value>& args) {
+        if (!args.empty() && args[0].tag == ValueTag::Obj) osd_cursor_attach(args[0].v.o);
+        return Value::make_void();
+      });
+  // Half width and height in OSD screen units (-1..1): a rectangle changes
+  // size without a new RenderRef (osdx.LevelBar's fill).
+  jvm.natives().register_method(
+      "java.render.osdx.OsdHost", "resize", "(Ljava.util.resource.RenderRef;FF)V",
+      [](Object*, const std::vector<Value>& args) {
+        if (args.size() < 3 || args[0].tag != ValueTag::Obj || !args[0].v.o)
+          return Value::make_void();
+        auto num = [](const Value& v) {
+          return v.tag == ValueTag::Float ? v.v.f : v.tag == ValueTag::Int ? float(v.v.i) : 0.f;
+        };
+        const auto wi = args[0].v.o->fields.find("_osd_wi");
+        if (wi != args[0].v.o->fields.end() && wi->second.tag == ValueTag::Int)
+          if (OsdWidget* w = osd_widget_mut(wi->second.v.i)) {
+            w->half_w = std::max(0.f, num(args[1]));
+            w->half_h = std::max(0.f, num(args[2]));
+          }
+        return Value::make_void();
+      });
+  jvm.natives().register_method(
+      "java.render.osdx.OsdHost", "fade", "(Ljava.util.resource.RenderRef;F)V",
+      [](Object*, const std::vector<Value>& args) {
+        if (args.size() < 2 || args[0].tag != ValueTag::Obj || !args[0].v.o)
+          return Value::make_void();
+        const float f = args[1].tag == ValueTag::Float ? args[1].v.f
+                      : args[1].tag == ValueTag::Int ? float(args[1].v.i) : 1.f;
+        const auto wi = args[0].v.o->fields.find("_osd_wi");
+        if (wi != args[0].v.o->fields.end() && wi->second.tag == ValueTag::Int)
+          if (OsdWidget* w = osd_widget_mut(wi->second.v.i)) w->fade = std::clamp(f, 0.f, 1.f);
+        return Value::make_void();
+      });
+  jvm.natives().register_method(
+      "java.render.osdx.OsdHost", "tint", "(Ljava.util.resource.RenderRef;I)V",
+      [](Object*, const std::vector<Value>& args) {
+        if (args.size() < 2 || args[0].tag != ValueTag::Obj || !args[0].v.o ||
+            args[1].tag != ValueTag::Int)
+          return Value::make_void();
+        Object* render = args[0].v.o;
+        render->fields["_osd_tint"] = args[1];
+        const auto wi = render->fields.find("_osd_wi");
+        if (wi != render->fields.end() && wi->second.tag == ValueTag::Int)
+          osd_set_widget_tint(wi->second.v.i, static_cast<uint32_t>(args[1].v.i));
+        return Value::make_void();
+      });
   jvm.natives().register_method("java.render.Text","getFontSize","(Ljava.util.resource.ResourceRef;)I",
     [](Object*,const std::vector<Value>& args){
       Object* font=!args.empty()&&args[0].tag==ValueTag::Obj?args[0].v.o:nullptr;
@@ -287,6 +337,8 @@ void register_osd_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         w.half_h = hh;
         w.owner = osd;
         w.group = osd_current_group();
+        w.phy = self;          // OSD v2: EVENT_CURSOR source
+        w.event_group = group; // and its listener
         if (group) {
           auto git = group->fields.find("_host_group");
           if (git != group->fields.end() && git->second.tag == ValueTag::Int)

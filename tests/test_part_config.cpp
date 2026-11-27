@@ -71,11 +71,62 @@ SLRR_TEST(part_config_keeps_unknown_body_shapes_compatible) {
   SLRR_REQUIRE(config.bodies[0].collision);
 }
 
+SLRR_TEST(part_config_reads_wing_panels_like_the_exe) {
+  std::string source =
+      "wing\t4\t0.0 0.0168 -0.3309\t0.0 0.9437 -0.2005\t49.53 -0.250 0.666\n"
+      "wing 4 1 2 3 0 0 0 7.5\n"
+      "wing 4 x\n"
+      "wing\n";
+  for (int i = 0; i < 20; ++i) source += "wing 4 0 0 0 0 1 0 1 0.25 0.666\n";
+  const auto config = slrr::parse_part_config(source + "render 0x123\n");
+  SLRR_REQUIRE(config.errors.empty());
+  SLRR_REQUIRE(config.valid);
+  SLRR_REQUIRE(config.wings.size() == 16);  // the EXE's per-part capacity
+
+  // The normal is normalised; area and suction are kept as magnitudes.
+  const auto& hood = config.wings[0];
+  SLRR_REQUIRE(hood.type == 4);
+  SLRR_REQUIRE(std::fabs(hood.position[2] + .3309f) < 1e-6f);
+  const float length = std::hypot(.9437f, .2005f);
+  SLRR_REQUIRE(std::fabs(hood.normal[1] - .9437f / length) < 1e-6f);
+  SLRR_REQUIRE(std::fabs(hood.normal[2] + .2005f / length) < 1e-6f);
+  SLRR_REQUIRE(std::fabs(hood.area - 49.53f) < 1e-4f);
+  SLRR_REQUIRE(std::fabs(hood.suction - .25f) < 1e-6f);
+  SLRR_REQUIRE(std::fabs(hood.exponent - .666f) < 1e-6f);
+
+  // sscanf defaults: a zero normal stays zero, a missing exponent is 1, and
+  // a line that stops after its type is still a (forceless) panel.
+  const auto& short_line = config.wings[1];
+  SLRR_REQUIRE(short_line.normal == (std::array<float, 3>{0.f, 0.f, 0.f}));
+  SLRR_REQUIRE(short_line.area == 7.5f && short_line.suction == 0.f);
+  SLRR_REQUIRE(short_line.exponent == 1.f);
+  SLRR_REQUIRE(config.wings[2].type == 4 && config.wings[2].area == 0.f);
+  SLRR_REQUIRE(config.wings[3].type == 4);
+}
+
+SLRR_TEST(part_config_recovers_wing_faces_and_areas_like_the_calculator) {
+  const auto config = slrr::parse_part_config(
+      "wing 4 0 0 0 0 1 0 15.0 -0.250 0.666\n"   // SLRR surface: 30 × m²
+      "wing 4 0 0 0 0 1 0 18.0 0.250 0.667\n"    // SLRR wing: 90 × m²
+      "wing 4 0 0 0 0 1 0 1.27 -0.3 2.0\n"       // CRC surface: 1.27 × m²
+      "wing 5 0 0 0 0 1 0 2.54 -2.54 1.5\n"      // CRC wing
+      "render 0x123\n");
+  SLRR_REQUIRE(config.wings.size() == 4);
+  const bool airfoil[] = {false, true, false, true};
+  const float area[] = {.5f, .2f, 1.f, 2.f};
+  for (size_t i = 0; i < 4; ++i) {
+    SLRR_REQUIRE(slrr::part_wing_is_airfoil(config.wings[i]) == airfoil[i]);
+    SLRR_REQUIRE(std::fabs(slrr::part_wing_area(config.wings[i]) - area[i]) < 1e-5f);
+  }
+}
+
 int main() {
   const slrr::standalone::Test tests[] = {
       part_config_reads_native_box_sphere_and_mesh_bodies,
       part_config_keeps_the_mass_of_malformed_native_primitives,
       part_config_keeps_unknown_body_shapes_compatible,
+      part_config_reads_wing_panels_like_the_exe,
+      part_config_recovers_wing_faces_and_areas_like_the_calculator,
   };
   return slrr::standalone::run("part_config", tests);
 }

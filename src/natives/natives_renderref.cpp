@@ -399,6 +399,7 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
           if (already != self->fields.end() &&
               already->second.tag == ValueTag::Int && osd_widget_mut(already->second.v.i)) {
             osd_set_widget_pos(already->second.v.i, nx, ny);
+            osd_widget_mut(already->second.v.i)->z = pz;
             if (tid != 0 || !texpath.empty())
               osd_set_widget_icon(
                   already->second.v.i, tid,
@@ -434,6 +435,10 @@ void register_renderref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& section
             w.icon_id = tid;
             w.tex_alpha = local == 0x00A2u;
             w.icon_path = icon;
+            w.z = pz;
+            if (auto t = self->fields.find("_osd_tint");
+                t != self->fields.end() && t->second.tag == ValueTag::Int)
+              w.tint = static_cast<uint32_t>(t->second.v.i);
             if (group) {
               auto git = group->fields.find("_host_group");
               if (git != group->fields.end() && git->second.tag == ValueTag::Int)

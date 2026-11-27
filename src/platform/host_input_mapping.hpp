@@ -76,4 +76,26 @@ bool steering_is_analog(const ControllerInput& input, Physical physical,
   analog |= fallback && std::abs(*fallback) > .01f;
   return analog && !digital;
 }
+// Class of the device steering now, for the per-class filters. An active key
+// or button wins, as in steering_is_analog; then a wheel axis, then a pad stick.
+template<class Physical, class Analog, class Kind, class Available = AllAvailable>
+InputKind steering_kind(const ControllerInput& input, Physical physical, std::span<const float> pad,
+                        Analog analog_axis, Kind kind, Available available = {}) {
+  InputKind digital = InputKind::None;
+  bool wheel = false, stick = false;
+  for (const auto& binding : input.bindings) {
+    if (binding.axis != 1 || !available(binding.device, binding.physical)) continue;
+    if (std::abs(binding_value(binding, physical(binding.device, binding.physical))) <= .01f) continue;
+    const InputKind k = kind(binding.device);
+    if (!analog_axis(binding.device, binding.physical)) {
+      if (digital == InputKind::None) digital = k;
+    } else if (k == InputKind::Wheel) wheel = true;
+    else stick = true;
+  }
+  if (digital != InputKind::None) return digital;
+  if (wheel) return InputKind::Wheel;
+  const auto fallback = pad_fallback(input, 1, pad);
+  if (stick || (fallback && std::abs(*fallback) > .01f)) return InputKind::Pad;
+  return InputKind::None;
+}
 }  // namespace slrr::input_mapping
