@@ -41,6 +41,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <numbers>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -89,6 +90,10 @@ struct WheelPhys {
   // setAnti (patched suspensions, #469): the share of the axle's load
   // transfer the arms carry, braking and driving; -1 when not set.
   float anti_brake = -1, anti_drive = -1;
+  // setCamberGain (patched suspensions, #481): degrees per 25 mm of bump at
+  // the static height and its change per 25 mm.
+  bool has_camber_gain = false;
+  float camber_gain = 0, camber_progression = 0;
   int opp = -1;
   float arm[7]{}, hub[10]{};
   bool authored_position = false;
@@ -2954,6 +2959,29 @@ void dynamics_wheels(Record &rec) {
       const bool live_axle = cfg.arm_length >= 20;
       cfg.anti_brake = front ? .15 : .30;
       cfg.anti_drive = front ? .10 : live_axle ? .80 : .40;
+    }
+    // Camber gain (#481): the curve the suspension's script sets with
+    // WheelRef.setCamberGain (the patched stock corners give their real
+    // car's); otherwise typical by suspension type: a front strut fit
+    // -0.5 deg per 25 mm, fading by 0.1 per 25 mm of bump; other front arms
+    // and the independent rear arms their geometry's gain (clamped to
+    // -1.5..-0.2), fronts growing by 0.1 per 25 mm of bump. Live axles (the
+    // #456 25 m arm) and corners without arms keep their geometry.
+    {
+      constexpr double per_25mm = std::numbers::pi / 180 / .025;
+      const bool front = i < 2;
+      cfg.camber_curve = false;
+      if (live.has_camber_gain) {
+        cfg.camber_curve = true;
+        cfg.camber_gain = live.camber_gain * per_25mm;
+        cfg.camber_progression = live.camber_progression * per_25mm / .025;
+      } else if (cfg.arm_length > 0 && cfg.arm_length < 20) {
+        const bool strut_fit = cfg.has_hub && cfg.hub[0] == 0;
+        cfg.camber_curve = true;
+        cfg.camber_gain = front && strut_fit ? -.5 * per_25mm : std::numeric_limits<double>::quiet_NaN();
+        cfg.camber_progression = (front ? strut_fit ? .1 : -.1 : 0) * per_25mm / .025;
+      }
+      if (!cfg.camber_curve) cfg.camber_reference = 0;
     }
     // WheelRef.setWidth: the tyre width in metres (Tyre.java), stored halved.
     cfg.half_width = cfg.metal_contact ? 0. : std::clamp(double(live.width), 0., .25);
@@ -10171,6 +10199,18 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
     return put(s, [&](WheelPhys &w) {
       w.anti_brake = std::clamp(scalar(a, 0, 0), 0.f, 1.5f);
       w.anti_drive = std::clamp(scalar(a, 1, 0), 0.f, 1.5f);
+    });
+  });
+  // OpenSLRR native declared by the patched WheelRef (#481): the camber
+  // curve, degrees per 25 mm of bump at the static ride height (-3 to +1)
+  // and the change of that gain per 25 mm of bump (-1 to +1).
+  wheel("setCamberGain", "(FF)V", [put](Object *s, const std::vector<Value> &a) {
+    return put(s, [&](WheelPhys &w) {
+      const float gain = scalar(a, 0, 0), progression = scalar(a, 1, 0);
+      if (!std::isfinite(gain) || !std::isfinite(progression)) return;
+      w.has_camber_gain = true;
+      w.camber_gain = std::clamp(gain, -3.f, 1.f);
+      w.camber_progression = std::clamp(progression, -1.f, 1.f);
     });
   });
   wheel("setOppWheel", "(I)V", [put](Object *s, const std::vector<Value> &a) {

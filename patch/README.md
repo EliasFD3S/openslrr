@@ -304,6 +304,25 @@ weights) after the real car:
 | Prime DLH 500 | none | -1.0, -0.6 | -1.5, 0.10, -0.7 |
 | SuperDuty 500 / 750 | Ram 1500 / 2500 | +0.3, -0.5 | live axle: 0, 0 |
 
+**Camber curve (#481).** Each corner also calls `WheelRef.setCamberGain(gain,
+progression)`: the camber gain per 25 mm of bump at the static ride height and
+its change per 25 mm, which replace the arm fit's own change (the static camber
+stays the table's). Struts fade like the fit; short-long arm and multilink fronts
+gain more camber the further they compress, so the outer front wheel keeps more
+negative camber as the car rolls. Live rear axles do not call it.
+
+| Cars | Front gain, progression /25 mm | Rear gain, progression /25 mm |
+| --- | --- | --- |
+| Baiern CS / DS / GT III | -0.40, +0.15 (strut) | -0.90, -0.05 (Z-axle) |
+| SunStrip 1.5 / 1.8 / 2.2 / Racing | -0.90 (race -1.00), -0.15 (double wishbone) | -0.70, -0.10 |
+| Einvagen 110 GT / GTK / 140 GTA | -0.40, +0.15 | -0.20, 0 (torsion beam) |
+| Enula WRY / WRZ / WRS | -0.40, +0.15 | -0.40, +0.10 (strut) |
+| Focer RC 200 / 300 / WRC | -0.40, +0.15 | -0.70, -0.10 (multilink) |
+| MC GT / GTB / GTLE | -0.80, -0.15 (short-long arms) | live axle: none |
+| Nonus Street GT / GT II | -0.90 / -1.00, -0.15 (multilink) | -0.70, -0.10 |
+| Prime DLH 500 | -0.90, -0.15 | -0.70, -0.10 |
+| SuperDuty 500 / 750 | -0.60, -0.10 (short-long arms) | live axle: none |
+
 **Caster (#458).** The stock struts had none: their strut axis and top lay
 in the front-view plane. Each front strut now leans back by its real car's
 factory figure where one was found (E36 325i +3°50', M3 +6°38', Golf III

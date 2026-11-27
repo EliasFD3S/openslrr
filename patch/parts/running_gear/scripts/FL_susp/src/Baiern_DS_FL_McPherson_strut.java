@@ -46,6 +46,8 @@ public class Baiern_DS_FL_McPherson_strut extends Suspension
 				              0.1276, 0.7107, 0.0660);
 				// OpenSLRR (#469): anti-dive braking, anti-lift driving, typical for the real car
 				wheel.setAnti( 0.15, 0.10 );
+				// OpenSLRR (#481): camber gain per 25 mm of bump at the static height and its change per 25 mm, typical for the real car
+				wheel.setCamberGain( -0.40, 0.15 );
 
 				the_car.setSlotPos(101+wheelID, new Vector3(-0.124,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(-0.113,0,0), null );

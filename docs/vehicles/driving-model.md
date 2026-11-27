@@ -142,6 +142,14 @@ them). Anti-dive, anti-lift and anti-squat come from typical shares by
 suspension type instead (#469, [notes](notes.md#anti-dive-and-anti-squat-469)):
 `WheelState::jacking` pushes body and wheel apart (or together) by the share
 of each wheel's longitudinal load transfer its arms carry.
+Camber changes with suspension travel along a curve about the static ride
+height (#481, [notes](notes.md#camber-gain-481)): gain x bump +
+progression x bump^2 / 2, from the suspension script's
+`WheelRef.setCamberGain` or typical values by suspension type.
+`wheel_pose` turns the arm fit's hub by the difference between the curve and
+the fit's own change, so the tyre's camber input, the rendered wheel and the
+kingpin follow it; `VehicleDynamics::update_camber_references` finds each
+static length from the car's weight every step.
 Wheel YPR and the existing arm/hub kinematics still affect contact geometry.
 Anti-roll bars are an optional host approximation, deliberately enabling a
 stock feature whose Java commands and catalog branch were dormant. The patched

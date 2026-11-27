@@ -434,6 +434,15 @@ rear anti-lift) and driving (front anti-lift, rear anti-squat). The 96
 patched stock corners call it; without it the host uses typical shares for
 the suspension type ([notes](../vehicles/notes.md#anti-dive-and-anti-squat-469)).
 
+### Suspension camber curve (#481)
+
+`WheelRef.setCamberGain(gain, progression)`, declared by the patched
+`parts/scripts/src/WheelRef.java`: the camber gain in degrees per 25 mm of
+bump at the static ride height (-3 to +1, negative leans the top inboard)
+and its change per 25 mm of bump (-1 to +1). 86 of the 96 patched stock
+corners call it (not the live rear axles); without it the host uses typical
+values for the suspension type ([notes](../vehicles/notes.md#camber-gain-481)).
+
 ### Math functions (#463)
 
 The patched `system/Scripts/lang/Math.java` declares, besides the stock
