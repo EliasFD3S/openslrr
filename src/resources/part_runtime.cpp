@@ -2604,8 +2604,6 @@ void rebuild_body_support(Object* chassis, Record& rec) {
   dynamics.body_support_count = 0;
   dynamics.scrape_count = 0;
   dynamics.scrape_lift = {};
-  dynamics.scrape_settled = false;
-  dynamics.scrape_rest_time = 0;
   std::array<Vec3, 8> lowest{}, hanging{};
   std::array<double, 8> height, hanging_height;
   height.fill(std::numeric_limits<double>::infinity());
@@ -3154,7 +3152,6 @@ void lift_scrape_points(Object* chassis, Record& rec) {
     const double ground = coef[0] + coef[1] * p.x + coef[2] * p.z;
     d.scrape_lift[i] = std::max(0.0, ground + .005 - p.y);
   }
-
 }
 
 void park_chassis(Object *chassis, bool shift) {

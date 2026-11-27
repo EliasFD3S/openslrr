@@ -1710,22 +1710,6 @@ void VehicleDynamics::step(const Terrain &terrain) {
   }
   // Exhausts and sumps scrape (#467): a compliant contact that pushes up
   // and drags, never a support the car rests on.
-  if (!scrape_settled && scrape_count) {
-    bool resting = body.velocity.length() < .2 && body.omega().length() < .2;
-    for (size_t i = 0; i < wheels.size(); ++i)
-      resting = resting && (!wheels[i].enabled || state[i].contact);
-    scrape_rest_time = resting ? scrape_rest_time + dt_ : 0;
-    if (scrape_rest_time >= .5) {
-      for (size_t i = 0; i < std::min(scrape_count, scrape_points.size()); ++i) {
-        const Vec3 point = body_point(body, scrape_points[i]);
-        GroundHit hit;
-        if (!terrain(point.x, point.z, ceiling, hit)) continue;
-        const double depth = (hit.height - point.y) * hit.normal.normalized().y;
-        scrape_lift[i] = std::max(0.0, depth + .005);
-      }
-      scrape_settled = true;
-    }
-  }
   for (size_t i = 0; i < std::min(scrape_count, scrape_points.size()); ++i) {
     const Vec3 point = body_point(body, scrape_points[i] + Vec3{0, scrape_lift[i], 0});
     GroundHit hit;

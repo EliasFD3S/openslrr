@@ -1857,10 +1857,11 @@ SLRR_TEST(an_exhaust_scrapes_over_a_hump_instead_of_passing_through) {
 }
 
 SLRR_TEST(an_exhaust_in_the_road_at_rest_is_raised_clear) {
-  // #467: a mesh the static ride height puts 1 cm into the road. Once the car
-  // has rested on its wheels it sits 5 mm clear, so a straight is not slowed.
-  double speed[2];
-  for (int scraping = 0; scraping < 2; ++scraping) {
+  // #467: a mesh the static ride height puts 1 cm into level ground. The host
+  // raises it to 5 mm clear (scrape_lift, from the parked car): a straight is
+  // then not slowed, while the same point left in the road drags.
+  double speed[3];
+  for (int scraping = 0; scraping < 3; ++scraping) {
     Car car;
     car.run(2, 0, 0, 0);
     auto& d = car.dynamics;
@@ -1869,16 +1870,16 @@ SLRR_TEST(an_exhaust_in_the_road_at_rest_is_raised_clear) {
     if (scraping) {
       d.scrape_points[0] = local + Vec3{0, -.01 - clearance, 0};
       d.scrape_count = 1;
+      d.scrape_lift[0] = scraping == 2 ? .015 : 0;
     }
-    car.run(1, 0, 0, 0);
-    if (scraping) SLRR_REQUIRE(d.scrape_settled && d.scrape_lift[0] > .012 && d.scrape_lift[0] < .02);
     d.drive.engaged = false;
     d.body.velocity = d.body.orientation.rotate({0, 0, -10});
     for (auto& w : d.state) w.spin = 10 / .31;
     car.run(2, 0, 0, 0);
     speed[scraping] = car.speed();
   }
-  SLRR_REQUIRE(std::abs(speed[1] - speed[0]) < .01);
+  SLRR_REQUIRE(speed[1] < speed[0] - .05);           // left in the road: drags
+  SLRR_REQUIRE(std::abs(speed[2] - speed[0]) < .01);  // raised clear: does not
 }
 
 SLRR_TEST(hot_brake_fluid_boils_and_the_pressure_falls) {

@@ -2251,10 +2251,21 @@ Findings:
 - Baiern GT III (`Baiern.rpk:0xFD`), lowest point per sector: centre pipe
   (z 0.25), front pipe (z -0.73), sump and front pipe (z -1.07), the two
   mufflers behind the rear axle (z 1.79). At rest on TestTrack the centre
-  pipe stood 1.1 cm into the road; the host's parked estimate (the plane
-  through the tyre contacts at the parked spring lengths) put it 3.6 cm
-  clear, so the static ride height is about 5 cm off there. The CoupeSport's
-  exhaust is 11.6 cm clear.
+  pipe stood 1.1 cm into the road, but the TestTrack spawn straddles a
+  change of slope (front contacts 13.4 cm above the rear): the ground rises
+  under the middle of the car. The springs sit at the parked estimate's
+  lengths within 1 mm (front 0.164 m, rear 0.191 m), which are the scripts'
+  authored lengths (`restlength` 6.5" / 7.5" at the designed 1141 kg; the
+  car weighs 1167).
+- Clearance audit of the 24 racers on level ground (the plane through the
+  tyre contacts at the parked spring lengths): the lowest scrape point is
+  -1.0 cm on the GT III (front pipe) and -2.9 cm on the Nonus GT II (front
+  pipe), 2.2 to 3.7 cm on the Enula WR SuperTurizmo and the three MC, 3.2 to
+  10.7 cm on the others; the lowest body point 1.6 cm (GT III sills), 4.6
+  (WRS) and 5.7 (GT II), 6.2 to 14.9 cm on the others. The ride heights are
+  the authored ones (the GT II 3-4 mm lower: 1490 kg against the designed
+  1437): the two race cars' exhaust meshes reach below the ground in the
+  original layout.
 
 Fix:
 
@@ -2265,11 +2276,12 @@ Fix:
   then 1 MN/m (the pipe or the pan; the suspension in series then lifts the
   car), 4000 N s/m, sliding at 0.35, the drag fading below 0.5 m/s so a
   parked car is not pushed.
-- A point the ride height puts into the road is raised to 5 mm above it
-  (`scrape_lift`): first from the parked estimate (`lift_scrape_points`),
-  then, once the car has rested on its wheels for half a second (under
-  0.2 m/s), from the ground it rests on. It scrapes only when the body comes
-  lower than at rest: bumps, dives, squat, kerbs.
+- A point the ride height puts into level ground is raised to 5 mm above it
+  (`scrape_lift`, from the parked estimate in `lift_scrape_points`): it
+  scrapes only when the body comes lower than at rest (bumps, dives, squat,
+  kerbs). A version that also measured the ground once the car had rested
+  was dropped: it measured the ground's shape under the car (the TestTrack
+  crest) rather than the ride height.
 - Walls (`solve_linked`): beside the hub (the tread edge, the bulge and the
   refined edge across), ground more than 12 cm above the centre sample
   bears on the sidewall. Those samples, and every lateral sample on the kerb
@@ -2298,7 +2310,7 @@ Validation:
   and slows the car by 2.1 m/s (0.04 parallel) before the tyre climbs it;
   an exhaust 2 cm clear over a ramped 7 cm hump goes 4.1 cm into it instead
   of 5.0 and slows the car from 4.95 to 4.46 m/s; an exhaust 1 cm into the
-  road at rest is raised 1.5 cm and leaves a straight unchanged.
+  road drags on a straight, raised 1.5 cm it does not.
   `missing_support` 17/17, `physics_tick_rate` 9/9.
 - `physics_lab --hz 1000`: the four kerb cases (square, fast, 20 and 8
   degrees) unchanged within 0.02 g. A first square-to-the-kerb version
@@ -2307,13 +2319,14 @@ Validation:
   38 kN) and read the edge's direction from kerbs already under the centre
   line: the 8 degree case braked at 2.8 g.
 - Bench drives (TestTrack, `game\`): CoupeSport unchanged (30.8 / 55.4 km/h
-  at 3 / 5 s). GT III: 48.9 km/h at 3 s against 50.4 without scrape points
-  (46.3 before the rest lift): under full throttle the tail squats and the
-  mufflers scrape up to 1.8 cm, the front pipe 4-7 mm; at rest nothing
-  touches.
+  at 3 / 5 s). GT III: 48.6 km/h at 3 s against 50.4 without scrape points
+  (46.3 without the lift): it starts across the crest, and under full
+  throttle the tail squats and the mufflers scrape up to 1.8 cm.
 
 Limitations: a kerb's direction comes from two points of its edge, so a
-curved or broken kerb pushes along a chord; the scrape points are one per sector (8), from the mesh's lowest
-vertex, with no sparks or sound; the GT III's rest correction hides a ride
-height that is about 5 cm off under its centre pipe, and its mufflers still
-scrape under full throttle.
+curved or broken kerb pushes along a chord; the scrape points are one per
+sector (8), from the mesh's lowest vertex, with no sparks or sound; the GT
+III's mufflers scrape under full throttle (its authored ride height is
+low); the lift uses the parked estimate, so a car whose springs or weight
+change in the garage gets it again only when its body supports are
+rebuilt.
