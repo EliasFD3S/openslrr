@@ -2462,6 +2462,9 @@ public class City extends Track
 			if (cameraMode == CAMMODE_TV)
 				changeCamTV();
 			else
+			if (cameraMode == CAMMODE_PROVIDER)
+				providerRestore();	// OpenSLRR (#487): the mod camera's view
+			else
 				changeCamFollow();	//default
 
 /*

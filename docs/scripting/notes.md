@@ -500,3 +500,41 @@ car's small banks (about ±0.03 rad). `boxMin/boxMax` on the Baiern:
 -0.96..0.96 x -0.75..0.58 x -2.28..2.16 m at entry, -1.31..0.96 x -1.12..0.58
 later in the drive; the box covers every mesh under the car, so a part or the
 driver outside the body widens it.
+
+### Re-review fixes (PR #493, second round)
+
+- `CameraControl.sweep` accepted an infinite radius (only `radius >= 0`
+  was checked) and swept 2 m. `mod_sweep_args_valid` now rejects non-finite
+  endpoints and radius; the native returns 1 without sweeping.
+- The pose was written back to `pos` / `ypr` only on the dt > 0 advance,
+  which runs before free-running physics publishes the frame's car pose, so
+  `getPos` / `getOri`, the GPS and `clearPose` saw an older pose than the
+  one drawn. Every resolution now writes back, the renderer's dt = 0 query
+  last.
+- V during a repair, mechanic or paint close-up (the static key stays active)
+  re-activated the provider over the close-up, and so did a selection change.
+  `closeUpBegin` / `closeUpEnd` count open close-ups; while one is open,
+  `nextCamera`, look back, `providerOn` and `syncCameraProvider` do
+  nothing. Closing the last one re-activates the selected provider if one was
+  showing, else the deferred selection applies on the next `animate`.
+- `City.restoreCamera` treated a saved `CAMMODE_PROVIDER` as the default
+  follow camera; it now calls `Track.providerRestore`.
+- `CarState` and the car of `setPoseRelative` / `setPoseLocal` accepted any
+  Part (an installed wheel read its own angular velocity and the owning
+  car's box). `part_is_car` (the chassis or its Vehicle, no parent, kind
+  `car`) gates them; others get null / 0.
+
+Validation (Windows, Release): `mod_camera` 10/10 (adds sweep argument
+rejection); ctest 7/7; `options_retry`, `gameref_alias`, `car_select_view`
+pass; knowledge refs 684 / 0 errors. In game (throwaway provider and test-only
+Track, not shipped; log only): V, a selection change to classic and back
+during repair left the repair close-up (`cameraMode` 1, renderer `cam`) and
+closing restored the provider; classic selected during the mechanic view
+stayed classic after closing and re-selecting the provider activated it;
+`backupCamera` + follow + `restoreCamera` returned to the provider; V during
+paint was ignored. Write-back: `getPos` on the hood camera matched
+`drawnPos` + the turned offset read in the next `animate` within 1 cm only
+while the car stood still; while the replay moved it, the two differed by
+about one frame of travel (mean 0.4 m), because the replay poses the car
+during the frame, after the draw. That gap is the draw-time versus
+script-time pose, not checked against a physically driven car.

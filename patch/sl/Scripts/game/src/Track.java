@@ -993,6 +993,7 @@ abstract public class Track extends Scene implements GameState
 	{
 		if (!cameraTarget)	return;
 		if (!cameraTarget.id())	return;
+		if (closeUps)	return;	// OpenSLRR (#487): repair, mechanic or paint view
 
 		CameraProvider p = selectedCameraProvider();
 		if( p && (cameraMode == CAMMODE_FOLLOW || cameraMode == CAMMODE_PROVIDER) )
@@ -1073,7 +1074,7 @@ abstract public class Track extends Scene implements GameState
 	// scripts use the cam field directly.
 	void providerOn( CameraProvider p, int v )
 	{
-		if( !p || !cameraTarget || !cameraTarget.id() )
+		if( !p || !cameraTarget || !cameraTarget.id() || closeUps )
 			return;
 		if( cameraMode != CAMMODE_FOLLOW )
 			changeCamFollow();	// also deactivates a provider
@@ -1104,35 +1105,53 @@ abstract public class Track extends Scene implements GameState
 			cameraMode = CAMMODE_NONE;
 	}
 
-	// The repair, mechanic and paint views drive Track's own cam. With a
-	// provider active, they get the stock follow camera back first; closing
-	// the last of them hands the follow view back to the provider.
-	int	providerPauses;
-	void providerPause()
+	// The repair, mechanic and paint views drive Track's own cam for their
+	// close-up. While one is open (closeUps > 0) V and look back are ignored
+	// and provider activation and selection changes wait. Opening the first
+	// one with a provider active gets the stock follow camera back; closing
+	// the last one applies the current selection to the follow view.
+	int	closeUps;
+	int	closeUpProvider;	// a provider showed when the first close-up opened
+	void closeUpBegin()
 	{
-		if( cameraMode == CAMMODE_PROVIDER )
+		if( !closeUps++ && cameraMode == CAMMODE_PROVIDER )
 		{
 			changeCamFollow();	// deactivates the provider, shows cam
-			providerPauses = 1;
+			closeUpProvider = 1;
 		}
-		else
-		if( providerPauses )
-			providerPauses++;
 	}
-	void providerResume()
+	void closeUpEnd()
 	{
-		if( !providerPauses )
+		if( !closeUps || --closeUps )
 			return;
-		if( --providerPauses )
-			return;
+		int resume = closeUpProvider;
+		closeUpProvider = 0;
+		if( resume && cameraMode == CAMMODE_FOLLOW )
+		{
+			CameraProvider p = selectedCameraProvider();
+			camProviderSynced = p;
+			if( p )
+				providerOn( p, Cameras.view( p ) );
+		}
+		// Otherwise syncCameraProvider applies a selection made meanwhile.
+	}
+
+	// Back to the provider's view after a temporary camera (City's night
+	// race watch), or to the stock follow camera when none is selected.
+	void providerRestore()
+	{
+		changeCamFollow();
 		CameraProvider p = selectedCameraProvider();
-		if( p && cameraMode == CAMMODE_FOLLOW )
+		camProviderSynced = p;
+		if( p )
 			providerOn( p, Cameras.view( p ) );
 	}
 
 	// A selection made while driving (the options) applies to the follow view.
 	void syncCameraProvider()
 	{
+		if( closeUps )
+			return;	// applied when the close-up closes
 		CameraProvider p = selectedCameraProvider();
 		if( p == camProviderSynced )
 			return;
@@ -1421,7 +1440,12 @@ abstract public class Track extends Scene implements GameState
 
 			if( cmd == CMD_LOOKBACK )
 			{
-				// OpenSLRR (#487): the active mod camera handles look back.
+				// OpenSLRR (#487): the active mod camera handles look back;
+				// the repair, mechanic and paint close-ups ignore it.
+				if( closeUps )
+				{
+				}
+				else
 				if( cameraMode == CAMMODE_PROVIDER )
 				{
 					if( camProvider )
@@ -1880,7 +1904,7 @@ abstract public class Track extends Scene implements GameState
 			{
 				if( RepairStatus == 0 )
 				{
-					providerPause();	// OpenSLRR (#487): the close-up uses cam
+					closeUpBegin();	// OpenSLRR (#487): the close-up uses cam
 					System.timeWarp(0.0);
 					enableOsd(0);
 					mechanic.filterInventory( 0,0,0 );
@@ -1913,7 +1937,7 @@ abstract public class Track extends Scene implements GameState
 					System.timeWarp(1.0);
 					painter.hide();
 					enableOsd(1);
-					providerResume();	// OpenSLRR (#487)
+					closeUpEnd();	// OpenSLRR (#487)
 				}
 			}
 			else
@@ -1932,11 +1956,11 @@ abstract public class Track extends Scene implements GameState
 					mechanic.hide();
 					mechanic.filterInventory( 1,1,1 );
 					enableOsd(1);
-					providerResume();	// OpenSLRR (#487)
+					closeUpEnd();	// OpenSLRR (#487)
 				}
 				else
 				{
-					providerPause();	// OpenSLRR (#487): the close-up uses cam
+					closeUpBegin();	// OpenSLRR (#487): the close-up uses cam
 					enableOsd(0);
 					mechanic.filterInventory( 0,0,0 );
 					mechanic.show();
@@ -1963,11 +1987,11 @@ abstract public class Track extends Scene implements GameState
 					player.car.command( "start" );	//release
 					painter.hide();
 					enableOsd(1);
-					providerResume();	// OpenSLRR (#487)
+					closeUpEnd();	// OpenSLRR (#487)
 				}
 				else
 				{
-					providerPause();	// OpenSLRR (#487): the close-up uses cam
+					closeUpBegin();	// OpenSLRR (#487): the close-up uses cam
 					enableOsd(0);
 
 					painter.show();

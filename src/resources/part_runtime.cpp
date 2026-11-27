@@ -8882,6 +8882,10 @@ void *part_shadow_source(void *render, float *frame) {
   }
   return nullptr;
 }
+bool part_is_car(void* object) {
+  const auto* rec = record(as_part(static_cast<Object*>(object)));
+  return rec && !rec->state.parent && rec->config->native_kind == "car";
+}
 bool part_camera_pose(void* car, int camera, float* matrix) {
   auto* chassis = as_part(static_cast<Object*>(car));
   const auto* rec = record(chassis);

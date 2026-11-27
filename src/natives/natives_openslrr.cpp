@@ -45,6 +45,7 @@ bool read_up(const std::vector<Value>& args, size_t i, float* out) {
   }
   return read_vector(args, i, out);
 }
+Object* car_arg(const std::vector<Value>& args, size_t i);
 // setPose / setPoseRelative / setPoseLocal: cam, [car,] eye, at, up, fov.
 // A non-finite or missing eye, focus, up or fov leaves the previous pose.
 void set_pose(const std::vector<Value>& args, ModCameraMode mode) {
@@ -56,7 +57,7 @@ void set_pose(const std::vector<Value>& args, ModCameraMode mode) {
   const float fov = native_arg_number(args, first + 3, 0.f);
   if (!std::isfinite(fov)) return;
   gameref_mod_camera_set(native_arg_object(args, 0), mode, eye, at, up, fov,
-                         mode == ModCameraMode::World ? nullptr : native_arg_object(args, 1));
+                         mode == ModCameraMode::World ? nullptr : car_arg(args, 1));
 }
 Value new_triple(Jvm& jvm, const char* cls, const char* a, const char* b, const char* c,
                  const float* v) {
@@ -71,6 +72,12 @@ Value new_vector(Jvm& jvm, const float* v) { return new_triple(jvm, "java.lang.V
 // Scripts get null when the GameRef is not a live car.
 Value null_object() { return Value::make_obj(nullptr); }
 
+// A car argument: the GameRef when it is a car (chassis or Vehicle), else
+// null, so an installed part or other object gets CarState's failure values.
+Object* car_arg(const std::vector<Value>& args, size_t i) {
+  Object* o = native_arg_object(args, i);
+  return o && part_is_car(o) ? o : nullptr;
+}
 // The pose drawn this frame: the car between its last two physics steps,
 // the same frame the chase camera follows (part_camera_pose).
 bool drawn_frame(Object* car, float* frame) { return car && part_camera_pose(car, -1, frame); }
@@ -85,44 +92,44 @@ void register_openslrr_natives(Jvm& jvm) {
   natives.register_method(kCarState, "drawnPos", "(Ljava.util.resource.GameRef;)Ljava.lang.Vector3;",
       [&jvm](Object*, const std::vector<Value>& args) {
         float frame[16];
-        if (!drawn_frame(native_arg_object(args, 0), frame)) return null_object();
+        if (!drawn_frame(car_arg(args, 0), frame)) return null_object();
         return new_vector(jvm, frame + 12);
       });
   natives.register_method(kCarState, "drawnOri", "(Ljava.util.resource.GameRef;)Ljava.lang.Ypr;",
       [&jvm](Object*, const std::vector<Value>& args) {
         float frame[16], ypr[3];
-        if (!drawn_frame(native_arg_object(args, 0), frame)) return null_object();
+        if (!drawn_frame(car_arg(args, 0), frame)) return null_object();
         mod_matrix_ypr(frame, ypr);
         return new_triple(jvm, "java.lang.Ypr", "y", "p", "r", ypr);
       });
   natives.register_method(kCarState, "vel", "(Ljava.util.resource.GameRef;)Ljava.lang.Vector3;",
       [&jvm](Object*, const std::vector<Value>& args) {
         float v[3];
-        if (!part_car_velocity(native_arg_object(args, 0), v)) return null_object();
+        if (!part_car_velocity(car_arg(args, 0), v)) return null_object();
         return new_vector(jvm, v);
       });
   natives.register_method(kCarState, "angVel", "(Ljava.util.resource.GameRef;)Ljava.lang.Vector3;",
       [&jvm](Object*, const std::vector<Value>& args) {
         float w[3];
-        if (!part_car_angular_velocity(native_arg_object(args, 0), w)) return null_object();
+        if (!part_car_angular_velocity(car_arg(args, 0), w)) return null_object();
         return new_vector(jvm, w);
       });
   natives.register_method(kCarState, "speed", "(Ljava.util.resource.GameRef;)F",
       [](Object*, const std::vector<Value>& args) {
         float v[3];
-        if (!part_car_velocity(native_arg_object(args, 0), v)) return Value::make_float(0.f);
+        if (!part_car_velocity(car_arg(args, 0), v)) return Value::make_float(0.f);
         return Value::make_float(std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]));
       });
   natives.register_method(kCarState, "nitro", "(Ljava.util.resource.GameRef;)I",
       [](Object*, const std::vector<Value>& args) {
         PartPhysicsState state;
-        Object* car = native_arg_object(args, 0);
+        Object* car = car_arg(args, 0);
         return Value::make_int(car && part_physics_state(car, state) && state.nitro_active ? 1 : 0);
       });
   natives.register_method(kCarState, "wheelsOnGround", "(Ljava.util.resource.GameRef;)I",
       [](Object*, const std::vector<Value>& args) {
         PartPhysicsState state;
-        Object* car = native_arg_object(args, 0);
+        Object* car = car_arg(args, 0);
         if (!car || !part_physics_state(car, state) || !state.active) return Value::make_int(0);
         return Value::make_int(static_cast<int32_t>(
             std::count(state.contact.begin(), state.contact.end(), true)));
@@ -130,13 +137,13 @@ void register_openslrr_natives(Jvm& jvm) {
   natives.register_method(kCarState, "boxMin", "(Ljava.util.resource.GameRef;)Ljava.lang.Vector3;",
       [&jvm](Object*, const std::vector<Value>& args) {
         float lo[3], hi[3];
-        if (!part_car_local_box(native_arg_object(args, 0), lo, hi)) return null_object();
+        if (!part_car_local_box(car_arg(args, 0), lo, hi)) return null_object();
         return new_vector(jvm, lo);
       });
   natives.register_method(kCarState, "boxMax", "(Ljava.util.resource.GameRef;)Ljava.lang.Vector3;",
       [&jvm](Object*, const std::vector<Value>& args) {
         float lo[3], hi[3];
-        if (!part_car_local_box(native_arg_object(args, 0), lo, hi)) return null_object();
+        if (!part_car_local_box(car_arg(args, 0), lo, hi)) return null_object();
         return new_vector(jvm, hi);
       });
 
@@ -169,8 +176,11 @@ void register_openslrr_natives(Jvm& jvm) {
   natives.register_method(kCameraControl, "sweep", "(Ljava.lang.Vector3;Ljava.lang.Vector3;F)F",
       [](Object*, const std::vector<Value>& args) {
         float from[3], to[3];
+        // A missing or non-finite endpoint or radius (NaN, infinity) is
+        // rejected like a negative radius: 1, clear, without sweeping.
         const float radius = native_arg_number(args, 2, .15f);
-        if (!read_vector(args, 0, from) || !read_vector(args, 1, to) || !(radius >= 0.f))
+        if (!read_vector(args, 0, from) || !read_vector(args, 1, to) ||
+            !mod_sweep_args_valid(from, to, radius))
           return Value::make_float(1.f);
         const float delta[3] = {to[0] - from[0], to[1] - from[1], to[2] - from[2]};
         SceneSphereHit hit;
