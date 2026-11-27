@@ -367,10 +367,6 @@ abstract public class Track extends Scene implements GameState
 				osd.createHotkey( Input.RCDIK_3, Input.KEY|Osd.HK_STATIC, CMD_SIMPAUSE, this );
 				osd.createHotkey( Input.RCDIK_4, Input.KEY|Osd.HK_STATIC, CMD_CAMROTATE, this );
 
-			// OpenSLRR (#470): one rebindable change-view key (V) replaces the
-			// F1 (cockpit), F2 (TV), F3 (follow), F4 (chase), F5 (reverse
-			// chase) and F9 (free) view keys; see nextCamera.
-			osd.createHotkey( Input.AXIS_LOOK_PREVNEXT, Input.VIRTUAL|Osd.HK_STATIC, CMD_NEXTCAM, this );
 		//cheat keys:
 			if( GameLogic.cheats )
 			{
@@ -386,7 +382,9 @@ abstract public class Track extends Scene implements GameState
 			
 			osd.createHotkey( Input.AXIS_MAP, Input.VIRTUAL|Osd.HK_STATIC, CMD_MAP, this );
 			osd.createHotkey( Input.AXIS_HELP, Input.VIRTUAL|Osd.HK_STATIC, CMD_CRUISECONTROL, this );
-			osd.createHotkey( Input.AXIS_LOOK_REAR, Input.VIRTUAL|Osd.HK_STATIC, CMD_LOOKBACK, Event.F_KEY_PRESS|Event.F_KEY_RELEASE );			
+			osd.createHotkey( Input.AXIS_LOOK_REAR, Input.VIRTUAL|Osd.HK_STATIC, CMD_LOOKBACK, Event.F_KEY_PRESS|Event.F_KEY_RELEASE );
+			// Dispatch LOOK BACK release before V if both edges arrive in one frame.
+			osd.createHotkey( Input.AXIS_LOOK_PREVNEXT, Input.VIRTUAL|Osd.HK_STATIC, CMD_NEXTCAM, this );
 
 		// Pneumatic suspension
 			osd.createHotkey( Input.AXIS_SPECIAL_1, Input.VIRTUAL|Osd.HK_STATIC, CMD_SUSP_FL, Event.F_KEY_PRESS|Event.F_KEY_RELEASE );
@@ -890,13 +888,17 @@ abstract public class Track extends Scene implements GameState
 		cameraMode = CAMMODE_POINT;
 	}
 
+	// id() alone can return the saved ID of a despawned collision target.
+	int hasLiveChaseTarget()
+	{
+		if (!cameraTarget2) return 0;
+		if (cameraTarget2.isEmpty()) return 0;
+		return cameraTarget2.id();
+	}
+
 	public void changeCamChase()
 	{
-		if (!cameraTarget2)
-		{
-			changeCamFollow();
-		} else
-		if (!cameraTarget2.id())
+		if (!hasLiveChaseTarget())
 		{
 			changeCamFollow();
 		} else
@@ -915,8 +917,8 @@ abstract public class Track extends Scene implements GameState
 			cam.command( "look " + cameraTarget2.id() + " 0,0,-1 " + roll*0.6 + ",0,-1" );
 			cam.command( "roll " + roll );
 			cam.command( "zoom " + (20.0+70.0*Math.random()) +" 5" );
+			cameraMode = CAMMODE_CHASE;
 		}
-		cameraMode = CAMMODE_CHASE;
 	}
 
 	public void changeCamInvChase()
@@ -961,15 +963,11 @@ abstract public class Track extends Scene implements GameState
 		float rear = player.controller.user_GetAxisVal( Input.AXIS_LOOK_REAR );
 		if( rear > 0.5 || rear < -0.5 ) return;
 
-		if( cameraMode == CAMMODE_FOLLOW )
+		if( cameraMode == CAMMODE_FOLLOW && hasLiveChaseTarget() )
 		{
-			if( cameraTarget2 )
-				if( cameraTarget2.id() )
-				{
-					changeCamChase();
-					setMessage( "Camera: chase" );
-					return;
-				}
+			changeCamChase();
+			setMessage( "Camera: chase" );
+			return;
 		}
 
 		if( cameraMode == CAMMODE_FOLLOW || cameraMode == CAMMODE_CHASE )
