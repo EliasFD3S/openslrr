@@ -50,6 +50,10 @@ void mod_matrix_ypr(const float m[16], float ypr[3]);
 // looking along -z rotated by yaw, pitched up by pitch) look from eye to at.
 void mod_look_ypr(const float eye[3], const float at[3], float& yaw, float& pitch);
 
+// CameraControl.sweep's arguments: finite endpoints and a finite radius >= 0.
+// The native returns 1 (clear) without sweeping otherwise.
+bool mod_sweep_args_valid(const float* from, const float* to, float radius);
+
 // Roll of up about the view from eye to at, in the convention of the camera
 // `roll` command (gameref.cpp world_camera_pose: rolled up = level up * cos r
 // + right * sin r, right = forward x world up). 0 when the view is vertical.

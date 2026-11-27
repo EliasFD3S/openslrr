@@ -13,6 +13,7 @@ using slrr::ModCameraPose;
 using slrr::mod_camera_resolve;
 using slrr::mod_camera_set;
 using slrr::mod_look_roll;
+using slrr::mod_sweep_args_valid;
 using slrr::mod_look_ypr;
 using slrr::mod_matrix_ypr;
 
@@ -233,6 +234,20 @@ SLRR_TEST(look_ypr_matches_the_stock_camera) {
       }
 }
 
+// sweep rejects a non-finite or negative radius and non-finite endpoints
+// (the native then returns 1 without sweeping).
+SLRR_TEST(sweep_rejects_non_finite_arguments) {
+  const float inf = std::numeric_limits<float>::infinity();
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float a[3] = {0.f, 1.f, 0.f}, b[3] = {0.f, -4.f, 0.f};
+  const float ia[3] = {inf, 1.f, 0.f}, na[3] = {0.f, nan, 0.f};
+  SLRR_REQUIRE(mod_sweep_args_valid(a, b, .2f) && mod_sweep_args_valid(a, b, 0.f));
+  SLRR_REQUIRE(!mod_sweep_args_valid(a, b, inf) && !mod_sweep_args_valid(a, b, -inf));
+  SLRR_REQUIRE(!mod_sweep_args_valid(a, b, nan) && !mod_sweep_args_valid(a, b, -.1f));
+  SLRR_REQUIRE(!mod_sweep_args_valid(ia, b, .2f) && !mod_sweep_args_valid(a, na, .2f));
+  SLRR_REQUIRE(!mod_sweep_args_valid(nullptr, b, .2f));
+}
+
 }  // namespace
 
 int main() {
@@ -241,7 +256,7 @@ int main() {
       relative_pose_follows_the_origin, up_axis_roll_and_fallbacks,
       invalid_input_keeps_the_pose, matrix_ypr_round_trip,
       look_ypr_matches_the_stock_camera, local_pose_turns_and_banks_with_the_car,
-      roll_write_back_matches_the_roll_command,
+      roll_write_back_matches_the_roll_command, sweep_rejects_non_finite_arguments,
   };
   return slrr::standalone::run("mod_camera", tests);
 }

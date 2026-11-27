@@ -100,6 +100,9 @@ Object *part_showing_texture(uint32_t texture);
 // hangs on this point; `look` stays on the chassis origin.
 bool part_car_ground(void *key, float *y);
 bool part_camera_pose(void* car, int camera, float* matrix);
+// True for a car's chassis or its Vehicle, false for any other GameRef,
+// installed parts included (the mod API's CarState and car-bound poses).
+bool part_is_car(void* object);
 // World linear velocity of a car's chassis body, in m/s.
 bool part_car_velocity(void* car, float* velocity);
 // World angular velocity of a car's chassis body, in rad/s (#487).

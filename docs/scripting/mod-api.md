@@ -21,7 +21,9 @@ depend on an addition.
 ## CarState
 
 Static natives that take the car's GameRef (`Track.cameraTarget`, `player.car`).
-A GameRef that is not a car gives `null` for vectors and `0` / `0.0` otherwise.
+A GameRef that is not a car (the chassis or its Vehicle) gives `null` for
+vectors and `0` / `0.0` otherwise; an installed part such as a wheel is not a
+car. The same applies to the car of `setPoseRelative` / `setPoseLocal`.
 World axes, y up; metres, m/s, rad/s.
 
 | Method | Returns |
@@ -58,7 +60,7 @@ While a pose is set it is the camera's whole view: `move`, `look`, `dist`,
 | `setPoseRelative(cam, car, eyeOffset, atOffset, up, fovDeg)` | Eye and focus are world-space offsets from the car's drawn origin. The engine adds the origin when it draws the frame, so the camera stays on the drawn car at any frame rate. The offsets and up are not turned with the car: a chase camera that turns them itself (with `drawnOri`) uses the previous frame's orientation in free-running play, which is fine for a camera that swings behind the car but not for one fixed to the body. |
 | `setPoseLocal(cam, car, eyeLocal, atLocal, upLocal, fovDeg)` | Eye, focus and up in the car's chassis frame (metres; x right, y up, z back, the frame of `boxMin` / `boxMax`). When it draws the frame, the engine turns them with the car's drawn orientation and adds its drawn origin, so a bumper or hood camera stays on the body while the car turns, pitches and banks. A null or zero `upLocal` is the car's up. |
 | `clearPose(cam)` | Back to the stock camera behaviour, from the last pose. |
-| `float sweep(from, to, radius)` | Fraction 0..1 of the segment that a sphere of this radius (at most 2 m) travels before it touches the scenery; 1 is clear. The engine's chase camera uses the same sweep. |
+| `float sweep(from, to, radius)` | Fraction 0..1 of the segment that a sphere of this radius (at most 2 m) travels before it touches the scenery; 1 is clear. The engine's chase camera uses the same sweep. A missing or non-finite endpoint, or a negative, NaN or infinite radius, returns 1 without sweeping. |
 
 `fovDeg` is the vertical view angle in degrees, clamped to 1..170; 0 or less
 keeps the camera's own (the `zoom` command, 60 by default). A null or zero
@@ -67,7 +69,9 @@ direction falls back to that, then to world -z. A pose with a NaN or infinite
 value anywhere (eye, focus, up or fov), or an eye equal to its focus, is
 ignored and the previous pose stays. A posed camera uses a 0.10 m near plane;
 the far plane is the view distance outdoors. `getPos` / `getOri` on the
-camera follow the drawn pose, roll included (`getOri().r` is the bank of the
+camera follow the pose resolved for the last drawn frame (in free-running
+play that is the draw-time resolution, the frame `drawnPos` reports in the
+next `animate()`), roll included (`getOri().r` is the bank of the
 up axis, in the convention of the `roll` command). The roll is also the
 camera's `roll` (except on the follow camera bound to the player's car), so
 `clearPose` continues with the same horizon.
@@ -127,8 +131,12 @@ persist them by name (`camera.provider`, `camera.<name>.view`).
   `cam` field directly.
 - The repair (F6 with cheats), mechanic and paint views drive that `cam` for
   their close-up. Opening one while a provider shows switches back to the
-  stock follow camera first (`deactivate`); closing the last of them hands
-  the follow view back to the provider (`activate`).
+  stock follow camera first (`deactivate`). While any of them is open, V and
+  LOOK BACK are ignored and selection changes wait; closing the last one hands
+  the follow view back to the selected provider (`activate`), or applies a
+  selection made meanwhile.
+- Watching a night race in `City` and stopping returns to the provider's view
+  when it was showing before.
 - The navigator in GPS modes 2 and 3 (follow the camera) follows the
   provider's `camera` field, or the car when it is null.
 - Track sets `world` to its map and passes the OSD viewport.

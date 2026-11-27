@@ -281,7 +281,7 @@ bool gameref_mod_camera_set(void* key, ModCameraMode mode, const float eye[3],
   int32_t car_id = 0;
   if (mode == ModCameraMode::Relative || mode == ModCameraMode::Local) {
     float frame[16];
-    if (!car || !part_camera_pose(car, -1, frame)) return false;
+    if (!car || !part_is_car(car) || !part_camera_pose(car, -1, frame)) return false;
     car_id = gameref_make_live(car);
     if (!car_id) return false;
   }
@@ -1045,16 +1045,17 @@ static bool world_camera_pose(float eye[3], float at[3], float* fov, float* znea
       // Closer than the chase view's .20 for bumper and hood eyes.
       if (znear) *znear = .10f;
       if (zfar) *zfar = 3000.f;
-      if (dt > 0.f) {
-        // getPos / getOri on the camera (the GPS reads the renderer's) and
-        // clearPose continue from here, roll included. The bound follow
-        // camera's roll stays the script's `roll` command, as in setMatrix.
-        std::copy_n(eye, 3, cam->pos);
-        mod_look_ypr(eye, at, cam->ypr[0], cam->ypr[1]);
-        cam->ypr[2] = mod_look_roll(eye, at, pose_up);
-        if (!(cam->follow_vehicle && cam->cockpit_index < 0 && !cam->camera_free))
-          cam->camera_roll = cam->ypr[2];
-      }
+      // getPos / getOri on the camera (the GPS reads the renderer's) and
+      // clearPose continue from here, roll included. Every resolution
+      // writes back, the renderer's dt = 0 query too: in free-running play
+      // the frame's car pose is published after the dt > 0 advance, so only
+      // the draw-time resolution matches the drawn frame. The bound follow
+      // camera's roll stays the script's `roll` command, as in setMatrix.
+      std::copy_n(eye, 3, cam->pos);
+      mod_look_ypr(eye, at, cam->ypr[0], cam->ypr[1]);
+      cam->ypr[2] = mod_look_roll(eye, at, pose_up);
+      if (!(cam->follow_vehicle && cam->cockpit_index < 0 && !cam->camera_free))
+        cam->camera_roll = cam->ypr[2];
       return true;
     }
   }
