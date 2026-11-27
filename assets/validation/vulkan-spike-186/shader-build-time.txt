@@ -1,0 +1,8 @@
+Shader compilation time per profile (#186)
+
+shaderc (shared cache build be74c8461ec078d8), the 14 shaders one after another, -O 3, second of two passes:
+430 (GLSL)     1.8 s
+s_5_0 (DXBC)  18.8 s
+s_6_0 (DXIL)   2.5 s
+spirv          2.1 s
+The two new profiles add 4.6 s to 20.6 s (+22 %). First pass: 6.4, 22.5, 2.6 and 2.0 s.

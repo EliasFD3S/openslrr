@@ -1,0 +1,22 @@
+What the in-game difference between Direct3D 11 and Vulkan is made of (#186)
+
+Standing start of the #358 replay at 13:00, 1600x900, RTX 4060, one capture per backend and setting.
+Mean absolute difference per channel out of 255, and share of pixels that differ at all.
+
+settings (others as in README.md)                              mean     pixels differing
+MSAA 8x, anisotropic on, AO on (the benchmark settings)        1.936    69.4 %
+MSAA off                                                       1.939    69.4 %
+anisotropic filtering off                                      0.550    13.4 %
+MSAA off, anisotropic off                                      0.550    13.4 %
+AO off                                                         1.693    66.9 %
+MSAA, anisotropic, AO, reflections and clouds all off          0.006     0.3 %
+
+Two runs of the same backend and settings (clouds and the car's reflection move): Direct3D 11 0.113 (16.0 %),
+Vulkan 0.009 (0.2 %).
+
+Reading: about 1.4 of the 1.9 comes from anisotropic filtering, about 0.25 from AO, the rest from effects
+that move between runs. With all five off the two backends give the same image. Both backends ask for the same
+maximum anisotropy (bgfx: 16 on Direct3D 11, the device limit, 16, on Vulkan; no LOD bias on either).
+
+Side observation, not a backend difference: MSAA 8x against MSAA off changes 0.2 % of the pixels of this
+capture on Direct3D 11 and 0.3 % on Vulkan (mean 0.03). Not investigated.

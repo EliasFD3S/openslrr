@@ -1,0 +1,49 @@
+Runtime behaviour on each backend (#186), RTX 4060, 1600x900 window
+
+Per backend: (1) garage with --debug-overlay, window captured after 14 s; (2) the #358 replay for 26 s with the
+window resized to 1100x700 after 5 s and minimised then restored after 17 s, the engine's own captures at 0,
+10 and 20 s; (3) a normal start with no input, window captured after 6 s (intro video) and 46 s (main menu).
+"alive" = the process had not exited. The window captures were looked at for Vulkan only
+(vulkan-garage-debug-menu.jpg, vulkan-intro-video.jpg, vulkan-main-menu.jpg).
+
+renderer vulkan
+garage alive=True window=1616 x 939 client=1600x900
+drive started=True client=1600x900
+after resize alive=True client=1084x661
+minimised=True alive=True
+restored alive=True client=1084x661
+drive exit=0
+shot t00.tga 1600x900
+shot t10.tga 1084x661
+shot t20.tga 1084x661
+boot 6s alive=True window=1616 x 939
+boot 46s alive=True window=1616 x 939
+DONE
+
+renderer d3d12
+garage alive=True window=1616 x 939 client=1600x900
+drive started=True client=1600x900
+after resize alive=True client=1084x661
+minimised=True alive=True
+restored alive=True client=1084x661
+drive exit=0
+shot t00.tga 1600x900
+shot t10.tga 1084x661
+shot t20.tga 1084x661
+boot 6s alive=True window=1616 x 939
+boot 46s alive=True window=1616 x 939
+DONE
+
+renderer d3d11
+garage alive=True window=1616 x 939 client=1600x900
+drive started=True client=1600x900
+after resize alive=True client=1084x661
+minimised=True alive=True
+restored alive=True client=1084x661
+drive exit=0
+shot t00.tga 1600x900
+shot t10.tga 1084x661
+shot t20.tga 1084x661
+boot 6s alive=True window=1616 x 939
+boot 46s alive=True window=1616 x 939
+DONE

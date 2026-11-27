@@ -20,6 +20,16 @@ machine. Build: `main` at 09535c9 plus the spike changes.
   capture between Direct3D 11 and Vulkan, times 8. The clouds and the car's
   reflection move between two runs on any backend.
 
+- `ao-attribution.txt`: the AO targets of the failing `ambient_occlusion`
+  case read back on each backend, stage by stage, and the size of the city
+  capture differences.
+- `edge-classification.txt`: the in-game difference between Direct3D 11 and
+  Vulkan with one setting changed at a time.
+- `runtime-checks.txt`, `vulkan-garage-debug-menu.jpg`,
+  `vulkan-intro-video.jpg`, `vulkan-main-menu.jpg`: garage, intro video,
+  main menu, resize and minimise on each backend.
+- `shader-build-time.txt`: shader compilation time per profile.
+
 Each run (1600x900 window, MSAA 8x, AO method 1 High, shadows High,
 smoothing 2, reflections and clouds on):
 

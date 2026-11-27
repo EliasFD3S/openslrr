@@ -2469,8 +2469,10 @@ struct SceneShadowRegression {
       size_t pixels=0;
       for(size_t i=0;i+3<base.size()&&i+3<on.image.size();i+=4)
         pixels+=std::memcmp(&base[i],&on.image[i],4)!=0;
+      // compare() sets worst; run it before evaluating the printf arguments.
+      const size_t reference_differ=compare(base,on.image,worst);
       std::printf("CITY FRAME %ux%u vs reference capture: %zu bytes differ in %zu pixels, max %d\n",
-                  width,height,compare(base,on.image,worst),pixels,worst);
+                  width,height,reference_differ,pixels,worst);
     } else if(FILE* out=std::fopen(reference,"wb")) {
       std::fwrite(on.image.data(),1,on.image.size(),out);std::fclose(out);
       std::printf("CITY FRAME %ux%u reference capture written\n",width,height);

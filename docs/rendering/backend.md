@@ -231,8 +231,9 @@ body panel, confirming texture stability and absence of stray vertices.
 ## bgfx backend selection and the Vulkan spike (#186)
 
 A spike, not a port: Direct3D 11 stays the default and the only backend
-validated in game. The plan that follows from it is #478. The numbers below come from one laptop (i9-13905H, RTX 4060
-Laptop GPU, Windows 11, 1600x900), not from the #358 machine.
+validated in game. Results: #478. The numbers below come from one laptop
+(i9-13905H, RTX 4060 Laptop GPU, Windows 11, 1600x900), not from the #358
+machine.
 
 What the build and the host do now:
 
@@ -241,7 +242,10 @@ What the build and the host do now:
   DXIL for Direct3D 12 and SPIR-V for Vulkan (bgfx's `BGFX_EMBEDDED_SHADER`
   maps Direct3D 12 to DXIL, not DXBC). All 14 shaders compile for the two new
   profiles with `WERROR` and no source change. The executable grows by
-  0.49 MB (166 KB of DXIL, 324 KB of SPIR-V).
+  0.49 MB (166 KB of DXIL, 324 KB of SPIR-V). Compiling the 14 shaders one
+  after another takes 18.8 s for `s_5_0`, 1.8 s for `430`, 2.5 s for
+  `s_6_0` and 2.1 s for `spirv`: the two new profiles add 22 %
+  (`shader-build-time.txt`).
 - `--renderer auto|d3d11|d3d12|vulkan` (`bgfx_request_renderer`) sets
   `bgfx::Init::type`; `auto` leaves the choice to bgfx, which takes
   Direct3D 11. `SLRR_RENDERER` does the same for the GPU test executables.
@@ -269,16 +273,28 @@ GPU suites (`assets/validation/vulkan-spike-186/gpu-tests.txt`):
 
 - Vulkan AO: an open wall gets occlusion it does not get on Direct3D
   ("frontal near", GTAO: 75 pixels, 0 on Direct3D; "frontal far on floor",
-  HBAO: 566 pixels, 0 on Direct3D, which fails `differ<=visible/50`). The
-  reference sampling path shows it too, so it comes before the AO-resolution
-  geometry shortcut: the depth prepass or the normal rebuilt from depth
-  slopes (`shaders/fs_ao.sc:surfaceNormal`). Cause not found.
+  HBAO: 566 pixels, 0 on Direct3D, which fails `differ<=visible/50`).
+  Reading the AO targets back (`ao-attribution.txt`): the linear depth and
+  the normals of the AO geometry pass are identical on Vulkan and
+  Direct3D 12 (0 of 4,800 texels), the capture without AO is identical, and
+  the AO value differs after the AO passes, on one texel row next to a
+  vertical depth step or the top border (255 on Direct3D, 232 to 245 on
+  Vulkan). Direct3D 11 and Direct3D 12 are identical at every stage. The
+  Intel Iris Xe gives the same Vulkan result as the RTX 4060, so it is not
+  one driver, and shaderc's `-O 0` gives the same SPIR-V size and result.
+  The difference is therefore in the SPIR-V build of the first AO pass
+  (`shaders/fs_ao.sc`: `hbao`, `gtao`, `sampleDelta`) with identical
+  inputs. The cause inside that pass is not found.
+- `ambient_occlusion` run alone fails on Direct3D 11 and 12 too (GTAO contact
+  pixels 0, other counts than in the full run): the case depends on state
+  left by the cases before it.
 - City captures against the Direct3D 11 reference of the same suite: the
-  640x360 and 2560x1440 night frames differ in at most 12 pixels on
-  Direct3D 12 and on Vulkan. The 1280x720 crowd frames (by day, and at night
-  with worker encoders) differ in 28 and 182 pixels on Direct3D 12 but in
-  120,870 and 197,311 of 921,600 on Vulkan. The suite counts differing
-  pixels; how far they differ was not measured.
+  640x360 and 2560x1440 night frames differ in at most 12 pixels, by 1/255,
+  on Direct3D 12 and on Vulkan. The 1280x720 crowd frames differ in 182
+  pixels (day) and 28 (night, worker encoders) on Direct3D 12, and on Vulkan
+  in 197,311 of 921,600 (mean 1.11/255, largest 73) and 120,870 (mean 0.32,
+  largest 19). The suite printed `max 0` for all of them until this change:
+  `compare` and the variable it fills were arguments of one `printf`.
 - Direct3D 12 and Vulkan agree with each other and not with Direct3D 11 on
   the garage sunlight counts (566 lit pixels against 545, 1,316 against
   1,264). Not classified.
@@ -298,8 +314,20 @@ replay, `--no-vsync`, MSAA 8x, AO method 1 High, shadows High, smoothing 2):
   night. On the standing start, Direct3D 12 differs from Direct3D 11 by
   0.12/255 on average; Vulkan differs by 1.93/255 by day and 1.05/255 at
   night, along texture detail, foliage and geometry edges
-  (`day-difference-d3d11-vulkan-x8.png`). Not classified (anisotropic
-  filtering, MSAA resolve or alpha coverage).
+  (`day-difference-d3d11-vulkan-x8.png`). Single-setting captures
+  (`edge-classification.txt`): with anisotropic filtering off the
+  difference falls from 1.94 to 0.55, with AO off to 1.69, with MSAA off it
+  does not move, and with MSAA, anisotropic filtering, AO, reflections and
+  clouds all off it is 0.006 (0.3 % of the pixels). Two runs of one backend
+  differ by 0.11 on Direct3D 11 (clouds, reflection). So about 1.4 is
+  anisotropic filtering, for which bgfx asks 16x on both backends, and about
+  0.25 the AO difference above.
+- Runtime checks on the three backends (`runtime-checks.txt`): the garage
+  with the debug menu, the intro video and the main menu draw on Vulkan
+  (`vulkan-garage-debug-menu.jpg`, `vulkan-intro-video.jpg`,
+  `vulkan-main-menu.jpg`); a resize to 1100x700, a minimise and a restore
+  during the replay leave every backend running, and the next captures have
+  the new size (1084x661).
 - Other builds and another game instance ran on the same machine during
   the measurements. A run counts as clean when no other `slrr_host` or compiler
   ran and the CPU was under 35 % before and after it: 16 of 30 runs. The
@@ -364,8 +392,11 @@ Read in the pinned bgfx (fe9bbdec6), not measured:
   shadow matrices take the Direct3D 11 path unchanged.
 
 Not done: the comparison against the #358 baseline needs its machine
-(i7-13700KF, RTX 4080, 2560x1440) and a quiet session; the Vulkan AO
-difference and the three pixel differences above are not explained; AMD and
-Intel GPUs, fullscreen, resize, FMV and the debug menu were not exercised on
-Direct3D 12 or Vulkan; `python scripts/check_knowledge_refs.py` was not run
-(no Python on the machine).
+(i7-13700KF, RTX 4080, 2560x1440) and a quiet session; the cause of the
+Vulkan AO difference inside `fs_ao.sc`, the anisotropic filtering
+difference and the garage sunlight counts are not explained; AMD GPUs,
+borderless fullscreen, a video mode change from the options, career and
+races were not exercised on Direct3D 12 or Vulkan, and the Intel GPU only
+ran `render_programs_gpu` and the AO case;
+`python scripts/check_knowledge_refs.py` was not run (no Python on the
+machine).
