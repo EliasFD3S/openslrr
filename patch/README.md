@@ -352,6 +352,10 @@ See the [scripting API](../docs/scripting/mod-api-keys-settings.md) for examples
 | `java.game.parts.WheelRef.setBrakeSpec(FFF)V` | Brake hardware: pad compound (0 street, 1 fast road, 2 race), rotor type (0 solid, 1 grooved, 2 vented, 3 carbon) and rotor diameter in metres (clamped to 0.15–0.5). A positive diameter makes the car's brakes physical (#446). |
 | `java.game.OptionsDialog.getRendererOption(I)I` | Reads the active value for the requested identifier. An unknown identifier returns 0. |
 | `java.game.OptionsDialog.setRendererOption(II)V` | Applies the value to the session. Unknown identifiers are ignored. |
+| `java.openslrr.ModSettings.getInt(Ljava.lang.String;I)I`, `getFloat(Ljava.lang.String;F)F`, `getString(Ljava.lang.String;Ljava.lang.String;)Ljava.lang.String;` | A mod setting from the `mods` section of `save/game/openslrr_options.json`, or the given default when the key is missing or holds another type (#488). |
+| `java.openslrr.ModSettings.setInt(Ljava.lang.String;I)V`, `setFloat(Ljava.lang.String;F)V`, `setString(Ljava.lang.String;Ljava.lang.String;)V` | Stores a mod setting; the file is written 500 ms after the last change, at shutdown, or before options reload (#488). A non-finite float is ignored. |
+| `java.io.ControlSet.bytesLeft(Ljava.io.File;)I` | Bytes left to read in an open file, so the patched ControlSet reads its optional MKEY mod key trailer only when one is there (#488). |
+| `java.openslrr.*` (`OpenSLRR`, `CarState`, `CameraControl`) | The mod API natives (#487); see [docs/scripting/mod-api.md](../docs/scripting/mod-api.md). |
 
 | ID | Option | Values |
 | --- | --- | --- |

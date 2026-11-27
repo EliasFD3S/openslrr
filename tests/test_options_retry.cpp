@@ -40,6 +40,22 @@ static void mod_settings_round_trip(Fixture& f, const fs::path& file) {
   const auto stamp = fs::last_write_time(file);
   invoke("setInt", "(Ljava.lang.String;I)V", "video.msaa", Value::make_int(INT32_MAX));
   SLRR_REQUIRE(fs::last_write_time(file) == stamp);
+  // A changed value is saved 500 ms after the last change (a slider sends one
+  // per tick), or at once when forced; a reload keeps a pending value.
+  invoke("setFloat", "(Ljava.lang.String;F)V", "test.gain", Value::make_float(.5f));
+  invoke("setFloat", "(Ljava.lang.String;F)V", "test.gain", Value::make_float(.75f));
+  host_game_options_update(f.vm);
+  SLRR_REQUIRE(fs::last_write_time(file) == stamp);
+  std::this_thread::sleep_for(std::chrono::milliseconds(550));
+  host_game_options_update(f.vm);
+  SLRR_REQUIRE(fs::last_write_time(file) != stamp);
+  fs::last_write_time(file, stamp);
+  invoke("setFloat", "(Ljava.lang.String;F)V", "test.gain", Value::make_float(.875f));
+  host_game_options_update(f.vm, true);
+  SLRR_REQUIRE(fs::last_write_time(file) != stamp);
+  invoke("setFloat", "(Ljava.lang.String;F)V", "test.gain", Value::make_float(-.125f));
+  host_game_options_load(f.vm);
+  SLRR_REQUIRE(get_float("test.gain") == -.125f);
   SLRR_REQUIRE(host_option_set(0, 3));
   host_game_options_load(f.vm);
   SLRR_REQUIRE(host_enhanced_graphics().msaa == 3 && get_int("video.msaa") == INT32_MAX);

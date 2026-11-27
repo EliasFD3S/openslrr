@@ -648,8 +648,14 @@ public class ControlSet
 		}
 	}
 
-	// The trailer after the smoothing table. A file without one (stock,
-	// #405, or before #488) leaves every mod key new.
+	// Bytes left to read in an open file (OpenSLRR native).
+	static native int bytesLeft( File f );
+
+	// The trailer after the smoothing table: "MKEY", a count, then per key
+	// its slot, id and flags. A file without one (stock, #405, before #488,
+	// or a 134-slot file saved again by an older build, which drops it)
+	// leaves every mod key new, so their defaults apply. Nothing is read past
+	// the end of the file.
 	void readModKeys( File ctrlFile )
 	{
 		int s;
@@ -658,13 +664,16 @@ public class ControlSet
 			modId[s] = null;
 			modFlags[s] = 0;
 		}
-		if( ctrlFile.readInt() == MODKEYFILEID )
+		if( bytesLeft( ctrlFile ) >= 8 && ctrlFile.readInt() == MODKEYFILEID )
 		{
 			int n = ctrlFile.readInt();
-			for( int i = 0; i < n && i < MOD_SLOTS; i++ )
+			// Each record is at least 12 bytes: slot, string length, flags.
+			for( int i = 0; i < n && i < MOD_SLOTS && bytesLeft( ctrlFile ) >= 12; i++ )
 			{
 				int slot = ctrlFile.readInt();
 				String id = ctrlFile.readString();
+				if( bytesLeft( ctrlFile ) < 4 )
+					break;	// a cut record
 				int flags = ctrlFile.readInt();
 				if( id != null && slot >= MOD_FIRST && slot < NCONTROLS )
 				{

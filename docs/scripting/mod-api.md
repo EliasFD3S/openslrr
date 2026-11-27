@@ -5,7 +5,7 @@ replacing stock classes such as `java.game.Track`. Its classes live in
 `patch/system/Scripts/openslrr` (package `java.openslrr`, sources in
 `src/`); the natives are in `src/natives/natives_openslrr.cpp`. Mod folders,
 load order and the mod entry point are described separately (#486); mod keys
-and settings are #488.
+and settings (#488) are in [mod-api-keys-settings.md](mod-api-keys-settings.md).
 
 The API exists only in OpenSLRR: a script that calls it does not run in the
 original game.
@@ -108,8 +108,10 @@ public static void modInit()
 | `selected()`, `select(i)` | The selected provider's index, -1 for the classic cameras. An index out of range selects the classic cameras. |
 | `view(p)`, `setView(p, v)` | Each provider's current view. |
 
-The selection and the views last for the session; the mod settings (#488)
-persist them by name (`camera.provider`, `camera.<name>.view`).
+The selection and each provider's view are saved by name in the mod settings
+(`camera.provider`, `camera.<name>.view`; see
+[mod-api-keys-settings.md](mod-api-keys-settings.md)), so they survive a
+restart and a change of mod load order.
 
 ### How the patched Track uses a provider
 
