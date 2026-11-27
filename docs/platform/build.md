@@ -10,6 +10,11 @@ in [AGENTS.md](../../AGENTS.md#build-speed-and-its-edge-cases).
 reviewed tip identify the build; the independent producer revision on main is not
 the package commit. Run `python tests/test_branch_package.py` for the offline contract tests.
 
+Offline validation at engine `09535c9`: Visual Studio 2022 (v14.44, SDK 26100)
+produced the x64 Release host. The local ZIP contained 831 overlays in the six
+approved roots; every overlay and the engine license matched its Git blob.
+The host digest matched the build output. The game was not run.
+
 ## Version metadata before compilation on every generator (#103)
 
 CMakeLists.txt now defines slrr_version as an always-run custom target whose

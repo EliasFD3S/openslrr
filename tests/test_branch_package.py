@@ -48,8 +48,12 @@ class Package(unittest.TestCase):
         self.repo.mkdir()
         self.git("init", "-q")
         self.files = {"LICENSE": b"engine\n", "third_party/slrrc/LICENSE": b"compiler\n",
-                      "patch/README.md": b"docs only", "data/game/base.rpk": b"private",
-                      "patch/sl/Scripts/src/Project.java": b"overlay\n"}
+                      "NOTICE.txt": b"engine notice\n", "patch/README.md": b"docs only", "data/game/base.rpk": b"private"}
+        self.overlays = {"patch/sl/Scripts/src/Project.java": b"overlay\n",
+                         "patch/MW_Mod/a.class": b"class", "patch/particles/b.cfg": b"cfg",
+                         "patch/cars/car.cfg": b"car", "patch/parts/part.cfg": b"part",
+                         "patch/system/cfg/a.cfg": b"system"}
+        self.files.update(self.overlays)
         for name, data in self.files.items():
             path = self.repo / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -85,12 +89,16 @@ class Package(unittest.TestCase):
                          dict(metadata, repository="EliasFD3S/openslrr", branch="Feature/test"))
         with ZipFile(self.output / "openslrr-windows-x86_64.zip") as archive:
             self.assertCountEqual(archive.namelist(), ["manifest.json", "slrr_host.exe", "LICENSE",
-                                  "NOTICE.txt", "THIRD-PARTY-NOTICES.txt", "patch/sl/Scripts/src/Project.java"])
+                                  "NOTICE.txt", *self.overlays])
             self.assertEqual(json.loads(archive.read("manifest.json")),
                              dict(metadata, version="0.0.0-branch." + self.commit))
             self.assertEqual(archive.read("slrr_host.exe"), self.binary)
-            self.assertEqual(archive.read("NOTICE.txt"), b"compiler\n")
-            self.assertEqual(archive.read("patch/sl/Scripts/src/Project.java"), b"overlay\n")
+            notice = archive.read("NOTICE.txt")
+            for text in [b"compiler\n", b"engine notice\n", *(n.encode() for n in producer.BUILD_NOTICES)]:
+                self.assertIn(text, notice)
+            self.assertEqual(archive.read("LICENSE"), b"engine\n")
+            for name, data in self.overlays.items():
+                self.assertEqual(archive.read(name), data)
         with self.assertRaises(FileExistsError):
             self.package()
 
@@ -112,6 +120,10 @@ class Package(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "file type"):
             self.package()
         self.assertFalse((self.output / producer.ASSET).exists())
+
+    def test_reject_unknown_patch_root(self):
+        with self.assertRaisesRegex(ValueError, "patch location"):
+            producer.payload_name("patch/saves/config.cfg")
 
     def test_reject_symlink_blob_without_following_it(self):
         oid = self.git("rev-parse", "HEAD:LICENSE").decode().strip()

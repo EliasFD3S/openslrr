@@ -31,6 +31,11 @@ jobs:
           persist-credentials: false
           path: producer
 
+      - name: Select Python for the producer
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
       - name: Test the trusted producer before building
         run: python -I producer/tests/test_branch_package.py
 
@@ -43,6 +48,7 @@ jobs:
           repository: EliasFD3S/openslrr
           ref: ${{ inputs.commit }}
           path: engine
+          fetch-depth: 0 # the host version uses the Git revision count
           persist-credentials: false
 
       - name: Check out the documented bgfx wrapper (also pins bx, bimg and bgfx)

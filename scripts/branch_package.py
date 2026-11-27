@@ -14,7 +14,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 REPOSITORY = "EliasFD3S/openslrr"
 TARGET = "windows-x86_64"
 ASSET = "openslrr-windows-x86_64.zip"
-PATCH_ROOTS = {"cars", "parts", "sl", "system"}
+PATCH_ROOTS = {"cars", "parts", "sl", "system", "MW_Mod", "particles"}
 PATCH_SUFFIXES = {".java", ".class", ".cfg"}
 
 
@@ -51,10 +51,8 @@ def release_tag(branch, commit):
 
 
 def payload_name(path):
-    if path == "LICENSE":
+    if path in {"LICENSE", "NOTICE.txt", "third_party/slrrc/LICENSE"}:
         return path
-    if path == "third_party/slrrc/LICENSE":
-        return "NOTICE.txt"
     if path == "patch/README.md":
         return None  # installation instructions, not an overlay
     parts = path.split("/")
@@ -75,7 +73,7 @@ def committed_files(checkout, commit):
     # checkout filters, CRLF conversion or .gitattributes export substitutions.
     git = ["git", "-C", checkout]
     tree = subprocess.check_output(git + [
-        "ls-tree", "-rlz", commit, "--", "LICENSE", "patch", "third_party/slrrc/LICENSE",
+        "ls-tree", "-rlz", commit, "--", "LICENSE", "NOTICE.txt", "patch", "third_party/slrrc/LICENSE",
     ])
     entries = []
     paths = {}
@@ -154,9 +152,14 @@ def package(checkout, build, output, branch, commit):
         with ZipFile(staged, "x", ZIP_DEFLATED) as archive:
             archive.writestr("manifest.json", json.dumps(manifest) + "\n")
             archive.writestr("slrr_host.exe", host)
-            archive.writestr("THIRD-PARTY-NOTICES.txt", dependency_notices(build))
+            notices = []
             for name, data in committed_files(checkout, commit):
-                archive.writestr(name, data)
+                if name in {"NOTICE.txt", "third_party/slrrc/LICENSE"}:
+                    notices.extend([name.encode() + b"\n", data, b"\n\n"])
+                else:
+                    archive.writestr(name, data)
+            notices.append(dependency_notices(build))
+            archive.writestr("NOTICE.txt", b"".join(notices))
         with staged.open("rb") as f:
             digest = hashlib.file_digest(f, "sha256").hexdigest()
         (output / "release-body.json").write_text(json.dumps(metadata) + "\n", encoding="utf-8")
