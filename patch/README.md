@@ -388,7 +388,7 @@ Press **V** to cycle follow → chase → each cockpit camera → follow. Withou
 
 On load, a stock F1/F2 pair in slots 35/36 migrates to V. Stock F2 is cleared from the hidden slot 36 even if slot 35 was already rebound or cleared. A later F1 binding stays on F1. The hidden F5 look-back binding (slot 37) is also cleared; LOOK BACK defaults to B.
 
-This requires the patched `Track.class`, `OsdxOptions.class` and `system/Scripts/io/ControlSet.class`. A mod that replaces the MWM `Track.class` also replaces this cycle.
+This requires the patched `Track.class`, `OptionsDialog.class`, `OsdxOptions.class` and `system/Scripts/io/ControlSet.class`. A mod that replaces the MWM `Track.class` also replaces this cycle.
 
 **Camera mods (#487).** A mod registers a camera provider (`java.openslrr.CameraProvider`, see [docs/scripting/mod-api.md](../docs/scripting/mod-api.md)). While one is selected it replaces the follow view: V cycles its views and LOOK BACK goes to it; any other camera (cockpit, race staging, TV) takes over until V brings it back. Without a camera mod nothing changes. This needs the patched `Track.class`, `City.class`, `ROCTrack.class` and the `system/Scripts/openslrr` classes.
 
@@ -410,11 +410,13 @@ instructions: 1,444 vs 1,457 nodes and 413 vs 421 nodes, respectively.
 The patched source now follows the binary: the save is restored and the
 Refresher and Test_Render calls are removed. Blank lines are adjusted so the
 source line numbers recorded in the trees match. Remove the #470 additions
-(`CMD_NEXTCAM`, the V hotkey, `nextCamera` and its `CMD_NEXTCAM` dispatch)
-and put back the six F-key hotkeys. That source then compiles to the installed
+(`CMD_NEXTCAM`, the V hotkey after LOOK BACK, `hasLiveChaseTarget`,
+`nextCamera` and its `CMD_NEXTCAM` dispatch). Restore the six F-key hotkeys
+before the cheat keys and the original `changeCamChase` from the MWM source. That source then compiles to the installed
 class byte for byte, apart from the compiler build stamp in header bytes 9-11
 (`cmp -l a b | awk '$1>11'` prints nothing). With the #470 additions, the only
-member changes are the added field `CMD_NEXTCAM` and the added method `nextCamera`.
+member changes are the added field `CMD_NEXTCAM` and the added methods `nextCamera` and
+`hasLiveChaseTarget`.
 
 To rebuild, copy the stock game into a private root, never the installed game. Put `Track.java` in
 `sl/Scripts/game/src`, then copy `sources/sl/Scripts/game/src/MotionBlur.java`

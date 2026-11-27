@@ -100,7 +100,7 @@ previews. Evidence is in assets/validation/map-views/{before,after}.txt.
 
 ### Cockpit camera as the scene camera (#318)
 
-- Stock `Track.changeCamInternal` (F1) hides the follow camera on the OSD
+- Stock `Track.changeCamInternal` (formerly F1) hides the follow camera on the OSD
   viewport, then calls `car.command("render <viewport> <controller> <cam>")`.
   The host answers with a `_hostCockpitCamera` per chassis
   (`src/resources/part_runtime.cpp:part_command`, verb `render`) that has
@@ -457,12 +457,17 @@ Verified on the PR branch (f422ebb), by reading the code; not run in game.
 
 ## Change-view key (#470)
 
-- From follow, V selects chase only if `cameraTarget2` has a nonzero ID.
-  Without that target, it goes straight to the first cockpit camera. The
+- From follow, V selects chase only if `cameraTarget2` has a nonzero ID and
+  `isEmpty()` is false. Removing a car also removes its alias state: `id()`
+  can return the stored ID, but `isEmpty()` sees that the target is gone.
+  Without a live target, V goes straight to the first cockpit camera. The
   cycle skips mirror and look-back cameras and returns to follow after the
   last cockpit camera (or if there are none). Holding LOOK BACK pauses the
   cycle in every mode so release restores the view it started from.
-- Options → Controls → Game controls exposes CHANGE VIEW (slot 35). On load,
+- Both Game controls pages expose CHANGE VIEW (slot 35). The classic page
+  is still reachable: applying a display mode in OsdxOptions selects the
+  owner’s classic options group, which becomes visible when OsdxOptions closes.
+  On load,
   only the stock keyboard F1/F2 pair in slots 35/36 migrates to V. If slot 35
   was rebound or cleared, it stays that way, but stock F2 in the hidden slot
   36 is still cleared: both slots drive the same virtual axis. A later F1
@@ -480,8 +485,16 @@ the first V selected cockpit directly. Subsequent presses selected cockpit
 2–5, follow, then cockpit again. In follow and cockpits 1–4, the test sent
 B down → V → B up → V via `keybd_event`. The held press did not advance
 the cycle: release restored the starting view, and the next V advanced by
-one. The screenshots showed only the game. Chase with a live target and
-career autosave persistence were not exercised.
+one. A later hold test repeated the sequence through cockpit 5 and returned
+to follow. Chase with a live target and career autosave persistence were not
+exercised.
+
+**B release with V press (Windows Release, same car and map).** LOOK BACK is
+registered before V so its release restores the old view before V advances.
+From follow and cockpit 1, V did nothing while B was held. Sending B up and
+V down back-to-back selected cockpit 1 and cockpit 2 respectively; another
+V selected cockpit 3. The views matched the messages and no foreign windows
+appeared. The test did not instrument host frame boundaries.
 
 **Stock binary check.** The reference was the installed MWM 2.2.1 Track
 (76,042 bytes, SHA-256 `adf4219fddbe495efe4dcab1ab15614f0b0013920a385c6b254f64210750fca7`),
