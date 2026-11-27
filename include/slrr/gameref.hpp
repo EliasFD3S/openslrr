@@ -189,8 +189,8 @@ struct GameRefState {
   float chase_accel = 0.f;
   float chase_fov = 0.f;
   // Mod camera pose (java.openslrr.CameraControl, #487). While set, the
-  // camera's view is this pose and nothing else; a Relative pose follows the
-  // drawn origin of the car with live id mod_pose_car.
+  // camera's view is this pose and nothing else; a Relative or Local pose
+  // follows the drawn frame of the car with live id mod_pose_car.
   ModCameraPose mod_pose;
   int32_t mod_pose_car = 0;
   // This frame's look axes (PE mouse rate). The orbit body consumes them.
@@ -285,8 +285,11 @@ void gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
 // engine computes and whose roll stays the script's `roll`.
 void gameref_set_camera_roll_from_matrix(void* key, float roll);
 // java.openslrr.CameraControl (#487). set stores an exact pose on a script
-// camera (mode World) or offsets from the drawn origin of car (Relative,
-// resolved whenever the pose is read, so at draw time); clear restores the
+// camera (mode World), world offsets from the drawn origin of car (Relative)
+// or offsets in car's drawn chassis frame (Local); Relative and Local are
+// resolved whenever the pose is read, so at draw time. Each drawn frame
+// writes the eye, yaw, pitch and roll back to pos/ypr (and the roll to the
+// camera roll unless it is the bound follow camera). clear restores the
 // stock behaviour. False when key is not a camera, car is not a drawn car,
 // or the pose is invalid (the previous pose stays).
 bool gameref_mod_camera_set(void* key, ModCameraMode mode, const float eye[3],

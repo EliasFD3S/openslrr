@@ -13,6 +13,11 @@ public abstract class CameraProvider
 	// parent for the provider's camera.
 	public GameRef world;
 
+	// The camera the provider renders: set it in activate and back to null in
+	// deactivate. While the navigator follows the camera (GPS modes 2 and 3)
+	// it follows this one; without it, it follows the car.
+	public GameRef camera;
+
 	public CameraProvider()
 	{
 	}

@@ -471,59 +471,24 @@ Verified on the PR branch (f422ebb), by reading the code; not run in game.
 - `host_input_cancel_pointer_gestures` turns a held world button into a
   `world_release`, which `dispatch_world_pointer` emits as cursor event 2
   in the frame after the boundary, without a matching press in that scene.
+
 ## Change-view key (#470)
 
-Request: an optional "Need for Speed Underground 2" chase camera, and, in
-review, one rebindable change-view key (V) instead of the F-key view set. The
-NFSU2 camera was first built into the engine on this branch; it was removed
-again (see the end of this section) and moves to a mod. What remains is the
-change-view key.
+- In the patched MWM `Track`, V cycles follow → chase → cockpit cameras →
+  follow, skipping the mirror and look-back cameras. A car without cockpit
+  cameras returns to follow from chase. While LOOK BACK is held in the
+  cockpit, CHANGE VIEW does not advance the index that release restores.
+- Options → Controls → Game controls exposes CHANGE VIEW (slot 35). On load,
+  only the stock keyboard F1/F2 pair in slots 35/36 migrates to V. If slot 35
+  was rebound or cleared, it stays that way, but stock F2 in the hidden slot
+  36 is still cleared: both slots drive the same virtual axis. A later F1
+  binding with slot 36 empty is preserved. The hidden stock F5 look-back
+  binding in slot 37 is also cleared; the visible LOOK BACK defaults to B.
 
-Change:
+Validation (Windows, Release): in Valo City with the Baiern and a legacy
+profile edited to V/F2, F2 left the camera in follow and V selected chase
+then cockpit. Holding B, pressing V and releasing B restored the steering-wheel
+view; the next V displayed “Camera: cockpit 2”. The Game controls page showed
+CHANGE VIEW bound to V; interactive rebinding and save/reload were not tested.
 
-- `Track.java` (MWM source, now shipped compiled): the F1-F5/F9 view hotkeys
-  are replaced by a virtual hotkey on `Input.AXIS_LOOK_PREVNEXT` (the stock
-  "change camera" axis no script used), `CMD_NEXTCAM` 4700, `nextCamera`:
-  follow -> chase -> cockpit cameras (skipping the mirror and look-back ones)
-  -> follow; a car without cockpit cameras goes back to follow.
-- `ControlSet`: slot 35 defaults to V, slot 36 (stock previous camera, F2)
-  is empty; `load` moves a saved stock F1/F2 pair to V once (only when slot
-  35 holds F1 and slot 36 F2, so a later F1 binding of CHANGE VIEW is kept).
-  The hidden stock slot 37 (`AXIS_LOOK_REAR` on F5, not in the options) is
-  empty by default and cleared on load. `OsdxOptions` game controls list
-  CHANGE VIEW (slot 35).
-
-Validation (Windows, Release): `compile_game_sources` builds `Track.java`,
-`OsdxOptions.java` and `ControlSet.java` in a full private game copy;
-`options_retry`, `gameref_alias`, `car_select_view` and ctest pass. In game,
-reference replay with V sent by `keybd_event` every 10 s: follow -> chase ->
-cockpit cameras (`assets/validation/change-view/classic-change-view.png`).
-The rebinding page and the F1/F2 migration of an old controls file were not
-exercised in game.
-
-### NFSU2 camera moves to a mod
-
-The engine arcade camera of the first review rounds (`arcade_camera.cpp`,
-host options 34 `camera.style` and 35 `camera.arcade_view`, the
-`arcadeback` camera command, `part_car_local_box` and the Options → Game →
-CAMERA item) is removed. The NFSU2 camera is to be a script mod, built on
-three engine features: mod overlay folders (#486), a camera provider hook
-with a car/camera mod API (#487) and mod key bindings and settings (#488).
-The removed C++ (in this branch's history, `8c60d17`..`5aeb5fb`) is the
-reference for the mod's behaviour: four views (bumper, hood, near, far),
-slide swing with lag, speed view angle and reach, nitrous, vibration, crash
-shake, bend tilt, air time and look back.
-
-Findings that still apply to the mod:
-
-- NFSU2Recomp ships no game code or data (only its input map:
-  `JOY_EVENT_CAMERA_POV_CHANGE` = C, `JOY_EVENT_CAMERA_LOOKBACK` = X).
-  NFSU2's own `GLOBAL/GlobalB.lzc` (JDLZ, 5,145,778 -> 8,008,064 bytes, 298
-  chunks) has no camera table; `SPEED2.EXE` holds the chase camera
-  (`CubicCameraMover`), so its values are compiled in and were approximated
-  by eye with the requester's agreement.
-- A car's mesh extent must be measured in the frame of its largest mesh (the
-  shell), not `part_camera_pose`'s frame (about 2,000 m off in x); the shell
-  frame gives -1.31..0.96 x -1.12..0.58 x -2.28..2.16 m for the Baiern. A hood
-  eye at 80 % height / 30 % length sat under the bonnet skin; 6 % under the
-  top and 35 % from the front did not.
+The NFSU2 camera moves to a mod (#486, #487, #488).

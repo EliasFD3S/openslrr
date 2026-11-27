@@ -8923,28 +8923,19 @@ bool part_car_angular_velocity(void* car, float* omega) {
   return true;
 }
 bool part_car_local_box(void *key, float *lo, float *hi) {
-  if (!key || !lo || !hi || !car(static_cast<Object *>(key)))
+  Object *chassis = key && lo && hi ? car(static_cast<Object *>(key)) : nullptr;
+  if (!chassis)
     return false;
-  const auto instances = scene_instances_collect_root(key);
-  // The chassis shell (the largest mesh) carries the chassis frame in the
-  // instances' own space; every mesh corner is measured in that frame
-  // (part_camera_pose's frame is not in the instances' space).
-  const float *frame = nullptr;
-  float largest = -1.f;
-  for (const auto &instance : instances) {
-    if (!instance.geometry)
-      continue;
-    const auto &info = instance.geometry->info;
-    const float s = instance.geometry->position_scale;
-    const float volume = (info.bbox_max[0] - info.bbox_min[0]) * (info.bbox_max[1] - info.bbox_min[1]) *
-                         (info.bbox_max[2] - info.bbox_min[2]) * s * s * s;
-    if (volume > largest) {
-      largest = volume;
-      frame = instance.transform.data();
-    }
-  }
-  if (!frame)
+  // collect_root(chassis) poses every mesh through its parent chain up to
+  // and including the chassis node itself, so the instances live in the
+  // chassis's parent space, reflected (S*M*S, S flipping z). The chassis
+  // node's own drawn transform in that same space is the chassis frame;
+  // measuring in it keeps an offset or rotated body render, or a large
+  // attachment, from moving the origin or axes.
+  float frame[16];
+  if (!scene_instance_transform(chassis, chassis, frame))
     return false;
+  const auto instances = scene_instances_collect_root(chassis);
   bool any = false;
   for (const auto &instance : instances) {
     if (!instance.geometry)
@@ -8956,12 +8947,13 @@ bool part_car_local_box(void *key, float *lo, float *hi) {
       const float x = (corner & 1 ? geo.info.bbox_max[0] : geo.info.bbox_min[0]) * scale;
       const float y = (corner & 2 ? geo.info.bbox_max[1] : geo.info.bbox_min[1]) * scale;
       const float z = (corner & 4 ? geo.info.bbox_max[2] : geo.info.bbox_min[2]) * scale;
-      // Mesh point in the instances' space (the convention of
-      // part_car_ground), relative to the chassis origin.
+      // Mesh point in the instances' space (vertices are uploaded with z
+      // flipped, as in part_car_ground), relative to the chassis origin.
       float d[3];
       for (int i = 0; i < 3; ++i)
         d[i] = m[i] * x + m[4 + i] * y - m[8 + i] * z + m[12 + i] - frame[12 + i];
-      // Chassis axes: x, y up, and back (a mesh's +Z is drawn along -m[8..10]).
+      // Onto the chassis axes in that space, z flipped back to script
+      // metres: x right, y up, z back.
       for (int axis = 0; axis < 3; ++axis) {
         const float *a = frame + axis * 4;
         const float len = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);

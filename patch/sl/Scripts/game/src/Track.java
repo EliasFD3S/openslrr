@@ -177,10 +177,16 @@ abstract public class Track extends Scene implements GameState
 			Vector3 RendererPos;
 			Ypr RendererOri;
 
-			if( renderer )
+			// OpenSLRR (#487): a mod camera provider has its own camera, and
+			// Track's renderer is null while it is active.
+			GameRef view = renderer;
+			if( !view && camProvider && camProvider.camera && camProvider.camera.id() )
+				view = camProvider.camera;
+
+			if( view )
 			{
-				RendererPos = renderer.getPos();
-				RendererOri = renderer.getOri();
+				RendererPos = view.getPos();
+				RendererOri = view.getOri();
 
 				nav.gmCamera.setMatrix( new Vector3(RendererPos.x, 0.1, RendererPos.z),  new Ypr(RendererOri.y, 0.0, 0.0) );
 				nav.rmCamera.setMatrix( new Vector3(RendererPos.x/100, 0.1, RendererPos.z/100),  new Ypr(RendererOri.y, 0.0, 0.0) );
@@ -195,7 +201,7 @@ abstract public class Track extends Scene implements GameState
 					Rot = player.car.getOri().y;	
 			}
 			else
-			if( Config.gpsMode == 2 && renderer || Config.gpsMode == 3 && renderer )
+			if( Config.gpsMode == 2 && view || Config.gpsMode == 3 && view )
 			{
 				CamPos = RendererPos;
 				Rot = 0;
@@ -204,8 +210,18 @@ abstract public class Track extends Scene implements GameState
 					Rot = RendererOri.y;
 			}
 			
+			else
+			if( player.car )	// OpenSLRR (#487): no camera to follow, follow the car
+			{
+				CamPos = player.car.getPos();
+				Rot = 0;
+				if(Config.gpsMode == 3)
+					Rot = player.car.getOri().y;
+			}
+
 			nav.updateNavigator( player.car );			
-			nav.cam.setMatrix( new Vector3(CamPos.x/100, GPS_Min_Zoom + Speed, CamPos.z/100),  new Ypr(Rot, -1.57, 0.0) );
+			if( CamPos )
+				nav.cam.setMatrix( new Vector3(CamPos.x/100, GPS_Min_Zoom + Speed, CamPos.z/100),  new Ypr(Rot, -1.57, 0.0) );
 		}
 
 	// Car position for modders
@@ -1019,6 +1035,10 @@ abstract public class Track extends Scene implements GameState
 		else
 		if( cameraMode == CAMMODE_INTERNAL )
 		{
+			// Look back temporarily renders another camera; release restores cameraNum.
+			float rear = player.controller.user_GetAxisVal( Input.AXIS_LOOK_REAR );
+			if( rear > 0.5 || rear < -0.5 ) return;
+
 			// changeCamInternal's next camera, skipping the mirror and
 			// look-back cameras; after the last one, back to follow.
 			int cameras = cameraTarget.getInfo( GameType.GII_RENDER );
@@ -1082,6 +1102,32 @@ abstract public class Track extends Scene implements GameState
 		}
 		if( cameraMode == CAMMODE_PROVIDER )
 			cameraMode = CAMMODE_NONE;
+	}
+
+	// The repair, mechanic and paint views drive Track's own cam. With a
+	// provider active, they get the stock follow camera back first; closing
+	// the last of them hands the follow view back to the provider.
+	int	providerPauses;
+	void providerPause()
+	{
+		if( cameraMode == CAMMODE_PROVIDER )
+		{
+			changeCamFollow();	// deactivates the provider, shows cam
+			providerPauses = 1;
+		}
+		else
+		if( providerPauses )
+			providerPauses++;
+	}
+	void providerResume()
+	{
+		if( !providerPauses )
+			return;
+		if( --providerPauses )
+			return;
+		CameraProvider p = selectedCameraProvider();
+		if( p && cameraMode == CAMMODE_FOLLOW )
+			providerOn( p, Cameras.view( p ) );
 	}
 
 	// A selection made while driving (the options) applies to the follow view.
@@ -1834,6 +1880,7 @@ abstract public class Track extends Scene implements GameState
 			{
 				if( RepairStatus == 0 )
 				{
+					providerPause();	// OpenSLRR (#487): the close-up uses cam
 					System.timeWarp(0.0);
 					enableOsd(0);
 					mechanic.filterInventory( 0,0,0 );
@@ -1866,6 +1913,7 @@ abstract public class Track extends Scene implements GameState
 					System.timeWarp(1.0);
 					painter.hide();
 					enableOsd(1);
+					providerResume();	// OpenSLRR (#487)
 				}
 			}
 			else
@@ -1884,9 +1932,11 @@ abstract public class Track extends Scene implements GameState
 					mechanic.hide();
 					mechanic.filterInventory( 1,1,1 );
 					enableOsd(1);
+					providerResume();	// OpenSLRR (#487)
 				}
 				else
 				{
+					providerPause();	// OpenSLRR (#487): the close-up uses cam
 					enableOsd(0);
 					mechanic.filterInventory( 0,0,0 );
 					mechanic.show();
@@ -1913,9 +1963,11 @@ abstract public class Track extends Scene implements GameState
 					player.car.command( "start" );	//release
 					painter.hide();
 					enableOsd(1);
+					providerResume();	// OpenSLRR (#487)
 				}
 				else
 				{
+					providerPause();	// OpenSLRR (#487): the close-up uses cam
 					enableOsd(0);
 
 					painter.show();

@@ -35,6 +35,29 @@ bool read3(Object* o, const char* a, const char* b, const char* c, float* out) {
 bool read_vector(const std::vector<Value>& args, size_t i, float* out) {
   return read3(native_arg_object(args, i), "x", "y", "z", out);
 }
+// The up argument: null is world up; any other value must be a finite
+// Vector3, else the whole pose is rejected (a zero vector is still world up,
+// resolved by mod_camera_resolve).
+bool read_up(const std::vector<Value>& args, size_t i, float* out) {
+  if (!native_arg_object(args, i)) {
+    out[0] = 0.f, out[1] = 1.f, out[2] = 0.f;
+    return true;
+  }
+  return read_vector(args, i, out);
+}
+// setPose / setPoseRelative / setPoseLocal: cam, [car,] eye, at, up, fov.
+// A non-finite or missing eye, focus, up or fov leaves the previous pose.
+void set_pose(const std::vector<Value>& args, ModCameraMode mode) {
+  const size_t first = mode == ModCameraMode::World ? 1 : 2;
+  float eye[3], at[3], up[3];
+  if (!read_vector(args, first, eye) || !read_vector(args, first + 1, at) ||
+      !read_up(args, first + 2, up))
+    return;
+  const float fov = native_arg_number(args, first + 3, 0.f);
+  if (!std::isfinite(fov)) return;
+  gameref_mod_camera_set(native_arg_object(args, 0), mode, eye, at, up, fov,
+                         mode == ModCameraMode::World ? nullptr : native_arg_object(args, 1));
+}
 Value new_triple(Jvm& jvm, const char* cls, const char* a, const char* b, const char* c,
                  const float* v) {
   Object* o = jvm.new_object(cls);
@@ -121,24 +144,21 @@ void register_openslrr_natives(Jvm& jvm) {
   natives.register_method(kCameraControl, "setPose",
       "(Ljava.util.resource.GameRef;Ljava.lang.Vector3;Ljava.lang.Vector3;Ljava.lang.Vector3;F)V",
       [](Object*, const std::vector<Value>& args) {
-        float eye[3], at[3], up[3] = {0.f, 1.f, 0.f};
-        if (read_vector(args, 1, eye) && read_vector(args, 2, at)) {
-          if (!read_vector(args, 3, up)) up[0] = 0.f, up[1] = 1.f, up[2] = 0.f;
-          gameref_mod_camera_set(native_arg_object(args, 0), ModCameraMode::World, eye, at, up,
-                                 native_arg_number(args, 4, 0.f), nullptr);
-        }
+        set_pose(args, ModCameraMode::World);
         return Value::make_void();
       });
   natives.register_method(kCameraControl, "setPoseRelative",
       "(Ljava.util.resource.GameRef;Ljava.util.resource.GameRef;Ljava.lang.Vector3;"
       "Ljava.lang.Vector3;Ljava.lang.Vector3;F)V",
       [](Object*, const std::vector<Value>& args) {
-        float eye[3], at[3], up[3] = {0.f, 1.f, 0.f};
-        if (read_vector(args, 2, eye) && read_vector(args, 3, at)) {
-          if (!read_vector(args, 4, up)) up[0] = 0.f, up[1] = 1.f, up[2] = 0.f;
-          gameref_mod_camera_set(native_arg_object(args, 0), ModCameraMode::Relative, eye, at,
-                                 up, native_arg_number(args, 5, 0.f), native_arg_object(args, 1));
-        }
+        set_pose(args, ModCameraMode::Relative);
+        return Value::make_void();
+      });
+  natives.register_method(kCameraControl, "setPoseLocal",
+      "(Ljava.util.resource.GameRef;Ljava.util.resource.GameRef;Ljava.lang.Vector3;"
+      "Ljava.lang.Vector3;Ljava.lang.Vector3;F)V",
+      [](Object*, const std::vector<Value>& args) {
+        set_pose(args, ModCameraMode::Local);
         return Value::make_void();
       });
   natives.register_method(kCameraControl, "clearPose", "(Ljava.util.resource.GameRef;)V",
