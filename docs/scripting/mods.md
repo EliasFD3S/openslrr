@@ -36,7 +36,7 @@ At boot, look for `[mods]` lines. Each folder is listed or skipped with a reason
 
 Resource scripts naming a game-relative class file use the same overlay as package lookup. An existing resource container determines the class identity, even if another package's class with that filename is already loaded. If the script file is missing from both the base and the overlay, the host reuses a loaded class only when exactly one simple name matches the filename stem. It does not cache that guess. Disambiguate different packages with qualified names; an unqualified legacy reference is not a way to select between unrelated classes sharing a short name. RPK discovery skips the entire top-level `mods/` directory, including enabled mods. Install a script mod there, not a resource pack. Textures, general file I/O and native bindings are **not** overlaid. This is not a sandbox: install scripts only from sources you trust.
 
-With no mod classes the host skips the base scan. With class mods it scans the base once per boot, including multi-class containers. The `[mods] overlay scan` line reports this step alone; see the [MWM probe measurements](notes.md#486-mod-overlay-folders).
+With or without mods, boot indexes the declarations in base containers too. This makes a stock helper loadable by its own class name even when a mod replaces the primary class from a different file. The VM and compiler follow junctions and symlinked directories, skipping cycles and directories whose names cannot be encoded in UTF-8. The `[mods] overlay scan` line measures indexing, not the entire boot; see the [MWM probe measurements](notes.md#486-mod-overlay-folders).
 
 ## Entry and compilation
 

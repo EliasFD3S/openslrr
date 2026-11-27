@@ -12,7 +12,9 @@ floating-point semantics. Its literal-conversion self-test must pass before
 any output is published. The rest of the host remains C++20.
 
 The path is resolved against the game root. The selected directory is scanned
-recursively; paths outside the root are rejected. The compiler reads the
+recursively; a requested path outside the logical root is rejected. A junction or
+symlink inside the root can refer to files elsewhere: output written beside a
+linked source is written on its target. The compiler reads the
 game's existing TUFA declarations and source declarations for dependencies,
 and resolves symbolic packs through the compiler's InstallPacks provider.
 This provider reproduces a Build 940 session's pack-name conventions; exact
@@ -26,7 +28,7 @@ generated classes. Logs distinguish attempted/succeeded/failed/class counts.
 
 ### Compiling with script mods
 
-Both `System.compileAll` and `compile_game_sources.exe` use the enabled layers from [the mod load order](mods.md#which-class-wins). A logical directory such as `system/Scripts/mods/dash` includes visible sources at that path in mods and the base game. To compile just one mod, pass its physical directory (for example, `mods/dash`). This does **not** force a hidden source to win. Dependency declarations are selected by fully qualified class name and mod priority, including secondary classes in a TUFA. A fully shadowed unit is skipped. If a source also declares a visible sibling, the compiler rebuilds its entire TUFA beside its own `src/` directory; it never publishes into another layer. Give source-only dependencies explicit package declarations. Restart to use the compiled classes in the game.
+Both `System.compileAll` and `compile_game_sources.exe` use the enabled layers from [the mod load order](mods.md#which-class-wins). A logical directory such as `system/Scripts/mods/dash` includes visible sources at that path in mods and the base game. To compile just one mod, pass its physical directory (for example, `mods/dash`). This does **not** force a hidden source to win. Dependency declarations are selected by fully qualified class name and mod priority, including secondary classes in base and mod TUFA files. A matching relative filename in another layer is not a declaration. Discovery follows junctions and symlinked directories without descending into cycles. A fully shadowed unit is skipped. If a source also declares a visible sibling, the compiler rebuilds its entire TUFA beside its own `src/` directory; it never publishes into another layer. Give source-only dependencies explicit package declarations. Restart to use the compiled classes in the game.
 
 ### Float literal conversion (#420)
 
