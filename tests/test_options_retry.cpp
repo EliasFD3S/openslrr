@@ -113,7 +113,7 @@ int main() {
  std::ofstream(legacy_file)<<"msaa=0\n";
  host_game_options_load(f.vm);SLRR_REQUIRE(g.msaa==2);  // the JSON wins
  // Every renderer option id reads back what was set, through the file.
- for(int key=0;key<=33;++key){
+ for(int key=0;key<=34;++key){
    if(key==5)continue;  // the removed framerate mode
    int before=0;SLRR_REQUIRE(host_option_get(key,before));
    int target=before==0?1:0;
@@ -123,7 +123,18 @@ int main() {
    // AO radius (12) and view distance (14) clamp 0/1 up to their minimum.
    SLRR_REQUIRE(after==target || ((key==12 || key==14) && after>1));
  }
- int unknown=0;SLRR_REQUIRE(!host_option_get(34,unknown));
+ int unknown=0;SLRR_REQUIRE(!host_option_get(35,unknown));
+ // The camera style (#470) is saved by name and read back from it; an
+ // unknown name keeps the classic default.
+ SLRR_REQUIRE(host_option_set(34,1));
+ {
+   std::ifstream in(host_file);const std::string text{std::istreambuf_iterator<char>(in),{}};
+   SLRR_REQUIRE(text.find("\"style\": \"arcade\"")!=std::string::npos);
+ }
+ std::ofstream(host_file)<<R"({"version":1,"camera":{"style":"arcade"}})";
+ host_game_options_load(f.vm);SLRR_REQUIRE(host_camera_tuning().style==1);
+ std::ofstream(host_file)<<R"({"version":1,"camera":{"style":"nfs"}})";
+ host_game_options_load(f.vm);SLRR_REQUIRE(host_camera_tuning().style==0);
  std::puts("PASS options JSON: sections and types, defaults for missing keys, clamps, damaged file, legacy migration, every id");
  if(const char* root=std::getenv("SLRR_COMPILE_OPTIONS_ROOT")) {
    const auto report=script_compile_all(root,"options-build");

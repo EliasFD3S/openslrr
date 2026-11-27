@@ -102,6 +102,10 @@ const HostOption kOptions[] = {
     HostOption{32, "hud", "temperatures", 0, 1, true,
                +[] { return int(host_hud_tuning().temperatures); },
                +[](int v) { host_hud_tuning().temperatures = v != 0; }, {}},
+    // Chase camera style (#470), saved by name.
+    HostOption{34, "camera", "style", 0, 1, false,
+               +[] { return host_camera_tuning().style; },
+               +[](int v) { host_camera_tuning().style = v; }, {"classic", "arcade"}},
 };
 #undef SLRR_GRAPHICS_INT
 #undef SLRR_GRAPHICS_BOOL
@@ -174,6 +178,7 @@ void load_host_options(const std::string& root) {
   host_enhanced_graphics() = {};
   host_input_tuning() = {};
   host_sfx_spatial_options() = {};
+  host_camera_tuning() = {};
 
   bool loaded_json = false;
   if (std::ifstream in{host_options_path, std::ios::binary}) {
@@ -308,6 +313,10 @@ InputTuning& host_input_tuning() {
 }
 HudTuning& host_hud_tuning() {
   static HudTuning tuning;
+  return tuning;
+}
+CameraTuning& host_camera_tuning() {
+  static CameraTuning tuning;
   return tuning;
 }
 EnhancedGraphics& host_enhanced_graphics() {

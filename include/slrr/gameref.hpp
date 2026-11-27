@@ -1,5 +1,6 @@
 #pragma once
 
+#include "slrr/arcade_camera.hpp"
 #include "slrr/trigger_volume.hpp"
 #include "slrr/scx_mesh.hpp"
 #include "slrr/scene_sun.hpp"
@@ -187,6 +188,12 @@ struct GameRefState {
   float chase_speed = 0.f;
   float chase_accel = 0.f;
   float chase_fov = 0.f;
+  // Arcade chase camera (#470, host option 34). arcade_active: the last
+  // pose came from it, so the view angle is arcade.fov; classic_chase_active:
+  // the last pose was the classic follow view, whose eye the arcade one
+  // takes over when the style changes.
+  ArcadeCameraState arcade;
+  bool arcade_active = false, classic_chase_active = false;
   // This frame's look axes (PE mouse rate). The orbit body consumes them.
   float ctl_x = 0.f;
   float ctl_y = 0.f;

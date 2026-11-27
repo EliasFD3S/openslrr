@@ -880,6 +880,14 @@ view angle widens with the smoothed chassis speed (smoothstep from 30 to
 view is activated. In the chase view only, smoothed forward acceleration
 moves the eye up to 1.2 m back while pulling and 0.8 m closer while braking
 (`update_chase_feel` in `gameref.cpp`).
+Host option 34 (`camera.style`, #470) replaces that plain chase view with
+the arcade camera of `arcade_camera.hpp` when set to arcade: the eye follows
+the heading blended toward the direction of travel with a short spring lag,
+its own speed-dependent view angle and reach, and a right-drag look that decays
+once released. Script variants (`cameraMode` 3 and 4), a held or
+`angle`-turned follow camera, cockpit, attached and free cameras keep their
+behaviour; both chase styles share the eye collision sweep and hand over
+their eye when the style changes.
 
 SDL3 owns joystick/gamepad discovery and polling on that same host thread;
 Win32 still owns the window, keyboard scan codes and mouse. Devices 0/1 remain

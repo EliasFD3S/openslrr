@@ -369,6 +369,7 @@ take the new values when they load. Details in
 | 20 | Shadowed street lamps | 0–6 (default 6) |
 | 21 | Steering speed sensitivity | 0–100 percent (default 50): how much an analog wheel or stick's full lock narrows with speed; 0 keeps full lock at any speed, 100 narrows it like keyboard steering |
 | 32 | Temperatures | 0 off, 1 on (default): the brake and tyre temperature panel above the gauges (#446) |
+| 34 | Camera | 0 classic (default), 1 arcade: the driving chase camera, saved as `"classic"` / `"arcade"` under `camera.style` (#470) |
 
 The menu and ImGui share all of these options. They are saved in `save/game/openslrr_options.json` and persist across launches. Local lights (4) are independent of scenery sunlight (3): turning sunlight off keeps the garage lamps and their shadows. Resolution, the global shadow toggle, and flares use the game's existing configuration.
 
@@ -381,6 +382,10 @@ comparison filtering independently. Start with medium quality and soft edges.
 ## Framerate
 
 Cars are always drawn between their last two 60 Hz host steps, so they move smoothly at any frame rate; the drawn car is up to one step (16.7 ms) behind the simulation. The **Framerate Adaptive Behaviour** option and its Classic (60 Hz) mode are gone. An old `framerate_mode` key in `save/game/openslrr_options.json` is ignored.
+
+## Chase camera (#470)
+
+**Options → Game → CAMERA** chooses the driving chase camera: **Classic** (default) is the original follow camera; **Arcade** is modelled on Need for Speed: Underground 2's chase view. It sits lower and closer behind the car, swings part of the way toward the direction of travel in a slide so the car's angle shows, trails a bend briefly, widens the view (50 to 72 degrees) and drops back with speed, and returns behind the car after a right-button look. The mouse wheel still zooms it. Race scripts' special cameras (`cameraMode` 3 and 4), held staging cameras, the cockpit and the free camera are unchanged. The choice needs the patched `OptionsDialog.class` and `OsdxOptions.class`; without them the option keeps its saved value (classic unless `save/game/openslrr_options.json` says otherwise).
 
 ## Transmission and clutch
 

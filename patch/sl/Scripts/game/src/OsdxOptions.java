@@ -1270,6 +1270,7 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		sl = m.addItem( "ASR", OptionsDialog.CMD_ASR_SLIDER, Config.player_asr, "Traction control: cuts the engine and brakes a spinning driven wheel. 0 is off; lower settings allow more wheelspin." );
 		sl.printValue( "%.0f", 100.0 );
 		m.addToggle( "TEMPERATURES", OptionsDialog.CMD_HUD_TEMPERATURES, option(32), "Shows each tyre's and brake's temperature above the gauges: blue cold, green working, yellow to red overheating. A red brake mark is boiling fluid." );
+		m.addItem( "CAMERA", OptionsDialog.CMD_CAMERA_STYLE, option(34), list( "CLASSIC", "ARCADE", null, null, null ), "Chase camera. CLASSIC is the original follow camera. ARCADE sits low behind the car like Need for Speed Underground 2: it swings toward the direction of travel in a slide, widens the view with speed and springs back after you look around." );
 
 		header = new SectionHeader( osd, "WORLD AND DISPLAY", 0.08, TOP - 0.06, 0.82 );
 		m = column( RIGHT, TOP + 0.04 );

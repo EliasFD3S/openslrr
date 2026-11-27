@@ -454,3 +454,56 @@ Verified on the PR branch (f422ebb), by reading the code; not run in game.
 - `host_input_cancel_pointer_gestures` turns a held world button into a
   `world_release`, which `dispatch_world_pointer` emits as cursor event 2
   in the frame after the boundary, without a matching press in that scene.
+
+## Arcade chase camera (#470)
+
+Request: an optional "Need for Speed Underground 2" chase camera, chosen in
+**Options → Game** as CLASSIC (the existing camera, default) or ARCADE. The
+issue points at [NFSU2Recomp](https://github.com/TalhaMudo/NFSU2Recomp); that
+repository is a static recompilation runtime (Metal, input, HUD and FOV
+patches) and ships no game code, so it has no camera logic to port. The
+arcade camera is therefore modelled on NFSU2's chase view as observed, not a
+port.
+
+Change:
+
+- `include/slrr/arcade_camera.hpp`, `src/resources/arcade_camera.cpp`: pure
+  pose math. The eye azimuth follows the chassis heading blended toward the
+  direction of travel (60 % of a slide up to 0.6 rad, from about 40 km/h;
+  reversing keeps the heading), with a spring lag of 4-6 /s capped at
+  1.2 rad. The focus is 0.75 m above the car origin with its height smoothed
+  (10 /s, at most 0.8 m behind); the eye sits 6.3 m back and 1.45 m above it,
+  looking 0.6-2.4 m past the car. Speed adds 1 m of reach and widens the
+  vertical view from 50 to 72 degrees (smoothstep 20-250 km/h), forward
+  acceleration up to 4 degrees and 0.9 m more (braking 0.5 m closer).
+- `gameref.cpp:driving_camera_pose` takes the arcade branch for the plain
+  follow view when host option 34 is arcade (`arcade_chase_selected`). Script
+  variants (`cameraMode` 3, 4), a held or `angle`-turned follow camera, the
+  cockpit, attached and free cameras are unchanged. Both styles share
+  `finish_chase_pose` (eye collision sweep, recorded pose). The arcade eye
+  is written into the classic follow body (`eye_s`, `look_s`), and the
+  arcade camera seeds its azimuth from the classic eye, so switching style
+  mid-drive does not cut. A right-drag look decays at 3 /s after release; the
+  wheel zoom scales the arcade distance by `cam_distance` / 7 m.
+  `world_camera_pose` returns `arcade.fov` while the arcade pose is active.
+- Host option 34 (`camera.style`, saved by name `"classic"`/`"arcade"`,
+  `host_camera_tuning`); `OptionsDialog.CMD_CAMERA_STYLE` (538) and a CAMERA
+  choice in `OsdxOptions.buildGame`.
+
+Validation (Windows, Release build of this branch):
+
+- `arcade_camera` (ctest): 7 checks pass (parked framing, read-only queries,
+  bounded lag then settling, slide/reverse/spin targets, speed view angle and
+  reach, seeding and zoom, bump smoothing).
+- `run_save_io_tests.ps1` suites `options_retry` (every id 0-34, name
+  round trip, unknown name keeps classic), `gameref_alias` and
+  `car_select_view` pass.
+- `compile_game_sources` compiles the patched `OptionsDialog.java` and
+  `OsdxOptions.java` (other units in that folder need the `parts` tree and
+  were not rebuilt).
+- In game: the reference Valo City replay
+  (`assets/validation/perf-baseline/drive.path`) with each style, frames in
+  `assets/validation/arcade-camera/`. The replay drives the car by pose, so
+  the speed-dependent angle, slide swing and look-back decay were not
+  exercised there; they are covered by the unit tests only. The Options menu
+  item itself was not opened in game.

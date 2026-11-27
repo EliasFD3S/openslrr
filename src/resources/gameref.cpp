@@ -1,6 +1,7 @@
 #include "slrr/race_runtime.hpp"
 #include "slrr/gc_roots.hpp"
 #include "slrr/gameref.hpp"
+#include "slrr/host_game_options.hpp"
 #include "slrr/script_events.hpp"
 #include "slrr/host_input.hpp"
 #include "slrr/part_runtime.hpp"
@@ -496,6 +497,7 @@ void gameref_activate_camera(GameRefState& camera, GameRefState& viewport, int p
   camera.cam_active = true;
   camera.cam_seq = ++g_camera_sequence;
   camera.chase_fov = 0.f;  // re-entered views restart from the current speed
+  camera.arcade.init = false;
 }
 
 bool gameref_scene_command(void* key, const std::string& line) {
@@ -880,9 +882,70 @@ static void update_chase_feel(GameRefState& cam, void* car, const float* frame, 
   cam.chase_fov = fresh ? goal : cam.chase_fov + (goal - cam.chase_fov) * -std::expm1(-dt * 2.f);
 }
 
+// Shared end of both chase poses: keep the eye out of walls between it and
+// the focus, and on timed steps record where the view is.
+static void finish_chase_pose(GameRefState& cam, float* eye, const float* at, float dt) {
+  float delta[3] = {eye[0] - at[0], eye[1] - at[1], eye[2] - at[2]};
+  SceneSphereHit hit;
+  if (scene_instances_sweep_sphere(at, delta, .15f, hit)) {
+    const float fraction = std::clamp(hit.fraction - .02f, .05f, 1.f);
+    for (int i = 0; i < 3; ++i) eye[i] = at[i] + delta[i] * fraction;
+  }
+  if (dt > 0.f) {
+    std::copy_n(eye, 3, cam.pos);
+    cam.ypr[0] = std::atan2(eye[0] - at[0], eye[2] - at[2]);
+    cam.ypr[1] = std::atan2(at[1] - eye[1], std::hypot(eye[0] - at[0], eye[2] - at[2]));
+  }
+}
+
+// The arcade chase camera (#470) replaces the plain follow view only: not
+// the script variants (cameraMode 3 and 4), a held or script-turned follow
+// camera, or the cockpit and attached views handled before it.
+static bool arcade_chase_selected(const GameRefState& cam) {
+  return host_camera_tuning().style == 1 && cam.follow_variant == 0 && !cam.follow_hold &&
+         cam.angle_gain <= 0.f;
+}
+
+static void arcade_chase_pose(GameRefState& cam, void* car, const float* frame, float* eye,
+                              float* at, float dt, bool was_arcade, bool was_classic) {
+  ArcadeCameraInput in;
+  std::copy_n(frame + 12, 3, in.position);
+  std::copy_n(frame + 8, 3, in.back);
+  if (!part_car_velocity(car, in.velocity)) std::fill_n(in.velocity, 3, 0.f);
+  // The wheel zoom keeps working: the stock follow distance is 7 m.
+  const float distance = std::clamp(cam.cam_distance > 0.f ? cam.cam_distance : 7.f,
+                                    cam.script_dist_min, cam.script_dist_max);
+  in.zoom = distance / 7.f;
+  // A look around with the right button springs back once it is released.
+  if (dt > 0.f && !host_input().rmb_down) {
+    const float keep = std::exp(-dt * 3.f);
+    cam.orbit_yaw *= keep;
+    cam.orbit_pitch *= keep;
+  }
+  in.orbit_yaw = cam.orbit_yaw;
+  in.orbit_pitch = cam.orbit_pitch;
+  // Taking over from the classic chase camera starts where its eye was;
+  // from any other view or a new target, straight behind the car.
+  if (!was_arcade || !cam.cam_pose_init) cam.arcade.init = false;
+  in.seed_eye = was_classic && cam.cam_pose_init ? cam.eye_s : nullptr;
+  const ArcadeCameraPose pose = arcade_camera_step(cam.arcade, in, dt);
+  std::copy_n(pose.eye, 3, eye);
+  std::copy_n(pose.at, 3, at);
+  // The classic follow body continues from here if the style or the view
+  // changes: its eye and focus (1.1 m above the car origin).
+  std::copy_n(pose.eye, 3, cam.eye_s);
+  cam.look_s[0] = frame[12];
+  cam.look_s[1] = frame[13] + 1.1f;
+  cam.look_s[2] = frame[14];
+  cam.cam_pose_init = true;
+  cam.arcade_active = true;
+}
+
 static bool driving_camera_pose(GameRefState& cam, float* eye, float* at,
                                 float* up, float dt) {
   using physics::Vec3;
+  const bool was_arcade = cam.arcade_active, was_classic = cam.classic_chase_active;
+  cam.arcade_active = cam.classic_chase_active = false;
   if (cam.camera_free) {
     const float yaw = cam.ypr[0] + cam.orbit_yaw;
     const float pitch = std::clamp(cam.ypr[1] + cam.orbit_pitch, -1.5f, 1.5f);
@@ -922,6 +985,12 @@ static bool driving_camera_pose(GameRefState& cam, float* eye, float* at,
     target_point(&cam, cam.look_id, cam.look_off, at);
     return true;
   }
+  if (arcade_chase_selected(cam)) {
+    arcade_chase_pose(cam, target->key, frame.data(), eye, at, dt, was_arcade, was_classic);
+    finish_chase_pose(cam, eye, at, dt);
+    return true;
+  }
+  cam.classic_chase_active = true;
 
   const double distance = cam.follow_variant == 4 ? 11. : cam.follow_variant == 3 ? 12. :
       std::clamp(cam.cam_distance > 0.f ? cam.cam_distance : 7.f,
@@ -973,17 +1042,7 @@ static bool driving_camera_pose(GameRefState& cam, float* eye, float* at,
   std::copy_n(center, 3, cam.look_s);
   std::copy_n(center, 3, at);
   std::copy_n(cam.eye_s, 3, eye);
-  float delta[3] = {eye[0] - at[0], eye[1] - at[1], eye[2] - at[2]};
-  SceneSphereHit hit;
-  if (scene_instances_sweep_sphere(at, delta, .15f, hit)) {
-    const float fraction = std::clamp(hit.fraction - .02f, .05f, 1.f);
-    for (int i = 0; i < 3; ++i) eye[i] = at[i] + delta[i] * fraction;
-  }
-  if (dt > 0.f) {
-    std::copy_n(eye, 3, cam.pos);
-    cam.ypr[0] = std::atan2(eye[0] - at[0], eye[2] - at[2]);
-    cam.ypr[1] = std::atan2(at[1] - eye[1], std::hypot(eye[0] - at[0], eye[2] - at[2]));
-  }
+  finish_chase_pose(cam, eye, at, dt);
   return true;
 }
 
@@ -997,7 +1056,9 @@ static bool world_camera_pose(float eye[3], float at[3], float* fov, float* znea
   if (driving_camera_pose(*cam, eye, at, up, dt)) {
     const bool cockpit = cam->camera_attached && !cam->follow_variant;
     const bool chase = !cockpit && !cam->camera_free;
-    if (fov) *fov = cockpit ? cam->half_aov : chase && cam->chase_fov > 0.f ? cam->chase_fov : kChaseFov;
+    if (fov) *fov = cockpit ? cam->half_aov :
+                    chase && cam->arcade_active && cam->arcade.fov > 0.f ? cam->arcade.fov :
+                    chase && cam->chase_fov > 0.f ? cam->chase_fov : kChaseFov;
     // Outside the cockpit, reserve more depth precision for close body seams.
     if (znear) *znear = cockpit ? .03f : .20f;
     if (zfar) *zfar = 3000.f;

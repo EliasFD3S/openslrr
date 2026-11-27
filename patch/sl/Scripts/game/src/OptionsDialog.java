@@ -69,6 +69,8 @@ public class OptionsDialog extends Dialog
 	final static int CMD_HUD_TEMPERATURES = 536;
 	// Tyre smoke and dust density (#454): host option 33, percent of the default.
 	final static int CMD_TYRE_SMOKE = 537;
+	// Chase camera style (#470): host option 34, 0 classic, 1 arcade.
+	final static int CMD_CAMERA_STYLE = 538;
 	public static native int getRendererOption(int option);
 
 	// The car control (ControlSet slot 0..9) of dead zone slider i:
@@ -1148,6 +1150,8 @@ public class OptionsDialog extends Dialog
 		if (command == CMD_SHADOWED_LAMPS) { setRendererOption(20, osd.sliderValue); customPreset(); }
 		else
 		if (command == CMD_TYRE_SMOKE) setRendererOption(33, osd.sliderValue);
+		else
+		if (command == CMD_CAMERA_STYLE) setRendererOption(34, osd.multiValue);
 		else
 		if (command == CMD_ENHANCED_SHADOWS)
 		{

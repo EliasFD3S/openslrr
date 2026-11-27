@@ -58,11 +58,18 @@ struct HudTuning {
   bool temperatures = true;
 };
 HudTuning& host_hud_tuning();
+// Host-only camera settings (#470), saved with the others.
+struct CameraTuning {
+  // Option 34: the driving chase camera. 0 classic (the stock follow
+  // camera), 1 arcade (arcade_camera.hpp). Saved as "classic" / "arcade".
+  int style = 0;
+};
+CameraTuning& host_camera_tuning();
 // Persist host-only graphics alongside the stock options, without changing Config.
 // Saved as JSON in save/game/openslrr_options.json (#405); the key=value
 // save/game/openslrr_options of older builds is read once and kept.
 bool host_save_graphics_options();
-// A host-only option by its OptionsDialog renderer option id (0-32, see the
+// A host-only option by its OptionsDialog renderer option id (0-34, see the
 // table in host_game_options.cpp). get returns false for an unknown id; set
 // clamps to the option's range, applies it and saves when it changed.
 bool host_option_get(int id, int& value);
