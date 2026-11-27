@@ -124,7 +124,6 @@ abstract public class Track extends Scene implements GameState
 
 	Vector3 rota;
 
-
 	public Track()
 	{
 		createNativeInstance();
@@ -133,7 +132,6 @@ abstract public class Track extends Scene implements GameState
 		player2=GameLogic.player2;
 	}
 
-	
 	public void animate()
 	{
 		/*if(player.car)
@@ -142,7 +140,6 @@ abstract public class Track extends Scene implements GameState
 			player.car.chassis.setSlotPos( 18, rota, null );
 			player.car.chassis.setSlotPos( 23, rota, null );
 		}*/
-
 		//setMessage( Math.sqrt(player.car.getSpeedSquare())*3.6 ); // Car Speed
 
 		if( TimeTextStatus == 1 && TimeTextWait < System.currentTime() )
@@ -259,11 +256,8 @@ abstract public class Track extends Scene implements GameState
 		return Math.sqrt(key)+3.75;
 	}
 
-
-
 	public void enter( GameState prev_state )
 	{
-
 		float key = Math.random()*100;
 		if( MainMenu.Check(key) != Math.sqrt(key)+3.75 ) Mirans_Mod_protection_error______Please_Resintal_Mirans_Mod();
 
@@ -278,7 +272,7 @@ abstract public class Track extends Scene implements GameState
 			t.setPriority( Thread.MAX_PRIORITY );
 
 			//test:
-			//GameLogic.autoSaveQuiet();
+			GameLogic.autoSaveQuiet();	// the installed MWM Track.class saves here (#470)
 	
 			//a gyerekosztalyok implementaljak a kov ket sort, az o enter() metodusukban!
 			//Frontend.loadingScreen.show();
@@ -322,7 +316,6 @@ abstract public class Track extends Scene implements GameState
 					player.car.setDefaultTransmission();
 					player.car.setDefaultSteeringHelp();
 					player.controller.command( "controllable " + player.car.id() );
-					player.car.chassis.Refresher_Start();
 				}
 
 				lastCamPos = new Vector3( 0, 3, 6);
@@ -471,7 +464,10 @@ abstract public class Track extends Scene implements GameState
 		//Test = new GameRef( map, cars.racers.addon:0x00000015r, "0,1,0"+","+"0,0,0," + 1, "Wing" );
 
 		//Test_Render = new RenderRef( map, maps.skydome:0x0013r, "egbolt-dawn_02" );
-		Test_Render = new RenderRef( map, MW_Mod:0x0079r, "egbolt-dawn_02" );
+		// OpenSLRR (#470): the installed MWM Track.class does not create
+		// Test_Render; the MWM source did, on every enter, and never
+		// destroyed it.
+		//Test_Render = new RenderRef( map, MW_Mod:0x0079r, "egbolt-dawn_02" );
 	}
 
 	public void exit( GameState next_state )
@@ -495,7 +491,6 @@ abstract public class Track extends Scene implements GameState
 				posStart = player.car.getPos();
 				oriStart = player.car.getOri();
 				player.controller.command( "leave " + player.car.id() );
-				player.car.chassis.Refresher_Stop();
 			}
 
 			player.render.destroy();
@@ -962,13 +957,22 @@ abstract public class Track extends Scene implements GameState
 		if (!cameraTarget)	return;
 		if (!cameraTarget.id())	return;
 
+		// Keep the current mode until look-back has restored the view.
+		float rear = player.controller.user_GetAxisVal( Input.AXIS_LOOK_REAR );
+		if( rear > 0.5 || rear < -0.5 ) return;
+
 		if( cameraMode == CAMMODE_FOLLOW )
 		{
-			changeCamChase();
-			setMessage( "Camera: chase" );
+			if( cameraTarget2 )
+				if( cameraTarget2.id() )
+				{
+					changeCamChase();
+					setMessage( "Camera: chase" );
+					return;
+				}
 		}
-		else
-		if( cameraMode == CAMMODE_CHASE )
+
+		if( cameraMode == CAMMODE_FOLLOW || cameraMode == CAMMODE_CHASE )
 		{
 			cameraNum = 0;
 			changeCamInternal();
@@ -984,10 +988,6 @@ abstract public class Track extends Scene implements GameState
 		else
 		if( cameraMode == CAMMODE_INTERNAL )
 		{
-			// Look back temporarily renders another camera; release restores cameraNum.
-			float rear = player.controller.user_GetAxisVal( Input.AXIS_LOOK_REAR );
-			if( rear > 0.5 || rear < -0.5 ) return;
-
 			// changeCamInternal's next camera, skipping the mirror and
 			// look-back cameras; after the last one, back to follow.
 			int cameras = cameraTarget.getInfo( GameType.GII_RENDER );
