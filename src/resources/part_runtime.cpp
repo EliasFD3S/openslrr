@@ -2006,13 +2006,12 @@ Object *part_create(Jvm &jvm, RpkIndex &resources, Object *parent,
                      script.find('.') != std::string::npos &&
                      (script.size() < 6 ||
                       script.compare(script.size() - 6, 6, ".class") != 0);
-    std::string lookup = script;
+    const TufaClass* cls = nullptr;
     if (fqn) {
-      if (!jvm.load_class(lookup)) return nullptr;
-    } else if (!jvm.load_class_file(path_to_utf8(std::filesystem::path(resources.game_root()) / script), &lookup)) {
-      return nullptr;
+      if (jvm.load_class(script)) cls = jvm.find_class(script);
+    } else {
+      cls = jvm.load_resource_class(path_to_utf8(std::filesystem::path(resources.game_root()) / script));
     }
-    auto* cls = jvm.find_class(lookup);
     if (!cls)
       return nullptr;
     class_name = cls->name();

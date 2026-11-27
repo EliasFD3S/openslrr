@@ -9,6 +9,7 @@
 #include "slrr/natives_boot.hpp"
 #include "slrr/rpk_index.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cctype>
 #include <limits>
@@ -163,7 +164,10 @@ bool Jvm::bootstrap_classpath() {
       {"parts/accessories/scripts", "java.game.parts.accessories"},
   };
   overlay_ = std::make_unique<ModOverlay>();
+  const auto scan_start = std::chrono::steady_clock::now();
   overlay_->scan(game_root_, std::cout);
+  const auto scan_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - scan_start);
+  std::printf("[mods] overlay scan: %.1f ms\n", scan_ms.count());
   publish_mod_list(overlay_->mods());
   namespace fs = std::filesystem;
   // Union of package directories, including packages absent in the base.
@@ -203,8 +207,10 @@ bool Jvm::bootstrap_classpath() {
   return true;
 }
 
-std::string Jvm::resolve_class_path(const std::string& fqn) const {
-  if (const auto mod = overlay_->provider(fqn); !mod.empty()) return path_to_utf8(mod);
+std::string Jvm::resolve_class_path(const std::string& fqn, bool exact) const {
+  if (overlay_) {
+    if (const auto mod = overlay_->provider(fqn); !mod.empty()) return path_to_utf8(mod);
+  }
   const auto slash = fqn.find_last_of('.');
   const std::string simple =
       slash == std::string::npos ? fqn : fqn.substr(slash + 1);
@@ -213,25 +219,48 @@ std::string Jvm::resolve_class_path(const std::string& fqn) const {
 
   for (const auto& root : classpath_) {
     if (!pkg.empty() && root.second != pkg) continue;
-    const auto path = overlay_->resolve(path_from_utf8(root.first) / path_from_utf8(simple + ".class"));
+    const auto raw = path_from_utf8(root.first) / path_from_utf8(simple + ".class");
+    const auto path = overlay_ ? overlay_->resolve(raw) : raw;
     if (file_readable(path)) return path_to_utf8(path);
   }
+  if (exact) return {};  // entries never fall back to a same-named class in another package
   for (const auto& root : classpath_) {
-    const auto path = overlay_->resolve(path_from_utf8(root.first) / path_from_utf8(simple + ".class"));
+    const auto raw = path_from_utf8(root.first) / path_from_utf8(simple + ".class");
+    const auto path = overlay_ ? overlay_->resolve(raw) : raw;
     if (file_readable(path)) return path_to_utf8(path);
   }
   return {};
 }
 
 void Jvm::initialize_mods() {
+  if (!overlay_) return;
   const auto& mods = overlay_->mods();
+  // Entries run lowest priority first; a shared entry runs once, at the turn of
+  // the highest-priority mod that names it (the last one in this order).
+  std::unordered_map<std::string, const ModManifest*> winner;
+  for (const auto& mod : mods)
+    if (!mod.entry.empty()) winner.try_emplace(mod.entry, &mod);
   for (auto it = mods.rbegin(); it != mods.rend(); ++it) {
     if (it->entry.empty()) continue;
+    if (winner[it->entry] != &*it) {
+      std::printf("[mods] mods/%s: duplicate entry %s; using mods/%s\n",
+                  it->folder.c_str(), it->entry.c_str(), winner.at(it->entry)->folder.c_str());
+      continue;
+    }
     try {
       // An entry is an exact class identity, not a legacy short-name alias.
       if (!by_name_.contains(it->entry)) {
-        const auto path = resolve_class_path(it->entry);
-        if (!path.empty()) load_class_file(path);
+        const auto path = resolve_class_path(it->entry, true);
+        if (!path.empty()) {
+          // The file found by directory/package must really declare the entry; an
+          // unrelated same-simple-name class is neither registered nor initialized.
+          std::vector<TufaClass> blobs;
+          std::string err;
+          const auto file = path_from_utf8(path);
+          const bool parsed = overlay_->load(file, blobs, err);
+          if (parsed && std::any_of(blobs.begin(), blobs.end(), [&](const TufaClass& b) { return b.name() == it->entry; }))
+            load_class_file(path);
+        }
       }
       const auto cls = by_name_.find(it->entry);
       if (cls == by_name_.end()) {
@@ -449,14 +478,25 @@ void Jvm::apply_field_defaults(Object* obj) {
 }
 
 bool Jvm::load_class_file(const std::string& requested, std::string* primary_name) {
-  // Resource scripts may name a game-relative file directly instead of a FQN.
+  return load_class_file_impl(requested, primary_name, false);
+}
+
+const TufaClass* Jvm::load_resource_class(const std::string& path) {
+  std::string primary;
+  return load_class_file_impl(path, &primary, true) ? find_class(primary) : nullptr;
+}
+
+bool Jvm::load_class_file_impl(const std::string& requested, std::string* primary_name,
+                               bool resource_path) {
   const auto request = path_from_utf8(requested);
   const auto relative = overlay_ ? overlay_->logical(request) : std::filesystem::absolute(request);
   if (relative.empty()) return false;
   std::error_code error;
   // A real resource container supplies its class identities. A mod may also
   // add a file for an RPK path which does not exist in the base installation.
-  const auto path = overlay_ && !std::filesystem::is_regular_file(request, error)
+  const auto request_status = overlay_ || resource_path
+      ? std::filesystem::status(request, error) : std::filesystem::file_status{};
+  const auto path = overlay_ && !std::filesystem::is_regular_file(request_status)
                       ? overlay_->resolve(relative) : request;
   auto absolute = std::filesystem::absolute(path, error);
   std::string path_key = path_to_utf8((error ? path : absolute).lexically_normal());
@@ -467,6 +507,26 @@ bool Jvm::load_class_file(const std::string& requested, std::string* primary_nam
   if (auto it = loaded_paths_.find(path_key); it != loaded_paths_.end()) {
     if (primary_name) *primary_name = it->second;
     return true;
+  }
+  // Give an existing base or mod container priority: its primary may not
+  // be the already-loaded class with the same short name. If neither layer
+  // supplies the path, reuse an unambiguous loaded identity without reading
+  // another file or caching this guess as the primary for the missing path.
+  if (resource_path &&
+      (path == request ? request_status : std::filesystem::status(path, error)).type() ==
+          std::filesystem::file_type::not_found) {
+    const auto stem = path_to_utf8(relative.stem());
+    const std::string* match = nullptr;
+    for (const auto& entry : by_name_) {
+      const auto& name = entry.first;
+      if (std::string_view(name).substr(name.rfind('.') + 1) != stem) continue;
+      if (match) return false;
+      match = &name;
+    }
+    if (match) {
+      *primary_name = *match;
+      return true;
+    }
   }
   if (!loading_paths_.insert(path_key).second) return false;
   struct LoadingGuard {

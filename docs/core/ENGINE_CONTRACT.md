@@ -274,7 +274,7 @@ Loading work that only reads files goes to the shared worker pool in
 `src/platform/job_system.cpp`: one worker per logical processor besides
 the host thread. `jobs_parallel_for` spreads the indices over the workers
 and the calling thread and returns when all are done; a nested call runs
-serially. Its users are pack indexing at startup, the immutable traffic-lane spatial
+serially. Its users are pack indexing and TUFA declaration scans for script overlays at startup, the immutable traffic-lane spatial
 index (per-edge fragments merged on the host after the join), mesh loading for a map's
 props and for the render objects new in a frame, a map's object types (CFG
 and collision meshes), the placement collision bakes, their merge and prop

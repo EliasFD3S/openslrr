@@ -32,8 +32,12 @@ set_target_properties(slrr_script_compiler PROPERTIES CXX_STANDARD 17)
 target_include_directories(slrr_script_compiler PUBLIC third_party/slrrc)
 target_compile_options(slrr_script_compiler PRIVATE /utf-8 /fp:precise)
 
+add_library(slrr_jobs STATIC src/platform/job_system.cpp)
+target_include_directories(slrr_jobs PUBLIC include)
+
 add_library(slrr_mod_overlay STATIC src/jvm/mod_overlay.cpp src/platform/host_options_json.cpp)
 target_include_directories(slrr_mod_overlay PUBLIC include)
+target_link_libraries(slrr_mod_overlay PRIVATE slrr_jobs)
 target_compile_options(slrr_mod_overlay PRIVATE /utf-8)
 
 add_executable(compile_game_sources tools/compile_game_sources.cpp
@@ -64,7 +68,6 @@ add_executable(slrr_host
   src/platform/host_music.cpp
   src/platform/host_game_options.cpp
   src/platform/host_cursor.cpp
-  src/platform/job_system.cpp
   src/platform/video_cinepak.cpp
   src/platform/video_fmv.cpp
   src/platform/video_fmv_vlc.cpp

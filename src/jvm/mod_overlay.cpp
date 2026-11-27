@@ -1,7 +1,9 @@
 #include "mod_overlay.hpp"
 #include "slrr/mod_api.hpp"
+#include "slrr/job_system.hpp"
 #include "slrr/tufa.hpp"
 #include "slrr/utf8_path.hpp"
+#include "../../third_party/slrrc/class_order.hpp"
 #include "../platform/host_options_json.hpp"
 #include <algorithm>
 #include <cctype>
@@ -36,6 +38,30 @@ int compare_names(const fs::path& a, const fs::path& b) {
 struct NameLess {
   bool operator()(const fs::path& a, const fs::path& b) const { return compare_names(a, b) == CSTR_LESS_THAN; }
 };
+
+// The compiler's order (slrrc::class_order_key, shared with install.cpp),
+// with the byte order of the relative path as tie-break. Keys are computed
+// once, outside the sort.
+void sort_like_compiler(std::vector<fs::path>& files, const fs::path& layer) {
+  struct Entry {
+    slrrc::ClassOrderKey order;
+    std::string rel;
+    fs::path path;
+  };
+  std::vector<Entry> entries;
+  entries.reserve(files.size());
+  for (auto& path : files) {
+    const auto rel = path.lexically_relative(layer).lexically_normal();
+    auto dir = path_to_utf8(rel.parent_path());
+    if (dir == ".") dir.clear();
+    entries.push_back({slrrc::class_order_key(dir, path_to_utf8(rel.stem())), path_to_utf8(rel), std::move(path)});
+  }
+  std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) {
+    return slrrc::class_order_less(a.order, a.rel, b.order, b.rel);
+  });
+  files.clear();
+  for (auto& e : entries) files.push_back(std::move(e.path));
+}
 
 bool identifier(const std::string& name) {
   bool first = true;
@@ -172,27 +198,47 @@ void ModOverlay::scan(const fs::path& game, std::ostream& log) {
     std::vector<fs::path> files;
     for (fs::recursive_directory_iterator it(layer, fs::directory_options::skip_permission_denied, ec), end;
          it != end; it.increment(ec)) {
-      if (!mod && it.depth() == 0 && key(it->path().filename()) == "mods") {
+      // NTFS names need not be valid UTF-16. Check each component before
+      // indexing it; skipping recursion also protects all descendant paths.
+      std::string name;
+      try {
+        name = key(it->path().filename());
+      } catch (const std::system_error&) {
+        log << "[mods] skipped a name not representable in UTF-8 under "
+            << path_to_utf8(it->path().parent_path()) << '\n';
         it.disable_recursion_pending();
         continue;
       }
-      if (key(it->path().extension()) != ".class") continue;
-      if (it->is_regular_file(ec)) files.push_back(it->path());
-    }
-    // Stable order for duplicate declarations within one layer. Prefer a
-    // container named after the class, as the compiler does at equal priority.
-    std::sort(files.begin(), files.end());
-    for (const auto& path : files) {
-      const auto rel = key(path.lexically_relative(layer));
-      if (mod) winners_.try_emplace(rel, path);
-      std::vector<TufaClass> blobs;
-      std::string error;
-      if (!tufa_load_file(path_to_utf8(path), &blobs, &error)) {
-        if (mod) log << "[mods] " << path_to_utf8(path.lexically_relative(game_)) << ": " << error << '\n';
+      if (!mod && it.depth() == 0 && name == "mods") {
+        it.disable_recursion_pending();
         continue;
       }
-      for (const auto& cls : blobs) {
-        const auto name = cls.name();
+      if (!name.ends_with(".class") || name == ".class") continue;
+      if (it->is_regular_file(ec)) files.push_back(it->path());
+    }
+    sort_like_compiler(files, layer);
+    // Parse independent containers on the loading pool. Keep names, not the
+    // whole installation's bytecode; commit winners and logs in sorted order.
+    struct Declarations { std::vector<std::string> names; std::string error; };
+    std::vector<Declarations> declarations(files.size());
+    jobs_parallel_for(files.size(), [&](size_t i) {
+      std::vector<TufaClass> blobs;
+      auto& result = declarations[i];
+      if (tufa_load_file(path_to_utf8(files[i]), &blobs, &result.error)) {
+        for (const auto& cls : blobs) result.names.push_back(cls.name());
+      }
+    });
+    for (size_t i = 0; i < files.size(); ++i) {
+      const auto& path = files[i];
+      const auto& result = declarations[i];
+      if (result.names.empty()) {
+        if (mod) log << "[mods] " << path_to_utf8(path.lexically_relative(game_)) << ": "
+                     << (result.error.empty() ? "empty class container" : result.error) << '\n';
+        continue;
+      }
+      const auto rel = key(path.lexically_relative(layer));
+      if (mod) winners_.try_emplace(rel, path);
+      for (const auto& name : result.names) {
         if (!mod) {
           if (auto hit = conflicts.find(name); hit != conflicts.end()) hit->second.base = true;
           else if (winners_.contains(rel)) base_siblings_.try_emplace(name, path);
@@ -204,8 +250,9 @@ void ModOverlay::scan(const fs::path& game, std::ostream& log) {
         if (folders.empty() || folders.back() != mod->folder) folders.push_back(mod->folder);
         auto [winner, fresh] = classes_.try_emplace(name, path);
         const auto simple = name.substr(name.rfind('.') + 1);
-        if (!fresh && folders.front() == mod->folder && path_to_utf8(path.stem()) == simple &&
-            path_to_utf8(winner->second.stem()) != simple) winner->second = path;
+        if (!fresh && folders.front() == mod->folder &&
+            slrrc::named_file_replaces(path_to_utf8(path.stem()), path_to_utf8(winner->second.stem()), simple,
+                                       winner->second == path)) winner->second = path;
       }
     }
   };

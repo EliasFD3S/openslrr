@@ -56,6 +56,8 @@ class Jvm : public TreeHost {
   void initialize_mods();
   bool load_class(const std::string& fqn_or_path);
   bool load_class_file(const std::string& path, std::string* primary_name = nullptr);
+  // A missing RPK script file may refer to a class already loaded by name.
+  const TufaClass* load_resource_class(const std::string& path);
   const TufaClass* find_class(const std::string& fqn) const;
 
   Object* new_object(const std::string& class_fqn);
@@ -134,7 +136,9 @@ class Jvm : public TreeHost {
   std::vector<GcRootProvider> gc_roots_;
   uint64_t gc_frame_id_=0;
   std::unordered_map<uint64_t,GcRootProvider> gc_frames_;
-  std::string resolve_class_path(const std::string& fqn) const;
+  std::string resolve_class_path(const std::string& fqn, bool exact = false) const;
+  bool load_class_file_impl(const std::string& path, std::string* primary_name,
+                            bool resource_path);
   void seed_static_fields(const TufaClass& cls);
   void enrich_static_fields(const TufaClass& cls);
   void apply_field_defaults(Object* obj);
