@@ -2184,6 +2184,42 @@ SLRR_TEST(compliance_steer_toes_the_loaded_wheels_by_their_forces) {
   SLRR_REQUIRE(std::abs(braking.dynamics.body.omega().y) < .02);
 }
 
+SLRR_TEST(a_live_axle_keeps_its_wheels_square_to_the_beam_and_steers_in_roll) {
+  // #490: the test saloon in a steady left turn, its rear wheels
+  // independent, then on a live axle, then on one with 0.15 deg of roll
+  // understeer per degree. On the beam the outer rear wheel stays near
+  // upright on the road instead of leaning out with the body; the roll
+  // steer turns the axle towards the turn and the car yaws less.
+  constexpr double degree = std::numbers::pi / 180;
+  double outer[3], yaw[3], steer[3];
+  for (int mode = 0; mode < 3; ++mode) {
+    Car car;
+    for (size_t i = 2; i < 4; ++i) {
+      car.dynamics.wheels[i].live_axle = mode > 0;
+      car.dynamics.wheels[i].roll_steer = mode == 2 ? .15 : 0;
+    }
+    car.run(2, 0, 0, 0);
+    car.dynamics.drive.engaged = false;
+    car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -16});
+    for (auto& s : car.dynamics.state) s.spin = 16 / .31;
+    car.run(2.5, 0, 0, .09);
+    const auto& body = car.dynamics.body;
+    const auto& s = car.dynamics.state[3];  // the outer (right) rear
+    const Vec3 axle = body.orientation.rotate(s.hub_rotation.rotate({1, 0, 0}));
+    outer[mode] = -std::asin(std::clamp(axle.y, -1.0, 1.0)) / degree;  // right wheel: top inboard negative
+    yaw[mode] = body.omega().y;
+    steer[mode] = s.axle_steer / degree;
+    SLRR_REQUIRE(std::abs(car.dynamics.state[2].axle_steer - s.axle_steer) < 1e-12);
+    SLRR_REQUIRE(std::abs(car.dynamics.state[2].axle_camber + s.axle_camber) < 1e-12);
+  }
+  std::printf("LIVEAXLE outer rear %.2f / %.2f / %.2f deg against the road, axle steer %.2f deg, yaw %.3f / %.3f / %.3f%c",
+              outer[0], outer[1], outer[2], steer[2], yaw[0], yaw[1], yaw[2], 10);
+  SLRR_REQUIRE(outer[0] > 2);
+  SLRR_REQUIRE(std::abs(outer[1]) < .5);
+  SLRR_REQUIRE(steer[1] == 0 && steer[2] > .2);  // towards the turn (left)
+  SLRR_REQUIRE(yaw[2] < yaw[1] * .97);
+}
+
 SLRR_TEST(hot_brake_fluid_boils_and_the_pressure_falls) {
   const auto brake = brake_hardware(0, 2, .286);
   double fluid = kAmbientTemperature;
@@ -2212,6 +2248,7 @@ int main() {
       rear_toe_in_under_bump_steers_a_rolling_car_out_of_its_turn,
       a_strut_keeps_its_scripts_static_toe,
       compliance_steer_toes_the_loaded_wheels_by_their_forces,
+      a_live_axle_keeps_its_wheels_square_to_the_beam_and_steers_in_roll,
       hard_braking_declutches_so_the_engine_never_pushes_the_rear_wheels,
       coasting_engine_braking_fades_with_the_speed,
       releasing_a_hard_brake_at_speed_takes_up_without_a_jolt,

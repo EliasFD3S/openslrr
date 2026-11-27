@@ -342,7 +342,10 @@ Impreza 0.03 / 0.05, Golf 0.02 / 0.03, Lancer, R34 and Prime 0.05 / 0.08,
 race cars 0.01 / 0.02. `WheelRef.setBushingCompliance(lateral,
 longitudinal)` gives the hub's travel in mm per kN: road fronts 0.30 /
 1.00, rears 0.20 / 0.80 (E36 1.00 fore and aft, Golf 0.30 / 1.20), Ram
-0.50 / 1.50, race cars 0.05 / 0.10. Live rear axles call neither.
+0.50 / 1.50, race cars 0.05 / 0.10. Live rear axles call neither; they
+call `WheelRef.setLiveAxle(rollSteer)` instead (#490): their wheels stay
+square to the beam, which steers by 0.05 deg per degree of its roll on the
+Camaro (torque arm, Panhard rod) and 0.10 on the Ram (leaf springs).
 
 **Caster (#458).** The stock struts had none: their strut axis and top lay
 in the front-view plane. Each front strut now leans back by its real car's

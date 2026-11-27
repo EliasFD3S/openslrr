@@ -106,6 +106,9 @@ struct WheelPhys {
   // per kN of cornering and of longitudinal force.
   bool has_bushing = false;
   float bushing_lateral = 0, bushing_longitudinal = 0;
+  // setLiveAxle (patched suspensions, #490): degrees of axle steer per
+  // degree of axle roll; NaN when not set.
+  float roll_steer = std::numeric_limits<float>::quiet_NaN();
   int opp = -1;
   float arm[7]{}, hub[10]{};
   bool authored_position = false;
@@ -3038,6 +3041,16 @@ void dynamics_wheels(Record &rec) {
       } else {
         cfg.bushing_lateral = cfg.bushing_longitudinal = 0;
       }
+      // Live axle (#490): WheelRef.setLiveAxle marks the corner as one end
+      // of a rigid beam and gives its roll steer; otherwise the #456 25 m
+      // arm corners are one, with 0.08 deg of roll understeer per degree.
+      if (std::isfinite(live.roll_steer)) {
+        cfg.live_axle = true;
+        cfg.roll_steer = live.roll_steer;
+      } else {
+        cfg.live_axle = cfg.arm_length >= 20;
+        cfg.roll_steer = cfg.live_axle ? .08 : 0;
+      }
     }
     // WheelRef.setWidth: the tyre width in metres (Tyre.java), stored halved.
     cfg.half_width = cfg.metal_contact ? 0. : std::clamp(double(live.width), 0., .25);
@@ -3141,11 +3154,11 @@ void pose_wheels(Object *chassis, Record &rec) {
     const auto base = part_pose_matrix(rec.config->wheels[i]);
     const auto inverse = part_matrix_inverse_rigid(base);
     const double steer = wheel_steering_angle(rec, i);
-    auto frames = physics::wheel_pose(cfg, state.length, &rec.geometry_solved[i], steer);
-    // The bushings' give and compliance steer (#484), as the solver has them.
-    frames.hub_origin += state.compliance_offset;
+    // The bushings' give and compliance steer (#484) and a live axle's tilt
+    // and roll steer (#490), as the solver has them.
+    const auto frames = physics::state_pose(cfg, state, state.length, steer, &rec.geometry_solved[i]);
     const auto hub_steered =
-        frames.hub_rotation * physics::wheel_steering(frames.steer_axis, steer + state.compliance_steer);
+        frames.hub_rotation * physics::wheel_steering(frames.steer_axis, physics::steer_total(state, steer));
     rec.travel_frame[i] = part_matrix_multiply(
         physics::corner_matrix(frames.arm_origin, rec.geometry_solved[i]
             ? frames.arm_rotation : frames.hub_rotation), inverse);
@@ -10312,6 +10325,15 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
       w.has_bushing = true;
       w.bushing_lateral = std::clamp(lateral, 0.f, 5.f);
       w.bushing_longitudinal = std::clamp(longitudinal, 0.f, 5.f);
+    });
+  });
+  // OpenSLRR native declared by the patched WheelRef (#490): this corner is
+  // one end of a live axle; degrees of axle steer per degree of the axle's
+  // roll against the body (-0.5 to +0.5, positive roll understeer).
+  wheel("setLiveAxle", "(F)V", [put](Object *s, const std::vector<Value> &a) {
+    return put(s, [&](WheelPhys &w) {
+      const float roll_steer = scalar(a, 0, 0);
+      if (std::isfinite(roll_steer)) w.roll_steer = std::clamp(roll_steer, -.5f, .5f);
     });
   });
   wheel("setOppWheel", "(I)V", [put](Object *s, const std::vector<Value> &a) {

@@ -91,4 +91,10 @@ public class WheelRef extends Native
 	// the suspension type.
 	public native void setBushingCompliance( float lateral, float longitudinal );
 
+	// OpenSLRR (#490): this corner is one end of a live axle: its wheel stays
+	// square to the beam joining it to the other wheel, and the beam steers by
+	// `rollSteer` degrees per degree of its roll against the body (positive:
+	// roll understeer). Without it the host treats the 25 m arm corners as one.
+	public native void setLiveAxle( float rollSteer );
+
 }

@@ -2661,3 +2661,57 @@ a live axle's roll steer (its whole axle yawing as the body rolls) is not
 modelled; compliance steer and give follow the last step's force with a
 fixed 30 ms lag; they are a few millimetres and under a degree, hardly
 visible on screen.
+
+## Live axle camber and roll steer (#490)
+
+Cause: the live rear axles (MC, SuperDuty) were two independent corners on
+a 25 m swing arm (#456). Each wheel's camber followed its own travel only,
+about 0.06 deg per 25 mm, so in roll both wheels leaned with the body (the
+outer rear about +4.5 deg against the road in the test turn) instead of
+staying square to the beam that joins them, and the axle never steered as
+the body rolled.
+
+Fix (OpenSLRR, typical values):
+
+- `WheelConfig::live_axle` marks a corner as one end of a beam;
+  `VehicleDynamics::update_live_axles` finds the other end on the same
+  axle and, from the last step's spring lengths, tilts the beam by
+  atan(length difference / track). Both wheels lean towards the drooping
+  side (`WheelState::axle_camber`: positive on it, negative on the other),
+  so against the road they stay near upright in roll.
+- Roll steer: the beam yaws by `roll_steer` times its tilt
+  (`WheelState::axle_steer`, the same for both wheels), towards the turn
+  for a rear axle (roll understeer), away for a front one. It adds to the
+  driver's steering in `steered_hub` (`steer_total`).
+- `state_pose` (moved to `suspension_geometry`, now also used by the
+  rendered wheel) applies the tilt with the bushings' give, so the tyre's
+  camber input, the contact and the rendered wheel follow the beam.
+- Moddable: `WheelRef.setLiveAxle(rollSteer)`, degrees of axle steer per
+  degree of axle roll, a new native declared by the patched `WheelRef.java`.
+  The patched MC rears call it with 0.05 (torque arm and Panhard rod) and
+  the SuperDuty rears with 0.10 (leaf springs). Without it, the 25 m arm
+  corners are live axles with 0.08.
+
+Validation:
+
+- Compilation: `slrr_host` Release; `WheelRef` and the rear suspension
+  classes in `build/brake-compile-root` (all compiled; the 10 live-axle
+  classes changed, the others byte for byte the same), the generator's
+  output identical to the edited sources.
+- `vehicle_dynamics` 79/79 with a new test: the test saloon in a steady
+  left turn at 16 m/s, outer rear wheel against the road +4.48 deg
+  independent, +0.37 deg on a live axle, +0.28 with 0.15 roll steer, which
+  steers the axle 0.45 deg towards the turn; yaw 0.499 / 0.474 / 0.435
+  rad/s. Both ends of the beam agree. `missing_support` 17/17,
+  `physics_tick_rate` 9/9.
+- In `build/needle-game` with the new classes, Tsukuba bench (straight
+  line): MC 9.97 / 40.55 km/h at 1 / 3 s (40.52 before; it still slows
+  after 4 s on that start, as before), CoupeSport unchanged at 71.99 km/h
+  at 6 s; no script error.
+- Not checked in game: cornering on a live axle, its feel and look.
+
+Limitations: the beam is kinematic: the wheels' own vertical travel is
+still two springs, so no axle tramp, wrap-up under drive or the beam's
+mass shared between the wheels; a single tilt from the two spring lengths,
+not the axle's locating links' geometry (Panhard rod lateral shift, roll
+centre); the roll steer coefficients are typical figures.

@@ -324,6 +324,18 @@ double toe_curve_change(const WheelConfig& wheel, double length) {
   return wheel.bump_steer * bump + .5 * wheel.bump_steer_progression * bump * bump;
 }
 
+CornerFrames state_pose(const WheelConfig& wheel, const WheelState& state, double length,
+                        double steer, bool* fitted) {
+  CornerFrames pose = wheel_pose(wheel, length, fitted, steer);
+  pose.hub_origin += state.compliance_offset;
+  if (wheel.live_axle && state.axle_camber != 0 && std::isfinite(state.axle_camber)) {
+    const double angle = std::clamp(state.axle_camber, -.35, .35) * outboard_side(wheel);
+    const Quaternion roll{0, 0, std::sin(angle * .5), std::cos(angle * .5)};
+    pose.hub_rotation = (roll * pose.hub_rotation).normalized();
+  }
+  return pose;
+}
+
 CornerFrames wheel_pose(const WheelConfig& wheel, double length, bool* fitted, double steer) {
   const double travel = length - wheel.anchor_length();
   const Vec3 ray = wheel.center + wheel.down.normalized() * travel;
