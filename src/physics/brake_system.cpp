@@ -204,6 +204,7 @@ void AbsModulator::update(double dt, double driver, double strength, double refe
         if (locking) {
           c.lock_pressure = c.pressure;
           c.phase = Phase::dump;
+          ++releases_[i];
         }
         break;
       case Phase::dump:
@@ -219,6 +220,7 @@ void AbsModulator::update(double dt, double driver, double strength, double refe
         c.timer += dt;
         if (slip > 1.5 * limit && acceleration < 0) {
           c.phase = Phase::dump;
+          ++releases_[i];
         } else if ((acceleration < 3 && slip < .6 * limit) || c.timer > .12) {
           // Spun back up: a quick first pulse, then a slow ramp.
           c.phase = Phase::rebuild;
@@ -234,6 +236,7 @@ void AbsModulator::update(double dt, double driver, double strength, double refe
         if (locking) {
           c.lock_pressure = std::min(c.pressure, driver);
           c.phase = Phase::dump;
+          ++releases_[i];
         } else if (c.pressure >= driver && c.timer > .3) {
           c.phase = Phase::follow;
         }

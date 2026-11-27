@@ -344,6 +344,7 @@ public:
   void sync_wheels();
   // Driving aids at the last step (#446), for the HUD and the debug view.
   bool abs_active() const { return abs_.active(); }
+  unsigned abs_releases(std::size_t i) const { return abs_.releases(i); }
   bool asr_active() const { return asr_.active(); }
   double reference_speed() const { return reference_.speed(); }
 
