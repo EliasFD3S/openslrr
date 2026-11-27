@@ -1120,6 +1120,9 @@ constexpr double rpm_per_rad = 9.54929658551372;
 // The wheel's spin inertia (kg m^2): WheelConfig::spin_inertia (#497,
 // from its rim, tyre and brake rotor), or the fixed 1.6 it replaces.
 constexpr double kWheelInertia = 1.6;
+// The longitudinal relaxation length as a share of the lateral one (#498):
+// a tyre's is about half (Pacejka, Tyre and Vehicle Dynamics, ch. 7-8).
+constexpr double kLongitudinalRelaxation = .5;
 double spin_inertia(const WheelConfig &w) { return w.spin_inertia > 0 ? w.spin_inertia : kWheelInertia; }
 
 // The tyre as it is now (#446, #452, #461): its grip at the tread
@@ -1133,6 +1136,7 @@ TireParameters effective_tyre(const DriveWheel &cfg, const WheelState &s, double
                    s.surface.friction * tyre_wear_grip(cfg.tread_wear);
   tyre.stiffness *= pressure.stiffness * tyre_wear_stiffness(cfg.tread_wear);
   tyre.relaxation_length *= pressure.relaxation;
+  tyre.longitudinal_relaxation *= pressure.relaxation;
   if (pressure.nominal_load != 1)
     tyre.maximum_load = (tyre.maximum_load > 0 ? tyre.maximum_load : 8000) * pressure.nominal_load;
   // Flat (#461): the sidewall folds; the tyre grips and steers poorly and
@@ -1141,6 +1145,7 @@ TireParameters effective_tyre(const DriveWheel &cfg, const WheelState &s, double
   tyre.friction *= 1 - .55 * flat;
   tyre.stiffness *= 1 - .75 * flat;
   tyre.relaxation_length *= 1 + 2 * flat;
+  tyre.longitudinal_relaxation *= 1 + 2 * flat;
   tyre.radius = radius;
   if (pressure_out) *pressure_out = pressure;
   return tyre;
@@ -1620,7 +1625,7 @@ void VehicleDynamics::step_drive() {
 
     if (!s.contact || s.force <= 0) {
       s.spin *= 1 - .25 * dt_ / wheel_inertia;
-      s.slip_angle = 0;
+      s.slip_angle = s.slip_ratio = 0;
     } else {
       s.slip_speed = s.spin * radius - road;
       s.lateral_speed = lateral;
@@ -1629,10 +1634,28 @@ void VehicleDynamics::step_drive() {
       // for the 0.3 m of a tyre at its optimal pressure). The patched Tyre
       // script lengthens it as the pressure falls.
       const double reference = std::max(1.5, std::abs(road));
-      const double relaxation = std::clamp(tyre.relaxation_length, .05, 2.0);
+      // Both lengths grow with the load as the cornering stiffness does
+      // (#498): a light wheel's tyre follows its slip sooner.
+      const double load_factor = relaxation_load_factor(s.force, tyre);
+      const double relaxation = std::clamp(tyre.relaxation_length * load_factor, .05, 2.0);
       s.slip_angle = (relaxation * s.slip_angle + lateral * dt_) /
                      (relaxation + reference * dt_);
       const double relaxed_lateral = s.slip_angle * reference;
+      // Longitudinal relaxation (#498): the tread's fore-and-aft deflection
+      // builds the same way, over the tyre's scripted longitudinal length
+      // or kLongitudinalRelaxation of the lateral one, both following the
+      // pressure, temperature and load. Faded out from 5 m/s down to walking
+      // pace, where a lagged force would push a stopping car back and forth
+      // (#426).
+      const double longitudinal_length =
+          tyre.longitudinal_relaxation > 0
+              ? std::clamp(tyre.longitudinal_relaxation * load_factor, .02, 1.0)
+              : kLongitudinalRelaxation * relaxation;
+      const double longitudinal_relaxation =
+          longitudinal_length * std::clamp((std::abs(road) - 1) / 4, 0.0, 1.0);
+      s.slip_ratio = (longitudinal_relaxation * s.slip_ratio + s.slip_speed * dt_) /
+                     (longitudinal_relaxation + reference * dt_);
+      const double relaxed_slip = s.slip_ratio * reference;
       // Camber against the road (#418): the hub's down axis leaning along the
       // tyre's lateral axis; positive when the tyre's top leans to +side.
       const Vec3 hub_down = body.orientation.rotate(steered_hub(s, cfg.steer).rotate({0, -1, 0}));
@@ -1644,8 +1667,8 @@ void VehicleDynamics::step_drive() {
         const double factor = slip > 1e-9 ? .4 * s.surface.friction * s.force / slip : 0;
         force = {s.slip_speed * factor, -lateral * factor};
       } else {
-        force = tire_forces(s.force, 1, s.spin * radius, road, relaxed_lateral,
-                            tyre, camber, lateral);
+        force = tire_forces(s.force, 1, road + relaxed_slip, road, relaxed_lateral,
+                            tyre, camber, lateral, s.slip_speed);
       }
 
       const Vec3 arm = s.patch - body.position;

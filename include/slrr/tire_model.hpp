@@ -25,6 +25,9 @@ struct TireParameters {
   // rolls for its lateral force to build, in metres. It grows as the pressure
   // falls; 0.3 m, a typical road tyre, without the patched script.
   double relaxation_length = .3;
+  // Longitudinal relaxation length (m, #498): WheelRef.setLongitudinalRelaxation;
+  // zero takes half the lateral one.
+  double longitudinal_relaxation = 0;
   // Stored setCPatch tolerance in radians. Not consumed by the 8ac2ba9
   // force law; alignment is supplied separately as a load factor.
   double patch_angle = 0;
@@ -74,9 +77,16 @@ TireForces tire_friction_limits(double load, double alignment,
 // sliding_speed is the contact patch's actual lateral speed when
 // lateral_speed is a relaxed (lagged) value; it bounds the low-speed force
 // (NaN: the same as lateral_speed).
+// slipping_speed likewise is the patch's actual longitudinal slip speed when
+// wheel_speed carries a relaxed one (#498).
 TireForces tire_forces(double load, double alignment, double wheel_speed,
                        double road_speed, double lateral_speed,
                        const TireParameters& tire, double camber = 0,
-                       double sliding_speed = std::numeric_limits<double>::quiet_NaN());
+                       double sliding_speed = std::numeric_limits<double>::quiet_NaN(),
+                       double slipping_speed = std::numeric_limits<double>::quiet_NaN());
+// How the relaxation lengths change with the load (#498): as the cornering
+// stiffness at that load against the nominal one (the carcass' own
+// stiffness stays), 0.3 to 1.5.
+double relaxation_load_factor(double load, const TireParameters& tire);
 
 } // namespace slrr::physics

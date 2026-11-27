@@ -392,7 +392,9 @@ stiffness clamp of 40; rolling resistance was 0.004. Now:
 - cornering stiffness 17.68 x (0.45 / aspect ratio)^0.25 x carcass (street
   0.95, sport 1, soft 1.15, drag radial 0.75) x rim fit;
 - rolling resistance 0.010 / 0.011 / 0.013 / 0.015 / sqrt(pressure ratio);
-- relaxation length 0.3 m x sqrt(sidewall / 113 mm / pressure ratio).
+- relaxation length 0.3 m x sqrt(sidewall / 113 mm / pressure ratio); a
+  drag radial's longitudinal one 0.75 of it, the others' half (the host's
+  default; #498, `WheelRef.setLongitudinalRelaxation`).
 
 | Tyre | Friction | Nominal load (N) | Stiffness | Relaxation |
 | --- | --- | --- | --- | --- |

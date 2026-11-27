@@ -508,6 +508,16 @@ Declared by the patched `parts/scripts/src/WheelRef.java`:
   The patched MC rears call it; without it, none
   ([notes](../vehicles/notes.md#roll-centre-migration-panhard-rod-and-wheel-inertia-496)).
 
+### Longitudinal tyre relaxation (#498)
+
+`WheelRef.setLongitudinalRelaxation(length)`, declared by the patched
+`parts/scripts/src/WheelRef.java`: the tyre's longitudinal relaxation length
+in metres (0.02 to 1), the rolling distance over which its braking and
+driving force builds; it grows with the load and as the pressure falls.
+The patched `Tyre` sends 0.75 of its lateral length for a drag radial and 0
+for the other compounds; with 0, half the lateral length of
+`setRelaxation` ([notes](../vehicles/notes.md#longitudinal-tyre-relaxation-498)).
+
 ### Math functions (#463)
 
 The patched `system/Scripts/lang/Math.java` declares, besides the stock

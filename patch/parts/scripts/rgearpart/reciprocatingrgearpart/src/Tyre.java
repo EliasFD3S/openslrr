@@ -207,6 +207,14 @@ public class Tyre extends ReciprocatingRGearPart
 			// and with the sidewall (#450): 0.3 m for a 113 mm sidewall (205/55).
 			if (optimal_inflation > 0.0)
 				w.setRelaxation( 0.3*Math.sqrt(profile_height/(113.0*inflation/optimal_inflation)) );
+			// OpenSLRR (#498): a drag radial's soft sidewall winds up far fore and
+			// aft, so its braking and driving force builds over 0.75 of its lateral
+			// relaxation length. The others send 0 (the host's half), which also
+			// clears a drag radial's length from the corner when they replace it.
+			if (optimal_inflation > 0.0 && rubber_type > 2.5)
+				w.setLongitudinalRelaxation( 0.75*0.3*Math.sqrt(profile_height/(113.0*inflation/optimal_inflation)) );
+			else
+				w.setLongitudinalRelaxation( 0.0 );
 			w.setTyreSpec( rubber_type );
 			w.setBearing( 20.0 );
 
