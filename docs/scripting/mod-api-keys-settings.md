@@ -1,0 +1,53 @@
+# Mod settings and key bindings (API 1)
+
+Import `java.openslrr.*`. Register settings and keys in the mod entry point's
+`public static void modInit()`. Give each setting or action a stable ID;
+changing its label is fine, but changing its ID changes its identity.
+
+## Store a setting
+
+`ModSettings` stores scalars in the `mods` object in
+`save/game/openslrr_options.json`. A dot is part of the key, not a path.
+Use the mod's name as a prefix so two mods don't write the same setting.
+Reading a missing key returns the supplied default without writing a file.
+
+~~~java
+int mode = ModSettings.getInt("roadbook.mode", 0);
+float scale = ModSettings.getFloat("roadbook.scale", 1.0);
+String title = ModSettings.getString("roadbook.title", "Roadbook");
+ModSettings.setInt("roadbook.mode", mode);
+ModSettings.setFloat("roadbook.scale", scale);
+ModSettings.setString("roadbook.title", title);
+~~~
+
+## Show a setting in Options → Mods
+
+~~~java
+String[] units = new String[2];
+units[0] = "KM";
+units[1] = "MI";
+ModOptions.addChoice("roadbook.units", "DISTANCE", units, 0, "Units for the trip meter.");
+ModOptions.addToggle("roadbook.show", "SHOW ROADBOOK", 1, "Display the roadbook on track.");
+ModOptions.addSlider("roadbook.scale", "MAP SCALE", 0.5, 2.0, 1.0, "Scale the roadbook map.");
+~~~
+
+Choices store the zero-based index, toggles store 0 or 1, and sliders store
+a float. Read the same key and default with `ModSettings` when consuming the
+value. Registering a row does not overwrite the player's setting.
+
+## Register a rebindable action
+
+~~~java
+// In modInit; keep the returned axis for the lifetime of this VM.
+axis = ModKeys.register("roadbook.mark", "MARK WAYPOINT", Input.RCDIK_M);
+// When creating the mod's OSD:
+if (axis >= 0)
+    osd.createHotkey(axis, Input.VIRTUAL|Osd.HK_STATIC, CMD_MARK, this);
+~~~
+
+The default is a physical DirectInput key code; the return value is a
+**virtual axis**, not a key code or ControlSet index. Handle the command on
+the OSD receiver just as for a stock virtual hotkey. Players can rebind it
+under **Options → Controls → Game controls**. Sixteen ControlSet slots
+(118–133) are reserved for mod actions; existing stock and 118-slot control
+files remain usable. A mod default never replaces a binding loaded from disk.

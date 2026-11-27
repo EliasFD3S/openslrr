@@ -332,6 +332,15 @@ Stock tyre sizes are unchanged. Cars already bought keep their parts, which
 take the new values when they load. Details in
 [docs/vehicles/notes.md](../docs/vehicles/notes.md#tyres-and-suspension-geometry-450).
 
+## Mod settings and keys (#488)
+
+Install `system/Scripts/openslrr` and the updated `ControlSet`, `OsdxOptions`
+and `Track` classes together. **Options → Mods** lists settings registered by
+mods; **Controls → Game controls** lists their rebindable actions. The **Game**
+page offers Classic and the installed camera providers. Mod settings are saved
+in `save/game/openslrr_options.json`, separate from the stock binary options.
+See the [scripting API](../docs/scripting/mod-api-keys-settings.md) for examples.
+
 ## Java natives
 
 | Class and signature | Behavior |
