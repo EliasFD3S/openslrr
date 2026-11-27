@@ -409,7 +409,7 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		m = osd.createMenu( wide, -0.48, TOP + 0.04 + 0.48, 0.0 );
 		m.addItem( "CAR CONTROLS", CMD_SUB + SUB_CAR, "Keys and axes for throttle, brake, steering, gears, handbrake, clutch, nitro and horn, for the keyboard, a pad and a wheel apart." );
 		m.addItem( "FORCE FEEDBACK", CMD_SUB + SUB_FFB, "Strength, road feel, impacts, vibration and the wheel's dead band." );
-		m.addItem( "GAME CONTROLS", CMD_SUB + 1, "Keys for the radio, cruise control, look back and the map." );
+		m.addItem( "GAME CONTROLS", CMD_SUB + 1, "Keys for the radio, cruise control, look back, change view and the map." );
 		m.addItem( "SUSPENSION CONTROLS", CMD_SUB + 2, "Keys for adjustable suspension: each corner, axle and side." );
 		m.addItem( "CONTROL FILES", CMD_SUB + 3, "Load or save a whole control set." );
 		m.addItem( "RESET TO DEFAULTS", OptionsDialog.CMD_RESET_CONTROLS, "Restore the default key and axis bindings." );
