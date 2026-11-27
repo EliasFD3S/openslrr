@@ -351,7 +351,12 @@ corner also calls `WheelRef.setRollCenterHeight(height)` (#490): fronts 5 to
 Camaro's Panhard rod 36 cm and the Ram's leaf-sprung axle 45 cm. The live
 rears also call `WheelRef.setAxleMass` and `WheelRef.setAxleWrap` (#494):
 Camaro 55 kg on a torque arm, 0.8 kN per mm at 0.25 damping; Ram 1500 /
-2500 80 / 95 kg on leaf springs, 0.3 kN per mm at 0.10 (wheel hop).
+2500 80 / 95 kg on leaf springs, 0.3 kN per mm at 0.10 (wheel hop). Every
+corner calls `WheelRef.setRollCenterMigration(rate)` (#496): struts -2.0
+metres of centre height per metre of bump, short-long arms and multilinks
+-1.0, the E36 rear -1.5, the Golf's torsion beam -0.5, the Camaro's Panhard
+axle -0.5, the Ram's leaf axle 0; the Camaro rears also call
+`WheelRef.setPanhardRod(0.95, -1)` (its frame mount on the left).
 
 **Caster (#458).** The stock struts had none: their strut axis and top lay
 in the front-view plane. Each front strut now leans back by its real car's

@@ -56,6 +56,8 @@ public class Baiern_DS_RR_trailing_arm extends Suspension
 				wheel.setBushingCompliance( 0.20, 1.00 );
 				// OpenSLRR (#490): roll centre height above the ground (m), typical for the real car
 				wheel.setRollCenterHeight( 0.12 );
+				// OpenSLRR (#496): roll centre migration, metres of height per metre of bump, typical for the real car
+				wheel.setRollCenterMigration( -1.50 );
 
 				the_car.setSlotPos(101+wheelID, new Vector3( 0.024,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3( 0.013,0,0), null );

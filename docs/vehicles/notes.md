@@ -2807,3 +2807,50 @@ housing's rotation with the pinion, and does not change the load on the
 springs; slot ids 111 / 121 / 131 / 301 / 311 / 351 follow the stock
 chassis, so a mod laid out otherwise gets only its wheel parts or the CFG
 mass.
+
+## Roll centre migration and Panhard rod (#496)
+
+Cause: the #490 roll centres stayed at their static height. A real one
+moves with the travel: a strut's drops about twice as fast as the body,
+short-long arms' and multilinks' about as fast, so in roll the outer
+(loaded) corner's centre drops and the inner one's rises. A live axle on a
+Panhard rod also moves sideways as the body rises and falls over it, the
+rod's axle end swinging on its arc.
+
+Fix (OpenSLRR, typical values):
+
+- `WheelConfig::roll_center_migration`: the centre's height in
+  `update_jacking` is the static one plus migration x bump (the static ride
+  height of #481, which `WheelConfig::needs_static_length` now also wants
+  for a migration or a rod), clamped to 0..0.6 m. Moddable through
+  `WheelRef.setRollCenterMigration(rate)`; all 96 patched corners call it
+  (struts -2.0, short-long arms and multilinks -1.0, E36 rear -1.5, Golf
+  torsion beam -0.5, Impreza rear strut -2.0, Camaro Panhard axle -0.5, Ram
+  leaf axle 0). Without it: front strut fit -2, other front arms -1,
+  independent rears -1.5, live axles -0.5.
+- Panhard rod: `WheelConfig::panhard_length` / `panhard_side`,
+  `WheelRef.setPanhardRod(length, side)` (patched Camaro: 0.95 m, body end
+  on the left). Level at the static height, the axle moves towards the rod's
+  body end by bump^2 / (2 L) of the axle's mean travel, at most 2 cm, both
+  ends alike (`WheelState::axle_shift`, carried by `state_pose`, so the
+  contact and the rendered wheels follow).
+
+Validation:
+
+- Compilation: `slrr_host` Release; `WheelRef` and the 96 suspension
+  classes in `build/brake-compile-root`, the generator's output identical
+  to the edited sources.
+- `vehicle_dynamics` 83/83 with two new tests: on swing arms in the steady
+  turn with 10 cm centres, roll per kN of cornering force 0.375 deg fixed,
+  0.400 dropping 2 m per metre; a live axle on a 0.95 m rod pushed 4 cm into
+  bump or droop moves 0.842 mm towards the rod's body end, both ends alike.
+  `missing_support` 17/17, `physics_tick_rate` 9/9.
+- In `build/needle-game` with the new classes, Tsukuba bench with ASR
+  forced (temporary switch): CoupeSport 71.99, MC 83.14, SuperDuty 90.23
+  km/h at 6 s, as with #494 alone; no script error.
+- Not checked in game: cornering, the feel.
+
+Limitations: the migration is linear in each corner's own travel, not the
+arms' geometry, and only vertical (the centre's sideways migration in roll
+is not modelled); the rod is level at rest and its shift does not steer the
+axle; the rates are typical figures.

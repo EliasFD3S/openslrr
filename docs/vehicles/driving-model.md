@@ -168,7 +168,10 @@ cornering force into the body at its roll centre's height
 part of the roll moment skips the springs. Each wheel's unsprung mass comes
 from the parts on its corner, and a live axle's beam shares its mass between
 its wheels and winds up under drive (#494,
-[notes](notes.md#unsprung-masses-and-live-axle-beam-494)).
+[notes](notes.md#unsprung-masses-and-live-axle-beam-494)). The roll centres
+migrate with each corner's travel, and a live axle on a Panhard rod shifts
+sideways on its arc (#496,
+[notes](notes.md#roll-centre-migration-and-panhard-rod-496)).
 Wheel YPR and the existing arm/hub kinematics still affect contact geometry.
 Anti-roll bars are an optional host approximation, deliberately enabling a
 stock feature whose Java commands and catalog branch were dormant. The patched

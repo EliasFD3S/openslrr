@@ -1751,7 +1751,13 @@ void VehicleDynamics::update_jacking() {
     // a force towards the car's middle (the outer wheel's) lifts the body,
     // one away from it (the inner wheel's) pulls it down, so that much of
     // the roll moment no longer goes through the springs.
-    if (w.roll_center_height > 0) {
+    // The centre migrates with the corner's travel (#496) about its static
+    // height.
+    double centre = w.roll_center_height;
+    if (w.roll_center_migration != 0 && w.static_length > 0)
+      centre += w.roll_center_migration * (w.static_length - s.length);
+    centre = std::clamp(centre, 0.0, .6);
+    if (centre > 0) {
       double across = 0;
       int partners = 0;
       for (size_t j = 0; j < wheels.size(); ++j)
@@ -1764,7 +1770,7 @@ void VehicleDynamics::update_jacking() {
                                           : std::abs(w.center.x - body.center.x);
       if (half_track > .3) {
         const double inboard = s.tire_force.lateral * (w.center.x < 0 ? 1 : -1);
-        s.jacking += inboard * std::min(w.roll_center_height, .6) / half_track;
+        s.jacking += inboard * centre / half_track;
       }
     }
   }
@@ -1790,7 +1796,7 @@ void VehicleDynamics::update_static_references() {
   rear_z /= rears;
   const double front_share = std::clamp((rear_z - body.center.z) / (rear_z - front_z), 0.0, 1.0);
   for (auto &w : wheels) {
-    if (!w.enabled || !(w.camber_curve || w.toe_curve)) {
+    if (!w.enabled || !w.needs_static_length()) {
       w.static_length = 0;
       continue;
     }
@@ -1890,6 +1896,7 @@ void VehicleDynamics::update_live_axles() {
   for (size_t i = 0; i < wheels.size(); ++i) {
     auto &s = state[i];
     s.axle_camber = s.axle_steer = s.axle_coupling = 0;
+    s.axle_shift = {};
     const auto &w = wheels[i];
     if (!w.enabled || !w.live_axle) continue;
     const bool is_front = w.center.z < body.center.z;
@@ -1908,6 +1915,14 @@ void VehicleDynamics::update_live_axles() {
       s.axle_steer = std::clamp(w.roll_steer, -1.0, 1.0) * tilt * (is_front ? -1 : 1);
       // The beam's shared mass (#494), from the other end's last motion.
       s.axle_coupling = -w.axle_mass / 6 * state[j].travel_acceleration;
+      // Panhard rod (#496): level at the static height, the rod's axle end
+      // swings on its arc as the body moves over the axle, pulling the axle
+      // towards the rod's body end by bump^2 / (2 L), the same for both ends.
+      if (w.panhard_length > .2 && w.static_length > 0 && o.static_length > 0) {
+        const double bump = .5 * ((w.static_length - s.length) + (o.static_length - state[j].length));
+        const double shift = std::min(bump * bump / (2 * w.panhard_length), .02);
+        s.axle_shift = {(w.panhard_side < 0 ? -1.0 : 1.0) * shift, 0, 0};
+      }
       break;
     }
   }
