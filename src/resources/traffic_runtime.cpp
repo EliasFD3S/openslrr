@@ -10,6 +10,7 @@
 #include "slrr/race_runtime.hpp"
 #include "slrr/rpk_index.hpp"
 #include "slrr/scene_instances.hpp"
+#include "slrr/script_events.hpp"
 #include "slrr/section_machine.hpp"
 #include <algorithm>
 #include <cmath>
@@ -35,6 +36,9 @@ struct Registration {
        unplaced = true, kinematic = false;
   int mode = 0;
   double distant_next = 0, stop_since = -1;
+  // Cached building-occlusion result for the recycle/reshow view test.
+  double seen_checked = -1;
+  bool occluded = false;
   uint32_t cleared_crossing = 0;
   size_t edge = 0;
   float along = 0, speed = 0, cruise = 0;
@@ -50,6 +54,9 @@ struct Population {
   std::vector<Seed> seeds;
   std::unordered_set<uint32_t> blocked;
   std::unordered_map<uint32_t, double> crossings;
+  // Signal-clock time of the first populated tick. The first fill happens
+  // behind the loading screen and may place cars in view.
+  double started = -1;
 };
 struct Event {
   Object *target;
@@ -61,6 +68,20 @@ struct Event {
 std::unordered_map<void *, Population> populations;
 std::unordered_map<int32_t, Registration> registrations;
 std::vector<Event> events;
+// Cars remTrafficCar released, by car: a Bot sent back to traffic takes the
+// same ID and ownership again (a woken police scout returning to patrol).
+struct Detached {
+  int32_t id = 0;
+  uint64_t car_incarnation = 0;
+  bool owned = false, notify = false;
+};
+std::unordered_map<void *, Detached> detached;
+struct EnterRequest {
+  Object *car = nullptr;
+  uint64_t car_incarnation = 0;
+  void *ground = nullptr;
+};
+std::vector<EnterRequest> enter_requests;
 SectionMachine *sections = nullptr;
 RpkIndex *resources = nullptr;
 int32_t next_id = 1;
@@ -133,6 +154,79 @@ RoadPoint position(Object *car) {
     return {};
   return {frame[12], frame[13], frame[14]};
 }
+// The world camera, sampled once per traffic tick.
+struct View {
+  bool valid = false;
+  float eye[3]{}, forward[2]{}, tan_half = 0, limit = 0;
+} view;
+void update_view() {
+  float at[3], fov = 60, zfar = 3000;
+  view.valid = gameref_world_camera(view.eye, at, &fov, nullptr, &zfar);
+  if (!view.valid)
+    return;
+  const float fx = at[0] - view.eye[0], fz = at[2] - view.eye[2],
+              fl = std::hypot(fx, fz);
+  view.forward[0] = fl > 1e-4f ? fx / fl : 0;
+  view.forward[1] = fl > 1e-4f ? fz / fl : 0;
+  // Wide enough for a 2:1 window.
+  view.tan_half =
+      std::tan(std::clamp(fov, 10.f, 120.f) * 3.1415927f / 360) * 2;
+  view.limit = std::min(zfar, host_game_options().video.view_distance);
+}
+// The camera sees a point within the view distance and cone, with a
+// car-length margin. Buildings are not tested, so a hidden street can still
+// count as seen.
+// Scene rays left this traffic tick: each one walks every world instance, so
+// only a few candidates per frame are tested for occlusion.
+int occlusion_budget = 0;
+bool in_view(const RoadPoint &p, bool occlusion = false) {
+  if (!view.valid)
+    return false;
+  const float dx = p[0] - view.eye[0], dz = p[2] - view.eye[2],
+              d = std::hypot(dx, dz);
+  if (d > view.limit)
+    return false;
+  if (d < 8 || (view.forward[0] == 0 && view.forward[1] == 0))
+    return true;
+  const float half = std::atan(view.tan_half) + std::atan(6 / d);
+  if ((view.forward[0] * dx + view.forward[1] * dz) / d <=
+      std::cos(std::min(half, 3.1415927f)))
+    return false;
+  // A point inside the cone is hidden when a building lies between it and
+  // the camera. Rays aim at roof height so the road surface near the point
+  // does not count; without budget the point counts as seen.
+  if (!occlusion || occlusion_budget <= 0)
+    return true;
+  --occlusion_budget;
+  const float target[3] = {p[0], p[1] + 1.2f, p[2]};
+  float direction[3] = {target[0] - view.eye[0], target[1] - view.eye[1],
+                        target[2] - view.eye[2]};
+  const float length = std::sqrt(direction[0] * direction[0] +
+                                 direction[1] * direction[1] +
+                                 direction[2] * direction[2]);
+  if (length < 1e-3f)
+    return true;
+  for (auto &v : direction)
+    v /= length;
+  float hit[3];
+  if (!scene_instances_pick(view.eye, direction, hit))
+    return true;
+  const float distance = std::sqrt((hit[0] - view.eye[0]) * (hit[0] - view.eye[0]) +
+                                   (hit[1] - view.eye[1]) * (hit[1] - view.eye[1]) +
+                                   (hit[2] - view.eye[2]) * (hit[2] - view.eye[2]));
+  return distance > length - 6;
+}
+// The camera sees the car's position: inside the view cone and, rechecked
+// at most every 1.5 s within the per-tick ray budget, not behind a building.
+bool seen(Registration &r, const RoadPoint &p) {
+  if (!in_view(p))
+    return false;
+  if (clock_seconds - r.seen_checked >= 1.5 && occlusion_budget > 0) {
+    r.seen_checked = clock_seconds;
+    r.occluded = !in_view(p, true);
+  }
+  return !r.occluded;
+}
 bool belongs(void *key, void *world) {
   for (int i = 0; key && i < 64; ++i) {
     auto *n = gameref_get(key);
@@ -165,18 +259,22 @@ void queue(Registration &r, bool add) {
                           (add ? " " + std::to_string(r.id) : "")});
   r.notified = add;
 }
-void remove(int32_t id) {
+// remTrafficCar keeps the car: Bot.followCar/startRace detach a streamed car
+// from traffic before driving it, and Java then owns its destruction.
+void remove(int32_t id, bool destroy_car = true) {
   auto found = registrations.find(id);
   if (found == registrations.end())
     return;
   auto r = found->second;
   queue(r, false);
   registrations.erase(found);
+  if (!destroy_car && r.car)
+    detached[r.car] = {r.id, r.car_incarnation, r.owned, r.notify};
   if (auto *n = gameref_get(r.car); n && n->incarnation == r.car_incarnation) {
     n->streamed_hidden = false;
     if (r.kinematic)
       part_set_external_motion(r.car, false);
-    if (r.owned)
+    if (r.owned && destroy_car)
       part_destroy(r.car);
   }
 }
@@ -228,7 +326,7 @@ void publish(Registration &r, const RoadRoutes &graph, float at) {
       n->vel[i] = direction[i] * r.speed;
 }
 bool place(Registration &r, const RoadRoutes &graph, const Population &p,
-           const RoadPoint &focus, bool initial) {
+           const RoadPoint &focus, bool initial, bool unseen = false) {
   for (int attempt = 0; attempt < 96; ++attempt) {
     size_t edge =
         std::min<size_t>(size_t(random() * graph.traffic_edges().size()),
@@ -242,6 +340,9 @@ bool place(Registration &r, const RoadRoutes &graph, const Population &p,
     auto candidate = road_at(line, at);
     float distance = road_distance(candidate, focus);
     if (initial && (distance < 45 || distance > 160))
+      continue;
+    // A car must not appear where the player can see it.
+    if (unseen && in_view(candidate, true))
       continue;
     if (initial && distance < 80) {
       PartMatrix frame;
@@ -327,6 +428,8 @@ void race_traffic_forget(void *key) {
 void race_traffic_reset() {
   ++signal_revision;
   registrations.clear();
+  detached.clear();
+  enter_requests.clear();
   populations.clear();
   events.clear();
   next_id = 1;
@@ -345,6 +448,20 @@ void *race_traffic_ground(Object *car) {
                  ? ground->key : nullptr;
     }
   return nullptr;
+}
+bool race_traffic_edge_open(void *ground, size_t edge) {
+  auto *p = population(ground);
+  if (!p || !resources)
+    return true;
+  auto graph = race_ground_roads(*resources, ground);
+  return !graph || edge >= graph->traffic_edges().size() ||
+         !blocked(*p, graph->traffic_edges()[edge]);
+}
+void race_traffic_request_enter(Object *car, void *ground) {
+  auto *n = gameref_get(car);
+  if (!n || !ground)
+    return;
+  enter_requests.push_back({static_cast<Object *>(n->key), n->incarnation, ground});
 }
 int32_t race_traffic_pointer(Object *car) {
   auto *n = gameref_get(car);
@@ -411,7 +528,11 @@ void race_clear_halts(void *ground) {
     p->crossings.clear();
   }
 }
-bool race_traffic_halted(void *ground, const RoadPoint &position, Object *car) {
+bool race_traffic_halted(void *ground, const RoadPoint &position, Object *car,
+                         float *stop_distance) {
+  float ignored = 0;
+  float &stop = stop_distance ? *stop_distance : ignored;
+  stop = 0;
   auto *p = population(ground);
   if (!p || !resources)
     return false;
@@ -434,9 +555,18 @@ bool race_traffic_halted(void *ground, const RoadPoint &position, Object *car) {
   for (auto road : e.roads)
     if (p->blocked.contains(road))
       return true;
+  // A traffic lane ends where the junction begins. The car's centre stops a
+  // few metres short so its nose stays out of the junction, and the driver
+  // brakes over the whole approach rather than locking at a fixed distance.
+  const float remaining = e.length - projection->along;
+  stop = std::max(0.f, remaining - 3);
+  const auto *node = car ? gameref_get(car) : nullptr;
+  const float speed = node ? std::hypot(node->vel[0], node->vel[2]) : 0;
+  // Too close to stop at a comfortable 3 m/s2 when the light turns yellow.
+  const bool committed = speed * speed / 6 > stop + 1;
   auto cross = p->crossings.find(e.to);
   if (cross != p->crossings.end() && cross->second > clock_seconds &&
-      e.length - projection->along < 22)
+      remaining < 22)
     return true;
   auto color = graph->traffic_signal(projection->edge, clock_seconds);
   Registration *registered = nullptr;
@@ -453,13 +583,19 @@ bool race_traffic_halted(void *ground, const RoadPoint &position, Object *car) {
     }
     registered->edge = projection->edge;
     registered->along = projection->along;
-    if (color == 2 && e.length - projection->along < 14)
+    // A car whose nose is already over the stop line, or which could only
+    // stop inside the junction even braking hard (6 m/s2), clears it rather
+    // than stopping in the middle of the crossing (#324).
+    const bool past_line = remaining < 1.5f ||
+                           (speed > 1 && speed * speed / 12 > stop + .5f);
+    if ((color == 2 && remaining < 14) ||
+        (color == 1 && remaining < 22 && committed) ||
+        ((color == 0 || color == 1) && remaining < 22 && past_line))
       registered->cleared_crossing = e.to;
     if (registered->cleared_crossing == e.to)
       return false;
-    if (color == -2 && e.length - projection->along < 6) {
-      if (std::hypot(gameref_get(car)->vel[0], gameref_get(car)->vel[2]) <
-          .5f) {
+    if (color == -2 && remaining < 22) {
+      if (remaining < 6 && speed < .5f) {
         if (registered->stop_since < 0)
           registered->stop_since = clock_seconds;
         if (clock_seconds - registered->stop_since >= 5) {
@@ -471,7 +607,9 @@ bool race_traffic_halted(void *ground, const RoadPoint &position, Object *car) {
       return true;
     }
   }
-  return (color == 0 || color == 1) && e.length - projection->along < 22;
+  if (color == 1 && committed)
+    return false;
+  return (color == 0 || color == 1) && remaining < 22;
 }
 void register_traffic_natives(Jvm &vm, RpkIndex &rpk, SectionMachine &machine) {
   race_traffic_reset();
@@ -492,7 +630,7 @@ void register_traffic_natives(Jvm &vm, RpkIndex &rpk, SectionMachine &machine) {
         auto id = int32_t(number(a, 0));
         auto it = registrations.find(id);
         if (it != registrations.end() && it->second.ground == canonical(self))
-          remove(id);
+          remove(id, false);
         return Value::make_void();
       });
   vm.natives().register_method(
@@ -640,6 +778,54 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
   if (old_phase != phase(clock_seconds))
     ++signal_revision;
   auto *world = scene_instances_world();
+  update_view();
+  occlusion_budget = 12;
+  // Bots that drove back onto a lane rejoin traffic (Bot.reJoinTraffic).
+  std::vector<std::pair<Object *, int32_t>> entered;
+  for (const auto &request : std::exchange(enter_requests, {})) {
+    auto *n = gameref_get(request.car);
+    auto *g = gameref_get(request.ground);
+    if (!n || n->incarnation != request.car_incarnation || !g ||
+        race_traffic_pointer(request.car))
+      continue;
+    auto graph = race_ground_roads(*resources, g->key);
+    auto *p = population(g->key);
+    const auto where = position(request.car);
+    auto lane = graph ? graph->traffic_project(where) : std::nullopt;
+    if (!p || !lane)
+      continue;
+    Registration r;
+    auto old = detached.find(request.car);
+    const bool known = old != detached.end() &&
+                       old->second.car_incarnation == request.car_incarnation &&
+                       !registrations.contains(old->second.id);
+    if (known) {
+      r.id = old->second.id;
+      r.owned = old->second.owned;
+      r.notify = old->second.notify;
+    } else {
+      if (next_id == INT32_MAX)
+        continue;
+      r.id = next_id++;
+    }
+    if (old != detached.end())
+      detached.erase(old);
+    r.ground = g->key;
+    r.ground_incarnation = g->incarnation;
+    r.car = request.car;
+    r.car_incarnation = request.car_incarnation;
+    r.cruise = (15 + random() * 20) / 3.6f;
+    // City still holds the car's tracker; it reads the new pointer through
+    // GII_CAR_TRAFFICPTR, so no second car_add is sent.
+    r.notified = r.notify;
+    r.visible = true;
+    r.unplaced = false;
+    r.edge = lane->edge;
+    r.along = lane->along;
+    r.speed = std::hypot(n->vel[0], n->vel[2]);
+    registrations.emplace(r.id, r);
+    entered.push_back({request.car, r.id});
+  }
   auto *focus_car = part_controlled_chassis();
   const auto focus = focus_car ? position(focus_car) : RoadPoint{};
   const float density = host_game_options().traffic_density;
@@ -655,6 +841,9 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
     auto *p = population(key);
     if (!graph || !p || graph->traffic_edges().empty())
       continue;
+    if (p->started < 0)
+      p->started = clock_seconds;
+    const bool unseen = clock_seconds - p->started > 3;
     std::vector<int32_t> ids;
     for (const auto &e : registrations)
       if (e.second.ground == key)
@@ -688,9 +877,12 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
         r.edge = 0;
         r.unplaced = true;
       }
+      // A distant car stays while the player can still see it.
+      const auto where = position(r.car);
+      const bool far = road_distance(where, focus) > (r.owned ? 220 : 380) &&
+                       !(unseen && seen(r, where));
       if (r.visible &&
-          (visible >= cap || (!r.owned && rivals >= rival_cap) ||
-           road_distance(position(r.car), focus) > (r.owned ? 220 : 380) ||
+          (visible >= cap || (!r.owned && rivals >= rival_cap) || far ||
            blocked(*p, graph->traffic_edges()[r.edge]))) {
         queue(r, false);
         r.visible = false;
@@ -718,7 +910,7 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
       if (!r.visible && !r.owned && clock_seconds >= r.distant_next) {
         r.distant_next = clock_seconds + 5;
         if (r.unplaced) {
-          if (place(r, *graph, *p, focus, true))
+          if (place(r, *graph, *p, focus, true, unseen))
             r.unplaced = false;
         } else if (road_distance(position(r.car), focus) > 300) {
           auto near = graph->traffic_project(position(r.car));
@@ -748,9 +940,10 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
         }
       }
       if (!r.visible && !r.owned && visible < cap && rivals < rival_cap) {
-        if (r.unplaced && !place(r, *graph, *p, focus, true))
+        if (r.unplaced && !place(r, *graph, *p, focus, true, unseen))
           continue;
-        if (road_distance(position(r.car), focus) > 300)
+        if (road_distance(position(r.car), focus) > 300 ||
+            (unseen && seen(r, position(r.car))))
           continue;
         r.visible = true;
         n->streamed_hidden = false;
@@ -762,6 +955,10 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
         }
         queue(r, true);
       }
+      // A visible physical car whose Bot left it (ai_info_entertraffic,
+      // leaveCar) is driven by the host again.
+      if (r.visible && !r.kinematic && !race_brain_drives(r.car))
+        race_set_traffic_mode(*resources, r.car);
       if (!r.visible || !r.kinematic)
         continue;
       const auto &e = graph->traffic_edges()[r.edge];
@@ -803,6 +1000,11 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
           r.along -= e.length;
           r.cleared_crossing = 0;
           r.edge = choose_transition(choices, *graph);
+          // Each road draws a cruise from its speed band (rural/urban).
+          if (!graph->traffic_edges()[r.edge].crossing) {
+            const auto band = road_speed_band(graph->traffic_edges()[r.edge].speed_group);
+            r.cruise = (band[0] + random() * (band[1] - band[0])) / 3.6f;
+          }
         }
       }
       const float previous_yaw = n->ypr[0];
@@ -850,8 +1052,10 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
                   [](const Seed &seed) { return seed.remaining <= 0; });
     // Original Java model weights choose appearance; the user density bounds
     // the active host population independently, as in the v221 stream model.
-    for (int attempt = 0;
-         visible < cap && !p->models.empty() && attempt < cap * 3; ++attempt) {
+    // Unseen road can run short; retry next frame rather than search on.
+    for (int attempt = 0, misses = 0; visible < cap && !p->models.empty() &&
+                                      attempt < cap * 3 && (!unseen || misses < 8);
+         ++attempt) {
       float total = 0;
       for (const auto &m : p->models)
         total += m.weight;
@@ -870,8 +1074,10 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
       // assembly every frame. Upstream also selects a safe spawn before it
       // creates the traffic vehicle. Keep the same search/safety budget.
       Registration candidate;
-      if (!place(candidate, *graph, *p, focus, true))
+      if (!place(candidate, *graph, *p, focus, true, unseen)) {
+        ++misses;
         continue;
+      }
       Object *car = part_create(vm, *resources, static_cast<Object *>(key),
                                 selected->type, "streamed traffic");
       if (!car)
@@ -899,6 +1105,12 @@ void race_traffic_tick(Jvm &vm, float seconds, double elapsed_seconds) {
   }
   // Deliver after placement and after native entry has returned. Original City
   // creates its own TrafficTracker and marker; the host never duplicates them.
+  for (const auto &[car, id] : entered) {
+    if (!gameref_get(car))
+      continue;
+    auto *message = vm.new_string("ai_info_entertraffic " + std::to_string(id));
+    script_event_emit(vm, car, nullptr, 0x10, Value::make_obj(message));
+  }
   auto pending = std::move(events);
   events.clear();
   for (const auto &e : pending) {

@@ -19,9 +19,25 @@ struct RaceDriveInput {
 bool race_brain_command(const RpkIndex &, void *brain, const std::string &);
 bool race_drive_input(Object *car, const RoadPoint &position, float yaw,
                       float speed, float dt, RaceDriveInput &);
+// Visible top-level cars at the start of a physics tick, in script metres.
+// Brains keep their distance from these (lead-car following).
+struct RacePeer {
+  Object *car = nullptr;
+  RoadPoint position{}, velocity{}, forward{};
+  float half_length = 2.3f, half_width = .95f;
+};
+void race_set_peers(std::vector<RacePeer> peers);
 void race_brain_forget(void *);
 void race_brains_reset();
 void race_set_traffic_mode(const RpkIndex &, Object *);
+// True when a brain currently drives the car.
+bool race_brain_drives(Object *car);
+// The map a car drives on: its traffic registration's, else the first parent
+// with a road graph.
+void *race_car_ground(const RpkIndex &, Object *car);
+// A car-to-car (or hard wall) impact committed to this car: a traffic driver
+// brakes, settles and rejoins its lane (SLRR_rev bot.ts impact mode).
+void race_note_impact(Object *car);
 void register_traffic_natives(Jvm &, RpkIndex &, SectionMachine &);
 // Motion is bounded independently of the pause/warp-aware signal clock.
 // Omit clock_seconds for callers already supplying simulation steps.
@@ -31,10 +47,18 @@ uint64_t race_signal_revision();
 void race_traffic_forget(void *);
 void race_traffic_reset();
 int32_t race_traffic_pointer(Object *);
+// False while a race path or crossing halt closes this traffic curve.
+bool race_traffic_edge_open(void *ground, size_t traffic_edge);
+// A Bot returning to traffic (AI_GoToTraffic) reached a lane. The next
+// traffic tick registers the car (reusing the ID remTrafficCar released) and
+// sends "ai_info_entertraffic <id>" to the car's EVENT_COMMAND listeners.
+void race_traffic_request_enter(Object *car, void *ground);
 // Canonical, incarnation-checked map retained by the traffic registration.
 void *race_traffic_ground(Object *);
+// True when the car must stop for a signal, STOP line or halt. stop_distance
+// receives the distance left to the stopping point (0: stop now).
 bool race_traffic_halted(void *ground, const RoadPoint &position,
-                         Object *car = nullptr);
+                         Object *car = nullptr, float *stop_distance = nullptr);
 void race_halt_path(const RpkIndex &, void *, const RoadPoint &,
                     const RoadPoint &);
 void race_halt_cross(const RpkIndex &, void *, const RoadPoint &, float);

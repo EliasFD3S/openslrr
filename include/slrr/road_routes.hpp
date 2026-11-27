@@ -28,6 +28,9 @@ public:
         next; // Explicit RoadOther -> grey crossing -> RoadOther joins.
     bool crossing = false;
     uint32_t branch = 0;
+    // SLRR_rev road-traffic.ts speed group: 0 rural (a yellow TRC node at
+    // either end of the road, or a rural junction), 1 urban, -1 unknown.
+    int speed_group = -1;
   };
   struct Signal {
     RoadPoint position{};
@@ -51,6 +54,9 @@ public:
   traffic_project(const RoadPoint &, const RoadPoint *heading = nullptr,
                   bool include_crossings = false) const;
   int traffic_signal(size_t edge, double seconds) const;
+  // Host speed zone (SLRR_rev road-speed-zones.ts): the upper speed band of
+  // the nearest lane or junction curve within 30 m, in m/s; -1 off the roads.
+  float speed_limit(const RoadPoint &) const;
 
 private:
   struct Anchor {
@@ -71,6 +77,8 @@ private:
   std::optional<RoadRoute> between(const RoadPoint &, const RoadPoint &,
                                    const Anchor &, const Anchor &) const;
 };
+// SLRR_rev trafficSpeedBand, km/h: rural 60..100, urban (and unknown) 15..35.
+std::array<float, 2> road_speed_band(int speed_group);
 float road_distance(const RoadPoint &, const RoadPoint &);
 RoadPoint road_normalize(RoadPoint);
 RoadPoint road_at(const RoadRoute &, float distance);

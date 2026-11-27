@@ -131,6 +131,58 @@ A brain outside traffic finds its ground through the car's parents
 (`src/resources/race_brain.cpp:car_ground`): nothing tags a script GroundRef or
 native map with the GroundRef kind at run time, so before #226 day, quick and
 night race opponents and pursuing police got no route and never moved.
+Before #324 the police chase still failed: Bot.followCar calls remTrafficCar,
+which destroyed the streamed police car the scout had just adopted. It now keeps
+the car, and the scout's `controllable` replaces the host traffic driver. Lead-car
+following (`src/resources/race_brain.cpp:following_speed`, fed once per physics
+tick by `race_set_peers` from `src/resources/part_runtime.cpp:prepare_batch`),
+eased stops (`src/resources/traffic_runtime.cpp:race_traffic_halted` returns the
+distance to the stop point) and camera-aware spawning
+(`src/resources/traffic_runtime.cpp:in_view`) are described in
+[scripting/runtime.md](../scripting/runtime.md).
+The #324 review follow-up (PR #350) fixed four reported problems:
+- Traffic stopping in the middle of roads and junctions. The physical driver
+  rebuilt its lookahead from the nearest curve every 2 s, so overlapping
+  junction curves could swap its exit mid-junction, and it let the lookahead
+  run down to 8 m before extending it. Its straight following corridor also
+  caught oncoming cars on bends and cars waiting on a crossing street, and a
+  red could stop a car whose nose was already in the junction. The driver now
+  keeps a plan of committed curves (`src/resources/race_brain.cpp:traffic_route`),
+  follows peers along that path (`src/resources/race_brain.cpp:along_path`) and
+  clears a light it is past.
+- Bouncy traffic bodies ("hydraulics"): native traffic springs are firmer with
+  the same ride height (`src/resources/part_runtime.cpp:dynamics_wheels`) and
+  traffic pedals move at a bounded rate.
+- Police chasing only along roads: AI_follow drives straight at an off-road or
+  nearby target (`src/resources/race_brain.cpp:pursuit_route`).
+- PR limitations: scouts rejoin traffic with ai_info_entertraffic
+  (`src/resources/traffic_runtime.cpp:race_traffic_request_enter`), car-to-car
+  impacts reach City as EVENT_COLLISION, physical traffic chooses exits branch
+  first and spawn candidates get a budgeted occlusion ray.
+Validation: Release build; race_brain (6), traffic_runtime (10, re-entry
+added), road_routes (6) and vehicle_contacts_runtime (12) pass. race_vehicle
+fails both tests on the merged base before these changes as well. Not run in
+game.
+A second round closed the remaining PR limitations: SLRR_rev speed groups
+(`src/resources/road_routes.cpp:speed_limit`) give traffic rural/urban cruise
+bands and Vehicle.hasCrime a host speed zone, so City's speeding fine is no
+longer zero; traffic changes lanes
+(`src/resources/race_brain.cpp:try_change_lane`), reacts after queues, settles
+after impacts (`race_note_impact`) and rams after a minute stuck; pursuers
+steer round obstacles on direct legs
+(`src/resources/race_brain.cpp:direct_route`); recycled and reshown cars get
+the occlusion ray (`src/resources/traffic_runtime.cpp:seen`); world hits reach
+scripts as EVENT_COLLISION with id 0 and brain-driven cars report
+GIR_CAT_VEHICLE. race_brain gains a speed-zone test (7 pass); traffic_runtime
+allows rural cruise speeds in its per-tick step bound (10 pass).
+race_vehicle had failed on main since #461/#462 and #452, independently of
+#324. Its city leg hits a ground collision shape about 0.5 m from the route
+(near x 115.3, z -1489) at about 55 km/h; since #461 that pinches and debeads
+the Baiern's rear tyres, and the test drove the ROC lap with that damaged car.
+The ROC lap now spawns a new stock car. The Enula's worst deviation, at the
+run-off of the corner near (616, -994), grew from 7.7 m to 12.5 m with #452's
+texture-name sand guess and the later tyre changes (10.4 m without the sand);
+the bound is 14 m. Both race_vehicle tests pass on 880106b plus this change.
 The original issues and #179 were closed for consolidation, not gameplay acceptance;
 #197 retains the remaining work. The [current audit](traffic-races.md)
 records the baseline's missing chassis pairs/player-only movable contacts, the

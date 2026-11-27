@@ -162,6 +162,27 @@ void lifecycle_and_stream() {
   SLRR_REQUIRE(road_distance(before, {traffic->pos[0], traffic->pos[1],
                                       traffic->pos[2]}) > 1);
   SLRR_REQUIRE(!scene_instances_collect_root(&f.world).empty());
+  // Bot.followCar detaches a streamed police car with remTrafficCar before
+  // driving it: the registration ends, the car stays.
+  f.call("remTrafficCar", "(I)V", {Value::make_int(registration)});
+  traffic_step(f.vm, .1f);
+  SLRR_REQUIRE(gameref_find_live(car_id) == traffic &&
+               race_traffic_pointer(static_cast<Object *>(traffic->key)) == 0 &&
+               !traffic->streamed_hidden);
+  // Bot.reJoinTraffic: back on a lane, the car takes its old ID again.
+  race_traffic_request_enter(static_cast<Object *>(traffic->key), &f.ground);
+  traffic_step(f.vm, .1f);
+  SLRR_REQUIRE(race_traffic_pointer(static_cast<Object *>(traffic->key)) ==
+               registration);
+  // City re-adds its own tracker for a returning scout, so re-entry sends no
+  // second car_add; the next detachment's car_rem removes that tracker.
+  f.call("remTrafficCar", "(I)V", {Value::make_int(registration)});
+  traffic_step(f.vm, .1f);
+  const auto detached_again =
+      std::find(events.rbegin(), events.rend(), "car_rem " + std::to_string(car_id));
+  SLRR_REQUIRE(detached_again != events.rend());
+  events.erase(std::next(detached_again).base());
+  part_destroy(static_cast<Object *>(traffic->key));
   f.call("delTraffic", "()V");
   traffic_step(f.vm, .1f);
   SLRR_REQUIRE(!gameref_find_live(car_id));
@@ -371,7 +392,9 @@ void actual_city_turns_and_wheels() {
     total_turn =
         std::max(total_turn,
                  std::fabs(std::remainder(n->ypr[0] - start_yaw, 6.2831853f)));
-    SLRR_REQUIRE(step < .3f && turn < .3f);
+    // Rural roads cruise up to 100 km/h (bot.ts speed bands), .46 m a tick;
+    // a jump or teleport is still far larger.
+    SLRR_REQUIRE(step < .5f && turn < .3f);
     for (const auto &[key, base] : initial)
       if (auto *w = gameref_get(key)) {
         auto *m = w->local_matrix;

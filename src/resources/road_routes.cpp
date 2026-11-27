@@ -92,6 +92,8 @@ RoadRoutes::RoadRoutes(const RoadNetwork &net,
             e.to = node.id;
           else
             e.from = node.id;
+          // Either rural (group 0) endpoint makes the whole road rural.
+          e.speed_group = node.group == 0 || e.speed_group == 0 ? 0 : 1;
         }
     lane_index[road.id] = traffic_edges_.size();
     traffic_edges_.push_back(std::move(e));
@@ -116,6 +118,7 @@ RoadRoutes::RoadRoutes(const RoadNetwork &net,
             continue;
           turn.crossing = true;
           turn.from = turn.to = node.id;
+          turn.speed_group = node.group == 0 ? 0 : 1;
           turn.branch = traffic_edges_[b->second].branch;
           turn.roads = traffic_edges_[a->second].roads;
           turn.next = {b->second};
@@ -603,6 +606,16 @@ RoadRoutes::traffic_project(const RoadPoint &point, const RoadPoint *heading,
     for (size_t i = 1; i < traffic_edges_[edge].points.size(); ++i)
       examine(edge, i);
   return result;
+}
+std::array<float, 2> road_speed_band(int group) {
+  return group == 0 ? std::array<float, 2>{60, 100} : std::array<float, 2>{15, 35};
+}
+float RoadRoutes::speed_limit(const RoadPoint &p) const {
+  auto near = traffic_project(p, nullptr, true);
+  if (!near || near->distance > 30)
+    return -1;
+  const int group = traffic_edges_[near->edge].speed_group;
+  return group < 0 ? -1 : road_speed_band(group)[1] / 3.6f;
 }
 int RoadRoutes::traffic_signal(size_t edge, double seconds) const {
   if (edge >= traffic_edges_.size() || traffic_edges_[edge].crossing)
