@@ -272,12 +272,15 @@ Notes and measurements: [notes](notes.md#brakes-as-hardware-abs-and-asr-446).
   ambient with a 40 s lag; past 230 deg C (DOT 4) the pressure reaching the
   pads falls, to 0.4 at 290 deg C.
 - **Tyres** (`src/physics/tyre_thermal.cpp`): with the patched `Tyre`
-  (`WheelRef.setTyreSpec`, the compound), each tyre has a tread and a
-  carcass temperature. Half the sliding work at the patch heats the tread,
-  the rolling resistance and the rotor (through the rim) heat the carcass;
-  both cool faster with speed. The tread temperature scales the tyre's
-  friction (`TireParameters::friction`) for the force law and the sticking
-  limits alike, through a curve per compound.
+  (`WheelRef.setTyreSpec`, the compound), each tyre has a surface skin, a
+  tread bulk and a carcass temperature (#472). Half the sliding work at the
+  patch heats the skin, which passes it to the bulk and loses it to the air
+  and the road within seconds; the rolling resistance and the rotor (through
+  the rim) heat the carcass; all cool faster with speed. The tread rubber's
+  temperature (`tyre_grip_temperature`, the mean of skin and bulk, what the
+  HUD shows) scales the tyre's friction (`TireParameters::friction`) for the
+  force law and the sticking limits alike, through a curve per compound.
+  Wear and rubber smoke follow the skin.
 - **Feedback.** Each time ABS releases a front wheel (a channel opens its
   outlet valve), a force feedback wheel gets a short knock; each release on
   any wheel gives the pad the brake is bound to a short pulse, at most ten a

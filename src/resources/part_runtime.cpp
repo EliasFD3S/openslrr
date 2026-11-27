@@ -8732,7 +8732,8 @@ bool part_vehicle_hud(VehicleHudState &state) {
     c.tyre = rec->dynamics.wheels[i].enabled && cfg.tyre_heat.specified;
     c.rotor = static_cast<float>(wheel.brake_temperature);
     c.fluid = static_cast<float>(wheel.fluid_temperature);
-    c.tread = static_cast<float>(wheel.tyre_temperature.surface);
+    // The tread rubber's temperature, the one that sets the grip (#472).
+    c.tread = static_cast<float>(physics::tyre_grip_temperature(wheel.tyre_temperature));
     c.carcass = static_cast<float>(wheel.tyre_temperature.carcass);
     c.pad = static_cast<float>(physics::pad_friction_factor(cfg.hardware, wheel.brake_temperature));
     c.grip = static_cast<float>(physics::tyre_grip_factor(cfg.tyre_heat, c.tread));

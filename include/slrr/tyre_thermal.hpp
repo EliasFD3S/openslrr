@@ -1,10 +1,12 @@
 #pragma once
-// Tyre temperature (#446). Two lumps per tyre: the tread surface, heated by
-// the sliding at the contact patch, and the carcass, heated by the rubber's
-// hysteresis as it rolls and by the hot brake through the rim. The surface
-// sets the grip, through a curve per compound (the patched Tyre sends it
-// with WheelRef.setTyreSpec). Without a spec the tyre stays at ambient and
-// keeps its grip.
+// Tyre temperature (#446, #472). Three lumps per tyre: the tread's surface
+// skin (its outer half millimetre), heated by the sliding at the contact
+// patch and quenched by the road and the bulk beneath; the tread bulk, fed
+// by the skin; and the carcass, heated by the rubber's hysteresis as it rolls
+// and by the hot brake through the rim. The tread rubber (skin and bulk
+// together, tyre_grip_temperature) sets the grip, through a curve per
+// compound (the patched Tyre sends it with WheelRef.setTyreSpec). Without a
+// spec the tyre stays at ambient and keeps its grip.
 
 namespace slrr::physics {
 
@@ -21,8 +23,12 @@ struct TyreThermalSpec {
 TyreThermalSpec tyre_thermal_spec(double compound, double radius, double width);
 
 struct TyreTemperature {
-  double surface = 25, carcass = 25;  // deg C
+  // deg C: the surface skin, the carcass and the tread bulk (#472).
+  double surface = 25, carcass = 25, tread = 25;
 };
+// The tread rubber's temperature that sets the grip: the mean of the skin
+// and the bulk, so a slide's flash heat fades within seconds (#472).
+double tyre_grip_temperature(const TyreTemperature& t);
 
 // Heat flows of one tyre for one substep:
 //  sliding: the friction power at the patch (W), |Fx slip| + |Fy lateral slip|;
@@ -33,12 +39,14 @@ TyreTemperature step_tyre_temperature(const TyreThermalSpec& tyre, TyreTemperatu
                                       double sliding, double rolling, double brake,
                                       double speed, double dt);
 
-// Grip at the tread surface's temperature, relative to the tyre's working
-// value (the scripted friction): below 1 cold and overheated.
-double tyre_grip_factor(const TyreThermalSpec& tyre, double surface);
+// Grip at the tread rubber's temperature (tyre_grip_temperature), relative
+// to the tyre's working value (the scripted friction): below 1 cold and
+// overheated.
+double tyre_grip_factor(const TyreThermalSpec& tyre, double temperature);
 
-// Heat capacities (J/K) of the two lumps, for tests and the debug view.
+// Heat capacities (J/K) of the three lumps, for tests and the debug view.
 double tyre_surface_capacity(const TyreThermalSpec& tyre);
+double tyre_tread_capacity(const TyreThermalSpec& tyre);
 double tyre_carcass_capacity(const TyreThermalSpec& tyre);
 
 // Hot pressure (#461, OpenSLRR, beyond the original). The Tyre script sets a
@@ -49,7 +57,8 @@ double tyre_carcass_capacity(const TyreThermalSpec& tyre);
 // values hold), the patched script's own laws scale the relaxation length
 // (pressure^-0.5), the rolling resistance (pressure^-0.5) and the nominal
 // load (pressure^0.25); the cornering stiffness grows as pressure^0.3 and
-// falls as the tread rubber heats past its working temperature.
+// falls as the tread rubber (tyre_grip_temperature) heats past its working
+// temperature.
 struct TyrePressureEffect {
   double pressure = 0;  // hot gauge pressure (bar); 0 when unknown
   double ratio = 1;     // against the pressure at the working temperature
