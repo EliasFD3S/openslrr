@@ -2391,3 +2391,58 @@ their measured geometry; the slope follows the car's current brake split,
 so a balance change in the garage keeps the stated percentage instead of
 moving it as a fixed arm geometry would; the push follows the last step's
 force; the scripts' instant centres stay unused.
+
+## Tyre surface stays hot after a slide (#472)
+
+Cause (Mark, direct-drive wheel, latest `main`: tyres heat far too fast,
+the DevilSport has no grip): the #446 tread lump was 8 % of the tyre (two
+or three millimetres) and set the grip. Wheelspin (40-60 kW into a rear
+tyre) heated it to 150-200 deg C in seconds, as a burnout does, but it then
+cooled only through the air, 25 W/K into the carcass and 8 W/K into the
+road: 15-40 s, during which the grip stayed 10-20 % low, so the car slid
+again and heated more. Measured on Tsukuba with temporary hooks:
+
+- The heat input is not the cause: the sliding work with the raw lateral
+  slip speed differs from the relaxed one by about 3 %.
+- The DevilSport's balance in a gentle slalom at 58 km/h is sound (slightly
+  understeering, like the CoupeSport). Full throttle on a straight, its
+  330 Nm in first (realistic for the E36 M3, no ASR) spin the rears at
+  10-15 m/s for 2 s and the car swaps ends near 57 km/h; the CoupeSport
+  launches at 0.9 m/s of slip. A wheel spinning that much has almost no
+  lateral grip: realistic, but it feeds the heat.
+
+Fix (`tyre_thermal.cpp`):
+
+- Three lumps: the skin (3 % of the tyre, its outer half millimetre) takes
+  half the sliding work; the tread bulk (20 %) is fed by it through 160 W/K
+  per square metre of tread band (0.25 W/m K over about 1.5 mm) and feeds
+  the carcass (77 %) through 50 W/K/m² (about 5 mm). The skin loses heat to
+  the air as before and to the road as 4 x sqrt(speed) W/K: the patch's
+  contact is shorter, so its gradient steeper, the faster the tyre rolls.
+- `tyre_grip_temperature` (the mean of skin and bulk) sets the grip, the
+  cornering stiffness's rubber term and the HUD's tread readout; wear and
+  rubber smoke follow the skin. `TyreTemperature` gains `tread` (the bulk).
+
+Validation:
+
+- Compilation: `slrr_host` and `physics_lab` Release. `vehicle_dynamics`
+  72/72 (the tyre heat test adds a 4 s, 40 kW wheelspin on a 275/40R19
+  sport tyre: after 4 s rolling at 15 m/s the grip temperature keeps less
+  than 60 % of its rise, the bulk at least 10 deg C), `missing_support`
+  17/17, `physics_tick_rate` 9/9.
+- Lumped model alone (275/40R19): a 4 s, 40 kW burnout peaks at about
+  82 deg C either way; 4 s later the grip temperature is 53 deg C against
+  73, at 20 s 37 against 51. Three minutes at 3 kW of sliding: 45 deg C
+  against 50 (slower warm-up). Ten minutes at 100 km/h: carcass 56 deg C.
+- In game (`build/needle-game`, DevilSport on Tsukuba, temporary hook: 3 s
+  full throttle then lift): the rear tread rubber peaks at 64 deg C either
+  way; 1.5 s after the lift 54 against 61 deg C; 10 s after, 42-46 against
+  55-62.
+- Not checked in game by a driver: the feel of the grip after a slide, the
+  HUD readout.
+
+Limitations: the conductances and the road term are estimates from rubber
+properties, not a measured tyre; the share of the sliding work the tyre
+takes stays at half. The DevilSport still spins its rears and swaps ends on
+a full-throttle launch without ASR: that is its torque, not the heat. The
+#461 tyre save keeps no temperatures (unchanged).

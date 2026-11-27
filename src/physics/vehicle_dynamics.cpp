@@ -1122,7 +1122,7 @@ TireParameters effective_tyre(const DriveWheel &cfg, const WheelState &s, double
                               TyrePressureEffect *pressure_out = nullptr) {
   TireParameters tyre = cfg.tyre;
   const auto pressure = tyre_pressure_effect(cfg.tyre_heat, cfg.inflation, s.tyre_temperature);
-  tyre.friction *= tyre_grip_factor(cfg.tyre_heat, s.tyre_temperature.surface) *
+  tyre.friction *= tyre_grip_factor(cfg.tyre_heat, tyre_grip_temperature(s.tyre_temperature)) *
                    s.surface.friction * tyre_wear_grip(cfg.tread_wear);
   tyre.stiffness *= pressure.stiffness * tyre_wear_stiffness(cfg.tread_wear);
   tyre.relaxation_length *= pressure.relaxation;

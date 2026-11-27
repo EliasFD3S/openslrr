@@ -1572,6 +1572,19 @@ SLRR_TEST(tyres_warm_up_rolling_and_sliding_and_set_the_grip) {
     burnout = step_tyre_temperature(street, burnout, 20000, 0, kAmbientTemperature, 0, .001);
   SLRR_REQUIRE(burnout.surface > 60);
   SLRR_REQUIRE(burnout.carcass < burnout.surface);
+  // #472: a slide's flash heat leaves the skin within seconds. A 4 s, 40 kW
+  // wheelspin on a 275/40R19 sport tyre, then 4 s rolling at 15 m/s: the
+  // rubber that sets the grip sheds most of its rise, the bulk keeps some.
+  const auto rear = tyre_thermal_spec(1, .351, .275);
+  TyreTemperature spin;
+  for (int step = 0; step < 4000; ++step)
+    spin = step_tyre_temperature(rear, spin, 40000, 0, kAmbientTemperature, 3, .001);
+  const double flash = tyre_grip_temperature(spin) - kAmbientTemperature;
+  SLRR_REQUIRE(flash > 40);
+  for (int step = 0; step < 4000; ++step)
+    spin = step_tyre_temperature(rear, spin, 0, 4500 * .012 * 15, kAmbientTemperature, 15, .001);
+  SLRR_REQUIRE(tyre_grip_temperature(spin) - kAmbientTemperature < .6 * flash);
+  SLRR_REQUIRE(spin.tread > kAmbientTemperature + 10);
   // Grip: cold below the window, full in it, falling past it; a racing
   // compound is weaker cold than a street one.
   SLRR_REQUIRE(tyre_grip_factor(street, 25) < 1 && tyre_grip_factor(street, 25) > .9);
@@ -1597,7 +1610,7 @@ SLRR_TEST(hot_tyres_gain_pressure_and_soften) {
   SLRR_REQUIRE(tyre_hot_pressure(2, 80) > 2.5 && tyre_hot_pressure(2, 80) < 2.65);
   const auto sport = tyre_thermal_spec(1, .31, .205), race = tyre_thermal_spec(2, .31, .205);
   // At the working carcass temperature the scripted tyre is unchanged.
-  const auto working = tyre_pressure_effect(sport, 2, {tyre_working_tread(sport), tyre_working_carcass(sport)});
+  const auto working = tyre_pressure_effect(sport, 2, {tyre_working_tread(sport), tyre_working_carcass(sport), tyre_working_tread(sport)});
   SLRR_REQUIRE(std::abs(working.ratio - 1) < 1e-9 && std::abs(working.stiffness - 1) < 1e-9);
   SLRR_REQUIRE(working.relaxation == 1 && working.rolling == 1 && working.nominal_load == 1);
   // Cold: under its working pressure, so a lazier, softer, draggier tyre.
@@ -1606,14 +1619,14 @@ SLRR_TEST(hot_tyres_gain_pressure_and_soften) {
   SLRR_REQUIRE(cold.relaxation > 1 && cold.rolling > 1 && cold.nominal_load < 1);
   // The low pressure softens the carcass; cold rubber is stiffer itself, so
   // a cold tyre's stiffness stays about as scripted.
-  SLRR_REQUIRE(tyre_pressure_effect(sport, 2, {tyre_working_tread(sport), 25}).stiffness < .97);
+  SLRR_REQUIRE(tyre_pressure_effect(sport, 2, {tyre_working_tread(sport), 25, tyre_working_tread(sport)}).stiffness < .97);
   SLRR_REQUIRE(std::abs(cold.stiffness - 1) < .05);
   // A cold racing tyre is further from its window than a sport one.
   SLRR_REQUIRE(tyre_pressure_effect(race, 2, {}).ratio < cold.ratio);
   // Hot: over-pressured, quicker; an overheated tread loses stiffness.
-  const auto hot = tyre_pressure_effect(sport, 2, {tyre_working_tread(sport), 110});
+  const auto hot = tyre_pressure_effect(sport, 2, {tyre_working_tread(sport), 110, tyre_working_tread(sport)});
   SLRR_REQUIRE(hot.ratio > 1.05 && hot.relaxation < 1 && hot.stiffness > 1);
-  const auto cooked = tyre_pressure_effect(sport, 2, {200, 110});
+  const auto cooked = tyre_pressure_effect(sport, 2, {200, 110, 200});
   SLRR_REQUIRE(cooked.stiffness < hot.stiffness * .9);
   // Without the patched Tyre or a known pressure: nothing changes.
   SLRR_REQUIRE(tyre_pressure_effect(TyreThermalSpec{}, 2, {100, 100}).stiffness == 1);
