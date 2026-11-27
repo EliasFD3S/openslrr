@@ -7,6 +7,7 @@
 #include "slrr/gc_roots.hpp"
 #include "slrr/types.hpp"
 
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -136,7 +137,11 @@ class Jvm : public TreeHost {
   std::vector<GcRootProvider> gc_roots_;
   uint64_t gc_frame_id_=0;
   std::unordered_map<uint64_t,GcRootProvider> gc_frames_;
-  std::string resolve_class_path(const std::string& fqn, bool exact = false) const;
+  std::string class_identity(const std::string& name) const;
+  const TufaClass* unique_loaded_short(const std::string& simple) const;
+  bool load_indexed_class(const std::string& name);
+  bool load_container(const std::filesystem::path& path, std::string* primary_name,
+                      const std::string& expected_name = {});
   bool load_class_file_impl(const std::string& path, std::string* primary_name,
                             bool resource_path);
   void seed_static_fields(const TufaClass& cls);
@@ -171,7 +176,7 @@ class Jvm : public TreeHost {
   std::string game_root_;
   bool classpath_ready_ = false;
   std::unique_ptr<ModOverlay> overlay_;
-  std::vector<std::pair<std::string, std::string>> classpath_;
+  std::vector<std::string> native_packages_;
   std::unordered_map<std::string, TufaClass> by_name_;
   // Class files currently inside load_class_file. A field path during static
   // init must not enrich the same file again.

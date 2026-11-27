@@ -11,7 +11,9 @@
 
 #include "class_order.hpp"
 #include "classfile.hpp"
+#include "provider_index.hpp"
 #include "slrrc.hpp"
+#include "tree_walk.hpp"
 
 namespace slrrc {
 namespace install {
@@ -103,90 +105,6 @@ struct FoundClass {
 struct FoundSource {
     IndexKey key;
     SourceFile sf;
-};
-
-struct Walk {
-    Install& inst;
-    std::vector<FoundClass> found_classes;
-    std::vector<FoundSource> found_sources;
-    std::map<IndexKey, std::string> by_key;         // index key -> class file
-
-    // One directory, then the directories in it: os.walk, top down, with
-    // the names sorted.  A directory that cannot be listed is passed over; a
-    // link to a directory is listed and not followed.
-    void directory(const fs::path& dir, const std::string& dirpath, const std::string& rel_dir) {
-        std::vector<std::string> dirnames;
-        std::vector<std::string> filenames;
-        std::error_code ec;
-        fs::directory_iterator it(dir, ec);
-        if (ec) {
-            return;
-        }
-        const fs::directory_iterator end;
-        while (it != end) {
-            std::error_code ec2;
-            bool entry_is_dir = it->is_directory(ec2);
-            if (ec2) {
-                entry_is_dir = false;
-            }
-            try {
-                auto name = from_path(it->path().filename());
-                (entry_is_dir ? dirnames : filenames).push_back(std::move(name));
-            } catch (const std::system_error&) {
-                std::fprintf(stderr, "[compile] skipped a name not representable in UTF-8 under %s\n", dirpath.c_str());
-            }
-            it.increment(ec);
-            if (ec) {
-                return;
-            }
-        }
-        std::vector<std::string> kept;
-        for (std::string& d : dirnames) {
-            if (!inst.skipped(d)) {
-                kept.push_back(std::move(d));
-            }
-        }
-        std::sort(kept.begin(), kept.end());
-        std::sort(filenames.begin(), filenames.end());
-        for (const std::string& f : filenames) {
-            const std::string low = lower(f);
-            const std::string rel = rel_dir.empty() ? f : rel_dir + '/' + f;
-            if (ends_with(low, CLASS_EXT)) {
-                IndexKey key = index_key(rel_dir, std::string_view(f).substr(0, f.size() - (sizeof(CLASS_EXT) - 1)));
-                if (by_key.find(key) == by_key.end()) {
-                    by_key[key] = rel;
-                }
-                found_classes.push_back(FoundClass{std::move(key), rel});
-            } else if (ends_with(low, PACK_EXT)) {
-                inst.pack_files.push_back(replaced(rel, '/', '\\'));
-            } else if (ends_with(low, SOURCE_EXT)) {
-                // head, _, last = rel_dir.rpartition('/')
-                const size_t slash = rel_dir.rfind('/');
-                const std::string head = slash == std::string::npos ? std::string() : rel_dir.substr(0, slash);
-                const std::string last = slash == std::string::npos ? rel_dir : rel_dir.substr(slash + 1);
-                if (lower(last) != SOURCE_DIR) {
-                    inst.stray_sources.push_back(rel);
-                    continue;
-                }
-                SourceFile sf;
-                sf.path = join(dirpath, f);
-                sf.rel = rel;
-                sf.class_dir = head;
-                sf.name = f.substr(0, f.size() - (sizeof(SOURCE_EXT) - 1));
-                IndexKey key = index_key(head, sf.name);
-                found_sources.push_back(FoundSource{std::move(key), std::move(sf)});
-            }
-        }
-        for (const std::string& d : kept) {
-            const fs::path sub = dir / to_path(d);
-            std::error_code ec3;
-            const fs::file_status st = fs::symlink_status(sub, ec3);
-            if (!ec3 && st.type() == fs::file_type::symlink) {
-                continue;
-            }
-            directory(sub, join(dirpath, d), rel_dir.empty() ? d : rel_dir + '/' + d);
-        }
-    }
 };
 
 bool key_less_class(const FoundClass& a, const FoundClass& b) {
@@ -298,17 +216,58 @@ bool Install::skipped(std::string_view dir_name) const {
 }
 
 void Install::scan() {
-    Walk walk{*this, {}, {}, {}};
-    walk.directory(to_path(root), root, std::string());
+    std::vector<FoundClass> found_classes;
+    std::vector<FoundSource> found_sources;
+    std::map<IndexKey, std::string> by_key;         // index key -> class file
+    // The walk the engine shares (tree_walk.hpp): names sorted, links to
+    // directories followed with a cycle guard.
+    tree::walk(to_path(root), [&](const tree::Entry& entry) {
+        if (entry.directory) {
+            return !skipped(entry.name);
+        }
+        const std::string& f = entry.name;
+        const std::string& rel = entry.rel;
+        const size_t cut = rel.rfind('/');
+        const std::string rel_dir = cut == std::string::npos ? std::string() : rel.substr(0, cut);
+        const std::string low = lower(f);
+        if (ends_with(low, CLASS_EXT)) {
+            IndexKey key = index_key(rel_dir, std::string_view(f).substr(0, f.size() - (sizeof(CLASS_EXT) - 1)));
+            if (by_key.find(key) == by_key.end()) {
+                by_key[key] = rel;
+            }
+            found_classes.push_back(FoundClass{std::move(key), rel});
+        } else if (ends_with(low, PACK_EXT)) {
+            pack_files.push_back(replaced(rel, '/', '\\'));
+        } else if (ends_with(low, SOURCE_EXT)) {
+            // head, _, last = rel_dir.rpartition('/')
+            const size_t slash = rel_dir.rfind('/');
+            const std::string head = slash == std::string::npos ? std::string() : rel_dir.substr(0, slash);
+            const std::string last = slash == std::string::npos ? rel_dir : rel_dir.substr(slash + 1);
+            if (lower(last) != SOURCE_DIR) {
+                stray_sources.push_back(rel);
+                return true;
+            }
+            SourceFile sf;
+            sf.path = from_path(entry.path);
+            sf.rel = rel;
+            sf.class_dir = head;
+            sf.name = f.substr(0, f.size() - (sizeof(SOURCE_EXT) - 1));
+            IndexKey key = index_key(head, sf.name);
+            found_sources.push_back(FoundSource{std::move(key), std::move(sf)});
+        }
+        return true;
+    }, [](const tree::Problem& problem) {
+        std::fprintf(stderr, "[compile] %s\n", tree::describe(problem).c_str());
+    });
     // Equal source keys keep their walk order; class order is shared with the VM.
-    std::sort(walk.found_classes.begin(), walk.found_classes.end(), key_less_class);
-    std::stable_sort(walk.found_sources.begin(), walk.found_sources.end(), key_less_source);
-    for (FoundClass& c : walk.found_classes) {
+    std::sort(found_classes.begin(), found_classes.end(), key_less_class);
+    std::stable_sort(found_sources.begin(), found_sources.end(), key_less_source);
+    for (FoundClass& c : found_classes) {
         class_files.push_back(std::move(c.rel));
     }
-    for (FoundSource& s : walk.found_sources) {
-        const std::map<IndexKey, std::string>::const_iterator hit = walk.by_key.find(s.key);
-        if (hit != walk.by_key.end()) {
+    for (FoundSource& s : found_sources) {
+        const std::map<IndexKey, std::string>::const_iterator hit = by_key.find(s.key);
+        if (hit != by_key.end()) {
             s.sf.has_class = true;
             s.sf.class_rel = hit->second;
         }
@@ -360,25 +319,6 @@ bool read_source(const SourceFile& sf, std::string& data, std::string& why) {
 // the classes of a tree
 // ---------------------------------------------------------------------------
 
-namespace {
-
-// rel.rpartition('/')[2][:-len(CLASS_EXT)]: the file name of a class file
-// without its extension.
-std::string_view class_file_name(std::string_view rel) {
-    const size_t slash = rel.rfind('/');
-    std::string_view name = slash == std::string_view::npos ? rel : rel.substr(slash + 1);
-    const size_t ext = sizeof(CLASS_EXT) - 1;
-    return name.size() >= ext ? name.substr(0, name.size() - ext) : std::string_view();
-}
-
-// name.rpartition('.')[2]: the simple name of a class.
-std::string_view simple_name(std::string_view name) {
-    const size_t dot = name.rfind('.');
-    return dot == std::string_view::npos ? name : name.substr(dot + 1);
-}
-
-}  // namespace
-
 InstallProvider::InstallProvider(Install& tree, bool strict_mode) : install(tree), strict(strict_mode) {}
 
 void InstallProvider::load(const std::function<int(const std::string&)>& priority) {
@@ -387,7 +327,13 @@ void InstallProvider::load(const std::function<int(const std::string&)>& priorit
     std::map<std::string, bool> rejected;       // class files that define less than they should
     std::string data;
     std::string why;
-    for (const std::string& rel : inst.class_files) {
+    // Each class file is a container of the shared provider index (the
+    // engine's mod overlay builds the same one); a file with a blob the reader
+    // rejects provides nothing.
+    std::vector<Container> containers;
+    std::vector<std::vector<classes::ClassInfo>> infos(inst.class_files.size());
+    for (size_t k = 0; k < inst.class_files.size(); ++k) {
+        const std::string& rel = inst.class_files[k];
         if (!inst.read(rel, data, why)) {
             unreadable.push_back(Unreadable{rel, "cannot be read: " + why});
             rejected[rel] = true;
@@ -400,30 +346,34 @@ void InstallProvider::load(const std::function<int(const std::string&)>& priorit
             continue;
         }
         builds[rel] = res.blobs[0].build;
-        const std::string_view file_name = class_file_name(rel);
+        Container container{k, rank(rel), rel, {}};
         for (const classfile::BlobData& blob : res.blobs) {
             classes::ClassInfo info;
             if (!classfile::class_info(blob, info)) {
                 unreadable.push_back(Unreadable{
                     rel, "a row or the CLSS record names a pool entry of the wrong kind"});
                 rejected[rel] = true;
-                continue;
+                break;
             }
             class_count += 1;
-            const std::map<std::string, std::string, std::less<>>::const_iterator old =
-                origin.find(info.name);
-            if (old != origin.end()) {
-                const std::string_view simple = simple_name(info.name);
-                const std::string_view old_name = class_file_name(old->second);
-                const int current_rank = rank(rel), old_rank = rank(old->second);
-                if (current_rank > old_rank || (current_rank == old_rank &&
-                    !slrrc::named_file_replaces(file_name, old_name, simple, old->second == rel))) {
-                    continue;
-                }
+            container.classes.push_back(info.name);
+            infos[k].push_back(std::move(info));
+        }
+        if (rejected.count(rel)) {
+            container.classes.clear();
+        }
+        containers.push_back(std::move(container));
+    }
+    ProviderIndex index;
+    index.build(std::move(containers));
+    for (const Container& c : index.containers()) {
+        for (size_t i = 0; i < c.classes.size(); ++i) {
+            const std::string& name = c.classes[i];
+            if (index.provider(name) != &c || origin.count(name)) {
+                continue;
             }
-            origin[info.name] = rel;
-            const std::string name = info.name;
-            known[name] = std::move(info);
+            origin[name] = c.rel;
+            known[name] = std::move(infos[c.id][i]);
         }
     }
     for (size_t k = 0; k < inst.sources.size(); ++k) {

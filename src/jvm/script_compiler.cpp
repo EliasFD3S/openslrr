@@ -163,16 +163,32 @@ ScriptCompileReport script_compile_all(const std::string& root,
     bool exists = slrrc::install::is_dir(requested);
     for (const auto& [folder, rank] : layers.ranks)
       exists |= slrrc::install::is_dir(tree.path("mods/" + folder + "/" + directory));
-    if (!slrrc::install::is_inside(requested, tree.root) || !exists)
-      throw std::runtime_error("compile directory is missing or outside the game root");
+    // Lexical, as the shared walk spells paths: a folder of a private copy
+    // may be a junction or link to content stored elsewhere.
+    auto lexical = [](const std::string& path) {
+      auto text = slrrc::install::lower(path_to_utf8(path_from_utf8(path).lexically_normal()));
+      while (text.size() > 1 && text.back() == '/' && !(text.size() == 3 && text[1] == ':')) text.pop_back();
+      return text;
+    };
+    const auto root_key = lexical(tree.root);
+    auto requested_rel = lexical(requested);
+    const auto root_prefix = root_key.ends_with('/') ? root_key : root_key + "/";
+    if (requested_rel == root_key) requested_rel.clear();
+    else if (requested_rel.starts_with(root_prefix)) requested_rel.erase(0, root_prefix.size());
+    else exists = false;
+    if (!exists) throw std::runtime_error("compile directory is missing or outside the game root");
+    auto requested_inside = [&](const std::string& rel) {
+      const auto low = slrrc::install::lower(rel);
+      return requested_rel.empty() || low == requested_rel ||
+             (low.size() > requested_rel.size() && low.starts_with(requested_rel) && low[requested_rel.size()] == '/');
+    };
     tree.scan();
     layers.filter(tree);
     slrrc::install::InstallProvider provider(tree);
     provider.load([&](const auto& rel) { return layers.unit(rel).second; });
     slrrc::install::InstallPacks packs(tree);
     for (const auto& source : tree.sources) {
-      if (!slrrc::install::is_inside(source.path, requested) &&
-          !slrrc::install::is_inside(tree.path(layers.unit(source.rel).first), requested)) continue;
+      if (!requested_inside(source.rel) && !requested_inside(layers.unit(source.rel).first)) continue;
       bool counted = false;
       try {
         std::string text, why;

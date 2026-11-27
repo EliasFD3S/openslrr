@@ -26,8 +26,9 @@ add_library(slrr_script_compiler STATIC
   third_party/slrrc/emit.cpp third_party/slrrc/floatlit.cpp
   third_party/slrrc/install.cpp third_party/slrrc/packs.cpp
   third_party/slrrc/parser.cpp third_party/slrrc/pool.cpp
+  third_party/slrrc/provider_index.cpp
   third_party/slrrc/scanner.cpp third_party/slrrc/slrrc.cpp
-  third_party/slrrc/write.cpp)
+  third_party/slrrc/tree_walk.cpp third_party/slrrc/write.cpp)
 set_target_properties(slrr_script_compiler PROPERTIES CXX_STANDARD 17)
 target_include_directories(slrr_script_compiler PUBLIC third_party/slrrc)
 target_compile_options(slrr_script_compiler PRIVATE /utf-8 /fp:precise)
@@ -37,7 +38,8 @@ target_include_directories(slrr_jobs PUBLIC include)
 
 add_library(slrr_mod_overlay STATIC src/jvm/mod_overlay.cpp src/platform/host_options_json.cpp)
 target_include_directories(slrr_mod_overlay PUBLIC include)
-target_link_libraries(slrr_mod_overlay PRIVATE slrr_jobs)
+# The provider index and directory walk it shares with the compiler.
+target_link_libraries(slrr_mod_overlay PUBLIC slrr_script_compiler PRIVATE slrr_jobs)
 target_compile_options(slrr_mod_overlay PRIVATE /utf-8)
 
 add_executable(compile_game_sources tools/compile_game_sources.cpp

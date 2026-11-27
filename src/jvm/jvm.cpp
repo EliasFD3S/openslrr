@@ -11,12 +11,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cctype>
 #include <limits>
 
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <filesystem>
 #include <stdexcept>
 #include <string_view>
@@ -73,9 +71,12 @@ Value empty_method_result(const std::string& desc) {
   if(t=='F'||t=='D')return Value::make_float(0);if(t!='V')return Value::make_int(0);return Value::make_void();
 }
 
-bool file_readable(const std::filesystem::path& path) {
-  std::ifstream in(path, std::ios::binary);
-  return static_cast<bool>(in);
+std::string path_cache_key(const std::filesystem::path& path) {
+  auto key = path_to_utf8(path.lexically_normal());
+#ifdef _WIN32
+  for (char& c : key) if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+#endif
+  return key;
 }
 
 constexpr uint32_t kNativeFlag = 0x40;
@@ -149,87 +150,26 @@ bool Jvm::bootstrap_classpath() {
     std::fprintf(stderr, "[jvm] bootstrap: empty game_root\n");
     return false;
   }
-  classpath_ = {
-      {"system/Scripts/lang", "java.lang"},
-      {"system/Scripts/io", "java.io"},
-      {"system/Scripts/util", "java.util"},
-      {"system/Scripts/util/resource", "java.util.resource"},
-      {"system/Scripts/render", "java.render"},
-      {"system/Scripts/render/osd", "java.render.osd"},
-      {"system/Scripts/render/osd/dialog", "java.render.osd.dialog"},
-      {"system/Scripts/sound", "java.sound"},
-      {"sl/Scripts/game", "java.game"},
-      {"parts/scripts", "java.game.parts"},
-      {"parts/scripts/bodypart", "java.game.parts.bodypart"},
-      {"parts/accessories/scripts", "java.game.parts.accessories"},
-  };
+  // Legacy TUFA owners may be unqualified even when registered host natives
+  // have a package. This list is for native dispatch, not class search.
+  native_packages_ = {"java.lang", "java.io", "java.util", "java.util.resource",
+                      "java.render", "java.render.osd", "java.render.osd.dialog", "java.sound",
+                      "java.game", "java.game.parts", "java.game.parts.bodypart",
+                      "java.game.parts.accessories"};
+  loaded_paths_.clear();
   overlay_ = std::make_unique<ModOverlay>();
   const auto scan_start = std::chrono::steady_clock::now();
   overlay_->scan(game_root_, std::cout);
   const auto scan_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - scan_start);
   std::printf("[mods] overlay scan: %.1f ms\n", scan_ms.count());
   publish_mod_list(overlay_->mods());
-  namespace fs = std::filesystem;
-  // Union of package directories, including packages absent in the base.
-  // Store logical paths so every root uses the very same overlay resolver.
-  auto add_packages = [&](const fs::path& layer, const std::string& dir, const std::string& prefix) {
-    const auto root = layer / dir;
-    std::error_code ec;
-    for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
-         it != end; it.increment(ec)) {
-      // Any one unusable directory is skipped; it must not abort boot.
-      try {
-        if (!it->is_directory(ec)) continue;
-        if (_wcsicmp(it->path().filename().c_str(), L"src") == 0) {
-          it.disable_recursion_pending();
-          continue;
-        }
-        const auto suffix = path_to_utf8(it->path().lexically_relative(root));
-        auto pkg = prefix + "." + suffix;
-        std::replace(pkg.begin(), pkg.end(), '/', '.');
-        auto candidate = std::make_pair(dir + "/" + suffix, pkg);
-        if (std::find(classpath_.begin(), classpath_.end(), candidate) == classpath_.end())
-          classpath_.push_back(std::move(candidate));
-      } catch (const std::exception& e) {
-        std::printf("[mods] skipped an unreadable directory under %s: %s\n", dir.c_str(), e.what());
-      }
-    }
-  };
-  auto add_layer = [&](const fs::path& layer) {
-    add_packages(layer, "parts/scripts", "java.game.parts");
-    add_packages(layer, "system/Scripts", "java");
-  };
-  add_layer(game_root_);
-  for (const auto& mod : overlay_->mods()) add_layer(fs::path(game_root_) / "mods" / path_from_utf8(mod.folder));
+  for (const auto& package : overlay_->packages()) {
+    if (std::find(native_packages_.begin(), native_packages_.end(), package) == native_packages_.end())
+      native_packages_.emplace_back(package);
+  }
   classpath_ready_ = true;
-  std::printf("[jvm] classpath ready (%zu roots) under %s\n", classpath_.size(),
-              game_root_.c_str());
+  std::printf("[jvm] classpath ready under %s\n", game_root_.c_str());
   return true;
-}
-
-std::string Jvm::resolve_class_path(const std::string& fqn, bool exact) const {
-  if (overlay_) {
-    if (const auto mod = overlay_->provider(fqn); !mod.empty()) return path_to_utf8(mod);
-  }
-  const auto slash = fqn.find_last_of('.');
-  const std::string simple =
-      slash == std::string::npos ? fqn : fqn.substr(slash + 1);
-  const std::string pkg =
-      slash == std::string::npos ? std::string() : fqn.substr(0, slash);
-
-  for (const auto& root : classpath_) {
-    if (!pkg.empty() && root.second != pkg) continue;
-    const auto raw = path_from_utf8(root.first) / path_from_utf8(simple + ".class");
-    const auto path = overlay_ ? overlay_->resolve(raw) : raw;
-    if (file_readable(path)) return path_to_utf8(path);
-  }
-  if (exact) return {};  // entries never fall back to a same-named class in another package
-  for (const auto& root : classpath_) {
-    const auto raw = path_from_utf8(root.first) / path_from_utf8(simple + ".class");
-    const auto path = overlay_ ? overlay_->resolve(raw) : raw;
-    if (file_readable(path)) return path_to_utf8(path);
-  }
-  return {};
 }
 
 void Jvm::initialize_mods() {
@@ -249,19 +189,7 @@ void Jvm::initialize_mods() {
     }
     try {
       // An entry is an exact class identity, not a legacy short-name alias.
-      if (!by_name_.contains(it->entry)) {
-        const auto path = resolve_class_path(it->entry, true);
-        if (!path.empty()) {
-          // The file found by directory/package must really declare the entry; an
-          // unrelated same-simple-name class is neither registered nor initialized.
-          std::vector<TufaClass> blobs;
-          std::string err;
-          const auto file = path_from_utf8(path);
-          const bool parsed = overlay_->load(file, blobs, err);
-          if (parsed && std::any_of(blobs.begin(), blobs.end(), [&](const TufaClass& b) { return b.name() == it->entry; }))
-            load_class_file(path);
-        }
-      }
+      if (!by_name_.contains(it->entry)) load_indexed_class(it->entry);
       const auto cls = by_name_.find(it->entry);
       if (cls == by_name_.end()) {
         std::printf("[mods] mods/%s: missing entry class %s\n", it->folder.c_str(), it->entry.c_str());
@@ -489,44 +417,48 @@ const TufaClass* Jvm::load_resource_class(const std::string& path) {
 bool Jvm::load_class_file_impl(const std::string& requested, std::string* primary_name,
                                bool resource_path) {
   const auto request = path_from_utf8(requested);
-  const auto relative = overlay_ ? overlay_->logical(request) : std::filesystem::absolute(request);
-  if (relative.empty()) return false;
-  std::error_code error;
-  // A real resource container supplies its class identities. A mod may also
-  // add a file for an RPK path which does not exist in the base installation.
-  const auto request_status = overlay_ || resource_path
-      ? std::filesystem::status(request, error) : std::filesystem::file_status{};
-  const auto path = overlay_ && !std::filesystem::is_regular_file(request_status)
-                      ? overlay_->resolve(relative) : request;
-  auto absolute = std::filesystem::absolute(path, error);
-  std::string path_key = path_to_utf8((error ? path : absolute).lexically_normal());
-#ifdef _WIN32
-  std::transform(path_key.begin(), path_key.end(), path_key.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-#endif
-  if (auto it = loaded_paths_.find(path_key); it != loaded_paths_.end()) {
-    if (primary_name) *primary_name = it->second;
+  const auto request_key = path_cache_key(request);
+  // In particular, do not stat a part's RPK script on every construction.
+  if (const auto cached = loaded_paths_.find(request_key); cached != loaded_paths_.end()) {
+    if (primary_name) *primary_name = cached->second;
     return true;
   }
+  const auto absolute = request.is_absolute() ? request : std::filesystem::absolute(request);
+  bool explicit_mod = false;
+  const auto relative = overlay_ ? overlay_->logical(absolute, &explicit_mod) : absolute;
+  if (relative.empty()) return false;
+  std::error_code error;
+  // Logical file references keep the indexed container's identities (valid
+  // base first). An explicit path under mods/ names that physical container.
+  const auto* indexed = overlay_ && !explicit_mod ? overlay_->container(relative) : nullptr;
+  const auto& path = indexed ? indexed->path : absolute;
   // Give an existing base or mod container priority: its primary may not
   // be the already-loaded class with the same short name. If neither layer
   // supplies the path, reuse an unambiguous loaded identity without reading
   // another file or caching this guess as the primary for the missing path.
-  if (resource_path &&
-      (path == request ? request_status : std::filesystem::status(path, error)).type() ==
-          std::filesystem::file_type::not_found) {
-    const auto stem = path_to_utf8(relative.stem());
-    const std::string* match = nullptr;
-    for (const auto& entry : by_name_) {
-      const auto& name = entry.first;
-      if (std::string_view(name).substr(name.rfind('.') + 1) != stem) continue;
-      if (match) return false;
-      match = &name;
-    }
-    if (match) {
-      *primary_name = *match;
-      return true;
-    }
+  if (!indexed && resource_path && std::filesystem::status(path, error).type() ==
+                                       std::filesystem::file_type::not_found) {
+    const auto* match = unique_loaded_short(path_to_utf8(relative.stem()));
+    if (!match) return false;
+    *primary_name = match->name();
+    return true;
+  }
+  std::string primary;
+  if (!load_container(path, &primary)) return false;
+  loaded_paths_.try_emplace(request_key, primary);
+  if (primary_name) *primary_name = primary;
+  return true;
+}
+
+// An indexed package lookup already identifies the physical TUFA container.
+// Never substitute another path here, even if that container has disappeared.
+bool Jvm::load_container(const std::filesystem::path& path, std::string* primary_name,
+                         const std::string& expected_name) {
+  const auto path_key = path_cache_key(path);
+  if (auto it = loaded_paths_.find(path_key); it != loaded_paths_.end()) {
+    if (!expected_name.empty() && !by_name_.contains(expected_name)) return false;
+    if (primary_name) *primary_name = it->second;
+    return true;
   }
   if (!loading_paths_.insert(path_key).second) return false;
   struct LoadingGuard {
@@ -543,8 +475,13 @@ bool Jvm::load_class_file_impl(const std::string& requested, std::string* primar
     return false;
   }
   if (blobs.empty()) return false;
+  // An index describes the boot snapshot. Do not register unrelated classes
+  // if a provider changed after the scan (especially when loading a mod entry).
+  if (!expected_name.empty() && std::none_of(blobs.begin(), blobs.end(), [&](const TufaClass& cls) {
+        return cls.name() == expected_name;
+      })) return false;
   std::string primary = blobs.front().name();
-  const auto stem = path_to_utf8(relative.stem());
+  const auto stem = path_to_utf8(path.stem());
   auto lower_ascii = [](char c) { return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c; };
   bool matched_case_insensitively = false;
   for (const auto& cls : blobs) {
@@ -564,12 +501,11 @@ bool Jvm::load_class_file_impl(const std::string& requested, std::string* primar
     // A class definition and its trees must outlive every executing/suspended
     // frame. A different container may still introduce unseen sibling classes.
     if (by_name_.contains(name)) continue;
-    auto dot=name.find_last_of('.');
-    if(dot!=std::string::npos){
-      auto directory=path_to_utf8(relative.parent_path());
-      std::string package=name.substr(0,dot);
-      auto candidate=std::make_pair(directory,package);
-      if(std::find(classpath_.begin(),classpath_.end(),candidate)==classpath_.end())classpath_.push_back(candidate);
+    const auto dot = name.rfind('.');
+    if (dot != std::string::npos) {
+      const auto package = name.substr(0, dot);
+      if (std::find(native_packages_.begin(), native_packages_.end(), package) == native_packages_.end())
+        native_packages_.push_back(package);
     }
     auto [entry, inserted] = by_name_.try_emplace(name, std::move(cls));
     if (inserted) added.push_back(&entry->second);
@@ -582,6 +518,11 @@ bool Jvm::load_class_file_impl(const std::string& requested, std::string* primar
   for (const auto* cls : added) seed_static_fields(*cls);
   for (const auto* cls : added) enrich_static_fields(*cls);
   return true;
+}
+
+bool Jvm::load_indexed_class(const std::string& name) {
+  const auto provider = overlay_->provider(name);
+  return !provider.empty() && load_container(provider, nullptr, name);
 }
 
 bool Jvm::load_class(const std::string& fqn_or_path) {
@@ -598,36 +539,44 @@ bool Jvm::load_class(const std::string& fqn_or_path) {
   // Logging each miss stalled dialog construction on the console.
   if (!fqn_or_path.empty() && fqn_or_path[0] == '[') return false;
 
-  const std::string path = resolve_class_path(fqn_or_path);
-  if (path.empty()) {
-    std::fprintf(stderr, "[jvm] class not found: %s\n", fqn_or_path.c_str());
-    return false;
-  }
-  if (!load_class_file(path)) return false;
-  return find_class(fqn_or_path) != nullptr;
+  const auto name = class_identity(fqn_or_path);
+  if (!name.empty() && load_indexed_class(name)) return true;
+  std::fprintf(stderr, "[jvm] class not found: %s\n", fqn_or_path.c_str());
+  return false;
 }
 
-const TufaClass* Jvm::find_class(const std::string& fqn) const {
-  auto it = by_name_.find(fqn);
-  if (it != by_name_.end()) return &it->second;
-  const auto slash = fqn.find_last_of('.');
-  if (slash != std::string::npos) {
-    it = by_name_.find(fqn.substr(slash + 1));
-    // A previously loaded legacy short name must not suppress the load of
-    // a specifically provided fully-qualified class.
-    if (it != by_name_.end() && (!overlay_ || overlay_->provider(fqn).empty())) return &it->second;
-  } else {
-    // Field refs sometimes name the class without its package. Reloading
-    // that short name re-runs static init and recurses.
-    const std::string suffix = "." + fqn;
-    for (const auto& kv : by_name_) {
-      if (kv.first.size() >= suffix.size() &&
-          kv.first.compare(kv.first.size() - suffix.size(), suffix.size(),
-                           suffix) == 0)
-        return &kv.second;
-    }
+// Resolve a legacy spelling to a declaration, never to a filename. Some TUFA
+// classes themselves have unqualified names even when their caller qualifies
+// them. Only an exact default-package declaration can satisfy that case.
+std::string Jvm::class_identity(const std::string& name) const {
+  if (overlay_ && !overlay_->provider(name).empty()) return name;
+  const auto dot = name.rfind('.');
+  if (dot != std::string::npos) return name.substr(dot + 1);
+  if (overlay_) {
+    bool ambiguous = false;
+    auto indexed = overlay_->unique_short_name(name, &ambiguous);
+    if (!indexed.empty() || ambiguous) return indexed;
   }
-  return nullptr;
+  // Explicit loads (also possible without bootstrapping) may be unindexed.
+  const auto* match = unique_loaded_short(name);
+  return match ? match->name() : std::string{};
+}
+
+const TufaClass* Jvm::unique_loaded_short(const std::string& simple) const {
+  const TufaClass* match = nullptr;
+  for (const auto& [name, cls] : by_name_) {
+    if (std::string_view(name).substr(name.rfind('.') + 1) != simple) continue;
+    if (match) return nullptr;
+    match = &cls;
+  }
+  return match;
+}
+
+const TufaClass* Jvm::find_class(const std::string& name) const {
+  auto it = by_name_.find(name);
+  if (it != by_name_.end()) return &it->second;
+  it = by_name_.find(class_identity(name));
+  return it == by_name_.end() ? nullptr : &it->second;
 }
 
 Object* Jvm::new_object(const std::string& class_fqn) {
@@ -860,9 +809,9 @@ bool Jvm::native_has_alias(const std::string& class_name,
   if (hit(class_name)) return true;
   const auto dot = class_name.find_last_of('.');
   if (dot == std::string::npos) {
-    // Short TUFA name → probe classpath packages (GameType → java.lang.GameType).
-    for (const auto& root : classpath_) {
-      if (hit(root.second + "." + class_name)) return true;
+    // Short TUFA name → qualified native owner (GameType → java.lang.GameType).
+    for (const auto& package : native_packages_) {
+      if (hit(package + "." + class_name)) return true;
     }
   } else if (hit(class_name.substr(dot + 1))) {
     return true;

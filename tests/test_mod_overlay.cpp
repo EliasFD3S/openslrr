@@ -4,6 +4,7 @@
 #include "slrr/utf8_path.hpp"
 #include "standalone_test.hpp"
 #include <chrono>
+#include <cstdlib>
 #include <algorithm>
 #include <fstream>
 #include <sstream>
@@ -73,9 +74,20 @@ void compiler_and_runtime_choose_same_file() {
   ModOverlay overlay;
   overlay.scan(f.root, log);
   const auto expected = f.root / "mods/z" / cls;
-  SLRR_REQUIRE(overlay.resolve(cls) == expected);
-  SLRR_REQUIRE(overlay.resolve(overlay.logical(f.root / "mods/a" / cls)) == expected);
-  SLRR_REQUIRE(overlay.resolve("stock/Fallback.class") == f.root / "stock/Fallback.class");
+  // The definition (winner) is chosen by FQN priority: mods/z beats mods/a and base.
+  SLRR_REQUIRE(overlay.provider("java.mods.extra.Marker") == expected);
+  // A path request selects the valid base container when present (copied above)...
+  const auto* base = overlay.container(cls);
+  SLRR_REQUIRE(base && base->path == f.root / cls);
+  const auto* via_mod_path = overlay.container(overlay.logical(f.root / "mods/a" / cls));
+  SLRR_REQUIRE(via_mod_path && via_mod_path->path == f.root / cls);
+  SLRR_REQUIRE(overlay.container("stock/Fallback.class") == nullptr);
+  // ...else the highest-priority mod container.
+  fs::remove(f.root / cls);
+  ModOverlay no_base;
+  no_base.scan(f.root, log);
+  const auto* top = no_base.container(cls);
+  SLRR_REQUIRE(top && top->path == expected);
   SLRR_REQUIRE(log.str().find("[mods] java.mods.extra.Marker: mods/z (overrides base; also in mods/a)") != std::string::npos);
 }
 
@@ -115,11 +127,24 @@ void invalid_containers_fall_through() {
   ModOverlay overlay;
   std::ostringstream log;
   overlay.scan(f.root, log);
-  SLRR_REQUIRE(overlay.resolve(cls) == f.root / cls);
+  // Corrupt/empty mod containers provide nothing; the valid base file stays selected.
+  const auto* base = overlay.container(cls);
+  SLRR_REQUIRE(base && base->path == f.root / cls);
+  SLRR_REQUIRE(overlay.provider("java.game.Stock") == f.root / cls);
   SLRR_REQUIRE(log.str().find("mods/a/system/Scripts/game/Stock.class:") != std::string::npos);
+  // A valid mod container overrides the definition by FQN even though base also exists.
   fs::copy_file(f.root / cls, f.root / "mods/b" / cls, fs::copy_options::overwrite_existing);
   overlay.scan(f.root, log);
-  SLRR_REQUIRE(overlay.resolve(cls) == f.root / "mods/b" / cls);
+  SLRR_REQUIRE(overlay.provider("java.game.Stock") == f.root / "mods/b" / cls);
+  base = overlay.container(cls);
+  SLRR_REQUIRE(base && base->path == f.root / cls);
+  // Without a valid base file the highest-priority VALID mod container is chosen;
+  // corrupt mods/a is never selected.
+  fs::remove(f.root / cls);
+  overlay.scan(f.root, log);
+  const auto* mod = overlay.container(cls);
+  SLRR_REQUIRE(mod && mod->path == f.root / "mods/b" / cls);
+  SLRR_REQUIRE(overlay.provider("java.game.Stock") == f.root / "mods/b" / cls);
 }
 
 void cross_root_secondary_providers() {
@@ -213,7 +238,8 @@ void unicode_folders_and_files() {
   ModOverlay overlay;
   try { overlay.scan(f.root, log); } catch (const std::exception&) { SLRR_REQUIRE(!"scan threw"); }
   const auto physical = f.root / "mods" / jp / cls;
-  SLRR_REQUIRE(overlay.resolve(cls) == physical);
+  const auto* container = overlay.container(cls);
+  SLRR_REQUIRE(container && container->path == physical);
   SLRR_REQUIRE(overlay.logical(physical) == cls);
   SLRR_REQUIRE(overlay.provider("java.mods.jp.Marker") == physical);
   std::vector<TufaClass> blobs;
@@ -321,6 +347,121 @@ void duplicates_in_one_mod_use_compiler_order() {
   run({{"system/Scripts/game/src/A.java", "A", "int"}, {"system/Scripts/game/src/Dup.java", "Aux", "float"}},
       "system/Scripts/game/Dup.class");
 }
+
+// ---- PR #489 review 3 (findings 1-3): identity is by declared FQN only ----
+void put_class_dir(Fixture& f, const fs::path& dir, const std::string& file, const std::string& text) {
+  f.put(dir / "src" / file, text);
+}
+
+// #1: a mod's primary replaces stock Track from ANOTHER path (docs' own example)
+// or under another file name; the stock secondary classes of that container
+// must stay reachable through the overlay.
+void secondary_survives_override_from_other_path() {
+  for (const bool renamed : {false, true}) {
+    Fixture f;
+    const fs::path stock = "sl/Scripts/game";
+    put_class_dir(f, stock, "Track.java",
+        "package java.game; public class Track { public static int id(){return 0;} } class StockSibling { public static int v(){return 5;} }");
+    SLRR_REQUIRE(script_compile_all(path_to_utf8(f.root), path_to_utf8(stock)).succeeded == 1);
+    f.manifest("z", R"("api":1)");
+    const fs::path mod = "mods/z/system/Scripts/game";
+    if (renamed)  // differently named file declaring the same FQN
+      put_class_dir(f, mod, "Other.java", "package java.game; public class Other {} class Track { public static int id(){return 2;} }");
+    else
+      put_class_dir(f, mod, "Track.java", "package java.game; public class Track { public static int id(){return 2;} }");
+    SLRR_REQUIRE(script_compile_all(path_to_utf8(f.root), "mods/z").succeeded == 1);
+    ModOverlay overlay;
+    std::ostringstream log;
+    overlay.scan(f.root, log);
+    SLRR_REQUIRE(overlay.provider("java.game.Track") == f.root / mod / (renamed ? "Other.class" : "Track.class"));
+    SLRR_REQUIRE(overlay.provider("java.game.StockSibling") == f.root / stock / "Track.class");
+    SLRR_REQUIRE(log.str().find("[mods] java.game.Track: mods/z (overrides base") != std::string::npos);
+    // The container that supplies the sibling must still load it.
+    std::vector<TufaClass> blobs;
+    std::string error;
+    SLRR_REQUIRE(overlay.load(f.root / stock / "Track.class", blobs, error));
+    bool sibling = false;
+    for (const auto& blob : blobs) sibling |= blob.name() == "java.game.StockSibling";
+    SLRR_REQUIRE(sibling);
+  }
+}
+
+// #2: a mod file at the same relative path as a stock class but declaring a
+// different FQN must not hide the stock class, in either direction.
+void same_path_different_fqn_does_not_shadow() {
+  Fixture f;
+  put_class_dir(f, "system/Scripts/game", "Foo.java", "package java.game; public class Foo { public static int v(){return 5;} }");
+  SLRR_REQUIRE(script_compile_all(path_to_utf8(f.root), "system/Scripts/game").succeeded == 1);
+  f.manifest("m", R"("api":1)");
+  const fs::path mod = "mods/m/sl/Scripts/game";
+  put_class_dir(f, mod, "Foo.java", "package java.mods.m; public class Foo { public static int v(){return 6;} }");
+  SLRR_REQUIRE(script_compile_all(path_to_utf8(f.root), "mods/m").succeeded == 1);
+  ModOverlay overlay;
+  std::ostringstream log;
+  overlay.scan(f.root, log);
+  SLRR_REQUIRE(overlay.provider("java.mods.m.Foo") == f.root / mod / "Foo.class");
+  // Nobody in the mod declares java.game.Foo: the stock container provides it.
+  SLRR_REQUIRE(overlay.provider("java.game.Foo") == f.root / "system/Scripts/game/Foo.class");
+  SLRR_REQUIRE(log.str().find("java.game.Foo:") == std::string::npos);
+}
+
+// #3: directory junctions and symlinked directories are followed by the scan
+// and by the compiler alike, with a cycle guard.
+bool make_junction(const fs::path& link, const fs::path& target) {
+  fs::create_directories(link.parent_path());
+  const std::string cmd = "cmd /c mklink /J \"" + link.string() + "\" \"" + target.string() + "\" >nul 2>nul";
+  return std::system(cmd.c_str()) == 0 && fs::is_directory(link);
+}
+bool make_symlink(const fs::path& link, const fs::path& target) {
+  fs::create_directories(link.parent_path());
+  std::error_code ec;
+  fs::create_directory_symlink(target, link, ec);  // may need privilege: caller skips
+  return !ec && fs::is_directory(link);
+}
+// Removes the links themselves (never their targets) even when a check throws.
+struct LinkGuard {
+  std::vector<fs::path> links;
+  void add(const fs::path& p) { links.push_back(p); }
+  ~LinkGuard() {
+    for (const auto& p : links) {
+      std::error_code ec;
+      if (fs::is_symlink(fs::symlink_status(p, ec)) || fs::exists(fs::symlink_status(p, ec)))
+        fs::remove(p, ec);  // removes the junction/symlink entry only; never recurses
+    }
+  }
+};
+void linked_directories_are_followed() {
+  for (const bool junction : {true, false}) {
+    Fixture f;
+    LinkGuard links;  // declared after f: unlinks before f's remove_all runs
+    f.manifest("m", R"("api":1)");
+    const fs::path pkg = "mods/m/system/Scripts/mods/m";
+    f.put("ext/linked/src/J.java", "package java.mods.m.linked; public class J { public static int id(){return 1;} }");
+    const fs::path link = f.root / pkg / "linked";
+    links.add(link);
+    links.add(f.root / pkg / "loop");
+    if (!(junction ? make_junction(link, f.root / "ext/linked") : make_symlink(link, f.root / "ext/linked"))) {
+      SLRR_REQUIRE(!junction);  // junctions need no privilege; symlinks may be unavailable
+      std::puts("SKIP directory symlinks unavailable (no privilege)");
+      continue;
+    }
+    // A cycle back to an ancestor, reachable from the same tree.
+    SLRR_REQUIRE(junction ? make_junction(f.root / pkg / "loop", f.root / pkg)
+                          : make_symlink(f.root / pkg / "loop", f.root / pkg));
+    // The compiler sees the linked source once and terminates on the cycle.
+    const auto built = script_compile_all(path_to_utf8(f.root), path_to_utf8(pkg));
+    SLRR_REQUIRE(built.attempted == 1 && built.succeeded == 1 && built.failed == 0);
+    SLRR_REQUIRE(fs::exists(f.root / "ext/linked/J.class"));
+    ModOverlay overlay;
+    std::ostringstream log;
+    overlay.scan(f.root, log);
+    const auto provider = overlay.provider("java.mods.m.linked.J");
+    SLRR_REQUIRE(!provider.empty() && fs::equivalent(provider, f.root / "ext/linked/J.class"));
+    // The same container reached through the loop is not a competing provider.
+    SLRR_REQUIRE(log.str().find("also in") == std::string::npos);
+    SLRR_REQUIRE(overlay.provider("java.mods.m.linked.J") == provider);
+  }
+}
 }  // namespace
 
 int main() {
@@ -328,6 +469,8 @@ int main() {
                                      compiler_and_runtime_choose_same_file, cross_root_secondary_providers,
                                      unicode_folders_and_files, load_order_ignores_case_and_logs_unknown,
                                      invalid_order_line_is_skipped,
-                                     duplicates_in_one_mod_use_compiler_order};
+                                     duplicates_in_one_mod_use_compiler_order,
+                                     secondary_survives_override_from_other_path,
+                                     same_path_different_fqn_does_not_shadow, linked_directories_are_followed};
   return standalone::run("mod_overlay", tests);
 }
