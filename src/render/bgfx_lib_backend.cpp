@@ -2144,7 +2144,11 @@ void LibBgfxBackend::submit_world(uint16_t world_view, bgfx::FrameBufferHandle t
         // the garage floor. Rebuild the view in the space the mesh is drawn in.
         const bx::Vec3 eye{p.camera.aim_eye[0],p.camera.aim_eye[1],-p.camera.aim_eye[2]};
         const bx::Vec3 at{p.camera.aim_at[0],p.camera.aim_at[1],-p.camera.aim_at[2]};
-        const bx::Vec3 up{0.f,1.f,0.f};
+        // The camera's roll (the `roll` command or setMatrix's), as the world
+        // camera applies it (#487); a preview camera is never the bound follow camera.
+        float ru[3]={0.f,1.f,0.f};
+        if(p.camera.camera_roll!=0.f)mod_roll_up(p.camera.aim_eye,p.camera.aim_at,p.camera.camera_roll,ru);
+        const bx::Vec3 up{ru[0],ru[1],-ru[2]};
         bx::mtxLookAt(view,eye,at,up);
       }else{
         // setMatrix stores the PE pose Ry*Rx*Rz. The scene basis is a

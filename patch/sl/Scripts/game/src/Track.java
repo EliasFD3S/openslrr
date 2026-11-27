@@ -992,6 +992,11 @@ abstract public class Track extends Scene implements GameState
 		if (!cameraTarget.id())	return;
 		if (closeUps)	return;	// OpenSLRR (#487): repair, mechanic or paint view
 
+		// Keep the current view, provider views included, until look-back
+		// has restored it.
+		float rear = player.controller.user_GetAxisVal( Input.AXIS_LOOK_REAR );
+		if( rear > 0.5 || rear < -0.5 ) return;
+
 		CameraProvider p = selectedCameraProvider();
 		if( p && (cameraMode == CAMMODE_FOLLOW || cameraMode == CAMMODE_PROVIDER) )
 		{
@@ -1010,10 +1015,6 @@ abstract public class Track extends Scene implements GameState
 				setMessage( "Camera: " + p.viewName( v ) );
 			return;
 		}
-
-		// Keep the current mode until look-back has restored the view.
-		float rear = player.controller.user_GetAxisVal( Input.AXIS_LOOK_REAR );
-		if( rear > 0.5 || rear < -0.5 ) return;
 
 		if( cameraMode == CAMMODE_FOLLOW && hasLiveChaseTarget() )
 		{
@@ -1072,7 +1073,14 @@ abstract public class Track extends Scene implements GameState
 	// scripts use the cam field directly.
 	void providerOn( CameraProvider p, int v )
 	{
-		if( !p || !cameraTarget || !cameraTarget.id() || closeUps )
+		if( !cameraTarget || !cameraTarget.id() )
+		{
+			// No car to follow (the target went away): the provider must not
+			// keep driving its camera, hotkeys and animate hook on the old one.
+			providerOff();
+			return;
+		}
+		if( !p || closeUps )
 			return;
 		if( cameraMode != CAMMODE_FOLLOW )
 			changeCamFollow();	// also deactivates a provider

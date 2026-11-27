@@ -278,7 +278,7 @@ void gameref_request_active_collision(void* key);
 // through a scene-graph mutation or script callback.
 void gameref_process_collision_requests();
 
-void gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
+bool gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
                         float pitch, float roll);
 // GameRef.setMatrix on a camera (#487): the Ypr roll becomes the camera roll
 // (the `roll` command), except on the bound follow camera, whose pose the

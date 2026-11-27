@@ -77,6 +77,48 @@ void mod_pose_on_preview_and_clear(){
  scene_instances_select(nullptr,nullptr,false);gameref_clear();
  std::puts("PASS mod poses drive preview cameras, keep a straight-down yaw and hand over to the stock camera without a snap");
 }
+// #487 review 4: the free script camera keeps its roll, a rejected setMatrix
+// is reported, near-vertical poses write a YPR that rebuilds the drawn up,
+// and the aimed preview cache starts from the drawn pose.
+void camera_roll_and_vertical_write_back(){
+ Fixture f;gameref_clear();scene_instances_select(nullptr,nullptr,false);
+ Object world,camera,viewport;
+ auto* root=gameref_upsert(&world,GameRefKind::Dummy);root->flags=kWorldTreeRoot;
+ auto* cam=gameref_upsert(&camera,GameRefKind::Camera);gameref_set_parent(&camera,&world);
+ auto* vp=gameref_upsert(&viewport,GameRefKind::Viewport);vp->vp_active=true;vp->vp_pri=12;
+ gameref_activate_camera(*cam,*vp,1);scene_instances_select(&world,nullptr,false);
+ SLRR_REQUIRE(fullscreen_script_camera()==cam);
+ // A rejected pose (NaN) changes nothing and says so; natives_gameref then
+ // leaves the roll alone too.
+ SLRR_REQUIRE(gameref_set_matrix(&camera,1,2,3,.4f,0,0));
+ SLRR_REQUIRE(!gameref_set_matrix(&camera,std::nanf(""),2,3,.4f,0,.5f) && cam->ypr[2]==0.f);
+ // camera_free: the free camera path applies camera_roll (it returned before).
+ cam->camera_free=true;cam->camera_roll=.5f;
+ float e[3],a[3],u[3],fv,zn,zf;
+ SLRR_REQUIRE(gameref_world_camera(e,a,&fv,&zn,&zf,u));
+ float expect[3]={0,1,0};SLRR_REQUIRE(mod_roll_up(e,a,.5f,expect));
+ for(int i=0;i<3;++i)SLRR_REQUIRE(std::fabs(u[i]-expect[i])<1e-4f);
+ SLRR_REQUIRE(std::fabs(u[1]-std::cos(.5f))<1e-3f);
+ cam->camera_free=false;cam->camera_roll=0.f;
+ // Near vertical: the written yaw/pitch/roll rebuild the pose's up.
+ for(const float h:{0.f,5e-6f,2e-5f,1e-3f,3e-2f})
+  for(const float ux:{1.f,0.f})
+   for(const float sign:{-1.f,1.f}){
+    const float eye[3]={0,10,0},at[3]={0,10+sign*5,-h*5},up[3]={ux,0,ux>0?0.f:-1.f};
+    SLRR_REQUIRE(gameref_mod_camera_set(&camera,ModCameraMode::World,eye,at,up,0.f,nullptr));
+    float pe[3],pa[3],pu[3];SLRR_REQUIRE(gameref_mod_camera_view(&camera,pe,pa,pu,nullptr));
+    const float y=cam->ypr[0],p=cam->ypr[1],r=cam->ypr[2];
+    // The stock camera's up for this YPR: level up rolled by r about the view.
+    float rebuilt[3]={std::sin(y)*std::sin(p),std::cos(p),std::cos(y)*std::sin(p)};
+    if(r!=0.f){const float fw[3]={-std::sin(y)*std::cos(p),std::sin(p),-std::cos(y)*std::cos(p)};
+      const float o[3]={0,0,0};SLRR_REQUIRE(mod_roll_up(o,fw,r,rebuilt));}
+    for(int i=0;i<3;++i)SLRR_REQUIRE(std::fabs(rebuilt[i]-pu[i])<2e-3f);
+    // The aimed preview cache follows the drawn pose.
+    for(int i=0;i<3;++i)SLRR_REQUIRE(cam->aim_eye[i]==pe[i] && cam->aim_at[i]==pa[i]);
+   }
+ scene_instances_select(nullptr,nullptr,false);gameref_clear();
+ std::puts("PASS free camera roll, rejected setMatrix, near-vertical YPR rebuilds up, aim cache seeded");
+}
 void cursor_camera_is_ui_only(){
  Fixture f;gameref_clear();scene_instances_select(nullptr,nullptr,false);
  Object cursor,camera,viewport;
@@ -104,4 +146,4 @@ void tooltip_does_not_promote_page_background(){
  osd_hide_widget(page_id);SLRR_REQUIRE(osd_page_background_layer()==std::numeric_limits<int32_t>::max());
  osd_clear_widgets();std::puts("PASS tooltip layer does not lift catalog background over car, repeated show/hide and modal plates");
 }
-int main(){const standalone::Test tests[]={inset_preview_keeps_page_and_pose,mod_pose_on_preview_and_clear,cursor_camera_is_ui_only,tooltip_does_not_promote_page_background};return standalone::run("car_select_view",tests);}
+int main(){const standalone::Test tests[]={inset_preview_keeps_page_and_pose,mod_pose_on_preview_and_clear,camera_roll_and_vertical_write_back,cursor_camera_is_ui_only,tooltip_does_not_promote_page_background};return standalone::run("car_select_view",tests);}

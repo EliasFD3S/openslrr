@@ -562,3 +562,33 @@ straight-down yaw from up, the seeded smoothing, and a free fullscreen camera
 continuing from the pose after `clearPose`. The attached-camera roll is
 covered by the unit test of `mod_roll_up` only, not by an engine test with a
 car.
+
+### Fourth review round (PR #493) and #500 findings
+
+- clearPose on the bound follow camera: the write-back put the pose's focus
+  in `look_s`, which the follow rule reads as the car focus it last saw
+  (`eye_s += center - look_s`), so the first stock frame jumped by the
+  focus offset. On the follow path `look_s` is now the car's follow focus
+  (`kFollowFocusLift` above the drawn origin).
+- Aimed preview cameras: the write-back also seeds `aim_eye` / `aim_at`,
+  and the aimed preview applies `camera_roll` (it used world up). The free
+  script camera path (`camera_free`) applies it too.
+- Near-vertical write-back: `mod_look_vertical` (1e-4 of vertical) decides
+  once; there the yaw comes from up and the roll is 0, elsewhere yaw from the
+  view and roll from up (`mod_look_ypr_roll`).
+- `gameref_set_matrix` returns whether it accepted the pose;
+  `GameRef.setMatrix` sets the camera roll only then.
+- Track: the look-back guard is the first check of `nextCamera`, so V while
+  LOOK BACK is held changes no view, a provider's included; `providerOn`
+  with no live target calls `providerOff` (a car-to-null target change left
+  the provider driving its camera on the old car).
+- The stock chase view's random roll (`Track.changeCamChase` sends
+  `roll`) shows again since the attached path applies `camera_roll`; that
+  is the stock behaviour.
+
+Validation: `mod_camera` 13/13 (adds the reviewer's near-vertical probe);
+`car_select_view` adds the free camera roll through `gameref_world_camera`,
+the rejected `setMatrix`, near-vertical write-back rebuilding the drawn up
+(offsets 0 to 3e-2, both up choices, up and down) and the aim cache. The
+follow-camera hand-back, the V guard and the null target are checked in game
+(below); the aimed preview roll has no headless renderer test.

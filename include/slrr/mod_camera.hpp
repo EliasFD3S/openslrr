@@ -63,6 +63,15 @@ bool mod_roll_up(const float eye[3], const float at[3], float roll, float up[3])
 // The native returns 1 (clear) without sweeping otherwise.
 bool mod_sweep_args_valid(const float* from, const float* to, float radius);
 
+// A view within kModVertical (horizontal over total length) of straight up
+// or down. There the yaw comes from up and the roll is 0, so the YPR always
+// rebuilds the drawn up; elsewhere the yaw comes from the view and the roll
+// from up. One threshold for both.
+constexpr float kModVertical = 1e-4f;
+bool mod_look_vertical(const float eye[3], const float at[3]);
+// Yaw, pitch and roll written back for a pose (mod_look_ypr + mod_look_roll).
+void mod_look_ypr_roll(const float eye[3], const float at[3], const float up[3], float ypr[3]);
+
 // Roll of up about the view from eye to at, in the convention of the camera
 // `roll` command (gameref.cpp world_camera_pose: rolled up = level up * cos r
 // + right * sin r, right = forward x world up). 0 when the view is vertical.

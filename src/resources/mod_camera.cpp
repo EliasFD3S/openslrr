@@ -108,8 +108,7 @@ void mod_look_ypr(const float eye[3], const float at[3], float& yaw, float& pitc
   const float d[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
   const float level = std::hypot(d[0], d[2]);
   pitch = std::atan2(d[1], level);
-  if (up && finite3(up) && level <= 1e-5f * std::fabs(d[1]) &&
-      std::hypot(up[0], up[2]) > 1e-6f) {
+  if (up && finite3(up) && mod_look_vertical(eye, at) && std::hypot(up[0], up[2]) > 1e-6f) {
     // Gimbal: up = (sin y, 0, cos y) * sin p; sin p is +-1 here.
     const float s = d[1] < 0.f ? -1.f : 1.f;
     yaw = std::atan2(s * up[0], s * up[2]);
@@ -135,9 +134,21 @@ bool mod_sweep_args_valid(const float* from, const float* to, float radius) {
   return finite3(from) && finite3(to) && std::isfinite(radius) && radius >= 0.f;
 }
 
+bool mod_look_vertical(const float eye[3], const float at[3]) {
+  const float d[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
+  const float length = std::sqrt(dot(d, d));
+  return length > 0.f && std::hypot(d[0], d[2]) <= kModVertical * length;
+}
+
+void mod_look_ypr_roll(const float eye[3], const float at[3], const float up[3], float ypr[3]) {
+  mod_look_ypr(eye, at, ypr[0], ypr[1], up);
+  ypr[2] = mod_look_roll(eye, at, up);
+}
+
 float mod_look_roll(const float eye[3], const float at[3], const float up[3]) {
   float forward[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
-  if (!normalize(forward) || !finite3(up)) return 0.f;
+  // Vertical: the yaw carries the heading (mod_look_ypr) and there is no roll.
+  if (mod_look_vertical(eye, at) || !normalize(forward) || !finite3(up)) return 0.f;
   static const float kWorldUp[3] = {0.f, 1.f, 0.f};
   float right[3], level[3];
   cross(forward, kWorldUp, right);

@@ -256,6 +256,19 @@ SLRR_TEST(look_ypr_keeps_yaw_when_vertical) {
   SLRR_REQUIRE(y0 == y1 && p0 == p1);
 }
 
+// The reviewer's probe: a view 5e-6 off vertical with up +X must not take
+// the yaw from up and also a full roll; vertical and roll share a threshold.
+SLRR_TEST(near_vertical_has_one_decomposition) {
+  const float eye[3] = {0.f, 0.f, 0.f}, at[3] = {0.f, -1.f, -.000005f}, up[3] = {1.f, 0.f, 0.f};
+  float ypr[3];
+  slrr::mod_look_ypr_roll(eye, at, up, ypr);
+  SLRR_REQUIRE(slrr::mod_look_vertical(eye, at) && ypr[2] == 0.f);
+  const float u[3] = {std::sin(ypr[0]) * std::sin(ypr[1]), std::cos(ypr[1]), std::cos(ypr[0]) * std::sin(ypr[1])};
+  SLRR_REQUIRE(near3(u, 1.f, 0.f, 0.f, 1e-3f));
+  const float tilted[3] = {0.f, -1.f, -.01f};
+  SLRR_REQUIRE(!slrr::mod_look_vertical(eye, tilted));
+}
+
 // mod_roll_up is the `roll` command's up, and mod_look_roll reads it back.
 SLRR_TEST(roll_up_round_trip) {
   const float eye[3] = {1.f, 2.f, 3.f}, at[3] = {-4.f, 3.f, -2.f};
@@ -294,7 +307,7 @@ int main() {
       invalid_input_keeps_the_pose, matrix_ypr_round_trip,
       look_ypr_matches_the_stock_camera, local_pose_turns_and_banks_with_the_car,
       roll_write_back_matches_the_roll_command, sweep_rejects_non_finite_arguments,
-      look_ypr_keeps_yaw_when_vertical, roll_up_round_trip,
+      look_ypr_keeps_yaw_when_vertical, roll_up_round_trip, near_vertical_has_one_decomposition,
   };
   return slrr::standalone::run("mod_camera", tests);
 }

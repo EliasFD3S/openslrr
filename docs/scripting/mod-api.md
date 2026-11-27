@@ -77,15 +77,21 @@ play that is the draw-time resolution, the frame `drawnPos` reports in the
 next `animate()`), roll included (`getOri().r` is the bank of the
 up axis, in the convention of the `roll` command). The roll is also the
 camera's `roll` (except on the follow camera bound to the player's car), so
-`clearPose` continues with the same horizon. Straight up or down, the yaw
-is taken from the up axis, so such poses keep their heading. The stock
+`clearPose` continues with the same horizon. Within 1e-4 (horizontal over length)
+of straight up or down, the yaw is taken from the up axis and the roll is 0,
+so the written yaw, pitch and roll always rebuild the drawn up. The stock
 smoothing (the eye and focus of `move` / `look`, orbit and chase) also starts
-from the last drawn pose, so `clearPose` does not snap back to an older view.
+from the last drawn pose, so `clearPose` does not snap back to an older view;
+on the follow camera bound to the player's car its focus is the car's, as
+the follow rule expects. An aimed preview camera's cached eye and focus
+follow the pose too.
 
 `GameRef.setMatrix` on a script camera now applies the Ypr roll (as the `roll`
 command), except on the follow camera bound to the player's car, whose roll
-stays the script's `roll`. The roll applies to a free script camera and to one
-attached to a car with a short `move` (for example Track's chase view).
+stays the script's `roll`. The roll applies to a free script camera, to one
+attached to a car with a short `move` (for example Track's chase view, whose
+stock random roll is back) and to aimed preview cameras. A `setMatrix` with a
+NaN or infinite value is rejected whole, roll included.
 
 ## CameraProvider and Cameras
 
@@ -123,6 +129,9 @@ persist them by name (`camera.provider`, `camera.<name>.view`).
 - When a provider is selected, it takes the follow view: when the player
   enters a track, and when the selection changes while the follow view or a
   provider is showing (`Track.syncCameraProvider`, from `animate`).
+- While LOOK BACK is held, V is ignored, for a provider too.
+- When the camera target goes away (null or despawned), the provider is
+  deactivated.
 - The change-view key (V) in the follow view activates the provider in its
   current view; in the provider's view it moves to the next view (wrapping)
   and calls `setView`. The cockpit and chase views are not in that cycle while
