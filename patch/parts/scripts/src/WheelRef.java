@@ -97,4 +97,10 @@ public class WheelRef extends Native
 	// roll understeer). Without it the host treats the 25 m arm corners as one.
 	public native void setLiveAxle( float rollSteer );
 
+	// OpenSLRR (#490): the roll centre's height above the ground at this
+	// corner, in metres: the arms take the cornering force into the body
+	// there, so part of the roll moment skips the springs. Without it the host
+	// uses a typical height for the suspension type.
+	public native void setRollCenterHeight( float height );
+
 }

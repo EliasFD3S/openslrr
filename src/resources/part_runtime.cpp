@@ -109,6 +109,9 @@ struct WheelPhys {
   // setLiveAxle (patched suspensions, #490): degrees of axle steer per
   // degree of axle roll; NaN when not set.
   float roll_steer = std::numeric_limits<float>::quiet_NaN();
+  // setRollCenterHeight (patched suspensions, #490): metres above the
+  // ground; -1 when not set.
+  float roll_center_height = -1;
   int opp = -1;
   float arm[7]{}, hub[10]{};
   bool authored_position = false;
@@ -3051,6 +3054,18 @@ void dynamics_wheels(Record &rec) {
         cfg.live_axle = cfg.arm_length >= 20;
         cfg.roll_steer = cfg.live_axle ? .08 : 0;
       }
+      // Roll centre (#490): WheelRef.setRollCenterHeight, or typical: linked
+      // fronts 7 cm, independent rear arms 10 cm, live axles 38 cm (a
+      // Panhard rod or the leaf springs' axle seats). Corners without arms:
+      // at the ground, as before.
+      if (live.roll_center_height >= 0)
+        cfg.roll_center_height = live.roll_center_height;
+      else if (cfg.live_axle)
+        cfg.roll_center_height = .38;
+      else if (cfg.arm_length > 0)
+        cfg.roll_center_height = front ? .07 : .10;
+      else
+        cfg.roll_center_height = 0;
     }
     // WheelRef.setWidth: the tyre width in metres (Tyre.java), stored halved.
     cfg.half_width = cfg.metal_contact ? 0. : std::clamp(double(live.width), 0., .25);
@@ -10334,6 +10349,14 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
     return put(s, [&](WheelPhys &w) {
       const float roll_steer = scalar(a, 0, 0);
       if (std::isfinite(roll_steer)) w.roll_steer = std::clamp(roll_steer, -.5f, .5f);
+    });
+  });
+  // OpenSLRR native declared by the patched WheelRef (#490): the roll
+  // centre's height above the ground at this corner, 0 to 0.6 m.
+  wheel("setRollCenterHeight", "(F)V", [put](Object *s, const std::vector<Value> &a) {
+    return put(s, [&](WheelPhys &w) {
+      const float height = scalar(a, 0, 0);
+      if (std::isfinite(height)) w.roll_center_height = std::clamp(height, 0.f, .6f);
     });
   });
   wheel("setOppWheel", "(I)V", [put](Object *s, const std::vector<Value> &a) {

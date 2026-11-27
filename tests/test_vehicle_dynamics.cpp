@@ -2220,6 +2220,38 @@ SLRR_TEST(a_live_axle_keeps_its_wheels_square_to_the_beam_and_steers_in_roll) {
   SLRR_REQUIRE(yaw[2] < yaw[1] * .97);
 }
 
+SLRR_TEST(a_raised_roll_centre_takes_roll_moment_off_the_springs) {
+  // #490: the test saloon in a steady left turn with its roll centres at
+  // the ground, at a road car's 7 / 10 cm, and with a live axle's 38 cm at
+  // the rear. The arms carry h_rc / h_cg of the moment, so the body rolls
+  // less for the same cornering force.
+  double roll[3], lateral[3];
+  const double heights[3][2] = {{0, 0}, {.07, .10}, {.07, .38}};
+  for (int mode = 0; mode < 3; ++mode) {
+    Car car;
+    for (size_t i = 0; i < 4; ++i) car.dynamics.wheels[i].roll_center_height = heights[mode][i < 2 ? 0 : 1];
+    car.run(2, 0, 0, 0);
+    car.dynamics.drive.engaged = false;
+    car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -16});
+    for (auto& s : car.dynamics.state) s.spin = 16 / .31;
+    car.run(2.5, 0, 0, .09);
+    roll[mode] = std::abs(car.roll());
+    double side = 0;
+    for (const auto& s : car.dynamics.state) side += s.tire_force.lateral;
+    lateral[mode] = std::abs(side);
+  }
+  std::printf("ROLLCENTRE roll %.2f / %.2f / %.2f deg, lateral force %.0f / %.0f / %.0f N%c",
+              roll[0] * 57.3, roll[1] * 57.3, roll[2] * 57.3, lateral[0], lateral[1], lateral[2], 10);
+  // Roll per newton of cornering force: about 17 % less at 7 / 10 cm (the
+  // CoM stands about 0.5 m up), much less with the live axle's 38 cm, whose
+  // rear also takes more of the load transfer, so the car turns tighter.
+  const auto per_force = [&](int mode) { return roll[mode] / lateral[mode]; };
+  SLRR_REQUIRE(per_force(1) < per_force(0) * .92 && per_force(1) > per_force(0) * .7);
+  SLRR_REQUIRE(per_force(2) < per_force(1) * .85);
+  SLRR_REQUIRE(std::abs(lateral[1] - lateral[0]) < .1 * lateral[0]);
+  SLRR_REQUIRE(lateral[2] > lateral[1]);
+}
+
 SLRR_TEST(hot_brake_fluid_boils_and_the_pressure_falls) {
   const auto brake = brake_hardware(0, 2, .286);
   double fluid = kAmbientTemperature;
@@ -2249,6 +2281,7 @@ int main() {
       a_strut_keeps_its_scripts_static_toe,
       compliance_steer_toes_the_loaded_wheels_by_their_forces,
       a_live_axle_keeps_its_wheels_square_to_the_beam_and_steers_in_roll,
+      a_raised_roll_centre_takes_roll_moment_off_the_springs,
       hard_braking_declutches_so_the_engine_never_pushes_the_rear_wheels,
       coasting_engine_braking_fades_with_the_speed,
       releasing_a_hard_brake_at_speed_takes_up_without_a_jolt,

@@ -471,7 +471,13 @@ its wheel square to the beam joining it to the other wheel, and the beam
 steers by `rollSteer` degrees per degree of its roll against the body
 (-0.5 to +0.5, positive roll understeer). The patched MC and SuperDuty
 rears call it; without it the host treats the 25 m arm corners as one
-with 0.08 ([notes](../vehicles/notes.md#live-axle-camber-and-roll-steer-490)).
+with 0.08.
+
+`WheelRef.setRollCenterHeight(height)` (#490, same file): the roll
+centre's height above the ground at the corner, 0 to 0.6 m. All 96 patched
+corners call it; without it the host uses 7 cm for linked fronts, 10 cm
+for independent rears and 38 cm for live axles
+([notes](../vehicles/notes.md#live-axle-camber-roll-steer-and-roll-centres-490)).
 
 ### Math functions (#463)
 

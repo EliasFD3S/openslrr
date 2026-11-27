@@ -48,6 +48,8 @@ public class SuperDuty_750_RL_trailing_arm extends Suspension
 				wheel.setAnti( 0.20, 0.50 );
 				// OpenSLRR (#490): live axle, degrees of axle steer per degree of axle roll, typical for the real car
 				wheel.setLiveAxle( 0.10 );
+				// OpenSLRR (#490): roll centre height above the ground (m), typical for the real car
+				wheel.setRollCenterHeight( 0.45 );
 
 				the_car.setSlotPos(101+wheelID, new Vector3(-0.024,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(-0.013,0,0), null );

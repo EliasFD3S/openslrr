@@ -1731,13 +1731,37 @@ void VehicleDynamics::update_jacking() {
     auto &s = state[i];
     s.jacking = 0;
     const auto &w = wheels[i];
-    if (!w.enabled || !s.contact || !(base > .5) || !(height > 0)) continue;
-    const double force = s.tire_force.longitudinal;
-    const bool braking = force * (s.spin != 0 ? s.spin : 1) < 0;
+    if (!w.enabled || !s.contact) continue;
     const bool is_front = w.center.z < body.center.z;
-    const double share = braking ? w.anti_brake : w.anti_drive;
-    const double split = braking ? (is_front ? front_split : 1 - front_split) : drive_split;
-    s.jacking = (is_front ? -1 : 1) * std::clamp(share, 0.0, 1.5) / split * force * height / base;
+    if (base > .5 && height > 0) {
+      const double force = s.tire_force.longitudinal;
+      const bool braking = force * (s.spin != 0 ? s.spin : 1) < 0;
+      const double share = braking ? w.anti_brake : w.anti_drive;
+      const double split = braking ? (is_front ? front_split : 1 - front_split) : drive_split;
+      s.jacking = (is_front ? -1 : 1) * std::clamp(share, 0.0, 1.5) / split * force * height / base;
+    }
+    // Roll centre (#490): the arms take the cornering force into the body
+    // at the roll centre's height, not at the ground. Their slope from the
+    // patch to it, height over half the track, turns the force into a push:
+    // a force towards the car's middle (the outer wheel's) lifts the body,
+    // one away from it (the inner wheel's) pulls it down, so that much of
+    // the roll moment no longer goes through the springs.
+    if (w.roll_center_height > 0) {
+      double across = 0;
+      int partners = 0;
+      for (size_t j = 0; j < wheels.size(); ++j)
+        if (j != i && wheels[j].enabled && (wheels[j].center.z < body.center.z) == is_front &&
+            (wheels[j].center.x < 0) != (w.center.x < 0)) {
+          across += wheels[j].center.x;
+          ++partners;
+        }
+      const double half_track = partners ? std::abs(w.center.x - across / partners) / 2
+                                          : std::abs(w.center.x - body.center.x);
+      if (half_track > .3) {
+        const double inboard = s.tire_force.lateral * (w.center.x < 0 ? 1 : -1);
+        s.jacking += inboard * std::min(w.roll_center_height, .6) / half_track;
+      }
+    }
   }
 }
 

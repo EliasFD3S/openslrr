@@ -177,6 +177,10 @@ struct WheelConfig {
   // radian of its roll against the body (positive: roll understeer).
   bool live_axle = false;
   double roll_steer = 0;
+  // Roll centre (#490): its height above the ground at this corner (m).
+  // The arms take the cornering force into the body there, so part of the
+  // roll moment skips the springs. Zero: at the ground.
+  double roll_center_height = 0;
   // Set by update_static_reference (suspension_geometry.hpp) from the car's
   // weight: the static spring length (0 unknown) and, there, the
   // geometry's camber and toe (rad) and the camber gain the curve uses
@@ -188,7 +192,8 @@ struct WheelState {
   bool contact = false, seeded = false;
   // force: spring and damper support, used as the tyre load. jacking: the
   // arms' vertical push from the longitudinal force (#469, N, extending the
-  // suspension; WheelConfig::anti_brake / anti_drive), from the last step.
+  // suspension; WheelConfig::anti_brake / anti_drive) and the cornering
+  // force (#490, WheelConfig::roll_center_height), from the last step.
   double length = 0, speed = 0, force = 0, jacking = 0;
   Vec3 center, normal{0, 1, 0}, hub, patch;
   // The ground under the tread (#452): friction and rolling averaged over

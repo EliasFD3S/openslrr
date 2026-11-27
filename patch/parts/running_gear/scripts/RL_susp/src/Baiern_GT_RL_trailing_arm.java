@@ -55,6 +55,8 @@ public class Baiern_GT_RL_trailing_arm extends Suspension
 				wheel.setComplianceSteer( 0.01, 0.02 );
 				// OpenSLRR (#484): the bushings' give, mm per kN of cornering and of longitudinal force, typical for the real car
 				wheel.setBushingCompliance( 0.05, 0.10 );
+				// OpenSLRR (#490): roll centre height above the ground (m), typical for the real car
+				wheel.setRollCenterHeight( 0.06 );
 				                        
 				the_car.setSlotPos(101+wheelID, new Vector3(-0.024,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(-0.013,0,0), null );

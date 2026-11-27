@@ -2662,7 +2662,7 @@ modelled; compliance steer and give follow the last step's force with a
 fixed 30 ms lag; they are a few millimetres and under a degree, hardly
 visible on screen.
 
-## Live axle camber and roll steer (#490)
+## Live axle camber, roll steer and roll centres (#490)
 
 Cause: the live rear axles (MC, SuperDuty) were two independent corners on
 a 25 m swing arm (#456). Each wheel's camber followed its own travel only,
@@ -2691,6 +2691,21 @@ Fix (OpenSLRR, typical values):
   The patched MC rears call it with 0.05 (torque arm and Panhard rod) and
   the SuperDuty rears with 0.10 (leaf springs). Without it, the 25 m arm
   corners are live axles with 0.08.
+- Roll centres (every corner, not only live axles): the tyre's cornering
+  force reached the body at the patch, as if every roll centre stood on
+  the ground, so the whole roll moment went through the springs. In
+  `update_jacking`, each wheel's arms now turn its cornering force into a
+  push of force x roll centre height / half track (`WheelState::jacking`,
+  as #469's): the outer wheel's force, towards the car's middle, lifts the
+  body; the inner one's pulls it down. That share of the roll moment skips
+  the springs; the tyres still carry the whole load transfer.
+  `WheelConfig::roll_center_height`, moddable through
+  `WheelRef.setRollCenterHeight(height)` (metres above the ground, 0 to
+  0.6), a new native; all 96 patched corners call it: fronts 5 to 8 cm
+  (Ram 10), independent rears 8 to 15 cm (Golf's torsion beam 15), race
+  cars 3 / 6 cm, the Camaro's Panhard rod 36 cm, the Ram's leaf springs
+  45 cm. Without it: linked fronts 7 cm, independent rear arms 10 cm, live
+  axles 38 cm; corners without arms at the ground, as before.
 
 Validation:
 
@@ -2702,16 +2717,28 @@ Validation:
   left turn at 16 m/s, outer rear wheel against the road +4.48 deg
   independent, +0.37 deg on a live axle, +0.28 with 0.15 roll steer, which
   steers the axle 0.45 deg towards the turn; yaw 0.499 / 0.474 / 0.435
-  rad/s. Both ends of the beam agree. `missing_support` 17/17,
-  `physics_tick_rate` 9/9.
+  rad/s. Both ends of the beam agree. A second one, the roll centres: in
+  the same turn the body rolls 4.48 deg with them at the ground, 3.77 at
+  7 / 10 cm, 3.65 with a live axle's 38 cm at the rear; per newton of
+  cornering force 17 % and 40 % less, and the high rear centre takes more
+  of the load transfer at the rear, so the car turns tighter (13.2 kN of
+  cornering force against 9.8). `vehicle_dynamics` 80/80,
+  `missing_support` 17/17, `physics_tick_rate` 9/9.
 - In `build/needle-game` with the new classes, Tsukuba bench (straight
-  line): MC 9.97 / 40.55 km/h at 1 / 3 s (40.52 before; it still slows
-  after 4 s on that start, as before), CoupeSport unchanged at 71.99 km/h
-  at 6 s; no script error.
-- Not checked in game: cornering on a live axle, its feel and look.
+  line): without traction control the MC spins its wheels at the limiter
+  after 4 s and hits a wall (Elias), as before this change. With ASR
+  forced on (temporary switch): MC 10.20 / 42.51 / 83.20 km/h at 1 / 3 / 6
+  s, SuperDuty 11.61 / 47.97 / 90.27, the same within 0.01 km/h with the
+  live axle and roll centres switched off; CoupeSport 71.99 km/h at 6 s
+  unchanged; no script error.
+- Not checked in game: cornering on a live axle and with the roll
+  centres, the balance (the live axles' high rear centre adds oversteer)
+  and the look.
 
 Limitations: the beam is kinematic: the wheels' own vertical travel is
 still two springs, so no axle tramp, wrap-up under drive or the beam's
 mass shared between the wheels; a single tilt from the two spring lengths,
-not the axle's locating links' geometry (Panhard rod lateral shift, roll
-centre); the roll steer coefficients are typical figures.
+not the axle's locating links' geometry (the Panhard rod's lateral shift
+with travel); the roll centres stay at their static height (no migration
+with travel or roll); the roll steer coefficients and roll centre heights
+are typical figures.
