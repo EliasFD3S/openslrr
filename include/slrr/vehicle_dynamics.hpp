@@ -136,6 +136,9 @@ struct WheelConfig {
   // CFG `type` mass. Zero keeps the massless ray. An arm length projects the
   // support onto the native hinge circle; the spring stays the 1-DOF element.
   double unsprung = 0, arm_length = 0;
+  // The wheel's spin inertia (kg m^2, #497): its rim, tyre and brake rotor.
+  // Zero: the fixed 1.6 of the generic wheel.
+  double spin_inertia = 0;
   Vec3 arm_pivot, arm_axis{0, 0, 1};
   // Raw setHub arguments. Without a hub the arm circle is the support point.
   bool has_hub = false;
@@ -187,6 +190,15 @@ struct WheelConfig {
   // The arms take the cornering force into the body there, so part of the
   // roll moment skips the springs. Zero: at the ground.
   double roll_center_height = 0;
+  // Its migration (#496): metres of height per metre of bump from the
+  // static ride height (negative: it drops as the corner compresses), and a
+  // live axle's Panhard rod: its length (m, 0 none) and the side its body
+  // end is on (+1 right, -1 left), whose arc shifts the axle sideways.
+  double roll_center_migration = 0, panhard_length = 0, panhard_side = 0;
+  // Whether the static ride height is wanted: a curve or a migration.
+  bool needs_static_length() const {
+    return camber_curve || toe_curve || roll_center_migration != 0 || panhard_length > 0;
+  }
   // Set by update_static_reference (suspension_geometry.hpp) from the car's
   // weight: the static spring length (0 unknown) and, there, the
   // geometry's camber and toe (rad) and the camber gain the curve uses
@@ -225,6 +237,8 @@ struct WheelState {
   // forward) and its rate, and both in the body's frame.
   double wrap = 0, wrap_rate = 0;
   Vec3 wrap_offset, wrap_velocity;
+  // A live axle's sideways shift on its Panhard rod's arc (#496, body frame).
+  Vec3 axle_shift;
   double spin = 0, rotation = 0;
   double slip_speed = 0, lateral_speed = 0;
   // Relaxed tan(slip angle): the tyre's lateral deflection builds over its

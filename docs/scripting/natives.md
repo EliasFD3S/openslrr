@@ -494,6 +494,20 @@ Declared by the patched `parts/scripts/src/WheelRef.java`:
 The patched MC and SuperDuty rears call the last two
 ([notes](../vehicles/notes.md#unsprung-masses-and-live-axle-beam-494)).
 
+### Roll centre migration and Panhard rod (#496)
+
+Declared by the patched `parts/scripts/src/WheelRef.java`:
+
+- `WheelRef.setRollCenterMigration(rate)`: metres of roll centre height per
+  metre of bump from the static ride height (-5 to +5, negative drops as
+  the corner compresses). All 96 patched corners call it; without it a
+  front strut fit -2, other front arms -1, independent rears -1.5, live
+  axles -0.5.
+- `WheelRef.setPanhardRod(length, side)`: a live axle's Panhard rod length
+  (0.3 to 2 m, 0 none) and the side of its body end (+1 right, -1 left).
+  The patched MC rears call it; without it, none
+  ([notes](../vehicles/notes.md#roll-centre-migration-panhard-rod-and-wheel-inertia-496)).
+
 ### Math functions (#463)
 
 The patched `system/Scripts/lang/Math.java` declares, besides the stock

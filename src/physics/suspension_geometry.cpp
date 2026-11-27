@@ -287,7 +287,7 @@ double geometry_toe(const WheelConfig& wheel, double length) {
 
 void update_static_reference(WheelConfig& wheel, double load) {
   wheel.static_length = 0;
-  if (!(wheel.camber_curve || wheel.toe_curve) || !(wheel.spring > 0) || !(wheel.rest > 0) ||
+  if (!wheel.needs_static_length() || !(wheel.spring > 0) || !(wheel.rest > 0) ||
       !(load >= 0))
     return;
   const double length =
@@ -327,7 +327,7 @@ double toe_curve_change(const WheelConfig& wheel, double length) {
 CornerFrames state_pose(const WheelConfig& wheel, const WheelState& state, double length,
                         double steer, bool* fitted) {
   CornerFrames pose = wheel_pose(wheel, length, fitted, steer);
-  pose.hub_origin += state.compliance_offset + state.wrap_offset;
+  pose.hub_origin += state.compliance_offset + state.wrap_offset + state.axle_shift;
   if (wheel.live_axle && state.axle_camber != 0 && std::isfinite(state.axle_camber)) {
     const double angle = std::clamp(state.axle_camber, -.35, .35) * outboard_side(wheel);
     const Quaternion roll{0, 0, std::sin(angle * .5), std::cos(angle * .5)};

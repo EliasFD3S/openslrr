@@ -115,6 +115,10 @@ struct WheelPhys {
   // setUnsprungMass, setAxleMass and setAxleWrap (patched suspensions,
   // #494): kg; kg; kN per mm and damping ratio. -1 when not set.
   float unsprung_mass = -1, axle_mass = -1, axle_wrap_rate = -1, axle_wrap_damping = -1;
+  // setRollCenterMigration and setPanhardRod (patched suspensions, #496):
+  // m per m of bump (NaN not set); the rod's length (m, 0 none) and side.
+  float roll_center_migration = std::numeric_limits<float>::quiet_NaN();
+  float panhard_length = 0, panhard_side = 0;
   int opp = -1;
   float arm[7]{}, hub[10]{};
   bool authored_position = false;
@@ -3069,6 +3073,21 @@ void dynamics_wheels(Record &rec) {
         cfg.roll_center_height = front ? .07 : .10;
       else
         cfg.roll_center_height = 0;
+      // Its migration (#496): WheelRef.setRollCenterMigration, or typical: a
+      // front strut fit drops 2 m per metre of bump, other front arms 1,
+      // independent rear arms 1.5, a live axle 0.5 (a Panhard rod's centre
+      // halfway between body and axle). A Panhard rod only from
+      // WheelRef.setPanhardRod.
+      if (std::isfinite(live.roll_center_migration))
+        cfg.roll_center_migration = live.roll_center_migration;
+      else if (cfg.live_axle)
+        cfg.roll_center_migration = -.5;
+      else if (cfg.arm_length > 0)
+        cfg.roll_center_migration = front ? (cfg.has_hub && cfg.hub[0] == 0 ? -2.0 : -1.0) : -1.5;
+      else
+        cfg.roll_center_migration = 0;
+      cfg.panhard_length = cfg.live_axle ? live.panhard_length : 0;
+      cfg.panhard_side = live.panhard_side;
     }
     // WheelRef.setWidth: the tyre width in metres (Tyre.java), stored halved.
     cfg.half_width = cfg.metal_contact ? 0. : std::clamp(double(live.width), 0., .25);
@@ -3100,6 +3119,30 @@ void dynamics_wheels(Record &rec) {
                .5 * (part_mass(301) + part_mass(311) + part_mass(351));
       if (live.unsprung_mass > 0) cfg.unsprung = live.unsprung_mass;
       else if (parts > 1) cfg.unsprung = parts;
+    }
+    // Spin inertia (#497): the tyre an annulus from the bead (taken at 0.65
+    // of its radius) to the tread, the rim's mass near the bead, the brake
+    // rotor (six tenths of the brake, a disc of the patched spec's diameter,
+    // 28 cm without it) and 0.03 for the hub. A 205/55 R16 on a 8 kg rim:
+    // about 0.9 kg m^2. Without a rim the generic 1.6.
+    cfg.spin_inertia = 0;
+    {
+      std::vector<Object *> rims;
+      corner_wheel_parts(rec, i, rims);
+      double total = 0;
+      for (Object *rim : rims) total += subtree_mass_properties(rim).mass;
+      Object *tyre = corner_tyre(rec, i);
+      const double tyre_mass = tyre ? std::min(total, subtree_mass_properties(tyre).mass) : 0.0;
+      const double outer = cfg.radius > .1 ? cfg.radius : .3, bead = .65 * outer;
+      if (total > 1) {
+        const auto brake = rec.children.find(111 + static_cast<int>(i));
+        const double brake_mass =
+            brake != rec.children.end() ? subtree_mass_properties(brake->second).mass : 0.0;
+        const double rotor = .5 * (live.brake_diameter > .1 ? live.brake_diameter : .28);
+        cfg.spin_inertia = .95 * tyre_mass * (outer * outer + bead * bead) / 2 +
+                           .55 * (total - tyre_mass) * bead * bead +
+                           .6 * (.6 * brake_mass) * rotor * rotor + .03;
+      }
     }
     // A live axle's beam (#494): WheelRef.setAxleMass, or a typical 50 kg
     // housing and differential; its wrap on the springs or links,
@@ -10415,6 +10458,24 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
       if (!std::isfinite(rate) || !std::isfinite(damping)) return;
       w.axle_wrap_rate = std::clamp(rate, 0.f, 10.f);
       w.axle_wrap_damping = std::clamp(damping, .02f, 1.f);
+    });
+  });
+  // OpenSLRR natives declared by the patched WheelRef (#496): the roll
+  // centre's migration, metres of height per metre of bump (-5 to +5), and
+  // a live axle's Panhard rod: its length (0.3 to 2 m, 0 none) and the side
+  // of its body end (+1 right, -1 left).
+  wheel("setRollCenterMigration", "(F)V", [put](Object *s, const std::vector<Value> &a) {
+    return put(s, [&](WheelPhys &w) {
+      const float rate = scalar(a, 0, 0);
+      if (std::isfinite(rate)) w.roll_center_migration = std::clamp(rate, -5.f, 5.f);
+    });
+  });
+  wheel("setPanhardRod", "(FF)V", [put](Object *s, const std::vector<Value> &a) {
+    return put(s, [&](WheelPhys &w) {
+      const float length = scalar(a, 0, 0), side = scalar(a, 1, 0);
+      if (!std::isfinite(length) || !std::isfinite(side)) return;
+      w.panhard_length = length > 0 ? std::clamp(length, .3f, 2.f) : 0.f;
+      w.panhard_side = side < 0 ? -1.f : 1.f;
     });
   });
   wheel("setOppWheel", "(I)V", [put](Object *s, const std::vector<Value> &a) {

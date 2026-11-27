@@ -117,4 +117,14 @@ public class WheelRef extends Native
 	// its damping ratio. Without it, 0.4 kN per mm at 0.15.
 	public native void setAxleWrap( float rate, float damping );
 
+	// OpenSLRR (#496): the roll centre's migration, metres of height per metre
+	// of bump from the static ride height (negative: it drops as the corner
+	// compresses). Without it the host uses a typical rate for the type.
+	public native void setRollCenterMigration( float rate );
+
+	// OpenSLRR (#496): a live axle's Panhard rod: its length in metres and the
+	// side of its body end (+1 right, -1 left). The axle shifts sideways on the
+	// rod's arc as the body moves over it. Without it, none.
+	public native void setPanhardRod( float length, float side );
+
 }
