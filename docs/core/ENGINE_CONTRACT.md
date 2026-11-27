@@ -889,12 +889,16 @@ the mod overlay folders, camera provider hook and mod keys/settings (#486,
 Camera mods (#487) register a `java.openslrr.CameraProvider`; the patched
 Track hands it the follow view (`CAMMODE_PROVIDER`), cycles its views on the
 change-view key, sends it LOOK BACK and deactivates it before any other camera
-change, keeping its own follow camera alive but hidden. A script camera with a
-`CameraControl` pose (`GameRefState::mod_pose`) bypasses every other camera
-rule in `world_camera_pose`; a Relative pose adds the car's drawn origin
+change (the repair, mechanic and paint close-ups included, which re-activate
+it on close), keeping its own follow camera alive but hidden. A script camera
+with a `CameraControl` pose (`GameRefState::mod_pose`) bypasses every other
+camera rule in `world_camera_pose`; a Relative pose adds the car's drawn
+origin and a Local pose applies the whole drawn chassis frame
 (`part_camera_pose`) on every query, so the draw-time query matches the drawn
 car even though free-running physics publishes the frame's poses after the
-scripts ran (inside `part_physics_begin`). Values a script reads in
+scripts ran (inside `part_physics_begin`). Each drawn frame writes the pose's
+eye, yaw, pitch and roll back to the camera's `pos` / `ypr` (and the roll to
+`camera_roll`, except on the bound follow camera). Values a script reads in
 `animate()` (`CarState.drawnPos`) are therefore one frame old in free-running
 mode and exact in frame-locked mode. `GameRef.setMatrix` on a camera other
 than the bound follow camera sets `camera_roll` from the Ypr roll. Reference:

@@ -451,6 +451,6 @@ against the shipped `Math.class` that reads `Math.PI` and calls the helpers.
 `src/natives/natives_openslrr.cpp` binds the static natives of the shipped
 `java.openslrr` classes: `OpenSLRR.apiVersion`, `CarState` (`drawnPos`,
 `drawnOri`, `vel`, `angVel`, `speed`, `nitro`, `wheelsOnGround`, `boxMin`,
-`boxMax`) and `CameraControl` (`setPose`, `setPoseRelative`, `clearPose`,
-`sweep`). Units, timing and failure values are in [mod-api.md](mod-api.md).
+`boxMax`) and `CameraControl` (`setPose`, `setPoseRelative`,
+`setPoseLocal`, `clearPose`, `sweep`). Units, timing and failure values are in [mod-api.md](mod-api.md).
 The pure pose math is `src/resources/mod_camera.cpp` (ctest `mod_camera`).
