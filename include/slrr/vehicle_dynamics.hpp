@@ -305,6 +305,22 @@ public:
   // is created when the runtime supplies none. Contact is floor-only.
   std::array<Vec3, 8> body_supports{};
   std::size_t body_support_count = 0;
+  // Hanging engine hardware (exhausts, mufflers, the sump), body frame
+  // (#467): they scrape rather than carry the car. Each gives on its
+  // hangers or mounts first, then the pipe or the pan hits, sliding at metal
+  // friction.
+  std::array<Vec3, 8> scrape_points{};
+  std::size_t scrape_count = 0;
+  // A mesh that the static ride height puts into the road (the Baiern GT
+  // III's centre pipe, about 1 cm in) would drag the car at rest and on
+  // every straight. Such a point is raised to 5 mm above the ground the car
+  // rests on (m, body up), so it scrapes only when the body comes lower than
+  // at rest: first from the host's parked estimate, then, once the car has
+  // rested on its wheels for half a second, from the ground it rests on.
+  // Clear scrape_settled when the points are rebuilt.
+  std::array<double, 8> scrape_lift{};
+  bool scrape_settled = false;
+  double scrape_rest_time = 0;
   DriveInput drive;
   Aerodynamics aero;
   double engine_omega = 0;
