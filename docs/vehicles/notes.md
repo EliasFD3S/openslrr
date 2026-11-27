@@ -2478,3 +2478,81 @@ Validation:
 Limitations: the knock is a vibration effect, not a torque kick along the
 steering axis; the rear channels' releases reach the pad only. The values
 (0.15, 40 ms, 0.3, 50 ms) are chosen, not measured.
+
+## Camber gain (#481)
+
+Cause: a wheel's camber change with travel came only from the single hinge
+each patched corner has (#450). The front strut fit is regressive: about
+-0.65 deg per 25 mm in droop, -0.4 at rest, nearly 0 past 50 mm of bump
+(host `wheel_pose`, 48 fronts). That suits a strut, but the short-long arm
+and multilink fronts (del Sol, Camaro, R34, Prime, Ram) used the same fit,
+so they lost camber gain in bump where a real one gains more, and a rolling
+car's outer front wheel went towards positive camber against the road. The
+rear swing arms are linear (1 / length).
+
+Fix (OpenSLRR, typical values where no data was found):
+
+- Each wheel has a camber curve about its static ride height:
+  gain x bump + progression x bump^2 / 2 (`WheelConfig::camber_gain`,
+  `camber_progression`). `wheel_pose` turns the arm fit's hub about the
+  body's longitudinal axis by the curve's change minus the fit's own change
+  from the static height, about the hub centre. The tyre's camber input
+  (#418), the rendered wheel and the kingpin (#458) all read that hub, so
+  they follow the curve; the static camber stays the fit's.
+- The static height: `VehicleDynamics::update_camber_references`, each
+  step, puts the car's weight on its springs (front / rear by the centre of
+  mass between the axles, then across each axle, less the wheel's own
+  mass) and keeps the spring length there with the fit's camber and gain
+  (`update_camber_reference`). On the CoupeSport it gives 0.2126 m front and
+  0.2192 m rear, the #450 generator's static lengths.
+- The curve comes from the suspension's script, so mods can set it:
+  `WheelRef.setCamberGain(gain, progression)`, degrees per 25 mm of bump at
+  the static height and the change of that gain per 25 mm (negative:
+  progressive, as short-long arms; positive: fading, as struts), a new
+  native declared by the patched `WheelRef.java`. 86 of the 96 patched
+  corners call it (the #450 generator writes the line; the live rear axles
+  do not): struts -0.4 / +0.15 (close to the fit), del Sol, R34 and Prime
+  fronts -0.9 / -0.15 (race cars -1.0), Camaro -0.8 / -0.15, Ram -0.6 /
+  -0.10; rears E36 -0.9 / -0.05, double wishbone and multilink -0.7 / -0.10,
+  Golf torsion beam -0.2 / 0, Impreza strut -0.4 / +0.10. Table in the
+  [patch README](../../patch/README.md#tyres-and-suspension-geometry-450).
+- A corner whose script does not call it gets typical values by suspension
+  type in `dynamics_wheels`: a front strut fit -0.5 / +0.1; other front arms
+  their geometry's gain at rest, clamped to -1.5..-0.2 (a copy of the stock
+  Baiern arm, which gains positive camber in bump, gets -0.2), growing by
+  0.1; independent rear arms their geometry's gain, clamped, linear. Live
+  axles (the #456 25 m arm) and corners without arms keep their geometry.
+
+Validation:
+
+- Compilation: `slrr_host` Release; `WheelRef` (byte-identical before the
+  change) and the 96 suspension classes in `build/brake-compile-root` (all
+  compiled; the 10 live rear axles unchanged byte for byte), the
+  generator's output identical to the edited sources.
+- `vehicle_dynamics` 74/74 with two new tests: the curve on the patched
+  Nonus GT II strut (static camber unchanged, -1.075 / -2.3 / +0.925 deg at
+  +25 / +50 / -25 mm for -1 / -0.15, mirrored on the right, the geometry's
+  gain when none is set, none without a spring); and the test saloon on
+  1.6 m swing arms in a steady left turn at 16 m/s with 4.5 deg of roll: the
+  outer front wheel 5.1 deg positive against the road with no gain, 2.0 deg
+  with -1 / -0.15. `missing_support` 17/17, `physics_tick_rate` 9/9.
+- Probe (`wheel_pose`, the patched corners' arguments at their static
+  lengths): from -75 to +75 mm, the del Sol front goes +2.0 / 0 / -3.4 deg
+  (before +2.2 / 0 / -1.2), the R34 -0.9 / -1.1 / -4.5 (before +1.1 / -1.1
+  / -2.3); the struts within 0.2 deg of the fit.
+- In `build/needle-game` with the new classes, bench drives on Tsukuba
+  (straight line, so little roll): CoupeSport 8.74 / 34.86 / 71.98 km/h at
+  1 / 3 / 6 s with and without the curve (temporary switch); the script
+  values reach the host (0.40 / 0.15 front, 0.90 / 0.05 rear); MC 9.97 /
+  40.52 km/h at 1 / 3 s either way (the MC slows after 4 s on that start
+  either way).
+- Not checked in game: cornering, its feel, the other cars.
+
+Limitations: the curve depends on the spring's travel only, so a live
+axle's camber still follows the body (and the 25 m arm), not the other
+wheel; bump steer is not modelled; the curves are typical figures for the
+real cars, not their measured kinematics; the static height follows the
+car's current weight (fuel, parts), so the curve's centre moves with it
+instead of staying where the arms were laid out; the hub turns about its
+centre, so the track does not change with the camber as a real upright's
+would.

@@ -151,6 +151,17 @@ struct WheelConfig {
   // The arms push body and wheel apart (or together) by that share of
   // force x CoM height / wheelbase, so the spring compresses less.
   double anti_brake = 0, anti_drive = 0;
+  // Camber curve (#481): about the static ride height, camber changes by
+  // gain x bump + progression x bump^2 / 2 (rad/m and rad/m^2, bump the
+  // spring's compression from static, metres) in place of the arm
+  // geometry's own change. NaN gain: the geometry's gain at the static
+  // height, clamped to a road car's range. Off: the geometry alone.
+  bool camber_curve = false;
+  double camber_gain = 0, camber_progression = 0;
+  // Set by update_camber_reference (suspension_geometry.hpp) from the
+  // car's weight: the static spring length (0 unknown) and, there, the
+  // geometry's camber (rad) and the gain the curve uses (rad/m).
+  double camber_reference = 0, reference_camber = 0, reference_gain = 0;
   bool linked() const { return unsprung > 0 || arm_length > 0; }
 };
 struct WheelState {
@@ -368,6 +379,7 @@ private:
   bool accelerator_down_ = false, forced_reverse_ = false;
   void step(const Terrain &terrain);
   void update_jacking();
+  void update_camber_references();
   void apply_aero();
   void step_drive();
   void update_gear(double rpm, double shaft, double road_shaft);

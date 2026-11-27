@@ -1740,9 +1740,58 @@ void VehicleDynamics::update_jacking() {
   }
 }
 
+// Camber gain (#481): each wheel's curve is centred on its static ride
+// height, the spring length under its share of the car's weight. The
+// shares follow the centre of mass between the axles and, on each axle,
+// between its wheels.
+void VehicleDynamics::update_camber_references() {
+  double front_z = 0, rear_z = 0;
+  int fronts = 0, rears = 0;
+  for (const auto &w : wheels) {
+    if (!w.enabled) continue;
+    (w.center.z < body.center.z ? front_z : rear_z) += w.center.z;
+    ++(w.center.z < body.center.z ? fronts : rears);
+  }
+  if (!fronts || !rears) {
+    for (auto &w : wheels) w.camber_reference = 0;
+    return;
+  }
+  front_z /= fronts;
+  rear_z /= rears;
+  const double front_share = std::clamp((rear_z - body.center.z) / (rear_z - front_z), 0.0, 1.0);
+  for (auto &w : wheels) {
+    if (!w.enabled || !w.camber_curve) {
+      w.camber_reference = 0;
+      continue;
+    }
+    const bool is_front = w.center.z < body.center.z;
+    // The wheels across this axle, for the side split.
+    double across = 0;
+    int partners = 0;
+    for (const auto &o : wheels)
+      if (&o != &w && o.enabled && (o.center.z < body.center.z) == is_front &&
+          (o.center.x < 0) != (w.center.x < 0)) {
+        across += o.center.x;
+        ++partners;
+      }
+    double side_share = 1;
+    if (partners) {
+      across /= partners;
+      side_share = std::abs(w.center.x - across) > 1e-3
+                       ? std::clamp((across - body.center.x) / (across - w.center.x), 0.0, 1.0)
+                       : .5;
+    }
+    // The body's mass includes the wheels, which the spring does not carry.
+    const double load = body.mass * 9.81 * (is_front ? front_share : 1 - front_share) * side_share -
+                        w.unsprung * 9.81;
+    update_camber_reference(w, std::max(0.0, load));
+  }
+}
+
 void VehicleDynamics::step(const Terrain &terrain) {
   apply_aero();
   update_jacking();
+  update_camber_references();
   double ceiling = body.position.y;
   for (Vec3 p : body.corners())
     ceiling = std::max(ceiling, p.y);

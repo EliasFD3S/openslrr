@@ -66,4 +66,11 @@ public class WheelRef extends Native
 	// the host uses typical shares for the suspension type.
 	public native void setAnti( float braking, float driving );
 
+	// OpenSLRR (#481): the camber curve about the static ride height: the gain
+	// in degrees per 25 mm of bump there (negative: the top leans inboard)
+	// and its change per 25 mm of bump (negative: progressive, as short-long
+	// arms; positive: fading, as struts). Without it the host uses typical
+	// values for the suspension type.
+	public native void setCamberGain( float gain, float progression );
+
 }

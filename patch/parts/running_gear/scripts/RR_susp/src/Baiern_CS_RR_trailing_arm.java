@@ -46,6 +46,8 @@ public class Baiern_CS_RR_trailing_arm extends Suspension
 				              0.0000, 0.0000, 0.0000);
 				// OpenSLRR (#469): anti-lift braking, anti-squat driving, typical for the real car
 				wheel.setAnti( 0.30, 0.45 );
+				// OpenSLRR (#481): camber gain per 25 mm of bump at the static height and its change per 25 mm, typical for the real car
+				wheel.setCamberGain( -0.90, -0.05 );
 
 				the_car.setSlotPos(101+wheelID, new Vector3( 0.024,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3( 0.013,0,0), null );

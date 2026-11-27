@@ -1947,6 +1947,98 @@ SLRR_TEST(anti_dive_and_anti_squat_carry_part_of_the_load_transfer) {
   SLRR_REQUIRE(std::abs(stop[1] - stop[0]) < .05 * stop[0]);
 }
 
+SLRR_TEST(camber_gain_follows_the_curve_about_the_static_height) {
+  // #481: the patched Nonus GT II strut, its camber curve set like a
+  // short-long arm's: -1 degree per 25 mm of bump at the static height,
+  // growing by 0.15 per 25 mm. The static camber stays the geometry's.
+  constexpr double degree = std::numbers::pi / 180, per_25mm = degree / .025;
+  auto w = caster_strut();
+  w.spring = 30000;
+  const double load = 3500, level = w.rest - load / w.spring;
+  const auto camber = [&](double length) {
+    const Vec3 up = wheel_pose(w, length).hub_rotation.rotate({0, 1, 0});
+    return -std::asin(up.x) / degree;  // left wheel: the top inboard is +x
+  };
+  const double geometry[] = {camber(level), camber(level - .025), camber(level - .05),
+                             camber(level + .025)};
+  // The strut alone: about -0.4 degrees for the first 25 mm, fading.
+  SLRR_REQUIRE(std::abs(geometry[0] - geometry_camber(w, level) / degree) < 1e-9);
+  SLRR_REQUIRE(geometry[1] - geometry[0] < -.2 && geometry[1] - geometry[0] > -.7);
+  SLRR_REQUIRE(geometry[2] - geometry[1] > geometry[1] - geometry[0]);
+  w.camber_curve = true;
+  w.camber_gain = -1 * per_25mm;
+  w.camber_progression = -.15 * per_25mm / .025;
+  // No reference yet (no weight): the geometry alone.
+  SLRR_REQUIRE(std::abs(camber(level - .025) - geometry[1]) < 1e-9);
+  update_camber_reference(w, load);
+  SLRR_REQUIRE(std::abs(w.camber_reference - level) < 1e-9);
+  SLRR_REQUIRE(std::abs(camber(level) - geometry[0]) < 1e-6);
+  SLRR_REQUIRE(std::abs(camber(level - .025) - geometry[0] - (-1 - .075)) < .01);
+  SLRR_REQUIRE(std::abs(camber(level - .05) - geometry[0] - (-2 - .3)) < .01);
+  SLRR_REQUIRE(std::abs(camber(level + .025) - geometry[0] - (1 - .075)) < .01);
+  // Progressive: the second 25 mm gains more than the first.
+  SLRR_REQUIRE(camber(level - .05) - camber(level - .025) < camber(level - .025) - camber(level));
+  // The right wheel mirrors it.
+  auto right = w;
+  right.center.x = -w.center.x;
+  right.arm_pivot.x = -w.arm_pivot.x;
+  right.hub[1] = -w.hub[1];
+  right.hub[4] = -w.hub[4];
+  right.hub[7] = -w.hub[7];
+  update_camber_reference(right, load);
+  const auto right_camber = [&](double length) {
+    const Vec3 up = wheel_pose(right, length).hub_rotation.rotate({0, 1, 0});
+    return std::asin(up.x) / degree;
+  };
+  SLRR_REQUIRE(std::abs(right_camber(level - .05) - camber(level - .05)) < .05);
+  // Without a gain of its own the curve takes the geometry's at rest.
+  w.camber_gain = std::numeric_limits<double>::quiet_NaN();
+  w.camber_progression = 0;
+  update_camber_reference(w, load);
+  SLRR_REQUIRE(std::abs(w.reference_gain * .025 / degree - (geometry[1] - geometry[3]) / 2) < .05);
+  // No spring, no curve.
+  w.spring = 0;
+  update_camber_reference(w, load);
+  SLRR_REQUIRE(w.camber_reference == 0);
+}
+
+SLRR_TEST(camber_gain_keeps_the_outer_wheel_leaning_into_a_turn) {
+  // #481: the test saloon on 1.6 m swing arms, in a steady left turn. With
+  // no gain the outer (right) front wheel leans out with the body; a
+  // short-long arm's curve keeps it leaning into the turn against the road.
+  constexpr double degree = std::numbers::pi / 180, per_25mm = degree / .025;
+  double outer[2], roll[2];
+  for (int gain = 0; gain < 2; ++gain) {
+    Car car;
+    for (size_t i = 0; i < 4; ++i) {
+      auto& w = car.dynamics.wheels[i];
+      const double side = i % 2 ? -1 : 1;
+      w.arm_length = 1.6;
+      w.arm_pivot = w.center + Vec3{side * 1.6, 0, 0};
+      w.arm_axis = {0, 0, 1};
+      w.camber_curve = true;
+      w.camber_gain = gain ? (i < 2 ? -1 : -.7) * per_25mm : 0;
+      w.camber_progression = gain && i < 2 ? -.15 * per_25mm / .025 : 0;
+    }
+    car.run(2, 0, 0, 0);
+    car.dynamics.drive.engaged = false;
+    car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -16});
+    for (auto& s : car.dynamics.state) s.spin = 16 / .31;
+    car.run(2.5, 0, 0, .09);
+    const auto& body = car.dynamics.body;
+    const Vec3 up = body.orientation.rotate(car.dynamics.state[1].hub_rotation.rotate({0, 1, 0}));
+    const Vec3 right = body.orientation.rotate({1, 0, 0});
+    // Against the road: the top towards -right (inboard) is negative camber.
+    outer[gain] = std::asin(std::clamp(up.dot(Vec3{right.x, 0, right.z}.normalized()), -1.0, 1.0)) / degree;
+    roll[gain] = car.roll() / degree;
+  }
+  std::printf("CAMBER outer front %.2f -> %.2f deg against the road, roll %.2f / %.2f deg%c",
+              outer[0], outer[1], roll[0], roll[1], 10);
+  SLRR_REQUIRE(std::abs(roll[0]) > 1);
+  SLRR_REQUIRE(outer[0] > .5);
+  SLRR_REQUIRE(outer[1] < outer[0] - 1);
+}
+
 SLRR_TEST(hot_brake_fluid_boils_and_the_pressure_falls) {
   const auto brake = brake_hardware(0, 2, .286);
   double fluid = kAmbientTemperature;
@@ -1969,6 +2061,8 @@ int main() {
       an_exhaust_scrapes_over_a_hump_instead_of_passing_through,
       an_exhaust_in_the_road_at_rest_is_raised_clear,
       anti_dive_and_anti_squat_carry_part_of_the_load_transfer,
+      camber_gain_follows_the_curve_about_the_static_height,
+      camber_gain_keeps_the_outer_wheel_leaning_into_a_turn,
       hard_braking_declutches_so_the_engine_never_pushes_the_rear_wheels,
       coasting_engine_braking_fades_with_the_speed,
       releasing_a_hard_brake_at_speed_takes_up_without_a_jolt,
