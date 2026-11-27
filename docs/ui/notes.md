@@ -474,10 +474,11 @@ Verified on the PR branch (f422ebb), by reading the code; not run in game.
 
 ## Change-view key (#470)
 
-- In the patched MWM `Track`, V cycles follow → chase → cockpit cameras →
-  follow, skipping the mirror and look-back cameras. A car without cockpit
-  cameras returns to follow from chase. While LOOK BACK is held in the
-  cockpit, CHANGE VIEW does not advance the index that release restores.
+- From follow, V selects chase only if `cameraTarget2` has a nonzero ID.
+  Without that target, it goes straight to the first cockpit camera. The
+  cycle skips mirror and look-back cameras and returns to follow after the
+  last cockpit camera (or if there are none). Holding LOOK BACK pauses the
+  cycle in every mode so release restores the view it started from.
 - Options → Controls → Game controls exposes CHANGE VIEW (slot 35). On load,
   only the stock keyboard F1/F2 pair in slots 35/36 migrates to V. If slot 35
   was rebound or cleared, it stays that way, but stock F2 in the hidden slot
@@ -485,10 +486,45 @@ Verified on the PR branch (f422ebb), by reading the code; not run in game.
   binding with slot 36 empty is preserved. The hidden stock F5 look-back
   binding in slot 37 is also cleared; the visible LOOK BACK defaults to B.
 
-Validation (Windows, Release): in Valo City with the Baiern and a legacy
+Earlier validation (`eca4b2f`, Windows Release): in Valo City with the Baiern and a legacy
 profile edited to V/F2, F2 left the camera in follow and V selected chase
 then cockpit. Holding B, pressing V and releasing B restored the steering-wheel
 view; the next V displayed “Camera: cockpit 2”. The Game controls page showed
 CHANGE VIEW bound to V; interactive rebinding and save/reload were not tested.
+
+**In-game check (`a225f15`, Windows Release).** In Valo City with the Baiern,
+the first V selected cockpit directly. Subsequent presses selected cockpit
+2–5, follow, then cockpit again. In follow and cockpits 1–4, the test sent
+B down → V → B up → V via `keybd_event`. The held press did not advance
+the cycle: release restored the starting view, and the next V advanced by
+one. The screenshots showed only the game. Chase with a live target and
+career autosave persistence were not exercised.
+
+**Stock binary check.** The reference was the installed MWM 2.2.1 Track
+(76,042 bytes, SHA-256 `adf4219fddbe495efe4dcab1ab15614f0b0013920a385c6b254f64210750fca7`),
+not a rebuild of the supplied MWM source (76,217 bytes). Decoding the stock
+TUFA with `src/jvm/tufa.cpp` shows `enter` calling `GameLogic.autoSaveQuiet`
+on non-RaceSetup entry, immediately after the thread priority is set. The
+unreconciled source build instead contains these extra TREE instructions
+(excerpts; `−` = installed only, `+` = unreconciled build only):
+
+```diff
+ enter
+-  op1a ref java.game.GameLogic.autoSaveQuiet ()V
++  op12 utf8 "Refresher_Start"
++  op0e res MW_Mod.rpk:0x00000079
++  op09 utf8 "egbolt-dawn_02"
+ exit
++  op12 utf8 "Refresher_Stop"
+```
+
+Neither Refresher method exists on the installed Chassis. The stock Track
+declares `Test_Render` but never creates the extra sky render. It also uses a
+typed `MotionBlur.changeCam(GameRef)` call at nine sites; the declaration
+must be available at compile time even though no MotionBlur class is shipped.
+With only #470 backed out of the reconciled source, all 1,207 pool entries,
+138 members (32 methods) and 81 TREEs match the installed bytes, including
+line numbers. Only the three compiler-stamp bytes differ. See the
+[rebuild recipe](../../patch/README.md#trackclass-stock-baseline).
 
 The NFSU2 camera moves to a mod (#486, #487, #488).

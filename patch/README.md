@@ -434,7 +434,7 @@ Cars are always drawn between their last two 60 Hz host steps, so they move smoo
 
 ## Change-view key (#470)
 
-Press **V** to cycle follow → chase → each cockpit camera → follow. The cycle skips mirror and look-back cameras; holding LOOK BACK in the cockpit pauses the cycle until release. A short message names each view. Rebind V under **Options → Controls → Game controls → CHANGE VIEW**. The former F1–F5/F9 view hotkeys are gone. TV, reverse chase and free view no longer have a key; race scripts can still select their own cameras.
+Press **V** to cycle follow → chase → each cockpit camera → follow. Without a second target, V skips chase and goes straight to the cockpit. The cycle skips mirror and look-back cameras; holding LOOK BACK pauses the cycle until release. A short message names each view. Rebind V under **Options → Controls → Game controls → CHANGE VIEW**. The former F1–F5/F9 view hotkeys are gone. TV, reverse chase and free view no longer have a key; race scripts can still select their own cameras.
 
 On load, a stock F1/F2 pair in slots 35/36 migrates to V. Stock F2 is cleared from the hidden slot 36 even if slot 35 was already rebound or cleared. A later F1 binding stays on F1. The hidden F5 look-back binding (slot 37) is also cleared; LOOK BACK defaults to B.
 
@@ -443,6 +443,42 @@ This requires the patched `Track.class`, `OsdxOptions.class` and `system/Scripts
 The Need for Speed: Underground 2 style arcade camera is not part of the engine or this patch: it is the **NFSU2 camera mod** in the repository's `mods/nfsu2-camera` folder, built on the mod overlay folders (#486), a camera provider hook (#487) and mod keys and settings (#488). Copy `mods/nfsu2-camera` into `<game>/mods/` (next to `system/`; `scripts/build-run-branch.ps1` does it), restart, and choose **ARCADE** under **Options → Game → CAMERA**: V cycles BUMPER, HOOD, NEAR and FAR, LOOK BACK (B) shows the rear view, and **Options → Mods** has the view and the shake strength. See [mods/nfsu2-camera/README.md](../mods/nfsu2-camera/README.md).
 
 **Camera mods (#487).** A mod registers a camera provider (`java.openslrr.CameraProvider`, see [docs/scripting/mod-api.md](../docs/scripting/mod-api.md)). While one is selected it replaces the follow view: V cycles its views and LOOK BACK goes to it; any other camera (cockpit, race staging, TV) takes over until V brings it back. Without a camera mod nothing changes. This needs the patched `Track.class`, `City.class`, `ROCTrack.class` and the `system/Scripts/openslrr` classes.
+
+### Track.class stock baseline
+
+`Track.java` keeps what the installed MWM 2.2.1 `Track.class` does
+(76,042 bytes, SHA-256 `ADF4219FDDBE…`), not what `sources/sl/Scripts/game/src/Track.java`
+does. Decoding the stock class and the unmodified source build with the repo's
+TUFA reader (`src/jvm/tufa.cpp`) shows the same 138 members, including 32 methods.
+With MotionBlur declarations available, only `enter` and `exit` differ in
+instructions: 1,444 vs 1,457 nodes and 413 vs 421 nodes, respectively.
+
+| In the installed class | In the MWM source |
+| --- | --- |
+| `enter` calls `GameLogic.autoSaveQuiet()` after `t.setPriority` | the call is commented out |
+| no `Refresher_Start` / `Refresher_Stop` strings | `enter` / `exit` call `player.car.chassis.Refresher_Start/Stop()`; the installed `Chassis.class` (35 methods) has neither method |
+| no `MW_Mod:0x0079r` or `"egbolt-dawn_02"` | `enter` creates `Test_Render` every time it runs and never destroys it |
+
+The patched source now follows the binary: the save is restored and the
+Refresher and Test_Render calls are removed. Blank lines are adjusted so the
+source line numbers recorded in the trees match. Remove the #470 additions
+(`CMD_NEXTCAM`, the V hotkey, `nextCamera` and its `CMD_NEXTCAM` dispatch)
+and put back the six F-key hotkeys. That source then compiles to the installed
+class byte for byte, apart from the compiler build stamp in header bytes 9-11
+(`cmp -l a b | awk '$1>11'` prints nothing). With the #470 additions, the only
+member changes are the added field `CMD_NEXTCAM` and the added method `nextCamera`.
+
+To rebuild, copy the stock game into a private root, never the installed game. Put `Track.java` in
+`sl/Scripts/game/src`, then copy `sources/sl/Scripts/game/src/MotionBlur.java`
+into a source folder outside the compiled directory, for example
+`sl/Scripts/mb/src`. Then run
+`compile_game_sources.exe <root> sl/Scripts/game`. The game ships no
+`MotionBlur.class`. The compiler reads that source only for its declarations
+and does not compile it. Without it, the nine `MB_Animator.changeCam(renderer)`
+calls compile to a by-name call instead of the stock method reference
+`MotionBlur.changeCam(GameRef)`. The result is one unit, float mode A (auto),
+and only the existing `W_UNVERIFIED` (final method) and `W_PACK`
+(`cars.traffic.chevy_van`) warnings.
 
 ## Transmission and clutch
 

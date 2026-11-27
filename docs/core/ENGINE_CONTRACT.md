@@ -884,7 +884,8 @@ moves the eye up to 1.2 m back while pulling and 0.8 m closer while braking
 (`update_chase_feel` in `gameref.cpp`).
 The patched `Track.nextCamera` (#470) cycles follow, chase and the cockpit
 cameras on the change-view key (ControlSet slot 35, `AXIS_LOOK_PREVNEXT`,
-V); the stock F1-F5/F9 view hotkeys are not created.
+V). It skips chase without a live second target and ignores change-view while
+look-back is held. The stock F1-F5/F9 view hotkeys are not created.
 Camera mods (#487) register a `java.openslrr.CameraProvider`; the patched
 Track hands it the follow view (`CAMMODE_PROVIDER`), cycles its views on the
 change-view key, sends it LOOK BACK and deactivates it before any other camera
