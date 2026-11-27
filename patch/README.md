@@ -393,6 +393,10 @@ See the [scripting API](../docs/scripting/mod-api-keys-settings.md) for examples
 | `java.game.parts.WheelRef.setBrakeSpec(FFF)V` | Brake hardware: pad compound (0 street, 1 fast road, 2 race), rotor type (0 solid, 1 grooved, 2 vented, 3 carbon) and rotor diameter in metres (clamped to 0.15–0.5). A positive diameter makes the car's brakes physical (#446). |
 | `java.game.OptionsDialog.getRendererOption(I)I` | Reads the active value for the requested identifier. An unknown identifier returns 0. |
 | `java.game.OptionsDialog.setRendererOption(II)V` | Applies the value to the session. Unknown identifiers are ignored. |
+| `java.openslrr.ModSettings.getInt(Ljava.lang.String;I)I`, `getFloat(Ljava.lang.String;F)F`, `getString(Ljava.lang.String;Ljava.lang.String;)Ljava.lang.String;` | A mod setting from the `mods` section of `save/game/openslrr_options.json`, or the given default when the key is missing or holds another type (#488). |
+| `java.openslrr.ModSettings.setInt(Ljava.lang.String;I)V`, `setFloat(Ljava.lang.String;F)V`, `setString(Ljava.lang.String;Ljava.lang.String;)V` | Stores a mod setting; the file is written 500 ms after the last change, at shutdown, or before options reload (#488). A non-finite float is ignored. |
+| `java.io.ControlSet.bytesLeft(Ljava.io.File;)I` | Bytes left to read in an open file, so the patched ControlSet reads its optional MKEY mod key trailer only when one is there (#488). |
+| `java.openslrr.*` (`OpenSLRR`, `CarState`, `CameraControl`) | The mod API natives (#487); see [docs/scripting/mod-api.md](../docs/scripting/mod-api.md). |
 
 | ID | Option | Values |
 | --- | --- | --- |
@@ -438,7 +442,7 @@ Press **V** to cycle follow → chase → each cockpit camera → follow. Withou
 
 On load, a stock F1/F2 pair in slots 35/36 migrates to V. Stock F2 is cleared from the hidden slot 36 even if slot 35 was already rebound or cleared. A later F1 binding stays on F1. The hidden F5 look-back binding (slot 37) is also cleared; LOOK BACK defaults to B.
 
-This requires the patched `Track.class`, `OsdxOptions.class` and `system/Scripts/io/ControlSet.class`. A mod that replaces the MWM `Track.class` also replaces this cycle.
+This requires the patched `Track.class`, `OptionsDialog.class`, `OsdxOptions.class` and `system/Scripts/io/ControlSet.class`. A mod that replaces the MWM `Track.class` also replaces this cycle.
 
 The Need for Speed: Underground 2 style arcade camera is not part of the engine or this patch: it is the **NFSU2 camera mod** in the repository's `mods/nfsu2-camera` folder, built on the mod overlay folders (#486), a camera provider hook (#487) and mod keys and settings (#488). Copy `mods/nfsu2-camera` into `<game>/mods/` (next to `system/`; `scripts/build-run-branch.ps1` does it), restart, and choose **ARCADE** under **Options → Game → CAMERA**: V cycles BUMPER, HOOD, NEAR and FAR, LOOK BACK (B) shows the rear view, and **Options → Mods** has the view and the shake strength. See [mods/nfsu2-camera/README.md](../mods/nfsu2-camera/README.md).
 
@@ -462,11 +466,13 @@ instructions: 1,444 vs 1,457 nodes and 413 vs 421 nodes, respectively.
 The patched source now follows the binary: the save is restored and the
 Refresher and Test_Render calls are removed. Blank lines are adjusted so the
 source line numbers recorded in the trees match. Remove the #470 additions
-(`CMD_NEXTCAM`, the V hotkey, `nextCamera` and its `CMD_NEXTCAM` dispatch)
-and put back the six F-key hotkeys. That source then compiles to the installed
+(`CMD_NEXTCAM`, the V hotkey after LOOK BACK, `hasLiveChaseTarget`,
+`nextCamera` and its `CMD_NEXTCAM` dispatch). Restore the six F-key hotkeys
+before the cheat keys and the original `changeCamChase` from the MWM source. That source then compiles to the installed
 class byte for byte, apart from the compiler build stamp in header bytes 9-11
 (`cmp -l a b | awk '$1>11'` prints nothing). With the #470 additions, the only
-member changes are the added field `CMD_NEXTCAM` and the added method `nextCamera`.
+member changes are the added field `CMD_NEXTCAM` and the added methods `nextCamera` and
+`hasLiveChaseTarget`.
 
 To rebuild, copy the stock game into a private root, never the installed game. Put `Track.java` in
 `sl/Scripts/game/src`, then copy `sources/sl/Scripts/game/src/MotionBlur.java`

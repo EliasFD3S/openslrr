@@ -714,14 +714,18 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 	void refreshModKeys()
 	{
 		int n = ModKeys.count();
-		if( n <= 0 )
+		// The rows exist only if a key was registered when the page was
+		// built; a key a mod registers later shows when Options reopens.
+		if( n <= 0 || !modKeyLabel[0] )
 			return;
 		for( int r=0; r<MODKEY_ROWS; r++ )
 		{
 			int i = modKeyCur*MODKEY_ROWS + r;
+			int c = -1;
 			if( i < n )
+				c = owner.controlSet.modSlot( i );
+			if( c >= 0 )
 			{
-				int c = owner.controlSet.modSlot( i );
 				modKeyLabel[r].changeText( ModKeys.label( i ) );
 				modKeyPlate[r].setColor( 0x50000000 );
 				modKeyButton[r].changeLabelText( bindingName( c ) );
@@ -1674,7 +1678,11 @@ public class OsdxOptions extends GameType implements EventReceiver, Animated
 		{
 			int mk = modKeyCur*MODKEY_ROWS + cmd - CMD_MODKEY;
 			if( mk < ModKeys.count() )
-				startCapture( owner.controlSet.modSlot( mk ) );
+			{
+				int slot = owner.controlSet.modSlot( mk );
+				if( slot >= 0 )	// -1: no slot for this key in the loaded set
+					startCapture( slot );
+			}
 			return;
 		}
 

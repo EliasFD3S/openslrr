@@ -1303,6 +1303,20 @@ void register_io_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections) {
         while (!s.empty() && s.back() == '\0') s.pop_back();
         return Value::make_obj(jvm.new_string(s));
       });
+  // OpenSLRR (#488): bytes left to read in an open File, so the patched
+  // ControlSet reads its optional MKEY trailer only when one is there (a
+  // read past the end marks the file broken for the JSON conversion).
+  jvm.natives().register_method(
+      "java.io.ControlSet", "bytesLeft", "(Ljava.io.File;)I",
+      [](Object*, const std::vector<Value>& args) {
+        Object* file = !args.empty() && args[0].tag == ValueTag::Obj ? args[0].v.o : nullptr;
+        auto it = g_host_files.find(file);
+        if (it == g_host_files.end() || it->second.writing ||
+            it->second.pos >= it->second.bytes.size())
+          return Value::make_int(0);
+        const size_t left = it->second.bytes.size() - it->second.pos;
+        return Value::make_int(static_cast<int32_t>(std::min<size_t>(left, INT32_MAX)));
+      });
   jvm.natives().register_method(
       "java.lang.System", "syncGameTime", "(F)V",
       [&jvm](Object*, const std::vector<Value>& args) {

@@ -295,6 +295,10 @@ void gameref_set_camera_roll_from_matrix(void* key, float roll);
 bool gameref_mod_camera_set(void* key, ModCameraMode mode, const float eye[3],
                             const float at[3], const float up[3], float fov, void* car);
 void gameref_mod_camera_clear(void* key);
+// The view of camera key's mod pose (#487), resolved now and written back as
+// for the world camera; for preview cameras the renderer draws. False when it
+// has no pose (or its car is gone).
+bool gameref_mod_camera_view(void* key, float eye[3], float at[3], float up[3], float* fov);
 void gameref_set_event_mask(void* key, int32_t mask);
 void gameref_clear_event_mask(void* key, int32_t mask);
 void gameref_add_timer(void* key, float deadline_abs, int32_t timer_id);

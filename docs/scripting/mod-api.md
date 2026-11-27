@@ -5,7 +5,7 @@ replacing stock classes such as `java.game.Track`. Its classes live in
 `patch/system/Scripts/openslrr` (package `java.openslrr`, sources in
 `src/`); the natives are in `src/natives/natives_openslrr.cpp`. Mod folders,
 load order and the mod entry point are described separately (#486); mod keys
-and settings are #488.
+and settings (#488) are in [mod-api-keys-settings.md](mod-api-keys-settings.md).
 
 The API exists only in OpenSLRR: a script that calls it does not run in the
 original game.
@@ -50,7 +50,10 @@ use `setPoseRelative` or `setPoseLocal` to stay on the drawn car.
 
 ## CameraControl
 
-Static natives on a script camera (a GameRef of type `GameRef.RID_CAMERA`).
+Static natives on a script camera (a GameRef of type `GameRef.RID_CAMERA`):
+the world camera or a preview camera drawn into an inset viewport (a car or
+part preview). `setPoseRelative` / `setPoseLocal` follow a car in the active
+world; in a preview world, whose car has no drawn frame there, use `setPose`.
 While a pose is set it is the camera's whole view: `move`, `look`, `dist`,
 `angle` and `roll` do not apply until `clearPose`.
 
@@ -74,11 +77,15 @@ play that is the draw-time resolution, the frame `drawnPos` reports in the
 next `animate()`), roll included (`getOri().r` is the bank of the
 up axis, in the convention of the `roll` command). The roll is also the
 camera's `roll` (except on the follow camera bound to the player's car), so
-`clearPose` continues with the same horizon.
+`clearPose` continues with the same horizon. Straight up or down, the yaw
+is taken from the up axis, so such poses keep their heading. The stock
+smoothing (the eye and focus of `move` / `look`, orbit and chase) also starts
+from the last drawn pose, so `clearPose` does not snap back to an older view.
 
 `GameRef.setMatrix` on a script camera now applies the Ypr roll (as the `roll`
 command), except on the follow camera bound to the player's car, whose roll
-stays the script's `roll`.
+stays the script's `roll`. The roll applies to a free script camera and to one
+attached to a car with a short `move` (for example Track's chase view).
 
 ## CameraProvider and Cameras
 
@@ -108,8 +115,10 @@ public static void modInit()
 | `selected()`, `select(i)` | The selected provider's index, -1 for the classic cameras. An index out of range selects the classic cameras. |
 | `view(p)`, `setView(p, v)` | Each provider's current view. |
 
-The selection and the views last for the session; the mod settings (#488)
-persist them by name (`camera.provider`, `camera.<name>.view`).
+The selection and each provider's view are saved by name in the mod settings
+(`camera.provider`, `camera.<name>.view`; see
+[mod-api-keys-settings.md](mod-api-keys-settings.md)), so they survive a
+restart and a change of mod load order.
 
 ### How the patched Track uses a provider
 

@@ -950,6 +950,9 @@ static bool driving_camera_pose(GameRefState& cam, float* eye, float* at,
   if (attached) {
     target_point(&cam, cam.move_id, cam.move_off, eye);
     target_point(&cam, cam.look_id, cam.look_off, at);
+    // A script camera attached to the car (a short `move`) keeps its `roll`
+    // (the command or setMatrix's roll), as the free script camera does.
+    if (up && cam.camera_roll != 0.f) mod_roll_up(eye, at, cam.camera_roll, up);
     return true;
   }
 
@@ -1017,6 +1020,47 @@ static bool driving_camera_pose(GameRefState& cam, float* eye, float* at,
   return true;
 }
 
+// A mod camera pose (#487) is the whole view of any camera the renderer
+// draws (the world camera and preview cameras). A Relative or Local pose
+// reads the car's drawn frame now, so the draw-time query matches the drawn
+// car even when the poses were published after the scripts ran
+// (free-running physics); Local also turns and banks with that frame.
+// Every resolution writes back, the renderer's dt = 0 query too: getPos /
+// getOri (the GPS reads them), and after clearPose the stock rules and their
+// smoothing, continue from the pose last drawn. The bound follow camera's
+// roll stays the script's `roll` command, as in setMatrix. False without a
+// pose, or for a car pose whose car is gone (the last pose stays in pos/ypr).
+static bool mod_pose_view(GameRefState& cam, float eye[3], float at[3], float up[3],
+                          float* fov) {
+  if (cam.mod_pose.mode == ModCameraMode::None) return false;
+  float frame[16];
+  const float* car = nullptr;
+  if (cam.mod_pose.mode == ModCameraMode::Relative || cam.mod_pose.mode == ModCameraMode::Local) {
+    const GameRefState* target = gameref_find_live(cam.mod_pose_car);
+    if (target && part_camera_pose(target->key, -1, frame)) car = frame;
+  }
+  float pose_up[3];
+  if (!mod_camera_resolve(cam.mod_pose, car, eye, at, pose_up)) return false;
+  if (up) std::copy_n(pose_up, 3, up);
+  if (fov) *fov = cam.mod_pose.fov > 0.f ? cam.mod_pose.fov : cam.half_aov > 1.f ? cam.half_aov : 60.f;
+  std::copy_n(eye, 3, cam.pos);
+  mod_look_ypr(eye, at, cam.ypr[0], cam.ypr[1], pose_up);
+  cam.ypr[2] = mod_look_roll(eye, at, pose_up);
+  if (!(cam.follow_vehicle && cam.cockpit_index < 0 && !cam.camera_free))
+    cam.camera_roll = cam.ypr[2];
+  // The smoothed eye and focus of the stock move/look, orbit and chase rules.
+  std::copy_n(eye, 3, cam.eye_s);
+  std::copy_n(at, 3, cam.look_s);
+  cam.eye_vel[0] = cam.eye_vel[1] = cam.eye_vel[2] = 0.f;
+  cam.cam_pose_init = true;
+  return true;
+}
+
+bool gameref_mod_camera_view(void* key, float eye[3], float at[3], float up[3], float* fov) {
+  GameRefState* n = gameref_get(key);
+  return n && n->kind == GameRefKind::Camera && eye && at && mod_pose_view(*n, eye, at, up, fov);
+}
+
 static bool world_camera_pose(float eye[3], float at[3], float* fov, float* znear,
                               float* zfar, float dt, float* up = nullptr) {
   GameRefState* cam = fullscreen_script_camera();
@@ -1024,40 +1068,11 @@ static bool world_camera_pose(float eye[3], float at[3], float* fov, float* znea
   if (up) { up[0] = 0; up[1] = 1; up[2] = 0; }
   if (dt > 0.f && cam->aov_goal > 0.f)
     cam->half_aov += (cam->aov_goal - cam->half_aov) * -std::expm1(-dt * cam->aov_rate);
-  // A mod camera pose (#487) is the whole view. A Relative or Local pose
-  // reads the car's drawn frame now, so the draw-time query matches the drawn
-  // car even when the poses were published after the scripts ran
-  // (free-running physics); Local also turns and banks with that frame.
-  // Without its car it keeps the last pose written to pos/ypr.
-  if (cam->mod_pose.mode != ModCameraMode::None) {
-    float frame[16];
-    const float* car = nullptr;
-    if (cam->mod_pose.mode == ModCameraMode::Relative ||
-        cam->mod_pose.mode == ModCameraMode::Local) {
-      const GameRefState* target = gameref_find_live(cam->mod_pose_car);
-      if (target && part_camera_pose(target->key, -1, frame)) car = frame;
-    }
-    float pose_up[3];
-    if (mod_camera_resolve(cam->mod_pose, car, eye, at, pose_up)) {
-      if (up) std::copy_n(pose_up, 3, up);
-      if (fov) *fov = cam->mod_pose.fov > 0.f ? cam->mod_pose.fov
-                                              : cam->half_aov > 1.f ? cam->half_aov : 60.f;
-      // Closer than the chase view's .20 for bumper and hood eyes.
-      if (znear) *znear = .10f;
-      if (zfar) *zfar = 3000.f;
-      // getPos / getOri on the camera (the GPS reads the renderer's) and
-      // clearPose continue from here, roll included. Every resolution
-      // writes back, the renderer's dt = 0 query too: in free-running play
-      // the frame's car pose is published after the dt > 0 advance, so only
-      // the draw-time resolution matches the drawn frame. The bound follow
-      // camera's roll stays the script's `roll` command, as in setMatrix.
-      std::copy_n(eye, 3, cam->pos);
-      mod_look_ypr(eye, at, cam->ypr[0], cam->ypr[1]);
-      cam->ypr[2] = mod_look_roll(eye, at, pose_up);
-      if (!(cam->follow_vehicle && cam->cockpit_index < 0 && !cam->camera_free))
-        cam->camera_roll = cam->ypr[2];
-      return true;
-    }
+  if (mod_pose_view(*cam, eye, at, up, fov)) {
+    // Closer than the chase view's .20 for bumper and hood eyes.
+    if (znear) *znear = .10f;
+    if (zfar) *zfar = 3000.f;
+    return true;
   }
   if (driving_camera_pose(*cam, eye, at, up, dt)) {
     const bool cockpit = cam->camera_attached && !cam->follow_variant;
@@ -1178,15 +1193,7 @@ static bool world_camera_pose(float eye[3], float at[3], float* fov, float* znea
     eye[1] = follow[1];
     eye[2] = follow[2];
   }
-  if (up && cam->camera_roll != 0.f) {
-    const auto forward = physics::Vec3{at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]}.normalized();
-    const auto right = forward.cross({0, 1, 0}).normalized();
-    if (right.dot(right) > 0) {
-      const auto rolled = right.cross(forward) * std::cos(cam->camera_roll) +
-                          right * std::sin(cam->camera_roll);
-      up[0] = float(rolled.x); up[1] = float(rolled.y); up[2] = float(rolled.z);
-    }
-  }
+  if (up && cam->camera_roll != 0.f) mod_roll_up(eye, at, cam->camera_roll, up);
   if (fov) {
     const auto delta = physics::Vec3{eye[0] - at[0], eye[1] - at[1], eye[2] - at[2]};
     *fov = cam->camera_autozoom ? float(std::clamp(240.0 / std::max(1.0, delta.length()), 18.0, 65.0))

@@ -26,13 +26,24 @@ GameOptions current;
 uint64_t driving_revision = 0;
 std::string host_options_path;
 options_json::Section mod_settings;
+// A mod setting changed since the last save (#488). A slider sends one per
+// tick, so host_game_options_update saves it 500 ms after the last change,
+// or at once when forced (shutdown) and before a reload.
+bool mods_dirty = false, mods_failed = false;  // failed: retry on change or force
+Clock::time_point mods_changed;
 bool save_host_options();
 
 void set_mod_setting(const std::string& key, options_json::Scalar value) {
   const auto it = mod_settings.find(key);
   if (it != mod_settings.end() && it->second == value) return;
   mod_settings.insert_or_assign(key, std::move(value));
-  save_host_options();
+  if (!loaded) {
+    save_host_options();  // no update loop to flush it yet
+    return;
+  }
+  mods_dirty = true;
+  mods_failed = false;
+  mods_changed = Clock::now();
 }
 
 // Host-only settings (#405: one table, saved as JSON). Config has a fixed
@@ -242,6 +253,8 @@ bool save_host_options() {
     entries.push_back(std::move(e));
   }
   for (const auto& [key, value] : mod_settings) entries.push_back({"mods", key, value});
+  const bool had_mods = mods_dirty;
+  mods_dirty = false;  // a failed write sets it again below
   // Write beside it, then replace: a crash mid-save keeps the old file.
   const std::string temporary = host_options_path + ".tmp";
   {
@@ -250,6 +263,8 @@ bool save_host_options() {
     out.close();
     if (!out) {
       std::fprintf(stderr, "[options] could not save %s\n", temporary.c_str());
+      mods_dirty = had_mods;
+      mods_failed = had_mods;
       return false;
     }
   }
@@ -258,6 +273,8 @@ bool save_host_options() {
     std::fprintf(stderr, "[options] could not save %s: %s\n", host_options_path.c_str(),
                  error.message().c_str());
     std::filesystem::remove(temporary, error);
+    mods_dirty = had_mods;
+    mods_failed = had_mods;
     return false;
   }
   return true;
@@ -371,6 +388,7 @@ const GameOptions& host_game_options() { return current; }
 uint64_t host_driving_options_revision() { return driving_revision; }
 
 void host_game_options_load(Jvm& jvm) {
+  if (mods_dirty) save_host_options();  // keep a pending mod setting
   loaded=false;dirty=false;save_failed=false;
   // Engine-owned Config in stock. A VM static keeps it alive through GC.
   Object* options=jvm.new_object("java.util.Config");
@@ -464,6 +482,8 @@ void host_game_options_set_steering_help(Jvm& jvm, float strength) {
 void host_game_options_update(Jvm& jvm, bool force) {
   if (!loaded) return;
   if (force || Clock::now() >= next_sample) host_game_options_apply(jvm);
+  if (mods_dirty && (force || (!mods_failed && Clock::now() - mods_changed >= std::chrono::milliseconds(500))))
+    save_host_options();
   if (!dirty || (!force && (save_failed || Clock::now() - changed < std::chrono::milliseconds(500)))) return;
   Value v=jvm.get_static("java.lang.System","_hostGameOptions");
   if(v.tag!=ValueTag::Obj || !v.v.o)return;

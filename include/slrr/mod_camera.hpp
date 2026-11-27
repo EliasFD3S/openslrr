@@ -48,7 +48,16 @@ void mod_matrix_ypr(const float m[16], float ypr[3]);
 
 // Camera yaw and pitch that make the stock script camera (eye at pos,
 // looking along -z rotated by yaw, pitched up by pitch) look from eye to at.
-void mod_look_ypr(const float eye[3], const float at[3], float& yaw, float& pitch);
+// Looking straight up or down the view alone has no yaw: with up given, the
+// yaw is the one whose rolled-free up axis is up (stock up axis
+// (sin y sin p, cos p, cos y sin p)), so two such poses stay distinct.
+void mod_look_ypr(const float eye[3], const float at[3], float& yaw, float& pitch,
+                  const float* up = nullptr);
+
+// The up axis of a view from eye to at rolled by roll, as the camera `roll`
+// command rolls it: level up * cos roll + right * sin roll, right = forward x
+// world up. False (up unchanged) for a vertical or empty view.
+bool mod_roll_up(const float eye[3], const float at[3], float roll, float up[3]);
 
 // CameraControl.sweep's arguments: finite endpoints and a finite radius >= 0.
 // The native returns 1 (clear) without sweeping otherwise.

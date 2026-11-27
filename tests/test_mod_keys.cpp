@@ -252,6 +252,38 @@ void binding_follows_id() {
   std::puts("PASS a binding follows its key id across boots, orders, clearing and uninstall");
 }
 
+// A cut MKEY trailer (a file truncated by hand or an interrupted copy) loads
+// what is complete and never reads past the end. Binary files, as an older
+// build or the stock game writes them.
+void truncated_trailer_is_safe() {
+  const std::string file = "save/controls/cut";
+  // 4: only the id; 8: id and count; 10, 22: inside the first record; 24: the
+  // first record whole; 34: inside the second.
+  for (const int keep : {-1, 4, 8, 10, 22, 24, 34}) {
+    Boot boot;
+    SLRR_REQUIRE(boot.reg("a.x", "A", kG) == kAxisBase && boot.reg("b.y", "B", kH) == kAxisBase + 1);
+    const auto path = boot.f.root / file;
+    write_old_file(path, kControls);
+    std::string trailer;
+    auto word = [&](int32_t v) { trailer.append(reinterpret_cast<const char*>(&v), 4); };
+    auto text = [&](const char* id) { word(int32_t(std::strlen(id) + 1)); trailer.append(id, std::strlen(id) + 1); };
+    word(0x59454b4d); word(2);
+    word(kModFirst + 1); text("a.x"); word(0);   // a.x owns slot 119
+    word(kModFirst); text("b.y"); word(0);       // b.y owns slot 118
+    if (keep >= 0) trailer.resize(size_t(keep));
+    { std::ofstream out(path, std::ios::binary | std::ios::app); out << trailer; }
+    Object* cs = boot.loaded(file);
+    // The slot table before the trailer is intact.
+    SLRR_REQUIRE(Boot::get(cs, "axisID", 5) == 6 && Boot::get(cs, "axisID", 100) == 101);
+    const int a = boot.slot_of(cs, 0), b = boot.slot_of(cs, 1);
+    SLRR_REQUIRE(a >= kModFirst && b >= kModFirst && a != b);
+    if (keep < 0) SLRR_REQUIRE(a == kModFirst + 1 && b == kModFirst);      // whole trailer
+    else if (keep >= 24) SLRR_REQUIRE(a == kModFirst + 1 && b != kModFirst + 1);  // first record only
+    else SLRR_REQUIRE(a == kModFirst && b == kModFirst + 1);               // none: new keys in order
+  }
+  std::puts("PASS a truncated mod key trailer loads its complete records and stops at the end");
+}
+
 void registration_limits() {
   Boot boot;
   SLRR_REQUIRE(boot.reg(nullptr, "none", kG) == -1 && boot.reg("", "empty", kG) == -1);
@@ -324,7 +356,8 @@ void virtual_axis_delivery() {
 }  // namespace
 
 int main() {
-  const standalone::Test tests[] = {old_files_keep_loading, binding_follows_id, registration_limits,
+  const standalone::Test tests[] = {old_files_keep_loading, binding_follows_id, truncated_trailer_is_safe,
+                                    registration_limits,
                                     virtual_axis_delivery};
   return standalone::run("mod_keys", tests);
 }

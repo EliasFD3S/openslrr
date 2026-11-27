@@ -32,28 +32,40 @@ ModOptions.addSlider("roadbook.scale", "MAP SCALE", 0.5, 2.0, 1.0, "Scale the ro
 ~~~
 
 Choices store the zero-based index, toggles store 0 or 1, and sliders store
-a float. Read the same key and default with `ModSettings` when consuming the
+a float. A changed value is written to disk 500 ms after the last change
+(dragging a slider does not rewrite the file every tick), at shutdown, or
+before options reload. Read the same key and default with `ModSettings` when consuming the
 value. Registering a row does not overwrite the player's setting.
 
 ## Register a rebindable action
 
 ~~~java
 // In modInit; keep the returned axis for the lifetime of this VM.
-axis = ModKeys.register("roadbook.mark", "MARK WAYPOINT", Input.RCDIK_M);
+// No default here (0): the player binds it. M would collide with VIEW MAP.
+axis = ModKeys.register("roadbook.mark", "MARK WAYPOINT", 0);
 // When creating the mod's OSD:
 if (axis >= 0)
     osd.createHotkey(axis, Input.VIRTUAL|Osd.HK_STATIC, CMD_MARK, this);
 ~~~
 
-The default is a physical DirectInput key code; the return value is a
+The default is a physical DirectInput key code, or 0 for none. Nothing checks
+it against the stock controls or other mods: pick a key the game does not
+use, or leave it unbound. The return value is a
 **virtual axis**, not a key code or ControlSet index. Handle the command on
 the OSD receiver just as for a stock virtual hotkey. Players can rebind it
 under **Options → Controls → Game controls**. Sixteen ControlSet slots
 (118–133) are reserved for mod actions; existing stock and 118-slot control
 files remain usable. A small trailer records the IDs so that load-order
 changes do not swap bindings. Esc-clearing a binding persists as well.
+The trailer (`MKEY`, a count, then slot, ID and flags per key) follows the
+smoothing table of the controls file. An older (#405 or earlier) build that
+saves a 134-slot file again drops it, and a cut trailer is read only up to
+its last complete record; mod keys without a record count as new and get
+their defaults back.
 An empty ID or a seventeenth distinct key returns -1 without registering
-a row. Registered keys become active on the next controller reset.
+a row. Registered keys become active on the next controller reset. A key
+registered after Options → Controls was opened appears when it is opened
+again.
 
 The Game page lists Classic plus each registered camera provider. The
 selection uses `camera.provider` (provider name; empty string for Classic);
