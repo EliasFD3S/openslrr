@@ -103,10 +103,32 @@ void mod_matrix_ypr(const float m[16], float ypr[3]) {
   }
 }
 
-void mod_look_ypr(const float eye[3], const float at[3], float& yaw, float& pitch) {
+void mod_look_ypr(const float eye[3], const float at[3], float& yaw, float& pitch,
+                  const float* up) {
   const float d[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
+  const float level = std::hypot(d[0], d[2]);
+  pitch = std::atan2(d[1], level);
+  if (up && finite3(up) && level <= 1e-5f * std::fabs(d[1]) &&
+      std::hypot(up[0], up[2]) > 1e-6f) {
+    // Gimbal: up = (sin y, 0, cos y) * sin p; sin p is +-1 here.
+    const float s = d[1] < 0.f ? -1.f : 1.f;
+    yaw = std::atan2(s * up[0], s * up[2]);
+    return;
+  }
   yaw = std::atan2(-d[0], -d[2]);
-  pitch = std::atan2(d[1], std::hypot(d[0], d[2]));
+}
+
+bool mod_roll_up(const float eye[3], const float at[3], float roll, float up[3]) {
+  float forward[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
+  if (!normalize(forward) || !std::isfinite(roll)) return false;
+  static const float kWorldUp[3] = {0.f, 1.f, 0.f};
+  float right[3], level[3];
+  cross(forward, kWorldUp, right);
+  if (!normalize(right)) return false;
+  cross(right, forward, level);
+  const float c = std::cos(roll), s = std::sin(roll);
+  for (int i = 0; i < 3; ++i) up[i] = level[i] * c + right[i] * s;
+  return true;
 }
 
 bool mod_sweep_args_valid(const float* from, const float* to, float radius) {

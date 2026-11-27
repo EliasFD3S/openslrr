@@ -3,6 +3,7 @@
 #include "slrr/gameref.hpp"
 #include "slrr/scene_instances.hpp"
 #include "slrr/osd_registry.hpp"
+#include <cmath>
 #include <limits>
 using namespace slrr;
 void inset_preview_keeps_page_and_pose(){
@@ -31,6 +32,51 @@ void inset_preview_keeps_page_and_pose(){
  scene_instances_select(nullptr,nullptr,false);gameref_clear();
  std::puts("PASS catalog inset retains script pose and preview camera; cursor hover cannot replace world; fullscreen showroom preserved");
 }
+// #487: a CameraControl pose drives preview cameras too, writes back a yaw
+// that survives looking straight down, and seeds the stock smoothing so
+// clearPose continues from the last drawn pose.
+void mod_pose_on_preview_and_clear(){
+ Fixture f;gameref_clear();scene_instances_select(nullptr,nullptr,false);
+ Object world,camera,viewport;
+ auto* root=gameref_upsert(&world,GameRefKind::Dummy);root->flags=kWorldTreeRoot;
+ auto* cam=gameref_upsert(&camera,GameRefKind::Camera);gameref_set_parent(&camera,&world);
+ auto* vp=gameref_upsert(&viewport,GameRefKind::Viewport);vp->vp_w=.45f;vp->vp_h=.4f;vp->vp_active=true;vp->vp_pri=12;
+ gameref_activate_camera(*cam,*vp,1);cam->aim_look=cam->aim_move=true;
+ float eye[3],at[3],up[3],fov=0;
+ SLRR_REQUIRE(!gameref_mod_camera_view(&camera,eye,at,up,&fov));  // no pose: stock aim
+ const float e0[3]={1,5,2},below[3]={1,-5,2},east[3]={1,0,0},north[3]={0,0,-1};
+ SLRR_REQUIRE(gameref_mod_camera_set(&camera,ModCameraMode::World,e0,below,east,40.f,nullptr));
+ SLRR_REQUIRE(gameref_mod_camera_view(&camera,eye,at,up,&fov) && fov==40.f);
+ SLRR_REQUIRE(eye[1]==5.f && at[1]==-5.f && std::fabs(up[0]-1.f)<1e-5f);
+ SLRR_REQUIRE(cam->pos[0]==1.f && cam->pos[1]==5.f && cam->pos[2]==2.f);
+ // Straight down: the yaw comes from up, and the stock up axis of that yaw
+ // and pitch, (sin y sin p, cos p, cos y sin p), is the pose's up.
+ auto stock_up=[&](float* u){const float y=cam->ypr[0],p=cam->ypr[1];
+   u[0]=std::sin(y)*std::sin(p);u[1]=std::cos(p);u[2]=std::cos(y)*std::sin(p);};
+ float u[3];stock_up(u);
+ SLRR_REQUIRE(std::fabs(u[0]-1.f)<1e-4f && std::fabs(u[1])<1e-4f && std::fabs(u[2])<1e-4f);
+ const float east_yaw=cam->ypr[0];
+ SLRR_REQUIRE(gameref_mod_camera_set(&camera,ModCameraMode::World,e0,below,north,40.f,nullptr));
+ SLRR_REQUIRE(gameref_mod_camera_view(&camera,eye,at,up,&fov));
+ stock_up(u);SLRR_REQUIRE(std::fabs(u[2]+1.f)<1e-4f && std::fabs(cam->ypr[0]-east_yaw)>1.f);
+ // The stock smoothing starts from the drawn pose, so clearPose does not snap.
+ SLRR_REQUIRE(cam->cam_pose_init && cam->eye_s[1]==5.f && cam->look_s[1]==-5.f);
+ // A fullscreen free script camera after clearPose keeps eye and direction.
+ const float e1[3]={3,2,1},a1[3]={-1,1.5f,-6},wup[3]={0,1,0};
+ SLRR_REQUIRE(gameref_mod_camera_set(&camera,ModCameraMode::World,e1,a1,wup,0.f,nullptr));
+ SLRR_REQUIRE(gameref_mod_camera_view(&camera,eye,at,up,&fov));
+ gameref_mod_camera_clear(&camera);cam->aim_look=cam->aim_move=false;vp->vp_w=vp->vp_h=1.f;
+ scene_instances_select(&world,nullptr,false);
+ SLRR_REQUIRE(fullscreen_script_camera()==cam);
+ float se[3],sa[3],sf=0,zn=0,zf=0,su[3];
+ SLRR_REQUIRE(gameref_world_camera(se,sa,&sf,&zn,&zf,su));
+ float d0[3],d1[3];for(int i=0;i<3;++i){d0[i]=a1[i]-e1[i];d1[i]=sa[i]-se[i];}
+ const float l0=std::sqrt(d0[0]*d0[0]+d0[1]*d0[1]+d0[2]*d0[2]),l1=std::sqrt(d1[0]*d1[0]+d1[1]*d1[1]+d1[2]*d1[2]);
+ SLRR_REQUIRE(se[0]==3.f && se[1]==2.f && se[2]==1.f);
+ for(int i=0;i<3;++i)SLRR_REQUIRE(std::fabs(d0[i]/l0-d1[i]/l1)<1e-4f);
+ scene_instances_select(nullptr,nullptr,false);gameref_clear();
+ std::puts("PASS mod poses drive preview cameras, keep a straight-down yaw and hand over to the stock camera without a snap");
+}
 void cursor_camera_is_ui_only(){
  Fixture f;gameref_clear();scene_instances_select(nullptr,nullptr,false);
  Object cursor,camera,viewport;
@@ -58,4 +104,4 @@ void tooltip_does_not_promote_page_background(){
  osd_hide_widget(page_id);SLRR_REQUIRE(osd_page_background_layer()==std::numeric_limits<int32_t>::max());
  osd_clear_widgets();std::puts("PASS tooltip layer does not lift catalog background over car, repeated show/hide and modal plates");
 }
-int main(){const standalone::Test tests[]={inset_preview_keeps_page_and_pose,cursor_camera_is_ui_only,tooltip_does_not_promote_page_background};return standalone::run("car_select_view",tests);}
+int main(){const standalone::Test tests[]={inset_preview_keeps_page_and_pose,mod_pose_on_preview_and_clear,cursor_camera_is_ui_only,tooltip_does_not_promote_page_background};return standalone::run("car_select_view",tests);}

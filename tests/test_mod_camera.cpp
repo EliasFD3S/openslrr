@@ -13,6 +13,7 @@ using slrr::ModCameraPose;
 using slrr::mod_camera_resolve;
 using slrr::mod_camera_set;
 using slrr::mod_look_roll;
+using slrr::mod_roll_up;
 using slrr::mod_sweep_args_valid;
 using slrr::mod_look_ypr;
 using slrr::mod_matrix_ypr;
@@ -234,6 +235,42 @@ SLRR_TEST(look_ypr_matches_the_stock_camera) {
       }
 }
 
+// Straight up or down, the yaw comes from the up axis (gimbal case): the
+// stock up of the written yaw and pitch is the pose's up, so two such poses
+// stay distinct. Elsewhere up does not change the yaw.
+SLRR_TEST(look_ypr_keeps_yaw_when_vertical) {
+  const float eye[3] = {0.f, 0.f, 0.f};
+  for (const float sign : {-1.f, 1.f})
+    for (const float a : {0.f, .9f, -2.2f, 3.1f}) {
+      const float at[3] = {0.f, sign * 7.f, 0.f};
+      const float up[3] = {std::sin(a), 0.f, std::cos(a)};
+      float yaw, pitch;
+      mod_look_ypr(eye, at, yaw, pitch, up);
+      const float u[3] = {std::sin(yaw) * std::sin(pitch), std::cos(pitch), std::cos(yaw) * std::sin(pitch)};
+      SLRR_REQUIRE(near(pitch, sign * 1.5707963f, 1e-4f) && near3(u, up[0], up[1], up[2], 1e-4f));
+    }
+  const float at[3] = {3.f, 1.f, -4.f}, up[3] = {1.f, 0.f, 0.f};
+  float y0, p0, y1, p1;
+  mod_look_ypr(eye, at, y0, p0);
+  mod_look_ypr(eye, at, y1, p1, up);
+  SLRR_REQUIRE(y0 == y1 && p0 == p1);
+}
+
+// mod_roll_up is the `roll` command's up, and mod_look_roll reads it back.
+SLRR_TEST(roll_up_round_trip) {
+  const float eye[3] = {1.f, 2.f, 3.f}, at[3] = {-4.f, 3.f, -2.f};
+  for (const float roll : {0.f, .4f, -1.1f, 2.5f}) {
+    float up[3] = {9.f, 9.f, 9.f};
+    SLRR_REQUIRE(mod_roll_up(eye, at, roll, up));
+    const float f[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
+    SLRR_REQUIRE(near(dot(f, up), 0.f, 1e-4f) && near(dot(up, up), 1.f, 1e-4f));
+    SLRR_REQUIRE(near(mod_look_roll(eye, at, up), roll, 1e-4f));
+  }
+  float up[3] = {0.f, 1.f, 0.f};
+  const float below[3] = {1.f, -5.f, 3.f};
+  SLRR_REQUIRE(!mod_roll_up(eye, below, .3f, up) && up[1] == 1.f);
+}
+
 // sweep rejects a non-finite or negative radius and non-finite endpoints
 // (the native then returns 1 without sweeping).
 SLRR_TEST(sweep_rejects_non_finite_arguments) {
@@ -257,6 +294,7 @@ int main() {
       invalid_input_keeps_the_pose, matrix_ypr_round_trip,
       look_ypr_matches_the_stock_camera, local_pose_turns_and_banks_with_the_car,
       roll_write_back_matches_the_roll_command, sweep_rejects_non_finite_arguments,
+      look_ypr_keeps_yaw_when_vertical, roll_up_round_trip,
   };
   return slrr::standalone::run("mod_camera", tests);
 }

@@ -2132,7 +2132,12 @@ void LibBgfxBackend::submit_world(uint16_t world_view, bgfx::FrameBufferHandle t
       int x=std::clamp(static_cast<int>(p.viewport.vp_x*width_),0,width_-1),y=std::clamp(static_cast<int>(p.viewport.vp_y*height_),0,height_-1);
       int w=std::clamp(static_cast<int>(p.viewport.vp_w*width_),1,width_-x),h=std::clamp(static_cast<int>(p.viewport.vp_h*height_),1,height_-y);
       float world[16],view[16],proj[16];if(!scene_instance_transform(p.camera.key,p.camera.parent,world))continue;
-      if(p.camera.aim_look||p.camera.aim_move){
+      float fov=p.camera.half_aov,me[3],ma[3],mu[3];
+      if(gameref_mod_camera_view(p.camera.key,me,ma,mu,&fov)){
+        // A mod camera pose (#487), in the drawn (z mirrored) space as below.
+        const bx::Vec3 eye{me[0],me[1],-me[2]},at{ma[0],ma[1],-ma[2]},up{mu[0],mu[1],-mu[2]};
+        bx::mtxLookAt(view,eye,at,up);
+      }else if(p.camera.aim_look||p.camera.aim_move){
         // Drawn vertices are S*v and the instance matrix is S*M*S, so a script
         // point lands at (x, y, -z). Conjugating the look-at basis by that same
         // S parks the eye on the nose and then aims the other way, out through
@@ -2161,7 +2166,7 @@ void LibBgfxBackend::submit_world(uint16_t world_view, bgfx::FrameBufferHandle t
         view[2]=-view[2]; view[6]=-view[6]; view[14]=-view[14];
         view[8]=-view[8]; view[9]=-view[9]; view[11]=-view[11];
       }
-      bx::mtxProj(proj,p.camera.half_aov,static_cast<float>(w)/h,std::max(.0001f,p.camera.dmin),p.camera.dmax,bgfx::getCaps()->homogeneousDepth);
+      bx::mtxProj(proj,fov,static_cast<float>(w)/h,std::max(.0001f,p.camera.dmin),p.camera.dmax,bgfx::getCaps()->homogeneousDepth);
       reverse_scene_projection(proj);
       bgfx::setViewRect(id,x,y,w,h);bgfx::setViewClear(id,BGFX_CLEAR_DEPTH,0,0.f);set_view_sequential(id);bgfx::setViewTransform(id,view,proj);
       for (int pass = 0; pass < 2; ++pass)
