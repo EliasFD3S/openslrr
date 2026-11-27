@@ -73,4 +73,10 @@ public class WheelRef extends Native
 	// values for the suspension type.
 	public native void setCamberGain( float gain, float progression );
 
+	// OpenSLRR (#484): bump steer about the static ride height: degrees of
+	// toe-in per 25 mm of bump there (negative: toe-out) and its change per
+	// 25 mm of bump. Without it the host uses typical values for the
+	// suspension type.
+	public native void setBumpSteer( float toe, float progression );
+
 }

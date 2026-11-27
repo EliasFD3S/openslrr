@@ -158,10 +158,16 @@ struct WheelConfig {
   // height, clamped to a road car's range. Off: the geometry alone.
   bool camber_curve = false;
   double camber_gain = 0, camber_progression = 0;
-  // Set by update_camber_reference (suspension_geometry.hpp) from the
-  // car's weight: the static spring length (0 unknown) and, there, the
-  // geometry's camber (rad) and the gain the curve uses (rad/m).
-  double camber_reference = 0, reference_camber = 0, reference_gain = 0;
+  // Bump steer (#484): likewise for the toe, positive toe-in (the wheel's
+  // front turning inboard) as the spring compresses, rad/m and rad/m^2.
+  // Off: the geometry's toe alone.
+  bool toe_curve = false;
+  double bump_steer = 0, bump_steer_progression = 0;
+  // Set by update_static_reference (suspension_geometry.hpp) from the car's
+  // weight: the static spring length (0 unknown) and, there, the
+  // geometry's camber and toe (rad) and the camber gain the curve uses
+  // (rad/m).
+  double static_length = 0, reference_camber = 0, reference_toe = 0, reference_gain = 0;
   bool linked() const { return unsprung > 0 || arm_length > 0; }
 };
 struct WheelState {
@@ -379,7 +385,7 @@ private:
   bool accelerator_down_ = false, forced_reverse_ = false;
   void step(const Terrain &terrain);
   void update_jacking();
-  void update_camber_references();
+  void update_static_references();
   void apply_aero();
   void step_drive();
   void update_gear(double rpm, double shaft, double road_shaft);

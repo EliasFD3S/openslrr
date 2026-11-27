@@ -148,8 +148,12 @@ progression x bump^2 / 2, from the suspension script's
 `WheelRef.setCamberGain` or typical values by suspension type.
 `wheel_pose` turns the arm fit's hub by the difference between the curve and
 the fit's own change, so the tyre's camber input, the rendered wheel and the
-kingpin follow it; `VehicleDynamics::update_camber_references` finds each
-static length from the car's weight every step.
+kingpin follow it; `VehicleDynamics::update_static_references` finds each
+static length from the car's weight every step. The toe follows its own
+curve about the same height (bump steer, #484,
+[notes](notes.md#bump-steer-484)), from `WheelRef.setBumpSteer` or typical
+values, so the tyre's heading changes with travel: rears that toe in as
+they compress steer a rolling car towards understeer.
 Wheel YPR and the existing arm/hub kinematics still affect contact geometry.
 Anti-roll bars are an optional host approximation, deliberately enabling a
 stock feature whose Java commands and catalog branch were dormant. The patched

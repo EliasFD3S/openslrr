@@ -94,6 +94,10 @@ struct WheelPhys {
   // the static height and its change per 25 mm.
   bool has_camber_gain = false;
   float camber_gain = 0, camber_progression = 0;
+  // setBumpSteer (patched suspensions, #484): degrees of toe-in per 25 mm
+  // of bump at the static height and its change per 25 mm.
+  bool has_bump_steer = false;
+  float bump_steer = 0, bump_steer_progression = 0;
   int opp = -1;
   float arm[7]{}, hub[10]{};
   bool authored_position = false;
@@ -2981,7 +2985,22 @@ void dynamics_wheels(Record &rec) {
         cfg.camber_gain = front && strut_fit ? -.5 * per_25mm : std::numeric_limits<double>::quiet_NaN();
         cfg.camber_progression = (front ? strut_fit ? .1 : -.1 : 0) * per_25mm / .025;
       }
-      if (!cfg.camber_curve) cfg.camber_reference = 0;
+      // Bump steer (#484): WheelRef.setBumpSteer, or typical values: linked
+      // fronts toe out by 0.05 deg per 25 mm of bump (the track rod a little
+      // off the arm's line), independent rear arms toe in by 0.1 (laid out
+      // for understeer as the outer wheel compresses). Live axles and
+      // corners without arms keep their geometry.
+      cfg.toe_curve = false;
+      if (live.has_bump_steer) {
+        cfg.toe_curve = true;
+        cfg.bump_steer = live.bump_steer * per_25mm;
+        cfg.bump_steer_progression = live.bump_steer_progression * per_25mm / .025;
+      } else if (cfg.arm_length > 0 && cfg.arm_length < 20) {
+        cfg.toe_curve = true;
+        cfg.bump_steer = (front ? -.05 : .1) * per_25mm;
+        cfg.bump_steer_progression = 0;
+      }
+      if (!cfg.camber_curve && !cfg.toe_curve) cfg.static_length = 0;
     }
     // WheelRef.setWidth: the tyre width in metres (Tyre.java), stored halved.
     cfg.half_width = cfg.metal_contact ? 0. : std::clamp(double(live.width), 0., .25);
@@ -10211,6 +10230,18 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
       w.has_camber_gain = true;
       w.camber_gain = std::clamp(gain, -3.f, 1.f);
       w.camber_progression = std::clamp(progression, -1.f, 1.f);
+    });
+  });
+  // OpenSLRR native declared by the patched WheelRef (#484): bump steer,
+  // degrees of toe-in per 25 mm of bump at the static ride height (-1 to
+  // +1, negative toes out) and its change per 25 mm of bump (-0.5 to +0.5).
+  wheel("setBumpSteer", "(FF)V", [put](Object *s, const std::vector<Value> &a) {
+    return put(s, [&](WheelPhys &w) {
+      const float toe = scalar(a, 0, 0), progression = scalar(a, 1, 0);
+      if (!std::isfinite(toe) || !std::isfinite(progression)) return;
+      w.has_bump_steer = true;
+      w.bump_steer = std::clamp(toe, -1.f, 1.f);
+      w.bump_steer_progression = std::clamp(progression, -.5f, .5f);
     });
   });
   wheel("setOppWheel", "(I)V", [put](Object *s, const std::vector<Value> &a) {

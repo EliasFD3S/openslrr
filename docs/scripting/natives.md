@@ -443,6 +443,15 @@ and its change per 25 mm of bump (-1 to +1). 86 of the 96 patched stock
 corners call it (not the live rear axles); without it the host uses typical
 values for the suspension type ([notes](../vehicles/notes.md#camber-gain-481)).
 
+### Suspension bump steer (#484)
+
+`WheelRef.setBumpSteer(toe, progression)`, declared by the patched
+`parts/scripts/src/WheelRef.java`: degrees of toe-in per 25 mm of bump at
+the static ride height (-1 to +1, negative toes out) and its change per
+25 mm of bump (-0.5 to +0.5). 86 of the 96 patched stock corners call it
+(not the live rear axles); without it the host uses typical values for the
+suspension type ([notes](../vehicles/notes.md#bump-steer-484)).
+
 ### Math functions (#463)
 
 The patched `system/Scripts/lang/Math.java` declares, besides the stock

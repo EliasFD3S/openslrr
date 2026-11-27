@@ -323,6 +323,14 @@ negative camber as the car rolls. Live rear axles do not call it.
 | Prime DLH 500 | -0.90, -0.15 | -0.70, -0.10 |
 | SuperDuty 500 / 750 | -0.60, -0.10 (short-long arms) | live axle: none |
 
+**Bump steer (#484).** Each corner also calls `WheelRef.setBumpSteer(toe,
+progression)`: degrees of toe-in per 25 mm of bump at the static ride height
+(the toe at rest stays the table's) and its change per 25 mm. Road fronts toe
+out by 0.05 (the Ram 0.10), race fronts are set to zero; independent rears
+toe in: 0.10 for the E36 Z-axle and the Lancer, R34 and Prime multilinks,
+0.05 for the del Sol wishbones, the Impreza struts and the race cars' rears,
+0.03 for the Golf's torsion beam. Live rear axles do not call it.
+
 **Caster (#458).** The stock struts had none: their strut axis and top lay
 in the front-view plane. Each front strut now leans back by its real car's
 factory figure where one was found (E36 325i +3°50', M3 +6°38', Golf III

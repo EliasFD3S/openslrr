@@ -1740,11 +1740,11 @@ void VehicleDynamics::update_jacking() {
   }
 }
 
-// Camber gain (#481): each wheel's curve is centred on its static ride
+// Camber gain (#481) and bump steer (#484): each wheel's curves are centred on its static ride
 // height, the spring length under its share of the car's weight. The
 // shares follow the centre of mass between the axles and, on each axle,
 // between its wheels.
-void VehicleDynamics::update_camber_references() {
+void VehicleDynamics::update_static_references() {
   double front_z = 0, rear_z = 0;
   int fronts = 0, rears = 0;
   for (const auto &w : wheels) {
@@ -1753,15 +1753,15 @@ void VehicleDynamics::update_camber_references() {
     ++(w.center.z < body.center.z ? fronts : rears);
   }
   if (!fronts || !rears) {
-    for (auto &w : wheels) w.camber_reference = 0;
+    for (auto &w : wheels) w.static_length = 0;
     return;
   }
   front_z /= fronts;
   rear_z /= rears;
   const double front_share = std::clamp((rear_z - body.center.z) / (rear_z - front_z), 0.0, 1.0);
   for (auto &w : wheels) {
-    if (!w.enabled || !w.camber_curve) {
-      w.camber_reference = 0;
+    if (!w.enabled || !(w.camber_curve || w.toe_curve)) {
+      w.static_length = 0;
       continue;
     }
     const bool is_front = w.center.z < body.center.z;
@@ -1784,14 +1784,14 @@ void VehicleDynamics::update_camber_references() {
     // The body's mass includes the wheels, which the spring does not carry.
     const double load = body.mass * 9.81 * (is_front ? front_share : 1 - front_share) * side_share -
                         w.unsprung * 9.81;
-    update_camber_reference(w, std::max(0.0, load));
+    update_static_reference(w, std::max(0.0, load));
   }
 }
 
 void VehicleDynamics::step(const Terrain &terrain) {
   apply_aero();
   update_jacking();
-  update_camber_references();
+  update_static_references();
   double ceiling = body.position.y;
   for (Vec3 p : body.corners())
     ceiling = std::max(ceiling, p.y);
