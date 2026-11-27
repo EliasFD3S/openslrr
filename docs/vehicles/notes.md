@@ -2330,3 +2330,229 @@ III's mufflers scrape under full throttle (its authored ride height is
 low); the lift uses the parked estimate, so a car whose springs or weight
 change in the garage gets it again only when its body supports are
 rebuilt.
+
+## Anti-dive and anti-squat (#469)
+
+Cause: braking and drive forces acted on the body at the contact patch and
+the whole longitudinal load transfer went through the springs, as if every
+arm were level: the car dived and squatted fully. The scripts'
+`setInstantCenter` side-view centres (`LICy`, `LICz`) are stored but
+inactive since the 8ac2ba9 baseline; the recovered exe (sl-remastered)
+copies them without using them, and their frame is unknown (one reading
+gives the CoupeSport 13 % anti-dive, another an instant centre 1.4 m above
+the wheel).
+
+Fix (OpenSLRR, typical values chosen over the original's data):
+
+- `VehicleDynamics::update_jacking`, at the start of each step from the last
+  step's tyre forces: a wheel's longitudinal force F moves F x h / L of load
+  (h the CoM's height above the tyres, L the wheelbase). `anti_brake` and
+  `anti_drive` are the usual percentages, the share of the axle's transfer
+  the arms carry at the car's own split (the front axle's share of the
+  brake torques the brake scripts give, 70 % without any; the drive on the
+  driven axles, halved on four-wheel drive), which fixes each arm's
+  side-view slope; each wheel's arms push by its own force times that slope
+  (`WheelState::jacking`). Braking is a force against the wheel's spin.
+- The push adds to the suspension force between body and wheel in the three
+  support paths (the quarter-car solve, the massless linked wheel, the
+  unlinked one), so the tyre still carries the whole transfer while the
+  spring takes less of it.
+- The shares come from the suspension's script, so mods can set them:
+  `WheelRef.setAnti(braking, driving)`, a new native declared by the
+  patched `WheelRef.java`. The 96 patched stock corners call it with typical
+  shares for their real car (table in the
+  [patch README](../../patch/README.md#anti-dive-and-anti-squat-469); the
+  #450 generator writes the line). A corner whose script does not call it
+  gets typical shares by suspension type in `dynamics_wheels`: linked fronts
+  15 % anti-dive and 10 % anti-lift driving, independent rear arms 30 %
+  anti-lift and 40 % anti-squat, live axles (the #456 25 m arm) 30 % and
+  80 %; corners without arms none.
+
+Validation:
+
+- Compilation: `slrr_host` Release; `WheelRef` and the 96 suspension
+  classes in `build/brake-compile-root` (all compiled), the generator's
+  output identical to the edited sources. `vehicle_dynamics` 72/72 with a
+  new test (the test saloon, its brakes split 50 / 50, braking from 20 m/s:
+  dive 2.42 to 1.99 degrees, the stop 21.4 m either way; launching: squat
+  1.41 to 1.18 degrees, the undriven front still rising),
+  `missing_support` 17/17, `physics_tick_rate` 9/9.
+- `physics_lab` unchanged (its car has no shares).
+- In `build/needle-game` with the new classes: the MC reads its scripts'
+  0.20 / 0.10 front and 0.40 / 1.00 rear. Bench drives on Tsukuba (flat;
+  the TestTrack start straddles a change of slope, where the MC rests on its
+  body with all four wheels in the air): CoupeSport 8.74 / 34.9 km/h at 1 /
+  3 s either way, GT III 14.9 / 49.5 against 14.8 / 49.2, MC 9.94 / 40.4
+  either way.
+- Not checked in game: the pitch under braking and launch, its feel.
+
+Limitations: the stock shares are typical figures for the real cars, not
+their measured geometry; the slope follows the car's current brake split,
+so a balance change in the garage keeps the stated percentage instead of
+moving it as a fixed arm geometry would; the push follows the last step's
+force; the scripts' instant centres stay unused.
+
+## Tyre surface stays hot after a slide (#472)
+
+Cause (Mark, direct-drive wheel, latest `main`: tyres heat far too fast,
+the DevilSport has no grip): the #446 tread lump was 8 % of the tyre (two
+or three millimetres) and set the grip. Wheelspin (40-60 kW into a rear
+tyre) heated it to 150-200 deg C in seconds, as a burnout does, but it then
+cooled only through the air, 25 W/K into the carcass and 8 W/K into the
+road: 15-40 s, during which the grip stayed 10-20 % low, so the car slid
+again and heated more. Measured on Tsukuba with temporary hooks:
+
+- The heat input is not the cause: the sliding work with the raw lateral
+  slip speed differs from the relaxed one by about 3 %.
+- The DevilSport's balance in a gentle slalom at 58 km/h is sound (slightly
+  understeering, like the CoupeSport). Full throttle on a straight, its
+  330 Nm in first (realistic for the E36 M3, no ASR) spin the rears at
+  10-15 m/s for 2 s and the car swaps ends near 57 km/h; the CoupeSport
+  launches at 0.9 m/s of slip. A wheel spinning that much has almost no
+  lateral grip: realistic, but it feeds the heat.
+
+Fix (`tyre_thermal.cpp`):
+
+- Three lumps: the skin (3 % of the tyre, its outer half millimetre) takes
+  half the sliding work; the tread bulk (20 %) is fed by it through 160 W/K
+  per square metre of tread band (0.25 W/m K over about 1.5 mm) and feeds
+  the carcass (77 %) through 50 W/K/m² (about 5 mm). The skin loses heat to
+  the air as before and to the road as 4 x sqrt(speed) W/K: the patch's
+  contact is shorter, so its gradient steeper, the faster the tyre rolls.
+- `tyre_grip_temperature` (the mean of skin and bulk) sets the grip, the
+  cornering stiffness's rubber term and the HUD's tread readout; wear and
+  rubber smoke follow the skin. `TyreTemperature` gains `tread` (the bulk).
+
+Validation:
+
+- Compilation: `slrr_host` and `physics_lab` Release. `vehicle_dynamics`
+  72/72 (the tyre heat test adds a 4 s, 40 kW wheelspin on a 275/40R19
+  sport tyre: after 4 s rolling at 15 m/s the grip temperature keeps less
+  than 60 % of its rise, the bulk at least 10 deg C), `missing_support`
+  17/17, `physics_tick_rate` 9/9.
+- Lumped model alone (275/40R19): a 4 s, 40 kW burnout peaks at about
+  82 deg C either way; 4 s later the grip temperature is 53 deg C against
+  73, at 20 s 37 against 51. Three minutes at 3 kW of sliding: 45 deg C
+  against 50 (slower warm-up). Ten minutes at 100 km/h: carcass 56 deg C.
+- In game (`build/needle-game`, DevilSport on Tsukuba, temporary hook: 3 s
+  full throttle then lift): the rear tread rubber peaks at 64 deg C either
+  way; 1.5 s after the lift 54 against 61 deg C; 10 s after, 42-46 against
+  55-62.
+- Not checked in game by a driver: the feel of the grip after a slide, the
+  HUD readout.
+
+Limitations: the conductances and the road term are estimates from rubber
+properties, not a measured tyre; the share of the sliding work the tyre
+takes stays at half. The DevilSport still spins its rears and swaps ends on
+a full-throttle launch without ASR: that is its torque, not the heat. The
+#461 tyre save keeps no temperatures (unchanged).
+
+## ABS force feedback pulses (#474)
+
+Cause (Mark, direct-drive wheel, latest `main`: the ABS vibration is far
+too strong): `update_force_feedback` forced the wheel's vibration to at
+least 0.3 at 14 Hz while `abs_active()`, twice the tyre scrub's maximum
+(0.15), and `abs_active()` stays true while any channel modulates,
+including the rebuild up to 0.3 s after the last lock: in practice the
+whole stop. The pad the brake is bound to got a 35 % rumble re-sent every
+frame, not scaled by the vibration option.
+
+Fix:
+
+- `AbsModulator::releases(i)` counts each time channel i opens its outlet
+  valve (the move to `dump`); `VehicleDynamics::abs_releases` exposes it.
+- `update_force_feedback` feels the releases, not the state: a front
+  release gives the wheel a knock of 0.15 (the scrub's maximum) at 20 Hz
+  decaying in 40 ms; any release gives the pad a 0.3 pulse of 50 ms, at most
+  every 0.1 s. Between releases nothing shakes.
+- `host_input_brake_pulse` scales the pad's pulse by the vibration option
+  (Options, force feedback vibration, 50 % by default), as the wheel's.
+
+Validation:
+
+- Compilation: `slrr_host` Release. `vehicle_dynamics` 72/72 (the ABS cycle
+  test counts the icy wheel's releases, 2 to 19 in 0.4 s, and none on the
+  grippy front).
+- Not checked in game: the feel on a wheel and a pad.
+
+Limitations: the knock is a vibration effect, not a torque kick along the
+steering axis; the rear channels' releases reach the pad only. The values
+(0.15, 40 ms, 0.3, 50 ms) are chosen, not measured.
+
+## Camber gain (#481)
+
+Cause: a wheel's camber change with travel came only from the single hinge
+each patched corner has (#450). The front strut fit is regressive: about
+-0.65 deg per 25 mm in droop, -0.4 at rest, nearly 0 past 50 mm of bump
+(host `wheel_pose`, 48 fronts). That suits a strut, but the short-long arm
+and multilink fronts (del Sol, Camaro, R34, Prime, Ram) used the same fit,
+so they lost camber gain in bump where a real one gains more, and a rolling
+car's outer front wheel went towards positive camber against the road. The
+rear swing arms are linear (1 / length).
+
+Fix (OpenSLRR, typical values where no data was found):
+
+- Each wheel has a camber curve about its static ride height:
+  gain x bump + progression x bump^2 / 2 (`WheelConfig::camber_gain`,
+  `camber_progression`). `wheel_pose` turns the arm fit's hub about the
+  body's longitudinal axis by the curve's change minus the fit's own change
+  from the static height, about the hub centre. The tyre's camber input
+  (#418), the rendered wheel and the kingpin (#458) all read that hub, so
+  they follow the curve; the static camber stays the fit's.
+- The static height: `VehicleDynamics::update_camber_references`, each
+  step, puts the car's weight on its springs (front / rear by the centre of
+  mass between the axles, then across each axle, less the wheel's own
+  mass) and keeps the spring length there with the fit's camber and gain
+  (`update_camber_reference`). On the CoupeSport it gives 0.2126 m front and
+  0.2192 m rear, the #450 generator's static lengths.
+- The curve comes from the suspension's script, so mods can set it:
+  `WheelRef.setCamberGain(gain, progression)`, degrees per 25 mm of bump at
+  the static height and the change of that gain per 25 mm (negative:
+  progressive, as short-long arms; positive: fading, as struts), a new
+  native declared by the patched `WheelRef.java`. 86 of the 96 patched
+  corners call it (the #450 generator writes the line; the live rear axles
+  do not): struts -0.4 / +0.15 (close to the fit), del Sol, R34 and Prime
+  fronts -0.9 / -0.15 (race cars -1.0), Camaro -0.8 / -0.15, Ram -0.6 /
+  -0.10; rears E36 -0.9 / -0.05, double wishbone and multilink -0.7 / -0.10,
+  Golf torsion beam -0.2 / 0, Impreza strut -0.4 / +0.10. Table in the
+  [patch README](../../patch/README.md#tyres-and-suspension-geometry-450).
+- A corner whose script does not call it gets typical values by suspension
+  type in `dynamics_wheels`: a front strut fit -0.5 / +0.1; other front arms
+  their geometry's gain at rest, clamped to -1.5..-0.2 (a copy of the stock
+  Baiern arm, which gains positive camber in bump, gets -0.2), growing by
+  0.1; independent rear arms their geometry's gain, clamped, linear. Live
+  axles (the #456 25 m arm) and corners without arms keep their geometry.
+
+Validation:
+
+- Compilation: `slrr_host` Release; `WheelRef` (byte-identical before the
+  change) and the 96 suspension classes in `build/brake-compile-root` (all
+  compiled; the 10 live rear axles unchanged byte for byte), the
+  generator's output identical to the edited sources.
+- `vehicle_dynamics` 74/74 with two new tests: the curve on the patched
+  Nonus GT II strut (static camber unchanged, -1.075 / -2.3 / +0.925 deg at
+  +25 / +50 / -25 mm for -1 / -0.15, mirrored on the right, the geometry's
+  gain when none is set, none without a spring); and the test saloon on
+  1.6 m swing arms in a steady left turn at 16 m/s with 4.5 deg of roll: the
+  outer front wheel 5.1 deg positive against the road with no gain, 2.0 deg
+  with -1 / -0.15. `missing_support` 17/17, `physics_tick_rate` 9/9.
+- Probe (`wheel_pose`, the patched corners' arguments at their static
+  lengths): from -75 to +75 mm, the del Sol front goes +2.0 / 0 / -3.4 deg
+  (before +2.2 / 0 / -1.2), the R34 -0.9 / -1.1 / -4.5 (before +1.1 / -1.1
+  / -2.3); the struts within 0.2 deg of the fit.
+- In `build/needle-game` with the new classes, bench drives on Tsukuba
+  (straight line, so little roll): CoupeSport 8.74 / 34.86 / 71.98 km/h at
+  1 / 3 / 6 s with and without the curve (temporary switch); the script
+  values reach the host (0.40 / 0.15 front, 0.90 / 0.05 rear); MC 9.97 /
+  40.52 km/h at 1 / 3 s either way (the MC slows after 4 s on that start
+  either way).
+- Not checked in game: cornering, its feel, the other cars.
+
+Limitations: the curve depends on the spring's travel only, so a live
+axle's camber still follows the body (and the 25 m arm), not the other
+wheel; bump steer is not modelled; the curves are typical figures for the
+real cars, not their measured kinematics; the static height follows the
+car's current weight (fuel, parts), so the curve's centre moves with it
+instead of staying where the arms were laid out; the hub turns about its
+centre, so the track does not change with the camber as a real upright's
+would.

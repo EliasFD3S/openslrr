@@ -196,33 +196,97 @@ Quaternion wheel_steering(Vec3 axis, double angle) {
   return axis_angle(axis, turn);
 }
 
+namespace {
+// The arm fit at `length`, without the camber curve or steering.
+bool arm_frames(const WheelConfig& wheel, double length, CornerFrames& frames) {
+  if (!(wheel.arm_length > 0)) return false;
+  const double travel = length - wheel.anchor_length();
+  CornerGeometry geometry;
+  geometry.reference = wheel.center;
+  const Vec3 pivot = wheel.arm_pivot - wheel.center, axis = wheel.arm_axis;
+  geometry.arm = {float(wheel.arm_length), float(pivot.x), float(pivot.y),
+                  float(pivot.z), float(axis.x), float(axis.y), float(axis.z)};
+  geometry.hub = wheel.hub;
+  geometry.alignment = wheel.hub_alignment;
+  if (!wheel.has_hub) geometry.hub[0] = -1;
+  // The fitted hub is driven by the vertical CFG travel, with alignment
+  // applied by the hub fit. Tilting the input ray applies it twice.
+  return solve_corner_geometry(geometry, wheel.center + Vec3{0, -travel, 0}, frames);
+}
+
+// +1 for a left wheel (-x), whose top leans inboard towards +x.
+double outboard_side(const WheelConfig& wheel) { return wheel.center.x < 0 ? 1 : -1; }
+
+double frames_camber(const WheelConfig& wheel, const CornerFrames& frames) {
+  const Vec3 up = frames.hub_rotation.rotate({0, 1, 0});
+  return -std::asin(std::clamp(up.x * outboard_side(wheel), -1.0, 1.0));
+}
+
+// The curve replaces the geometry's change from the static height (#481):
+// the hub turns about the body's longitudinal axis by the difference, about
+// its own centre.
+void apply_camber_curve(const WheelConfig& wheel, double length, CornerFrames& frames) {
+  if (!wheel.camber_curve || !(wheel.camber_reference > 0)) return;
+  const double change = camber_curve_change(wheel, length);
+  const double correction =
+      change - (frames_camber(wheel, frames) - wheel.reference_camber);
+  if (!std::isfinite(correction) || correction == 0) return;
+  const double angle = std::clamp(correction, -.35, .35) * outboard_side(wheel);
+  const Quaternion roll{0, 0, std::sin(angle * .5), std::cos(angle * .5)};
+  frames.hub_rotation = (roll * frames.hub_rotation).normalized();
+}
+}  // namespace
+
+double geometry_camber(const WheelConfig& wheel, double length) {
+  CornerFrames frames;
+  if (!arm_frames(wheel, length, frames)) return std::numeric_limits<double>::quiet_NaN();
+  return frames_camber(wheel, frames);
+}
+
+void update_camber_reference(WheelConfig& wheel, double load) {
+  wheel.camber_reference = 0;
+  if (!wheel.camber_curve || !(wheel.spring > 0) || !(wheel.rest > 0) || !(load >= 0)) return;
+  const double length =
+      std::clamp(wheel.rest - load / wheel.spring, wheel.minimum, std::max(wheel.minimum, wheel.maximum));
+  constexpr double h = .0125;
+  const double at = geometry_camber(wheel, length);
+  const double bump = geometry_camber(wheel, length - h), droop = geometry_camber(wheel, length + h);
+  if (!std::isfinite(at) || !std::isfinite(bump) || !std::isfinite(droop)) return;
+  wheel.camber_reference = length;
+  wheel.reference_camber = at;
+  if (std::isfinite(wheel.camber_gain)) {
+    wheel.reference_gain = wheel.camber_gain;
+  } else {
+    // A road car's arms gain -0.2 to -1.5 deg of camber per 25 mm of bump;
+    // a hinge past level (the stock Baiern arms') gains positive camber.
+    constexpr double degree_per_25mm = std::numbers::pi / 180 / .025;
+    wheel.reference_gain =
+        std::clamp((bump - droop) / (2 * h), -1.5 * degree_per_25mm, -.2 * degree_per_25mm);
+  }
+}
+
+double camber_curve_change(const WheelConfig& wheel, double length) {
+  if (!wheel.camber_curve || !(wheel.camber_reference > 0)) return 0;
+  const double bump = wheel.camber_reference - length;
+  return wheel.reference_gain * bump + .5 * wheel.camber_progression * bump * bump;
+}
+
 CornerFrames wheel_pose(const WheelConfig& wheel, double length, bool* fitted, double steer) {
   const double travel = length - wheel.anchor_length();
   const Vec3 ray = wheel.center + wheel.down.normalized() * travel;
   if (fitted) *fitted = false;
-  if (wheel.arm_length > 0) {
-    CornerGeometry geometry;
-    geometry.reference = wheel.center;
-    const Vec3 pivot = wheel.arm_pivot - wheel.center, axis = wheel.arm_axis;
-    geometry.arm = {float(wheel.arm_length), float(pivot.x), float(pivot.y),
-                    float(pivot.z), float(axis.x), float(axis.y), float(axis.z)};
-    geometry.hub = wheel.hub;
-    geometry.alignment = wheel.hub_alignment;
-    if (!wheel.has_hub) geometry.hub[0] = -1;
-    CornerFrames frames;
-    // The fitted hub is driven by the vertical CFG travel, with alignment
-    // applied by the hub fit. Tilting the input ray applies it twice.
-    if (solve_corner_geometry(geometry, wheel.center + Vec3{0, -travel, 0}, frames)) {
-      if (fitted) *fitted = true;
-      // Steered, a strut's hub swings about its kingpin (#458): the wheel
-      // centre moves on an arc, and the inclination lowers it either way,
-      // which lifts the car.
-      if (steer != 0 && strut(wheel)) {
-        const Vec3 ground = kingpin_ground(wheel, frames);
-        frames.hub_origin = ground + kingpin_turn(frames, steer).rotate(frames.hub_origin - ground);
-      }
-      return frames;
+  CornerFrames frames;
+  if (arm_frames(wheel, length, frames)) {
+    if (fitted) *fitted = true;
+    apply_camber_curve(wheel, length, frames);
+    // Steered, a strut's hub swings about its kingpin (#458): the wheel
+    // centre moves on an arc, and the inclination lowers it either way,
+    // which lifts the car.
+    if (steer != 0 && strut(wheel)) {
+      const Vec3 ground = kingpin_ground(wheel, frames);
+      frames.hub_origin = ground + kingpin_turn(frames, steer).rotate(frames.hub_origin - ground);
     }
+    return frames;
   }
   return {ray, ray, {}, wheel.hub_alignment};
 }

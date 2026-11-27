@@ -24,6 +24,10 @@ vendored install scanner. The return value is the number of source units
 attempted, matching the reference directory-walk contract, not the number of
 generated classes. Logs distinguish attempted/succeeded/failed/class counts.
 
+### Compiling with script mods
+
+Both `System.compileAll` and `compile_game_sources.exe` use the enabled layers from [the mod load order](mods.md#which-class-wins). A logical directory such as `system/Scripts/mods/dash` includes visible sources at that path in mods and the base game. To compile just one mod, pass its physical directory (for example, `mods/dash`). This does **not** force a hidden source to win. Dependency declarations are selected by fully qualified class name and mod priority, including secondary classes in a TUFA. A fully shadowed unit is skipped. If a source also declares a visible sibling, the compiler rebuilds its entire TUFA beside its own `src/` directory; it never publishes into another layer. Give source-only dependencies explicit package declarations. Restart to use the compiled classes in the game.
+
 ### Float literal conversion (#420)
 
 `System.compileAll` converts float literals as the Build 940 exe does

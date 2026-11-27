@@ -1433,6 +1433,10 @@ SLRR_TEST(abs_cycles_one_wheel_holds_the_rear_axle_together_and_delays_the_yaw) 
   }
   SLRR_REQUIRE(minimum_left < .3);
   SLRR_REQUIRE(abs.active());
+  // #474: each cycle on the icy wheels counts one release (the feedback's
+  // knocks); the grippy front never released its wheel.
+  SLRR_REQUIRE(abs.releases(0) >= 2 && abs.releases(0) < 20);
+  SLRR_REQUIRE(abs.releases(1) == 0);
   // The grippy front wheel may not take the full pedal at once.
   SLRR_REQUIRE(high_side < .9);
   SLRR_REQUIRE(abs.pressure(1) > high_side);
@@ -1572,6 +1576,19 @@ SLRR_TEST(tyres_warm_up_rolling_and_sliding_and_set_the_grip) {
     burnout = step_tyre_temperature(street, burnout, 20000, 0, kAmbientTemperature, 0, .001);
   SLRR_REQUIRE(burnout.surface > 60);
   SLRR_REQUIRE(burnout.carcass < burnout.surface);
+  // #472: a slide's flash heat leaves the skin within seconds. A 4 s, 40 kW
+  // wheelspin on a 275/40R19 sport tyre, then 4 s rolling at 15 m/s: the
+  // rubber that sets the grip sheds most of its rise, the bulk keeps some.
+  const auto rear = tyre_thermal_spec(1, .351, .275);
+  TyreTemperature spin;
+  for (int step = 0; step < 4000; ++step)
+    spin = step_tyre_temperature(rear, spin, 40000, 0, kAmbientTemperature, 3, .001);
+  const double flash = tyre_grip_temperature(spin) - kAmbientTemperature;
+  SLRR_REQUIRE(flash > 40);
+  for (int step = 0; step < 4000; ++step)
+    spin = step_tyre_temperature(rear, spin, 0, 4500 * .012 * 15, kAmbientTemperature, 15, .001);
+  SLRR_REQUIRE(tyre_grip_temperature(spin) - kAmbientTemperature < .6 * flash);
+  SLRR_REQUIRE(spin.tread > kAmbientTemperature + 10);
   // Grip: cold below the window, full in it, falling past it; a racing
   // compound is weaker cold than a street one.
   SLRR_REQUIRE(tyre_grip_factor(street, 25) < 1 && tyre_grip_factor(street, 25) > .9);
@@ -1597,7 +1614,7 @@ SLRR_TEST(hot_tyres_gain_pressure_and_soften) {
   SLRR_REQUIRE(tyre_hot_pressure(2, 80) > 2.5 && tyre_hot_pressure(2, 80) < 2.65);
   const auto sport = tyre_thermal_spec(1, .31, .205), race = tyre_thermal_spec(2, .31, .205);
   // At the working carcass temperature the scripted tyre is unchanged.
-  const auto working = tyre_pressure_effect(sport, 2, {tyre_working_tread(sport), tyre_working_carcass(sport)});
+  const auto working = tyre_pressure_effect(sport, 2, {tyre_working_tread(sport), tyre_working_carcass(sport), tyre_working_tread(sport)});
   SLRR_REQUIRE(std::abs(working.ratio - 1) < 1e-9 && std::abs(working.stiffness - 1) < 1e-9);
   SLRR_REQUIRE(working.relaxation == 1 && working.rolling == 1 && working.nominal_load == 1);
   // Cold: under its working pressure, so a lazier, softer, draggier tyre.
@@ -1606,14 +1623,14 @@ SLRR_TEST(hot_tyres_gain_pressure_and_soften) {
   SLRR_REQUIRE(cold.relaxation > 1 && cold.rolling > 1 && cold.nominal_load < 1);
   // The low pressure softens the carcass; cold rubber is stiffer itself, so
   // a cold tyre's stiffness stays about as scripted.
-  SLRR_REQUIRE(tyre_pressure_effect(sport, 2, {tyre_working_tread(sport), 25}).stiffness < .97);
+  SLRR_REQUIRE(tyre_pressure_effect(sport, 2, {tyre_working_tread(sport), 25, tyre_working_tread(sport)}).stiffness < .97);
   SLRR_REQUIRE(std::abs(cold.stiffness - 1) < .05);
   // A cold racing tyre is further from its window than a sport one.
   SLRR_REQUIRE(tyre_pressure_effect(race, 2, {}).ratio < cold.ratio);
   // Hot: over-pressured, quicker; an overheated tread loses stiffness.
-  const auto hot = tyre_pressure_effect(sport, 2, {tyre_working_tread(sport), 110});
+  const auto hot = tyre_pressure_effect(sport, 2, {tyre_working_tread(sport), 110, tyre_working_tread(sport)});
   SLRR_REQUIRE(hot.ratio > 1.05 && hot.relaxation < 1 && hot.stiffness > 1);
-  const auto cooked = tyre_pressure_effect(sport, 2, {200, 110});
+  const auto cooked = tyre_pressure_effect(sport, 2, {200, 110, 200});
   SLRR_REQUIRE(cooked.stiffness < hot.stiffness * .9);
   // Without the patched Tyre or a known pressure: nothing changes.
   SLRR_REQUIRE(tyre_pressure_effect(TyreThermalSpec{}, 2, {100, 100}).stiffness == 1);
@@ -1882,6 +1899,146 @@ SLRR_TEST(an_exhaust_in_the_road_at_rest_is_raised_clear) {
   SLRR_REQUIRE(std::abs(speed[2] - speed[0]) < .01);  // raised clear: does not
 }
 
+SLRR_TEST(anti_dive_and_anti_squat_carry_part_of_the_load_transfer) {
+  // #469: braking from 20 m/s and launching, with no anti geometry and with
+  // the typical strut / independent arm shares. The arms take part of the
+  // load transfer: the car dives and squats less, and stops about as short.
+  const auto pitch = [](const Car& car) {
+    const Vec3 forward = car.dynamics.body.orientation.rotate({0, 0, -1});
+    return std::asin(std::clamp(forward.y, -1.0, 1.0));  // nose up positive
+  };
+  double dive[2], squat[2], stop[2];
+  for (int anti = 0; anti < 2; ++anti) {
+    const auto set = [&](Car& car) {
+      for (size_t i = 0; i < 4; ++i) {
+        car.dynamics.wheels[i].anti_brake = anti ? (i < 2 ? .15 : .30) : 0;
+        car.dynamics.wheels[i].anti_drive = anti ? (i < 2 ? .10 : .40) : 0;
+      }
+    };
+    Car braking;
+    set(braking);
+    braking.run(2, 0, 0, 0);
+    const double level = pitch(braking);
+    braking.dynamics.drive.engaged = false;
+    braking.dynamics.body.velocity = braking.dynamics.body.orientation.rotate({0, 0, -20});
+    for (auto& w : braking.dynamics.state) w.spin = 20 / .31;
+    const Vec3 start = braking.dynamics.body.position;
+    dive[anti] = 0;
+    for (int i = 0; i < 240 && braking.speed() > .1; ++i) {
+      braking.run(1. / 60, 0, 1, 0);
+      dive[anti] = std::max(dive[anti], level - pitch(braking));
+    }
+    stop[anti] = (braking.dynamics.body.position - start).length();
+    Car launching;
+    set(launching);
+    launching.run(2, 0, 0, 0);
+    squat[anti] = 0;
+    for (int i = 0; i < 120; ++i) {
+      launching.run(1. / 60, 1, 0, 0);
+      squat[anti] = std::max(squat[anti], pitch(launching) - level);
+    }
+  }
+  std::printf("ANTI dive %.2f -> %.2f deg, squat %.2f -> %.2f deg, stop %.1f -> %.1f m%c",
+              dive[0] * 57.3, dive[1] * 57.3, squat[0] * 57.3, squat[1] * 57.3, stop[0], stop[1], 10);
+  // About 15 % front and 30 % rear of the dive; the rear's 40 % of the squat
+  // (the undriven front still rises).
+  SLRR_REQUIRE(dive[1] < dive[0] * .85 && dive[1] > dive[0] * .6);
+  SLRR_REQUIRE(squat[1] < squat[0] * .9);
+  SLRR_REQUIRE(std::abs(stop[1] - stop[0]) < .05 * stop[0]);
+}
+
+SLRR_TEST(camber_gain_follows_the_curve_about_the_static_height) {
+  // #481: the patched Nonus GT II strut, its camber curve set like a
+  // short-long arm's: -1 degree per 25 mm of bump at the static height,
+  // growing by 0.15 per 25 mm. The static camber stays the geometry's.
+  constexpr double degree = std::numbers::pi / 180, per_25mm = degree / .025;
+  auto w = caster_strut();
+  w.spring = 30000;
+  const double load = 3500, level = w.rest - load / w.spring;
+  const auto camber = [&](double length) {
+    const Vec3 up = wheel_pose(w, length).hub_rotation.rotate({0, 1, 0});
+    return -std::asin(up.x) / degree;  // left wheel: the top inboard is +x
+  };
+  const double geometry[] = {camber(level), camber(level - .025), camber(level - .05),
+                             camber(level + .025)};
+  // The strut alone: about -0.4 degrees for the first 25 mm, fading.
+  SLRR_REQUIRE(std::abs(geometry[0] - geometry_camber(w, level) / degree) < 1e-9);
+  SLRR_REQUIRE(geometry[1] - geometry[0] < -.2 && geometry[1] - geometry[0] > -.7);
+  SLRR_REQUIRE(geometry[2] - geometry[1] > geometry[1] - geometry[0]);
+  w.camber_curve = true;
+  w.camber_gain = -1 * per_25mm;
+  w.camber_progression = -.15 * per_25mm / .025;
+  // No reference yet (no weight): the geometry alone.
+  SLRR_REQUIRE(std::abs(camber(level - .025) - geometry[1]) < 1e-9);
+  update_camber_reference(w, load);
+  SLRR_REQUIRE(std::abs(w.camber_reference - level) < 1e-9);
+  SLRR_REQUIRE(std::abs(camber(level) - geometry[0]) < 1e-6);
+  SLRR_REQUIRE(std::abs(camber(level - .025) - geometry[0] - (-1 - .075)) < .01);
+  SLRR_REQUIRE(std::abs(camber(level - .05) - geometry[0] - (-2 - .3)) < .01);
+  SLRR_REQUIRE(std::abs(camber(level + .025) - geometry[0] - (1 - .075)) < .01);
+  // Progressive: the second 25 mm gains more than the first.
+  SLRR_REQUIRE(camber(level - .05) - camber(level - .025) < camber(level - .025) - camber(level));
+  // The right wheel mirrors it.
+  auto right = w;
+  right.center.x = -w.center.x;
+  right.arm_pivot.x = -w.arm_pivot.x;
+  right.hub[1] = -w.hub[1];
+  right.hub[4] = -w.hub[4];
+  right.hub[7] = -w.hub[7];
+  update_camber_reference(right, load);
+  const auto right_camber = [&](double length) {
+    const Vec3 up = wheel_pose(right, length).hub_rotation.rotate({0, 1, 0});
+    return std::asin(up.x) / degree;
+  };
+  SLRR_REQUIRE(std::abs(right_camber(level - .05) - camber(level - .05)) < .05);
+  // Without a gain of its own the curve takes the geometry's at rest.
+  w.camber_gain = std::numeric_limits<double>::quiet_NaN();
+  w.camber_progression = 0;
+  update_camber_reference(w, load);
+  SLRR_REQUIRE(std::abs(w.reference_gain * .025 / degree - (geometry[1] - geometry[3]) / 2) < .05);
+  // No spring, no curve.
+  w.spring = 0;
+  update_camber_reference(w, load);
+  SLRR_REQUIRE(w.camber_reference == 0);
+}
+
+SLRR_TEST(camber_gain_keeps_the_outer_wheel_leaning_into_a_turn) {
+  // #481: the test saloon on 1.6 m swing arms, in a steady left turn. With
+  // no gain the outer (right) front wheel leans out with the body; a
+  // short-long arm's curve keeps it leaning into the turn against the road.
+  constexpr double degree = std::numbers::pi / 180, per_25mm = degree / .025;
+  double outer[2], roll[2];
+  for (int gain = 0; gain < 2; ++gain) {
+    Car car;
+    for (size_t i = 0; i < 4; ++i) {
+      auto& w = car.dynamics.wheels[i];
+      const double side = i % 2 ? -1 : 1;
+      w.arm_length = 1.6;
+      w.arm_pivot = w.center + Vec3{side * 1.6, 0, 0};
+      w.arm_axis = {0, 0, 1};
+      w.camber_curve = true;
+      w.camber_gain = gain ? (i < 2 ? -1 : -.7) * per_25mm : 0;
+      w.camber_progression = gain && i < 2 ? -.15 * per_25mm / .025 : 0;
+    }
+    car.run(2, 0, 0, 0);
+    car.dynamics.drive.engaged = false;
+    car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -16});
+    for (auto& s : car.dynamics.state) s.spin = 16 / .31;
+    car.run(2.5, 0, 0, .09);
+    const auto& body = car.dynamics.body;
+    const Vec3 up = body.orientation.rotate(car.dynamics.state[1].hub_rotation.rotate({0, 1, 0}));
+    const Vec3 right = body.orientation.rotate({1, 0, 0});
+    // Against the road: the top towards -right (inboard) is negative camber.
+    outer[gain] = std::asin(std::clamp(up.dot(Vec3{right.x, 0, right.z}.normalized()), -1.0, 1.0)) / degree;
+    roll[gain] = car.roll() / degree;
+  }
+  std::printf("CAMBER outer front %.2f -> %.2f deg against the road, roll %.2f / %.2f deg%c",
+              outer[0], outer[1], roll[0], roll[1], 10);
+  SLRR_REQUIRE(std::abs(roll[0]) > 1);
+  SLRR_REQUIRE(outer[0] > .5);
+  SLRR_REQUIRE(outer[1] < outer[0] - 1);
+}
+
 SLRR_TEST(hot_brake_fluid_boils_and_the_pressure_falls) {
   const auto brake = brake_hardware(0, 2, .286);
   double fluid = kAmbientTemperature;
@@ -1903,6 +2060,9 @@ int main() {
       an_angled_kerb_beside_the_tyre_pushes_square_to_itself,
       an_exhaust_scrapes_over_a_hump_instead_of_passing_through,
       an_exhaust_in_the_road_at_rest_is_raised_clear,
+      anti_dive_and_anti_squat_carry_part_of_the_load_transfer,
+      camber_gain_follows_the_curve_about_the_static_height,
+      camber_gain_keeps_the_outer_wheel_leaning_into_a_turn,
       hard_braking_declutches_so_the_engine_never_pushes_the_rear_wheels,
       coasting_engine_braking_fades_with_the_speed,
       releasing_a_hard_brake_at_speed_takes_up_without_a_jolt,

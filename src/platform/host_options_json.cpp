@@ -15,6 +15,7 @@ struct Parser {
   Sections& out;
   std::string error;
   int depth = 0;
+  bool flat = false;  // parse_flat: one object of scalars
 
   bool fail(const char* what) {
     if (error.empty()) error = std::string(what) + " at offset " + std::to_string(i);
@@ -91,9 +92,17 @@ struct Parser {
   bool number(double& value) {
     const size_t start = i;
     if (i < s.size() && s[i] == '-') ++i;
-    while (i < s.size() && (std::isdigit(static_cast<unsigned char>(s[i])) || s[i] == '.' ||
-                            s[i] == 'e' || s[i] == 'E' || s[i] == '+' || s[i] == '-'))
-      ++i;
+    const auto digits = [&]() {
+      const size_t first = i;
+      while (i < s.size() && s[i] >= '0' && s[i] <= '9') ++i;
+      return i != first;
+    };
+    if (!literal("0") && !digits()) return fail("bad number");
+    if (literal(".") && !digits()) return fail("bad fraction");
+    if (literal("e") || literal("E")) {
+      if (!literal("+")) literal("-");
+      if (!digits()) return fail("bad exponent");
+    }
     const auto result = std::from_chars(s.data() + start, s.data() + i, value);
     if (result.ec != std::errc{} || result.ptr != s.data() + i || !std::isfinite(value))
       return fail("bad number");
@@ -104,6 +113,8 @@ struct Parser {
     if (i >= s.size()) return fail("expected a value");
     Scalar scalar;
     const char c = s[i];
+    if (flat && (c == '{' || c == '[' || c == 'n'))
+      return fail("expected a string, number or boolean");
     if (c == '{') return object(depth == 1 && key ? &out[*key] : nullptr);
     if (c == '[') return array();
     if (c == '"') {
@@ -117,7 +128,9 @@ struct Parser {
     } else if (literal("null")) {
       return true;
     } else if (c == '-' || std::isdigit(static_cast<unsigned char>(c))) {
+      const size_t start = i;
       if (!number(scalar.number)) return false;
+      if (flat) scalar.text = s.substr(start, i - start);
     } else {
       return fail("unexpected character");
     }
@@ -137,6 +150,8 @@ struct Parser {
       space();
       std::string key;
       if (!string(key)) return false;
+      if (flat && (key.empty() || (section && section->contains(key))))
+        return fail("empty or duplicate key");
       space();
       if (i >= s.size() || s[i] != ':') return fail("expected ':'");
       ++i;
@@ -219,6 +234,24 @@ bool parse(std::string_view text, Sections& out, std::string* error) {
   Parser p{text, 0, out};
   p.space();
   bool ok = p.i < text.size() && text[p.i] == '{' ? p.object(nullptr) : p.fail("expected an object");
+  if (ok) {
+    p.space();
+    if (p.i != text.size()) ok = p.fail("text after the object");
+  }
+  if (!ok) {
+    out.clear();
+    if (error) *error = p.error;
+  }
+  return ok;
+}
+
+bool parse_flat(std::string_view text, Section& out, std::string* error) {
+  out.clear();
+  Sections unused;
+  Parser p{text, 0, unused};
+  p.flat = true;
+  p.space();
+  bool ok = p.i < text.size() && text[p.i] == '{' ? p.object(&out) : p.fail("expected an object");
   if (ok) {
     p.space();
     if (p.i != text.size()) ok = p.fail("text after the object");

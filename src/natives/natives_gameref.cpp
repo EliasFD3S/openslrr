@@ -1,4 +1,5 @@
 #include "slrr/race_runtime.hpp"
+#include "slrr/utf8_path.hpp"
 #include "slrr/natives_boot.hpp"
 #include "natives_internal.hpp"
 
@@ -104,21 +105,13 @@ Object* script_instance_for(Jvm& jvm, const RpkIndex& rpk, uint32_t full_id) {
   if (script.size() < 7) return nullptr;
   for (char& c : script)
     if (c == '/') c = '\\';
-  std::string root = rpk.game_root();
-  if (!root.empty() && root.back() != '\\' && root.back() != '/')
-    root.push_back('\\');
-  const std::string disk = root + script;
-  if (!jvm.load_class(disk)) {
+  // The host's root string is native (ANSI); the loader takes UTF-8.
+  const std::string disk = path_to_utf8(std::filesystem::path(rpk.game_root()) / script);
+  const TufaClass* tc = jvm.load_resource_class(disk);
+  if (!tc) {
     std::printf("[track] class miss %s\n", disk.c_str());
     return nullptr;
   }
-  std::string simple = script;
-  const auto slash = simple.find_last_of('\\');
-  if (slash != std::string::npos) simple = simple.substr(slash + 1);
-  if (simple.size() > 6 && simple.compare(simple.size() - 6, 6, ".class") == 0)
-    simple.resize(simple.size() - 6);
-  const TufaClass* tc = jvm.find_class(simple);
-  if (!tc) return nullptr;
   Object* inst = jvm.new_object(tc->name());
   if (!inst) return nullptr;
   for (const auto& f : tc->static_fields) {
@@ -160,21 +153,13 @@ Object* script_construct(Jvm& jvm, const RpkIndex& rpk, uint32_t full_id,
   if (script.size() < 7) return nullptr;
   for (char& c : script)
     if (c == '/') c = '\\';
-  std::string root = rpk.game_root();
-  if (!root.empty() && root.back() != '\\' && root.back() != '/')
-    root.push_back('\\');
-  const std::string disk = root + script;
-  if (!jvm.load_class(disk)) {
+  // The host's root string is native (ANSI); the loader takes UTF-8.
+  const std::string disk = path_to_utf8(std::filesystem::path(rpk.game_root()) / script);
+  const TufaClass* tc = jvm.load_resource_class(disk);
+  if (!tc) {
     std::printf("[vt] class miss %s\n", disk.c_str());
     return nullptr;
   }
-  std::string simple = script;
-  const auto slash = simple.find_last_of('\\');
-  if (slash != std::string::npos) simple = simple.substr(slash + 1);
-  if (simple.size() > 6 && simple.compare(simple.size() - 6, 6, ".class") == 0)
-    simple.resize(simple.size() - 6);
-  const TufaClass* tc = jvm.find_class(simple);
-  if (!tc) return nullptr;
   Object* inst = jvm.new_object(tc->name());
   if (!inst) return nullptr;
   if (GameRefState* st = gameref_upsert(inst, GameRefKind::GameType)) {
@@ -486,9 +471,9 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
         if (!args.empty() && args[0].tag == ValueTag::Obj && args[0].v.o)
           want = args[0].v.o->str;
         const auto* state = gameref_get(self);
-        std::string name;
+        const TufaClass* cls = nullptr;
         if (state && state->script && state->live_id) {
-          name = static_cast<Object*>(state->script)->class_name;
+          cls = jvm.find_class(static_cast<Object*>(state->script)->class_name);
         } else {
           auto script = rpk.payload_prop(resource_id_of(self), "script");
           std::replace(script.begin(), script.end(), '\\', '/');
@@ -501,15 +486,12 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
                            (script.size() < 6 ||
                             script.compare(script.size() - 6, 6, ".class") != 0);
           if (fqn) {
-            name = script;
-            if (!jvm.find_class(name)) jvm.load_class(name);
+            cls = jvm.find_class(script);
+            if (!cls && jvm.load_class(script)) cls = jvm.find_class(script);
           } else {
-            name = std::filesystem::path(script).stem().string();
-            if (!jvm.find_class(name))
-              jvm.load_class_file((std::filesystem::path(rpk.game_root()) / script).string());
+            cls = jvm.load_resource_class(path_to_utf8(std::filesystem::path(rpk.game_root()) / script));
           }
         }
-        const auto* cls = jvm.find_class(name);
         if (!cls) return Value::make_int(0);
         if (want.empty()) return Value::make_int(1);
         for (int depth = 0; cls && depth < 64; ++depth) {

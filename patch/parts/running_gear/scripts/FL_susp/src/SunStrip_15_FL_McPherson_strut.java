@@ -44,6 +44,10 @@ public class SunStrip_15_FL_McPherson_strut extends Suspension
 				              -0.0770, -0.0430, -0.0040,
 				              0.0710, 0.4068, 0.0124,
 				              0.1187, 0.7166, 0.0174);
+				// OpenSLRR (#469): anti-dive braking, anti-lift driving, typical for the real car
+				wheel.setAnti( 0.10, 0.15 );
+				// OpenSLRR (#481): camber gain per 25 mm of bump at the static height and its change per 25 mm, typical for the real car
+				wheel.setCamberGain( -0.90, -0.15 );
 
 				the_car.setSlotPos(101+wheelID, new Vector3(-0.124,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(-0.113,0,0), null );

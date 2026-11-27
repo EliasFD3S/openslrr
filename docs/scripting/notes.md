@@ -5,6 +5,20 @@ lookup and GameRef handles, moved from the knowledge base. Garbage
 collection is in [vm-gc.md](vm-gc.md); native coverage in
 [natives.md](natives.md).
 
+## #486: mod overlay folders
+
+**Cause.** The first overlay indexed game-relative filenames. It missed the same TUFA class declared in different roots or as a secondary blob. Scanning used Windows ANSI paths; ordering compared folder names byte-for-byte. A recursive resource load could return success with no primary class, and a filename differing only in case could select the wrong blob. Stock startup failure did not gate mod entries.
+
+**Change.** The VM indexes declared class identities in mod priority order, including secondary blobs. Direct resource loads keep the requested container's identities but use the winning definitions. They prefer an exact simple-name/stem match, then a case-insensitive match, then the first blob. Definitions and the primary name are registered before initializers can re-enter the loader. Discovery uses native paths and UTF-8 names, and compares order entries case-insensitively. The compiler ranks declarations by mod priority and writes output beside the winning source. Entries run only after a successful stock startup. See [the mod guide](mods.md) and [compiler guide](compiler.md#compiling-with-script-mods).
+
+**Validation.** Release host and compiler built. CTest passed `mod_overlay` and `float_literal_mode`; the host-linked `class_lifetime`, `vm_lookup`, `options_retry`, `gameref_alias`, `splash_boot` and `rpk_validation` suites passed. The fixtures cover non-ANSI mod and class filenames, case-insensitive order and unknown entries, a secondary class in a differently named higher-priority TUFA, recursive primary lookup during initialization, an unbound native during stock startup, and the top-level RPK exclusion.
+
+**Review regressions.** An unpaired UTF-16 surrogate in an NTFS filename could abort the overlay walk, and a corrupt mod container used to claim its path before parsing. The overlay now skips unencodable components (including subtrees) and publishes only nonempty, successfully parsed containers. The compiler shares its within-layer sort and named-file preference with the VM; fixtures check the consumer's compiled method descriptor against the runtime winner. A missing RPK script may reuse a unique loaded stem, but an existing container, including a mod-only one, still determines its own primary. Entry lookup checks the declared FQN before registration; duplicate entry FQNs run only at the highest-priority declaration. Fixtures verify the ordering and that a wrong-package class is never loaded.
+
+**Boot cost.** The Release host times only `ModOverlay::scan`, not package discovery, pack indexing or stock Init. Four consecutive headless probes on a private MWM copy (1,561 base class files, five mod class files, five enabled manifests) took 104.8, 98.4, 88.1 and 89.7 ms in the scan; a separate private copy without mods took 0.1–0.3 ms. The scan still reads base containers so a secondary declaration in an unrelated filename is not missed. Reading independent containers on the host loading pool reduced the three repeat runs from 144.9–182.0 ms serially to 88.1–98.4 ms. The first serial run took 6.51 s; the OS cache was not flushed, so these are not controlled cold-start measurements. Both copies reached the splash state and exited 0 under `--probe`.
+
+**In game.** In a private patched MWM install, the original host silently loaded stock `sl/Scripts/game/ClubInfo.class` and reported a missing entry method. With the same fixture, the fixed host logged `java.game.ClubInfo: mods/cross-root (overrides base)` and the entry in `mods/cross-root/system/Scripts/game/ClubInfo.class` printed its own marker. After `Init actualState=java.game.SplashScreen`, both original test mods called the winning `Stamp`: entry a / winner b, then entry b / winner b. Missing-class and missing-method entries each logged once. The Baiern spawned with 79 parts in ValoCity.
+
 ## Issues #72 / #126: exact TREE integers and integer balances
 
 `src/jvm/tree_eval.cpp:arithmetic` now handles integer operands without
@@ -108,6 +122,7 @@ pack setup logs unrelated frontend RID misses. Evidence:
 `assets/validation/class-lifetime/after.txt`.
 
 Release build, vm_lookup, tree_numbers, save_io and TUFA corpus checks pass.
+
 The corpus is unchanged: 1,501 files, 1,546 accepted classes and the existing
 Dialog.class CONS-kind-2 rejection. vm_lookup now checks immutable definitions
 in the running VM and refreshed metadata in a fresh VM. No native signatures

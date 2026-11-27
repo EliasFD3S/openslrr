@@ -47,20 +47,52 @@ function Install-BranchPatch {
     })
     if ($files.Count -eq 0) { throw "Branch patch contains no game files: $patch" }
     $patchPrefix = $patch.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    # Script mods shipped with the branch (#470: mods/nfsu2-camera) go to
+    # <GameRoot>/mods/<name>; their tests folders are not installed.
+    $mods = Join-Path $Repo 'mods'
+    $modsPrefix = $mods.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    $modFiles = @()
+    if (Test-Path -LiteralPath $mods -PathType Container) {
+        $modFiles = @(Get-ChildItem -LiteralPath $mods -File -Recurse -Force | Where-Object {
+            $_.FullName.Substring($modsPrefix.Length) -notmatch '(^|[\\/])tests([\\/]|$)'
+        })
+    }
     $rootPrefix = [IO.Path]::GetFullPath($Root).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
     $backup = Join-Path $BackupBase ([Guid]::NewGuid().ToString('N'))
     if ([IO.Path]::GetFullPath($backup).StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
         throw 'Patch backups must be outside GameRoot (old classes there can shadow the new UI). Choose a workspace outside GameRoot.'
     }
-    $entries = @($files | ForEach-Object {
-        $relative = $_.FullName.Substring($patchPrefix.Length)
+    $sources = @($files | ForEach-Object { [PSCustomObject]@{ File = $_; Relative = $_.FullName.Substring($patchPrefix.Length) } }) +
+        @($modFiles | ForEach-Object { [PSCustomObject]@{ File = $_; Relative = Join-Path 'mods' $_.FullName.Substring($modsPrefix.Length) } })
+    # An installed mod.json keeps the player's "enabled" choice: the new
+    # manifest is installed with the existing enabled value.
+    $staging = Join-Path ([IO.Path]::GetTempPath()) ("slrr-mod-manifests-" + [Guid]::NewGuid().ToString('N'))
+    $sources = @($sources | ForEach-Object {
+        $source = $_
+        $installed = Join-Path $Root $source.Relative
+        if ($source.Relative -match '^mods[\\/][^\\/]+[\\/]mod\.json$' -and (Test-Path -LiteralPath $installed -PathType Leaf)) {
+            $old = $null
+            try { $old = Get-Content -LiteralPath $installed -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
+            if ($old -and ($old.PSObject.Properties.Name -contains 'enabled')) {
+                $new = Get-Content -LiteralPath $source.File.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+                $new | Add-Member -NotePropertyName enabled -NotePropertyValue ([bool]$old.enabled) -Force
+                $staged = Join-Path $staging $source.Relative
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent $staged) | Out-Null
+                [IO.File]::WriteAllText($staged, ($new | ConvertTo-Json -Compress) + [Environment]::NewLine, (New-Object Text.UTF8Encoding $false))
+                $source = [PSCustomObject]@{ File = (Get-Item -LiteralPath $staged); Relative = $source.Relative }
+            }
+        }
+        $source
+    })
+    $entries = @($sources | ForEach-Object {
+        $relative = $_.Relative
         $destination = Join-Path $Root $relative
         [PSCustomObject]@{
             Relative = $relative
-            Source = $_.FullName
+            Source = $_.File.FullName
             Destination = $destination
             Existed = (Test-Path -LiteralPath $destination -PathType Leaf)
-            SHA256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+            SHA256 = (Get-FileHash -LiteralPath $_.File.FullName -Algorithm SHA256).Hash
         }
     })
     # Do not follow junctions/symlinks out of either tree when copying.
@@ -96,6 +128,7 @@ function Install-BranchPatch {
             throw "Patch verification failed: $($entry.Destination). Backup: $backup"
         }
     }
+    Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host "Verified all branch patch files for commit $Commit in $Root"
 }
 

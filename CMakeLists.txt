@@ -32,9 +32,17 @@ set_target_properties(slrr_script_compiler PROPERTIES CXX_STANDARD 17)
 target_include_directories(slrr_script_compiler PUBLIC third_party/slrrc)
 target_compile_options(slrr_script_compiler PRIVATE /utf-8 /fp:precise)
 
+add_library(slrr_jobs STATIC src/platform/job_system.cpp)
+target_include_directories(slrr_jobs PUBLIC include)
+
+add_library(slrr_mod_overlay STATIC src/jvm/mod_overlay.cpp src/platform/host_options_json.cpp)
+target_include_directories(slrr_mod_overlay PUBLIC include)
+target_link_libraries(slrr_mod_overlay PRIVATE slrr_jobs)
+target_compile_options(slrr_mod_overlay PRIVATE /utf-8)
+
 add_executable(compile_game_sources tools/compile_game_sources.cpp
   src/jvm/script_compiler.cpp src/jvm/tufa.cpp)
-target_link_libraries(compile_game_sources PRIVATE slrr_script_compiler)
+target_link_libraries(compile_game_sources PRIVATE slrr_script_compiler slrr_mod_overlay)
 target_include_directories(compile_game_sources PRIVATE include)
 target_compile_options(compile_game_sources PRIVATE /utf-8)
 
@@ -59,9 +67,7 @@ add_executable(slrr_host
   src/platform/host_sfx.cpp
   src/platform/host_music.cpp
   src/platform/host_game_options.cpp
-  src/platform/host_options_json.cpp
   src/platform/host_cursor.cpp
-  src/platform/job_system.cpp
   src/platform/video_cinepak.cpp
   src/platform/video_fmv.cpp
   src/platform/video_fmv_vlc.cpp
@@ -409,7 +415,7 @@ target_include_directories(slrr_host PRIVATE
   "${SLRR_SHADER_OUT}"
   "${BIMG_DIR}/3rdparty"
 )
-target_link_libraries(slrr_host PRIVATE bgfx bx bimg slrr_script_compiler)
+target_link_libraries(slrr_host PRIVATE bgfx bx bimg slrr_script_compiler slrr_mod_overlay)
 target_compile_features(slrr_host PRIVATE cxx_std_20)
 message(STATUS "slrr_host: libbgfx + mesh shaders enabled")
 
@@ -439,9 +445,14 @@ if(BUILD_TESTING)
   target_compile_features(host_options_json PRIVATE cxx_std_20)
   target_compile_options(host_options_json PRIVATE /W3 /utf-8)
   add_test(NAME host_options_json COMMAND host_options_json)
+  add_executable(mod_overlay tests/test_mod_overlay.cpp src/jvm/script_compiler.cpp src/jvm/tufa.cpp)
+  target_include_directories(mod_overlay PRIVATE src/jvm)
+  target_compile_options(mod_overlay PRIVATE /W3 /utf-8)
+  target_link_libraries(mod_overlay PRIVATE slrr_mod_overlay slrr_script_compiler)
+  add_test(NAME mod_overlay COMMAND mod_overlay)
   add_executable(float_literal_mode tests/test_float_literal_mode.cpp
     src/jvm/script_compiler.cpp src/jvm/tufa.cpp)
-  target_link_libraries(float_literal_mode PRIVATE slrr_script_compiler)
+  target_link_libraries(float_literal_mode PRIVATE slrr_script_compiler slrr_mod_overlay)
   target_include_directories(float_literal_mode PRIVATE include)
   target_compile_options(float_literal_mode PRIVATE /W3 /utf-8)
   add_test(NAME float_literal_mode COMMAND float_literal_mode)

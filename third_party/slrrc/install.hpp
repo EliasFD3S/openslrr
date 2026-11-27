@@ -67,6 +67,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
 #include <string_view>
@@ -206,7 +207,9 @@ public:
     std::vector<FailedSource> failed;           // sources that did not declare
     uint32_t class_count = 0;                   // classes read from class files, duplicates included
 
-    void load();
+    // Smaller layer priorities win per declared name, before the same-layer
+    // file/source and container-name tie breakers described above.
+    void load(const std::function<int(const std::string&)>& priority = {});
 
     // The contract of classes::ClassProvider: the class of exactly this name;
     // while a source is being declared, a stub for every name it declares

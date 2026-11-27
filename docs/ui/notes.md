@@ -472,6 +472,84 @@ Verified on the PR branch (f422ebb), by reading the code; not run in game.
   `world_release`, which `dispatch_world_pointer` emits as cursor event 2
   in the frame after the boundary, without a matching press in that scene.
 
+## NFSU2 camera mod (#470)
+
+Request: the Need for Speed: Underground 2 style camera of #470 as a script
+mod, now that the engine version is removed (see the next section).
+
+Cause: the camera needed car and camera state, a hook in `Track`, keys and
+settings that scripts did not have. #486 (mod folders), #487 (camera provider
+hook and `java.openslrr` API) and #488 (mod keys and settings) supply them.
+
+Change: `mods/nfsu2-camera` ([README](../../mods/nfsu2-camera/README.md)),
+`java.mods.nfsu2camera`:
+
+- `ArcadeCamera` (a `CameraProvider` named ARCADE, views BUMPER, HOOD, NEAR,
+  FAR) ports `arcade_camera.cpp` from 46f90d7 with the same values: slide
+  swing with bounded lag, speed view angle and reach, nitrous, vibration,
+  crash shake, bend tilt, air time, look back (rear bumper for the mounted
+  views) and the 0.15 m wall sweep for the chase views. `ArcadeMath` holds
+  the pure math. An `ArcadeDriver` (GameType) runs it from `animate()`.
+- One function (`place`) sends the pose: `setPoseLocal` (chassis frame,
+  turned with the drawn car at draw time) for BUMPER/HOOD, `setPoseRelative`
+  (world offsets from the drawn origin) for NEAR/FAR. `CameraProvider.camera`
+  is set for the GPS. Inputs: `CarState.drawnPos/drawnOri`, `vel`,
+  `angVel.y` (yaw rate), `nitro`, `wheelsOnGround` (0 with speed above
+  0.5 m/s is air time), `boxMin/boxMax`; time from `System.simTime`, so a
+  paused game freezes the camera.
+- One change from the engine version: the crash jolt divides the velocity
+  change by the physics step that made it (the frame time, but at least the
+  1/60 s step when the velocity changed after several unchanged frames, and
+  never more than one step): at 144 fps the frame time made ordinary braking
+  read as a 2.4 times larger jolt. Review round 1 found that dividing by the
+  time since the last change missed a hit after a standstill.
+- Switching from CLASSIC starts the eye at the classic follow camera's
+  azimuth (Track keeps that camera alive and hidden; read through
+  `GameLogic.actualState`), as `gameref.cpp` did at 46f90d7. A first
+  activation on a car or map starts behind it.
+- `modInit`: `ModOptions` ARCADE VIEW on `camera.ARCADE.view`, the key
+  `Cameras` saves the view under (one setting for the option and the V
+  cycle; the camera passes an option change on to `Cameras`' copy), and
+  ARCADE SHAKE (%) (0-200, default 100); `camera.ARCADE.view` is set to FAR
+  only when missing; `ModKeys` NEXT ARCADE VIEW,
+  unbound, delivered as a global hotkey (`new Hotkey(axis, VIRTUAL, cmd,
+  receiver)`) because a provider has no OSD.
+- View changes (V or the mod key) are ignored while LOOK BACK is held; `Track`
+  still delivers V then and saves the next view, so the mod writes its view
+  back and `viewName` names the kept view in Track's message.
+- `build-run-branch.ps1` keeps an installed `mod.json`'s `enabled` value.
+- `scripts/build-run-branch.ps1` also installs the repository's `mods/`
+  folders (without `tests`) into `<GameRoot>/mods`.
+
+Validation (Windows, Release, private game copy with the patch and the mod):
+
+- `compile_game_sources <game> mods/nfsu2-camera`: 4 classes. VM test
+  (`mods/nfsu2-camera/tests/nfsu2-camera-test`, a port of
+  `test_arcade_camera.cpp` plus jolt timing at 30/60/144 Hz with a
+  standstill before the hit, eye seeding and the look-back guard): 52/52 in
+  the game's VM. The deployment's `enabled` handling was run against a
+  temporary game root (kept `false`; a fresh install has no `enabled`).
+- Reference replay (Valo City, Baiern, `--bench-realtime`) with ARCADE
+  selected, keys sent with `keybd_event`: V cycled FAR → BUMPER → HOOD →
+  NEAR → FAR with the "Camera:" message; B held gave the front view of the
+  car on FAR and the rear-bumper view on BUMPER and HOOD
+  (`assets/validation/nfsu2-camera-mod/`). Judder: 40 window grabs per
+  burst tracked the red car's centroid; on a straight FAR the frame-to-frame
+  jerk was 0.2-0.5 px (CLASSIC 0.1-0.6 px), on NEAR 2.2-2.6 px against
+  CLASSIC's 0.8-1.1 px over the same stretch of the replay, which has the car
+  turning; no step was visible by eye in any view. HOOD and BUMPER bursts are
+  not comparable (the car fills or leaves the frame).
+- `--bench-drive 25` (physically driven car): speed, pull and view angle
+  rose with speed (50° → 52.4° at 54 km/h), the wall hit gave a small impact
+  value (0.01), and the sweep shortened the eye near a wall (0.87).
+- Options from the main menu and in game: Game → CAMERA shows ARCADE, and
+  CLASSIC restores the stock follow → chase cycle in the same drive; MODS
+  lists ARCADE VIEW and ARCADE SHAKE (%); Controls → Game controls lists NEXT
+  ARCADE VIEW (unbound); bound to G, G cycled FAR → BUMPER → HOOD in a drive.
+- Not exercised: nitrous and air time in game (the replay drives the car by
+  pose), race staging, the shake slider's effect by eye, a car other than the
+  Baiern.
+
 ## Change-view key (#470)
 
 - From follow, V selects chase only if `cameraTarget2` has a nonzero ID and

@@ -44,6 +44,10 @@ public class Nonus_GT2_FL_McPherson_strut extends Suspension
 				              -0.0770, -0.0430, -0.0040,
 				              0.0710, 0.4049, 0.0409,
 				              0.1572, 0.7311, 0.0688);
+				// OpenSLRR (#469): anti-dive braking, anti-lift driving, typical for the real car
+				wheel.setAnti( 0.30, 0.15 );
+				// OpenSLRR (#481): camber gain per 25 mm of bump at the static height and its change per 25 mm, typical for the real car
+				wheel.setCamberGain( -1.00, -0.15 );
 
 				the_car.setSlotPos(101+wheelID, new Vector3(-0.124,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(-0.113,0,0), null );

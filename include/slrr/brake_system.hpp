@@ -105,9 +105,13 @@ class AbsModulator {
   double pressure(std::size_t i) const { return output_[i]; }
   const Channel& channel(std::size_t i) const { return channels_[i]; }
   bool active() const;  // any channel modulating
+  // How many times channel i has opened its outlet valve to release its
+  // wheel (#474): the knocks the driver feels, one per cycle.
+  unsigned releases(std::size_t i) const { return releases_[i]; }
 
  private:
   std::array<Channel, 4> channels_{};
+  std::array<unsigned, 4> releases_{};
   std::array<double, 4> output_{};
   double asymmetry_ = 0;  // 0-1: time since one front wheel alone modulates
 };
