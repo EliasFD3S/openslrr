@@ -44,6 +44,8 @@ public class Prime_FL_McPherson_strut extends Suspension
 				              -0.0770, -0.0430, -0.0040,
 				              0.0710, 0.4057, 0.0329,
 				              0.1306, 0.7191, 0.0491);
+				// OpenSLRR (#469): anti-dive braking, anti-lift driving, typical for the real car
+				wheel.setAnti( 0.15, 0.10 );
 
 				the_car.setSlotPos(101+wheelID, new Vector3(-0.124,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(-0.113,0,0), null );

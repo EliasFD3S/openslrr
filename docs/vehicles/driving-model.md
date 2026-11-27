@@ -136,9 +136,12 @@ scaled. In strut mode (`setHub` mode 0) the strut fit replaces the hub
 rotation, so `setYpr` camber and toe do not reach a strut wheel: the patched
 stock struts tilt the fit itself to their static camber (#450,
 [notes](notes.md#tyres-and-suspension-geometry-450)). The copied `setCPatch` tolerance (`patch_angle`) is not read by the
-solver. Likewise, `setInstantCenter` values and the
-`WheelState::jacking` field are retained but have no active load effect:
-there is no instant-centre anti-dive/anti-squat force or jacking feedback.
+solver. Likewise, `setInstantCenter` values are retained but have no active
+load effect (their frame is unknown and the recovered exe does not use
+them). Anti-dive, anti-lift and anti-squat come from typical shares by
+suspension type instead (#469, [notes](notes.md#anti-dive-and-anti-squat-469)):
+`WheelState::jacking` pushes body and wheel apart (or together) by the share
+of each wheel's longitudinal load transfer its arms carry.
 Wheel YPR and the existing arm/hub kinematics still affect contact geometry.
 Anti-roll bars are an optional host approximation, deliberately enabling a
 stock feature whose Java commands and catalog branch were dormant. The patched

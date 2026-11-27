@@ -44,6 +44,8 @@ public class Focer_200_RL_trailing_arm extends Suspension
 				              0.1210, 0.0000, 0.0000,
 				              0.0000, 0.0000, 0.0000,
 				              0.0000, 0.0000, 0.0000);
+				// OpenSLRR (#469): anti-lift braking, anti-squat driving, typical for the real car
+				wheel.setAnti( 0.30, 0.45 );
 				                        
 				the_car.setSlotPos(101+wheelID, new Vector3(-0.024,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(-0.013,0,0), null );

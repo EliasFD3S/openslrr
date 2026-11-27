@@ -146,12 +146,18 @@ struct WheelConfig {
   // the intended 8ac2ba9 solver does not apply an instant-centre load force.
   bool front_instant_center = false, side_instant_center = false;
   Vec3 front_center_offset, side_center_offset;
+  // Anti-dive / anti-lift / anti-squat (#469): the share of this wheel's
+  // longitudinal load transfer its arms carry, braking and driving, 0 to 1.
+  // The arms push body and wheel apart (or together) by that share of
+  // force x CoM height / wheelbase, so the spring compresses less.
+  double anti_brake = 0, anti_drive = 0;
   bool linked() const { return unsprung > 0 || arm_length > 0; }
 };
 struct WheelState {
   bool contact = false, seeded = false;
-  // force: spring and damper support, used as the tyre load. jacking is a
-  // reserved legacy field; the intended solver does not add it to the load.
+  // force: spring and damper support, used as the tyre load. jacking: the
+  // arms' vertical push from the longitudinal force (#469, N, extending the
+  // suspension; WheelConfig::anti_brake / anti_drive), from the last step.
   double length = 0, speed = 0, force = 0, jacking = 0;
   Vec3 center, normal{0, 1, 0}, hub, patch;
   // The ground under the tread (#452): friction and rolling averaged over
@@ -360,6 +366,7 @@ private:
   int previous_shift_ = 0;
   bool accelerator_down_ = false, forced_reverse_ = false;
   void step(const Terrain &terrain);
+  void update_jacking();
   void apply_aero();
   void step_drive();
   void update_gear(double rpm, double shaft, double road_shaft);
