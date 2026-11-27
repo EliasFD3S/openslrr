@@ -507,3 +507,50 @@ Validation (Windows, Release build of this branch):
   the speed-dependent angle, slide swing and look-back decay were not
   exercised there; they are covered by the unit tests only. The Options menu
   item itself was not opened in game.
+
+### Change-view key and the four arcade views (#470, review)
+
+Requested in review: one change-view key (V, rebindable) cycling every view
+instead of the F-key set; F-keys removed; Classic cycles the driving views;
+Arcade gets NFSU2's views and default with NFSU2's values. NFSU2Recomp ships
+no game data (only its input map: `JOY_EVENT_CAMERA_POV_CHANGE` = C,
+`JOY_EVENT_CAMERA_LOOKBACK` = X), and the `GlobalB.lzc` supplied is from NFS
+Carbon (track list "(5000) Carbon World", cop-light and wind-tunnel parts) with
+no camera table, so the values remain approximations, chosen with the
+requester's agreement until NFSU2's own data is available.
+
+- `Track.java` (MWM source, now shipped compiled): the F1-F5/F9 view hotkeys
+  are replaced by a virtual hotkey on `Input.AXIS_LOOK_PREVNEXT` (the stock
+  "change camera" axis no script used), `CMD_NEXTCAM` 4700, `nextCamera`.
+  Classic: follow -> chase -> cockpit cameras (skipping the mirror and
+  look-back ones) -> follow; a car without cockpit cameras goes back to follow.
+  Arcade: `changeCamFollow` from any other mode, else option 35 + 1 mod 4.
+- `ControlSet`: slot 35 defaults to V, slot 36 (stock previous camera, F2)
+  is empty; `load` moves a saved stock F1/F2 there. `OsdxOptions` game
+  controls list CHANGE VIEW (slot 35).
+- Host option 35 `camera.arcade_view` (names bumper/hood/near/far, default
+  far); `HostOption.names` grew to four.
+- `arcade_camera`: per-view tuning (`arcade_view_tuning`). Near: 4.4 m back,
+  1.1 m up, 54-74 degrees; far unchanged. Bumper: 0.55 m above the lowest
+  mesh point, 5 cm ahead of the front; hood: 6 % of the height under the top,
+  35 % of the length from the front, looking down 1 m over 10 m. Mounted views
+  use the chassis up axis and skip the wall sweep.
+- `part_car_local_box`: corners of every mesh of the car, measured in the
+  frame of its largest mesh (the shell). Measured against
+  `part_camera_pose`'s frame the result was offset by about 2,000 m in x (the
+  instance transforms are not in that frame's space); the shell's own
+  transform gives -1.31..0.96 x -1.12..0.58 x -2.28..2.16 m for the Baiern.
+  A first hood eye at 80 % height / 30 % length sat under the bonnet skin.
+
+Validation (Windows, Release):
+
+- `arcade_camera` ctest 9/9 (adds view order and the mounted views, rolled
+  car included); `options_retry` (ids 0-35, arcade view names),
+  `gameref_alias`, `car_select_view` pass; `compile_game_sources` builds
+  `Track.java`, `OsdxOptions.java` and `ControlSet.java` in a full private
+  game copy.
+- In game, reference replay with V sent by `keybd_event` every 10 s:
+  Arcade far -> bumper -> hood -> near -> far, Classic follow -> chase ->
+  cockpit cameras (`assets/validation/arcade-camera/*-change-view.png`). The
+  rebinding page and the F1/F2 migration of an old controls file were not
+  exercised in game.

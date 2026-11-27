@@ -884,10 +884,11 @@ static void update_chase_feel(GameRefState& cam, void* car, const float* frame, 
 
 // Shared end of both chase poses: keep the eye out of walls between it and
 // the focus, and on timed steps record where the view is.
-static void finish_chase_pose(GameRefState& cam, float* eye, const float* at, float dt) {
+static void finish_chase_pose(GameRefState& cam, float* eye, const float* at, float dt,
+                              bool sweep = true) {
   float delta[3] = {eye[0] - at[0], eye[1] - at[1], eye[2] - at[2]};
   SceneSphereHit hit;
-  if (scene_instances_sweep_sphere(at, delta, .15f, hit)) {
+  if (sweep && scene_instances_sweep_sphere(at, delta, .15f, hit)) {
     const float fraction = std::clamp(hit.fraction - .02f, .05f, 1.f);
     for (int i = 0; i < 3; ++i) eye[i] = at[i] + delta[i] * fraction;
   }
@@ -906,12 +907,28 @@ static bool arcade_chase_selected(const GameRefState& cam) {
          cam.angle_gain <= 0.f;
 }
 
-static void arcade_chase_pose(GameRefState& cam, void* car, const float* frame, float* eye,
-                              float* at, float dt, bool was_arcade, bool was_classic) {
+// Returns whether the view is fixed to the car (bumper, hood).
+static bool arcade_chase_pose(GameRefState& cam, void* car, const float* frame, float* eye,
+                              float* at, float* up, float dt, bool was_arcade,
+                              bool was_classic) {
   ArcadeCameraInput in;
+  in.view = arcade_view_from_index(host_camera_tuning().arcade_view);
   std::copy_n(frame + 12, 3, in.position);
   std::copy_n(frame + 8, 3, in.back);
+  std::copy_n(frame + 4, 3, in.up);
   if (!part_car_velocity(car, in.velocity)) std::fill_n(in.velocity, 3, 0.f);
+  const bool mounted = arcade_view_tuning(in.view).mounted;
+  // The car's extent places the bumper and hood eyes. Measured when a car
+  // is first seen in one of those views; parts do not change on the road.
+  if (mounted && (cam.arcade_box_key != car || !cam.arcade_box_valid)) {
+    cam.arcade_box_key = car;
+    cam.arcade_box_valid = part_car_local_box(car, cam.arcade_box_lo, cam.arcade_box_hi);
+  }
+  if (cam.arcade_box_key == car && cam.arcade_box_valid) {
+    in.box_valid = true;
+    std::copy_n(cam.arcade_box_lo, 3, in.box_lo);
+    std::copy_n(cam.arcade_box_hi, 3, in.box_hi);
+  }
   // The wheel zoom keeps working: the stock follow distance is 7 m.
   const float distance = std::clamp(cam.cam_distance > 0.f ? cam.cam_distance : 7.f,
                                     cam.script_dist_min, cam.script_dist_max);
@@ -931,6 +948,7 @@ static void arcade_chase_pose(GameRefState& cam, void* car, const float* frame, 
   const ArcadeCameraPose pose = arcade_camera_step(cam.arcade, in, dt);
   std::copy_n(pose.eye, 3, eye);
   std::copy_n(pose.at, 3, at);
+  if (up) std::copy_n(pose.up, 3, up);
   // The classic follow body continues from here if the style or the view
   // changes: its eye and focus (1.1 m above the car origin).
   std::copy_n(pose.eye, 3, cam.eye_s);
@@ -939,6 +957,7 @@ static void arcade_chase_pose(GameRefState& cam, void* car, const float* frame, 
   cam.look_s[2] = frame[14];
   cam.cam_pose_init = true;
   cam.arcade_active = true;
+  return mounted;
 }
 
 static bool driving_camera_pose(GameRefState& cam, float* eye, float* at,
@@ -986,8 +1005,10 @@ static bool driving_camera_pose(GameRefState& cam, float* eye, float* at,
     return true;
   }
   if (arcade_chase_selected(cam)) {
-    arcade_chase_pose(cam, target->key, frame.data(), eye, at, dt, was_arcade, was_classic);
-    finish_chase_pose(cam, eye, at, dt);
+    const bool mounted = arcade_chase_pose(cam, target->key, frame.data(), eye, at, up, dt,
+                                           was_arcade, was_classic);
+    // A mounted eye sits on the car: no wall sweep from a focus inside it.
+    finish_chase_pose(cam, eye, at, dt, !mounted);
     return true;
   }
   cam.classic_chase_active = true;

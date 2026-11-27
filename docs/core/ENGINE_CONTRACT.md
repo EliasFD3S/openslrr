@@ -881,10 +881,14 @@ view is activated. In the chase view only, smoothed forward acceleration
 moves the eye up to 1.2 m back while pulling and 0.8 m closer while braking
 (`update_chase_feel` in `gameref.cpp`).
 Host option 34 (`camera.style`, #470) replaces that plain chase view with
-the arcade camera of `arcade_camera.hpp` when set to arcade: the eye follows
-the heading blended toward the direction of travel with a short spring lag,
-its own speed-dependent view angle and reach, and a right-drag look that decays
-once released. Script variants (`cameraMode` 3 and 4), a held or
+the arcade camera of `arcade_camera.hpp` when set to arcade, in the view
+of host option 35 (`camera.arcade_view`): bumper and hood ride fixed on the
+chassis (placed from `part_car_local_box`, no wall sweep, the chassis up
+axis); near and far follow the heading blended toward the direction of travel
+with a short spring lag, their own speed-dependent view angle and reach, and a
+right-drag look that decays once released. The patched `Track.nextCamera`
+cycles the views on the change-view key (ControlSet slot 35,
+`AXIS_LOOK_PREVNEXT`, V); the stock F1-F5/F9 view hotkeys are not created. Script variants (`cameraMode` 3 and 4), a held or
 `angle`-turned follow camera, cockpit, attached and free cameras keep their
 behaviour; both chase styles share the eye collision sweep and hand over
 their eye when the style changes.

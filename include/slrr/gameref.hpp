@@ -194,6 +194,10 @@ struct GameRefState {
   // takes over when the style changes.
   ArcadeCameraState arcade;
   bool arcade_active = false, classic_chase_active = false;
+  // Chassis-local extent of the car seen in the bumper and hood views.
+  void* arcade_box_key = nullptr;
+  bool arcade_box_valid = false;
+  float arcade_box_lo[3] = {}, arcade_box_hi[3] = {};
   // This frame's look axes (PE mouse rate). The orbit body consumes them.
   float ctl_x = 0.f;
   float ctl_y = 0.f;

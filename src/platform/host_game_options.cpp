@@ -40,7 +40,9 @@ struct HostOption {
   bool boolean;
   int (*get)();
   void (*set)(int);
-  const char* names[2];  // a named two-value option, saved by name; else null
+  // A named option (low = 0, one name per value up to high), saved by
+  // name; else null.
+  const char* names[4];
 };
 
 #define SLRR_GRAPHICS_INT(id, key, low, high)                         \
@@ -106,6 +108,11 @@ const HostOption kOptions[] = {
     HostOption{34, "camera", "style", 0, 1, false,
                +[] { return host_camera_tuning().style; },
                +[](int v) { host_camera_tuning().style = v; }, {"classic", "arcade"}},
+    // Arcade camera view (#470), cycled by the change-view key.
+    HostOption{35, "camera", "arcade_view", 0, 3, false,
+               +[] { return host_camera_tuning().arcade_view; },
+               +[](int v) { host_camera_tuning().arcade_view = v; },
+               {"bumper", "hood", "near", "far"}},
 };
 #undef SLRR_GRAPHICS_INT
 #undef SLRR_GRAPHICS_BOOL
@@ -135,7 +142,7 @@ bool read_value(const HostOption& o, const options_json::Scalar& v, int& out) {
       out = v.boolean;
       return o.boolean;
     case options_json::Scalar::String:
-      for (int i = 0; i < 2; ++i)
+      for (int i = 0; i < 4; ++i)
         if (o.names[i] && v.text == o.names[i]) {
           out = i;
           return true;

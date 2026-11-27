@@ -37,7 +37,7 @@ SLRR_TEST(parked_car_is_seen_from_behind_and_above) {
   SLRR_REQUIRE(std::fabs(pose.eye[0]) < 1e-4f);
   SLRR_REQUIRE(pose.eye[1] > 1.5f && pose.eye[1] < 3.f);
   SLRR_REQUIRE(pose.at[2] < 0.f);  // looks past the car
-  SLRR_REQUIRE(std::fabs(pose.fov - slrr::kArcadeFovBase) < 1e-3f);
+  SLRR_REQUIRE(std::fabs(pose.fov - slrr::arcade_view_tuning(slrr::ArcadeView::Far).fov_base) < 1e-3f);
 }
 
 SLRR_TEST(read_only_queries_do_not_step) {
@@ -93,7 +93,8 @@ SLRR_TEST(speed_widens_the_view_and_reach) {
   const auto slow_pose = arcade_camera_step(slow_state, parked, 0.f);
   const auto fast_pose = arcade_camera_step(fast_state, fast, 0.f);
   SLRR_REQUIRE(fast_pose.fov > slow_pose.fov + 15.f);
-  SLRR_REQUIRE(fast_pose.fov <= slrr::kArcadeFovBase + slrr::kArcadeFovSpeed + 1e-3f);
+  SLRR_REQUIRE(fast_pose.fov <= slrr::arcade_view_tuning(slrr::ArcadeView::Far).fov_base +
+                                  slrr::arcade_view_tuning(slrr::ArcadeView::Far).fov_speed + 1e-3f);
   SLRR_REQUIRE(fast_pose.eye[2] > slow_pose.eye[2] + .5f);
 }
 
@@ -124,12 +125,59 @@ SLRR_TEST(bumps_move_the_car_more_than_the_view) {
   SLRR_REQUIRE(s.focus_y >= 4.2f - 1e-4f);
 }
 
+SLRR_TEST(views_and_their_order) {
+  using slrr::ArcadeView;
+  SLRR_REQUIRE(slrr::arcade_view_from_index(0) == ArcadeView::Bumper);
+  SLRR_REQUIRE(slrr::arcade_view_from_index(3) == ArcadeView::Far);
+  SLRR_REQUIRE(slrr::arcade_view_from_index(7) == slrr::kArcadeDefaultView);
+  SLRR_REQUIRE(slrr::kArcadeDefaultView == ArcadeView::Far);
+  SLRR_REQUIRE(slrr::arcade_view_tuning(ArcadeView::Bumper).mounted);
+  SLRR_REQUIRE(slrr::arcade_view_tuning(ArcadeView::Hood).mounted);
+  // Near sits closer and lower than far.
+  ArcadeCameraState a, b;
+  auto near = car(), far = car();
+  near.view = ArcadeView::Near;
+  const auto pn = arcade_camera_step(a, near, 0.f);
+  const auto pf = arcade_camera_step(b, far, 0.f);
+  SLRR_REQUIRE(pn.eye[2] < pf.eye[2] - 1.f && pn.eye[1] < pf.eye[1]);
+}
+
+SLRR_TEST(mounted_views_ride_on_the_car) {
+  using slrr::ArcadeView;
+  auto in = car(30.f);
+  in.box_valid = true;
+  in.box_lo[0] = -.9f; in.box_lo[1] = -.4f; in.box_lo[2] = -2.3f;
+  in.box_hi[0] = .9f;  in.box_hi[1] = 1.f;  in.box_hi[2] = 2.1f;
+  in.view = ArcadeView::Bumper;
+  ArcadeCameraState s;
+  auto p = arcade_camera_step(s, in, 0.f);
+  // Just ahead of the front (-Z) and low, looking straight ahead.
+  SLRR_REQUIRE(p.eye[2] < -2.3f && p.eye[2] > -2.5f);
+  SLRR_REQUIRE(std::fabs(p.eye[1] - (-.4f + slrr::kArcadeBumperHeight)) < 1e-4f);
+  SLRR_REQUIRE(p.at[2] < p.eye[2] - 5.f && std::fabs(p.at[1] - p.eye[1]) < 1e-4f);
+  in.view = ArcadeView::Hood;
+  p = arcade_camera_step(s, in, 0.f);
+  SLRR_REQUIRE(p.eye[1] > .6f && p.eye[2] < 0.f && p.eye[2] > -2.3f);
+  SLRR_REQUIRE(p.at[1] < p.eye[1]);  // looks over the bonnet
+  // Fixed to the chassis: a car rolled 90 degrees rolls the view and moves
+  // the hood eye sideways.
+  in.up[0] = 1.f; in.up[1] = 0.f;
+  p = arcade_camera_step(s, in, 0.f);
+  SLRR_REQUIRE(p.up[0] == 1.f && std::fabs(p.eye[1]) < 1e-4f && std::fabs(p.eye[0]) > .6f);
+  // Without a measured extent a typical saloon is assumed.
+  auto bare = car();
+  bare.view = ArcadeView::Bumper;
+  ArcadeCameraState s2;
+  SLRR_REQUIRE(arcade_camera_step(s2, bare, 0.f).eye[2] < -2.f);
+}
+
 }  // namespace
 
 int main() {
   const slrr::standalone::Test tests[] = {
       parked_car_is_seen_from_behind_and_above, read_only_queries_do_not_step,
       the_eye_trails_a_turn_then_settles_behind, a_slide_swings_the_view_toward_travel,
-      speed_widens_the_view_and_reach, seed_eye_and_zoom, bumps_move_the_car_more_than_the_view};
+      speed_widens_the_view_and_reach, seed_eye_and_zoom, bumps_move_the_car_more_than_the_view,
+      views_and_their_order, mounted_views_ride_on_the_car};
   return slrr::standalone::run("arcade_camera", tests);
 }
