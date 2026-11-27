@@ -179,5 +179,7 @@ void register_script_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections);
 // java.render.LightSource family (#235); also clears the light registry.
 void register_light_natives(Jvm& jvm);
 void register_particle_natives(Jvm& jvm, RpkIndex& rpk);
+// java.openslrr mod API (#487): OpenSLRR, CarState, CameraControl.
+void register_openslrr_natives(Jvm& jvm);
 
 }  // namespace slrr

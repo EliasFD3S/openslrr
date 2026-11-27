@@ -102,6 +102,12 @@ bool part_car_ground(void *key, float *y);
 bool part_camera_pose(void* car, int camera, float* matrix);
 // World linear velocity of a car's chassis body, in m/s.
 bool part_car_velocity(void* car, float* velocity);
+// World angular velocity of a car's chassis body, in rad/s (#487).
+bool part_car_angular_velocity(void* car, float* omega);
+// Extent of a car's meshes in its chassis frame (x right, y up, z back),
+// relative to the chassis origin, for the mod API's CarState.boxMin/boxMax
+// (#487). Measured from the drawn instances on each call.
+bool part_car_local_box(void *key, float *lo, float *hi);
 // Chassis owning a render node, with its active-world script frame.
 void *part_shadow_source(void *render, float *frame);
 // Advance only cars belonging to the active world, at a fixed physics step.

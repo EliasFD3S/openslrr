@@ -670,6 +670,9 @@ public class ROCTrack extends Track
 	
 	public void moveCamera( Vector3 p, Ypr o )
 	{
+		// OpenSLRR (#487): the staging view is Track's follow camera.
+		if( cameraMode == CAMMODE_PROVIDER )
+			changeCamFollow();
 		Vector3 cur = cam.getPos();
 		cur.sub( p );
 

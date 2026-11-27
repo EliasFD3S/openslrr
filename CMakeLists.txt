@@ -79,6 +79,7 @@ add_executable(slrr_host
   src/natives/natives_painter.cpp
   src/natives/natives_lights.cpp
   src/natives/natives_particles.cpp
+  src/natives/natives_openslrr.cpp
   src/ui/osd_registry.cpp
   src/ui/osd_script.cpp
   src/ui/ui_time.cpp
@@ -101,6 +102,7 @@ add_executable(slrr_host
   src/formats/skeleton_text.cpp
   src/formats/matrixdata.cpp
   src/resources/gameref.cpp
+  src/resources/mod_camera.cpp
   src/resources/script_lights.cpp
   src/resources/light_resource.cpp
   src/resources/ground_surface.cpp
@@ -449,6 +451,11 @@ if(BUILD_TESTING)
   target_compile_features(tyre_effects PRIVATE cxx_std_20)
   target_compile_options(tyre_effects PRIVATE /W3 /utf-8)
   add_test(NAME tyre_effects COMMAND tyre_effects)
+  add_executable(mod_camera tests/test_mod_camera.cpp src/resources/mod_camera.cpp)
+  target_include_directories(mod_camera PRIVATE include)
+  target_compile_features(mod_camera PRIVATE cxx_std_20)
+  target_compile_options(mod_camera PRIVATE /W3 /utf-8)
+  add_test(NAME mod_camera COMMAND mod_camera)
 endif()
 
 install(TARGETS slrr_host RUNTIME DESTINATION bin)

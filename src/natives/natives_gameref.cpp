@@ -414,6 +414,7 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
         }
         Object* moved = placed_body(self);
         gameref_set_matrix(moved, px, py, pz, yaw, pitch, roll);
+        gameref_set_camera_roll_from_matrix(moved, roll);  // OpenSLRR (#487)
         part_park_chassis(moved);
         return Value::make_void();
       });

@@ -267,6 +267,36 @@ void gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
   }
 }
 
+void gameref_set_camera_roll_from_matrix(void* key, float roll) {
+  GameRefState* n = gameref_get(key);
+  if (!n || n->kind != GameRefKind::Camera || !std::isfinite(roll)) return;
+  if (n->follow_vehicle && n->cockpit_index < 0 && !n->camera_free) return;
+  n->camera_roll = roll;
+}
+
+bool gameref_mod_camera_set(void* key, ModCameraMode mode, const float eye[3],
+                            const float at[3], const float up[3], float fov, void* car) {
+  GameRefState* n = gameref_get(key);
+  if (!n || n->kind != GameRefKind::Camera) return false;
+  int32_t car_id = 0;
+  if (mode == ModCameraMode::Relative) {
+    float frame[16];
+    if (!car || !part_camera_pose(car, -1, frame)) return false;
+    car_id = gameref_make_live(car);
+    if (!car_id) return false;
+  }
+  if (!mod_camera_set(n->mod_pose, mode, eye, at, up, fov)) return false;
+  n->mod_pose_car = car_id;
+  return true;
+}
+
+void gameref_mod_camera_clear(void* key) {
+  if (GameRefState* n = gameref_get(key)) {
+    n->mod_pose = {};
+    n->mod_pose_car = 0;
+  }
+}
+
 void gameref_set_event_mask(void* key, int32_t mask) {
   GameRefState* n = gameref_get(key);
   if (!n) n = gameref_upsert(key, GameRefKind::GameType);
@@ -994,6 +1024,38 @@ static bool world_camera_pose(float eye[3], float at[3], float* fov, float* znea
   if (up) { up[0] = 0; up[1] = 1; up[2] = 0; }
   if (dt > 0.f && cam->aov_goal > 0.f)
     cam->half_aov += (cam->aov_goal - cam->half_aov) * -std::expm1(-dt * cam->aov_rate);
+  // A mod camera pose (#487) is the whole view. A Relative pose reads the
+  // car's drawn frame now, so the draw-time query matches the drawn car even
+  // when the poses were published after the scripts ran (free-running
+  // physics). Without its car it keeps the last pose written to pos/ypr.
+  if (cam->mod_pose.mode != ModCameraMode::None) {
+    float origin[3];
+    const float* car = nullptr;
+    if (cam->mod_pose.mode == ModCameraMode::Relative) {
+      float frame[16];
+      const GameRefState* target = gameref_find_live(cam->mod_pose_car);
+      if (target && part_camera_pose(target->key, -1, frame)) {
+        std::copy_n(frame + 12, 3, origin);
+        car = origin;
+      }
+    }
+    float pose_up[3];
+    if (mod_camera_resolve(cam->mod_pose, car, eye, at, pose_up)) {
+      if (up) std::copy_n(pose_up, 3, up);
+      if (fov) *fov = cam->mod_pose.fov > 0.f ? cam->mod_pose.fov
+                                              : cam->half_aov > 1.f ? cam->half_aov : 60.f;
+      // Closer than the chase view's .20 for bumper and hood eyes.
+      if (znear) *znear = .10f;
+      if (zfar) *zfar = 3000.f;
+      if (dt > 0.f) {
+        // getPos / getOri on the camera (the GPS reads the renderer's) and
+        // clearPose continue from here.
+        std::copy_n(eye, 3, cam->pos);
+        mod_look_ypr(eye, at, cam->ypr[0], cam->ypr[1]);
+      }
+      return true;
+    }
+  }
   if (driving_camera_pose(*cam, eye, at, up, dt)) {
     const bool cockpit = cam->camera_attached && !cam->follow_variant;
     const bool chase = !cockpit && !cam->camera_free;

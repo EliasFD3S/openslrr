@@ -6,6 +6,7 @@ import java.util.resource.*;
 import java.render.*;	//Text
 import java.render.osd.*;	//Text
 import java.sound.*;
+import java.openslrr.*;	// OpenSLRR (#487): mod camera providers
 
 abstract public class Track extends Scene implements GameState
 {
@@ -107,6 +108,11 @@ abstract public class Track extends Scene implements GameState
 	final static int CAMMODE_INTERNAL = 5;
 	final static int CAMMODE_FREE = 6;
 	final static int CAMMODE_POINT = 7;
+	// OpenSLRR (#487): a mod CameraProvider has the follow view.
+	final static int CAMMODE_PROVIDER = 8;
+
+	CameraProvider	camProvider;		// the active provider, or null
+	CameraProvider	camProviderSynced;	// the selection syncCameraProvider last saw
 
 	Mechanic mechanic;
 	Painter painter;
@@ -136,6 +142,8 @@ abstract public class Track extends Scene implements GameState
 	
 	public void animate()
 	{
+		syncCameraProvider();	// OpenSLRR (#487)
+
 		/*if(player.car)
 		{
 			rota = new Vector3(Math.random()*0.1-0.05, Math.random()*0.1-0.05, 0);
@@ -329,6 +337,9 @@ abstract public class Track extends Scene implements GameState
 				lastCamPos.add( player.car.getPos() );
 				changeCamTarget(player.car);
 				changeCamFollow();// cameraPos );
+				// OpenSLRR (#487): a selected mod camera takes the follow view.
+				camProviderSynced = null;
+				syncCameraProvider();
 
 				map.command( "obs_add " + player.car.id() );
 			}
@@ -704,6 +715,8 @@ abstract public class Track extends Scene implements GameState
 		int cameras = cameraTarget.getInfo( GameType.GII_RENDER );
 		if (cameras == 0)	return;
 
+		providerOff();	// OpenSLRR (#487)
+
 		if (cameraMode == CAMMODE_INTERNAL)
 		{//change to _next_ int.cam.
 			if (++cameraNum >= cameras)
@@ -766,6 +779,8 @@ abstract public class Track extends Scene implements GameState
 	void makeCamExternal()	//ennek ki kellene kapcsolnia a renderert, ha az nem az ext. cam.
 	{
 		Vector3	pos;
+
+		providerOff();	// OpenSLRR (#487)
 
 		if (cameraMode == CAMMODE_FREE)
 		{
@@ -956,11 +971,31 @@ abstract public class Track extends Scene implements GameState
 
 	// OpenSLRR (#470): the change-view key cycles the driving views:
 	// follow, chase, then each cockpit camera (not the mirror and look-back
-	// ones), back to follow.
+	// ones), back to follow. With a mod camera selected (#487), the follow
+	// view is the provider's, and the key cycles the provider's views.
 	public void nextCamera()
 	{
 		if (!cameraTarget)	return;
 		if (!cameraTarget.id())	return;
+
+		CameraProvider p = selectedCameraProvider();
+		if( p && (cameraMode == CAMMODE_FOLLOW || cameraMode == CAMMODE_PROVIDER) )
+		{
+			int v = Cameras.view( p );
+			if( cameraMode == CAMMODE_PROVIDER && camProvider == p )
+			{
+				v++;
+				if( v >= p.views() )
+					v = 0;
+				Cameras.setView( p, v );
+				p.setView( v );
+			}
+			else
+				providerOn( p, v );
+			if( cameraMode == CAMMODE_PROVIDER )
+				setMessage( "Camera: " + p.viewName( v ) );
+			return;
+		}
 
 		if( cameraMode == CAMMODE_FOLLOW )
 		{
@@ -1007,6 +1042,67 @@ abstract public class Track extends Scene implements GameState
 		}
 	}
 
+	// OpenSLRR (#487): mod camera providers (java.openslrr.CameraProvider).
+	CameraProvider selectedCameraProvider()
+	{
+		return Cameras.get( Cameras.selected() );
+	}
+
+	// Hands the follow view to provider p in view v. Track's follow camera
+	// stays alive, hidden and bound to the car, because subclasses and race
+	// scripts use the cam field directly.
+	void providerOn( CameraProvider p, int v )
+	{
+		if( !p || !cameraTarget || !cameraTarget.id() )
+			return;
+		if( cameraMode != CAMMODE_FOLLOW )
+			changeCamFollow();	// also deactivates a provider
+		if( cameraMode != CAMMODE_FOLLOW )
+			return;
+		if( renderer )
+		{
+			renderer.command( "hide " + osd.getViewport().id() );
+			renderer = null;
+		}
+		camProvider = p;
+		cameraMode = CAMMODE_PROVIDER;
+		Cameras.setView( p, v );
+		p.world = map;
+		p.activate( cameraTarget, osd.getViewport(), v );
+	}
+
+	// Every other camera change starts here: the provider destroys its camera.
+	void providerOff()
+	{
+		if( camProvider )
+		{
+			CameraProvider p = camProvider;
+			camProvider = null;
+			p.deactivate();
+		}
+		if( cameraMode == CAMMODE_PROVIDER )
+			cameraMode = CAMMODE_NONE;
+	}
+
+	// A selection made while driving (the options) applies to the follow view.
+	void syncCameraProvider()
+	{
+		CameraProvider p = selectedCameraProvider();
+		if( p == camProviderSynced )
+			return;
+		camProviderSynced = p;
+		if( cameraMode == CAMMODE_FOLLOW || cameraMode == CAMMODE_PROVIDER )
+		{
+			if( p )
+			{
+				if( p != camProvider )
+					providerOn( p, Cameras.view( p ) );
+			}
+			else
+				changeCamFollow();
+		}
+	}
+
 	public void changeCamFree()
 	{
 //'freestyle' camera for debug
@@ -1030,6 +1126,8 @@ abstract public class Track extends Scene implements GameState
 
 	public void changeCamNone()
 	{
+		providerOff();	// OpenSLRR (#487)
+
 		if (renderer)
 		{
 			renderer.command( "hide " + osd.getViewport().id());
@@ -1074,6 +1172,9 @@ abstract public class Track extends Scene implements GameState
 		else
 		if (cameraMode == CAMMODE_INVCH)
 			changeCamInvChase();
+		else
+		if (cameraMode == CAMMODE_PROVIDER && camProvider)
+			providerOn( camProvider, Cameras.view( camProvider ) );	// OpenSLRR (#487): new target
 	}
 
 	public void changeCamTarget( GameRef obj )
@@ -1274,6 +1375,18 @@ abstract public class Track extends Scene implements GameState
 
 			if( cmd == CMD_LOOKBACK )
 			{
+				// OpenSLRR (#487): the active mod camera handles look back.
+				if( cameraMode == CAMMODE_PROVIDER )
+				{
+					if( camProvider )
+					{
+						int pressed = 0;
+						if( ((Event)m).flags )
+							pressed = 1;
+						camProvider.lookBack( pressed );
+					}
+				}
+				else
 				if(cameraMode == CAMMODE_FOLLOW)
 				{
 					if( ((Event)m).flags )	//press

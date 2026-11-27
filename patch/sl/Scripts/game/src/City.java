@@ -935,6 +935,9 @@ public class City extends Track
         map.haltTrafficCross( raceStart, 15.0 );
 
         //move camera (player _IS_ participating)
+		// OpenSLRR (#487): the staging view is Track's follow camera.
+		if( cameraMode == CAMMODE_PROVIDER )
+			changeCamFollow();
         Vector3 camPos = new Vector3( startDir );
         camPos.mul( -7.0 );     //moge
         camPos.y+=3; //fole
