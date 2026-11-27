@@ -2609,11 +2609,13 @@ Fix (OpenSLRR, typical values):
   race cars 0.01 / 0.02. Without it: linked fronts -0.10 / -0.03,
   independent rear arms 0.03 / 0.05; live axles and corners without arms
   rigid.
-- Bushing give: the same forces move the hub, inboard under the cornering
-  force and along the longitudinal force (back under braking), at most
-  15 mm each way, settling with the toe (`WheelState::compliance_offset`,
-  body frame). The solver's poses (`state_pose`) carry it, so the patch
-  and the contact move with the wheel. Moddable through
+- Bushing give: the same forces move the hub, along the steered wheel's
+  own side and heading (inboard under the cornering force, back under
+  braking), at most 15 mm each way, settling with the toe
+  (`WheelState::compliance_offset`, body frame). The solver's poses
+  (`state_pose`) carry it, so the patch and the contact move with the
+  wheel. Parking (`park_chassis`) clears it with the compliance steer, and
+  the support estimate of a running car adds it. Moddable through
   `WheelRef.setBushingCompliance(lateral, longitudinal)`, mm per kN; 86
   patched corners call it: road fronts 0.30 / 1.00, rears 0.20 / 0.80 (E36
   1.00 fore and aft, Golf's torsion beam 0.30 / 1.20), Ram 0.50 / 1.50,
@@ -2639,8 +2641,8 @@ Validation:
   rad/s against 0.499 rigid, and rears toeing in by 0.1 deg per kN of
   braking toe in by 0.24 deg alike under braking, the car running
   straight; with 0.3 mm per kN sideways and 1 mm per kN fore and aft, the
-  outer front gives 0.87 mm inboard in the turn and a braked front 3.8 mm
-  back. `vehicle_dynamics` 78/78, `missing_support` 17/17,
+  outer front gives 0.86 mm inboard in the turn, square to its steered
+  heading, and a braked front 3.8 mm back. `vehicle_dynamics` 78/78, `missing_support` 17/17,
   `physics_tick_rate` 9/9.
 - In `build/needle-game` with the new classes, Tsukuba bench (straight
   line): CoupeSport 8.74 / 34.86 / 71.98 km/h at 1 / 3 / 6 s with and
@@ -2657,6 +2659,5 @@ Limitations: the values are typical figures, not the real cars' measured
 toe curves or bushing rates; toe changes with the spring's travel only, so
 a live axle's roll steer (its whole axle yawing as the body rolls) is not
 modelled; compliance steer and give follow the last step's force with a
-fixed 30 ms lag; the give moves the hub along the body's axes, not the
-steered wheel's; the parked-car and support estimates in `part_runtime`
-use the rigid pose.
+fixed 30 ms lag; they are a few millimetres and under a degree, hardly
+visible on screen.

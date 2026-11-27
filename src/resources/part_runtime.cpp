@@ -3302,6 +3302,9 @@ void park_chassis(Object *chassis, bool shift) {
     state.seeded = true;
     state.contact = false;
     state.force = 0;
+    // Parked, no tyre force loads the bushings (#484).
+    state.compliance_steer = 0;
+    state.compliance_offset = {};
     contact += physics::wheel_pose(cfg, state.length).hub_origin -
                physics::Vec3{0, cfg.radius, 0};
     ++used;
@@ -3367,7 +3370,9 @@ bool script_pos(void *key, float *x, float *y, float *z) {
                                         parked_wheel_load(*rec, i, mass, com, count),
                                         length))
       length = static_cast<float>(cfg.rest);
-    contact += physics::wheel_pose(cfg, length).hub_origin -
+    // A running wheel's hub where its bushings hold it (#484).
+    contact += physics::wheel_pose(cfg, length).hub_origin +
+               (state.seeded ? state.compliance_offset : physics::Vec3{}) -
                physics::Vec3{0, cfg.radius, 0};
     ++used;
   }

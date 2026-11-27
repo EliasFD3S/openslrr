@@ -1818,10 +1818,15 @@ void VehicleDynamics::update_compliance_steer() {
                                        -.035, .035);
       // Toe-in turns a left wheel to the right: a negative steering angle.
       target = -toe_in * left;
-      // The hub gives inboard (+x on the left) and along the force (forward
-      // is -z), at most 15 mm each way.
-      offset = {std::clamp(w.bushing_lateral * inboard, -.015, .015) * left, 0,
-                -std::clamp(w.bushing_longitudinal * s.tire_force.longitudinal, -.015, .015)};
+      // The hub gives along the forces, on the steered wheel's own axes in
+      // the body's frame (its heading, and the side the lateral force acts
+      // along), at most 15 mm each way.
+      const double steer = i < drive.wheels.size() ? drive.wheels[i].steer : 0;
+      const Vec3 heading = steered_hub(s, steer).rotate({0, 0, -1});
+      const Vec3 ahead = Vec3{heading.x, 0, heading.z}.normalized();
+      const Vec3 across{-ahead.z, 0, ahead.x};
+      offset = across * std::clamp(w.bushing_lateral * s.tire_force.lateral, -.015, .015) +
+               ahead * std::clamp(w.bushing_longitudinal * s.tire_force.longitudinal, -.015, .015);
     }
     s.compliance_steer += (target - s.compliance_steer) * settle;
     s.compliance_offset += (offset - s.compliance_offset) * settle;

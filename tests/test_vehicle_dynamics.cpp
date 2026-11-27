@@ -2147,7 +2147,14 @@ SLRR_TEST(compliance_steer_toes_the_loaded_wheels_by_their_forces) {
     car.run(2.5, 0, 0, .09);
     yaw[soft] = car.dynamics.body.omega().y;
     outer[soft] = car.dynamics.state[1].compliance_steer / degree;
-    if (soft) give = car.dynamics.state[1].compliance_offset.x;
+    if (soft) {
+      // The give follows the steered wheel's side: square to its heading.
+      const auto& s = car.dynamics.state[1];
+      give = s.compliance_offset.x;
+      const Vec3 heading = (s.hub_rotation * wheel_steering(s.steer_axis, .09 + s.compliance_steer)).rotate({0, 0, -1});
+      SLRR_REQUIRE(std::abs(s.compliance_offset.dot(heading)) < 1e-6);
+      SLRR_REQUIRE(std::abs(s.compliance_offset.z) > 1e-5);
+    }
   }
   Car braking;
   for (size_t i = 0; i < 4; ++i) {
