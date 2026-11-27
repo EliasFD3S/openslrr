@@ -273,6 +273,16 @@ public class ControlSet
 		{
 			deviceID [i] = device;
 			axisID [i] = axis;
+			// OpenSLRR (#488): a mod key the player clears (Esc in the
+			// options) stays unbound, whatever its default later becomes;
+			// binding it again lifts that.
+			if( i >= MOD_FIRST )
+			{
+				if( device < 0 || axis < 0 )
+					modFlags[i - MOD_FIRST] = MODKEY_CLEARED;
+				else
+					modFlags[i - MOD_FIRST] = 0;
+			}
 		}
 	}
 
@@ -704,15 +714,8 @@ public class ControlSet
 		{
 			if( modId[s] != null )
 			{
-				int k = ModKeys.find( modId[s] );
-				if( k >= 0 )
-				{
-					// An unbound key that has a default was cleared by the player.
-					if( slotEmpty( MOD_FIRST + s ) && ModKeys.defaultKey( k ) > 0 )
-						modFlags[s] = MODKEY_CLEARED;
-					else
-						modFlags[s] = 0;
-				}
+				// modFlags records what the player did (change), not what the
+				// current default suggests.
 				n++;
 			}
 		}

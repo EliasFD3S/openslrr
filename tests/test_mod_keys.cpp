@@ -284,6 +284,36 @@ void truncated_trailer_is_safe() {
   std::puts("PASS a truncated mod key trailer loads its complete records and stops at the end");
 }
 
+// A clear is the player's action, recorded when it happens: a key without a
+// default, bound and then cleared, stays cleared when a later version of the
+// mod gives it a default; binding it again lifts the clear.
+void clear_survives_a_new_default() {
+  const std::string file = "save/controls/clr";
+  Boot one;
+  SLRR_REQUIRE(one.reg("m.key", "M", 0) == kAxisBase);
+  Object* cs = one.set();
+  const int slot = one.slot_of(cs, 0);
+  one.change(cs, slot, 0, kH);
+  one.change(cs, slot, -1, -1);  // Esc in the options
+  one.call(cs, "save", file);
+  Boot two;
+  one.copy_to(two, file);
+  SLRR_REQUIRE(two.reg("m.key", "M", kK) == kAxisBase);
+  Object* back = two.loaded(file);
+  SLRR_REQUIRE(two.slot_of(back, 0) == slot && Boot::get(back, "axisID", slot) == -1);
+  // Bound again and saved: the clear is gone, the binding stays.
+  two.change(back, slot, 0, kJ);
+  two.call(back, "save", file);
+  Boot three;
+  two.copy_to(three, file);
+  SLRR_REQUIRE(three.reg("m.key", "M", kK) == kAxisBase);
+  Object* again = three.loaded(file);
+  SLRR_REQUIRE(Boot::get(again, "axisID", slot) == kJ);
+  // Unbound by something other than the player (a file without the key's
+  // binding) still takes the default: only change() records a clear.
+  std::puts("PASS a cleared mod key stays cleared under a new default; rebinding lifts it");
+}
+
 void registration_limits() {
   Boot boot;
   SLRR_REQUIRE(boot.reg(nullptr, "none", kG) == -1 && boot.reg("", "empty", kG) == -1);
@@ -357,7 +387,7 @@ void virtual_axis_delivery() {
 
 int main() {
   const standalone::Test tests[] = {old_files_keep_loading, binding_follows_id, truncated_trailer_is_safe,
-                                    registration_limits,
+                                    clear_survives_a_new_default, registration_limits,
                                     virtual_axis_delivery};
   return standalone::run("mod_keys", tests);
 }
