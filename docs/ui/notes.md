@@ -464,19 +464,24 @@ Verified on the PR branch (f422ebb), by reading the code; not run in game.
   cycle skips mirror and look-back cameras and returns to follow after the
   last cockpit camera (or if there are none). Holding LOOK BACK pauses the
   cycle in every mode so release restores the view it started from.
+- `changeCamChase` sets `CAMMODE_CHASE` only when it really shows the chase
+  view; stock set it even after falling back to follow, so B did nothing and
+  V named the wrong view. Consequence: once a chase target is lost the mode is
+  FOLLOW, so a later `changeCamTarget2` does not switch back to chase by
+  itself, and the demo timer settles on follow. `changeCamInvChase` still
+  checks only `id()`, but no key reaches it since F5 was removed.
 - Both Game controls pages expose CHANGE VIEW (slot 35). The classic page
   is still reachable: applying a display mode in OsdxOptions selects the
   owner’s classic options group, which becomes visible when OsdxOptions closes.
-  On load,
-  only the stock keyboard F1/F2 pair in slots 35/36 migrates to V. If slot 35
+  On load, only the stock keyboard F1/F2 pair in slots 35/36 migrates to V. If slot 35
   was rebound or cleared, it stays that way, but stock F2 in the hidden slot
   36 is still cleared: both slots drive the same virtual axis. A later F1
   binding with slot 36 empty is preserved. The hidden stock F5 look-back
   binding in slot 37 is also cleared; the visible LOOK BACK defaults to B.
 
-Earlier validation (`eca4b2f`, Windows Release): in Valo City with the Baiern and a legacy
-profile edited to V/F2, F2 left the camera in follow and V selected chase
-then cockpit. Holding B, pressing V and releasing B restored the steering-wheel
+Earlier validation (`eca4b2f`, Windows Release, before chase required a live
+target): in Valo City with the Baiern and a legacy profile edited to V/F2, F2
+left the camera in follow and V selected chase then cockpit. Holding B, pressing V and releasing B restored the steering-wheel
 view; the next V displayed “Camera: cockpit 2”. The Game controls page showed
 CHANGE VIEW bound to V; interactive rebinding and save/reload were not tested.
 
@@ -489,7 +494,7 @@ one. A later hold test repeated the sequence through cockpit 5 and returned
 to follow. Chase with a live target and career autosave persistence were not
 exercised.
 
-**B release with V press (Windows Release, same car and map).** LOOK BACK is
+**B release with V press (`c3d8c0f`, Windows Release, same car and map).** LOOK BACK is
 registered before V so its release restores the old view before V advances.
 From follow and cockpit 1, V did nothing while B was held. Sending B up and
 V down back-to-back selected cockpit 1 and cockpit 2 respectively; another
