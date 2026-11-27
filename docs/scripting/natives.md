@@ -506,7 +506,7 @@ Declared by the patched `parts/scripts/src/WheelRef.java`:
 - `WheelRef.setPanhardRod(length, side)`: a live axle's Panhard rod length
   (0.3 to 2 m, 0 none) and the side of its body end (+1 right, -1 left).
   The patched MC rears call it; without it, none
-  ([notes](../vehicles/notes.md#roll-centre-migration-and-panhard-rod-496)).
+  ([notes](../vehicles/notes.md#roll-centre-migration-panhard-rod-and-wheel-inertia-496)).
 
 ### Math functions (#463)
 

@@ -2808,7 +2808,7 @@ springs; slot ids 111 / 121 / 131 / 301 / 311 / 351 follow the stock
 chassis, so a mod laid out otherwise gets only its wheel parts or the CFG
 mass.
 
-## Roll centre migration and Panhard rod (#496)
+## Roll centre migration, Panhard rod and wheel inertia (#496)
 
 Cause: the #490 roll centres stayed at their static height. A real one
 moves with the travel: a strut's drops about twice as fast as the body,
@@ -2819,15 +2819,31 @@ rod's axle end swinging on its arc.
 
 Fix (OpenSLRR, typical values):
 
-- `WheelConfig::roll_center_migration`: the centre's height in
-  `update_jacking` is the static one plus migration x bump (the static ride
-  height of #481, which `WheelConfig::needs_static_length` now also wants
-  for a migration or a rod), clamped to 0..0.6 m. Moddable through
+- `WheelConfig::roll_center_migration`: each corner's arms swing about a
+  front-view instant centre fixed in the body, on the static force line
+  (patch to roll centre) at -half track / migration from the patch (inboard
+  when the centre drops in bump, outboard when it rises). In
+  `update_jacking` the force line runs from the patch as it is now to that
+  point, so its slope (the centre's height) follows the corner's travel and
+  the body's roll, not linearly, and the outer and inner centres part in a
+  turn (the centre's sideways migration). At the static height it is the
+  #490 slope; the static ride height is the #481 one, which
+  `WheelConfig::needs_static_length` now also wants for a migration or a
+  rod. The centre stays within ±0.6 m of the ground. Moddable through
   `WheelRef.setRollCenterMigration(rate)`; all 96 patched corners call it
   (struts -2.0, short-long arms and multilinks -1.0, E36 rear -1.5, Golf
   torsion beam -0.5, Impreza rear strut -2.0, Camaro Panhard axle -0.5, Ram
   leaf axle 0). Without it: front strut fit -2, other front arms -1,
   independent rears -1.5, live axles -0.5.
+- Wheel inertia: the fixed 1.6 kg m^2 per wheel becomes
+  `WheelConfig::spin_inertia`, from the corner's parts in `dynamics_wheels`:
+  the tyre an annulus from the bead (0.65 of its radius) to the tread, the
+  rim's mass near the bead, the brake rotor (six tenths of the brake, a disc
+  of the patched spec's diameter, 28 cm without it) and 0.03 for the hub.
+  In game: CoupeSport 0.93, MC 0.75 front and 1.00 rear, SuperDuty 1.46 /
+  1.76. The drive train's reflected inertia sums weight^2 / inertia and the
+  differential evens two spins by their reduced inertia (both the same as
+  before for equal wheels); without a rim, 1.6.
 - Panhard rod: `WheelConfig::panhard_length` / `panhard_side`,
   `WheelRef.setPanhardRod(length, side)` (patched Camaro: 0.95 m, body end
   on the left). Level at the static height, the axle moves towards the rod's
@@ -2840,17 +2856,23 @@ Validation:
 - Compilation: `slrr_host` Release; `WheelRef` and the 96 suspension
   classes in `build/brake-compile-root`, the generator's output identical
   to the edited sources.
-- `vehicle_dynamics` 83/83 with two new tests: on swing arms in the steady
-  turn with 10 cm centres, roll per kN of cornering force 0.375 deg fixed,
-  0.400 dropping 2 m per metre; a live axle on a 0.95 m rod pushed 4 cm into
-  bump or droop moves 0.842 mm towards the rod's body end, both ends alike.
+- `vehicle_dynamics` 84/84 with three new tests: on swing arms in the
+  steady turn with 10 cm centres, roll per kN of cornering force 0.375 deg
+  fixed, 0.392 dropping 2 m per metre, the outer front centre at 5.3 cm and
+  the inner at 14.0; a live axle on a 0.95 m rod pushed 4 cm into bump or
+  droop moves 0.842 mm towards the rod's body end, both ends alike; one
+  brake step slows a 0.9 kg m^2 wheel in the air 1.8 times as much as the
+  generic 1.6.
   `missing_support` 17/17, `physics_tick_rate` 9/9.
 - In `build/needle-game` with the new classes, Tsukuba bench with ASR
-  forced (temporary switch): CoupeSport 71.99, MC 83.14, SuperDuty 90.23
-  km/h at 6 s, as with #494 alone; no script error.
-- Not checked in game: cornering, the feel.
+  forced (temporary switch): with the migration and rod alone CoupeSport
+  71.99, MC 83.14, SuperDuty 90.23 km/h at 6 s, as with #494; with the
+  wheels' own inertia CoupeSport 75.32, MC 86.18 (lighter wheels spin up
+  faster), SuperDuty 90.33; no script error.
+- Not checked in game: cornering, braking and launches with the lighter
+  wheels (ABS, lock-ups), the feel.
 
-Limitations: the migration is linear in each corner's own travel, not the
-arms' geometry, and only vertical (the centre's sideways migration in roll
-is not modelled); the rod is level at rest and its shift does not steer the
-axle; the rates are typical figures.
+Limitations: the instant centre is placed from the roll centre and its
+migration rate, not the arms' real pivots; the rod is level at rest and its
+shift does not steer the axle; the rates, the bead radius and the parts'
+shares in the inertia are typical figures.

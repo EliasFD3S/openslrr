@@ -3120,6 +3120,30 @@ void dynamics_wheels(Record &rec) {
       if (live.unsprung_mass > 0) cfg.unsprung = live.unsprung_mass;
       else if (parts > 1) cfg.unsprung = parts;
     }
+    // Spin inertia (#497): the tyre an annulus from the bead (taken at 0.65
+    // of its radius) to the tread, the rim's mass near the bead, the brake
+    // rotor (six tenths of the brake, a disc of the patched spec's diameter,
+    // 28 cm without it) and 0.03 for the hub. A 205/55 R16 on a 8 kg rim:
+    // about 0.9 kg m^2. Without a rim the generic 1.6.
+    cfg.spin_inertia = 0;
+    {
+      std::vector<Object *> rims;
+      corner_wheel_parts(rec, i, rims);
+      double total = 0;
+      for (Object *rim : rims) total += subtree_mass_properties(rim).mass;
+      Object *tyre = corner_tyre(rec, i);
+      const double tyre_mass = tyre ? std::min(total, subtree_mass_properties(tyre).mass) : 0.0;
+      const double outer = cfg.radius > .1 ? cfg.radius : .3, bead = .65 * outer;
+      if (total > 1) {
+        const auto brake = rec.children.find(111 + static_cast<int>(i));
+        const double brake_mass =
+            brake != rec.children.end() ? subtree_mass_properties(brake->second).mass : 0.0;
+        const double rotor = .5 * (live.brake_diameter > .1 ? live.brake_diameter : .28);
+        cfg.spin_inertia = .95 * tyre_mass * (outer * outer + bead * bead) / 2 +
+                           .55 * (total - tyre_mass) * bead * bead +
+                           .6 * (.6 * brake_mass) * rotor * rotor + .03;
+      }
+    }
     // A live axle's beam (#494): WheelRef.setAxleMass, or a typical 50 kg
     // housing and differential; its wrap on the springs or links,
     // WheelRef.setAxleWrap, or a typical 0.4 kN per mm at 15 % damping.

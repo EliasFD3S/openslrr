@@ -2311,10 +2311,12 @@ SLRR_TEST(a_live_axle_beam_shares_its_mass_and_winds_up_under_a_launch) {
 
 SLRR_TEST(a_migrating_roll_centre_drops_on_the_loaded_wheel) {
   // #496: the test saloon on swing arms in a steady left turn, its roll
-  // centres 10 cm up, fixed or dropping 2 m per metre of bump. The outer
-  // wheels compress, so their centres (which carry the larger force) drop:
-  // the arms take less of the moment and the body rolls more per newton.
-  double per_force[2];
+  // centres 10 cm up, fixed or dropping 2 m per metre of bump (an instant
+  // centre 0.375 m inboard of each patch). The outer wheels compress and
+  // the body rolls, so the outer centres (which carry the larger force)
+  // drop and the inner ones rise: the arms take less of the moment and the
+  // body rolls more per newton.
+  double per_force[2], outer_centre = 0, inner_centre = 0;
   for (int moving = 0; moving < 2; ++moving) {
     Car car;
     for (size_t i = 0; i < 4; ++i) {
@@ -2334,10 +2336,23 @@ SLRR_TEST(a_migrating_roll_centre_drops_on_the_loaded_wheel) {
     double side = 0;
     for (const auto& s : car.dynamics.state) side += s.tire_force.lateral;
     per_force[moving] = std::abs(car.roll()) / std::abs(side);
-    if (moving) SLRR_REQUIRE(car.dynamics.wheels[1].static_length > 0);
+    if (moving) {
+      SLRR_REQUIRE(car.dynamics.wheels[1].static_length > 0);
+      // The centre each front wheel's push stands for: jacking per inboard
+      // newton times the half track (0.75 m). Right is outer, left inner.
+      const auto centre_of = [&](size_t i) {
+        const auto& s = car.dynamics.state[i];
+        const double inboard = s.tire_force.lateral * (i % 2 ? -1 : 1);
+        return s.jacking / inboard * .75;
+      };
+      outer_centre = centre_of(1);
+      inner_centre = centre_of(0);
+    }
   }
-  std::printf("RCMIGRATION roll per kN %.3f -> %.3f deg%c", per_force[0] * 57.3e3, per_force[1] * 57.3e3, 10);
+  std::printf("RCMIGRATION roll per kN %.3f -> %.3f deg, front centres outer %.3f inner %.3f m%c",
+              per_force[0] * 57.3e3, per_force[1] * 57.3e3, outer_centre, inner_centre, 10);
   SLRR_REQUIRE(per_force[1] > per_force[0] * 1.02);
+  SLRR_REQUIRE(outer_centre < .10 && inner_centre > .10);
 }
 
 SLRR_TEST(a_panhard_rod_pulls_the_axle_towards_its_body_end) {
@@ -2366,6 +2381,26 @@ SLRR_TEST(a_panhard_rod_pulls_the_axle_towards_its_body_end) {
     SLRR_REQUIRE(left == right);
     SLRR_REQUIRE(left < -.0006 && left > -.0011);
   }
+}
+
+SLRR_TEST(a_lighter_wheel_spins_down_faster_under_the_same_brake) {
+  // #497: in the air, one step of the same brake torque slows a 0.9 kg m^2
+  // wheel (a road car's rim, tyre and rotor) 1.6 / 0.9 times as much as the
+  // generic 1.6.
+  double drop[2];
+  for (int light = 0; light < 2; ++light) {
+    Car car;
+    for (auto& w : car.dynamics.wheels) w.spin_inertia = light ? .9 : 0;
+    car.dynamics.body.position.y += 2;
+    for (auto& s : car.dynamics.state) s.spin = 50;
+    car.dynamics.drive.engaged = false;
+    car.dynamics.drive.brake = .3;
+    SLRR_REQUIRE(car.dynamics.advance(VehicleDynamics::timestep, flat_ground) == 1);
+    drop[light] = 50 - car.dynamics.state[0].spin;
+  }
+  std::printf("INERTIA spin drop %.3f -> %.3f rad/s%c", drop[0], drop[1], 10);
+  SLRR_REQUIRE(drop[0] > 0);
+  SLRR_REQUIRE(std::abs(drop[1] / drop[0] - 1.6 / .9) < .05);
 }
 
 SLRR_TEST(hot_brake_fluid_boils_and_the_pressure_falls) {
@@ -2401,6 +2436,7 @@ int main() {
       a_live_axle_beam_shares_its_mass_and_winds_up_under_a_launch,
       a_migrating_roll_centre_drops_on_the_loaded_wheel,
       a_panhard_rod_pulls_the_axle_towards_its_body_end,
+      a_lighter_wheel_spins_down_faster_under_the_same_brake,
       hard_braking_declutches_so_the_engine_never_pushes_the_rear_wheels,
       coasting_engine_braking_fades_with_the_speed,
       releasing_a_hard_brake_at_speed_takes_up_without_a_jolt,

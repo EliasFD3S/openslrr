@@ -136,6 +136,9 @@ struct WheelConfig {
   // CFG `type` mass. Zero keeps the massless ray. An arm length projects the
   // support onto the native hinge circle; the spring stays the 1-DOF element.
   double unsprung = 0, arm_length = 0;
+  // The wheel's spin inertia (kg m^2, #497): its rim, tyre and brake rotor.
+  // Zero: the fixed 1.6 of the generic wheel.
+  double spin_inertia = 0;
   Vec3 arm_pivot, arm_axis{0, 0, 1};
   // Raw setHub arguments. Without a hub the arm circle is the support point.
   bool has_hub = false;

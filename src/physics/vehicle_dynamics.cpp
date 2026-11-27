@@ -1117,7 +1117,10 @@ void solve_anti_roll(RigidBody& body, const std::array<WheelConfig, 4>& wheels,
 }
 
 constexpr double rpm_per_rad = 9.54929658551372;
-constexpr double wheel_inertia = 1.6;
+// The wheel's spin inertia (kg m^2): WheelConfig::spin_inertia (#497,
+// from its rim, tyre and brake rotor), or the fixed 1.6 it replaces.
+constexpr double kWheelInertia = 1.6;
+double spin_inertia(const WheelConfig &w) { return w.spin_inertia > 0 ? w.spin_inertia : kWheelInertia; }
 
 // The tyre as it is now (#446, #452, #461): its grip at the tread
 // temperature, on the ground's material and at its wear; its stiffness,
@@ -1318,6 +1321,8 @@ double VehicleDynamics::engine_limit_fraction() const {
 
 void VehicleDynamics::step_drive() {
   const double rpm = engine_omega * rpm_per_rad;
+  // square_weights: the sum of weight^2 / spin inertia, for the driven
+  // wheels' inertia seen at the shaft (weights^2 / it; #497).
   double weights = 0, shaft = 0, road_shaft = 0, square_weights = 0;
   for (size_t i = 0; i < wheels.size(); ++i) {
     if (!wheels[i].enabled)
@@ -1327,7 +1332,7 @@ void VehicleDynamics::step_drive() {
     const double w = cfg.weight;
     weights += w;
     shaft += w * s.spin;
-    square_weights += w * w;
+    square_weights += w * w / spin_inertia(wheels[i]);
     if (s.contact && wheels[i].radius > 0) {
       const Vec3 forward = wheel_forward(body, cfg.steer, s);
       const Vec3 tangent =
@@ -1453,7 +1458,7 @@ void VehicleDynamics::step_drive() {
   if (weights > 0 && ratio != 0 && shift_time_ == 0 &&
       (engine_running || !drive.auto_clutch)) {
     const double transmission =
-        wheel_inertia * weights * weights / square_weights;
+        weights * weights / square_weights;
     const double reflected = transmission / (ratio * ratio);
     const double mix = reflected / (drive.inertia + reflected);
     const double mismatch = shaft * ratio - engine_omega;
@@ -1487,7 +1492,7 @@ void VehicleDynamics::step_drive() {
     for (size_t i = 0; i < wheels.size(); ++i)
       if (wheels[i].enabled)
         state[i].spin +=
-            drive_impulse * drive.wheels[i].weight / (weights * wheel_inertia);
+            drive_impulse * drive.wheels[i].weight / (weights * spin_inertia(wheels[i]));
   } else if (automatic_shift && engine_running) {
     const double target =
         std::max(drive.idle, std::abs(road_shaft * ratio) * rpm_per_rad);
@@ -1518,8 +1523,10 @@ void VehicleDynamics::step_drive() {
           left_weight <= 0 || right_weight <= 0)
         continue;
 
-      double transfer =
-          (state[left].spin - state[right].spin) * wheel_inertia * 0.5;
+      // The impulse that evens the two spins: half the inertia when equal.
+      const double left_inertia = spin_inertia(wheels[left]), right_inertia = spin_inertia(wheels[right]);
+      double transfer = (state[left].spin - state[right].spin) * left_inertia * right_inertia /
+                        (left_inertia + right_inertia);
       if (lock_ratio < 1.0) {
         const double axle_share = (left_weight + right_weight) / weights;
         const double preload = 35.0 * lock_ratio * dt_;
@@ -1530,8 +1537,8 @@ void VehicleDynamics::step_drive() {
             std::abs(drive_impulse) * axle_share * lock_ratio * ramp;
         transfer = std::clamp(transfer, -limit, limit);
       }
-      state[left].spin -= transfer / wheel_inertia;
-      state[right].spin += transfer / wheel_inertia;
+      state[left].spin -= transfer / left_inertia;
+      state[right].spin += transfer / right_inertia;
     }
   }
 
@@ -1554,6 +1561,7 @@ void VehicleDynamics::step_drive() {
     auto &s = state[i];
     if (!wheel.enabled)
       continue;
+    const double wheel_inertia = spin_inertia(wheel);
     const auto brake = [](double speed, double amount) {
       return std::copysign(std::max(0.0, std::abs(speed) - amount), speed);
     };
@@ -1751,13 +1759,7 @@ void VehicleDynamics::update_jacking() {
     // a force towards the car's middle (the outer wheel's) lifts the body,
     // one away from it (the inner wheel's) pulls it down, so that much of
     // the roll moment no longer goes through the springs.
-    // The centre migrates with the corner's travel (#496) about its static
-    // height.
-    double centre = w.roll_center_height;
-    if (w.roll_center_migration != 0 && w.static_length > 0)
-      centre += w.roll_center_migration * (w.static_length - s.length);
-    centre = std::clamp(centre, 0.0, .6);
-    if (centre > 0) {
+    if (w.roll_center_height > 0) {
       double across = 0;
       int partners = 0;
       for (size_t j = 0; j < wheels.size(); ++j)
@@ -1769,8 +1771,29 @@ void VehicleDynamics::update_jacking() {
       const double half_track = partners ? std::abs(w.center.x - across / partners) / 2
                                           : std::abs(w.center.x - body.center.x);
       if (half_track > .3) {
-        const double inboard = s.tire_force.lateral * (w.center.x < 0 ? 1 : -1);
-        s.jacking += inboard * centre / half_track;
+        const double toward_middle = w.center.x < 0 ? 1 : -1;
+        const double inboard = s.tire_force.lateral * toward_middle;
+        double slope = w.roll_center_height / half_track;
+        // Migration (#496): the arms swing about a front-view instant centre
+        // fixed in the body, on the static force line (patch to roll centre)
+        // at -half_track / migration from the patch: inboard when the
+        // centre drops in bump, outboard when it rises. The force line runs
+        // from the patch as it is now to that point, so the centre moves
+        // with the corner's travel and with the body's roll, and the two
+        // wheels' centres part in a turn.
+        if (w.roll_center_migration != 0 && w.static_length > 0) {
+          const double reach =
+              std::clamp(-half_track / w.roll_center_migration, -20.0, 20.0);
+          const Vec3 rest_patch = wheel_pose(w, w.static_length).hub_origin - Vec3{0, w.radius, 0};
+          const Vec3 centre = body_point(
+              body, rest_patch + Vec3{toward_middle * reach, w.roll_center_height * reach / half_track, 0});
+          const Vec3 across_body = body.orientation.rotate({toward_middle, 0, 0});
+          const Vec3 inward = Vec3{across_body.x, 0, across_body.z}.normalized();
+          const Vec3 line = centre - s.patch;
+          const double run = line.dot(inward);
+          if (std::abs(run) > .05) slope = line.y / run;
+        }
+        s.jacking += inboard * std::clamp(slope, -.6 / half_track, .6 / half_track);
       }
     }
   }
