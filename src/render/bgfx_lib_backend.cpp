@@ -23,10 +23,11 @@
 #include <cctype>
 #include <string>
 
-// Only embed the profiles we compile (dxbc + glsl).
-#define BGFX_PLATFORM_SUPPORTS_DXIL 0
+// Only embed the profiles we compile: dxbc (D3D11), dxil (D3D12), glsl and
+// spirv (Vulkan). D3D12 and Vulkan are selected by --renderer (#186).
+#define BGFX_PLATFORM_SUPPORTS_DXIL 1
 #define BGFX_PLATFORM_SUPPORTS_ESSL 0
-#define BGFX_PLATFORM_SUPPORTS_SPIRV 0
+#define BGFX_PLATFORM_SUPPORTS_SPIRV 1
 #define BGFX_PLATFORM_SUPPORTS_WGSL 0
 #define BGFX_PLATFORM_SUPPORTS_METAL 0
 #define BGFX_PLATFORM_SUPPORTS_PSSL 0
@@ -38,6 +39,7 @@
 #include <atomic>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <future>
 #include <cstdio>
 #include <cstring>
@@ -86,6 +88,35 @@
 #include "glsl/vs_particle.sc.bin.h"
 #include "dxbc/fs_particle.sc.bin.h"
 #include "glsl/fs_particle.sc.bin.h"
+// The same shaders for D3D12 (DXIL) and Vulkan (SPIR-V), #186.
+#include "dxil/vs_osd_text.sc.bin.h"
+#include "spirv/vs_osd_text.sc.bin.h"
+#include "dxil/fs_osd_text.sc.bin.h"
+#include "spirv/fs_osd_text.sc.bin.h"
+#include "dxil/vs_mesh.sc.bin.h"
+#include "spirv/vs_mesh.sc.bin.h"
+#include "dxil/vs_mesh_inst.sc.bin.h"
+#include "spirv/vs_mesh_inst.sc.bin.h"
+#include "dxil/vs_skin.sc.bin.h"
+#include "spirv/vs_skin.sc.bin.h"
+#include "dxil/fs_mesh.sc.bin.h"
+#include "spirv/fs_mesh.sc.bin.h"
+#include "dxil/vs_vehicle.sc.bin.h"
+#include "spirv/vs_vehicle.sc.bin.h"
+#include "dxil/fs_vehicle.sc.bin.h"
+#include "spirv/fs_vehicle.sc.bin.h"
+#include "dxil/vs_shadow.sc.bin.h"
+#include "spirv/vs_shadow.sc.bin.h"
+#include "dxil/fs_static_shadow.sc.bin.h"
+#include "spirv/fs_static_shadow.sc.bin.h"
+#include "dxil/vs_ao.sc.bin.h"
+#include "spirv/vs_ao.sc.bin.h"
+#include "dxil/fs_ao.sc.bin.h"
+#include "spirv/fs_ao.sc.bin.h"
+#include "dxil/vs_particle.sc.bin.h"
+#include "spirv/vs_particle.sc.bin.h"
+#include "dxil/fs_particle.sc.bin.h"
+#include "spirv/fs_particle.sc.bin.h"
 
 #include "bgfx_lib_backend.hpp"
 #include "reflection_capture.hpp"
@@ -117,7 +148,59 @@ static const bgfx::EmbeddedShader k_ao[] = {
 static const bgfx::EmbeddedShader k_vehicle[] = {
     BGFX_EMBEDDED_SHADER(vs_vehicle), BGFX_EMBEDDED_SHADER(fs_vehicle),
     BGFX_EMBEDDED_SHADER_END()};
+
+// --renderer NAME (#186). Empty or "auto" leaves the choice to bgfx, which
+// takes Direct3D 11 on Windows.
+std::string g_renderer_request;
+
+std::string lower_ascii(std::string text) {
+  for (char& c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return text;
+}
+
+bool renderer_from_name(const std::string& name, bgfx::RendererType::Enum& type) {
+  const std::string key = lower_ascii(name);
+  if (key.empty() || key == "auto") type = bgfx::RendererType::Count;
+  else if (key == "d3d11") type = bgfx::RendererType::Direct3D11;
+  else if (key == "d3d12") type = bgfx::RendererType::Direct3D12;
+  else if (key == "vulkan") type = bgfx::RendererType::Vulkan;
+  else return false;
+  return true;
+}
+
+// The command line wins; SLRR_RENDERER lets the GPU test executables, which
+// have no options, run on another backend.
+bgfx::RendererType::Enum requested_renderer() {
+  bgfx::RendererType::Enum type = bgfx::RendererType::Count;
+  std::string name = g_renderer_request;
+  if (name.empty()) {
+    if (const char* env = std::getenv("SLRR_RENDERER")) name = env;
+  }
+  if (!renderer_from_name(name, type))
+    std::fprintf(stderr, "[bgfx] unknown renderer '%s', using auto\n", name.c_str());
+  return type;
+}
+
+// SLRR_GPU_VENDOR=nvidia|amd|intel: on a machine with two GPUs each backend
+// otherwise picks its own default adapter, which makes timings incomparable.
+uint16_t requested_gpu_vendor() {
+  const char* env = std::getenv("SLRR_GPU_VENDOR");
+  const std::string key = lower_ascii(env ? env : "");
+  if (key == "nvidia") return BGFX_PCI_ID_NVIDIA;
+  if (key == "amd") return BGFX_PCI_ID_AMD;
+  if (key == "intel") return BGFX_PCI_ID_INTEL;
+  if (!key.empty())
+    std::fprintf(stderr, "[bgfx] unknown SLRR_GPU_VENDOR '%s', using the default adapter\n", key.c_str());
+  return BGFX_PCI_ID_NONE;
+}
 }  // namespace
+
+bool bgfx_request_renderer(const std::string& name) {
+  bgfx::RendererType::Enum type;
+  if (!renderer_from_name(name, type)) return false;
+  g_renderer_request = name;
+  return true;
+}
 
   bool LibBgfxBackend::open(int32_t width, int32_t height, const char* title)
 {
@@ -163,7 +246,9 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
     }
 
     bgfx::Init init;
-    init.type = bgfx::RendererType::Count;
+    const bgfx::RendererType::Enum requested = requested_renderer();
+    init.type = requested;
+    init.vendorId = requested_gpu_vendor();
     // A day frame queues the AO prepass, car tiles, reflection faces, four
     // sun cascades and four opaque world runs (#359). With bgfx's default of
     // eight encoders (the host's included) the jobs left without one ran on
@@ -186,6 +271,16 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
 #endif
 
     const bgfx::RendererType::Enum rt = bgfx::getRendererType();
+#ifdef _WIN32
+    // bgfx falls back to another backend when the requested one cannot start.
+    // A run that asked for one must not silently measure another (#186).
+    if (requested != bgfx::RendererType::Count && rt != requested) {
+      std::fprintf(stderr, "[bgfx] renderer %s is unavailable (bgfx started %s)\n",
+                   bgfx::getRendererName(requested), bgfx::getRendererName(rt));
+      { bgfx::shutdown(); host_encoder_ = nullptr; }
+      return false;
+    }
+#endif
     program_ = create_owned_program(
         bgfx::createEmbeddedShader(k_vs, rt, "vs_mesh"),
         bgfx::createEmbeddedShader(k_fs, rt, "fs_mesh"));
@@ -359,8 +454,10 @@ static const bgfx::EmbeddedShader k_vehicle[] = {
     ready_ = true;
     quit_ = false;
     video_fmv_set_hwnd(hwnd_);
-    std::printf("[bgfx] open %dx%d GPU=libbgfx renderer=%s\n", width_, height_,
-                bgfx::getRendererName(rt));
+    // The adapter matters with two GPUs: each backend picks its own default.
+    std::printf("[bgfx] open %dx%d GPU=libbgfx renderer=%s adapter=%04x:%04x\n",
+                width_, height_, bgfx::getRendererName(rt),
+                bgfx::getCaps()->vendorId, bgfx::getCaps()->deviceId);
     return true;
   }
   void LibBgfxBackend::close()

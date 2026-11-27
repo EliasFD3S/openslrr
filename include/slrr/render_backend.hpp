@@ -70,6 +70,9 @@ void bgfx_set_osd_overlay(IRenderBackend& render, bool enabled);
 bool bgfx_osd_draw_enabled(IRenderBackend& render);
 void bgfx_set_debug_context(IRenderBackend& render, Jvm& jvm,
                             const SectionMachine& sections);
+// --renderer: "auto" (or empty), "d3d11", "d3d12" or "vulkan", applied by the
+// next open(). Returns false for any other name (#186).
+bool bgfx_request_renderer(const std::string& name);
 // Development flags: initial VSync state and Ctrl+F12 panel visibility.
 void bgfx_set_debug_startup(IRenderBackend& render, bool vsync, bool overlay);
 

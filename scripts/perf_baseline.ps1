@@ -19,6 +19,10 @@
   Single-setting variants of saved, for the GPU pass costs (#362):
     msaa4  MSAA 4x            noao    AO off
     hard   shadow smoothing 0 norefl  dynamic reflections off
+  Renderers (#186): the bgfx backends to run, passed as --renderer. "auto" is
+  Direct3D 11 and keeps the run name of earlier baselines; d3d12 and vulkan
+  add their name to it. -Shots also saves a window capture every 10 s of each
+  run under <Out>\shots-<run>, to compare the backends' images.
   The first and second CSV rows (warm-up) are left out of the averages.
 
 .EXAMPLE
@@ -35,6 +39,8 @@ param(
   # A --record-path recording to replay instead of the straight
   # full-throttle drive; the drive then lasts the recording.
   [string] $ReplayPath = "",
+  [string[]] $Renderers = @("auto"),
+  [switch] $Shots,
   [int] $Seed = 3
 )
 $ErrorActionPreference = "Stop"
@@ -42,6 +48,7 @@ $ErrorActionPreference = "Stop"
 $Scenes = @($Scenes | ForEach-Object { $_ -split "," })
 $Cpus = @($Cpus | ForEach-Object { $_ -split "," })
 $Presets = @($Presets | ForEach-Object { $_ -split "," })
+$Renderers = @($Renderers | ForEach-Object { $_ -split "," })
 $hours = @{ day = 13; night = 22 }
 $masks = @{ all = 0; p4 = 0xFF; e4 = 0xF0000 }
 $exe = (Resolve-Path $Exe).Path
@@ -83,8 +90,14 @@ foreach ($preset in $Presets) {
   robocopy (Resolve-Path $SourceRoot).Path $root /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
   Write-Preset $root $preset
   foreach ($scene in $Scenes) {
-    foreach ($cpu in $Cpus) {
-      $name = "$scene-$cpu-$preset"
+    foreach ($cpu in $Cpus) { foreach ($renderer in $Renderers) {
+      $name = "$scene-$cpu-$preset" + $(if ($renderer -ne "auto") { "-$renderer" } else { "" })
+      $extra = @("--renderer", $renderer)
+      if ($Shots) {
+        $shotDir = Join-Path $out "shots-$name"
+        New-Item -ItemType Directory -Force $shotDir | Out-Null
+        $extra += @("--bench-shots", $shotDir)
+      }
       $csv = Join-Path $out "$name.csv"
       Remove-Item $csv -ErrorAction SilentlyContinue
       # Children inherit the affinity, so the pool sees it from the start.
@@ -96,7 +109,7 @@ foreach ($preset in $Presets) {
           -ArgumentList (@("--game", "--window", "--root", $root, "--no-vsync",
             "--spawn-car", "cars/racers/Baiern.rpk:0x6", "--bench-map", "ValoCity",
             "--bench-time", "$($hours[$scene])", "--seed", "$Seed",
-            "--perf-log", $csv) + $drive)
+            "--perf-log", $csv) + $extra + $drive)
       } finally { $me.ProcessorAffinity = $fullMask }
       if (-not $p.WaitForExit(600000)) { $p.Kill(); Write-Warning "$name timed out" }
       $data = @(Import-Csv $csv | Select-Object -Skip 2)
@@ -113,8 +126,8 @@ foreach ($preset in $Presets) {
         $avg[$c] = if ($data.Count) { [math]::Round($sum / $data.Count, 2) } else { $null }
       }
       $rows += [pscustomobject]$avg
-      Write-Host ("{0,-18} {1,6} fps  frame {2,6} ms  flush {3,6}  gpu {4,6}" -f $name, $avg.fps, $avg.frame_avg_ms, $avg.flush_ms, $avg.gpu_ms)
-    }
+      Write-Host ("{0,-25} {1,6} fps  frame {2,6} ms  flush {3,6}  gpu {4,6}" -f $name, $avg.fps, $avg.frame_avg_ms, $avg.flush_ms, $avg.gpu_ms)
+    } }
   }
 }
 $rows | Export-Csv (Join-Path $out "summary.csv") -NoTypeInformation -Encoding utf8

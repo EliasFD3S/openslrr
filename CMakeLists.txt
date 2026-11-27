@@ -367,7 +367,7 @@ bgfx_compile_shaders(
   OUTPUT_DIR "${SLRR_SHADER_OUT}"
   INCLUDE_DIRS "${_bgfx_shader_inc}"
   AS_HEADERS
-  PROFILES s_5_0 430
+  PROFILES s_5_0 s_6_0 430 spirv
   OUT_FILES_VAR SLRR_VS_SHADER_HEADERS
 )
 bgfx_compile_shaders(
@@ -377,7 +377,7 @@ bgfx_compile_shaders(
   OUTPUT_DIR "${SLRR_SHADER_OUT}"
   INCLUDE_DIRS "${_bgfx_shader_inc}"
   AS_HEADERS
-  PROFILES s_5_0 430
+  PROFILES s_5_0 s_6_0 430 spirv
   OUT_FILES_VAR SLRR_FS_SHADER_HEADERS
 )
 
