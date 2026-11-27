@@ -167,6 +167,10 @@ struct WheelConfig {
   // of the tyre's cornering force pushing the patch inboard and per newton
   // of braking force (driving force reverses it). Zero: rigid.
   double compliance_lateral = 0, compliance_braking = 0;
+  // The bushings' give (m per newton): the hub moves inboard under the
+  // cornering force pushing the patch inboard and along the tyre's
+  // longitudinal force (back under braking). Zero: rigid.
+  double bushing_lateral = 0, bushing_longitudinal = 0;
   // Set by update_static_reference (suspension_geometry.hpp) from the car's
   // weight: the static spring length (0 unknown) and, there, the
   // geometry's camber and toe (rad) and the camber gain the curve uses
@@ -190,6 +194,8 @@ struct WheelState {
   // Compliance steer (#484): the road steering angle (rad, positive to the
   // left) the bushings add, from the last steps' tyre forces.
   double compliance_steer = 0;
+  // The hub's displacement in the body's frame (m) from the bushings' give.
+  Vec3 compliance_offset;
   double spin = 0, rotation = 0;
   double slip_speed = 0, lateral_speed = 0;
   // Relaxed tan(slip angle): the tyre's lateral deflection builds over its

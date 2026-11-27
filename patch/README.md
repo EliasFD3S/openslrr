@@ -339,7 +339,10 @@ braking)`, the bushings' toe-in in degrees per kN of cornering force pushing
 the tyre inboard and per kN of braking: road fronts -0.10 / -0.03 (Ram
 -0.15 / -0.05), race fronts -0.03 / -0.01; rears E36 0 / 0.05, del Sol and
 Impreza 0.03 / 0.05, Golf 0.02 / 0.03, Lancer, R34 and Prime 0.05 / 0.08,
-race cars 0.01 / 0.02. Live rear axles do not call it.
+race cars 0.01 / 0.02. `WheelRef.setBushingCompliance(lateral,
+longitudinal)` gives the hub's travel in mm per kN: road fronts 0.30 /
+1.00, rears 0.20 / 0.80 (E36 1.00 fore and aft, Golf 0.30 / 1.20), Ram
+0.50 / 1.50, race cars 0.05 / 0.10. Live rear axles call neither.
 
 **Caster (#458).** The stock struts had none: their strut axis and top lay
 in the front-view plane. Each front strut now leans back by its real car's

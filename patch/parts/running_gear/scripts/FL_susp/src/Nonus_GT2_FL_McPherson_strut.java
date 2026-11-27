@@ -52,6 +52,8 @@ public class Nonus_GT2_FL_McPherson_strut extends Suspension
 				wheel.setBumpSteer( 0.00, 0.00 );
 				// OpenSLRR (#484): compliance steer, degrees of toe-in per kN of cornering force pushing the tyre inboard and per kN of braking, typical for the real car
 				wheel.setComplianceSteer( -0.03, -0.01 );
+				// OpenSLRR (#484): the bushings' give, mm per kN of cornering and of longitudinal force, typical for the real car
+				wheel.setBushingCompliance( 0.05, 0.10 );
 
 				the_car.setSlotPos(101+wheelID, new Vector3(-0.124,0,0), null );
 				the_car.setSlotPos(111+wheelID, new Vector3(-0.113,0,0), null );

@@ -156,7 +156,10 @@ values, so the tyre's heading changes with travel: rears that toe in as
 they compress steer a rolling car towards understeer. A strut fit keeps
 the script's static toe (`setYpr` yaw), and the bushings' compliance steer
 (`WheelRef.setComplianceSteer`, `WheelState::compliance_steer`) adds toe from
-the tyre's cornering and braking forces to the driver's steering.
+the tyre's cornering and braking forces to the driver's steering; the
+bushings' give (`WheelRef.setBushingCompliance`,
+`WheelState::compliance_offset`) moves the hub with the same forces. The
+rendered wheel shows both.
 Wheel YPR and the existing arm/hub kinematics still affect contact geometry.
 Anti-roll bars are an optional host approximation, deliberately enabling a
 stock feature whose Java commands and catalog branch were dormant. The patched

@@ -2133,10 +2133,13 @@ SLRR_TEST(compliance_steer_toes_the_loaded_wheels_by_their_forces) {
   // with rears toeing in by 0.1 deg per kN of braking, both rears toe in
   // alike and the car runs straight.
   constexpr double degree = std::numbers::pi / 180, per_kn = degree / 1000;
-  double yaw[2], outer[2];
+  double yaw[2], outer[2], give = 0;
   for (int soft = 0; soft < 2; ++soft) {
     Car car;
-    for (size_t i = 0; i < 2; ++i) car.dynamics.wheels[i].compliance_lateral = soft ? -.15 * per_kn : 0;
+    for (size_t i = 0; i < 2; ++i) {
+      car.dynamics.wheels[i].compliance_lateral = soft ? -.15 * per_kn : 0;
+      car.dynamics.wheels[i].bushing_lateral = soft ? .3e-6 : 0;  // 0.3 mm per kN
+    }
     car.run(2, 0, 0, 0);
     car.dynamics.drive.engaged = false;
     car.dynamics.body.velocity = car.dynamics.body.orientation.rotate({0, 0, -16});
@@ -2144,9 +2147,13 @@ SLRR_TEST(compliance_steer_toes_the_loaded_wheels_by_their_forces) {
     car.run(2.5, 0, 0, .09);
     yaw[soft] = car.dynamics.body.omega().y;
     outer[soft] = car.dynamics.state[1].compliance_steer / degree;
+    if (soft) give = car.dynamics.state[1].compliance_offset.x;
   }
   Car braking;
-  for (size_t i = 2; i < 4; ++i) braking.dynamics.wheels[i].compliance_braking = .1 * per_kn;
+  for (size_t i = 0; i < 4; ++i) {
+    braking.dynamics.wheels[i].compliance_braking = i < 2 ? 0 : .1 * per_kn;
+    braking.dynamics.wheels[i].bushing_longitudinal = 1e-6;  // 1 mm per kN
+  }
   braking.run(2, 0, 0, 0);
   braking.dynamics.drive.engaged = false;
   braking.dynamics.body.velocity = braking.dynamics.body.orientation.rotate({0, 0, -20});
@@ -2154,8 +2161,13 @@ SLRR_TEST(compliance_steer_toes_the_loaded_wheels_by_their_forces) {
   braking.run(.5, 0, .6, 0);
   const double rear_left = braking.dynamics.state[2].compliance_steer / degree,
                rear_right = braking.dynamics.state[3].compliance_steer / degree;
-  std::printf("COMPLIANCE yaw %.3f -> %.3f rad/s, outer front %.2f deg; braking rears %.3f / %.3f deg%c",
-              yaw[0], yaw[1], outer[1], rear_left, rear_right, 10);
+  const double back = braking.dynamics.state[0].compliance_offset.z;
+  std::printf("COMPLIANCE yaw %.3f -> %.3f rad/s, outer front %.2f deg %.2f mm; braking rears %.3f / %.3f deg, front back %.2f mm%c",
+              yaw[0], yaw[1], outer[1], give * 1000, rear_left, rear_right, back * 1000, 10);
+  // The bushings give: the outer (right) front inboard (-x), a braked front
+  // back (+z), a few millimetres.
+  SLRR_REQUIRE(give < -.0005 && give > -.005);
+  SLRR_REQUIRE(back > .001 && back < .01);
   SLRR_REQUIRE(outer[0] == 0);
   SLRR_REQUIRE(outer[1] < -.2);  // the outer (right) front turns right: out of the turn
   SLRR_REQUIRE(yaw[1] < yaw[0] * .97);

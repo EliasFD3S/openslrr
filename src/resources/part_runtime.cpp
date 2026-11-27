@@ -102,6 +102,10 @@ struct WheelPhys {
   // kN of inboard cornering force and per kN of braking force.
   bool has_compliance = false;
   float compliance_lateral = 0, compliance_braking = 0;
+  // setBushingCompliance (patched suspensions, #484): the hub's give in mm
+  // per kN of cornering and of longitudinal force.
+  bool has_bushing = false;
+  float bushing_lateral = 0, bushing_longitudinal = 0;
   int opp = -1;
   float arm[7]{}, hub[10]{};
   bool authored_position = false;
@@ -3020,6 +3024,20 @@ void dynamics_wheels(Record &rec) {
       } else {
         cfg.compliance_lateral = cfg.compliance_braking = 0;
       }
+      // The bushings' give (#484): WheelRef.setBushingCompliance, or typical
+      // rubber: linked fronts 0.3 mm per kN sideways and 1.0 fore and aft
+      // (soft for the ride), independent rear arms 0.2 and 0.8. Live axles
+      // and corners without arms stay rigid.
+      constexpr double mm_per_kn = 1e-6;
+      if (live.has_bushing) {
+        cfg.bushing_lateral = live.bushing_lateral * mm_per_kn;
+        cfg.bushing_longitudinal = live.bushing_longitudinal * mm_per_kn;
+      } else if (cfg.arm_length > 0 && cfg.arm_length < 20) {
+        cfg.bushing_lateral = (front ? .3 : .2) * mm_per_kn;
+        cfg.bushing_longitudinal = (front ? 1.0 : .8) * mm_per_kn;
+      } else {
+        cfg.bushing_lateral = cfg.bushing_longitudinal = 0;
+      }
     }
     // WheelRef.setWidth: the tyre width in metres (Tyre.java), stored halved.
     cfg.half_width = cfg.metal_contact ? 0. : std::clamp(double(live.width), 0., .25);
@@ -3123,8 +3141,11 @@ void pose_wheels(Object *chassis, Record &rec) {
     const auto base = part_pose_matrix(rec.config->wheels[i]);
     const auto inverse = part_matrix_inverse_rigid(base);
     const double steer = wheel_steering_angle(rec, i);
-    const auto frames = physics::wheel_pose(cfg, state.length, &rec.geometry_solved[i], steer);
-    const auto hub_steered = frames.hub_rotation * physics::wheel_steering(frames.steer_axis, steer);
+    auto frames = physics::wheel_pose(cfg, state.length, &rec.geometry_solved[i], steer);
+    // The bushings' give and compliance steer (#484), as the solver has them.
+    frames.hub_origin += state.compliance_offset;
+    const auto hub_steered =
+        frames.hub_rotation * physics::wheel_steering(frames.steer_axis, steer + state.compliance_steer);
     rec.travel_frame[i] = part_matrix_multiply(
         physics::corner_matrix(frames.arm_origin, rec.geometry_solved[i]
             ? frames.arm_rotation : frames.hub_rotation), inverse);
@@ -10274,6 +10295,18 @@ void register_part_natives(Jvm &jvm, RpkIndex &resources) {
       w.has_compliance = true;
       w.compliance_lateral = std::clamp(lateral, -.5f, .5f);
       w.compliance_braking = std::clamp(braking, -.5f, .5f);
+    });
+  });
+  // OpenSLRR native declared by the patched WheelRef (#484): the bushings'
+  // give, mm of hub travel per kN of cornering force (inboard) and per kN
+  // of longitudinal force (along it), 0 to 5 each.
+  wheel("setBushingCompliance", "(FF)V", [put](Object *s, const std::vector<Value> &a) {
+    return put(s, [&](WheelPhys &w) {
+      const float lateral = scalar(a, 0, 0), longitudinal = scalar(a, 1, 0);
+      if (!std::isfinite(lateral) || !std::isfinite(longitudinal)) return;
+      w.has_bushing = true;
+      w.bushing_lateral = std::clamp(lateral, 0.f, 5.f);
+      w.bushing_longitudinal = std::clamp(longitudinal, 0.f, 5.f);
     });
   });
   wheel("setOppWheel", "(I)V", [put](Object *s, const std::vector<Value> &a) {

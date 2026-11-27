@@ -85,4 +85,10 @@ public class WheelRef extends Native
 	// it the host uses typical values for the suspension type.
 	public native void setComplianceSteer( float lateral, float braking );
 
+	// OpenSLRR (#484): the bushings' give, millimetres of hub travel per kN
+	// of cornering force (inboard) and per kN of longitudinal force (along
+	// it, back under braking). Without it the host uses typical values for
+	// the suspension type.
+	public native void setBushingCompliance( float lateral, float longitudinal );
+
 }

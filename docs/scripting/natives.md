@@ -458,6 +458,11 @@ inboard and per kN of braking force (-0.5 to +0.5 each; negative toes out,
 driving reverses the braking part). 86 patched corners call it; without it
 the host uses typical values for the suspension type.
 
+`WheelRef.setBushingCompliance(lateral, longitudinal)` (#484, same file):
+the bushings' give, millimetres of hub travel per kN of cornering force
+(inboard) and per kN of longitudinal force (along it), 0 to 5 each. 86
+patched corners call it; without it the host uses typical values.
+
 ### Math functions (#463)
 
 The patched `system/Scripts/lang/Math.java` declares, besides the stock
