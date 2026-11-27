@@ -195,6 +195,10 @@ struct GameRefState {
   ArcadeCameraState arcade;
   bool arcade_active = false, classic_chase_active = false;
   // Chassis-local extent of the car seen in the bumper and hood views.
+  // Last sampled nitrous, air time and yaw rate, and the look-back key
+  // (camera command "arcadeback 0|1" from the patched Track).
+  bool arcade_nitro = false, arcade_airborne = false, arcade_look_back = false;
+  float arcade_yaw_rate = 0.f;
   void* arcade_box_key = nullptr;
   bool arcade_box_valid = false;
   float arcade_box_lo[3] = {}, arcade_box_hi[3] = {};

@@ -601,6 +601,13 @@ bool gameref_scene_command(void* key, const std::string& line) {
     if (st->aov_rate < 0.f || !full) st->half_aov = st->aov_goal;
     return full;
   }
+  // OpenSLRR (#470): the patched Track's look-back key on the arcade camera.
+  if (std::strcmp(word, "arcadeback") == 0) {
+    int on = 0;
+    std::sscanf(text, "%*s %d", &on);
+    st->arcade_look_back = on != 0;
+    return false;
+  }
   if (std::strcmp(word, "simulate") == 0) {
     int on = 0;
     std::sscanf(text, "%*s %d", &on);
@@ -917,6 +924,24 @@ static bool arcade_chase_pose(GameRefState& cam, void* car, const float* frame, 
   std::copy_n(frame + 8, 3, in.back);
   std::copy_n(frame + 4, 3, in.up);
   if (!part_car_velocity(car, in.velocity)) std::fill_n(in.velocity, 3, 0.f);
+  // Nitrous, wheel contact and yaw rate, sampled on timed steps only.
+  if (dt > 0.f) {
+    PartPhysicsState state;
+    if (part_physics_state(static_cast<Object*>(car), state) && state.active) {
+      cam.arcade_nitro = state.nitro_active;
+      cam.arcade_yaw_rate = float(state.yaw_rate);
+      bool touching = false;
+      for (bool contact : state.contact) touching = touching || contact;
+      cam.arcade_airborne = !touching;
+    } else {
+      cam.arcade_nitro = cam.arcade_airborne = false;
+      cam.arcade_yaw_rate = 0.f;
+    }
+  }
+  in.nitro = cam.arcade_nitro;
+  in.airborne = cam.arcade_airborne;
+  in.yaw_rate = cam.arcade_yaw_rate;
+  in.look_back = cam.arcade_look_back;
   const bool mounted = arcade_view_tuning(in.view).mounted;
   // The car's extent places the bumper and hood eyes. Measured when a car
   // is first seen in one of those views; parts do not change on the road.

@@ -554,3 +554,32 @@ Validation (Windows, Release):
   cockpit cameras (`assets/validation/arcade-camera/*-change-view.png`). The
   rebinding page and the F1/F2 migration of an old controls file were not
   exercised in game.
+
+### NFSU2 camera behaviour (#470, review)
+
+Requested: the arcade views should behave like NFSU2's, not only sit where
+they do. Added to `arcade_camera` (values by eye, as above):
+
+- Nitrous (`PartPhysicsState.nitro_active`): +10 degrees, +0.8 m reach, the
+  eye 8 % lower and a 2 cm shake while it burns; eases in at 3 /s, out at 1.5 /s.
+- Road vibration from 150 km/h (smoothstep to 300), 1.2 cm, x1.4 mounted and
+  x2 on the bumper; crash shake when the velocity changes faster than
+  40 m/s^2 (4 g), up to 15 cm, decaying at 6 /s. Shakes move eye and look
+  point together.
+- Bend tilt (chase views): yaw rate x speed, 0.05 rad per g, at most
+  0.06 rad, following at 3 /s; none in the air.
+- Air time (no wheel contact): the slide is not followed and the height
+  follows at 3 /s instead of 10 /s; at speed the chase eye sits up to 12 %
+  lower.
+- Look back: `Track` sends `arcadeback 1` / `0` to the follow camera while
+  LOOK BACK is held in arcade style (the stock flip of the classic camera is
+  unchanged). Chase views cut to the same distance in front of the car without
+  lag or player look; mounted views move to the rear bumper facing back.
+  `gameref.cpp` samples nitrous, contact and yaw rate from
+  `part_physics_state` on timed steps.
+
+Validation: `arcade_camera` 13/13 (nitrous, crash vs. braking, look back
+both kinds, air time and tilt). In game, B held for 12 s in the reference
+replay showed the rear view and returned behind the car on release
+(`assets/validation/arcade-camera/arcade-look-back.png`). Nitrous, crash and
+bend tilt were not seen in game: the replay drives the car by pose.

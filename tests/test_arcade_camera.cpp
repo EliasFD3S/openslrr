@@ -163,12 +163,73 @@ SLRR_TEST(mounted_views_ride_on_the_car) {
   // the hood eye sideways.
   in.up[0] = 1.f; in.up[1] = 0.f;
   p = arcade_camera_step(s, in, 0.f);
-  SLRR_REQUIRE(p.up[0] == 1.f && std::fabs(p.eye[1]) < 1e-4f && std::fabs(p.eye[0]) > .6f);
+  SLRR_REQUIRE(p.up[0] > .99f && std::fabs(p.eye[1]) < 1e-4f && std::fabs(p.eye[0]) > .6f);
   // Without a measured extent a typical saloon is assumed.
   auto bare = car();
   bare.view = ArcadeView::Bumper;
   ArcadeCameraState s2;
   SLRR_REQUIRE(arcade_camera_step(s2, bare, 0.f).eye[2] < -2.f);
+}
+
+SLRR_TEST(nitrous_widens_and_pushes_back) {
+  auto plain = car(30.f), boost = car(30.f);
+  boost.nitro = true;
+  ArcadeCameraState a = settled(plain, 300), b = settled(boost, 300);
+  const auto pa = arcade_camera_step(a, plain, 0.f);
+  const auto pb = arcade_camera_step(b, boost, 0.f);
+  SLRR_REQUIRE(pb.fov > pa.fov + slrr::kArcadeNitroFov * .9f);
+  SLRR_REQUIRE(pb.eye[2] > pa.eye[2] + .5f);
+  // It fades after the burn.
+  for (int i = 0; i < 600; ++i) arcade_camera_step(b, plain, 1.f / 60.f);
+  SLRR_REQUIRE(b.nitro < .01f);
+}
+
+SLRR_TEST(a_crash_shakes_the_view_then_settles) {
+  ArcadeCameraState s;
+  auto in = car(30.f);
+  arcade_camera_step(s, in, 1.f / 60.f);
+  in.velocity[2] = -5.f;  // 25 m/s lost in one step: a wall
+  arcade_camera_step(s, in, 1.f / 60.f);
+  SLRR_REQUIRE(s.impact > .5f);
+  for (int i = 0; i < 120; ++i) arcade_camera_step(s, in, 1.f / 60.f);
+  SLRR_REQUIRE(s.impact < .01f);
+  // Ordinary braking does not.
+  ArcadeCameraState q;
+  auto brake = car(30.f);
+  arcade_camera_step(q, brake, 1.f / 60.f);
+  brake.velocity[2] = -29.85f;  // about 1 g
+  arcade_camera_step(q, brake, 1.f / 60.f);
+  SLRR_REQUIRE(q.impact == 0.f);
+}
+
+SLRR_TEST(look_back_cuts_to_a_rear_view) {
+  ArcadeCameraState s;
+  auto in = car(20.f);
+  arcade_camera_step(s, in, 0.f);
+  in.look_back = true;
+  in.orbit_yaw = .5f;  // ignored while looking back
+  const auto p = arcade_camera_step(s, in, 0.f);
+  // In front of the car (-Z), looking back at it.
+  SLRR_REQUIRE(p.eye[2] < -5.f && std::fabs(p.eye[0]) < 1e-3f && p.at[2] > p.eye[2]);
+  in.view = slrr::ArcadeView::Bumper;
+  const auto m = arcade_camera_step(s, in, 0.f);
+  SLRR_REQUIRE(m.eye[2] > 2.f && m.at[2] > m.eye[2]);  // rear bumper, facing back
+}
+
+SLRR_TEST(air_time_and_bends) {
+  // In the air a slide is not followed.
+  auto in = car();
+  in.velocity[0] = 10.f;
+  in.velocity[2] = -20.f;
+  in.airborne = true;
+  SLRR_REQUIRE(std::fabs(arcade_camera_target_yaw(in)) < 1e-6f);
+  // Cornering tilts the view, bounded.
+  auto bend = car(30.f);
+  bend.yaw_rate = 1.f;  // about 3 g
+  ArcadeCameraState s = settled(bend, 300);
+  SLRR_REQUIRE(std::fabs(s.roll - slrr::kArcadeMaxTilt) < 1e-3f);
+  const auto p = arcade_camera_step(s, bend, 0.f);
+  SLRR_REQUIRE(std::fabs(p.up[1]) < .9999f);
 }
 
 }  // namespace
@@ -178,6 +239,7 @@ int main() {
       parked_car_is_seen_from_behind_and_above, read_only_queries_do_not_step,
       the_eye_trails_a_turn_then_settles_behind, a_slide_swings_the_view_toward_travel,
       speed_widens_the_view_and_reach, seed_eye_and_zoom, bumps_move_the_car_more_than_the_view,
-      views_and_their_order, mounted_views_ride_on_the_car};
+      views_and_their_order, mounted_views_ride_on_the_car, nitrous_widens_and_pushes_back,
+      a_crash_shakes_the_view_then_settles, look_back_cuts_to_a_rear_view, air_time_and_bends};
   return slrr::standalone::run("arcade_camera", tests);
 }

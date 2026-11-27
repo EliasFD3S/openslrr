@@ -886,7 +886,12 @@ of host option 35 (`camera.arcade_view`): bumper and hood ride fixed on the
 chassis (placed from `part_car_local_box`, no wall sweep, the chassis up
 axis); near and far follow the heading blended toward the direction of travel
 with a short spring lag, their own speed-dependent view angle and reach, and a
-right-drag look that decays once released. The patched `Track.nextCamera`
+right-drag look that decays once released. All arcade views add NFSU2's
+motion: nitrous widening, reach and shake, road vibration from 150 km/h, a
+crash shake above a 40 m/s^2 velocity change, a bend tilt from yaw rate x
+speed (chase views), a softer height follow in the air, and the camera
+command `arcadeback 0|1` (sent by the patched Track's look-back key) for an
+immediate rear view. The patched `Track.nextCamera`
 cycles the views on the change-view key (ControlSet slot 35,
 `AXIS_LOOK_PREVNEXT`, V); the stock F1-F5/F9 view hotkeys are not created. Script variants (`cameraMode` 3 and 4), a held or
 `angle`-turned follow camera, cockpit, attached and free cameras keep their

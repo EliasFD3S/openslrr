@@ -5,7 +5,10 @@
 // BUMPER and HOOD are fixed to the car; NEAR and FAR chase it, low behind,
 // swinging toward the direction of travel in a slide so the car's angle
 // shows, with a short lag in bends, a wider view angle and a longer reach at
-// speed, and a player look that springs back. Pure math: gameref.cpp feeds it
+// speed, and a player look that springs back. Like NFSU2 the views also
+// widen, drop back and shake under nitrous, shake with road speed and in
+// crashes, tilt with the car's lean in bends, float over jumps, and cut
+// straight to a rear view while the look-back key is held. Pure math: gameref.cpp feeds it
 // the chassis pose, velocity and extent and draws the pose it returns. The
 // classic (stock) follow camera stays the default; host option 34 selects
 // this one. The values approximate NFSU2's views by eye: the game's own
@@ -37,6 +40,11 @@ struct ArcadeCameraState {
   float speed = 0.f;    // smoothed horizontal speed, m/s
   float pull = 0.f;     // smoothed forward acceleration, m/s^2
   float fov = 0.f;      // vertical view angle, degrees
+  float nitro = 0.f;    // smoothed nitrous burn, 0..1
+  float impact = 0.f;   // crash shake, 0..1, decaying
+  float roll = 0.f;     // tilt in bends, radians
+  float clock = 0.f;    // seconds, for the shake
+  float velocity[3] = {};  // last step's velocity
 };
 
 struct ArcadeCameraInput {
@@ -48,6 +56,10 @@ struct ArcadeCameraInput {
   float orbit_yaw = 0.f;   // player look offset, radians (chase views)
   float orbit_pitch = 0.f;
   float zoom = 1.f;        // distance scale from the mouse wheel (chase views)
+  float yaw_rate = 0.f;    // rad/s about the up axis, for the tilt in bends
+  bool nitro = false;      // nitrous burning
+  bool airborne = false;   // no wheel touches the ground
+  bool look_back = false;  // the look-back key is held (camera "arcadeback")
   // Chassis-local extent of the car's meshes (x right, y up, z back), for
   // the mounted views; without it a typical saloon is assumed.
   bool box_valid = false;
@@ -78,5 +90,14 @@ inline constexpr float kArcadeMaxLag = 1.2f;    // radians the eye may trail
 inline constexpr float kArcadeSlipShare = .6f;  // of the slide angle shown
 inline constexpr float kArcadeMaxSlip = .6f;    // radians of slide followed
 inline constexpr float kArcadeBumperHeight = .55f;  // bumper eye above the lowest point
+inline constexpr float kArcadeMaxDrop = .8f;       // metres the focus may trail the car
+inline constexpr float kArcadeNitroFov = 10.f;     // degrees added while nitrous burns
+inline constexpr float kArcadeNitroReach = .8f;    // metres added while nitrous burns
+inline constexpr float kArcadeImpactAccel = 40.f;  // m/s^2 before a jolt shakes the view
+inline constexpr float kArcadeSpeedShake = .012f;  // metres at full road vibration
+inline constexpr float kArcadeNitroShake = .02f;   // metres while nitrous burns
+inline constexpr float kArcadeImpactShake = .15f;  // metres for the hardest crash
+inline constexpr float kArcadeTiltPerG = .05f;     // radians of tilt per g of cornering
+inline constexpr float kArcadeMaxTilt = .06f;      // radians
 
 }  // namespace slrr
