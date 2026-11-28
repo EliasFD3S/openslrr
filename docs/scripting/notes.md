@@ -393,3 +393,202 @@ Validation: the classes compiled with `compile_game_sources` in
 (TestTrack: same speeds as before, 30.8 / 55.3 km/h at 3 / 5 s; a career
 through `MainMenu`, the garage and Tsukuba) with no script message. Not
 exercised: `City`, `CarLot`, `ROCTrack`, the dealer.
+
+## Issue #487: camera provider hook and mod car/camera API
+
+Request: a hook so that a camera mod (the NFSU2 camera of #470) can supply a
+driving camera without replacing `java.game.Track`, plus the car and camera
+state it needs (gaps 2-5 of the workspace wiki's camera-mod-support analysis).
+
+Change:
+
+- `java.openslrr` (`patch/system/Scripts/openslrr`, new package, picked up by
+  the system/Scripts classpath scan): `OpenSLRR`, `CarState`,
+  `CameraControl`, `CameraProvider`, `Cameras`; natives in
+  `natives_openslrr.cpp`; `kModApiVersion` = 1 in `mod_api.hpp` (same file
+  as the #486 branch). Reference: [mod-api.md](mod-api.md).
+- `GameRefState::mod_pose` (`mod_camera.hpp`): `world_camera_pose` returns
+  it before every other camera rule. Frame order (`mainloop.cpp`): scripts
+  and `animate()` -> `gameref_advance_world_camera` -> `part_physics_begin`
+  -> `render.flush` (the renderer's `gameref_world_camera`) ->
+  `part_physics_end`. Frame-locked batches publish render poses in
+  `part_physics_end`, so scripts see this frame's drawn pose; the game's
+  free-running mode publishes them in `free_running_sync` inside
+  `part_physics_begin`, after the scripts. A Relative pose therefore reads
+  `part_camera_pose` on every query; `CarState.drawnPos` read in `animate()`
+  is one frame old in free-running mode.
+- `gameref_set_camera_roll_from_matrix`: `setMatrix` roll on non-follow
+  cameras. `part_car_angular_velocity`; `part_car_local_box` (from the
+  removed #470 arcade camera) now resolves the chassis first: given the
+  Vehicle it measured nothing (all zero).
+- Track: `CAMMODE_PROVIDER` 8, `providerOn` / `providerOff` /
+  `syncCameraProvider`; `changeCamInternal`, `makeCamExternal` and
+  `changeCamNone` deactivate first; `refreshCamera` re-activates on a new
+  target; `nextCamera` and look back route to the provider. The follow camera
+  stays alive and hidden while a provider shows, because `City` /
+  `ROCTrack` and the MWM tracks use `cam` directly. `City` day-race staging
+  and `ROCTrack.moveCamera` switch back to the follow camera.
+
+Validation (Windows, Release):
+
+- ctest 7/7 including `mod_camera` (7 checks: exact world pose, relative
+  pose following the origin, up/roll fallbacks, invalid input, fov clamp,
+  `getOri`-compatible Euler extraction, stock camera yaw/pitch);
+  `options_retry`, `gameref_alias`, `car_select_view` pass.
+- `compile_game_sources`: the five `java.openslrr` classes, then `Track`,
+  then `City` and `ROCTrack` in a full private game copy. Unchanged
+  `City.java` / `ROCTrack.java` rebuild their shipped classes (ROCTrack byte
+  for byte, City with one differing byte), so the diffs are the edits.
+- In game, with a throwaway provider that was not shipped (`java.camtest`,
+  registered by a test-only Track build; view 0 `setPoseRelative` 6 m
+  behind, view 1 `setPose` from `drawnPos`): the Valo City replay in
+  free-running mode (`--bench-realtime`). The provider took the follow view
+  on entry, V cycled 0 -> 1 -> 0 -> 1 (`setView`), B held gave `lookBack 1`
+  and the front view, release `lookBack 0`
+  (`assets/validation/camera-provider/test-provider-views.png`).
+  `OpenSLRR.apiVersion` 1; `boxMin/boxMax` -1.31..0.96 x -1.12..0.58 x
+  -2.28..2.16 m on the Baiern; `drawnOri` equals `getOri`; `drawnPos` is the
+  chassis origin, 0.74 m above `getPos`'s contact-based point. Judder: 30
+  window grabs per burst (about 25 ms apart) tracked the red car's centroid;
+  over frame pairs with stable lighting the step RMS was 0.15-0.3 px for
+  `setPoseRelative` and 0.1-0.6 px for `setPose` from `drawnPos` (one burst
+  had 2.8 px steps), i.e. no visible judder against the car at 6 m.
+- Not exercised: speed, nitrous, angular velocity and wheel contact on a
+  physically driven car (the replay drives the car by pose, so they read
+  ~0), `sweep` beyond a 5 m drop test (0.11), race staging, ROC, and a
+  selection change from the options (no UI until #488).
+
+### Review fixes (PR #493)
+
+- GPS modes 2 and 3 follow the camera, but Track's `renderer` is null while a
+  provider shows, so `animate` read an unassigned `CamPos`. The navigator
+  now follows the new `CameraProvider.camera` field (the provider's own
+  camera) and falls back to the car.
+- `setPoseRelative` only adds the drawn origin; a body-fixed camera that
+  turns its offsets with `drawnOri` uses last frame's orientation in
+  free-running play and slides on the body. New mode Local
+  (`CameraControl.setPoseLocal`): eye, focus and up in the chassis frame,
+  turned by the drawn frame's normalized axes at draw time.
+- The repair (F6), mechanic and paint close-ups send commands to Track's
+  hidden `cam`. `providerPause` switches to the stock follow camera before
+  them (deactivating the provider); `providerResume` re-activates the provider
+  when the last one closes.
+- `part_car_local_box` took the largest mesh's transform as the chassis
+  frame. It now uses the chassis node's own drawn transform in the same
+  (reflected, parent) space as `collect_root`'s instances
+  (`scene_instance_transform(chassis, chassis)`).
+- The drawn pose now writes its roll (`mod_look_roll`, the `roll` command
+  convention) to `ypr[2]` and, unless it is the bound follow camera, to
+  `camera_roll`, so `getOri().r` and `clearPose` keep a banked horizon.
+- A non-null up vector with NaN or infinity now rejects the pose (null is
+  still world up).
+
+Validation (Windows, Release): `mod_camera` 9/9 (adds local offsets turning,
+pitching and banking with the frame, scale-free axes, zero local up, roll
+write-back against the `roll` formula, non-finite up); ctest 7/7;
+`options_retry`, `gameref_alias`, `car_select_view` pass;
+`check_knowledge_refs.py` 684 references, 0 errors. In game, with the
+throwaway provider (not shipped; view 0 now a `setPoseLocal` hood camera
+that sets `camera`) and a test-only Track that stepped through the checks on
+the Valo City replay: in GPS mode 2 and 3 the navigator followed the provider's
+camera (navigator centre within 0.5 m of it; mode 3 turns the map with the
+camera), `assets/validation/camera-provider/provider-gps-mode2.png` and
+`-mode3.png`; repair, mechanic and paint each deactivated the provider,
+rendered `cam` (`provider-repair-closeup.png`) and re-activated the
+provider on close (log). `getOri().r` on the provider camera followed the
+car's small banks (about ±0.03 rad). `boxMin/boxMax` on the Baiern:
+-0.96..0.96 x -0.75..0.58 x -2.28..2.16 m at entry, -1.31..0.96 x -1.12..0.58
+later in the drive; the box covers every mesh under the car, so a part or the
+driver outside the body widens it.
+
+### Re-review fixes (PR #493, second round)
+
+- `CameraControl.sweep` accepted an infinite radius (only `radius >= 0`
+  was checked) and swept 2 m. `mod_sweep_args_valid` now rejects non-finite
+  endpoints and radius; the native returns 1 without sweeping.
+- The pose was written back to `pos` / `ypr` only on the dt > 0 advance,
+  which runs before free-running physics publishes the frame's car pose, so
+  `getPos` / `getOri`, the GPS and `clearPose` saw an older pose than the
+  one drawn. Every resolution now writes back, the renderer's dt = 0 query
+  last.
+- V during a repair, mechanic or paint close-up (the static key stays active)
+  re-activated the provider over the close-up, and so did a selection change.
+  `closeUpBegin` / `closeUpEnd` count open close-ups; while one is open,
+  `nextCamera`, look back, `providerOn` and `syncCameraProvider` do
+  nothing. Closing the last one re-activates the selected provider if one was
+  showing, else the deferred selection applies on the next `animate`.
+- `City.restoreCamera` treated a saved `CAMMODE_PROVIDER` as the default
+  follow camera; it now calls `Track.providerRestore`.
+- `CarState` and the car of `setPoseRelative` / `setPoseLocal` accepted any
+  Part (an installed wheel read its own angular velocity and the owning
+  car's box). `part_is_car` (the chassis or its Vehicle, no parent, kind
+  `car`) gates them; others get null / 0.
+
+Validation (Windows, Release): `mod_camera` 10/10 (adds sweep argument
+rejection); ctest 7/7; `options_retry`, `gameref_alias`, `car_select_view`
+pass; knowledge refs 684 / 0 errors. In game (throwaway provider and test-only
+Track, not shipped; log only): V, a selection change to classic and back
+during repair left the repair close-up (`cameraMode` 1, renderer `cam`) and
+closing restored the provider; classic selected during the mechanic view
+stayed classic after closing and re-selecting the provider activated it;
+`backupCamera` + follow + `restoreCamera` returned to the provider; V during
+paint was ignored. Write-back: `getPos` on the hood camera matched
+`drawnPos` + the turned offset read in the next `animate` within 1 cm only
+while the car stood still; while the replay moved it, the two differed by
+about one frame of travel (mean 0.4 m), because the replay poses the car
+during the frame, after the draw. That gap is the draw-time versus
+script-time pose, not checked against a physically driven car.
+
+### Third review round (PR #493)
+
+- Preview cameras (inset viewports, `bgfx_lib_backend.cpp` previews) drew
+  their stock aim and ignored a pose. `gameref_mod_camera_view` resolves and
+  writes back a pose for any camera; the renderer uses it for previews and
+  `world_camera_pose` for the world camera (shared `mod_pose_view`).
+- After `clearPose` a camera with an initialised move/look, orbit or chase
+  state drew its old smoothed eye. Each resolution now also seeds `eye_s`,
+  `look_s` (velocity zero, `cam_pose_init`).
+- Straight-down poses with different up vectors wrote the same yaw.
+  `mod_look_ypr` takes the yaw from up in that case (stock up
+  `(sin y sin p, cos p, cos y sin p)`).
+- `camera_roll` (the `roll` command, setMatrix roll) was applied only on
+  the free script camera path; a camera attached to a car by a short `move`
+  (Track's chase view) returned before it. `mod_roll_up` applies it on both.
+  This also restores the stock chase view's random roll.
+
+Validation: `mod_camera` 12/12 (adds vertical yaw and the roll round trip);
+`car_select_view` adds a preview camera driven by `setPose`, the
+straight-down yaw from up, the seeded smoothing, and a free fullscreen camera
+continuing from the pose after `clearPose`. The attached-camera roll is
+covered by the unit test of `mod_roll_up` only, not by an engine test with a
+car.
+
+### Fourth review round (PR #493) and #500 findings
+
+- clearPose on the bound follow camera: the write-back put the pose's focus
+  in `look_s`, which the follow rule reads as the car focus it last saw
+  (`eye_s += center - look_s`), so the first stock frame jumped by the
+  focus offset. On the follow path `look_s` is now the car's follow focus
+  (`kFollowFocusLift` above the drawn origin).
+- Aimed preview cameras: the write-back also seeds `aim_eye` / `aim_at`,
+  and the aimed preview applies `camera_roll` (it used world up). The free
+  script camera path (`camera_free`) applies it too.
+- Near-vertical write-back: `mod_look_vertical` (1e-4 of vertical) decides
+  once; there the yaw comes from up and the roll is 0, elsewhere yaw from the
+  view and roll from up (`mod_look_ypr_roll`).
+- `gameref_set_matrix` returns whether it accepted the pose;
+  `GameRef.setMatrix` sets the camera roll only then.
+- Track: the look-back guard is the first check of `nextCamera`, so V while
+  LOOK BACK is held changes no view, a provider's included; `providerOn`
+  with no live target calls `providerOff` (a car-to-null target change left
+  the provider driving its camera on the old car).
+- The stock chase view's random roll (`Track.changeCamChase` sends
+  `roll`) shows again since the attached path applies `camera_roll`; that
+  is the stock behaviour.
+
+Validation: `mod_camera` 13/13 (adds the reviewer's near-vertical probe);
+`car_select_view` adds the free camera roll through `gameref_world_camera`,
+the rejected `setMatrix`, near-vertical write-back rebuilding the drawn up
+(offsets 0 to 3e-2, both up choices, up and down) and the aim cache. The
+follow-camera hand-back, the V guard and the null target are checked in game
+(below); the aimed preview roll has no headless renderer test.

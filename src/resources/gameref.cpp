@@ -241,13 +241,13 @@ void gameref_process_collision_requests() {
   for (auto& [key, n] : g_refs) gameref_activate_collision_state(n);
 }
 
-void gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
+bool gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
                         float pitch, float roll) {
   if (!std::isfinite(px) || !std::isfinite(py) || !std::isfinite(pz) ||
-      !std::isfinite(yaw) || !std::isfinite(pitch) || !std::isfinite(roll)) return;
+      !std::isfinite(yaw) || !std::isfinite(pitch) || !std::isfinite(roll)) return false;
   GameRefState* n = gameref_get(key);
   if(!n)n=gameref_upsert(key);
-  if (!n) return;
+  if (!n) return false;
   n->matrix_override=false;
   n->pos[0] = px;
   n->pos[1] = py;
@@ -264,6 +264,37 @@ void gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
     std::copy_n(n->pos, 3, n->eye_s);
     std::fill(std::begin(n->eye_vel), std::end(n->eye_vel), 0.f);
     n->cam_pose_init = n->follow_hold = true;
+  }
+  return true;
+}
+
+void gameref_set_camera_roll_from_matrix(void* key, float roll) {
+  GameRefState* n = gameref_get(key);
+  if (!n || n->kind != GameRefKind::Camera || !std::isfinite(roll)) return;
+  if (n->follow_vehicle && n->cockpit_index < 0 && !n->camera_free) return;
+  n->camera_roll = roll;
+}
+
+bool gameref_mod_camera_set(void* key, ModCameraMode mode, const float eye[3],
+                            const float at[3], const float up[3], float fov, void* car) {
+  GameRefState* n = gameref_get(key);
+  if (!n || n->kind != GameRefKind::Camera) return false;
+  int32_t car_id = 0;
+  if (mode == ModCameraMode::Relative || mode == ModCameraMode::Local) {
+    float frame[16];
+    if (!car || !part_is_car(car) || !part_camera_pose(car, -1, frame)) return false;
+    car_id = gameref_make_live(car);
+    if (!car_id) return false;
+  }
+  if (!mod_camera_set(n->mod_pose, mode, eye, at, up, fov)) return false;
+  n->mod_pose_car = car_id;
+  return true;
+}
+
+void gameref_mod_camera_clear(void* key) {
+  if (GameRefState* n = gameref_get(key)) {
+    n->mod_pose = {};
+    n->mod_pose_car = 0;
   }
 }
 
@@ -880,6 +911,9 @@ static void update_chase_feel(GameRefState& cam, void* car, const float* frame, 
   cam.chase_fov = fresh ? goal : cam.chase_fov + (goal - cam.chase_fov) * -std::expm1(-dt * 2.f);
 }
 
+// The follow camera aims this far above the chassis origin.
+constexpr float kFollowFocusLift = 1.1f;
+
 static bool driving_camera_pose(GameRefState& cam, float* eye, float* at,
                                 float* up, float dt) {
   using physics::Vec3;
@@ -899,6 +933,8 @@ static bool driving_camera_pose(GameRefState& cam, float* eye, float* at,
     at[0] = eye[0] + float(forward.x);
     at[1] = eye[1] + float(forward.y);
     at[2] = eye[2] + float(forward.z);
+    // A free camera is never the bound follow camera: it keeps its roll.
+    if (up && cam.camera_roll != 0.f) mod_roll_up(eye, at, cam.camera_roll, up);
     return true;
   }
 
@@ -920,6 +956,9 @@ static bool driving_camera_pose(GameRefState& cam, float* eye, float* at,
   if (attached) {
     target_point(&cam, cam.move_id, cam.move_off, eye);
     target_point(&cam, cam.look_id, cam.look_off, at);
+    // A script camera attached to the car (a short `move`) keeps its `roll`
+    // (the command or setMatrix's roll), as the free script camera does.
+    if (up && cam.camera_roll != 0.f) mod_roll_up(eye, at, cam.camera_roll, up);
     return true;
   }
 
@@ -955,7 +994,7 @@ static bool driving_camera_pose(GameRefState& cam, float* eye, float* at,
   const Vec3 offset{std::sin(azimuth) * std::cos(elevation) * radius,
                     std::sin(elevation) * radius,
                     std::cos(azimuth) * std::cos(elevation) * radius};
-  const Vec3 focus{frame[12], frame[13] + 1.1, frame[14]};
+  const Vec3 focus{frame[12], frame[13] + kFollowFocusLift, frame[14]};
   const Vec3 desired = focus + offset;
   const float position[3] = {float(desired.x), float(desired.y), float(desired.z)};
   const float center[3] = {float(focus.x), float(focus.y), float(focus.z)};
@@ -987,6 +1026,63 @@ static bool driving_camera_pose(GameRefState& cam, float* eye, float* at,
   return true;
 }
 
+// A mod camera pose (#487) is the whole view of any camera the renderer
+// draws (the world camera and preview cameras). A Relative or Local pose
+// reads the car's drawn frame now, so the draw-time query matches the drawn
+// car even when the poses were published after the scripts ran
+// (free-running physics); Local also turns and banks with that frame.
+// Every resolution writes back, the renderer's dt = 0 query too: getPos /
+// getOri (the GPS reads them), and after clearPose the stock rules and their
+// smoothing, continue from the pose last drawn. The bound follow camera's
+// roll stays the script's `roll` command, as in setMatrix. False without a
+// pose, or for a car pose whose car is gone (the last pose stays in pos/ypr).
+static bool mod_pose_view(GameRefState& cam, float eye[3], float at[3], float up[3],
+                          float* fov) {
+  if (cam.mod_pose.mode == ModCameraMode::None) return false;
+  float frame[16];
+  const float* car = nullptr;
+  if (cam.mod_pose.mode == ModCameraMode::Relative || cam.mod_pose.mode == ModCameraMode::Local) {
+    const GameRefState* target = gameref_find_live(cam.mod_pose_car);
+    if (target && part_camera_pose(target->key, -1, frame)) car = frame;
+  }
+  float pose_up[3];
+  if (!mod_camera_resolve(cam.mod_pose, car, eye, at, pose_up)) return false;
+  if (up) std::copy_n(pose_up, 3, up);
+  if (fov) *fov = cam.mod_pose.fov > 0.f ? cam.mod_pose.fov : cam.half_aov > 1.f ? cam.half_aov : 60.f;
+  std::copy_n(eye, 3, cam.pos);
+  mod_look_ypr_roll(eye, at, pose_up, cam.ypr);
+  if (!(cam.follow_vehicle && cam.cockpit_index < 0 && !cam.camera_free))
+    cam.camera_roll = cam.ypr[2];
+  // The smoothed eye and focus of the stock rules, so clearPose starts from
+  // the drawn pose. The follow rule reads look_s as the car focus it last
+  // saw (eye_s moves by focus - look_s), so a camera on that path gets the
+  // focus of its car, not the pose's; the move/look and orbit rules smooth
+  // look_s toward their target from the pose's focus. Aimed previews draw
+  // aim_eye / aim_at (the preview's own space, as the pose).
+  std::copy_n(eye, 3, cam.eye_s);
+  std::copy_n(at, 3, cam.look_s);
+  const bool follow_path = !cam.camera_free && !(cam.camera_attached && !cam.follow_variant) &&
+                           cam.cockpit_index < 0 && cam.follow_vehicle;
+  if (follow_path) {
+    float car_frame[16];
+    const GameRefState* followed = gameref_find_live(cam.follow_vehicle);
+    if (followed && part_camera_pose(followed->key, -1, car_frame)) {
+      const float focus[3] = {car_frame[12], car_frame[13] + kFollowFocusLift, car_frame[14]};
+      std::copy_n(focus, 3, cam.look_s);
+    }
+  }
+  std::copy_n(eye, 3, cam.aim_eye);
+  std::copy_n(at, 3, cam.aim_at);
+  cam.eye_vel[0] = cam.eye_vel[1] = cam.eye_vel[2] = 0.f;
+  cam.cam_pose_init = true;
+  return true;
+}
+
+bool gameref_mod_camera_view(void* key, float eye[3], float at[3], float up[3], float* fov) {
+  GameRefState* n = gameref_get(key);
+  return n && n->kind == GameRefKind::Camera && eye && at && mod_pose_view(*n, eye, at, up, fov);
+}
+
 static bool world_camera_pose(float eye[3], float at[3], float* fov, float* znear,
                               float* zfar, float dt, float* up = nullptr) {
   GameRefState* cam = fullscreen_script_camera();
@@ -994,6 +1090,12 @@ static bool world_camera_pose(float eye[3], float at[3], float* fov, float* znea
   if (up) { up[0] = 0; up[1] = 1; up[2] = 0; }
   if (dt > 0.f && cam->aov_goal > 0.f)
     cam->half_aov += (cam->aov_goal - cam->half_aov) * -std::expm1(-dt * cam->aov_rate);
+  if (mod_pose_view(*cam, eye, at, up, fov)) {
+    // Closer than the chase view's .20 for bumper and hood eyes.
+    if (znear) *znear = .10f;
+    if (zfar) *zfar = 3000.f;
+    return true;
+  }
   if (driving_camera_pose(*cam, eye, at, up, dt)) {
     const bool cockpit = cam->camera_attached && !cam->follow_variant;
     const bool chase = !cockpit && !cam->camera_free;
@@ -1113,15 +1215,7 @@ static bool world_camera_pose(float eye[3], float at[3], float* fov, float* znea
     eye[1] = follow[1];
     eye[2] = follow[2];
   }
-  if (up && cam->camera_roll != 0.f) {
-    const auto forward = physics::Vec3{at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]}.normalized();
-    const auto right = forward.cross({0, 1, 0}).normalized();
-    if (right.dot(right) > 0) {
-      const auto rolled = right.cross(forward) * std::cos(cam->camera_roll) +
-                          right * std::sin(cam->camera_roll);
-      up[0] = float(rolled.x); up[1] = float(rolled.y); up[2] = float(rolled.z);
-    }
-  }
+  if (up && cam->camera_roll != 0.f) mod_roll_up(eye, at, cam->camera_roll, up);
   if (fov) {
     const auto delta = physics::Vec3{eye[0] - at[0], eye[1] - at[1], eye[2] - at[2]};
     *fov = cam->camera_autozoom ? float(std::clamp(240.0 / std::max(1.0, delta.length()), 18.0, 65.0))

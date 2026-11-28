@@ -884,6 +884,24 @@ The patched `Track.nextCamera` (#470) cycles follow, chase and the cockpit
 cameras on the change-view key (ControlSet slot 35, `AXIS_LOOK_PREVNEXT`,
 V). It skips chase without a live second target and ignores change-view while
 look-back is held. The stock F1-F5/F9 view hotkeys are not created.
+Camera mods (#487) register a `java.openslrr.CameraProvider`; the patched
+Track hands it the follow view (`CAMMODE_PROVIDER`), cycles its views on the
+change-view key, sends it LOOK BACK and deactivates it before any other camera
+change (the repair, mechanic and paint close-ups included, which ignore V
+and look back and re-activate it on close), keeping its own follow camera alive but hidden. A script camera
+with a `CameraControl` pose (`GameRefState::mod_pose`) bypasses every other
+camera rule in `world_camera_pose`; a Relative pose adds the car's drawn
+origin and a Local pose applies the whole drawn chassis frame
+(`part_camera_pose`) on every query, so the draw-time query matches the drawn
+car even though free-running physics publishes the frame's poses after the
+scripts ran (inside `part_physics_begin`). Every resolution, the renderer's
+dt = 0 query included, writes the pose's eye, yaw, pitch and roll back to the
+camera's `pos` / `ypr` (and the roll to `camera_roll`, except on the bound
+follow camera), so `getPos` / `getOri` and `clearPose` see the drawn pose. Values a script reads in
+`animate()` (`CarState.drawnPos`) are therefore one frame old in free-running
+mode and exact in frame-locked mode. `GameRef.setMatrix` on a camera other
+than the bound follow camera sets `camera_roll` from the Ypr roll. Reference:
+[scripting/mod-api.md](../scripting/mod-api.md).
 
 SDL3 owns joystick/gamepad discovery and polling on that same host thread;
 Win32 still owns the window, keyboard scan codes and mouse. Devices 0/1 remain

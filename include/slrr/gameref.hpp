@@ -1,5 +1,6 @@
 #pragma once
 
+#include "slrr/mod_camera.hpp"
 #include "slrr/trigger_volume.hpp"
 #include "slrr/scx_mesh.hpp"
 #include "slrr/scene_sun.hpp"
@@ -187,6 +188,11 @@ struct GameRefState {
   float chase_speed = 0.f;
   float chase_accel = 0.f;
   float chase_fov = 0.f;
+  // Mod camera pose (java.openslrr.CameraControl, #487). While set, the
+  // camera's view is this pose and nothing else; a Relative or Local pose
+  // follows the drawn frame of the car with live id mod_pose_car.
+  ModCameraPose mod_pose;
+  int32_t mod_pose_car = 0;
   // This frame's look axes (PE mouse rate). The orbit body consumes them.
   float ctl_x = 0.f;
   float ctl_y = 0.f;
@@ -272,8 +278,27 @@ void gameref_request_active_collision(void* key);
 // through a scene-graph mutation or script callback.
 void gameref_process_collision_requests();
 
-void gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
+bool gameref_set_matrix(void* key, float px, float py, float pz, float yaw,
                         float pitch, float roll);
+// GameRef.setMatrix on a camera (#487): the Ypr roll becomes the camera roll
+// (the `roll` command), except on the bound follow camera, whose pose the
+// engine computes and whose roll stays the script's `roll`.
+void gameref_set_camera_roll_from_matrix(void* key, float roll);
+// java.openslrr.CameraControl (#487). set stores an exact pose on a script
+// camera (mode World), world offsets from the drawn origin of car (Relative)
+// or offsets in car's drawn chassis frame (Local); Relative and Local are
+// resolved whenever the pose is read, so at draw time. Each drawn frame
+// writes the eye, yaw, pitch and roll back to pos/ypr (and the roll to the
+// camera roll unless it is the bound follow camera). clear restores the
+// stock behaviour. False when key is not a camera, car is not a drawn car,
+// or the pose is invalid (the previous pose stays).
+bool gameref_mod_camera_set(void* key, ModCameraMode mode, const float eye[3],
+                            const float at[3], const float up[3], float fov, void* car);
+void gameref_mod_camera_clear(void* key);
+// The view of camera key's mod pose (#487), resolved now and written back as
+// for the world camera; for preview cameras the renderer draws. False when it
+// has no pose (or its car is gone).
+bool gameref_mod_camera_view(void* key, float eye[3], float at[3], float up[3], float* fov);
 void gameref_set_event_mask(void* key, int32_t mask);
 void gameref_clear_event_mask(void* key, int32_t mask);
 void gameref_add_timer(void* key, float deadline_abs, int32_t timer_id);

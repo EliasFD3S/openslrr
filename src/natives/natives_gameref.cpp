@@ -413,7 +413,9 @@ void register_gameref_natives(Jvm& jvm, RpkIndex& rpk, SectionMachine& sections)
           }
         }
         Object* moved = placed_body(self);
-        gameref_set_matrix(moved, px, py, pz, yaw, pitch, roll);
+        // OpenSLRR (#487): the roll only when the pose itself was accepted.
+        if (gameref_set_matrix(moved, px, py, pz, yaw, pitch, roll))
+          gameref_set_camera_roll_from_matrix(moved, roll);
         part_park_chassis(moved);
         return Value::make_void();
       });

@@ -8882,6 +8882,10 @@ void *part_shadow_source(void *render, float *frame) {
   }
   return nullptr;
 }
+bool part_is_car(void* object) {
+  const auto* rec = record(as_part(static_cast<Object*>(object)));
+  return rec && !rec->state.parent && rec->config->native_kind == "car";
+}
 bool part_camera_pose(void* car, int camera, float* matrix) {
   auto* chassis = as_part(static_cast<Object*>(car));
   const auto* rec = record(chassis);
@@ -8912,6 +8916,60 @@ bool part_car_velocity(void* car, float* velocity) {
   velocity[1] = static_cast<float>(v.y);
   velocity[2] = static_cast<float>(v.z);
   return true;
+}
+bool part_car_angular_velocity(void* car, float* omega) {
+  const auto* rec = record(as_part(static_cast<Object*>(car)));
+  if (!rec || !omega) return false;
+  const auto w = rec->dynamics.body.omega();
+  omega[0] = static_cast<float>(w.x);
+  omega[1] = static_cast<float>(w.y);
+  omega[2] = static_cast<float>(w.z);
+  return true;
+}
+bool part_car_local_box(void *key, float *lo, float *hi) {
+  Object *chassis = key && lo && hi ? car(static_cast<Object *>(key)) : nullptr;
+  if (!chassis)
+    return false;
+  // collect_root(chassis) poses every mesh through its parent chain up to
+  // and including the chassis node itself, so the instances live in the
+  // chassis's parent space, reflected (S*M*S, S flipping z). The chassis
+  // node's own drawn transform in that same space is the chassis frame;
+  // measuring in it keeps an offset or rotated body render, or a large
+  // attachment, from moving the origin or axes.
+  float frame[16];
+  if (!scene_instance_transform(chassis, chassis, frame))
+    return false;
+  const auto instances = scene_instances_collect_root(chassis);
+  bool any = false;
+  for (const auto &instance : instances) {
+    if (!instance.geometry)
+      continue;
+    const auto &geo = *instance.geometry;
+    const float scale = geo.position_scale;
+    const float *m = instance.transform.data();
+    for (int corner = 0; corner < 8; ++corner) {
+      const float x = (corner & 1 ? geo.info.bbox_max[0] : geo.info.bbox_min[0]) * scale;
+      const float y = (corner & 2 ? geo.info.bbox_max[1] : geo.info.bbox_min[1]) * scale;
+      const float z = (corner & 4 ? geo.info.bbox_max[2] : geo.info.bbox_min[2]) * scale;
+      // Mesh point in the instances' space (vertices are uploaded with z
+      // flipped, as in part_car_ground), relative to the chassis origin.
+      float d[3];
+      for (int i = 0; i < 3; ++i)
+        d[i] = m[i] * x + m[4 + i] * y - m[8 + i] * z + m[12 + i] - frame[12 + i];
+      // Onto the chassis axes in that space, z flipped back to script
+      // metres: x right, y up, z back.
+      for (int axis = 0; axis < 3; ++axis) {
+        const float *a = frame + axis * 4;
+        const float len = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+        const float sign = axis == 2 ? -1.f : 1.f;
+        const float v = len > 1e-6f ? sign * (d[0] * a[0] + d[1] * a[1] + d[2] * a[2]) / len : 0.f;
+        if (!any || v < lo[axis]) lo[axis] = v;
+        if (!any || v > hi[axis]) hi[axis] = v;
+      }
+      any = true;
+    }
+  }
+  return any;
 }
 bool part_car_ground(void *key, float *y) {
   if (!key || !y || !car(static_cast<Object *>(key)))
