@@ -36,6 +36,7 @@ void usage() {
       "           [--bench-time HOUR] [--bench-shots DIR]\n"
       "           [--record-path FILE] [--replay-path FILE]\n"
       "           [--wind M/S[,HEADING]]\n"
+      "           [--renderer auto|d3d11|d3d12|vulkan]\n"
       "           [--no-vsync] [--debug-overlay] [--physics-inline] [--physics-batch] [--physics-hz HZ]\n"
       "           [--physics-trace FILE]\n"
       "           [PlayerName]\n"
@@ -132,6 +133,15 @@ int main(int argc, char** argv) {
     }
     if (std::strcmp(a, "--no-vsync") == 0) {
       opt.vsync = false;
+      continue;
+    }
+    if (std::strcmp(a, "--renderer") == 0 && i + 1 < argc) {
+      // bgfx backend (#186); auto is Direct3D 11 on Windows.
+      if (!bgfx_request_renderer(argv[++i])) {
+        std::fprintf(stderr, "unknown renderer: %s\n", argv[i]);
+        usage();
+        return 1;
+      }
       continue;
     }
     if (std::strcmp(a, "--physics-hz") == 0 && i + 1 < argc) {

@@ -1,4 +1,5 @@
-// Real D3D11 pixels through production vehicle/scenery shaders and bindings.
+// Real GPU pixels through production vehicle/scenery shaders and bindings.
+// D3D11 by default; SLRR_RENDERER=d3d12|vulkan runs it on that backend (#186).
 #include "../src/render/bgfx_lib_backend.hpp"
 #include "../src/render/reflection_capture.hpp"
 #include "../src/render/point_shadows.hpp"
@@ -10,6 +11,11 @@
 #include <bx/math.h>
 #include "dxbc/fs_mesh.sc.bin.h"
 #include "dxbc/fs_vehicle.sc.bin.h"
+#include "dxil/fs_mesh.sc.bin.h"
+#include "dxil/fs_vehicle.sc.bin.h"
+#include "spirv/fs_mesh.sc.bin.h"
+#include "spirv/fs_vehicle.sc.bin.h"
+#include <cstdlib>
 #include <chrono>
 #include <thread>
 #include "slrr/frame_profiler.hpp"
@@ -1849,7 +1855,13 @@ struct SceneShadowRegression {
     std::printf("LIGHT UNIFORMS 2000 lit draws: submit %.3f -> %.3f ms, render thread %.3f -> %.3f ms\n",
                 uncached.first,cached.first,uncached.second,cached.second);
     // #254: fragment uniform size (vec4) of fs_mesh / fs_vehicle, from the
-    // embedded D3D11 shaders' uniform tables.
+    // embedded shaders' uniform tables, for the backend that is running.
+    struct ShaderBytes {const uint8_t* data;uint32_t size;};
+    const auto renderer=bgfx::getRendererType();
+    const ShaderBytes mesh_fs=renderer==bgfx::RendererType::Vulkan?ShaderBytes{fs_mesh_spv,sizeof(fs_mesh_spv)}
+      :renderer==bgfx::RendererType::Direct3D12?ShaderBytes{fs_mesh_dxil,sizeof(fs_mesh_dxil)}:ShaderBytes{fs_mesh_dxbc,sizeof(fs_mesh_dxbc)};
+    const ShaderBytes vehicle_fs=renderer==bgfx::RendererType::Vulkan?ShaderBytes{fs_vehicle_spv,sizeof(fs_vehicle_spv)}
+      :renderer==bgfx::RendererType::Direct3D12?ShaderBytes{fs_vehicle_dxil,sizeof(fs_vehicle_dxil)}:ShaderBytes{fs_vehicle_dxbc,sizeof(fs_vehicle_dxbc)};
     const auto uniform_vec4=[](const uint8_t* data,uint32_t size) {
       const auto shader=bgfx::createShader(bgfx::makeRef(data,size));
       bgfx::UniformHandle handles[128];
@@ -1865,7 +1877,7 @@ struct SceneShadowRegression {
       return vec4;
     };
     std::printf("FRAGMENT UNIFORMS fs_mesh %u vec4, fs_vehicle %u vec4\n",
-                uniform_vec4(fs_mesh_dxbc,sizeof(fs_mesh_dxbc)),uniform_vec4(fs_vehicle_dxbc,sizeof(fs_vehicle_dxbc)));
+                uniform_vec4(mesh_fs.data,mesh_fs.size),uniform_vec4(vehicle_fs.data,vehicle_fs.size));
     bgfx::setViewMode(view_id,bgfx::ViewMode::Default);
     b.sequential_views_.reset(view_id);
     bgfx::frame();bgfx::destroy(fb);bgfx::destroy(readback);
@@ -2457,8 +2469,10 @@ struct SceneShadowRegression {
       size_t pixels=0;
       for(size_t i=0;i+3<base.size()&&i+3<on.image.size();i+=4)
         pixels+=std::memcmp(&base[i],&on.image[i],4)!=0;
+      // compare() sets worst; run it before evaluating the printf arguments.
+      const size_t reference_differ=compare(base,on.image,worst);
       std::printf("CITY FRAME %ux%u vs reference capture: %zu bytes differ in %zu pixels, max %d\n",
-                  width,height,compare(base,on.image,worst),pixels,worst);
+                  width,height,reference_differ,pixels,worst);
     } else if(FILE* out=std::fopen(reference,"wb")) {
       std::fwrite(on.image.data(),1,on.image.size(),out);std::fclose(out);
       std::printf("CITY FRAME %ux%u reference capture written\n",width,height);
@@ -4182,40 +4196,66 @@ int main() {
   LibBgfxBackend backend;
   try {
     SLRR_REQUIRE(backend.open(320, 240, "Scene shadow integration"));
-    SLRR_REQUIRE(bgfx::getRendererType() == bgfx::RendererType::Direct3D11);
+    SLRR_REQUIRE(std::getenv("SLRR_RENDERER") ||
+                 bgfx::getRendererType() == bgfx::RendererType::Direct3D11);
+    std::printf("renderer: %s\n", bgfx::getRendererName(bgfx::getRendererType()));
     ShowWindow(static_cast<HWND>(backend.native_hwnd()), SW_HIDE);
     // Captures compare frames rendered at once: a real-time crossfade after a
     // sun step would weigh them differently (#371). Its own test enables it.
     render_debug().shadow_crossfade = 0.f;
-    SceneShadowRegression::run(backend);
-    SceneShadowRegression::real_world_cache(backend);
-    SceneShadowRegression::addon_bounds(backend);
-    SceneShadowRegression::scene_environment(backend);
-    SceneShadowRegression::reflection_occupants();
-    SceneShadowRegression::garage_geometry(backend);
-    SceneShadowRegression::garage_fixtures(backend);
-    SceneShadowRegression::vehicle_wall(backend);
-    SceneShadowRegression::ambient_occlusion(backend);
-    SceneShadowRegression::point_lifetime(backend);
-    SceneShadowRegression::emissive_overlay_flush(backend);
-    SceneShadowRegression::scenery_lamps(backend);
-    SceneShadowRegression::car_lights(backend);
-    SceneShadowRegression::nitro_flares(backend);
-    SceneShadowRegression::headlight_shadows(backend);
-    SceneShadowRegression::lamp_cost(backend);
-    SceneShadowRegression::lamp_shadows(backend);
-    SceneShadowRegression::lamp_shadow_stability(backend);
-    SceneShadowRegression::car_lamp_shadows(backend);
-    SceneShadowRegression::render_debug_overrides(backend);
-    SceneShadowRegression::per_view_light_uniforms(backend);
-    SceneShadowRegression::city_submission(backend,640,360);
-    SceneShadowRegression::city_submission(backend,2560,1440);
-    SceneShadowRegression::desert_capture(backend);
-    SceneShadowRegression::city_submission(backend,2560,1440,true);
-    SceneShadowRegression::city_submission(backend,1280,720,true,true);
-    SceneShadowRegression::city_submission(backend,1280,720,true,false,true);
+    // SLRR_GPU_KEEP_GOING=1 (#186): run every case and list those that
+    // fail, to compare backends. A failed case can leave renderer state
+    // behind, so the cases after it are only indicative.
+    const bool keep_going = std::getenv("SLRR_GPU_KEEP_GOING") != nullptr;
+    int failed = 0;
+    const auto run_case = [&](const char *name, const auto &body) {
+      if (!keep_going) {
+        body();
+        return;
+      }
+      try {
+        body();
+      } catch (const std::exception &e) {
+        ++failed;
+        std::printf("FAIL case %s: %s\n", name, e.what());
+      }
+    };
+#define SLRR_CASE(call) run_case(#call, [&] { SceneShadowRegression::call; })
+    SLRR_CASE(run(backend));
+    SLRR_CASE(real_world_cache(backend));
+    SLRR_CASE(addon_bounds(backend));
+    SLRR_CASE(scene_environment(backend));
+    SLRR_CASE(reflection_occupants());
+    SLRR_CASE(garage_geometry(backend));
+    SLRR_CASE(garage_fixtures(backend));
+    SLRR_CASE(vehicle_wall(backend));
+    SLRR_CASE(ambient_occlusion(backend));
+    SLRR_CASE(point_lifetime(backend));
+    SLRR_CASE(emissive_overlay_flush(backend));
+    SLRR_CASE(scenery_lamps(backend));
+    SLRR_CASE(car_lights(backend));
+    SLRR_CASE(nitro_flares(backend));
+    SLRR_CASE(headlight_shadows(backend));
+    SLRR_CASE(lamp_cost(backend));
+    SLRR_CASE(lamp_shadows(backend));
+    SLRR_CASE(lamp_shadow_stability(backend));
+    SLRR_CASE(car_lamp_shadows(backend));
+    SLRR_CASE(render_debug_overrides(backend));
+    SLRR_CASE(per_view_light_uniforms(backend));
+    SLRR_CASE(city_submission(backend,640,360));
+    SLRR_CASE(city_submission(backend,2560,1440));
+    SLRR_CASE(desert_capture(backend));
+    SLRR_CASE(city_submission(backend,2560,1440,true));
+    SLRR_CASE(city_submission(backend,1280,720,true,true));
+    SLRR_CASE(city_submission(backend,1280,720,true,false,true));
     // #359: by day, with the sun cascades on worker encoders.
-    SceneShadowRegression::city_submission(backend,1280,720,true,true,true);
+    SLRR_CASE(city_submission(backend,1280,720,true,true,true));
+#undef SLRR_CASE
+    if (failed) {
+      backend.close();
+      std::printf("FAILED %d case(s)\n", failed);
+      return 1;
+    }
     backend.close();
     std::puts("PASS vehicle/scenery shadow visibility, preview/emission "
               "isolation and reflection-view parity");

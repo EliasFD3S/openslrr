@@ -146,6 +146,10 @@ current gaps to SLRR_rev code are in
   world and OSD submission, present wait, bgfx render-thread and GPU time,
   draws) and appends CSV rows (`src/platform/frame_profiler.cpp`).
   `--no-vsync` and `--debug-overlay` set the Ctrl+F12 panel at startup.
+  `--renderer auto|d3d11|d3d12|vulkan` selects the bgfx backend (#186;
+  `src/render/bgfx_lib_backend.cpp:requested_renderer`), `auto` being
+  Direct3D 11; see
+  [rendering/backend.md](../rendering/backend.md#bgfx-backend-selection-and-the-vulkan-spike-186).
   The repeatable city run is
   `--spawn-car cars/racers/Baiern.rpk:0x6 --bench-map ValoCity --bench-drive 40 --bench-time 13`:
   it starts the MapBox track from the garage, settles the car for two
@@ -171,7 +175,10 @@ current gaps to SLRR_rev code are in
 - Runtime environment variables: `SLRR_GAME_ROOT` (`src/main.cpp`),
   `SLRR_VLC_DIR` (`src/platform/video_fmv_vlc.cpp`) and `SLRR_AMBIENCE_LOG`
   (`src/resources/scene_ambience.cpp`, debug logging of random ambience
-  requests). `SLRR_TOOLS_CACHE_DIR` is build-time only (see README.md).
+  requests). `SLRR_RENDERER` is `--renderer` for the GPU test executables,
+  which take no options, and `SLRR_GPU_VENDOR=nvidia|amd|intel` picks the
+  adapter on a machine with two GPUs (`src/render/bgfx_lib_backend.cpp`).
+  `SLRR_TOOLS_CACHE_DIR` is build-time only (see README.md).
 - Automated checks on `main`: the only CTest target is `audio_recovery`
   (`-DBUILD_TESTING=ON`, `CMakeLists.txt`). Every other regression is a
   standalone `tests/test_<name>.cpp` built and run by

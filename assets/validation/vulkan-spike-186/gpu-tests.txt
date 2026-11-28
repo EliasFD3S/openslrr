@@ -1,0 +1,303 @@
+GPU regression suites per bgfx backend (#186)
+Machine: i9-13905H, RTX 4060 Laptop GPU (driver 31.0.15.4692), Windows 11, adapter 10de:28e0 on every backend.
+Command: $env:SLRR_RENDERER=<backend>; powershell -File scripts\run_save_io_tests.ps1 -Suite <suite>
+scene_shadow_gpu on Vulkan was run again with SLRR_GPU_KEEP_GOING=1 to list every failing case.
+
+== render_programs_gpu d3d11: PASS
+  shader ownership: baseline=32 legacy rejected=34 after 32 cycles=32
+  PASS shader success/rejection/missing-stage ownership and backend reopen
+== render_programs_gpu d3d12: PASS
+  shader ownership: baseline=27 legacy rejected=29 after 32 cycles=27
+  PASS shader success/rejection/missing-stage ownership and backend reopen
+== render_programs_gpu vulkan: PASS
+  shader ownership: baseline=21 legacy rejected=23 after 32 cycles=21
+  PASS shader success/rejection/missing-stage ownership and backend reopen
+== osd_text_gpu d3d11: PASS
+  GPU text: 20 lines / 1000 glyphs; empty=7 full=27 hidden=7 text_draws=20
+== osd_text_gpu d3d12: PASS
+  GPU text: 20 lines / 1000 glyphs; empty=7 full=27 hidden=7 text_draws=20
+== osd_text_gpu vulkan: PASS
+  GPU text: 20 lines / 1000 glyphs; empty=7 full=27 hidden=7 text_draws=20
+== scene_mesh_cache d3d11: PASS
+  PASS source/index ownership, material ordering/blends, skin + 16 revisions, GPU cleanup
+== scene_mesh_cache d3d12: PASS
+  PASS source/index ownership, material ordering/blends, skin + 16 revisions, GPU cleanup
+== scene_mesh_cache vulkan: PASS
+  PASS source/index ownership, material ordering/blends, skin + 16 revisions, GPU cleanup
+
+osd_text_gpu capture (1280x800 TGA): identical bytes on d3d11, d3d12 and vulkan.
+
+== scene_shadow_gpu d3d11 (exit 0)
+  PASS sub-texel camera stability and continuous small sun changes
+  PASS sun step crossfade keeps the previous atlas and fades it out (#371)
+  PASS far sun cascades alternate while the camera moves (#361)
+  PASS real map: unchanged atlas reused, sun held within its step (#371), larger sun and caster motion invalidates
+  PASS real Drag Track: decoded bounds match vertices and retain map in all four shadow levels
+  PASS scene intent: mesh-only exterior shadows, interior clock/sky isolation, root-scoped lights, preview and automatic fallback
+  PASS reflection excludes seated subtree but preserves independent pedestrians
+  GARAGE directional sunlight through alpha windows=545 pixels
+  GARAGE opaque window alpha blocks 545 sunlight pixels
+  GARAGE clock-only sunlight motion=1264 pixels
+  GARAGE camera-to-sun flare: window=2735 roof=0
+  PASS point colour/intensity, radial range cutoff and unchanged-depth reuse
+  PASS shadow quality reallocates, smoothing changes pixels without depth redraw
+  AO flat method=1 dark=0/4174 average=178 reference=178
+  AO flat method=1 dark=0/4174 average=178 reference=178
+  AO flat method=1 dark=0/4174 average=178 reference=178
+  AO flat method=2 dark=0/4174 average=178 reference=178
+  AO flat method=2 dark=0/4174 average=178 reference=178
+  AO flat method=2 dark=0/4174 average=178 reference=178
+  AO wall frontal near method=1: visible 19200, AO pixels 792 (reference 800), differ>8 11, max 14
+  AO wall frontal near method=2: visible 19200, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall frontal far method=1: visible 1560, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall frontal far method=2: visible 1560, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall grazing near method=1: visible 8257, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall grazing near method=2: visible 8257, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall grazing far method=1: visible 224, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall grazing far method=2: visible 224, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall frontal near on floor method=1: visible 19200, AO pixels 792 (reference 800), differ>8 11, max 14
+  AO wall frontal near on floor method=2: visible 19200, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall frontal far on floor method=1: visible 10110, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall frontal far on floor method=2: visible 10110, AO pixels 0 (reference 92), differ>8 0, max 5
+  AO wall grazing near on floor method=1: visible 13733, AO pixels 2027 (reference 2090), differ>8 250, max 38
+  AO wall grazing near on floor method=2: visible 13733, AO pixels 1107 (reference 1218), differ>8 141, max 37
+  AO wall grazing far on floor method=1: visible 1033, AO pixels 10 (reference 26), differ>8 8, max 13
+  AO wall grazing far on floor method=2: visible 1033, AO pixels 2 (reference 20), differ>8 12, max 18
+  PASS HBAO/GTAO quality/contact, indirect-only, reflection isolation, resize and off cleanup
+  PASS point-light source lifetime, invalid data, option toggle and world isolation
+  PASS emissive overlays sit flush: level glass shows, glass behind the surface stays hidden
+  PASS scenery lamp lights the road at night only, option 4 and groups
+  PASS car lights: headlight beams, brake light, one beam per headlight part
+  PASS headlight shadows: a caster darkens the road behind it, budget favours the followed car
+  PASS scenery lamp GPU timing recorded
+  PASS street lamp shadows: static and car casters at night, none by day, budget, fade-in, caching
+  PASS lamp shadows ignore camera rotation and reassign with hysteresis while driving
+  PASS car casts a shadow from every lamp reaching it, fixed under camera orbit, smooth while driving
+  PASS renderer debug overrides: defaults, pass toggles remove their views, budgets
+  LIGHT UNIFORMS per-draw uploads=4 per-view uploads=1 lit pixels=37248, images identical
+  LIGHT UNIFORMS 2000 lit draws: submit 65.198 -> 9.856 ms, render thread 1586.802 -> 846.992 ms
+  FRAGMENT UNIFORMS fs_mesh 102 vec4, fs_vehicle 100 vec4
+  PASS per-view light uniforms: one upload per Sequential view and frame, same image
+  CITY FRAME 640x360 caches off: sync_instances 2.019 ms, world submission 7.760 ms, render thread 45.352 ms, 1621 draws, 71 instances, 852 batch slots; per frame 51852 uniform sets / 0 skipped, 0 texture sets / 0 skipped; 0 residency skips; 1621 world-view draws
+  CITY FRAME 640x360 caches on : sync_instances 1.345 ms, world submission 4.486 ms, render thread 45.252 ms, 1621 draws, 71 instances, 852 batch slots; per frame 187 uniform sets / 51665 skipped, 1907 texture sets / 20794 skipped; 40 residency skips; 1621 world-view draws
+  CITY FRAME 640x360 caches on, cold: sync_instances 1.584 ms, world submission 4.764 ms, render thread 48.056 ms, 1621 draws, 71 instances, 852 batch slots; per frame 187 uniform sets / 51665 skipped, 1907 texture sets / 20794 skipped; 40 residency skips; 1621 world-view draws
+  CITY FRAME caches on vs off: 0 bytes differ, max 0 (sum 27864441)
+  CITY FRAME 640x360 reference capture written
+  PASS city frame cost recorded
+  CITY FRAME 2560x1440 caches off: sync_instances 1.715 ms, world submission 8.094 ms, render thread 57.089 ms, 1843 draws, 116 instances, 852 batch slots; per frame 58838 uniform sets / 0 skipped, 0 texture sets / 0 skipped; 0 residency skips; 1843 world-view draws
+  CITY FRAME 2560x1440 caches on : sync_instances 1.647 ms, world submission 5.552 ms, render thread 49.882 ms, 1843 draws, 116 instances, 852 batch slots; per frame 384 uniform sets / 58454 skipped, 2885 texture sets / 22924 skipped; 40 residency skips; 1843 world-view draws
+  CITY FRAME 2560x1440 caches on, cold: sync_instances 1.554 ms, world submission 4.997 ms, render thread 53.428 ms, 1843 draws, 116 instances, 852 batch slots; per frame 384 uniform sets / 58454 skipped, 2885 texture sets / 22924 skipped; 40 residency skips; 1843 world-view draws
+  CITY FRAME caches on vs off: 0 bytes differ, max 0 (sum 445904092)
+  CITY FRAME 2560x1440 reference capture written
+  PASS city frame cost recorded
+  DESERT noon mountains: 9684 of 32520 rock vertex colours under 0.1; mountain band 0.1 % under luminance 40, mean 136.3
+  PASS desert mountains lit by the sun, not by baked vertex light
+  CITY FRAME 2560x1440 caches off: sync_instances 3.769 ms, world submission 13.460 ms, render thread 93.429 ms, 2091 draws, 224 instances, 852 batch slots; per frame 66678 uniform sets / 0 skipped, 0 texture sets / 0 skipped; 0 residency skips; 2063 world-view draws
+  CITY FRAME 2560x1440 caches on : sync_instances 4.474 ms, world submission 13.675 ms, render thread 107.050 ms, 2091 draws, 224 instances, 852 batch slots; per frame 413 uniform sets / 66265 skipped, 4509 texture sets / 24772 skipped; 40 residency skips; 2063 world-view draws
+  CITY FRAME 2560x1440 caches on, cold: sync_instances 6.151 ms, world submission 14.818 ms, render thread 112.680 ms, 2091 draws, 224 instances, 852 batch slots; per frame 413 uniform sets / 66265 skipped, 4509 texture sets / 24772 skipped; 40 residency skips; 2063 world-view draws
+  CITY FRAME caches on vs off: 0 bytes differ, max 0 (sum 478282450)
+  CITY FRAME 2560x1440 reference capture written
+  PASS city frame cost recorded
+  CITY FRAME 1280x720 caches off: sync_instances 5.392 ms, world submission 16.580 ms, render thread 135.149 ms, 4380 draws, 216 instances, 852 batch slots; per frame 69217 uniform sets / 0 skipped, 0 texture sets / 0 skipped; 0 residency skips; 1946 world-view draws
+  CITY FRAME 1280x720 caches on : sync_instances 4.487 ms, world submission 15.072 ms, render thread 247.615 ms, 4380 draws, 216 instances, 852 batch slots; per frame 2583 uniform sets / 66604 skipped, 3544 texture sets / 24092 skipped; 40 residency skips; 1946 world-view draws
+  CITY FRAME 1280x720 caches on, cold: sync_instances 3.067 ms, world submission 8.800 ms, render thread 123.070 ms, 4380 draws, 216 instances, 852 batch slots; per frame 2583 uniform sets / 66604 skipped, 3544 texture sets / 24092 skipped; 40 residency skips; 1946 world-view draws
+  CITY FRAME caches on vs off: 0 bytes differ, max 0 (sum 280199880)
+  CITY FRAME 1280x720 reference capture written
+  PASS city frame cost recorded
+  WORKERS threaded vs one thread: 0 bytes differ, max 0 (sum 111902780)
+  CITY FRAME 1280x720 caches off: sync_instances 2.575 ms, world submission 5.767 ms, render thread 82.384 ms, 3121 draws, 216 instances, 852 batch slots; per frame 2870 uniform sets / 0 skipped, 0 texture sets / 0 skipped; 0 residency skips; 65 world-view draws
+  CITY FRAME 1280x720 caches on : sync_instances 2.344 ms, world submission 4.237 ms, render thread 84.454 ms, 3260 draws, 216 instances, 852 batch slots; per frame 420 uniform sets / 2445 skipped, 1296 texture sets / 13 skipped; 40 residency skips; 65 world-view draws
+  CITY FRAME 1280x720 caches on, cold: sync_instances 2.979 ms, world submission 6.232 ms, render thread 130.380 ms, 3165 draws, 216 instances, 852 batch slots; per frame 420 uniform sets / 2445 skipped, 1296 texture sets / 13 skipped; 40 residency skips; 65 world-view draws
+  CITY FRAME caches on vs off: 0 bytes differ, max 0 (sum 111902780)
+  CITY FRAME 1280x720 reference capture written
+  PASS city frame cost recorded
+  WORKERS threaded vs one thread: 0 bytes differ, max 0 (sum 276143356)
+  CITY FRAME 1280x720 caches off: sync_instances 2.320 ms, world submission 6.627 ms, render thread 89.397 ms, 4538 draws, 216 instances, 852 batch slots; per frame 1574 uniform sets / 0 skipped, 0 texture sets / 0 skipped; 0 residency skips; 31 world-view draws
+  CITY FRAME 1280x720 caches on : sync_instances 2.246 ms, world submission 5.454 ms, render thread 86.445 ms, 4674 draws, 216 instances, 852 batch slots; per frame 81 uniform sets / 1493 skipped, 813 texture sets / 13 skipped; 40 residency skips; 31 world-view draws
+  CITY FRAME 1280x720 caches on, cold: sync_instances 2.106 ms, world submission 5.761 ms, render thread 86.739 ms, 4579 draws, 216 instances, 852 batch slots; per frame 81 uniform sets / 1493 skipped, 813 texture sets / 13 skipped; 40 residency skips; 31 world-view draws
+  CITY FRAME caches on vs off: 0 bytes differ, max 0 (sum 276143356)
+  CITY FRAME 1280x720 vs reference capture: 56782 bytes differ in 19159 pixels, max 0
+  PASS city frame cost recorded
+  PASS vehicle/scenery shadow visibility, preview/emission isolation and reflection-view parity
+
+== scene_shadow_gpu d3d12 (exit 0)
+  PASS sub-texel camera stability and continuous small sun changes
+  PASS sun step crossfade keeps the previous atlas and fades it out (#371)
+  PASS far sun cascades alternate while the camera moves (#361)
+  PASS real map: unchanged atlas reused, sun held within its step (#371), larger sun and caster motion invalidates
+  PASS real Drag Track: decoded bounds match vertices and retain map in all four shadow levels
+  PASS scene intent: mesh-only exterior shadows, interior clock/sky isolation, root-scoped lights, preview and automatic fallback
+  PASS reflection excludes seated subtree but preserves independent pedestrians
+  GARAGE directional sunlight through alpha windows=566 pixels
+  GARAGE opaque window alpha blocks 566 sunlight pixels
+  GARAGE clock-only sunlight motion=1316 pixels
+  GARAGE camera-to-sun flare: window=2734 roof=0
+  PASS point colour/intensity, radial range cutoff and unchanged-depth reuse
+  PASS shadow quality reallocates, smoothing changes pixels without depth redraw
+  AO flat method=1 dark=0/4174 average=178 reference=178
+  AO flat method=1 dark=0/4174 average=178 reference=178
+  AO flat method=1 dark=0/4174 average=178 reference=178
+  AO flat method=2 dark=0/4174 average=178 reference=178
+  AO flat method=2 dark=0/4174 average=178 reference=178
+  AO flat method=2 dark=0/4174 average=178 reference=178
+  AO wall frontal near method=1: visible 19200, AO pixels 792 (reference 800), differ>8 11, max 14
+  AO wall frontal near method=2: visible 19200, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall frontal far method=1: visible 1560, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall frontal far method=2: visible 1560, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall grazing near method=1: visible 8257, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall grazing near method=2: visible 8257, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall grazing far method=1: visible 224, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall grazing far method=2: visible 224, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall frontal near on floor method=1: visible 19200, AO pixels 792 (reference 800), differ>8 11, max 14
+  AO wall frontal near on floor method=2: visible 19200, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall frontal far on floor method=1: visible 10110, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall frontal far on floor method=2: visible 10110, AO pixels 0 (reference 92), differ>8 0, max 5
+  AO wall grazing near on floor method=1: visible 13733, AO pixels 2027 (reference 2090), differ>8 250, max 38
+  AO wall grazing near on floor method=2: visible 13733, AO pixels 1107 (reference 1218), differ>8 141, max 37
+  AO wall grazing far on floor method=1: visible 1033, AO pixels 10 (reference 26), differ>8 8, max 13
+  AO wall grazing far on floor method=2: visible 1033, AO pixels 2 (reference 20), differ>8 12, max 18
+  PASS HBAO/GTAO quality/contact, indirect-only, reflection isolation, resize and off cleanup
+  PASS point-light source lifetime, invalid data, option toggle and world isolation
+  PASS emissive overlays sit flush: level glass shows, glass behind the surface stays hidden
+  PASS scenery lamp lights the road at night only, option 4 and groups
+  PASS car lights: headlight beams, brake light, one beam per headlight part
+  PASS headlight shadows: a caster darkens the road behind it, budget favours the followed car
+  PASS scenery lamp GPU timing recorded
+  PASS street lamp shadows: static and car casters at night, none by day, budget, fade-in, caching
+  PASS lamp shadows ignore camera rotation and reassign with hysteresis while driving
+  PASS car casts a shadow from every lamp reaching it, fixed under camera orbit, smooth while driving
+  PASS renderer debug overrides: defaults, pass toggles remove their views, budgets
+  LIGHT UNIFORMS per-draw uploads=4 per-view uploads=1 lit pixels=37248, images identical
+  LIGHT UNIFORMS 2000 lit draws: submit 13.619 -> 5.623 ms, render thread 19.316 -> 20.116 ms
+  FRAGMENT UNIFORMS fs_mesh 102 vec4, fs_vehicle 100 vec4
+  PASS per-view light uniforms: one upload per Sequential view and frame, same image
+  CITY FRAME 640x360 caches off: sync_instances 1.515 ms, world submission 5.444 ms, render thread 5.754 ms, 1621 draws, 71 instances, 852 batch slots; per frame 51852 uniform sets / 0 skipped, 0 texture sets / 0 skipped; 0 residency skips; 1621 world-view draws
+  CITY FRAME 640x360 caches on : sync_instances 1.120 ms, world submission 3.813 ms, render thread 4.803 ms, 1621 draws, 71 instances, 852 batch slots; per frame 187 uniform sets / 51665 skipped, 1907 texture sets / 20794 skipped; 40 residency skips; 1621 world-view draws
+  CITY FRAME 640x360 caches on, cold: sync_instances 1.237 ms, world submission 4.036 ms, render thread 5.293 ms, 1621 draws, 71 instances, 852 batch slots; per frame 187 uniform sets / 51665 skipped, 1907 texture sets / 20794 skipped; 40 residency skips; 1621 world-view draws
+  CITY FRAME caches on vs off: 0 bytes differ, max 0 (sum 27864441)
+  CITY FRAME 640x360 vs reference capture: 0 bytes differ in 0 pixels, max 0
+  PASS city frame cost recorded
+  CITY FRAME 2560x1440 caches off: sync_instances 1.600 ms, world submission 6.989 ms, render thread 13.367 ms, 1843 draws, 116 instances, 852 batch slots; per frame 58838 uniform sets / 0 skipped, 0 texture sets / 0 skipped; 0 residency skips; 1843 world-view draws
+  CITY FRAME 2560x1440 caches on : sync_instances 1.409 ms, world submission 5.133 ms, render thread 8.657 ms, 1843 draws, 116 instances, 852 batch slots; per frame 384 uniform sets / 58454 skipped, 2885 texture sets / 22924 skipped; 40 residency skips; 1843 world-view draws
+  CITY FRAME 2560x1440 caches on, cold: sync_instances 1.529 ms, world submission 5.342 ms, render thread 5.259 ms, 1843 draws, 116 instances, 852 batch slots; per frame 384 uniform sets / 58454 skipped, 2885 texture sets / 22924 skipped; 40 residency skips; 1843 world-view draws
+  CITY FRAME caches on vs off: 0 bytes differ, max 0 (sum 445904093)
+  CITY FRAME 2560x1440 vs reference capture: 3 bytes differ in 3 pixels, max 0
+  PASS city frame cost recorded
+  DESERT noon mountains: 9684 of 32520 rock vertex colours under 0.1; mountain band 0.1 % under luminance 40, mean 136.3
+  PASS desert mountains lit by the sun, not by baked vertex light
+  CITY FRAME 2560x1440 caches off: sync_instances 2.513 ms, world submission 8.928 ms, render thread 13.859 ms, 2091 draws, 224 instances, 852 batch slots; per frame 66678 uniform sets / 0 skipped, 0 texture sets / 0 skipped; 0 residency skips; 2063 world-view draws
+  CITY FRAME 2560x1440 caches on : sync_instances 2.174 ms, world submission 6.143 ms, render thread 10.821 ms, 2091 draws, 224 instances, 852 batch slots; per frame 413 uniform sets / 66265 skipped, 4509 texture sets / 24772 skipped; 40 residency skips; 2063 world-view draws
+  CITY FRAME 2560x1440 caches on, cold: sync_instances 2.465 ms, world submission 6.178 ms, render thread 7.265 ms, 2091 draws, 224 instances, 852 batch slots; per frame 413 uniform sets / 66265 skipped, 4509 texture sets / 24772 skipped; 40 residency skips; 2063 world-view draws
+  CITY FRAME caches on vs off: 0 bytes differ, max 0 (sum 478282454)
+  CITY FRAME 2560x1440 vs reference capture: 6 bytes differ in 6 pixels, max 0
+  PASS city frame cost recorded
+  CITY FRAME 1280x720 caches off: sync_instances 2.746 ms, world submission 8.108 ms, render thread 14.948 ms, 4380 draws, 216 instances, 852 batch slots; per frame 69217 uniform sets / 0 skipped, 0 texture sets / 0 skipped; 0 residency skips; 1946 world-view draws
+  CITY FRAME 1280x720 caches on : sync_instances 2.213 ms, world submission 5.053 ms, render thread 10.627 ms, 4380 draws, 216 instances, 852 batch slots; per frame 2583 uniform sets / 66604 skipped, 3544 texture sets / 24092 skipped; 40 residency skips; 1946 world-view draws
+  CITY FRAME 1280x720 caches on, cold: sync_instances 2.396 ms, world submission 5.203 ms, render thread 11.327 ms, 4380 draws, 216 instances, 852 batch slots; per frame 2583 uniform sets / 66604 skipped, 3544 texture sets / 24092 skipped; 40 residency skips; 1946 world-view draws
+  CITY FRAME caches on vs off: 0 bytes differ, max 0 (sum 280198667)
+  CITY FRAME 1280x720 vs reference capture: 341 bytes differ in 182 pixels, max 0
+  PASS city frame cost recorded
+  WORKERS threaded vs one thread: 0 bytes differ, max 0 (sum 111902756)
+  CITY FRAME 1280x720 caches off: sync_instances 2.267 ms, world submission 5.741 ms, render thread 12.993 ms, 3121 draws, 216 instances, 852 batch slots; per frame 2870 uniform sets / 0 skipped, 0 texture sets / 0 skipped; 0 residency skips; 65 world-view draws
+  CITY FRAME 1280x720 caches on : sync_instances 1.877 ms, world submission 4.000 ms, render thread 10.538 ms, 3260 draws, 216 instances, 852 batch slots; per frame 420 uniform sets / 2445 skipped, 1296 texture sets / 13 skipped; 40 residency skips; 65 world-view draws
+  CITY FRAME 1280x720 caches on, cold: sync_instances 2.005 ms, world submission 3.992 ms, render thread 10.023 ms, 3165 draws, 216 instances, 852 batch slots; per frame 420 uniform sets / 2445 skipped, 1296 texture sets / 13 skipped; 40 residency skips; 65 world-view draws
+  CITY FRAME caches on vs off: 0 bytes differ, max 0 (sum 111902756)
+  CITY FRAME 1280x720 vs reference capture: 34 bytes differ in 28 pixels, max 0
+  PASS city frame cost recorded
+  WORKERS threaded vs one thread: 0 bytes differ, max 0 (sum 276142149)
+  CITY FRAME 1280x720 caches off: sync_instances 2.303 ms, world submission 6.475 ms, render thread 15.798 ms, 4538 draws, 216 instances, 852 batch slots; per frame 1574 uniform sets / 0 skipped, 0 texture sets / 0 skipped; 0 residency skips; 31 world-view draws
+  CITY FRAME 1280x720 caches on : sync_instances 2.075 ms, world submission 5.238 ms, render thread 15.039 ms, 4674 draws, 216 instances, 852 batch slots; per frame 81 uniform sets / 1493 skipped, 813 texture sets / 13 skipped; 40 residency skips; 31 world-view draws
+  CITY FRAME 1280x720 caches on, cold: sync_instances 1.996 ms, world submission 6.135 ms, render thread 12.348 ms, 4579 draws, 216 instances, 852 batch slots; per frame 81 uniform sets / 1493 skipped, 813 texture sets / 13 skipped; 40 residency skips; 31 world-view draws
+  CITY FRAME caches on vs off: 0 bytes differ, max 0 (sum 276142149)
+  CITY FRAME 1280x720 vs reference capture: 57123 bytes differ in 19341 pixels, max 0
+  PASS city frame cost recorded
+  PASS vehicle/scenery shadow visibility, preview/emission isolation and reflection-view parity
+
+== scene_shadow_gpu vulkan, SLRR_GPU_KEEP_GOING=1 (exit 1: 1 case failed)
+  PASS sub-texel camera stability and continuous small sun changes
+  PASS sun step crossfade keeps the previous atlas and fades it out (#371)
+  PASS far sun cascades alternate while the camera moves (#361)
+  PASS real map: unchanged atlas reused, sun held within its step (#371), larger sun and caster motion invalidates
+  PASS real Drag Track: decoded bounds match vertices and retain map in all four shadow levels
+  PASS scene intent: mesh-only exterior shadows, interior clock/sky isolation, root-scoped lights, preview and automatic fallback
+  PASS reflection excludes seated subtree but preserves independent pedestrians
+  GARAGE directional sunlight through alpha windows=566 pixels
+  GARAGE opaque window alpha blocks 566 sunlight pixels
+  GARAGE clock-only sunlight motion=1316 pixels
+  GARAGE camera-to-sun flare: window=2735 roof=0
+  PASS point colour/intensity, radial range cutoff and unchanged-depth reuse
+  PASS shadow quality reallocates, smoothing changes pixels without depth redraw
+  AO flat method=1 dark=0/4174 average=178 reference=178
+  AO flat method=1 dark=0/4174 average=178 reference=178
+  AO flat method=1 dark=0/4174 average=178 reference=178
+  AO flat method=2 dark=0/4174 average=178 reference=178
+  AO flat method=2 dark=0/4174 average=178 reference=178
+  AO flat method=2 dark=0/4174 average=178 reference=178
+  AO wall frontal near method=1: visible 19200, AO pixels 796 (reference 800), differ>8 0, max 6
+  AO wall frontal near method=2: visible 19200, AO pixels 75 (reference 168), differ>8 0, max 4
+  AO wall frontal far method=1: visible 1560, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall frontal far method=2: visible 1560, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall grazing near method=1: visible 8257, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall grazing near method=2: visible 8257, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall grazing far method=1: visible 224, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall grazing far method=2: visible 224, AO pixels 0 (reference 0), differ>8 0, max 0
+  AO wall frontal near on floor method=1: visible 19200, AO pixels 796 (reference 800), differ>8 0, max 6
+  AO wall frontal near on floor method=2: visible 19200, AO pixels 75 (reference 168), differ>8 0, max 4
+  AO wall frontal far on floor method=1: visible 10110, AO pixels 566 (reference 644), differ>8 228, max 13
+  FAIL case ambient_occlusion(backend): differ<=visible/50 at tests/test_scene_shadow_gpu.cpp:139
+  PASS point-light source lifetime, invalid data, option toggle and world isolation
+  PASS emissive overlays sit flush: level glass shows, glass behind the surface stays hidden
+  PASS scenery lamp lights the road at night only, option 4 and groups
+  PASS car lights: headlight beams, brake light, one beam per headlight part
+  PASS headlight shadows: a caster darkens the road behind it, budget favours the followed car
+  PASS scenery lamp GPU timing recorded
+  PASS street lamp shadows: static and car casters at night, none by day, budget, fade-in, caching
+  PASS lamp shadows ignore camera rotation and reassign with hysteresis while driving
+  PASS car casts a shadow from every lamp reaching it, fixed under camera orbit, smooth while driving
+  PASS renderer debug overrides: defaults, pass toggles remove their views, budgets
+  LIGHT UNIFORMS per-draw uploads=4 per-view uploads=1 lit pixels=37248, images identical
+  LIGHT UNIFORMS 2000 lit draws: submit 17.777 -> 4.923 ms, render thread 4.842 -> 3.996 ms
+  FRAGMENT UNIFORMS fs_mesh 102 vec4, fs_vehicle 100 vec4
+  PASS per-view light uniforms: one upload per Sequential view and frame, same image
+  CITY FRAME 640x360 caches off: sync_instances 1.224 ms, world submission 4.416 ms, render thread 6.325 ms, 1621 draws, 71 instances, 852 batch slots; per frame 51852 uniform sets / 0 skipped, 0 texture sets / 0 skipped; 0 residency skips; 1621 world-view draws
+  CITY FRAME 640x360 caches on : sync_instances 0.738 ms, world submission 2.229 ms, render thread 3.494 ms, 1621 draws, 71 instances, 852 batch slots; per frame 187 uniform sets / 51665 skipped, 1907 texture sets / 20794 skipped; 40 residency skips; 1621 world-view draws
+  CITY FRAME 640x360 caches on, cold: sync_instances 1.162 ms, world submission 3.421 ms, render thread 5.600 ms, 1621 draws, 71 instances, 852 batch slots; per frame 187 uniform sets / 51665 skipped, 1907 texture sets / 20794 skipped; 40 residency skips; 1621 world-view draws
+  CITY FRAME caches on vs off: 0 bytes differ, max 0 (sum 27864441)
+  CITY FRAME 640x360 vs reference capture: 0 bytes differ in 0 pixels, max 0
+  PASS city frame cost recorded
+  CITY FRAME 2560x1440 caches off: sync_instances 1.608 ms, world submission 6.227 ms, render thread 7.718 ms, 1843 draws, 116 instances, 852 batch slots; per frame 58838 uniform sets / 0 skipped, 0 texture sets / 0 skipped; 0 residency skips; 1843 world-view draws
+  CITY FRAME 2560x1440 caches on : sync_instances 1.198 ms, world submission 4.460 ms, render thread 6.433 ms, 1843 draws, 116 instances, 852 batch slots; per frame 384 uniform sets / 58454 skipped, 2885 texture sets / 22924 skipped; 40 residency skips; 1843 world-view draws
+  CITY FRAME 2560x1440 caches on, cold: sync_instances 1.330 ms, world submission 4.267 ms, render thread 6.824 ms, 1843 draws, 116 instances, 852 batch slots; per frame 384 uniform sets / 58454 skipped, 2885 texture sets / 22924 skipped; 40 residency skips; 1843 world-view draws
+  CITY FRAME caches on vs off: 0 bytes differ, max 0 (sum 445904090)
+  CITY FRAME 2560x1440 vs reference capture: 12 bytes differ in 12 pixels, max 0
+  PASS city frame cost recorded
+  DESERT noon mountains: 9684 of 32520 rock vertex colours under 0.1; mountain band 0.6 % under luminance 40, mean 136.3
+  PASS desert mountains lit by the sun, not by baked vertex light
+  CITY FRAME 2560x1440 caches off: sync_instances 2.672 ms, world submission 7.694 ms, render thread 9.897 ms, 2091 draws, 224 instances, 852 batch slots; per frame 66678 uniform sets / 0 skipped, 0 texture sets / 0 skipped; 0 residency skips; 2063 world-view draws
+  CITY FRAME 2560x1440 caches on : sync_instances 2.580 ms, world submission 6.005 ms, render thread 9.238 ms, 2091 draws, 224 instances, 852 batch slots; per frame 413 uniform sets / 66265 skipped, 4509 texture sets / 24772 skipped; 40 residency skips; 2063 world-view draws
+  CITY FRAME 2560x1440 caches on, cold: sync_instances 2.549 ms, world submission 5.899 ms, render thread 9.652 ms, 2091 draws, 224 instances, 852 batch slots; per frame 413 uniform sets / 66265 skipped, 4509 texture sets / 24772 skipped; 40 residency skips; 2063 world-view draws
+  CITY FRAME caches on vs off: 0 bytes differ, max 0 (sum 478282449)
+  CITY FRAME 2560x1440 vs reference capture: 11 bytes differ in 11 pixels, max 0
+  PASS city frame cost recorded
+  CITY FRAME 1280x720 caches off: sync_instances 2.247 ms, world submission 5.901 ms, render thread 12.702 ms, 4380 draws, 216 instances, 852 batch slots; per frame 69217 uniform sets / 0 skipped, 0 texture sets / 0 skipped; 0 residency skips; 1946 world-view draws
+  CITY FRAME 1280x720 caches on : sync_instances 1.771 ms, world submission 3.993 ms, render thread 11.192 ms, 4380 draws, 216 instances, 852 batch slots; per frame 2583 uniform sets / 66604 skipped, 3544 texture sets / 24092 skipped; 40 residency skips; 1946 world-view draws
+  CITY FRAME 1280x720 caches on, cold: sync_instances 1.837 ms, world submission 4.063 ms, render thread 10.940 ms, 4380 draws, 216 instances, 852 batch slots; per frame 2583 uniform sets / 66604 skipped, 3544 texture sets / 24092 skipped; 40 residency skips; 1946 world-view draws
+  CITY FRAME caches on vs off: 0 bytes differ, max 0 (sum 278005986)
+  CITY FRAME 1280x720 vs reference capture: 517846 bytes differ in 197311 pixels, max 0
+  PASS city frame cost recorded
+  WORKERS threaded vs one thread: 0 bytes differ, max 0 (sum 111512673)
+  CITY FRAME 1280x720 caches off: sync_instances 1.904 ms, world submission 5.033 ms, render thread 11.483 ms, 3121 draws, 216 instances, 852 batch slots; per frame 2870 uniform sets / 0 skipped, 0 texture sets / 0 skipped; 0 residency skips; 65 world-view draws
+  CITY FRAME 1280x720 caches on : sync_instances 1.692 ms, world submission 3.587 ms, render thread 10.534 ms, 3260 draws, 216 instances, 852 batch slots; per frame 420 uniform sets / 2445 skipped, 1296 texture sets / 13 skipped; 40 residency skips; 65 world-view draws
+  CITY FRAME 1280x720 caches on, cold: sync_instances 1.974 ms, world submission 3.866 ms, render thread 12.612 ms, 3165 draws, 216 instances, 852 batch slots; per frame 420 uniform sets / 2445 skipped, 1296 texture sets / 13 skipped; 40 residency skips; 65 world-view draws
+  CITY FRAME caches on vs off: 0 bytes differ, max 0 (sum 111512673)
+  CITY FRAME 1280x720 vs reference capture: 276830 bytes differ in 120870 pixels, max 0
+  PASS city frame cost recorded
+  WORKERS threaded vs one thread: 0 bytes differ, max 0 (sum 273942074)
+  CITY FRAME 1280x720 caches off: sync_instances 2.320 ms, world submission 6.419 ms, render thread 16.349 ms, 4538 draws, 216 instances, 852 batch slots; per frame 1574 uniform sets / 0 skipped, 0 texture sets / 0 skipped; 0 residency skips; 31 world-view draws
+  CITY FRAME 1280x720 caches on : sync_instances 2.013 ms, world submission 5.370 ms, render thread 15.481 ms, 4674 draws, 216 instances, 852 batch slots; per frame 81 uniform sets / 1493 skipped, 813 texture sets / 13 skipped; 40 residency skips; 31 world-view draws
+  CITY FRAME 1280x720 caches on, cold: sync_instances 2.215 ms, world submission 6.210 ms, render thread 15.634 ms, 4579 draws, 216 instances, 852 batch slots; per frame 81 uniform sets / 1493 skipped, 813 texture sets / 13 skipped; 40 residency skips; 31 world-view draws
+  CITY FRAME caches on vs off: 0 bytes differ, max 0 (sum 273942074)
+  CITY FRAME 1280x720 vs reference capture: 569794 bytes differ in 214533 pixels, max 0
+  PASS city frame cost recorded
+  FAILED 1 case(s)
+

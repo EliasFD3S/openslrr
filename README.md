@@ -244,6 +244,15 @@ wall-clock durations. `--bench-traffic 0..1` sets the city traffic density for
 the run (the perf roots have none); with 1, about 100 cars share the physics
 thread.
 
+`--renderer d3d11|d3d12|vulkan` runs the game on another bgfx backend (#186).
+The default, `auto`, is Direct3D 11, the only backend validated in game;
+Direct3D 12 and Vulkan exist to compare them, and Vulkan still fails one
+ambient-occlusion regression. `scripts/perf_baseline.ps1 -Renderers
+d3d11,d3d12,vulkan` adds them to the benchmark matrix. On a machine with two
+GPUs, set `SLRR_GPU_VENDOR=nvidia` (or `amd`, `intel`) so every backend uses
+the same adapter. Results and open points are in
+[rendering/backend.md](docs/rendering/backend.md#bgfx-backend-selection-and-the-vulkan-spike-186).
+
 Opening the debug overlay starts frame timing automatically. The Renderer tab
 shows CPU scripts, traffic, physics (with vehicle, pedestrian and collision
 subtimes), collection, shadows, reflections, presentation wait and GC. Physics
